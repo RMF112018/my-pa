@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from hashlib import sha256
 
 from my_pa.application.goodnotes_gsqs import Geometry, GoldRegion
-from my_pa.domain.goodnotes.models import GoodNotesSegmentKind
+from my_pa.domain.goodnotes.models import GoodNotesSegmentKind, GoodNotesTranscriptionStatus
 
 
 def _pdf_literal(value: str) -> str:
@@ -40,6 +41,26 @@ def _pdf_xy(geometry: Geometry) -> tuple[float, float, float, float]:
     return x, y, width, height
 
 
+def _scribble_commands(geometry: Geometry, ink: str, seed: str) -> list[str]:
+    """Deterministic non-semantic strokes. Does not encode a readable label."""
+    x, y, width, height = _pdf_xy(geometry)
+    digest = sha256(seed.encode()).digest()
+    commands: list[str] = []
+    for index in range(10):
+        byte = digest[index]
+        x1 = x + (byte / 255.0) * width
+        y1 = y + (digest[(index + 3) % 16] / 255.0) * height
+        x2 = x + (digest[(index + 7) % 16] / 255.0) * width
+        y2 = y + (digest[(index + 11) % 16] / 255.0) * height
+        x3 = x + ((byte ^ digest[(index + 5) % 16]) / 255.0) * width
+        y3 = y + (digest[(index + 9) % 16] / 255.0) * height
+        commands.append(
+            f"q {ink} {ink} {ink} RG 1.4 w {x1:.2f} {y1:.2f} m {x2:.2f} {y2:.2f} l "
+            f"{x3:.2f} {y3:.2f} l S Q"
+        )
+    return commands
+
+
 def synthetic_labeled_page_pdf(
     *,
     case_id: str,
@@ -52,8 +73,12 @@ def synthetic_labeled_page_pdf(
     ink = "0.08" if contrast != "low" else "0.45"
     commands = [f"q {fill.decode()} g 36 36 540 720 re f Q"]
     commands.append("BT /F1 11 Tf 54 730 Td (SYNTHETIC / NON-PERSONAL Gate B GSQS) Tj ET")
-    commands.append(f"BT /F1 9 Tf 54 716 Td ({_pdf_literal(case_id)}) Tj ET")
-    commands.append(f"BT /F1 10 Tf 54 700 Td ({_pdf_literal(title[:80])}) Tj ET")
+    marker = sha256(case_id.encode()).hexdigest()[:12]
+    commands.append(f"BT /F1 9 Tf 54 716 Td ({marker}) Tj ET")
+    safe_title = title[:80]
+    if "UNREADABLE" in safe_title.upper():
+        safe_title = "SYNTHETIC obscured marks"
+    commands.append(f"BT /F1 10 Tf 54 700 Td ({_pdf_literal(safe_title)}) Tj ET")
     for region in regions:
         x, y, width, height = _pdf_xy(region.geometry)
         if region.kind is GoodNotesSegmentKind.SOURCE_CONTEXT:
@@ -62,17 +87,29 @@ def synthetic_labeled_page_pdf(
             )
             font = "F1"
             size = 14 if style != "agenda" else 12
-        else:
-            commands.append(
-                f"q {ink} {ink} {ink} RG 1.1 w {x:.2f} {y:.2f} {width:.2f} {height:.2f} re S Q"
-            )
+            if region.transcription:
+                text = region.transcription[:90]
+                commands.append(
+                    f"BT /{font} {size} Tf {x + 6:.2f} {y + max(8.0, height - 18):.2f} Td "
+                    f"({_pdf_literal(text)}) Tj ET"
+                )
+            continue
+        commands.append(
+            f"q {ink} {ink} {ink} RG 1.1 w {x:.2f} {y:.2f} {width:.2f} {height:.2f} re S Q"
+        )
+        unreadable = (
+            region.transcription_status is GoodNotesTranscriptionStatus.UNREADABLE
+            and not region.transcription
+        )
+        if unreadable:
+            commands.extend(_scribble_commands(region.geometry, ink, region.region_id))
+        elif region.transcription:
             font = "F2" if style != "print-only" else "F1"
             size = 16 if style != "dense" else 11
-        text = region.transcription[:90] or "[UNREADABLE]"
-        commands.append(
-            f"BT /{font} {size} Tf {x + 6:.2f} {y + max(8.0, height - 18):.2f} Td "
-            f"({_pdf_literal(text)}) Tj ET"
-        )
+            commands.append(
+                f"BT /{font} {size} Tf {x + 6:.2f} {y + max(8.0, height - 18):.2f} Td "
+                f"({_pdf_literal(region.transcription[:90])}) Tj ET"
+            )
         if style == "arrow":
             commands.append(
                 f"q {ink} {ink} {ink} RG 1 w {x:.2f} {y + height + 8:.2f} m "
@@ -88,10 +125,10 @@ def synthetic_labeled_page_pdf(
         b"/Resources << /Font << /F1 5 0 R /F2 6 0 R >> >> >>"
     )
     info = (
-        "<< /Producer (my-pa-gsqs-v1) /Title ("
+        "<< /Producer (my-pa-gsqs) /Title ("
         + _pdf_literal("SYNTHETIC Gate B GSQS fixture")
         + ") /Subject ("
-        + _pdf_literal(case_id)
+        + marker
         + ") >>"
     )
     return _assemble(

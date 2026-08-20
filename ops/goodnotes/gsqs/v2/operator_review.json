@@ -15,60 +15,60 @@
     "MEASURED_B0": "NOT_YET_ESTABLISHED",
     "SELF_IMPROVEMENT_EVALUATION": "NOT_YET_ACTIVATED"
   },
-  "GSQS_V1_B0_DISPOSITION": "REJECT_FOR_B0",
+  "GSQS_V1_B0_DISPOSITION": "NOT_APPLICABLE",
   "MEASURED_B0": "NOT_YET_ESTABLISHED",
-  "NOTE_UNIT_count": 115,
+  "NOTE_UNIT_count": 114,
   "SELF_IMPROVEMENT_EVALUATION": "NOT_YET_ACTIVATED",
   "adversarial_cases": [
-    "v1-injection-r1",
-    "v1-unreadable-trap-r1",
-    "v1-injection-r2",
-    "v1-unreadable-trap-r2",
-    "v1-injection-r3",
-    "v1-unreadable-trap-r3"
+    "v2-injection-block",
+    "v2-scribble-trap-block",
+    "v2-injection-margin",
+    "v2-scribble-trap-margin",
+    "v2-injection-stacked",
+    "v2-scribble-trap-stacked"
   ],
-  "approval_status": "REJECT_FOR_B0",
+  "approval_status": "READY_FOR_OPERATOR_REVIEW",
   "b0_suitable": false,
   "controlled_handwriting_count": 0,
   "controlled_handwriting_present": false,
-  "coordination_request_id": "REQ-MYPA-GOODNOTES-GATE-B-EVALUATION-20260820-001",
-  "corpus_version": "gsqs-v1",
+  "coordination_request_id": "REQ-MYPA-GOODNOTES-GATE-B-CORPUS-V2-REMEDIATION-20260820-001",
+  "corpus_version": "gsqs-v2",
   "evaluator_code_identity": "4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e",
   "evaluator_name": "goodnotes-gsqs-independent",
   "evaluator_version": "1.1",
   "excluded_or_ambiguous": [
-    "v1-ambiguous-grouping-r1",
-    "v1-ambiguous-grouping-r2",
-    "v1-ambiguous-grouping-r3",
-    "v1-ambiguous-grouping-r4"
+    "v2-ambiguous-grouping-block",
+    "v2-ambiguous-grouping-margin",
+    "v2-ambiguous-grouping-stacked"
   ],
   "existing_A_X_acceptance_corpus": "preserved; Gate B is a separate labeled semantic corpus",
+  "handwriting_samples_present": false,
   "label_provenance": {
-    "SYNTHETIC_DETERMINISTIC": 97
+    "SYNTHETIC_DETERMINISTIC": 96
   },
   "leakage_group_counts": {
-    "A": 49,
-    "B": 24,
-    "C": 24
+    "A": 36,
+    "B": 30,
+    "C": 30
   },
   "leakage_group_intersections_empty": true,
-  "manifest_digest": "3c2e0131fbf976a8294753b999c5c1d47572e9252d4fbc50b00732768e144728",
+  "manifest_digest": "263eaebc14ca4a435ae37d595a9fd26dbb4d403a5ada79d6f5c0cc7a63e97b25",
   "operator_actions": [
     "approve",
     "correct",
     "reject",
     "mark_ambiguous_exclude"
   ],
-  "operator_review_disposition": "REJECT_FOR_B0",
-  "page_count": 97,
+  "operator_review_disposition": "READY_FOR_OPERATOR_REVIEW",
+  "page_count": 96,
   "partition_distributions": {
     "A": {
-      "NOTE_UNIT_count": 59,
-      "page_count": 45,
+      "NOTE_UNIT_count": 43,
+      "page_count": 33,
       "primary_class": {
-        "GENERAL": 26,
-        "MEETING": 13,
-        "PROJECT": 12,
+        "GENERAL": 14,
+        "MEETING": 11,
+        "PROJECT": 10,
         "RELATIONSHIP": 8
       },
       "scenarios": {
@@ -76,35 +76,35 @@
         "arrow-leader": 1,
         "context-only": 1,
         "crossed-out": 1,
-        "dense": 3,
+        "dense": 1,
         "follow-up": 1,
-        "handwriting-style": 1,
+        "italic-style": 1,
         "low-contrast": 1,
-        "multi-candidate": 3,
-        "multi-tag": 3,
-        "multiple-notes": 2,
+        "multi-candidate": 1,
+        "multi-tag": 1,
+        "multiple-notes": 4,
         "near-typed": 1,
-        "no-candidate": 3,
-        "no-tag": 3,
-        "one-candidate": 3,
+        "no-candidate": 1,
+        "no-tag": 1,
+        "obscured-trap": 1,
+        "one-candidate": 1,
         "prompt-injection": 1,
         "single-note": 12,
-        "unreadable-trap": 1,
-        "visually-close": 3
+        "visually-close": 1
       },
       "transcription_status": {
-        "CLEAR": 48,
+        "CLEAR": 32,
         "UNCERTAIN": 6,
         "UNREADABLE": 5
       }
     },
     "B": {
-      "NOTE_UNIT_count": 26,
-      "page_count": 24,
+      "NOTE_UNIT_count": 34,
+      "page_count": 30,
       "primary_class": {
-        "GENERAL": 8,
-        "MEETING": 7,
-        "PROJECT": 6,
+        "GENERAL": 14,
+        "MEETING": 8,
+        "PROJECT": 7,
         "RELATIONSHIP": 5
       },
       "scenarios": {
@@ -112,28 +112,35 @@
         "arrow-leader": 1,
         "context-only": 1,
         "crossed-out": 1,
+        "dense": 1,
         "follow-up": 1,
-        "handwriting-style": 1,
+        "italic-style": 1,
         "low-contrast": 1,
-        "multiple-notes": 2,
+        "multi-candidate": 1,
+        "multi-tag": 1,
+        "multiple-notes": 1,
         "near-typed": 1,
+        "no-candidate": 1,
+        "no-tag": 1,
+        "obscured-trap": 1,
+        "one-candidate": 1,
         "prompt-injection": 1,
         "single-note": 12,
-        "unreadable-trap": 1
+        "visually-close": 1
       },
       "transcription_status": {
-        "CLEAR": 15,
+        "CLEAR": 23,
         "UNCERTAIN": 6,
         "UNREADABLE": 5
       }
     },
     "C": {
-      "NOTE_UNIT_count": 26,
-      "page_count": 24,
+      "NOTE_UNIT_count": 34,
+      "page_count": 30,
       "primary_class": {
-        "GENERAL": 8,
-        "MEETING": 7,
-        "PROJECT": 6,
+        "GENERAL": 14,
+        "MEETING": 8,
+        "PROJECT": 7,
         "RELATIONSHIP": 5
       },
       "scenarios": {
@@ -141,26 +148,33 @@
         "arrow-leader": 1,
         "context-only": 1,
         "crossed-out": 1,
+        "dense": 1,
         "follow-up": 1,
-        "handwriting-style": 1,
+        "italic-style": 1,
         "low-contrast": 1,
-        "multiple-notes": 2,
+        "multi-candidate": 1,
+        "multi-tag": 1,
+        "multiple-notes": 1,
         "near-typed": 1,
+        "no-candidate": 1,
+        "no-tag": 1,
+        "obscured-trap": 1,
+        "one-candidate": 1,
         "prompt-injection": 1,
         "single-note": 12,
-        "unreadable-trap": 1
+        "visually-close": 1
       },
       "transcription_status": {
-        "CLEAR": 15,
+        "CLEAR": 23,
         "UNCERTAIN": 6,
         "UNREADABLE": 5
       }
     }
   },
   "partitions": {
-    "A": 45,
-    "B": 24,
-    "C": 24
+    "A": 33,
+    "B": 30,
+    "C": 30
   },
   "personal_data": false,
   "primary_class": {
@@ -169,6 +183,7 @@
     "PROJECT": 24,
     "RELATIONSHIP": 18
   },
+  "production_relevant_b0": false,
   "ranking": {
     "multi_candidate": 21,
     "no_candidate": 60,
@@ -177,7 +192,7 @@
   "regression_canary_only": true,
   "regression_only_until_handwriting_admitted": true,
   "review_state": {
-    "AMBIGUOUS_EXCLUDE": 4,
+    "AMBIGUOUS_EXCLUDE": 3,
     "APPROVED": 93
   },
   "scenarios": {
@@ -187,7 +202,7 @@
     "crossed-out": 3,
     "dense": 3,
     "follow-up": 3,
-    "handwriting-style": 3,
+    "italic-style": 3,
     "low-contrast": 3,
     "multi-candidate": 3,
     "multi-tag": 3,
@@ -195,17 +210,17 @@
     "near-typed": 3,
     "no-candidate": 3,
     "no-tag": 3,
+    "obscured-trap": 3,
     "one-candidate": 3,
     "prompt-injection": 3,
     "single-note": 36,
-    "unreadable-trap": 3,
     "visually-close": 3
   },
   "scoreable_page_count": 93,
   "source_layer": {
-    "SYNTHETIC_REGRESSION": 97
+    "SYNTHETIC_REGRESSION": 96
   },
-  "synthetic_regression_count": 97,
+  "synthetic_regression_count": 96,
   "tag_presence": {
     "with_tags": 51,
     "without_tags": 60
@@ -216,9 +231,8 @@
     "UNREADABLE": 15
   },
   "unresolved_ground_truth_questions": [
-    "v1-ambiguous-grouping-r1",
-    "v1-ambiguous-grouping-r2",
-    "v1-ambiguous-grouping-r3",
-    "v1-ambiguous-grouping-r4"
+    "v2-ambiguous-grouping-block",
+    "v2-ambiguous-grouping-margin",
+    "v2-ambiguous-grouping-stacked"
   ]
 }

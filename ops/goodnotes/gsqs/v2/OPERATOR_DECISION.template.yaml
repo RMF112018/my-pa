@@ -1,0 +1,30 @@
+# Operator decision for Gate B corpus gsqs-v2
+#
+# Copy this file (do not edit the template in place) and fill one decision.
+# Cite the exact manifest digest. Do not edit database rows.
+#
+# coordination_request_id: REQ-MYPA-GOODNOTES-GATE-B-CORPUS-V2-REMEDIATION-20260820-001
+
+corpus_version: gsqs-v2
+manifest_digest: 263eaebc14ca4a435ae37d595a9fd26dbb4d403a5ada79d6f5c0cc7a63e97b25
+
+# One of: approve | correct | reject | mark_ambiguous_exclude
+decision: pending
+
+operator: ""
+decided_at: ""
+
+# Required when decision is correct or mark_ambiguous_exclude
+case_ids: []
+notes: ""
+
+# Leave false unless decision is approve and the digest still matches.
+# Approval of this synthetic-regression digest still does not establish B0.
+FIXED_LABELED_CORPUS_APPROVED: false
+
+CONTROLLED_HANDWRITING_CORPUS: READY_FOR_OPERATOR_INPUT
+
+# These remain until a later authorized B0 phase, even after corpus approval.
+MEASURED_B0: NOT_YET_ESTABLISHED
+SELF_IMPROVEMENT_EVALUATION: NOT_YET_ACTIVATED
+AUTOMATIC_PROMOTION: DISABLED

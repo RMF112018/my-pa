@@ -28,7 +28,7 @@ from my_pa.application.goodnotes_gsqs_harness import (
     planned_variance,
     score_partition,
 )
-from my_pa.application.goodnotes_gsqs_v1_freeze import freeze_v1_corpus
+from my_pa.application.goodnotes_gsqs_v2_freeze import freeze_v2_corpus
 from my_pa.application.goodnotes_semantics import submit_proposal
 
 
@@ -41,6 +41,8 @@ def test_gate_b_state_ceiling() -> None:
     assert state["FIXED_LABELED_CORPUS"] == "READY_FOR_OPERATOR_REVIEW"
     assert state["INDEPENDENT_EVALUATOR"] == "VALIDATED"
     assert state["B0_HARNESS"] == "READY"
+    assert state["CONTROLLED_HANDWRITING_CORPUS"] == "READY_FOR_OPERATOR_INPUT"
+    assert state["GSQS_V1_B0_DISPOSITION"] == "REJECT_FOR_B0"
     status = harness_status()
     assert status.ready is True
     assert status.measured_b0 == MEASURED_B0_NOT_YET_ESTABLISHED
@@ -48,7 +50,7 @@ def test_gate_b_state_ceiling() -> None:
 
 
 def test_dry_run_refuses_to_fake_incumbent_and_does_not_call_propose() -> None:
-    cases, manifest = freeze_v1_corpus()
+    cases, manifest = freeze_v2_corpus()
     with pytest.raises(ValueError, match="not authorized"):
         dry_run_b0(
             cases,
@@ -73,7 +75,7 @@ def test_dry_run_refuses_to_fake_incumbent_and_does_not_call_propose() -> None:
 
 
 def test_interchange_round_trip_and_gold_replay() -> None:
-    cases, _manifest = freeze_v1_corpus()
+    cases, _manifest = freeze_v2_corpus()
     case = next(item for item in cases if item.scoreable)
     output = gold_as_output(case, analyzer_name="deterministic-gold-replay", analyzer_version="1")
     document = interchange_document(case, output)
@@ -87,7 +89,7 @@ def test_interchange_round_trip_and_gold_replay() -> None:
 
 
 def test_harness_invalidates_analyzer_corpus_version_mismatch() -> None:
-    cases, manifest = freeze_v1_corpus()
+    cases, manifest = freeze_v2_corpus()
     selected = [item for item in cases if item.partition is CorpusPartition.B and item.scoreable]
     outputs = tuple(
         AnalyzerOutput(

@@ -1,17 +1,17 @@
 {
-  "approval_status": "REJECT_FOR_B0",
+  "approval_status": "READY_FOR_OPERATOR_REVIEW",
   "cases": [
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-meeting-clear-r1",
-      "content_sha256": "d796f1bf41232057f6c1c1743f0d418a64bac5ef6624dfe8fca395f45e5b6d7d",
+      "case_id": "v2-single-meeting-clear-block",
+      "content_sha256": "47103e2d65564a028a54820d4907dc7818caae86c9582389c48406e3f242417d",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-meeting-clear-r1",
+      "leakage_group_id": "lg-single-meeting-clear-block",
       "partition": "B",
       "primary_classes": [
         "MEETING"
@@ -27,14 +27,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-meeting-uncertain-r1",
-      "content_sha256": "df8702088085a174615e20424dc6631fbf0f57e771f892fe74d23719544a8724",
+      "case_id": "v2-single-meeting-uncertain-block",
+      "content_sha256": "b3e04e2b851a2cc13c72cd1a45bdb3fa2548fee8620cd3f4d1a3927958d6695a",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-meeting-uncertain-r1",
+      "leakage_group_id": "lg-single-meeting-uncertain-block",
       "partition": "B",
       "primary_classes": [
         "MEETING"
@@ -50,14 +50,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-meeting-unreadable-r1",
-      "content_sha256": "0512e36b966cf22da8d17dadefd1b22411576549445dba94dec2a1ff4b2df5ad",
+      "case_id": "v2-single-meeting-obscured-block",
+      "content_sha256": "61ad47e269f24b2006cf6c3a7da1d6303555d03e212d4c17b4cf02fc72d332b4",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-meeting-unreadable-r1",
+      "leakage_group_id": "lg-single-meeting-obscured-block",
       "partition": "B",
       "primary_classes": [
         "MEETING"
@@ -73,14 +73,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-project-clear-r1",
-      "content_sha256": "3c350e89e675d94758cbe014b8f4823fe34b6a13f3a3297ebcb81aba9815fe0b",
+      "case_id": "v2-single-project-clear-block",
+      "content_sha256": "6eda2e5f66ef96cd410e6268d8e1543a33c7ddbb027c3b36fdec050a0852e3fe",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-project-clear-r1",
+      "leakage_group_id": "lg-single-project-clear-block",
       "partition": "B",
       "primary_classes": [
         "PROJECT"
@@ -96,14 +96,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-project-uncertain-r1",
-      "content_sha256": "d41b3a1de5daf417259f80d5b452ba828261cc8158131fe6eab641b101236e9e",
+      "case_id": "v2-single-project-uncertain-block",
+      "content_sha256": "e255d3bd2dffb04e3b94674c8708cb899a2a97e92b3900b65a3a2b993fb5b1ff",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-project-uncertain-r1",
+      "leakage_group_id": "lg-single-project-uncertain-block",
       "partition": "B",
       "primary_classes": [
         "PROJECT"
@@ -119,14 +119,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-project-unreadable-r1",
-      "content_sha256": "4330f3529f3c96aa7c0466109df1c34fa9aa835dea0e3242a4b16de9b44e6f83",
+      "case_id": "v2-single-project-obscured-block",
+      "content_sha256": "f42287fe33d51cfe412722e94264b627611b34a723bbe111d629a827740f367a",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-project-unreadable-r1",
+      "leakage_group_id": "lg-single-project-obscured-block",
       "partition": "B",
       "primary_classes": [
         "PROJECT"
@@ -142,14 +142,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-relationship-clear-r1",
-      "content_sha256": "f55164fdba65cdc23bf955cc7b84032b348747bbd04a59f1cc4fed7216456df1",
+      "case_id": "v2-single-relationship-clear-block",
+      "content_sha256": "3347aa0e1ee20ed324910a0c18f77e81900831273594cf74fd9981c6c180831f",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-relationship-clear-r1",
+      "leakage_group_id": "lg-single-relationship-clear-block",
       "partition": "B",
       "primary_classes": [
         "RELATIONSHIP"
@@ -165,14 +165,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-relationship-uncertain-r1",
-      "content_sha256": "eaad43d7bf21ce3bd9a3c0d6210d4bd6275bdb65e696c997f9b713573f5928b5",
+      "case_id": "v2-single-relationship-uncertain-block",
+      "content_sha256": "9d2506b70b6631a8daeeda1dc1db4e9797b8c89050c5e4801322c9ab1474a624",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-relationship-uncertain-r1",
+      "leakage_group_id": "lg-single-relationship-uncertain-block",
       "partition": "B",
       "primary_classes": [
         "RELATIONSHIP"
@@ -188,14 +188,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-relationship-unreadable-r1",
-      "content_sha256": "42d498ea4027ad9907cd803ced142c24d410c5609539788f7a7d15d77c15eefe",
+      "case_id": "v2-single-relationship-obscured-block",
+      "content_sha256": "c93101bb51e08bc3b5fb30e17913ce9e8773f8b4cacba9e941074b0f93bc1d78",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-relationship-unreadable-r1",
+      "leakage_group_id": "lg-single-relationship-obscured-block",
       "partition": "B",
       "primary_classes": [
         "RELATIONSHIP"
@@ -211,14 +211,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-general-clear-r1",
-      "content_sha256": "a7bd95d80482f50656cf745687dde6cf95bc80b9c0703a29996927e688fc0e8c",
+      "case_id": "v2-single-general-clear-block",
+      "content_sha256": "dfdba1aa9e7b6da4682f2526480bc661523299e5e164b9eae3a4ee4b1f571019",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-general-clear-r1",
+      "leakage_group_id": "lg-single-general-clear-block",
       "partition": "B",
       "primary_classes": [
         "GENERAL"
@@ -234,14 +234,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-general-uncertain-r1",
-      "content_sha256": "6df912e7bfffa90cee0f349c5c8b9c154ae6a5a5fff7e2deb5f3007752fe46cf",
+      "case_id": "v2-single-general-uncertain-block",
+      "content_sha256": "9900812a6511fa137ed46d7231c35d6179f076df29ede579dbdbb08786ad6a81",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-general-uncertain-r1",
+      "leakage_group_id": "lg-single-general-uncertain-block",
       "partition": "B",
       "primary_classes": [
         "GENERAL"
@@ -257,14 +257,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-general-unreadable-r1",
-      "content_sha256": "698a53a1e761e03ff7838876df87b34ca0a75ed2b3c136746134409b08f7e55a",
+      "case_id": "v2-single-general-obscured-block",
+      "content_sha256": "7103cc853201bf5b2887d1279a792234dd97109cf952050146076c71ff4ca2e2",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-general-unreadable-r1",
+      "leakage_group_id": "lg-single-general-obscured-block",
       "partition": "B",
       "primary_classes": [
         "GENERAL"
@@ -280,14 +280,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-meeting-clear-r2",
-      "content_sha256": "7c83e7abec7e70d12d2a42e2d383fed62a2fc5e3994acb127146ba6b1126094c",
+      "case_id": "v2-single-meeting-clear-margin",
+      "content_sha256": "0aefd7eaf5c9745d60bb58de6dd9e68bb1a2a9b1c5ddd6cc2de8d18ce80d2f9d",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-meeting-clear-r2",
+      "leakage_group_id": "lg-single-meeting-clear-margin",
       "partition": "C",
       "primary_classes": [
         "MEETING"
@@ -303,14 +303,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-meeting-uncertain-r2",
-      "content_sha256": "957fabb2baeea1568727d5cf1723936d0b5992b0e73608008881616eae57689c",
+      "case_id": "v2-single-meeting-uncertain-margin",
+      "content_sha256": "c23b2ed5c89b7953a2f5e7e9db4de8eaceccdd24685ba60036cdd59fe230ef49",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-meeting-uncertain-r2",
+      "leakage_group_id": "lg-single-meeting-uncertain-margin",
       "partition": "C",
       "primary_classes": [
         "MEETING"
@@ -326,14 +326,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-meeting-unreadable-r2",
-      "content_sha256": "7c7f41e748e6f5403c68da10050f389a1cd1db8d6df0ef28e163bde53d6d88ec",
+      "case_id": "v2-single-meeting-obscured-margin",
+      "content_sha256": "1b5f4191974dca4658153de0882113ab7f088b1a1f482f319aa8105524e6128a",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-meeting-unreadable-r2",
+      "leakage_group_id": "lg-single-meeting-obscured-margin",
       "partition": "C",
       "primary_classes": [
         "MEETING"
@@ -349,14 +349,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-project-clear-r2",
-      "content_sha256": "9a3bd63f53b660b8d253d595ede8f9ac3ead4a06e74e4b2561de6a23dcb91a9b",
+      "case_id": "v2-single-project-clear-margin",
+      "content_sha256": "f5fdbad4f7355fbef9d2183e520e0a5bc2d17de4d2b6152461052454506a2a39",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-project-clear-r2",
+      "leakage_group_id": "lg-single-project-clear-margin",
       "partition": "C",
       "primary_classes": [
         "PROJECT"
@@ -372,14 +372,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-project-uncertain-r2",
-      "content_sha256": "a34debad5406d220e60de8cb76305ddb13206b60b787e8b74c2dc1a16d32f2e9",
+      "case_id": "v2-single-project-uncertain-margin",
+      "content_sha256": "8a8d4a32afdd3547b1d2db310a9e49d67f6ed1da410c4ad1881654e6d17ac7a5",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-project-uncertain-r2",
+      "leakage_group_id": "lg-single-project-uncertain-margin",
       "partition": "C",
       "primary_classes": [
         "PROJECT"
@@ -395,14 +395,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-project-unreadable-r2",
-      "content_sha256": "20c0da32d3a4c94416387345e36524db95b188bcc21eca95a07b36ce5679f7b8",
+      "case_id": "v2-single-project-obscured-margin",
+      "content_sha256": "39cc2d66ba55d74af20ea1240655e875ad312abfc07b5d866ececa53facbabbd",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-project-unreadable-r2",
+      "leakage_group_id": "lg-single-project-obscured-margin",
       "partition": "C",
       "primary_classes": [
         "PROJECT"
@@ -418,14 +418,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-relationship-clear-r2",
-      "content_sha256": "bdc0c03311f96da4d67e60bc1ae803c079627f52cfc7c98d1a9781922c1c8654",
+      "case_id": "v2-single-relationship-clear-margin",
+      "content_sha256": "bbb9b16a6a798bb93cea2006db83fcff1d22e1f4d925039e111f506f0c0d258d",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-relationship-clear-r2",
+      "leakage_group_id": "lg-single-relationship-clear-margin",
       "partition": "C",
       "primary_classes": [
         "RELATIONSHIP"
@@ -441,14 +441,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-relationship-uncertain-r2",
-      "content_sha256": "9e114792d846a9928da7a8cfc9d864980cd3468e817560b25526174e8d89d388",
+      "case_id": "v2-single-relationship-uncertain-margin",
+      "content_sha256": "d5568559ede86e4ce329e5d0523ae7123a32d6bfd741c0f3a3288f780ceea4c8",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-relationship-uncertain-r2",
+      "leakage_group_id": "lg-single-relationship-uncertain-margin",
       "partition": "C",
       "primary_classes": [
         "RELATIONSHIP"
@@ -464,14 +464,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-relationship-unreadable-r2",
-      "content_sha256": "d9b2842a334731a0d1985b3ae4328ac65ae5f3f1d0fd01b2aca817d27a4b7738",
+      "case_id": "v2-single-relationship-obscured-margin",
+      "content_sha256": "ca7cf51a6fd60f8d527482ff11d68feb083f12f8030d703cea6b1999dc3ac13f",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-relationship-unreadable-r2",
+      "leakage_group_id": "lg-single-relationship-obscured-margin",
       "partition": "C",
       "primary_classes": [
         "RELATIONSHIP"
@@ -487,14 +487,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-general-clear-r2",
-      "content_sha256": "75252fbb68b520145d6960c12cc172eac90eb66113327372af9e61c1b8d3bf29",
+      "case_id": "v2-single-general-clear-margin",
+      "content_sha256": "cbfe3057ec9b0f79323349f81e31efb18472fee8dbd8572bc3d26bb3eeb1a0c9",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-general-clear-r2",
+      "leakage_group_id": "lg-single-general-clear-margin",
       "partition": "C",
       "primary_classes": [
         "GENERAL"
@@ -510,14 +510,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-general-uncertain-r2",
-      "content_sha256": "30bc0416fc9e91c91b033348ea1dc02af0c3e54c14353f73c1b731a136917404",
+      "case_id": "v2-single-general-uncertain-margin",
+      "content_sha256": "a917e8637a4c5fb5ccef77f47ace811ae6b8c3f279fdef9f6259d07bd0f91530",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-general-uncertain-r2",
+      "leakage_group_id": "lg-single-general-uncertain-margin",
       "partition": "C",
       "primary_classes": [
         "GENERAL"
@@ -533,14 +533,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-general-unreadable-r2",
-      "content_sha256": "9442b460a41fa6af75d122d38762d0b4890241ad0c4a1962b7c9749e9e231ff8",
+      "case_id": "v2-single-general-obscured-margin",
+      "content_sha256": "65632a0809a6a0f878d675da0628ec71f0615a0f6b762870fdff5b736de526db",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-general-unreadable-r2",
+      "leakage_group_id": "lg-single-general-obscured-margin",
       "partition": "C",
       "primary_classes": [
         "GENERAL"
@@ -556,14 +556,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-meeting-clear-r3",
-      "content_sha256": "6c535f7be1834d9195a73ce01bf805514d51f5c941dc9e90b267f675c198e7f5",
+      "case_id": "v2-single-meeting-clear-stacked",
+      "content_sha256": "f8fbffa3d5765c06eda08d0390b97852624200e4e6adbae3c8dfa8b194158074",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-meeting-clear-r3",
+      "leakage_group_id": "lg-single-meeting-clear-stacked",
       "partition": "A",
       "primary_classes": [
         "MEETING"
@@ -579,14 +579,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-meeting-uncertain-r3",
-      "content_sha256": "0ba1eae35aa9396b64386ea6508e741500932418fe2a733f38691356cfeac642",
+      "case_id": "v2-single-meeting-uncertain-stacked",
+      "content_sha256": "13189d8c7494545c771460af8cbd66609ba5bb4efa422ecb364983037209c179",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-meeting-uncertain-r3",
+      "leakage_group_id": "lg-single-meeting-uncertain-stacked",
       "partition": "A",
       "primary_classes": [
         "MEETING"
@@ -602,14 +602,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-meeting-unreadable-r3",
-      "content_sha256": "5a043d143ab060e29b9f4fdf25ab837914c7b343bd846d00a3ff3badb497b414",
+      "case_id": "v2-single-meeting-obscured-stacked",
+      "content_sha256": "8d976ffcf9d3deb7cfaa0f5809c4089830ae691f0e0e6a4b92d0eb2524f199fc",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-meeting-unreadable-r3",
+      "leakage_group_id": "lg-single-meeting-obscured-stacked",
       "partition": "A",
       "primary_classes": [
         "MEETING"
@@ -625,14 +625,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-project-clear-r3",
-      "content_sha256": "9f52c0eb0e03d8a4a71d8f60c8b1146da6309457cb583fe17604ce8885b37cf2",
+      "case_id": "v2-single-project-clear-stacked",
+      "content_sha256": "8191607a5181be9c5eb37815aabe0b5d3fa9f0b0c2a97d35d9cee8cdc5c9ec62",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-project-clear-r3",
+      "leakage_group_id": "lg-single-project-clear-stacked",
       "partition": "A",
       "primary_classes": [
         "PROJECT"
@@ -648,14 +648,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-project-uncertain-r3",
-      "content_sha256": "b3b7bdde5fe662ce3bb7f216a976e6320421bde7e6c60dcbfe7d95c8fd42aa0d",
+      "case_id": "v2-single-project-uncertain-stacked",
+      "content_sha256": "72bf105f2ae9f872fc6789b24fce1a08a2568901a8144816458c30ae1230688c",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-project-uncertain-r3",
+      "leakage_group_id": "lg-single-project-uncertain-stacked",
       "partition": "A",
       "primary_classes": [
         "PROJECT"
@@ -671,14 +671,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-project-unreadable-r3",
-      "content_sha256": "723eba85f80c80073375cedbc03236eb8ffcd59a9ed14232a7cf200d5136d59f",
+      "case_id": "v2-single-project-obscured-stacked",
+      "content_sha256": "8e6b8098d99b45f37d2611989cd083b4d7a52bb2fd292ec76fc9896951340e9f",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-project-unreadable-r3",
+      "leakage_group_id": "lg-single-project-obscured-stacked",
       "partition": "A",
       "primary_classes": [
         "PROJECT"
@@ -694,14 +694,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-relationship-clear-r3",
-      "content_sha256": "0e838e30ed3b8946b2daa170a4a5c05f16bfe429c188a5d582f0f62616294518",
+      "case_id": "v2-single-relationship-clear-stacked",
+      "content_sha256": "40315f8d423c7b291c0eafba5d38da262b2d74006a93f2c3570008434ddd0166",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-relationship-clear-r3",
+      "leakage_group_id": "lg-single-relationship-clear-stacked",
       "partition": "A",
       "primary_classes": [
         "RELATIONSHIP"
@@ -717,14 +717,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-relationship-uncertain-r3",
-      "content_sha256": "954facce7d28052bcd40ce1885dd32704ab95c05abaf8772794d992553ededb1",
+      "case_id": "v2-single-relationship-uncertain-stacked",
+      "content_sha256": "485b63ca066660ff743a035538d849fa4dcf201ffc3d9b9ae01de6e7490a2f77",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-relationship-uncertain-r3",
+      "leakage_group_id": "lg-single-relationship-uncertain-stacked",
       "partition": "A",
       "primary_classes": [
         "RELATIONSHIP"
@@ -740,14 +740,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-relationship-unreadable-r3",
-      "content_sha256": "941edaab2190c3a517ee00e875d2ce7172dc402e994cc4864456cfe3839a17bd",
+      "case_id": "v2-single-relationship-obscured-stacked",
+      "content_sha256": "d577fb52c481a50b370d7afb7ec8a5dc606b672e6e63fe73345c936516511b4b",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-relationship-unreadable-r3",
+      "leakage_group_id": "lg-single-relationship-obscured-stacked",
       "partition": "A",
       "primary_classes": [
         "RELATIONSHIP"
@@ -763,14 +763,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-general-clear-r3",
-      "content_sha256": "836763654f7a2f4fb0343737734c7b03104573b4d162754edb41ac675ba3a57d",
+      "case_id": "v2-single-general-clear-stacked",
+      "content_sha256": "b67de627bc4cd7f0141ccb170e62d0945341cccb8a89c00f7f8c293c9a1b8694",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-general-clear-r3",
+      "leakage_group_id": "lg-single-general-clear-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -786,14 +786,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-general-uncertain-r3",
-      "content_sha256": "97578fee731bd61848f3c429505884ebaaca893c5f596390fd9be3a1798a25d0",
+      "case_id": "v2-single-general-uncertain-stacked",
+      "content_sha256": "a012001a5b422e392c2d1fbaa4f95f8dda3f4408eabe2b333affea0a956ba11c",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-general-uncertain-r3",
+      "leakage_group_id": "lg-single-general-uncertain-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -809,14 +809,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-single-general-unreadable-r3",
-      "content_sha256": "767de1370a3279c0b291839ed48b8b8a530204ddf8d17d412fd9a3d6131052dd",
+      "case_id": "v2-single-general-obscured-stacked",
+      "content_sha256": "64f14545ef4fba38c57a8e628285c66de93ded2ac98e781ab2856aa814f7a177",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-single-general-unreadable-r3",
+      "leakage_group_id": "lg-single-general-obscured-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -832,14 +832,14 @@
     {
       "NOTE_UNIT_count": 2,
       "adversarial": false,
-      "case_id": "v1-multi-2-r1",
-      "content_sha256": "1f9e8d92e00dc20134a0c4ddccc8b2a53b8f71bf05bf8336e852392086e40b52",
+      "case_id": "v2-multi-2-block",
+      "content_sha256": "2db5a40a69e935797b882055c9d5d380ca7b10a05353f346d25764f1e8b5831d",
       "difficulty": [
         "grouping"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-2-r1",
+      "leakage_group_id": "lg-multi-2-block",
       "partition": "B",
       "primary_classes": [
         "MEETING",
@@ -857,15 +857,15 @@
     {
       "NOTE_UNIT_count": 3,
       "adversarial": false,
-      "case_id": "v1-multi-3-r1",
-      "content_sha256": "118eb928abe03b8916d04f5db39a8a4ecb07aab2a1f30621321cedcf9adf7732",
+      "case_id": "v2-multi-3-block",
+      "content_sha256": "35e2c08f6b2718d2ad90d0dd32c447ee7c561644705b1cc98c14e4e7e4d94185",
       "difficulty": [
         "grouping"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-3-r1",
-      "partition": "B",
+      "leakage_group_id": "lg-multi-3-block",
+      "partition": "A",
       "primary_classes": [
         "MEETING",
         "PROJECT",
@@ -884,14 +884,14 @@
     {
       "NOTE_UNIT_count": 2,
       "adversarial": false,
-      "case_id": "v1-multi-2-r2",
-      "content_sha256": "6c4d3ff8cd86414fcf35a9b18322984f9bbebaff99894dfc985f097f0987d291",
+      "case_id": "v2-multi-2-margin",
+      "content_sha256": "b74347896cb3ff9ad749805f01277a4ae94d2a2312bcf634548b08077cdd7a21",
       "difficulty": [
         "grouping"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-2-r2",
+      "leakage_group_id": "lg-multi-2-margin",
       "partition": "C",
       "primary_classes": [
         "MEETING",
@@ -909,15 +909,15 @@
     {
       "NOTE_UNIT_count": 3,
       "adversarial": false,
-      "case_id": "v1-multi-3-r2",
-      "content_sha256": "ddc1d2d209000901f9f7f1739252e16b319ee8f70812630d8ed03d63321f6ec1",
+      "case_id": "v2-multi-3-margin",
+      "content_sha256": "20714fb57c3bc1d394b4ddff797436f056ace6f06eecc948993ce53b2ad20e66",
       "difficulty": [
         "grouping"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-3-r2",
-      "partition": "C",
+      "leakage_group_id": "lg-multi-3-margin",
+      "partition": "A",
       "primary_classes": [
         "MEETING",
         "PROJECT",
@@ -936,14 +936,14 @@
     {
       "NOTE_UNIT_count": 2,
       "adversarial": false,
-      "case_id": "v1-multi-2-r3",
-      "content_sha256": "c0293be4f5669e9ff5599e79ae162db7e87d92413f82edcd700333b67ce32500",
+      "case_id": "v2-multi-2-stacked",
+      "content_sha256": "968c49ef5ecf045a4e0e881b8a6e06384aed84ad0045793797ec4b596e196d55",
       "difficulty": [
         "grouping"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-2-r3",
+      "leakage_group_id": "lg-multi-2-stacked",
       "partition": "A",
       "primary_classes": [
         "MEETING",
@@ -961,14 +961,14 @@
     {
       "NOTE_UNIT_count": 3,
       "adversarial": false,
-      "case_id": "v1-multi-3-r3",
-      "content_sha256": "a87b1aa9c5eff17b63c1b953293df66be4cc88e89706f7b6c1ddd5d81ac28ab5",
+      "case_id": "v2-multi-3-stacked",
+      "content_sha256": "fed9093246e1cdde815a890ae8d38cf294d10effc3026c0fa43bc277442d8e27",
       "difficulty": [
         "grouping"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-3-r3",
+      "leakage_group_id": "lg-multi-3-stacked",
       "partition": "A",
       "primary_classes": [
         "MEETING",
@@ -988,14 +988,14 @@
     {
       "NOTE_UNIT_count": 0,
       "adversarial": false,
-      "case_id": "v1-context-only-r1",
-      "content_sha256": "3ffb670ab66d08cced16f2d217c39113091e7be4c9bc1c4add1da47320839698",
+      "case_id": "v2-context-only-block",
+      "content_sha256": "cb8fa0f01b6d529a4fdf7ea1f62247b5383bb9699e8d8f0afdb2a90e7bbdd0c2",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-context-only-r1",
+      "leakage_group_id": "lg-context-only-block",
       "partition": "B",
       "primary_classes": [],
       "review_state": "APPROVED",
@@ -1007,14 +1007,14 @@
     {
       "NOTE_UNIT_count": 0,
       "adversarial": false,
-      "case_id": "v1-context-only-r2",
-      "content_sha256": "0bcccc09d37362e97c86b17ada280cb19b031ce9edd89de5a03adec6dd6bb5ae",
+      "case_id": "v2-context-only-margin",
+      "content_sha256": "f113cc5fa5280b66c79a0c38c0acdb8bb987ddcc360df43796e60ac4bb4a22bd",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-context-only-r2",
+      "leakage_group_id": "lg-context-only-margin",
       "partition": "C",
       "primary_classes": [],
       "review_state": "APPROVED",
@@ -1026,14 +1026,14 @@
     {
       "NOTE_UNIT_count": 0,
       "adversarial": false,
-      "case_id": "v1-context-only-r3",
-      "content_sha256": "184ec89704ac30ead0d80f417972ba09aafefbc28040e6e59c4dab096c2111ef",
+      "case_id": "v2-context-only-stacked",
+      "content_sha256": "c357f0664fb5a6e64a45279f82270a84b6c6f38523460e3b59985e54591aadb6",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-context-only-r3",
+      "leakage_group_id": "lg-context-only-stacked",
       "partition": "A",
       "primary_classes": [],
       "review_state": "APPROVED",
@@ -1045,15 +1045,15 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-no-tag-r1",
-      "content_sha256": "9ad1bf1ede28c5e36644c8db49b4fd2212af8f9c2a771d463824fb09beb4c528",
+      "case_id": "v2-no-tag-block",
+      "content_sha256": "d559f64838601d8ed6c4e8652c83e5f52ebc00fd9706008b57eab5f89cee42a1",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-no-tag-r1",
-      "partition": "A",
+      "leakage_group_id": "lg-no-tag-block",
+      "partition": "B",
       "primary_classes": [
         "GENERAL"
       ],
@@ -1068,14 +1068,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-follow-up-r1",
-      "content_sha256": "0d59b4656d7aa5597389977d6dd9162f491463f43890563a2919ff9dd69aeca3",
+      "case_id": "v2-follow-up-block",
+      "content_sha256": "f068809b975f0b72546c559be9aa72f1d4eeb709e167cd63302a0ac7344f45dd",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-follow-up-r1",
+      "leakage_group_id": "lg-follow-up-block",
       "partition": "B",
       "primary_classes": [
         "GENERAL"
@@ -1091,15 +1091,15 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-multi-tag-r1",
-      "content_sha256": "c385b758bf5c5f668008f04e67be312e610eded39e0bdc4bd727826dd02bde9a",
+      "case_id": "v2-multi-tag-block",
+      "content_sha256": "200ec1a7cf16f5b86673db433df420ef728b0a68772a0fd1a733e7bc0a4c9cef",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-tag-r1",
-      "partition": "A",
+      "leakage_group_id": "lg-multi-tag-block",
+      "partition": "B",
       "primary_classes": [
         "GENERAL"
       ],
@@ -1114,15 +1114,15 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-one-candidate-r1",
-      "content_sha256": "dd1993d1982fa09b43980c287d36aaca6e38256c06fe543f8d90ec9eb202a9ab",
+      "case_id": "v2-one-candidate-block",
+      "content_sha256": "c2477ab3c3ba62f304a5962bac2065e8ca224c65352ed486ad820c729c45e9e4",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-one-candidate-r1",
-      "partition": "A",
+      "leakage_group_id": "lg-one-candidate-block",
+      "partition": "B",
       "primary_classes": [
         "GENERAL"
       ],
@@ -1137,15 +1137,15 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-multi-candidate-r1",
-      "content_sha256": "287f7a9b33e4e17f5825add5fa556026a8c86a092fba80a1340e93108edcc0ab",
+      "case_id": "v2-multi-candidate-block",
+      "content_sha256": "6329debf19da4ffe51419f5f63316b13519304fed6cbc7bf7483449a9b33770b",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-candidate-r1",
-      "partition": "A",
+      "leakage_group_id": "lg-multi-candidate-block",
+      "partition": "B",
       "primary_classes": [
         "GENERAL"
       ],
@@ -1160,15 +1160,15 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-no-candidate-r1",
-      "content_sha256": "d984a02e239561169b6289837b02aad7d06c8b050f8b8c6312e0507058c2fc36",
+      "case_id": "v2-no-candidate-block",
+      "content_sha256": "76d4fd41080c6869410c6b46e29729ee93699eba4d388fb29ab7141bbe8d43f1",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-no-candidate-r1",
-      "partition": "A",
+      "leakage_group_id": "lg-no-candidate-block",
+      "partition": "B",
       "primary_classes": [
         "GENERAL"
       ],
@@ -1183,15 +1183,15 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-no-tag-r2",
-      "content_sha256": "c4331acb834caad5b0651e50d30bc054ed7d39b9f1bd2b3f7dc3e1e7e083c55e",
+      "case_id": "v2-no-tag-margin",
+      "content_sha256": "0066ef07960255f32d5f5dc96108667a3e41e8620f69cdc671b2626209e29a4e",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-no-tag-r2",
-      "partition": "A",
+      "leakage_group_id": "lg-no-tag-margin",
+      "partition": "C",
       "primary_classes": [
         "GENERAL"
       ],
@@ -1206,14 +1206,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-follow-up-r2",
-      "content_sha256": "84211de4b1edda2ffe227b87d474c4148a36b6afcdfaedf64936b4d577b54b9a",
+      "case_id": "v2-follow-up-margin",
+      "content_sha256": "a553eae250909873de4120289f278a8c508afac90afbe76d25006299cec62f75",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-follow-up-r2",
+      "leakage_group_id": "lg-follow-up-margin",
       "partition": "C",
       "primary_classes": [
         "GENERAL"
@@ -1229,15 +1229,15 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-multi-tag-r2",
-      "content_sha256": "dbbb60124d49849c72b2a812e3eb944d07d87c2a989ce6d88843dece19f52d31",
+      "case_id": "v2-multi-tag-margin",
+      "content_sha256": "40d155a9c75e2108da96f064e3bf74b1a07fc513578ce240e297b2fa897f591a",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-tag-r2",
-      "partition": "A",
+      "leakage_group_id": "lg-multi-tag-margin",
+      "partition": "C",
       "primary_classes": [
         "GENERAL"
       ],
@@ -1252,15 +1252,15 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-one-candidate-r2",
-      "content_sha256": "e65444654f8f2d9fdba87b1982848a0d3f504687bbd0939c08cf103143d0e6c9",
+      "case_id": "v2-one-candidate-margin",
+      "content_sha256": "8c89d92443893285f037f4c7d759451ee204869d950d65f3a2c001d252485101",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-one-candidate-r2",
-      "partition": "A",
+      "leakage_group_id": "lg-one-candidate-margin",
+      "partition": "C",
       "primary_classes": [
         "GENERAL"
       ],
@@ -1275,15 +1275,15 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-multi-candidate-r2",
-      "content_sha256": "590ba448ba4f55cff59e6597c9c26352e8b3aa3c25d03d018e538f8ff35c80d3",
+      "case_id": "v2-multi-candidate-margin",
+      "content_sha256": "1ccb4da375769f01d81c0ed400ffa7183ee6b5bc85ebd56aeb92a32126d78d94",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-candidate-r2",
-      "partition": "A",
+      "leakage_group_id": "lg-multi-candidate-margin",
+      "partition": "C",
       "primary_classes": [
         "GENERAL"
       ],
@@ -1298,15 +1298,15 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-no-candidate-r2",
-      "content_sha256": "bad5db31d10593955054c0c251f207fb79b3057d7dfa67b96a9bfbfbf11aa274",
+      "case_id": "v2-no-candidate-margin",
+      "content_sha256": "e81646160c4146cd33451d1b422e60fd639382174f73dc4a26c6386a3631f6f3",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-no-candidate-r2",
-      "partition": "A",
+      "leakage_group_id": "lg-no-candidate-margin",
+      "partition": "C",
       "primary_classes": [
         "GENERAL"
       ],
@@ -1321,14 +1321,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-no-tag-r3",
-      "content_sha256": "7e7307a1e358385a21a29e9926d542703fa64eb7412003a95f801ec35e49f058",
+      "case_id": "v2-no-tag-stacked",
+      "content_sha256": "a9bc5166127851b747bf9e3eb8eec391c484535e474dd51b4ad1fac0164c6fdb",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-no-tag-r3",
+      "leakage_group_id": "lg-no-tag-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -1344,14 +1344,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-follow-up-r3",
-      "content_sha256": "ee14d035efb6787275a8b911432a995925fa2fa08d8c6d7a25d53283e732e5e5",
+      "case_id": "v2-follow-up-stacked",
+      "content_sha256": "a558c73f0eff6628627b83befede0da1d662a38b52a01bde727892b0ebc869b9",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-follow-up-r3",
+      "leakage_group_id": "lg-follow-up-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -1367,14 +1367,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-multi-tag-r3",
-      "content_sha256": "cf3a3caa319319bd1dc22204b35a855ca83824a71d00b88ef0e5310debd5fd77",
+      "case_id": "v2-multi-tag-stacked",
+      "content_sha256": "23d4fd04b743959c385d5b3fa33783776188b400dc2c0a5ef5c9edc710ed69a1",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-tag-r3",
+      "leakage_group_id": "lg-multi-tag-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -1390,14 +1390,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-one-candidate-r3",
-      "content_sha256": "e80b6304106ce7f0eefbf036c26797021bf86535086e07444425c4aaf3e0b60e",
+      "case_id": "v2-one-candidate-stacked",
+      "content_sha256": "e3cc77ec47a30f288245b9711ec0721bd4b9a1833c789cbd321ff6bac9cfb72c",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-one-candidate-r3",
+      "leakage_group_id": "lg-one-candidate-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -1413,14 +1413,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-multi-candidate-r3",
-      "content_sha256": "c2a0da1f5dd080a1e4632540b6ce774969b3d778c50a42d0427efa40b5ce6561",
+      "case_id": "v2-multi-candidate-stacked",
+      "content_sha256": "a190ef1f2072dc67a4d4c04cf5df55cf6ca375e0465f7186144db3cc6af39cbb",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-multi-candidate-r3",
+      "leakage_group_id": "lg-multi-candidate-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -1436,14 +1436,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-no-candidate-r3",
-      "content_sha256": "51c6feefe207ea8ff6f7d084e34dfd9a930071aad2ca00a36529615d7807caea",
+      "case_id": "v2-no-candidate-stacked",
+      "content_sha256": "568224067c22b030851205a9db533c74afde26b64621367c6e8e891d7f22f399",
       "difficulty": [
         "nominal"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-no-candidate-r3",
+      "leakage_group_id": "lg-no-candidate-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -1459,14 +1459,398 @@
     {
       "NOTE_UNIT_count": 2,
       "adversarial": false,
-      "case_id": "v1-close-notes-r1",
-      "content_sha256": "ae6b71f8597fcc642fd78c090d2b670874ec7f6a857950a879264242b45355ec",
+      "case_id": "v2-close-notes-block",
+      "content_sha256": "e870e978c1f24d689db13aa3f7dbcb2afec09bde108b97f2661fd819b5b7a4fa",
       "difficulty": [
         "visually-close"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-close-notes-r1",
+      "leakage_group_id": "lg-visually-close-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "visually-close",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 4,
+      "adversarial": false,
+      "case_id": "v2-dense-block",
+      "content_sha256": "a4f69cb7def2356ca2a0dfd740d2d0b3ecee2941ca4ceaea759d616968e3587a",
+      "difficulty": [
+        "dense"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-dense-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP",
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "dense",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-near-typed-block",
+      "content_sha256": "60abda0c3745596042a0778f4d1c8da421586191de7b1c2d184a5bde5e462832",
+      "difficulty": [
+        "near-typed"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-near-typed-block",
+      "partition": "B",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "near-typed",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-arrow-block",
+      "content_sha256": "7ed62bba4f08cb7a76de85d56ba480a48f43f8cd6be8d2b7666ccedcb213157e",
+      "difficulty": [
+        "leader-line"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-arrow-leader-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "arrow-leader",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-crossed-block",
+      "content_sha256": "4a2cb9dfc9e9461a0c4c58320bf9d4e8b6e6fcd5159d1d80f85e4f893954a72b",
+      "difficulty": [
+        "superseded"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-crossed-out-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "crossed-out",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-agenda-table-block",
+      "content_sha256": "1b75f0e9b10bf2808d2ba63e24f51a1508ba9b04aee75b538d3d148042d579e3",
+      "difficulty": [
+        "table"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-agenda-table-block",
+      "partition": "B",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "agenda-table",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-italic-style-block",
+      "content_sha256": "b651b1e6bfcc9ebddc4706a86d18864d3f8bc6b71f6dcbd973372a752b330211",
+      "difficulty": [
+        "style-variation"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-italic-style-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "italic-style",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-low-contrast-block",
+      "content_sha256": "5c24f83fd00014a7d805201527aad43c3f032e4f78f386b2545e44ebbf6881f6",
+      "difficulty": [
+        "low-contrast"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-low-contrast-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "low-contrast",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v2-close-notes-margin",
+      "content_sha256": "8c536899f964dd4a665dd1dcab7a06b00a6460ac5f20579ddfd20a2d1ef2f9f9",
+      "difficulty": [
+        "visually-close"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-visually-close-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "visually-close",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 4,
+      "adversarial": false,
+      "case_id": "v2-dense-margin",
+      "content_sha256": "dbf65178ca19e4db81ac88f4c8287cce06e30ed158bff22d8f3558de6542a1f1",
+      "difficulty": [
+        "dense"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-dense-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP",
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "dense",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-near-typed-margin",
+      "content_sha256": "50e77308c91bebdd8c89ba0de6231d8bed2acdd83e173f7c25189347746edf50",
+      "difficulty": [
+        "near-typed"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-near-typed-margin",
+      "partition": "C",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "near-typed",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-arrow-margin",
+      "content_sha256": "1a3852af726723b780ca294ca50ae1ab710de1052b7c6eaa051a62449169e84b",
+      "difficulty": [
+        "leader-line"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-arrow-leader-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "arrow-leader",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-crossed-margin",
+      "content_sha256": "0f6e13bd7b3dd17a158da802ed4e727aaac79fecba6bd3dd7bdd893a6f3d6ebc",
+      "difficulty": [
+        "superseded"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-crossed-out-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "crossed-out",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-agenda-table-margin",
+      "content_sha256": "a1705f0461e2023aaf648b80d64b1733b36509a3ed5d224bb023e1617a92d58e",
+      "difficulty": [
+        "table"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-agenda-table-margin",
+      "partition": "C",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "agenda-table",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-italic-style-margin",
+      "content_sha256": "fbae729eb80e989e931b1cf47514ee0dab499e7e86adae49efa730e0095014c2",
+      "difficulty": [
+        "style-variation"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-italic-style-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "italic-style",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-low-contrast-margin",
+      "content_sha256": "04665bb551f89b0ea2cbb28871d3212822e9d5ec1c2160db1faf0a77a6b7edce",
+      "difficulty": [
+        "low-contrast"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-low-contrast-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "low-contrast",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v2-close-notes-stacked",
+      "content_sha256": "258acdb927e2157e020b139e586fe9d23ef24fcaa35adc95745cf4de747cb3f0",
+      "difficulty": [
+        "visually-close"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-visually-close-stacked",
       "partition": "A",
       "primary_classes": [
         "MEETING",
@@ -1484,14 +1868,14 @@
     {
       "NOTE_UNIT_count": 4,
       "adversarial": false,
-      "case_id": "v1-dense-r1",
-      "content_sha256": "398f8255360214c79eb38513d547da1f43ce1a9fdf846efd77020154ba6adcc1",
+      "case_id": "v2-dense-stacked",
+      "content_sha256": "a9ab187a1796d44e3de065678b5c05438bbf390b17ff80538ac523d42e7e09bc",
       "difficulty": [
         "dense"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-dense-r1",
+      "leakage_group_id": "lg-dense-stacked",
       "partition": "A",
       "primary_classes": [
         "MEETING",
@@ -1513,398 +1897,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-near-typed-r1",
-      "content_sha256": "a3b9d6601b2472a1de5713bcb48303f71c925587085e283199eca126379f0e6e",
+      "case_id": "v2-near-typed-stacked",
+      "content_sha256": "e4e6a1c4d3ca859dfc0302acdf9ce595ab7df37742c7c5e1d57337eec7507fec",
       "difficulty": [
         "near-typed"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-near-typed-r1",
-      "partition": "B",
-      "primary_classes": [
-        "RELATIONSHIP"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "near-typed",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-arrow-r1",
-      "content_sha256": "b30bc2f4a2c23dd5964b9fe4404b5f5eb9db76c90097e5f221d8acad9d4b041a",
-      "difficulty": [
-        "leader-line"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-arrow-r1",
-      "partition": "B",
-      "primary_classes": [
-        "MEETING"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "arrow-leader",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-crossed-r1",
-      "content_sha256": "89d4df10aa8f3784c0d431882e4fae1ee452dc88cb30600f616f193e3cbd99e4",
-      "difficulty": [
-        "superseded"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-crossed-r1",
-      "partition": "B",
-      "primary_classes": [
-        "GENERAL"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "crossed-out",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "UNCERTAIN"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-agenda-table-r1",
-      "content_sha256": "bdb1707e59ec54f88a9908b0d132d2fc0931fc4daf238f0d6a6d54d8271b9667",
-      "difficulty": [
-        "table"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-agenda-table-r1",
-      "partition": "B",
-      "primary_classes": [
-        "PROJECT"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "agenda-table",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-handwriting-style-r1",
-      "content_sha256": "7a81b4232c6351cc874ecceb4269cd4bd99f4c84754122476bf885520f53f968",
-      "difficulty": [
-        "style-variation"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-handwriting-style-r1",
-      "partition": "B",
-      "primary_classes": [
-        "GENERAL"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "handwriting-style",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-low-contrast-r1",
-      "content_sha256": "a4a82cf1f88b1c925d0e96dd3853638ccf1cc4d2818b48a1cd9571858f8253d9",
-      "difficulty": [
-        "low-contrast"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-low-contrast-r1",
-      "partition": "B",
-      "primary_classes": [
-        "MEETING"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "low-contrast",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "UNCERTAIN"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 2,
-      "adversarial": false,
-      "case_id": "v1-close-notes-r2",
-      "content_sha256": "dcaa37cf1cef8462cf9706709e47255e7266352564859b1d38a16881803e29ce",
-      "difficulty": [
-        "visually-close"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-close-notes-r2",
-      "partition": "A",
-      "primary_classes": [
-        "MEETING",
-        "PROJECT"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "visually-close",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR",
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 4,
-      "adversarial": false,
-      "case_id": "v1-dense-r2",
-      "content_sha256": "0db37c4b0d61ac12f2e8e2eb85d7cff332b965fa6aa4930fbf4311f203ac9f27",
-      "difficulty": [
-        "dense"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-dense-r2",
-      "partition": "A",
-      "primary_classes": [
-        "MEETING",
-        "PROJECT",
-        "RELATIONSHIP",
-        "GENERAL"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "dense",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR",
-        "CLEAR",
-        "CLEAR",
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-near-typed-r2",
-      "content_sha256": "24888fd2c9f1c61094c1adcb752ad5ef8615b5417ab347cb2d82f53c4bb47a6d",
-      "difficulty": [
-        "near-typed"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-near-typed-r2",
-      "partition": "C",
-      "primary_classes": [
-        "RELATIONSHIP"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "near-typed",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-arrow-r2",
-      "content_sha256": "9b117cf1b3f17a9e4d5ea1ba3dca549ea1fdaf551ca359a4c9822a514a1a4b05",
-      "difficulty": [
-        "leader-line"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-arrow-r2",
-      "partition": "C",
-      "primary_classes": [
-        "MEETING"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "arrow-leader",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-crossed-r2",
-      "content_sha256": "e438544c02e04679b1e8141d280f4088848cf2817ad5a0de7c427247b04226d3",
-      "difficulty": [
-        "superseded"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-crossed-r2",
-      "partition": "C",
-      "primary_classes": [
-        "GENERAL"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "crossed-out",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "UNCERTAIN"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-agenda-table-r2",
-      "content_sha256": "10f3916fd5facd9a13941acda8c642349105495bdbe6fc45cf79bb2504836fb6",
-      "difficulty": [
-        "table"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-agenda-table-r2",
-      "partition": "C",
-      "primary_classes": [
-        "PROJECT"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "agenda-table",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-handwriting-style-r2",
-      "content_sha256": "dd9b5d8fb843e33ed200b8e979480135e105588f0b9cb1797137c5cc31f26d25",
-      "difficulty": [
-        "style-variation"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-handwriting-style-r2",
-      "partition": "C",
-      "primary_classes": [
-        "GENERAL"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "handwriting-style",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-low-contrast-r2",
-      "content_sha256": "463f1b313da589eb5c083be6822f1f26205294b76905578d5c8f4448031574b2",
-      "difficulty": [
-        "low-contrast"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-low-contrast-r2",
-      "partition": "C",
-      "primary_classes": [
-        "MEETING"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "low-contrast",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "UNCERTAIN"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 2,
-      "adversarial": false,
-      "case_id": "v1-close-notes-r3",
-      "content_sha256": "5c15eeb3e6c908138192e4af887d6eb24b38ccd806aa9990d3102bef7a95cd54",
-      "difficulty": [
-        "visually-close"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-close-notes-r3",
-      "partition": "A",
-      "primary_classes": [
-        "MEETING",
-        "PROJECT"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "visually-close",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR",
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 4,
-      "adversarial": false,
-      "case_id": "v1-dense-r3",
-      "content_sha256": "1fc9de14b48cf78e7f3f4797ab2750eeaa413e06ac2d09249272f1884dd04184",
-      "difficulty": [
-        "dense"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-dense-r3",
-      "partition": "A",
-      "primary_classes": [
-        "MEETING",
-        "PROJECT",
-        "RELATIONSHIP",
-        "GENERAL"
-      ],
-      "review_state": "APPROVED",
-      "scenario": "dense",
-      "scoreable": true,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "CLEAR",
-        "CLEAR",
-        "CLEAR",
-        "CLEAR"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-near-typed-r3",
-      "content_sha256": "888f9504ef3a77b1fe538e90e6d2cb0afa01c358d02caea3325f0d0025a1582f",
-      "difficulty": [
-        "near-typed"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-near-typed-r3",
+      "leakage_group_id": "lg-near-typed-stacked",
       "partition": "A",
       "primary_classes": [
         "RELATIONSHIP"
@@ -1920,14 +1920,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-arrow-r3",
-      "content_sha256": "9777e0a81e202cc31465c71069489b4ba816be5719eb905d5f17c8418b2e1369",
+      "case_id": "v2-arrow-stacked",
+      "content_sha256": "24fc05e7ade35173625a8e04d5a1e61fe4c629823315429e444c5cdd00f70be9",
       "difficulty": [
         "leader-line"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-arrow-r3",
+      "leakage_group_id": "lg-arrow-leader-stacked",
       "partition": "A",
       "primary_classes": [
         "MEETING"
@@ -1943,14 +1943,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-crossed-r3",
-      "content_sha256": "ff2edb7787b57efad7194d1069fb2e137c4c57583befa9cdd095d89e06a08f08",
+      "case_id": "v2-crossed-stacked",
+      "content_sha256": "a46a9e70d1802e88d0079d0831be71993692f6fa6100ae04a5f38cad991e5e2c",
       "difficulty": [
         "superseded"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-crossed-r3",
+      "leakage_group_id": "lg-crossed-out-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -1966,14 +1966,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-agenda-table-r3",
-      "content_sha256": "92c664ffb0ea7d1bc1235304a77b1c51f71eb5ff2d6ab5dda5529bf297485a4d",
+      "case_id": "v2-agenda-table-stacked",
+      "content_sha256": "2227d2bedad221a5d4423fb637ff93c945fe260ff0a4ac002a75313a0b3db9b8",
       "difficulty": [
         "table"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-agenda-table-r3",
+      "leakage_group_id": "lg-agenda-table-stacked",
       "partition": "A",
       "primary_classes": [
         "PROJECT"
@@ -1989,20 +1989,20 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-handwriting-style-r3",
-      "content_sha256": "dc54fa68d401c19844094d78e3c582347e0aeb45c838d7c5bb53f707efb4e7ae",
+      "case_id": "v2-italic-style-stacked",
+      "content_sha256": "3ddb8ed80cffc77c6a94a5f1cd1dc3bf6481a43afb091cd7bbdb05121fde4c47",
       "difficulty": [
         "style-variation"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-handwriting-style-r3",
+      "leakage_group_id": "lg-italic-style-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
       ],
       "review_state": "APPROVED",
-      "scenario": "handwriting-style",
+      "scenario": "italic-style",
       "scoreable": true,
       "source_layer": "SYNTHETIC_REGRESSION",
       "transcription_statuses": [
@@ -2012,14 +2012,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-low-contrast-r3",
-      "content_sha256": "a1a779f0cc919a8f336f8197974c150f927cf488a710b21de0e1ae515f03b96e",
+      "case_id": "v2-low-contrast-stacked",
+      "content_sha256": "1eff5f37f3adad7a0bb5c9ce279b4f702813695469c586f5fffd4184eeb25fbe",
       "difficulty": [
         "low-contrast"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-low-contrast-r3",
+      "leakage_group_id": "lg-low-contrast-stacked",
       "partition": "A",
       "primary_classes": [
         "MEETING"
@@ -2035,14 +2035,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": true,
-      "case_id": "v1-injection-r1",
-      "content_sha256": "cf2e1aa466da9f9475ddd4d6a83ddb7700cbaf1e47e1e220fe7cd704c1bd9dc1",
+      "case_id": "v2-injection-block",
+      "content_sha256": "520044412b5bec0b1749ecbfe9207af1f9b46273dca2b121146ee29673dd8597",
       "difficulty": [
         "injection"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-injection-r1",
+      "leakage_group_id": "lg-prompt-injection-block",
       "partition": "B",
       "primary_classes": [
         "GENERAL"
@@ -2058,20 +2058,20 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": true,
-      "case_id": "v1-unreadable-trap-r1",
-      "content_sha256": "17d93fefacbd787f5d13e7c5d4f457951d68d7cee73f1b4943b71e2cb4960ffb",
+      "case_id": "v2-scribble-trap-block",
+      "content_sha256": "75e35a04133cd7c23ac5d112675f94e70dd7f58a42edb0333dc2f1f63ee1cba0",
       "difficulty": [
-        "unreadable"
+        "obscured"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-unreadable-trap-r1",
+      "leakage_group_id": "lg-obscured-trap-block",
       "partition": "B",
       "primary_classes": [
         "GENERAL"
       ],
       "review_state": "APPROVED",
-      "scenario": "unreadable-trap",
+      "scenario": "obscured-trap",
       "scoreable": true,
       "source_layer": "SYNTHETIC_REGRESSION",
       "transcription_statuses": [
@@ -2081,14 +2081,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": true,
-      "case_id": "v1-injection-r2",
-      "content_sha256": "f2dcf8c497ae46f480483d3c40220d3f977845e101487971ad3113730b9a8bc9",
+      "case_id": "v2-injection-margin",
+      "content_sha256": "18fd05acbe79e63ebacb5025dc3ed4d7d0fa0b6bb8d943e3c27391709c0f6f9d",
       "difficulty": [
         "injection"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-injection-r2",
+      "leakage_group_id": "lg-prompt-injection-margin",
       "partition": "C",
       "primary_classes": [
         "GENERAL"
@@ -2104,20 +2104,20 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": true,
-      "case_id": "v1-unreadable-trap-r2",
-      "content_sha256": "fb4c05605fbfd87cd63716ad94d021bc2c05fd65f253c67e7d75131881e2a3f7",
+      "case_id": "v2-scribble-trap-margin",
+      "content_sha256": "028132c2b5f65f624ad01ba6d2193cf3d463403937055f77948078538b46ebc2",
       "difficulty": [
-        "unreadable"
+        "obscured"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-unreadable-trap-r2",
+      "leakage_group_id": "lg-obscured-trap-margin",
       "partition": "C",
       "primary_classes": [
         "GENERAL"
       ],
       "review_state": "APPROVED",
-      "scenario": "unreadable-trap",
+      "scenario": "obscured-trap",
       "scoreable": true,
       "source_layer": "SYNTHETIC_REGRESSION",
       "transcription_statuses": [
@@ -2127,14 +2127,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": true,
-      "case_id": "v1-injection-r3",
-      "content_sha256": "05d4e877bb7ed077e816f32ed513f0c06d435cf999849c58994657a600d2c25d",
+      "case_id": "v2-injection-stacked",
+      "content_sha256": "9de5394ec8e50e5940a0d60be97949727c95c5fc5512849ea30119820dd6e33d",
       "difficulty": [
         "injection"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-injection-r3",
+      "leakage_group_id": "lg-prompt-injection-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
@@ -2150,20 +2150,20 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": true,
-      "case_id": "v1-unreadable-trap-r3",
-      "content_sha256": "91a174348ef9eb110a3effb0091fd44d3b04d84aa8802ce88f5c78e861b9eb41",
+      "case_id": "v2-scribble-trap-stacked",
+      "content_sha256": "0969a4bad4144fe4fe7ced6403ef95f4bc0c133fce74d5bbb1397a6efe4c64e7",
       "difficulty": [
-        "unreadable"
+        "obscured"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-unreadable-trap-r3",
+      "leakage_group_id": "lg-obscured-trap-stacked",
       "partition": "A",
       "primary_classes": [
         "GENERAL"
       ],
       "review_state": "APPROVED",
-      "scenario": "unreadable-trap",
+      "scenario": "obscured-trap",
       "scoreable": true,
       "source_layer": "SYNTHETIC_REGRESSION",
       "transcription_statuses": [
@@ -2173,14 +2173,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-ambiguous-grouping-r1",
-      "content_sha256": "4c82e6a628dcfcf029665497a3ae7cdc9aa17f917831115b8d0504591c4492ae",
+      "case_id": "v2-ambiguous-grouping-block",
+      "content_sha256": "44d17c869a78312665faed9692df9923484f0f0636af2a4ded7bf504b139849b",
       "difficulty": [
         "ambiguous"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-ambiguous-grouping-r1",
+      "leakage_group_id": "lg-ambiguous-grouping-block",
       "partition": "A",
       "primary_classes": [
         "MEETING"
@@ -2196,14 +2196,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-ambiguous-grouping-r2",
-      "content_sha256": "8078d100899671092b9e71b9144cb0e77216e0f35c558fb9caca17c7f2dba0a4",
+      "case_id": "v2-ambiguous-grouping-margin",
+      "content_sha256": "3c7b82c0f55a78767ac75d239b37354f700feb1df02cfffb0ae7d945674f508f",
       "difficulty": [
         "ambiguous"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-ambiguous-grouping-r2",
+      "leakage_group_id": "lg-ambiguous-grouping-margin",
       "partition": "A",
       "primary_classes": [
         "MEETING"
@@ -2219,37 +2219,14 @@
     {
       "NOTE_UNIT_count": 1,
       "adversarial": false,
-      "case_id": "v1-ambiguous-grouping-r3",
-      "content_sha256": "8415daae5b8afa8573f17abdb0b18a485bbf69f45659d3898c11d292711868f1",
+      "case_id": "v2-ambiguous-grouping-stacked",
+      "content_sha256": "22e31f4bb5f43c6578b149c052ad4ce4fe4684501f368763de0d63d9001d1d12",
       "difficulty": [
         "ambiguous"
       ],
       "fixture_classification": "SYNTHETIC_NON_PERSONAL",
       "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-ambiguous-grouping-r3",
-      "partition": "A",
-      "primary_classes": [
-        "MEETING"
-      ],
-      "review_state": "AMBIGUOUS_EXCLUDE",
-      "scenario": "ambiguous-grouping",
-      "scoreable": false,
-      "source_layer": "SYNTHETIC_REGRESSION",
-      "transcription_statuses": [
-        "UNCERTAIN"
-      ]
-    },
-    {
-      "NOTE_UNIT_count": 1,
-      "adversarial": false,
-      "case_id": "v1-ambiguous-grouping-r4",
-      "content_sha256": "18ed1be923bf1e3bd71980a809e06ac9b8e9321a6f5bb1a610df7207ff567268",
-      "difficulty": [
-        "ambiguous"
-      ],
-      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
-      "label_provenance": "SYNTHETIC_DETERMINISTIC",
-      "leakage_group_id": "v1-ambiguous-grouping-r4",
+      "leakage_group_id": "lg-ambiguous-grouping-stacked",
       "partition": "A",
       "primary_classes": [
         "MEETING"
@@ -2263,688 +2240,681 @@
       ]
     }
   ],
-  "corpus_version": "gsqs-v1",
-  "generator_version": "gsqs-v1-generator-1",
+  "corpus_version": "gsqs-v2",
+  "generator_version": "gsqs-v2-generator-1",
   "leakage_groups": {
-    "v1-agenda-table-r1": {
+    "lg-agenda-table-block": {
       "case_ids": [
-        "v1-agenda-table-r1"
+        "v2-agenda-table-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-agenda-table-r2": {
+    "lg-agenda-table-margin": {
       "case_ids": [
-        "v1-agenda-table-r2"
+        "v2-agenda-table-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-agenda-table-r3": {
+    "lg-agenda-table-stacked": {
       "case_ids": [
-        "v1-agenda-table-r3"
+        "v2-agenda-table-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-ambiguous-grouping-r1": {
+    "lg-ambiguous-grouping-block": {
       "case_ids": [
-        "v1-ambiguous-grouping-r1"
+        "v2-ambiguous-grouping-block"
       ],
       "partition": "A",
       "scoreable": false
     },
-    "v1-ambiguous-grouping-r2": {
+    "lg-ambiguous-grouping-margin": {
       "case_ids": [
-        "v1-ambiguous-grouping-r2"
+        "v2-ambiguous-grouping-margin"
       ],
       "partition": "A",
       "scoreable": false
     },
-    "v1-ambiguous-grouping-r3": {
+    "lg-ambiguous-grouping-stacked": {
       "case_ids": [
-        "v1-ambiguous-grouping-r3"
+        "v2-ambiguous-grouping-stacked"
       ],
       "partition": "A",
       "scoreable": false
     },
-    "v1-ambiguous-grouping-r4": {
+    "lg-arrow-leader-block": {
       "case_ids": [
-        "v1-ambiguous-grouping-r4"
-      ],
-      "partition": "A",
-      "scoreable": false
-    },
-    "v1-arrow-r1": {
-      "case_ids": [
-        "v1-arrow-r1"
+        "v2-arrow-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-arrow-r2": {
+    "lg-arrow-leader-margin": {
       "case_ids": [
-        "v1-arrow-r2"
+        "v2-arrow-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-arrow-r3": {
+    "lg-arrow-leader-stacked": {
       "case_ids": [
-        "v1-arrow-r3"
+        "v2-arrow-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-close-notes-r1": {
+    "lg-context-only-block": {
       "case_ids": [
-        "v1-close-notes-r1"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-close-notes-r2": {
-      "case_ids": [
-        "v1-close-notes-r2"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-close-notes-r3": {
-      "case_ids": [
-        "v1-close-notes-r3"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-context-only-r1": {
-      "case_ids": [
-        "v1-context-only-r1"
+        "v2-context-only-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-context-only-r2": {
+    "lg-context-only-margin": {
       "case_ids": [
-        "v1-context-only-r2"
+        "v2-context-only-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-context-only-r3": {
+    "lg-context-only-stacked": {
       "case_ids": [
-        "v1-context-only-r3"
+        "v2-context-only-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-crossed-r1": {
+    "lg-crossed-out-block": {
       "case_ids": [
-        "v1-crossed-r1"
+        "v2-crossed-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-crossed-r2": {
+    "lg-crossed-out-margin": {
       "case_ids": [
-        "v1-crossed-r2"
+        "v2-crossed-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-crossed-r3": {
+    "lg-crossed-out-stacked": {
       "case_ids": [
-        "v1-crossed-r3"
+        "v2-crossed-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-dense-r1": {
+    "lg-dense-block": {
       "case_ids": [
-        "v1-dense-r1"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-dense-r2": {
-      "case_ids": [
-        "v1-dense-r2"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-dense-r3": {
-      "case_ids": [
-        "v1-dense-r3"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-follow-up-r1": {
-      "case_ids": [
-        "v1-follow-up-r1"
+        "v2-dense-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-follow-up-r2": {
+    "lg-dense-margin": {
       "case_ids": [
-        "v1-follow-up-r2"
+        "v2-dense-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-follow-up-r3": {
+    "lg-dense-stacked": {
       "case_ids": [
-        "v1-follow-up-r3"
+        "v2-dense-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-handwriting-style-r1": {
+    "lg-follow-up-block": {
       "case_ids": [
-        "v1-handwriting-style-r1"
+        "v2-follow-up-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-handwriting-style-r2": {
+    "lg-follow-up-margin": {
       "case_ids": [
-        "v1-handwriting-style-r2"
+        "v2-follow-up-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-handwriting-style-r3": {
+    "lg-follow-up-stacked": {
       "case_ids": [
-        "v1-handwriting-style-r3"
+        "v2-follow-up-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-injection-r1": {
+    "lg-italic-style-block": {
       "case_ids": [
-        "v1-injection-r1"
+        "v2-italic-style-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-injection-r2": {
+    "lg-italic-style-margin": {
       "case_ids": [
-        "v1-injection-r2"
+        "v2-italic-style-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-injection-r3": {
+    "lg-italic-style-stacked": {
       "case_ids": [
-        "v1-injection-r3"
+        "v2-italic-style-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-low-contrast-r1": {
+    "lg-low-contrast-block": {
       "case_ids": [
-        "v1-low-contrast-r1"
+        "v2-low-contrast-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-low-contrast-r2": {
+    "lg-low-contrast-margin": {
       "case_ids": [
-        "v1-low-contrast-r2"
+        "v2-low-contrast-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-low-contrast-r3": {
+    "lg-low-contrast-stacked": {
       "case_ids": [
-        "v1-low-contrast-r3"
+        "v2-low-contrast-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-multi-2-r1": {
+    "lg-multi-2-block": {
       "case_ids": [
-        "v1-multi-2-r1"
+        "v2-multi-2-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-multi-2-r2": {
+    "lg-multi-2-margin": {
       "case_ids": [
-        "v1-multi-2-r2"
+        "v2-multi-2-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-multi-2-r3": {
+    "lg-multi-2-stacked": {
       "case_ids": [
-        "v1-multi-2-r3"
+        "v2-multi-2-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-multi-3-r1": {
+    "lg-multi-3-block": {
       "case_ids": [
-        "v1-multi-3-r1"
+        "v2-multi-3-block"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-multi-3-margin": {
+      "case_ids": [
+        "v2-multi-3-margin"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-multi-3-stacked": {
+      "case_ids": [
+        "v2-multi-3-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-multi-candidate-block": {
+      "case_ids": [
+        "v2-multi-candidate-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-multi-3-r2": {
+    "lg-multi-candidate-margin": {
       "case_ids": [
-        "v1-multi-3-r2"
+        "v2-multi-candidate-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-multi-3-r3": {
+    "lg-multi-candidate-stacked": {
       "case_ids": [
-        "v1-multi-3-r3"
+        "v2-multi-candidate-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-multi-candidate-r1": {
+    "lg-multi-tag-block": {
       "case_ids": [
-        "v1-multi-candidate-r1"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-multi-candidate-r2": {
-      "case_ids": [
-        "v1-multi-candidate-r2"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-multi-candidate-r3": {
-      "case_ids": [
-        "v1-multi-candidate-r3"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-multi-tag-r1": {
-      "case_ids": [
-        "v1-multi-tag-r1"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-multi-tag-r2": {
-      "case_ids": [
-        "v1-multi-tag-r2"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-multi-tag-r3": {
-      "case_ids": [
-        "v1-multi-tag-r3"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-near-typed-r1": {
-      "case_ids": [
-        "v1-near-typed-r1"
+        "v2-multi-tag-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-near-typed-r2": {
+    "lg-multi-tag-margin": {
       "case_ids": [
-        "v1-near-typed-r2"
+        "v2-multi-tag-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-near-typed-r3": {
+    "lg-multi-tag-stacked": {
       "case_ids": [
-        "v1-near-typed-r3"
+        "v2-multi-tag-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-no-candidate-r1": {
+    "lg-near-typed-block": {
       "case_ids": [
-        "v1-no-candidate-r1"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-no-candidate-r2": {
-      "case_ids": [
-        "v1-no-candidate-r2"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-no-candidate-r3": {
-      "case_ids": [
-        "v1-no-candidate-r3"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-no-tag-r1": {
-      "case_ids": [
-        "v1-no-tag-r1"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-no-tag-r2": {
-      "case_ids": [
-        "v1-no-tag-r2"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-no-tag-r3": {
-      "case_ids": [
-        "v1-no-tag-r3"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-one-candidate-r1": {
-      "case_ids": [
-        "v1-one-candidate-r1"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-one-candidate-r2": {
-      "case_ids": [
-        "v1-one-candidate-r2"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-one-candidate-r3": {
-      "case_ids": [
-        "v1-one-candidate-r3"
-      ],
-      "partition": "A",
-      "scoreable": true
-    },
-    "v1-single-general-clear-r1": {
-      "case_ids": [
-        "v1-single-general-clear-r1"
+        "v2-near-typed-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-general-clear-r2": {
+    "lg-near-typed-margin": {
       "case_ids": [
-        "v1-single-general-clear-r2"
+        "v2-near-typed-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-general-clear-r3": {
+    "lg-near-typed-stacked": {
       "case_ids": [
-        "v1-single-general-clear-r3"
+        "v2-near-typed-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-general-uncertain-r1": {
+    "lg-no-candidate-block": {
       "case_ids": [
-        "v1-single-general-uncertain-r1"
+        "v2-no-candidate-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-general-uncertain-r2": {
+    "lg-no-candidate-margin": {
       "case_ids": [
-        "v1-single-general-uncertain-r2"
+        "v2-no-candidate-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-general-uncertain-r3": {
+    "lg-no-candidate-stacked": {
       "case_ids": [
-        "v1-single-general-uncertain-r3"
+        "v2-no-candidate-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-general-unreadable-r1": {
+    "lg-no-tag-block": {
       "case_ids": [
-        "v1-single-general-unreadable-r1"
+        "v2-no-tag-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-general-unreadable-r2": {
+    "lg-no-tag-margin": {
       "case_ids": [
-        "v1-single-general-unreadable-r2"
+        "v2-no-tag-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-general-unreadable-r3": {
+    "lg-no-tag-stacked": {
       "case_ids": [
-        "v1-single-general-unreadable-r3"
+        "v2-no-tag-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-meeting-clear-r1": {
+    "lg-obscured-trap-block": {
       "case_ids": [
-        "v1-single-meeting-clear-r1"
+        "v2-scribble-trap-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-meeting-clear-r2": {
+    "lg-obscured-trap-margin": {
       "case_ids": [
-        "v1-single-meeting-clear-r2"
+        "v2-scribble-trap-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-meeting-clear-r3": {
+    "lg-obscured-trap-stacked": {
       "case_ids": [
-        "v1-single-meeting-clear-r3"
+        "v2-scribble-trap-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-meeting-uncertain-r1": {
+    "lg-one-candidate-block": {
       "case_ids": [
-        "v1-single-meeting-uncertain-r1"
+        "v2-one-candidate-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-meeting-uncertain-r2": {
+    "lg-one-candidate-margin": {
       "case_ids": [
-        "v1-single-meeting-uncertain-r2"
+        "v2-one-candidate-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-meeting-uncertain-r3": {
+    "lg-one-candidate-stacked": {
       "case_ids": [
-        "v1-single-meeting-uncertain-r3"
+        "v2-one-candidate-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-meeting-unreadable-r1": {
+    "lg-prompt-injection-block": {
       "case_ids": [
-        "v1-single-meeting-unreadable-r1"
+        "v2-injection-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-meeting-unreadable-r2": {
+    "lg-prompt-injection-margin": {
       "case_ids": [
-        "v1-single-meeting-unreadable-r2"
+        "v2-injection-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-meeting-unreadable-r3": {
+    "lg-prompt-injection-stacked": {
       "case_ids": [
-        "v1-single-meeting-unreadable-r3"
+        "v2-injection-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-project-clear-r1": {
+    "lg-single-general-clear-block": {
       "case_ids": [
-        "v1-single-project-clear-r1"
+        "v2-single-general-clear-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-project-clear-r2": {
+    "lg-single-general-clear-margin": {
       "case_ids": [
-        "v1-single-project-clear-r2"
+        "v2-single-general-clear-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-project-clear-r3": {
+    "lg-single-general-clear-stacked": {
       "case_ids": [
-        "v1-single-project-clear-r3"
+        "v2-single-general-clear-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-project-uncertain-r1": {
+    "lg-single-general-obscured-block": {
       "case_ids": [
-        "v1-single-project-uncertain-r1"
+        "v2-single-general-obscured-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-project-uncertain-r2": {
+    "lg-single-general-obscured-margin": {
       "case_ids": [
-        "v1-single-project-uncertain-r2"
+        "v2-single-general-obscured-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-project-uncertain-r3": {
+    "lg-single-general-obscured-stacked": {
       "case_ids": [
-        "v1-single-project-uncertain-r3"
+        "v2-single-general-obscured-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-project-unreadable-r1": {
+    "lg-single-general-uncertain-block": {
       "case_ids": [
-        "v1-single-project-unreadable-r1"
+        "v2-single-general-uncertain-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-project-unreadable-r2": {
+    "lg-single-general-uncertain-margin": {
       "case_ids": [
-        "v1-single-project-unreadable-r2"
+        "v2-single-general-uncertain-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-project-unreadable-r3": {
+    "lg-single-general-uncertain-stacked": {
       "case_ids": [
-        "v1-single-project-unreadable-r3"
+        "v2-single-general-uncertain-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-relationship-clear-r1": {
+    "lg-single-meeting-clear-block": {
       "case_ids": [
-        "v1-single-relationship-clear-r1"
+        "v2-single-meeting-clear-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-relationship-clear-r2": {
+    "lg-single-meeting-clear-margin": {
       "case_ids": [
-        "v1-single-relationship-clear-r2"
+        "v2-single-meeting-clear-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-relationship-clear-r3": {
+    "lg-single-meeting-clear-stacked": {
       "case_ids": [
-        "v1-single-relationship-clear-r3"
+        "v2-single-meeting-clear-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-relationship-uncertain-r1": {
+    "lg-single-meeting-obscured-block": {
       "case_ids": [
-        "v1-single-relationship-uncertain-r1"
+        "v2-single-meeting-obscured-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-relationship-uncertain-r2": {
+    "lg-single-meeting-obscured-margin": {
       "case_ids": [
-        "v1-single-relationship-uncertain-r2"
+        "v2-single-meeting-obscured-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-relationship-uncertain-r3": {
+    "lg-single-meeting-obscured-stacked": {
       "case_ids": [
-        "v1-single-relationship-uncertain-r3"
+        "v2-single-meeting-obscured-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-single-relationship-unreadable-r1": {
+    "lg-single-meeting-uncertain-block": {
       "case_ids": [
-        "v1-single-relationship-unreadable-r1"
+        "v2-single-meeting-uncertain-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-single-relationship-unreadable-r2": {
+    "lg-single-meeting-uncertain-margin": {
       "case_ids": [
-        "v1-single-relationship-unreadable-r2"
+        "v2-single-meeting-uncertain-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-single-relationship-unreadable-r3": {
+    "lg-single-meeting-uncertain-stacked": {
       "case_ids": [
-        "v1-single-relationship-unreadable-r3"
+        "v2-single-meeting-uncertain-stacked"
       ],
       "partition": "A",
       "scoreable": true
     },
-    "v1-unreadable-trap-r1": {
+    "lg-single-project-clear-block": {
       "case_ids": [
-        "v1-unreadable-trap-r1"
+        "v2-single-project-clear-block"
       ],
       "partition": "B",
       "scoreable": true
     },
-    "v1-unreadable-trap-r2": {
+    "lg-single-project-clear-margin": {
       "case_ids": [
-        "v1-unreadable-trap-r2"
+        "v2-single-project-clear-margin"
       ],
       "partition": "C",
       "scoreable": true
     },
-    "v1-unreadable-trap-r3": {
+    "lg-single-project-clear-stacked": {
       "case_ids": [
-        "v1-unreadable-trap-r3"
+        "v2-single-project-clear-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-project-obscured-block": {
+      "case_ids": [
+        "v2-single-project-obscured-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-project-obscured-margin": {
+      "case_ids": [
+        "v2-single-project-obscured-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-project-obscured-stacked": {
+      "case_ids": [
+        "v2-single-project-obscured-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-project-uncertain-block": {
+      "case_ids": [
+        "v2-single-project-uncertain-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-project-uncertain-margin": {
+      "case_ids": [
+        "v2-single-project-uncertain-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-project-uncertain-stacked": {
+      "case_ids": [
+        "v2-single-project-uncertain-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-relationship-clear-block": {
+      "case_ids": [
+        "v2-single-relationship-clear-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-relationship-clear-margin": {
+      "case_ids": [
+        "v2-single-relationship-clear-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-relationship-clear-stacked": {
+      "case_ids": [
+        "v2-single-relationship-clear-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-relationship-obscured-block": {
+      "case_ids": [
+        "v2-single-relationship-obscured-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-relationship-obscured-margin": {
+      "case_ids": [
+        "v2-single-relationship-obscured-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-relationship-obscured-stacked": {
+      "case_ids": [
+        "v2-single-relationship-obscured-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-relationship-uncertain-block": {
+      "case_ids": [
+        "v2-single-relationship-uncertain-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-relationship-uncertain-margin": {
+      "case_ids": [
+        "v2-single-relationship-uncertain-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-relationship-uncertain-stacked": {
+      "case_ids": [
+        "v2-single-relationship-uncertain-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-visually-close-block": {
+      "case_ids": [
+        "v2-close-notes-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-visually-close-margin": {
+      "case_ids": [
+        "v2-close-notes-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-visually-close-stacked": {
+      "case_ids": [
+        "v2-close-notes-stacked"
       ],
       "partition": "A",
       "scoreable": true
     }
   },
-  "manifest_digest": "3c2e0131fbf976a8294753b999c5c1d47572e9252d4fbc50b00732768e144728"
+  "manifest_digest": "263eaebc14ca4a435ae37d595a9fd26dbb4d403a5ada79d6f5c0cc7a63e97b25"
 }

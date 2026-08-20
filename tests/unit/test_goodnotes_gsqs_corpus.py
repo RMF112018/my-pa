@@ -97,9 +97,10 @@ def test_partition_leakage_is_refused() -> None:
             review_state=ReviewState.APPROVED,
             partition=partition,
             page_bytes=b"%PDF",
+            leakage_group_id="lg-same-template",
         )
 
-    with pytest.raises(ValueError, match="leak"):
+    with pytest.raises(ValueError, match="leakage group"):
         prevent_partition_leakage((_case("a", CorpusPartition.A), _case("b", CorpusPartition.B)))
     assert case_signature((region,), "single-note") == case_signature((region,), "single-note")
 
@@ -109,7 +110,8 @@ def test_freeze_v1_is_reproducible_and_digest_bound() -> None:
     second_cases, second_manifest = freeze_v1_corpus()
     assert first_manifest.manifest_digest == second_manifest.manifest_digest
     assert first_manifest.frozen is True
-    assert first_manifest.approval_status == "READY_FOR_OPERATOR_REVIEW"
+    assert first_manifest.approval_status == "REJECT_FOR_B0"
+    assert first_manifest.corpus_version == "gsqs-v1"
     assert {case.content_sha256 for case in first_cases} == {
         case.content_sha256 for case in second_cases
     }
@@ -134,7 +136,28 @@ def test_committed_operator_package_matches_freeze() -> None:
     review_md = Path("ops/goodnotes/gsqs/v1/OPERATOR_REVIEW.md").read_text()
     assert manifest.manifest_digest in review_md
     assert review["FIXED_LABELED_CORPUS_APPROVED"] is False
+    assert review["approval_status"] == "REJECT_FOR_B0"
+    assert review["GSQS_V1_B0_DISPOSITION"] == "REJECT_FOR_B0"
+    assert review["b0_suitable"] is False
     assert review["page_count"] == payload["page_count"]
     assert review["NOTE_UNIT_count"] == payload["NOTE_UNIT_count"]
     assert review["partitions"] == payload["partitions"]
     assert {item["case_id"] for item in index["cases"]} == {case.case_id for case in cases}
+
+
+def test_v1_unreadable_pdf_has_no_status_label() -> None:
+    cases, _manifest = freeze_v1_corpus()
+    selected = [
+        case
+        for case in cases
+        for region in case.regions
+        if region.kind is GoodNotesSegmentKind.NOTE_UNIT
+        and region.transcription_status is GoodNotesTranscriptionStatus.UNREADABLE
+    ]
+    assert selected
+    for case in selected:
+        assert b"UNREADABLE" not in case.page_bytes.upper()
+        note = next(
+            region for region in case.regions if region.kind is GoodNotesSegmentKind.NOTE_UNIT
+        )
+        assert note.transcription == ""

@@ -140,7 +140,9 @@ Automated coverage is FAST/unit only:
   tests/unit/test_goodnotes_evaluation.py \
   tests/unit/test_goodnotes_gsqs.py \
   tests/unit/test_goodnotes_gsqs_corpus.py \
-  tests/unit/test_goodnotes_gsqs_harness.py
+  tests/unit/test_goodnotes_gsqs_digest.py \
+  tests/unit/test_goodnotes_gsqs_harness.py \
+  tests/unit/test_goodnotes_gsqs_v2.py
 ```
 
 Those suites use synthetic fixtures such as `"synthetic note"`. They do not

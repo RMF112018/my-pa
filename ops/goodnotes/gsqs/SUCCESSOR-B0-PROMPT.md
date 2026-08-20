@@ -1,7 +1,7 @@
 # Successor prompt — operator corpus approval and MEASURED_B0
 
-coordination_request_id of the infrastructure that built this package:
-`REQ-MYPA-GOODNOTES-GATE-B-EVALUATION-20260820-001`
+coordination_request_id of the remediation that produced `gsqs-v2`:
+`REQ-MYPA-GOODNOTES-GATE-B-CORPUS-V2-REMEDIATION-20260820-001`
 
 This prompt is for a **later, separately authorized** phase. It is not
 authorization to run now.
@@ -12,21 +12,31 @@ authorization to run now.
 - Do not call production `goodnotes.propose` as the scoring path.
 - Do not activate the Abacus optimizer.
 - Do not set `AUTOMATIC_PROMOTION = ENABLED`.
-- Do not ingest personal GoodNotes.
+- Do not ingest ordinary production GoodNotes or personal/business
+  handwriting.
 - Do not deploy, mutate OAuth/grants, schedule the Task, enable Gate C,
   modify TBR, or activate pilot/production.
+- Do not use `gsqs-v1` to establish `MEASURED_B0`. Its disposition is
+  `REJECT_FOR_B0`.
 
 ## Prerequisites
 
-1. Operator has approved corpus `gsqs-v1` at manifest digest
-   `971083804db9fc46295db1ea64dcf2288d4aa1feaddd1ac8a26345f3579bb6d3`
-   (or a **new** corpus version if labels changed).
-2. Freeze Corpus B (scoreable partition B only) to that digest.
-3. Freeze evaluator `goodnotes-gsqs-independent` version `1.1` with code
+1. Operator has reviewed corpus `gsqs-v2` at manifest digest
+   `263eaebc14ca4a435ae37d595a9fd26dbb4d403a5ada79d6f5c0cc7a63e97b25`.
+   Synthetic-regression approval is not by itself B0 readiness.
+2. Operator has admitted a digest-bound
+   `SYNTHETIC_NON_PERSONAL_HANDWRITING` sample set per
+   [`HANDWRITING_ADMISSION.md`](HANDWRITING_ADMISSION.md), or has
+   explicitly accepted a later corpus version that includes it.
+3. Freeze Corpus B (scoreable partition B only) to the **approved**
+   digest. Corpus C stays unused for prompt/config tuning.
+4. Freeze evaluator `goodnotes-gsqs-independent` version `1.1` with code
    identity
    `4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e`
    (or a new evaluator version if scoring changed).
-4. Confirm `FIXED_LABELED_CORPUS_APPROVED = true` for that digest only.
+5. Confirm `FIXED_LABELED_CORPUS_APPROVED = true` for that digest only,
+   and that the operator has stated the corpus is suitable for B0 — not
+   regression-only.
 
 ## Incumbent
 

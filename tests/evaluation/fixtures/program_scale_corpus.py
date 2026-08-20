@@ -122,15 +122,17 @@ LATE: Final = datetime(2025, 6, 1, tzinfo=UTC)
 # Named constants rather than literals scattered through the builder, so a
 # reader can check the intent against the requirement without reading the loops.
 #
-# **No test asserts these minimums against the built corpus.** This module is
-# imported by nothing and executed by no tier, which
-# `docs/plans/relationship-intelligence-implementation-plan.md` records as the
-# honest fact about it: a fixture no test reads proves the same amount as no
-# fixture. An earlier version of this comment cited
-# `tests/evaluation/test_program_scale_acceptance.py` for that assertion; that
-# file has never existed. It was the third citation in this campaign naming a
-# test file that does not exist, which is why the two others now say so in place
-# of the citation rather than being quietly deleted.
+# `tests/database/test_program_scale_acceptance.py` asserts these minimums
+# against the *built* corpus, and answers all 1,090 labelled cases through
+# `SqlEntityRepository` on a disposable PostgreSQL database.
+#
+# **That test did not exist until 2026-08-20, and this comment cited it anyway.**
+# It named `tests/evaluation/test_program_scale_acceptance.py`, in the evaluation
+# tier, which had never been written — the third citation in this campaign
+# naming a test file that does not exist. The correction stated the honest fact
+# (nothing read this fixture, so it proved the same amount as no fixture) and
+# the suite was then written, in the database tier rather than the evaluation
+# one because the criterion is about scale and about SQL.
 
 ACTIVE_PERSONS: Final = 500
 MERGED_PERSONS: Final = 40

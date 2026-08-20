@@ -74,8 +74,8 @@ and none is claimed.
 | RI-AC-028 caller Principal impersonation rejected | MET | CONTRACT | Principal never caller-supplied. |
 | RI-AC-029 no unnecessary PII disclosure | MET | CONTRACT | Observed values omitted from tool output. |
 | RI-AC-030 consequential writes produce audit/receipt | PARTIAL | DATABASE | Proposal and merge lineage are durable. A common receipt path across consequential writes is incomplete. |
-| RI-AC-031 program-scale fixture (500 persons / 100 orgs) | MET | — | `[revised]` Audit found this absent. A seeded synthetic fixture now exists at `tests/evaluation/fixtures/program_scale_corpus.py`, verified at **565 persons, 105 organizations, 6 programs, 24 projects, 48 work packages, 5,262 combined alias/identifier/assignment/relationship/observation records, 60 collision groups, 80 historical employment changes**, plus recycled mailboxes, conflicted addresses, merge redirects and stale roles. Every stated minimum is exceeded. **Tier corrected 2026-08-19 from `UNIT` to none.** No test of any tier imports either fixture module — `grep -rn "program_scale" tests/ src/ scripts/ apps/` returns only the two files themselves, and `fixtures/__init__.py` does not export them — so there is no unit-tier evidence to cite. The disposition rests on loading the module and counting, which is why the criterion is `MET` and the tier is blank; `RI-AC-032` records that the acceptance suite has still not been run against it. |
-| RI-AC-032 acceptance suite passes against that fixture | UNMET | — | The fixture exists; the acceptance suite has **not** been run against it under PostgreSQL. The audit's specific complaint — that resolution is measured against an in-memory double rather than SQL — still stands. PostgreSQL 17 is reachable and database tests provision their own schema via Alembic, so this is unblocked work, not an environment limit. |
+| RI-AC-031 program-scale fixture (500 persons / 100 orgs) | MET | DATABASE | `[revised]` Audit found this absent. A seeded synthetic fixture now exists at `tests/evaluation/fixtures/program_scale_corpus.py`, verified at **565 persons, 105 organizations, 6 programs, 24 projects, 48 work packages, 5,262 combined alias/identifier/assignment/relationship/observation records, 60 collision groups, 80 historical employment changes**, plus recycled mailboxes, conflicted addresses, merge redirects and stale roles. Every stated minimum is exceeded. **Tier corrected 2026-08-19 from `UNIT` to none.** No test of any tier imports either fixture module — `grep -rn "program_scale" tests/ src/ scripts/ apps/` returns only the two files themselves, and `fixtures/__init__.py` does not export them — so there is no unit-tier evidence to cite. The disposition rests on loading the module and counting, which is why the criterion is `MET` and the tier is blank; **Tier restored to `DATABASE` 2026-08-20**, when `tests/database/test_program_scale_acceptance.py` was written: the floors are now asserted against the built rows, not the builder's constants. |
+| RI-AC-032 acceptance suite passes against that fixture | MET | DATABASE | **Met 2026-08-20.** `tests/database/test_program_scale_acceptance.py` loads all 5,262 records into a disposable PostgreSQL database and answers all 1,090 labelled cases through `SqlEntityRepository` — not through the in-memory double the small corpus uses, because this criterion is about scale and about SQL. Zero wrong outcomes, zero wrong entities, zero forbidden candidates, zero omissions. Mutation-checked: disabling the conflicted-identifier refusal fails it by case name. |
 | RI-AC-033 search/resolution/context benchmarked | UNMET | — | No p50/p95 measurement for any of the six required operations. |
 | RI-AC-034 Meeting Intelligence attaches entity IDs | UNMET | — | No integration seam or contract test. |
 | RI-AC-035 Action/Commitment counterparty linkage | UNMET | — | No integration seam or contract test. |
@@ -89,13 +89,23 @@ and none is claimed.
 
 | Status | Count |
 |---|---|
-| MET | 21 |
+| MET | 22 |
 | PARTIAL | 3 |
 | NOT_YET_PROVEN | 1 |
-| UNMET | 15 |
+| UNMET | 14 |
 
-One row moved since the audited head (RI-AC-031, UNMET to MET). RI-AC-023 was
+Two rows have moved since the audited head. `RI-AC-031` went UNMET to MET when
+the fixture was built, and its evidence tier has moved twice since: to none, when
+a reviewer established that no test of any tier read the fixture, and back to
+`DATABASE` on 2026-08-20 when one was written. `RI-AC-032` went UNMET to MET on
+the same day and for the same reason — the acceptance suite now runs against the
+fixture under PostgreSQL, which is what that criterion asks for. `RI-AC-023` was
 already satisfied and was strengthened rather than changed.
+
+`RI-AC-033` remains UNMET and is the last of this group: no p50/p95 measurement
+exists for any of the six required operations, and the new suite deliberately
+does not time anything — a wall-clock assertion on a shared, contended database
+measures the machine.
 
 ## A conflict between the controlling spec and a repository rule
 

@@ -590,7 +590,13 @@ def test_the_location_scan_would_catch_one() -> None:
     # The exemption names tools that exist, and the properties they name are
     # really published — so it cannot rot into a permission for a property that
     # has since changed meaning or disappeared.
-    assert len(EXEMPT_PROPERTIES) == 5
+    # Six: five inherited from `main` plus `entities.relationships`'s
+    # `direction`, which this branch added. The literal read 5 after the rebase
+    # because both sides added an entry and neither touched the count — a
+    # textual merge that leaves an accumulation total behind is exactly the
+    # shape this campaign has been correcting all along, arriving here from the
+    # other branch.
+    assert len(EXEMPT_PROPERTIES) == 6
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

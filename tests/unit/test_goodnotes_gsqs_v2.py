@@ -278,7 +278,7 @@ def test_committed_v2_operator_package_matches_freeze() -> None:
 
 def test_handwriting_admission_refuses_production_and_stores_no_samples() -> None:
     assert handwriting_catalog() == ()
-    assert HANDWRITING_STATE == "READY_FOR_OPERATOR_INPUT"
+    assert HANDWRITING_STATE == "INSUFFICIENT_EVIDENCE"
     assert "Review agenda Monday" in ALLOWED_SAMPLE_PHRASES
     with pytest.raises(ValueError, match="production/live"):
         refuse_production_fixture(FIXTURE_PRODUCTION_GOODNOTES)

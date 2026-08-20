@@ -12,9 +12,9 @@ separate operator decision recorded in a filled
 
 `FIXED_LABELED_CORPUS_APPROVED` is currently **false**.
 
-`b0_suitable` is currently **false**. Controlled handwriting samples are
-not present. This version is a deterministic synthetic regression corpus
-plus an empty handwriting-admission path.
+`b0_suitable` is currently **false**. This version is a deterministic
+synthetic regression corpus. Controlled real handwriting is a separate
+layer (`gsqs-hw-moss-v1`) and is `INSUFFICIENT_EVIDENCE`.
 
 Machine copy: [`operator_review.json`](operator_review.json). Per-case
 identity (no page bytes): [`case_index.json`](case_index.json).
@@ -64,9 +64,10 @@ Target was 60–100 pages and 100–150 NOTE_UNITs.
    using Helvetica / Times-Italic. Valid for evaluator correctness,
    schema, tags, ranking, critical errors, prompt injection, and CI.
    **Not** a production-relevant handwriting transcription baseline.
-2. **Controlled handwriting validation.** Admission infrastructure only.
-   State: `CONTROLLED_HANDWRITING_CORPUS = READY_FOR_OPERATOR_INPUT`.
-   No private image bytes are in Git.
+2. **Controlled handwriting validation.** Separate layer
+   [`../hw-moss-v1/OPERATOR_REVIEW.md`](../hw-moss-v1/OPERATOR_REVIEW.md).
+   State: `CONTROLLED_HANDWRITING_CORPUS = INSUFFICIENT_EVIDENCE`.
+   This synthetic freeze still contains zero handwriting pages.
 
 Suitable for: **regression-only use**. **Not** suitable for establishing
 `MEASURED_B0` until the operator admits a digest-bound synthetic

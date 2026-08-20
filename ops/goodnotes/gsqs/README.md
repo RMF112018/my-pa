@@ -2,8 +2,8 @@
 
 Repository-side measurement system for Gate B of GoodNotes Durable Note
 Intelligence. It holds a versioned labeled corpus, an independent GSQS
-evaluator, critical-error gates, a side-effect-free B0 harness, and an
-empty controlled-handwriting admission path.
+evaluator, critical-error gates, a side-effect-free B0 harness, and a
+repository-safe digest-bound handwriting catalog (`gsqs-hw-moss-v1`).
 
 This is not another MCP interoperability project. It does not run the live
 ChatLLM Task, does not establish `MEASURED_B0`, does not activate the Abacus
@@ -15,8 +15,11 @@ it does not replace A-X.
 
 ## Operator entry
 
-- [`v2/OPERATOR_REVIEW.md`](v2/OPERATOR_REVIEW.md) — current review target
-  (`gsqs-v2` synthetic regression; handwriting still absent).
+- [`v2/OPERATOR_REVIEW.md`](v2/OPERATOR_REVIEW.md) — synthetic regression
+  review target (`gsqs-v2`; still not handwriting-B0).
+- [`hw-moss-v1/OPERATOR_REVIEW.md`](hw-moss-v1/OPERATOR_REVIEW.md) —
+  controlled real-handwriting layer. State:
+  `INSUFFICIENT_EVIDENCE`. No private bytes in Git.
 - [`v2/operator_review.json`](v2/operator_review.json) — machine-readable
   review payload, including per-partition distributions.
 - [`v2/case_index.json`](v2/case_index.json) — per-case identity, partition,
@@ -37,8 +40,11 @@ it does not replace A-X.
 1. **Deterministic synthetic regression** (`gsqs-v2`, and `gsqs-v1` as
    canary). Helvetica / Times-Italic PDFs. Valid for evaluator, schema,
    tags, ranking, critical errors, injection, and CI. Not handwriting.
-2. **Controlled handwriting validation.** Admission records only until the
-   operator supplies digest-bound synthetic non-personal samples.
+2. **Controlled handwriting validation.** Digest-bound private gold from
+   the operator-authorized Moss root. Repository-safe catalog:
+   [`hw-moss-v1/`](hw-moss-v1/). State:
+   `CONTROLLED_HANDWRITING_CORPUS = INSUFFICIENT_EVIDENCE`.
+   No private image bytes or transcriptions are in Git.
 
 ## Partitioning (`gsqs-v2`)
 
@@ -63,7 +69,7 @@ replicas of one template can split.
 
 `B0_HARNESS = READY`
 
-`CONTROLLED_HANDWRITING_CORPUS = READY_FOR_OPERATOR_INPUT`
+`CONTROLLED_HANDWRITING_CORPUS = INSUFFICIENT_EVIDENCE`
 
 `GSQS_V1_B0_DISPOSITION = REJECT_FOR_B0`
 
@@ -76,4 +82,5 @@ replicas of one template can split.
 `FIXED_LABELED_CORPUS_APPROVED` remains false until explicit operator
 approval of a digest. Changing a label or case after that approval requires
 a new corpus version. Synthetic-regression approval still does not
-establish `MEASURED_B0` while handwriting samples are absent.
+establish `MEASURED_B0`. The handwriting layer is below the B0 population
+floor and is not operator-adjudicated.

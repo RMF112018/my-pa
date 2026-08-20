@@ -24,10 +24,16 @@ authorization to run now.
 1. Operator has reviewed corpus `gsqs-v2` at manifest digest
    `e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd`.
    Synthetic-regression approval is not by itself B0 readiness.
-2. Operator has admitted a digest-bound
-   `SYNTHETIC_NON_PERSONAL_HANDWRITING` sample set per
-   [`HANDWRITING_ADMISSION.md`](HANDWRITING_ADMISSION.md), or has
-   explicitly accepted a later corpus version that includes it.
+2. Operator has reviewed handwriting corpus `gsqs-hw-moss-v1` at
+   manifest digest
+   `3bed9cc9bfe4a7cb3d28383232e940268ab3435429312c0977eb82a326158f9d`
+   **and** has either expanded the source population to the B0 floor or
+   explicitly accepted the documented statistical limitation. Current
+   state is `INSUFFICIENT_EVIDENCE`. External scoring of that layer
+   requires a separate private-data disclosure authorization. The
+   synthetic-phrase path in
+   [`HANDWRITING_ADMISSION.md`](HANDWRITING_ADMISSION.md) remains
+   available if the operator prefers non-personal samples instead.
 3. Freeze Corpus B (scoreable partition B only) to the **approved**
    digest. Corpus C stays unused for prompt/config tuning.
 4. Freeze evaluator `goodnotes-gsqs-independent` version `1.1` with code

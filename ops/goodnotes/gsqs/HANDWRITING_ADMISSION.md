@@ -1,51 +1,45 @@
-# Controlled handwriting admission — operator handoff
+# Controlled handwriting admission
 
-`CONTROLLED_HANDWRITING_CORPUS = READY_FOR_OPERATOR_INPUT`
+`CONTROLLED_HANDWRITING_CORPUS = INSUFFICIENT_EVIDENCE`
 
-This is not a request to ingest ordinary production GoodNotes, customer
-pages, business notes, or any personal content already on a device.
+Two complementary Gate B layers exist:
 
-The repository must not receive private handwriting image bytes unless a
-later operator decision explicitly permits that exact representation.
-Admission is digest-bound and external: the Git tree stores identifiers,
-SHA-256 digests, labels, leakage groups, partition assignment, and a
-private artifact reference — not the pixels.
+1. **Synthetic regression** (`gsqs-v2`) — Helvetica / Times-Italic PDFs.
+   Valid for evaluator, schema, tags, ranking, critical errors, and CI.
+   Not genuine handwriting. `b0_suitable = false` on that layer alone.
+2. **Controlled real handwriting** (`gsqs-hw-moss-v1`) — operator-authorized
+   local construction from the exact Moss inbox root named in
+   `REQ-MYPA-GOODNOTES-GATE-B-HANDWRITING-CORPUS-20260820-001`.
+   First-pass labels are private, digest-bound, and `PENDING`.
+   Population/diversity is below the B0 floor.
 
-## Purpose
+The repository must not receive private handwriting image bytes or gold
+transcriptions. Git stores identifiers, SHA-256 digests, classification,
+leakage groups, partition assignment, redacted counts, and a private
+artifact reference.
 
-Layer 1 (`gsqs-v2` synthetic PDFs) is a deterministic regression/canary
-corpus. It uses Helvetica and Times-Italic. That is **not** handwriting
-and must not be used alone to establish a production-relevant
-transcription `MEASURED_B0`.
+## Allowed classifications
 
-Layer 2 is a later, operator-controlled sample set of genuine pen/stylus
-handwriting of **synthetic non-personal phrases only**.
+`admit_handwriting` accepts only:
 
-## Required classification
+- `SYNTHETIC_NON_PERSONAL_HANDWRITING` — optional later phrase samples
+- `PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING` — the 2026-08-20 Moss
+  root only, via digest-bound private gold
 
-Every admitted artifact must be:
-
-- `fixture_classification = SYNTHETIC_NON_PERSONAL_HANDWRITING`
-- `source_layer = CONTROLLED_HANDWRITING`
-- `label_provenance = OPERATOR_ADJUDICATED` after operator review
-- explicit gold labels (geometry, transcription, status, class, tags,
-  ranking, confidence as applicable)
-- `leakage_group_id` that does not split across A/B/C
-- exact `artifact_sha256` (64 hex chars)
-- non-empty `external_ref` to the private store
-- no automatic ingest from GoodNotes production history
-
-Forbidden classifications (refused by `admit_handwriting`):
+Forbidden (still refused):
 
 - `PRODUCTION_GOODNOTES`
 - `LIVE_GOODNOTES`
 - `PERSONAL_HANDWRITING`
 - `ORDINARY_PRODUCTION_GOODNOTES`
 
-## Requested sample content
+Uncontrolled personal or production ingest is not authorized by the
+existence of the Moss exception.
 
-Write **only** these (or equally synthetic) phrases. Do not substitute
-real names, customers, addresses, or live meeting content.
+## Synthetic phrase path (still available)
+
+If the operator later supplies non-personal written phrases, use only
+these (or equally synthetic) phrases:
 
 - Review agenda Monday
 - Send crane plan Friday
@@ -53,47 +47,29 @@ real names, customers, addresses, or live meeting content.
 - Buy spare markers
 - Thank partner for intro
 
-## Requested style coverage
+Requested style coverage for that path remains: print, cursive,
+mixed-print-cursive, compact, large, slanted, messy-readable, uncertain,
+genuinely-unreadable.
 
-Provide at least one sample in each style, using the phrases above:
+## Real-handwriting path (current)
 
-- print handwriting
-- cursive
-- mixed print/cursive
-- compact writing
-- large writing
-- slanted writing
-- messy but readable
-- uncertain (gold `transcription_status = UNCERTAIN`)
-- genuinely unreadable (gold `transcription = ""`,
-  `transcription_status = UNREADABLE`; the image must be unreadable marks,
-  not the word `UNREADABLE`)
+Operator review package:
+[`hw-moss-v1/OPERATOR_REVIEW.md`](hw-moss-v1/OPERATOR_REVIEW.md).
 
-Natural variation across writers/sessions is useful. Do not invent
-samples inside the repository agent session.
+Rules for that layer:
 
-## Admission record (no pixels)
-
-```text
-case_id:
-artifact_sha256:
-external_ref:
-fixture_classification: SYNTHETIC_NON_PERSONAL_HANDWRITING
-phrases: [...]
-style: print | cursive | mixed-print-cursive | compact | large | slanted
-       | messy-readable | uncertain | genuinely-unreadable
-leakage_group_id:
-review_state: PENDING  # until operator review
-partition:             # assigned at group level after review
-```
-
-After samples exist and are labeled, the corpus state becomes
-`READY_FOR_REVIEW`. Only an explicit operator decision may set
-`APPROVED`. That later approval is still distinct from
-`MEASURED_B0`.
+- source PDFs are read-only evidence
+- gold transcriptions stay in the private store
+- each case digest binds raster digest + private label digest
+- A/B/C partitioning is group-level; no leakage group may split
+- review_state stays `PENDING` until the operator adjudicates
+- `b0_suitable` stays false while population, UNREADABLE coverage, or
+  pending labels fail the B0 criteria
+- Corpus C is a holdout and must not be shown to a future optimizer
+- external model scoring requires a separate disclosure authorization
 
 ## Stop
 
-Do not collect live personal handwriting in this assignment.
-Do not commit private image bytes to this public repository.
-Do not run live B0 from these instructions.
+Do not commit private image bytes or transcriptions to this public
+repository. Do not run live B0 from these instructions. Do not send
+Moss page content to ChatLLM, Abacus, or another external model.

@@ -5,17 +5,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from my_pa.application.goodnotes_gsqs import (
-    CONTROLLED_HANDWRITING_READY_FOR_OPERATOR_INPUT,
+    CONTROLLED_HANDWRITING_INSUFFICIENT_EVIDENCE,
     CorpusPartition,
 )
 from my_pa.application.goodnotes_gsqs_corpus import (
+    FIXTURE_PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING,
     FIXTURE_SYNTHETIC_NON_PERSONAL_HANDWRITING,
     ReviewState,
     SourceLayer,
     refuse_production_fixture,
 )
 
-HANDWRITING_STATE = CONTROLLED_HANDWRITING_READY_FOR_OPERATOR_INPUT
+HANDWRITING_STATE = CONTROLLED_HANDWRITING_INSUFFICIENT_EVIDENCE
+ALLOWED_HANDWRITING_CLASSES = frozenset(
+    {
+        FIXTURE_PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING,
+        FIXTURE_SYNTHETIC_NON_PERSONAL_HANDWRITING,
+    }
+)
 ALLOWED_SAMPLE_PHRASES = (
     "Review agenda Monday",
     "Send crane plan Friday",
@@ -57,8 +64,8 @@ def handwriting_catalog() -> tuple[HandwritingAdmission, ...]:
 
 def admit_handwriting(record: HandwritingAdmission) -> HandwritingAdmission:
     refuse_production_fixture(record.fixture_classification)
-    if record.fixture_classification != FIXTURE_SYNTHETIC_NON_PERSONAL_HANDWRITING:
-        raise ValueError("handwriting admission requires SYNTHETIC_NON_PERSONAL_HANDWRITING")
+    if record.fixture_classification not in ALLOWED_HANDWRITING_CLASSES:
+        raise ValueError("handwriting admission requires an allowed fixture class")
     if record.source_layer is not SourceLayer.CONTROLLED_HANDWRITING:
         raise ValueError("handwriting admission requires CONTROLLED_HANDWRITING source layer")
     try:

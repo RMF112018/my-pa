@@ -41,7 +41,7 @@ def test_gate_b_state_ceiling() -> None:
     assert state["FIXED_LABELED_CORPUS"] == "READY_FOR_OPERATOR_REVIEW"
     assert state["INDEPENDENT_EVALUATOR"] == "VALIDATED"
     assert state["B0_HARNESS"] == "READY"
-    assert state["CONTROLLED_HANDWRITING_CORPUS"] == "READY_FOR_OPERATOR_INPUT"
+    assert state["CONTROLLED_HANDWRITING_CORPUS"] == "INSUFFICIENT_EVIDENCE"
     assert state["GSQS_V1_B0_DISPOSITION"] == "REJECT_FOR_B0"
     status = harness_status()
     assert status.ready is True

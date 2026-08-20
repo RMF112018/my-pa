@@ -3063,8 +3063,9 @@ entity_observations = Table(
     ),
     CheckConstraint(
         "mention_display_name IS NULL OR ("
-        "mention_display_name ~ '[^[:space:]]' "
-        "AND mention_display_name = btrim(mention_display_name) "
+        r"mention_display_name !~ '^[ \t\n\r\v\f]' "
+        r"AND mention_display_name !~ '[ \t\n\r\v\f]$' "
+        r"AND mention_display_name ~ '[^ \t\n\r\v\f]' "
         "AND length(mention_display_name) BETWEEN 1 AND 200)",
         name="a_disclosed_mention_name_is_bounded",
     ),

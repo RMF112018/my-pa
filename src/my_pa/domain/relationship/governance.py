@@ -38,6 +38,7 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 
 __all__ = [
+    "EDGE_WHITESPACE",
     "MENTION_DISPLAY_NAME_LIMIT",
     "EntityMergeRecord",
     "EntityObservation",
@@ -54,6 +55,18 @@ __all__ = [
 #: enough for a person's full name with honorifics and a long organization name;
 #: short enough that a paragraph of lifted text does not fit.
 MENTION_DISPLAY_NAME_LIMIT = 200
+
+#: The whitespace a disclosed mention name may not begin or end with, written
+#: out rather than taken from `str.isspace()` or from SQL's `[[:space:]]`.
+#:
+#: Both of those are larger than this and **larger by different amounts**:
+#: Python strips U+00A0, PostgreSQL's class here does not; PostgreSQL's class
+#: matches U+2003 and U+3000, Python's `strip()` of this set does not. A rule
+#: expressed in either one cannot be checked by the other, and the CHECK in
+#: `f3a8c1d7e592` has to refuse exactly what this record refuses. This set is
+#: the intersection both engines agree on, and unlike a character class it does
+#: not move with the server's collation.
+EDGE_WHITESPACE = " \t\n\r\v\f"
 
 
 class ObservationKind(StrEnum):
@@ -206,20 +219,36 @@ class EntityObservation:
             # whose whole purpose is showing the operator what could not be
             # placed.
             #
-            # **Refused rather than trimmed, and the length is of the value
-            # itself.** The CHECK in `f3a8c1d7e592` has to agree with this rule
-            # or the two disagree in both directions, which is what an
-            # independent review found the first version of it doing: Python's
-            # `str.strip()` removes every kind of whitespace and PostgreSQL's
-            # `trim()` removes only spaces, so a value padded with tabs was
-            # short enough here and too long at the server, and a tab-only value
-            # was blank here and acceptable there. Requiring the value to arrive
-            # already trimmed removes the difference instead of trying to
-            # express one language's rule in the other. It also means what is
+            # **Refused rather than trimmed, against an explicit character
+            # set, and the length is of the value itself.** The CHECK in
+            # `f3a8c1d7e592` has to refuse exactly what this refuses, and two
+            # earlier attempts did not.
+            #
+            # The first compared `str.strip()` against SQL's `trim()`. Those
+            # disagree in both directions: `str.strip()` removes every kind of
+            # whitespace and `trim()` removes only spaces, so a tab-padded value
+            # was short enough here and too long at the server, and a tab-only
+            # value was blank here and acceptable there.
+            #
+            # The second kept `str.strip()` and moved the CHECK to
+            # `[[:space:]]`. That closed the two values a reviewer had named and
+            # left the class open: `"\tA. Chen"` is still refused here and
+            # accepted there, so the row this guard exists to stop could be
+            # written around the repository and then make the whole
+            # `entities.unresolved_mentions` page raise on read. Worse,
+            # `[[:space:]]` is decided by the server's collation -- measured
+            # matching U+2003 and U+3000 but not U+00A0 -- which is the exact
+            # locale dependence `persistence.entity` already refuses for
+            # `[[:alnum:]]`, one module over.
+            #
+            # So the set is written out. It is the ASCII whitespace both
+            # engines name the same way, it does not move with a locale, and it
+            # is small enough to state in both languages and compare. What is
             # stored is what is published, with no padding.
-            if self.mention_display_name != self.mention_display_name.strip():
+            edges = self.mention_display_name[:1] + self.mention_display_name[-1:]
+            if any(character in EDGE_WHITESPACE for character in edges):
                 raise ValueError("a disclosed mention name carries no leading or trailing space")
-            if not self.mention_display_name:
+            if not self.mention_display_name.strip(EDGE_WHITESPACE):
                 raise ValueError("a disclosed mention name is not blank")
             if len(self.mention_display_name) > MENTION_DISPLAY_NAME_LIMIT:
                 raise ValueError("a disclosed mention name is bounded")

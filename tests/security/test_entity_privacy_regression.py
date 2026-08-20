@@ -48,17 +48,26 @@ from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.entity import (
     AliasType,
+    Assignment,
+    AssignmentType,
     Entity,
     EntityAlias,
+    EntityRelationship,
+    EntityRelationshipType,
     EntityStatus,
     EntityType,
+    ExternalIdentifier,
+    ExternalIdentifierNamespace,
 )
 from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
-from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
 
 WHEN: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
 
 FOREIGN_ENTITY: Final = "ent_foreign0001foreig"
+#: A second entity the other Principal owns, so a foreign assignment and a
+#: foreign edge have somewhere to point.
+FOREIGN_SCOPE: Final = "ent_foreign0002foreig"
 OWN_ENTITY: Final = "ent_mine0002mine00002"
 
 #: A display name that is also an instruction. If any of it reaches a tool
@@ -129,6 +138,67 @@ def staged(scene: Scene) -> Scene:
                 observed_at=WHEN,
                 recorded_at=WHEN,
                 entity_id=None,
+            ),
+        )
+        # **Every collection the plane can read, staged foreign.** The sweep
+        # below asks each capability for a foreign entity and asserts nothing
+        # comes back — which proves nothing about a read whose foreign side is
+        # empty. Six of the ten underlying reads were in that state: removing
+        # the Principal filter from `aliases`, `external_identifiers`,
+        # `assignments`, `relationships`, `entities_by_identifier` or
+        # `entities_by_alias` outright left this whole file green, because
+        # the other Principal owned an entity and nothing hanging off it.
+        #
+        # This is the same defect the observation above records, five reads
+        # over, and it is why these are staged together rather than one at a
+        # time as a reviewer names them.
+        unit_of_work.entities.record_alias(
+            theirs,
+            EntityAlias(
+                alias_id="eals_foreign1foreign1",
+                entity_id=FOREIGN_ENTITY,
+                alias_type=AliasType.FORMER_NAME,
+                normalized_value=normalize_name("Confidential Predecessor"),
+                display_value="Confidential Predecessor",
+                principal_id=theirs,
+            ),
+        )
+        unit_of_work.entities.bind_identifier(
+            theirs,
+            FOREIGN_ENTITY,
+            ExternalIdentifier(
+                identifier_id="xid_foreign01foreign1",
+                entity_id=FOREIGN_ENTITY,
+                namespace=ExternalIdentifierNamespace.EMAIL,
+                normalized_value=normalize_identifier(
+                    ExternalIdentifierNamespace.EMAIL, "cc@rival.test"
+                ),
+                display_value="cc@rival.test",
+                principal_id=theirs,
+            ),
+        )
+        unit_of_work.entities.create(
+            theirs, _entity(FOREIGN_SCOPE, "Confidential Employer", theirs)
+        )
+        unit_of_work.entities.record_assignment(
+            theirs,
+            Assignment(
+                assignment_id="asn_foreign01foreign1",
+                entity_id=FOREIGN_ENTITY,
+                assignment_type=AssignmentType.EMPLOYMENT,
+                principal_id=theirs,
+                scope_entity_id=FOREIGN_SCOPE,
+                role="confidential role",
+            ),
+        )
+        unit_of_work.entities.record_relationship(
+            theirs,
+            EntityRelationship(
+                relationship_id="erel_foreign1foreign1",
+                from_entity_id=FOREIGN_ENTITY,
+                relationship_type=EntityRelationshipType.WORKS_FOR,
+                to_entity_id=FOREIGN_SCOPE,
+                principal_id=theirs,
             ),
         )
     return scene
@@ -320,6 +390,112 @@ def test_the_task_profile_refuses_every_capability_outside_it() -> None:
     for capability in Capability:
         outside = capability not in ALLOWED_CAPABILITIES
         assert mcp_profile_refuses(capability.value, published=published) is outside
+
+
+# --- resolution may not find what only another Principal holds ---------------
+
+
+def test_resolving_a_value_only_another_principal_holds_finds_nothing(staged: Scene) -> None:
+    """The two resolution lookups the sweep above never exercises.
+
+    `entities.resolve` reaches `entities_by_alias` and
+    `entities_by_identifier`, and neither is touched by asking the other
+    capabilities for a foreign entity id — removing the partition from either
+    left every other test in this file green. They are the two reads where a
+    partition failure is worst, because resolution's answer is *an identity*:
+    the caller learns that a person exists, which name they are known by, and
+    that an address belongs to them.
+
+    Both values below are staged on the other Principal's entity and appear
+    nowhere in this caller's partition, so a hit could only come from theirs.
+    """
+    alias_answer = _answer(
+        staged, Capability.ENTITIES_RESOLVE, ResolveEntity(reference="Confidential Predecessor")
+    )
+    assert "ent_foreign" not in repr(alias_answer)
+    assert "Confidential" not in repr(alias_answer["result"])  # type: ignore[index]
+
+    identifier_answer = _answer(
+        staged,
+        Capability.ENTITIES_RESOLVE,
+        ResolveEntity(reference="cc@rival.test", namespace="email"),
+    )
+    assert "ent_foreign" not in repr(identifier_answer)
+
+
+# --- a child row whose partition disagrees with its parent's ----------------
+
+
+def test_the_card_of_my_own_entity_carries_no_other_principals_rows(staged: Scene) -> None:
+    """The case the foreign-entity sweep above structurally cannot reach.
+
+    Asking a capability for *another* Principal's entity is refused on the
+    parent, so the enumerations hanging off it are never called — which is why
+    removing the partition from `aliases`, `external_identifiers`,
+    `assignments` or `relationships` leaves that sweep green. Those predicates
+    are real and they guard a different arrangement: a **child row owned by
+    someone else that points at an entity I own**. A foreign key is global, so
+    the database will accept one, and the second-side predicate on each
+    enumeration is the only thing that keeps it off my card.
+
+    Staged straight into the world rather than through the repository, because
+    the repository is what refuses to write such a row — the row this guards
+    against is the one that arrived some other way. That is the same reason
+    `tests/database/test_entity_repository.py` stages its equivalents with SQL.
+    """
+    theirs = "prn_ffff0009ffff0009ffff0009"
+    world = staged.world
+    world.entity_aliases.append(
+        EntityAlias(
+            alias_id="eals_crossed1crossed1",
+            entity_id=OWN_ENTITY,
+            alias_type=AliasType.FORMER_NAME,
+            normalized_value=normalize_name("Crossed Predecessor"),
+            display_value="Crossed Predecessor",
+            principal_id=theirs,
+        )
+    )
+    world.entity_identifiers.append(
+        ExternalIdentifier(
+            identifier_id="xid_crossed01crossed1",
+            entity_id=OWN_ENTITY,
+            namespace=ExternalIdentifierNamespace.EMAIL,
+            normalized_value=normalize_identifier(
+                ExternalIdentifierNamespace.EMAIL, "crossed@rival.test"
+            ),
+            display_value="crossed@rival.test",
+            principal_id=theirs,
+        )
+    )
+    world.entity_assignments.append(
+        Assignment(
+            assignment_id="asn_crossed01crossed1",
+            entity_id=OWN_ENTITY,
+            assignment_type=AssignmentType.EMPLOYMENT,
+            principal_id=theirs,
+            scope_entity_id=FOREIGN_SCOPE,
+            role="crossed role",
+        )
+    )
+    world.entity_relationships.append(
+        EntityRelationship(
+            relationship_id="erel_crossed1crossed1",
+            from_entity_id=OWN_ENTITY,
+            relationship_type=EntityRelationshipType.WORKS_FOR,
+            to_entity_id=FOREIGN_SCOPE,
+            principal_id=theirs,
+        )
+    )
+
+    answer = _answer(staged, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=OWN_ENTITY))
+    rendered = repr(answer)
+    for planted in ("Crossed Predecessor", "crossed@rival.test", "crossed role", "erel_crossed"):
+        assert planted not in rendered, f"{planted!r} reached the card across the partition"
+
+    edges = _answer(
+        staged, Capability.ENTITIES_RELATIONSHIPS, GetEntityRelationships(entity_id=OWN_ENTITY)
+    )
+    assert "erel_crossed" not in repr(edges)
 
 
 # --- what a browse result may not disclose ---------------------------------

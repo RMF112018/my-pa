@@ -32,6 +32,7 @@ from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import (
+    MENTION_DISPLAY_NAME_LIMIT,
     EntityMergeRecord,
     EntityObservation,
     EntityProposalKind,
@@ -287,28 +288,50 @@ def test_the_server_refuses_a_disclosed_mention_name_past_its_bound(
         SqlEntityRepository(connection).record_observation(PRINCIPAL_A, oversized)
 
 
-@pytest.mark.parametrize(
-    "value",
-    ["\t", "   ", " A. Chen", "A. Chen ", "\t" * 10 + "x" * 195],
-    ids=["tab-only", "spaces-only", "leading-space", "trailing-space", "tab-padded-long"],
+#: Values the record and the CHECK must classify identically. Both lists matter:
+#: an earlier version of this test carried only refusals, and every one of them
+#: happened to be a value both sides already refused, so it was structurally
+#: incapable of seeing the half of the divergence that survived.
+AGREED_REFUSALS: Final = (
+    ("\t", "tab-only"),
+    ("   ", "spaces-only"),
+    (" A. Chen", "leading-space"),
+    ("A. Chen ", "trailing-space"),
+    ("\tA. Chen", "leading-tab"),
+    ("A. Chen\t", "trailing-tab"),
+    ("\nA. Chen", "leading-newline"),
+    ("A. Chen\r", "trailing-return"),
+    ("\x0bA. Chen", "leading-vertical-tab"),
+    ("\x0cA. Chen", "leading-form-feed"),
+    ("\t" * 10 + "x" * 195, "tab-padded-long"),
+    ("x" * (MENTION_DISPLAY_NAME_LIMIT + 1), "too-long"),
 )
-def test_the_server_and_the_record_agree_about_a_disclosed_mention_name(
-    two_principals: Engine, value: str
+
+AGREED_ACCEPTANCES: Final = (
+    ("A. Chen", "plain"),
+    ("A.\tChen", "interior-tab"),
+    ("\xa0A. Chen", "leading-no-break-space"),
+    ("\u3000A. Chen", "leading-ideographic-space"),
+    ("\u2003A. Chen", "leading-em-space"),
+    ("x" * MENTION_DISPLAY_NAME_LIMIT, "exactly-at-the-bound"),
+)
+
+
+@pytest.mark.parametrize(("value", "case"), AGREED_REFUSALS, ids=[c for _, c in AGREED_REFUSALS])
+def test_the_server_and_the_record_refuse_the_same_mention_names(
+    two_principals: Engine, value: str, case: str
 ) -> None:
-    """The two enforcement points must refuse the *same* values.
+    """Both enforcement points must refuse the same values.
 
-    They did not. Python's `str.strip()` removes every kind of whitespace and
-    PostgreSQL's `trim()` removes only spaces, so the first version of this
-    bound disagreed in **both** directions: `"\t" * 10 + "x" * 195` was 195
-    characters to the record and 205 to the server, so a value the record
-    accepted aborted the transaction; and `"\t"` was blank to the record and a
-    one-character name to the server, so a row the server accepted made the
-    whole queue page unreadable when the mapper rebuilt it.
+    They did not, twice. The first version compared Python's `str.strip()`
+    against SQL's `trim()`, which disagree in both directions. The second moved
+    the CHECK to `[[:space:]]`, which closed the two values a reviewer had named
+    and left the class open — `"\tA. Chen"` was still refused by the record and
+    accepted by the server, so that row could be written around the repository
+    and then make the whole queue page raise on read.
 
-    Each value below is refused by both, and this test would have failed on
-    either half of that divergence. Staged around the record with
-    `object.__setattr__`, because the row this guards against is the one that
-    arrives without building a record.
+    The leading-tab case is here because it is the one that survived, and it
+    fails against either earlier version.
     """
     smuggled = _observation("eobs_agree0001agree01")
     object.__setattr__(smuggled, "mention_display_name", value)
@@ -316,6 +339,58 @@ def test_the_server_and_the_record_agree_about_a_disclosed_mention_name(
         SqlEntityRepository(connection).record_observation(PRINCIPAL_A, smuggled)
     with pytest.raises(ValueError):
         dataclasses.replace(_observation(), mention_display_name=value)
+
+
+@pytest.mark.parametrize(
+    ("value", "case"), AGREED_ACCEPTANCES, ids=[c for _, c in AGREED_ACCEPTANCES]
+)
+def test_the_server_and_the_record_accept_the_same_mention_names(
+    two_principals: Engine, value: str, case: str
+) -> None:
+    """And they must **accept** the same values, which nothing checked.
+
+    This is the direction that hid the surviving defect: a test written only
+    over refusals passes on a rule that is far too strict at one end, and the
+    consequence of the record being stricter than the CHECK is not a refused
+    write — it is a row the server stored happily that the mapper then cannot
+    rebuild, which takes the whole `entities.unresolved_mentions` page down.
+
+    The Unicode-space cases are here deliberately. `[[:space:]]` is decided by
+    the server's collation and was measured matching U+2003 and U+3000 but not
+    U+00A0, so a rule written against it agrees with Python on one server and
+    not another. The explicit set both sides now name has no such freedom, and
+    these three prove the two engines agree that those characters are *not*
+    edge whitespace.
+    """
+    named = dataclasses.replace(_observation("eobs_accept001accept1"), mention_display_name=value)
+    with two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_observation(PRINCIPAL_A, named)
+    with two_principals.connect() as connection:
+        stored = SqlEntityRepository(connection).observations(PRINCIPAL_A)
+    assert [item.mention_display_name for item in stored] == [value]
+
+
+def test_the_stated_bound_is_the_one_the_server_enforces(two_principals: Engine) -> None:
+    """`MENTION_DISPLAY_NAME_LIMIT` and the CHECK's literal are coupled by hand.
+
+    Nothing tied them: lowering the constant would make the record refuse a
+    value the server accepts, with the agreement tests above still green,
+    because a value long enough to reach the record's length branch is caught by
+    the trim rule first. Read back from the server rather than from the
+    declaration, so a migration that wrote a different number than `tables.py`
+    declares is caught too.
+    """
+    with two_principals.connect() as connection:
+        definition = connection.execute(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conname = 'a_disclosed_mention_name_is_bounded'"
+            )
+        ).scalar_one()
+    # PostgreSQL rewrites `BETWEEN` into two comparisons, so the assertion is
+    # against what the server stores rather than against what was written.
+    assert f"length(mention_display_name) <= {MENTION_DISPLAY_NAME_LIMIT}" in definition
+    assert "length(mention_display_name) >= 1" in definition
 
 
 def test_an_observation_cursor_the_caller_cannot_read_is_refused(

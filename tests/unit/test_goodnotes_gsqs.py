@@ -152,6 +152,11 @@ def test_shifted_region_beyond_threshold_drops_boundary() -> None:
     shifted = _pred(gold[0], geometry=_geom(0.70, 0.40, 0.20, 0.12))
     result = _score(gold, _output(shifted))
     assert result.scores.boundary == pytest.approx(0.0)
+    assert result.scores.transcription == pytest.approx(0.0)
+    assert result.scores.secondary_tag == pytest.approx(0.0)
+    assert result.scores.candidate_ranking == pytest.approx(0.0)
+    assert result.scores.transcription_status == pytest.approx(0.0)
+    assert result.scores.primary_class == pytest.approx(0.0)
     assert result.gsqs < 1.0
 
 
@@ -343,3 +348,41 @@ def test_corpus_identity_mismatch_is_invalid() -> None:
     )
     assert result.measurement_valid is False
     assert result.invalid_reason == "evaluator/corpus identity mismatch"
+
+
+def test_source_context_copied_as_note_is_critical_even_when_text_matches() -> None:
+    context = _context()
+    copied = PredictedSegment(
+        kind=GoodNotesSegmentKind.NOTE_UNIT,
+        geometry=context.geometry,
+        transcription=context.transcription,
+        transcription_status=GoodNotesTranscriptionStatus.CLEAR,
+        primary_class=GoodNotesNoteClass.GENERAL,
+    )
+    result = _score((context,), _output(copied))
+    assert any(
+        item.kind is CriticalErrorKind.SOURCE_CONTEXT_AS_OPERATOR_NOTE
+        for item in result.critical_errors
+    )
+    assert disqualified(result)
+    gold = _gold()
+    extra_copy = _score(
+        (context, gold),
+        _output(_pred(context), _pred(gold), copied),
+    )
+    assert any(
+        item.kind is CriticalErrorKind.SOURCE_CONTEXT_AS_OPERATOR_NOTE
+        for item in extra_copy.critical_errors
+    )
+
+
+def test_missing_class_or_status_is_not_treated_as_correct() -> None:
+    gold = (_gold(),)
+    missing_class = _score(
+        gold,
+        _output(_pred(gold[0], primary_class=None, confidence=Confidence(1.0, 1.0, 1.0, 1.0))),
+    )
+    assert missing_class.scores.primary_class == pytest.approx(0.0)
+    assert missing_class.scores.confidence_calibration < 1.0
+    missing_status = _score(gold, _output(_pred(gold[0], transcription_status=None)))
+    assert missing_status.scores.transcription_status == pytest.approx(0.0)

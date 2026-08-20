@@ -26,9 +26,9 @@
   "approval_status": "READY_FOR_OPERATOR_REVIEW",
   "coordination_request_id": "REQ-MYPA-GOODNOTES-GATE-B-EVALUATION-20260820-001",
   "corpus_version": "gsqs-v1",
-  "evaluator_code_identity": "ed24cf1172e88c88dd5ede15a47783f582a643c7f6eb7a4c22b9227d5bbc3011",
+  "evaluator_code_identity": "4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e",
   "evaluator_name": "goodnotes-gsqs-independent",
-  "evaluator_version": "1.0",
+  "evaluator_version": "1.1",
   "excluded_or_ambiguous": [
     "v1-ambiguous-grouping-r1",
     "v1-ambiguous-grouping-r2",

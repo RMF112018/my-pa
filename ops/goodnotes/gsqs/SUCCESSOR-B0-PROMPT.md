@@ -22,9 +22,9 @@ authorization to run now.
    `971083804db9fc46295db1ea64dcf2288d4aa1feaddd1ac8a26345f3579bb6d3`
    (or a **new** corpus version if labels changed).
 2. Freeze Corpus B (scoreable partition B only) to that digest.
-3. Freeze evaluator `goodnotes-gsqs-independent` version `1.0` with code
+3. Freeze evaluator `goodnotes-gsqs-independent` version `1.1` with code
    identity
-   `ed24cf1172e88c88dd5ede15a47783f582a643c7f6eb7a4c22b9227d5bbc3011`
+   `4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e`
    (or a new evaluator version if scoring changed).
 4. Confirm `FIXED_LABELED_CORPUS_APPROVED = true` for that digest only.
 

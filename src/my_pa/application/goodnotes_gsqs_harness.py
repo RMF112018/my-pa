@@ -145,6 +145,7 @@ def parse_interchange(document: dict[str, object]) -> AnalyzerOutput:
             "segments",
         }
     }
+    corpus_version = document.get("corpus_version")
     return AnalyzerOutput(
         case_id=str(document["case_id"]),
         schema_version=str(document.get("proposal_schema_version") or NOTE_UNIT_V2),
@@ -154,6 +155,7 @@ def parse_interchange(document: dict[str, object]) -> AnalyzerOutput:
             parse_predicted_segment(item) for item in segments_raw if isinstance(item, dict)
         ),
         extra=extra,
+        corpus_version=str(corpus_version) if corpus_version is not None else None,
     )
 
 
@@ -168,6 +170,7 @@ def gold_as_output(
         analyzer_name=analyzer_name,
         analyzer_version=analyzer_version,
         segments=segments,
+        corpus_version=case.corpus_version,
     )
 
 
@@ -187,8 +190,8 @@ def score_partition(
 ) -> tuple[EvaluationResult, MeasurementRecord]:
     selected = tuple(case for case in cases if case.partition is partition and case.scoreable)
     gold = gold_for_partition(cases, partition)
-    versions = {case.corpus_version for case in selected}
-    output_version = versions.pop() if len(versions) == 1 else "mismatch"
+    claimed = {item.corpus_version or "missing" for item in outputs}
+    output_version = claimed.pop() if len(claimed) == 1 else "mismatch"
     result = evaluate_gsqs(
         gold,
         outputs,

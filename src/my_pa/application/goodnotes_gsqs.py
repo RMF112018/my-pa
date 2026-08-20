@@ -34,7 +34,7 @@ from my_pa.domain.goodnotes.models import (
 )
 
 EVALUATOR_NAME = "goodnotes-gsqs-independent"
-EVALUATOR_VERSION = "1.0"
+EVALUATOR_VERSION = "1.1"
 NOTE_UNIT_V2 = NOTE_UNIT_SCHEMA_V2
 BOUNDARY_IOU_THRESHOLD = 0.5
 RANKING_K = 5
@@ -192,6 +192,7 @@ class AnalyzerOutput:
     analyzer_version: str
     segments: tuple[PredictedSegment, ...]
     extra: Mapping[str, object] = field(default_factory=dict)
+    corpus_version: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -504,16 +505,21 @@ def evaluate_gsqs(
                 cer = character_error_rate(gold.transcription, pred.transcription or "")
                 trans_scores.append(transcription_score_from_cer(cer))
             gold_status = (gold.transcription_status or GoodNotesTranscriptionStatus.CLEAR).value
-            pred_status = (pred.transcription_status or GoodNotesTranscriptionStatus.CLEAR).value
+            pred_status = (
+                pred.transcription_status.value if pred.transcription_status is not None else ""
+            )
             status_pairs.append((gold_status, pred_status))
             gold_class = (gold.primary_class or GoodNotesNoteClass.GENERAL).value
-            pred_class = (pred.primary_class or GoodNotesNoteClass.GENERAL).value
+            pred_class = pred.primary_class.value if pred.primary_class is not None else ""
             class_pairs.append((gold_class, pred_class))
             tag_scores.append(_multilabel_f1(gold.candidate_tags, pred.candidate_tags))
             rank_scores.append(_ranking_score(gold.ranked_candidates, pred.ranked_candidates, gold))
             _collect_calibration(calibration_samples, gold, pred, overlap)
         for gold in gold_notes:
             if gold.region_id not in {regions[gi].region_id for gi, _, _ in matches}:
+                trans_scores.append(0.0)
+                tag_scores.append(0.0)
+                rank_scores.append(0.0)
                 status_pairs.append(
                     ((gold.transcription_status or GoodNotesTranscriptionStatus.CLEAR).value, "")
                 )
@@ -606,7 +612,11 @@ def _macro_f1(pairs: Sequence[tuple[str, str]], labels: Sequence[str]) -> float:
                 fp += 1
             elif gold == label and pred != label:
                 fn += 1
+        if tp == 0 and fp == 0 and fn == 0:
+            continue
         scores.append(_f1(tp, fp, fn))
+    if not scores:
+        return 1.0
     return sum(scores) / len(scores)
 
 
@@ -661,7 +671,9 @@ def _collect_calibration(
             if character_error_rate(gold.transcription, pred.transcription or "") == 0.0
             else 0.0
         )
-    class_ok = 1.0 if (pred.primary_class or gold.primary_class) == gold.primary_class else 0.0
+    class_ok = (
+        1.0 if pred.primary_class is not None and pred.primary_class == gold.primary_class else 0.0
+    )
     seg_ok = 1.0 if overlap >= BOUNDARY_IOU_THRESHOLD else 0.0
     gold_cands = {normalize_transcription(item.candidate) for item in gold.ranked_candidates}
     if gold.no_association_correct or not gold.ranked_candidates:
@@ -759,21 +771,22 @@ def _critical_errors_for_case(
                 )
             )
         if index not in matched_pred and pred.kind is GoodNotesSegmentKind.NOTE_UNIT:
+            pred_text = normalize_transcription(pred.transcription)
             for gold in regions:
                 if gold.kind is not GoodNotesSegmentKind.SOURCE_CONTEXT:
                     continue
-                if iou(gold.geometry, pred.geometry) < BOUNDARY_IOU_THRESHOLD:
+                overlap = iou(gold.geometry, pred.geometry) >= BOUNDARY_IOU_THRESHOLD
+                same_text = pred_text == normalize_transcription(gold.transcription)
+                if not pred_text or not (overlap or same_text):
                     continue
-                if normalize_transcription(pred.transcription) and normalize_transcription(
-                    pred.transcription
-                ) != normalize_transcription(gold.transcription):
-                    found.append(
-                        CriticalError(
-                            CriticalErrorKind.SOURCE_CONTEXT_AS_OPERATOR_NOTE,
-                            case_id,
-                            "SOURCE_CONTEXT predicted as fabricated NOTE_UNIT",
-                        )
+                found.append(
+                    CriticalError(
+                        CriticalErrorKind.SOURCE_CONTEXT_AS_OPERATOR_NOTE,
+                        case_id,
+                        "SOURCE_CONTEXT predicted as fabricated NOTE_UNIT",
                     )
+                )
+                break
     instruction_gold = [region for region in regions if region.contains_embedded_instructions]
     if instruction_gold:
         joined = " ".join(

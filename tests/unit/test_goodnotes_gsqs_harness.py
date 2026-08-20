@@ -12,7 +12,10 @@ from my_pa.application.goodnotes_gsqs import (
     AUTOMATIC_PROMOTION_DISABLED,
     GATE_B_STATE,
     MEASURED_B0_NOT_YET_ESTABLISHED,
+    NOTE_UNIT_V2,
     SELF_IMPROVEMENT_NOT_YET_ACTIVATED,
+    AnalyzerOutput,
+    CorpusPartition,
 )
 from my_pa.application.goodnotes_gsqs_harness import (
     INCUMBENT_ANALYZER_NAME,
@@ -23,6 +26,7 @@ from my_pa.application.goodnotes_gsqs_harness import (
     interchange_document,
     parse_interchange,
     planned_variance,
+    score_partition,
 )
 from my_pa.application.goodnotes_gsqs_v1_freeze import freeze_v1_corpus
 from my_pa.application.goodnotes_semantics import submit_proposal
@@ -76,6 +80,36 @@ def test_interchange_round_trip_and_gold_replay() -> None:
     parsed = parse_interchange(document)
     assert parsed.case_id == case.case_id
     assert parsed.schema_version == output.schema_version
+    assert parsed.corpus_version == case.corpus_version
     assert len(parsed.segments) == len(output.segments)
     with pytest.raises(ValueError, match="unsupported"):
         parse_interchange({**document, "schema_version": "other"})
+
+
+def test_harness_invalidates_analyzer_corpus_version_mismatch() -> None:
+    cases, manifest = freeze_v1_corpus()
+    selected = [item for item in cases if item.partition is CorpusPartition.B and item.scoreable]
+    outputs = tuple(
+        AnalyzerOutput(
+            case_id=item.case_id,
+            schema_version=NOTE_UNIT_V2,
+            analyzer_name="deterministic-gold-replay",
+            analyzer_version="harness-dry-run",
+            segments=gold_as_output(
+                item, analyzer_name="deterministic-gold-replay", analyzer_version="1"
+            ).segments,
+            corpus_version="other",
+        )
+        for item in selected
+    )
+    result, record = score_partition(
+        cases,
+        outputs,
+        partition=CorpusPartition.B,
+        manifest=manifest,
+        analyzer_name="deterministic-gold-replay",
+        analyzer_version="harness-dry-run",
+        run_repetition=1,
+    )
+    assert result.measurement_valid is False
+    assert record.measurement_valid is False

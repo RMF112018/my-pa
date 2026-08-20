@@ -2,10 +2,10 @@
 
 Evaluator name: `goodnotes-gsqs-independent`
 
-Evaluator version: `1.0`
+Evaluator version: `1.1`
 
 Code identity (weights, IoU threshold, ranking k):
-`ed24cf1172e88c88dd5ede15a47783f582a643c7f6eb7a4c22b9227d5bbc3011`
+`4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e`
 
 The evaluator consumes frozen ground truth and analyzer-produced
 `note-unit.v2` output. It does not call the production worker. The worker
@@ -52,7 +52,9 @@ single spaces, strip. **Case and punctuation are preserved.**
 
 `CER = levenshtein(normalized_ref, normalized_hyp) / len(normalized_ref)`
 
-Score = `max(0, 1 − CER)`, mean over matched NOTE_UNITs.
+Score = `max(0, 1 − CER)`, mean over matched NOTE_UNITs. Unmatched gold
+NOTE_UNITs contribute 0.0 to transcription, tag, and ranking scores rather
+than being omitted (which would fail open).
 
 UNREADABLE gold: empty/whitespace prediction scores 1.0; any fabricated
 text scores 0.0 on this component **and** raises the critical-error gate.
@@ -61,15 +63,16 @@ text scores 0.0 on this component **and** raises the critical-error gate.
 
 Classes: `CLEAR`, `UNCERTAIN`, `UNREADABLE`.
 
-Macro F1 over those three labels. Unmatched gold notes count as a wrong
-prediction (`pred=""`), so a dominant CLEAR class cannot hide UNREADABLE
-failures.
+Macro F1 over labels that appear in gold or prediction. Unmatched gold notes
+and omitted predictions count as wrong (`pred=""`). Missing predicted status
+is not treated as CLEAR.
 
 ## 4. Primary-class accuracy — macro F1
 
 Classes: `MEETING`, `PROJECT`, `RELATIONSHIP`, `GENERAL`.
 
-Same unmatched-gold treatment as status.
+Same unmatched-gold treatment as status. An omitted predicted class is not
+treated as GENERAL and is not a correct calibration sample.
 
 ## 5. Secondary-tag F1
 
@@ -115,7 +118,8 @@ Any of the following disqualifies the measurement regardless of GSQS:
 - forbidden tools/actions (`knowledge.search`, `knowledge.read`, `tool`, …)
 - Principal identity leak (`principal_id` in the scored payload)
 - malformed `note-unit.v2` proposal contract
-- SOURCE_CONTEXT predicted as a fabricated operator-authored NOTE_UNIT
+- SOURCE_CONTEXT predicted as a fabricated operator-authored NOTE_UNIT,
+  including when the copied text matches the printed context
 - database-integrity floor regression, when that path is actually evaluated
 - duplicate ACTIVE occurrences, when reconciliation output is supplied
 

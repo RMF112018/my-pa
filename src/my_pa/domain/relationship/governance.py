@@ -205,9 +205,23 @@ class EntityObservation:
             # writer bug, and admitting it would put an empty row on a queue
             # whose whole purpose is showing the operator what could not be
             # placed.
-            if not self.mention_display_name.strip():
+            #
+            # **Refused rather than trimmed, and the length is of the value
+            # itself.** The CHECK in `f3a8c1d7e592` has to agree with this rule
+            # or the two disagree in both directions, which is what an
+            # independent review found the first version of it doing: Python's
+            # `str.strip()` removes every kind of whitespace and PostgreSQL's
+            # `trim()` removes only spaces, so a value padded with tabs was
+            # short enough here and too long at the server, and a tab-only value
+            # was blank here and acceptable there. Requiring the value to arrive
+            # already trimmed removes the difference instead of trying to
+            # express one language's rule in the other. It also means what is
+            # stored is what is published, with no padding.
+            if self.mention_display_name != self.mention_display_name.strip():
+                raise ValueError("a disclosed mention name carries no leading or trailing space")
+            if not self.mention_display_name:
                 raise ValueError("a disclosed mention name is not blank")
-            if len(self.mention_display_name.strip()) > MENTION_DISPLAY_NAME_LIMIT:
+            if len(self.mention_display_name) > MENTION_DISPLAY_NAME_LIMIT:
                 raise ValueError("a disclosed mention name is bounded")
         ensure_utc(self.observed_at)
         ensure_utc(self.recorded_at)

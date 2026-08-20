@@ -287,6 +287,37 @@ def test_the_server_refuses_a_disclosed_mention_name_past_its_bound(
         SqlEntityRepository(connection).record_observation(PRINCIPAL_A, oversized)
 
 
+@pytest.mark.parametrize(
+    "value",
+    ["\t", "   ", " A. Chen", "A. Chen ", "\t" * 10 + "x" * 195],
+    ids=["tab-only", "spaces-only", "leading-space", "trailing-space", "tab-padded-long"],
+)
+def test_the_server_and_the_record_agree_about_a_disclosed_mention_name(
+    two_principals: Engine, value: str
+) -> None:
+    """The two enforcement points must refuse the *same* values.
+
+    They did not. Python's `str.strip()` removes every kind of whitespace and
+    PostgreSQL's `trim()` removes only spaces, so the first version of this
+    bound disagreed in **both** directions: `"\t" * 10 + "x" * 195` was 195
+    characters to the record and 205 to the server, so a value the record
+    accepted aborted the transaction; and `"\t"` was blank to the record and a
+    one-character name to the server, so a row the server accepted made the
+    whole queue page unreadable when the mapper rebuilt it.
+
+    Each value below is refused by both, and this test would have failed on
+    either half of that divergence. Staged around the record with
+    `object.__setattr__`, because the row this guards against is the one that
+    arrives without building a record.
+    """
+    smuggled = _observation("eobs_agree0001agree01")
+    object.__setattr__(smuggled, "mention_display_name", value)
+    with pytest.raises(IntegrityError), two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_observation(PRINCIPAL_A, smuggled)
+    with pytest.raises(ValueError):
+        dataclasses.replace(_observation(), mention_display_name=value)
+
+
 def test_an_observation_cursor_the_caller_cannot_read_is_refused(
     two_principals: Engine,
 ) -> None:

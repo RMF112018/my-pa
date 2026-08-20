@@ -690,12 +690,13 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if observation.principal_id != principal_id:
             raise ValueError("an observation belongs to the acting Principal")
-        # This was the one write on the plane that constrained no form, and it
-        # feeds the one field `entities.unresolved_mentions` discloses. The
-        # guard is necessary and it is **not sufficient**: it establishes that
-        # the value is normalized, not that it is a name — normalized raw text
-        # passes it. What keeps an envelope out is the caller's contract on
-        # `EntityRepository.record_observation`, which this cannot check.
+        # This was the one write on the plane that constrained no form. It no
+        # longer feeds anything the queue publishes: `f3a8c1d7e592` moved the
+        # disclosure to `mention_display_name`, and this column is now internal
+        # to matching. The guard stays because a value the resolver's equality
+        # predicate cannot match still removes its row from the candidate set,
+        # which is the `RI-PR135-MAJOR-002` argument and has nothing to do with
+        # disclosure.
         _require_normalized_name(observation.normalized_value)
         if observation.entity_id is not None:
             self._require_own_entity(principal_id, observation.entity_id)
@@ -1141,9 +1142,10 @@ def _row_to_observation(row: Row[Any]) -> EntityObservation:
     # `EntityAlias` and `ExternalIdentifier`, whose own `__post_init__` refuse an
     # unnormalized value and so make this repository's claim true for their
     # mappers without a line here. Without this, the module docstring's "on
-    # every read mapper" was false of the one field
-    # `entities.unresolved_mentions` discloses: a row written around the
-    # repository came back verbatim, angle brackets and all.
+    # every read mapper" was false of this column: a row written around the
+    # repository came back verbatim, angle brackets and all. That mattered for
+    # disclosure until `f3a8c1d7e592`; it still matters for matching, which is
+    # what the guard is actually about.
     _require_normalized_name(str(row.normalized_value))
     return EntityObservation(
         observation_id=str(row.observation_id),

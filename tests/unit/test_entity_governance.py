@@ -23,6 +23,7 @@ from my_pa.application.entity_governance import (
 )
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import (
+    MENTION_DISPLAY_NAME_LIMIT,
     EntityObservation,
     EntityProposalKind,
     EntityProposalState,
@@ -87,6 +88,78 @@ def an_observation(
         recorded_at=WHEN,
         entity_id=entity_id,
     )
+
+
+# --- the one field the queue publishes --------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("value", "message"),
+    [
+        ("", "not blank"),
+        ("   ", "no leading or trailing space"),
+        ("\t", "no leading or trailing space"),
+        (" Alice Chen", "no leading or trailing space"),
+        ("Alice Chen ", "no leading or trailing space"),
+        ("x" * (MENTION_DISPLAY_NAME_LIMIT + 1), "bounded"),
+    ],
+)
+def test_a_disclosed_mention_name_is_refused_unless_it_is_trimmed_and_bounded(
+    value: str, message: str
+) -> None:
+    """The record half of a bound the schema states as a CHECK.
+
+    Both halves had to exist and neither had a test: both `raise` branches
+    could be deleted with the whole suite green, on the one field
+    `entities.unresolved_mentions` publishes.
+
+    **Trimmed rather than trimmable**, because the two enforcement points must
+    agree and they cannot be made to agree by trimming. Python's `str.strip()`
+    removes every kind of whitespace; PostgreSQL's `trim()` removes only
+    spaces. An earlier version of this bound differed in both directions: a
+    tab-padded value was short enough here and too long at the server, and a
+    tab-only value was blank here and acceptable there. Requiring the value to
+    arrive already trimmed removes the difference rather than expressing one
+    language's whitespace rule in the other's.
+    """
+    with pytest.raises(ValueError, match=message):
+        EntityObservation(
+            observation_id="eobs_bound0001bound01",
+            principal_id=PRINCIPAL,
+            kind=ObservationKind.MESSAGE_PARTICIPANT,
+            observed_value="Alice Chen <a.chen@acme.test>",
+            normalized_value=normalize_name("Alice Chen"),
+            source_id=SOURCE,
+            source_object_id=OBJECT,
+            source_version_id=VERSION,
+            observed_at=WHEN,
+            recorded_at=WHEN,
+            mention_display_name=value,
+        )
+
+
+def test_a_disclosed_mention_name_is_optional_and_defaults_to_nothing() -> None:
+    """The control, and the property the column exists for.
+
+    A writer that names nothing is not an error: the mention is queued and
+    carries no text. The test above would pass against a record that refused
+    every value, which would defeat the capability entirely.
+    """
+    assert an_observation().mention_display_name is None
+    named = EntityObservation(
+        observation_id="eobs_named0001named01",
+        principal_id=PRINCIPAL,
+        kind=ObservationKind.MESSAGE_PARTICIPANT,
+        observed_value="Alice Chen <a.chen@acme.test>",
+        normalized_value=normalize_name("Alice Chen"),
+        source_id=SOURCE,
+        source_object_id=OBJECT,
+        source_version_id=VERSION,
+        observed_at=WHEN,
+        recorded_at=WHEN,
+        mention_display_name="A. Chen",
+    )
+    assert named.mention_display_name == "A. Chen"
 
 
 # --- an observation is not a person -----------------------------------------

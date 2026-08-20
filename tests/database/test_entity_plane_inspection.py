@@ -98,6 +98,15 @@ PLANTED_PERSONAL_DATA: Final[tuple[str, ...]] = (
     #: green while an operator pasted a person's name into a ticket. The other
     #: four personal columns were planted and scanned; this was the one gap.
     "Dana Whitfield",
+    #: Planted into `entity_observations.mention_display_name`, the fifteenth
+    #: free-text column and the one `f3a8c1d7e592` designates as **the only
+    #: field `entities.unresolved_mentions` publishes**. It arrived with no
+    #: plant, so this scan was one column short of the contract the comment
+    #: above states — and short on the highest-disclosure-risk free text on the
+    #: plane, which is the same defect that comment records happening at
+    #: `entity_aliases.normalized_value`. A hand-maintained canary list is
+    #: derived from nothing and cannot notice a new column; only a plant can.
+    "Rosalind Achterberg",
 )
 
 SOURCE: Final = "src_aaaa0001aaaa0001"
@@ -193,6 +202,7 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                     kind=ObservationKind.MESSAGE_PARTICIPANT,
                     observed_value="Alice Chen <a.chen@acme.test>",
                     normalized_value=normalize_name("Alice Chen"),
+                    mention_display_name="Rosalind Achterberg",
                     source_id=SOURCE,
                     source_object_id=OBJECT,
                     source_version_id=VERSION,

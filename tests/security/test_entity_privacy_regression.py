@@ -114,6 +114,15 @@ def staged(scene: Scene) -> Scene:
                 kind=ObservationKind.MESSAGE_PARTICIPANT,
                 observed_value="Confidential Counterparty <cc@rival.test>",
                 normalized_value=normalize_name("Confidential Counterparty"),
+                # **Set deliberately, and the sweep is vacuous without it.**
+                # `entities.unresolved_mentions` publishes this field and this
+                # field only. When the disclosed field moved off
+                # `normalized_value`, the foreign observation staged here still
+                # carried no display name, so the one thing the queue could leak
+                # was `None` — and removing the Principal filter from the read
+                # left the sweep green. A privacy test that cannot fail is worse
+                # than an absent one, because it reads as coverage.
+                mention_display_name="Confidential Counterparty",
                 source_id=scene.source.source_id,
                 source_object_id=scene.markdown.source_object_id,
                 source_version_id="ver_foreign01foreign01",

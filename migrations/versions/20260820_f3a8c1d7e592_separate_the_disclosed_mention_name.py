@@ -57,7 +57,10 @@ def upgrade() -> None:
     op.create_check_constraint(
         "a_disclosed_mention_name_is_bounded",
         "entity_observations",
-        "mention_display_name IS NULL OR length(trim(mention_display_name)) BETWEEN 1 AND 200",
+        "mention_display_name IS NULL OR ("
+        "mention_display_name ~ '[^[:space:]]' "
+        "AND mention_display_name = btrim(mention_display_name) "
+        "AND length(mention_display_name) BETWEEN 1 AND 200)",
         schema=SCHEMA,
     )
 

@@ -3062,7 +3062,10 @@ entity_observations = Table(
         name="an_observation_is_not_recorded_before_it_was_observed",
     ),
     CheckConstraint(
-        "mention_display_name IS NULL OR length(trim(mention_display_name)) BETWEEN 1 AND 200",
+        "mention_display_name IS NULL OR ("
+        "mention_display_name ~ '[^[:space:]]' "
+        "AND mention_display_name = btrim(mention_display_name) "
+        "AND length(mention_display_name) BETWEEN 1 AND 200)",
         name="a_disclosed_mention_name_is_bounded",
     ),
     Index("entity_observations_by_principal", "principal_id"),

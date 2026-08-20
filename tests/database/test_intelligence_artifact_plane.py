@@ -19,6 +19,7 @@ from sqlalchemy.sql import Executable
 from my_pa.application.commands import (
     BeginIntelligenceCycle,
     CommitIntelligenceArtifact,
+    GetLatestIntelligenceArtifact,
     ListIntelligenceArtifacts,
     ReadIntelligenceArtifact,
     RecordIntelligenceRunState,
@@ -607,3 +608,184 @@ def test_sql_collector_rerun_stales_descendants(migrated_engine: Engine) -> None
         ReadIntelligenceArtifact(report_id=reporter_id),
     )
     assert historical["body_markdown"] == "report communications"
+
+
+def _sql_latest(
+    service: ApplicationService,
+    principal: Principal,
+    cycle: str,
+    stage: IntelligenceStage,
+    *,
+    focus: FocusAreaId | None = None,
+    lane: SourceLaneId | None = None,
+) -> str:
+    result = _ok(
+        service,
+        principal,
+        Purpose.REPORT_READ,
+        GetLatestIntelligenceArtifact(
+            cycle_run_id=cycle, stage=stage, focus_area_id=focus, source_lane=lane
+        ),
+    )
+    report_id = result["report_id"]
+    assert isinstance(report_id, str)
+    return report_id
+
+
+def test_sql_researcher_rerun_stales_reporter_input(migrated_engine: Engine) -> None:
+    service = _service(migrated_engine)
+    principal = operator()
+    cycle = _begin(service, principal, "sql-r-rerun")
+    reporter_id = _focus_branch(service, principal, cycle, FocusAreaId.COMMUNICATIONS)
+    synth_id = _sql_latest(
+        service, principal, cycle, IntelligenceStage.SYNTHESIZER, focus=FocusAreaId.COMMUNICATIONS
+    )
+    collector_id = _sql_latest(
+        service, principal, cycle, IntelligenceStage.COLLECTOR, focus=FocusAreaId.COMMUNICATIONS
+    )
+    _commit(
+        service,
+        principal,
+        cycle_run_id=cycle,
+        stage=IntelligenceStage.RESEARCHER,
+        kind=ArtifactKind.RESEARCH_CONTEXT,
+        key="sql-r-teams-v2",
+        title="teams v2",
+        body="v2",
+        focus=FocusAreaId.COMMUNICATIONS,
+        lane=SourceLaneId.TEAMS,
+        dependencies=(collector_id,),
+    )
+    reporter_set = _ok(
+        service,
+        principal,
+        Purpose.REPORT_READ,
+        ResolveIntelligenceSet(
+            cycle_run_id=cycle,
+            set_id=ResolverSetId.REPORTER_INPUT,
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+        ),
+    )
+    assert reporter_set["aggregate"] != "READY"
+    members = reporter_set["members"]
+    assert isinstance(members, list)
+    assert members[0]["readiness"] == "STALE"
+    stale = _invoke(
+        service,
+        principal,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.REPORTER,
+            artifact_kind=ArtifactKind.FOCUS_REPORT,
+            producer_task_id="sql-stale-r",
+            producer_task_name="stale",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="stale",
+            body_markdown="no",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="sql-stale-r",
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+            dependency_report_ids=(synth_id,),
+        ),
+    )
+    assert stale.error is not None
+    assert stale.error.code is ErrorCode.CONFLICT
+    historical = _ok(
+        service,
+        principal,
+        Purpose.REPORT_READ,
+        ReadIntelligenceArtifact(report_id=reporter_id),
+    )
+    assert historical["body_markdown"] == "report communications"
+
+
+def test_sql_synthesizer_rerun_stales_brief_and_rejects_old_reporters(
+    migrated_engine: Engine,
+) -> None:
+    service = _service(migrated_engine)
+    principal = operator()
+    cycle = _begin(service, principal, "sql-s-rerun")
+    reporters = tuple(
+        _focus_branch(service, principal, cycle, focus) for focus in EXPECTED_FOCUS_AREAS
+    )
+    brief = _commit(
+        service,
+        principal,
+        cycle_run_id=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind=ArtifactKind.MORNING_BRIEF,
+        key=f"{cycle}-brief",
+        title="Morning Brief",
+        body="brief body",
+        dependencies=reporters,
+    )
+    researcher_ids = tuple(
+        _sql_latest(
+            service,
+            principal,
+            cycle,
+            IntelligenceStage.RESEARCHER,
+            focus=FocusAreaId.COMMUNICATIONS,
+            lane=lane,
+        )
+        for lane in EXPECTED_SOURCE_LANES
+    )
+    _commit(
+        service,
+        principal,
+        cycle_run_id=cycle,
+        stage=IntelligenceStage.SYNTHESIZER,
+        kind=ArtifactKind.SYNTHESIS_PACKAGE,
+        key="sql-s-v2",
+        title="synthesis v2",
+        body="synthesis v2",
+        focus=FocusAreaId.COMMUNICATIONS,
+        dependencies=researcher_ids,
+    )
+    brief_inputs = _ok(
+        service,
+        principal,
+        Purpose.REPORT_READ,
+        ResolveIntelligenceSet(cycle_run_id=cycle, set_id=ResolverSetId.MORNING_BRIEF_INPUTS),
+    )
+    assert brief_inputs["aggregate"] != "READY"
+    members = brief_inputs["members"]
+    assert isinstance(members, list)
+    communications = next(
+        member for member in members if member["focus_area_id"] == "communications"
+    )
+    assert communications["readiness"] == "STALE"
+    stale = _invoke(
+        service,
+        principal,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.MORNING_BRIEF,
+            artifact_kind=ArtifactKind.MORNING_BRIEF,
+            producer_task_id="sql-stale-brief",
+            producer_task_name="stale brief",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="stale brief",
+            body_markdown="no",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="sql-stale-brief",
+            dependency_report_ids=reporters,
+        ),
+    )
+    assert stale.error is not None
+    assert stale.error.code is ErrorCode.CONFLICT
+    brief_id = brief["report_id"]
+    assert isinstance(brief_id, str)
+    historical = _ok(
+        service,
+        principal,
+        Purpose.REPORT_READ,
+        ReadIntelligenceArtifact(report_id=brief_id),
+    )
+    assert historical["body_markdown"] == "brief body"

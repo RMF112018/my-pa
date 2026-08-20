@@ -684,6 +684,188 @@ def test_collector_rerun_stales_descendant_readiness_and_commits(scene: Scene) -
     assert historical["body_markdown"] == f"report {FOCUS.value}"
 
 
+def _latest(
+    service: ApplicationService,
+    scene: Scene,
+    cycle: str,
+    stage: IntelligenceStage,
+    *,
+    focus: FocusAreaId | None = None,
+    lane: SourceLaneId | None = None,
+) -> str:
+    result = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            GetLatestIntelligenceArtifact(
+                cycle_run_id=cycle,
+                stage=stage,
+                focus_area_id=focus,
+                source_lane=lane,
+            ),
+        )
+    )
+    report_id = result["report_id"]
+    assert isinstance(report_id, str)
+    return report_id
+
+
+def test_researcher_rerun_stales_reporter_input_and_rejects_old_synthesizer(
+    scene: Scene,
+) -> None:
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, "cycle-r-rerun")
+    reporter_id = _focus_branch(service, scene, cycle, FOCUS)
+    synth_id = _latest(service, scene, cycle, IntelligenceStage.SYNTHESIZER, focus=FOCUS)
+    collector_id = _latest(service, scene, cycle, IntelligenceStage.COLLECTOR, focus=FOCUS)
+    commit(
+        service,
+        scene,
+        cycle_run_id=cycle,
+        stage=IntelligenceStage.RESEARCHER,
+        kind=ArtifactKind.RESEARCH_CONTEXT,
+        key="r-teams-v2",
+        title="teams v2",
+        body="from current collector",
+        focus=FOCUS,
+        lane=SourceLaneId.TEAMS,
+        dependencies=(collector_id,),
+    )
+    reporter_set = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(
+                cycle_run_id=cycle,
+                set_id=ResolverSetId.REPORTER_INPUT,
+                focus_area_id=FOCUS,
+            ),
+        )
+    )
+    assert reporter_set["aggregate"] != "READY"
+    members = reporter_set["members"]
+    assert isinstance(members, list)
+    assert members[0]["readiness"] == "STALE"
+    stale = run(
+        service,
+        scene,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.REPORTER,
+            artifact_kind=ArtifactKind.FOCUS_REPORT,
+            producer_task_id="stale-after-r",
+            producer_task_name="stale",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="stale",
+            body_markdown="no",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="stale-after-r",
+            focus_area_id=FOCUS,
+            dependency_report_ids=(synth_id,),
+        ),
+    )
+    assert stale.error is not None
+    assert stale.error.code is ErrorCode.CONFLICT
+    historical = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ReadIntelligenceArtifact(report_id=reporter_id),
+        )
+    )
+    assert historical["body_markdown"] == f"report {FOCUS.value}"
+
+
+def test_synthesizer_rerun_stales_brief_inputs_and_rejects_old_reporters(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, "cycle-s-rerun")
+    reporters = tuple(_focus_branch(service, scene, cycle, focus) for focus in EXPECTED_FOCUS_AREAS)
+    brief = commit(
+        service,
+        scene,
+        cycle_run_id=cycle,
+        stage=IntelligenceStage.MORNING_BRIEF,
+        kind=ArtifactKind.MORNING_BRIEF,
+        key=f"{cycle}-brief",
+        title="Morning Brief",
+        body="brief body",
+        dependencies=reporters,
+    )
+    researcher_ids = tuple(
+        _latest(
+            service,
+            scene,
+            cycle,
+            IntelligenceStage.RESEARCHER,
+            focus=FOCUS,
+            lane=lane,
+        )
+        for lane in EXPECTED_SOURCE_LANES
+    )
+    commit(
+        service,
+        scene,
+        cycle_run_id=cycle,
+        stage=IntelligenceStage.SYNTHESIZER,
+        kind=ArtifactKind.SYNTHESIS_PACKAGE,
+        key="s-v2",
+        title="synthesis v2",
+        body="synthesis v2",
+        focus=FOCUS,
+        dependencies=researcher_ids,
+    )
+    brief_inputs = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(cycle_run_id=cycle, set_id=ResolverSetId.MORNING_BRIEF_INPUTS),
+        )
+    )
+    assert brief_inputs["aggregate"] != "READY"
+    members = brief_inputs["members"]
+    assert isinstance(members, list)
+    communications = next(member for member in members if member["focus_area_id"] == FOCUS.value)
+    assert communications["readiness"] == "STALE"
+    stale_brief = run(
+        service,
+        scene,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.MORNING_BRIEF,
+            artifact_kind=ArtifactKind.MORNING_BRIEF,
+            producer_task_id="stale-brief",
+            producer_task_name="stale brief",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="stale brief",
+            body_markdown="no",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="stale-brief",
+            dependency_report_ids=reporters,
+        ),
+    )
+    assert stale_brief.error is not None
+    assert stale_brief.error.code is ErrorCode.CONFLICT
+    historical = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ReadIntelligenceArtifact(report_id=str(brief["report_id"])),
+        )
+    )
+    assert historical["body_markdown"] == "brief body"
+
+
 def test_failed_researcher_lane_exposes_run_id_and_blocks_synthesizer(scene: Scene) -> None:
     service = build_service(scene.world, scene.providers)
     cycle = begin(service, scene, "cycle-blocked-lane")

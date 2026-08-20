@@ -308,64 +308,56 @@ def _parse_provenance(
     return tuple(parsed)
 
 
-def _role_upstream(artifact: IntelligenceArtifact, role: str) -> str | None:
-    return next(
-        (
-            dependency.upstream_artifact_id
-            for dependency in artifact.dependencies
-            if dependency.dependency_role == role
-        ),
-        None,
-    )
-
-
-def _lineage_collector_id(
-    store: IntelligenceStore, principal_id: str, artifact: IntelligenceArtifact
-) -> str | None:
-    """The Collector this artifact's pipeline lineage is bound to, if unique."""
-    if artifact.stage is IntelligenceStage.COLLECTOR:
-        return artifact.artifact_id
-    if artifact.stage is IntelligenceStage.RESEARCHER:
-        return _role_upstream(artifact, "collector")
-    if artifact.stage is IntelligenceStage.SYNTHESIZER:
-        collectors: set[str] = set()
-        for dependency in artifact.dependencies:
-            if not dependency.dependency_role.startswith("researcher:"):
-                continue
-            researcher = store.get_artifact(principal_id, dependency.upstream_artifact_id)
-            if researcher is None:
-                return None
-            collector_id = _lineage_collector_id(store, principal_id, researcher)
-            if collector_id is None:
-                return None
-            collectors.add(collector_id)
-        if len(collectors) != 1:
-            return None
-        return next(iter(collectors))
-    if artifact.stage is IntelligenceStage.REPORTER:
-        synthesizer_id = _role_upstream(artifact, "synthesizer")
-        if synthesizer_id is None:
-            return None
-        synthesizer = store.get_artifact(principal_id, synthesizer_id)
-        if synthesizer is None:
-            return None
-        return _lineage_collector_id(store, principal_id, synthesizer)
-    return None
-
-
-def _require_current_collector_lineage(
+def _upstream_matches_current_head(
     store: IntelligenceStore,
     *,
     principal_id: str,
     cycle_run_id: str,
-    focus_area_id: FocusAreaId,
+    artifact: IntelligenceArtifact,
+) -> bool:
+    """Every recorded pipeline parent is that role's current head, recursively.
+
+    Collector-only comparison would leave a Synthesizer current-ready after a
+    Researcher rerun, and a Reporter current-ready after a Synthesizer rerun.
+    """
+    for dependency in artifact.dependencies:
+        if dependency.expected_stage is None:
+            return False
+        current = store.current_head(
+            principal_id,
+            cycle_run_id,
+            dependency.expected_stage,
+            dependency.expected_focus_area_id,
+            dependency.expected_source_lane,
+        )
+        if current is None or current.artifact_id != dependency.upstream_artifact_id:
+            return False
+        parent = store.get_artifact(principal_id, dependency.upstream_artifact_id)
+        if parent is None:
+            return False
+        if not _upstream_matches_current_head(
+            store,
+            principal_id=principal_id,
+            cycle_run_id=cycle_run_id,
+            artifact=parent,
+        ):
+            return False
+    return True
+
+
+def _require_current_upstream_lineage(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    cycle_run_id: str,
     artifact: IntelligenceArtifact,
 ) -> None:
-    current = store.current_head(
-        principal_id, cycle_run_id, IntelligenceStage.COLLECTOR, focus_area_id, None
-    )
-    collector_id = _lineage_collector_id(store, principal_id, artifact)
-    if current is None or collector_id != current.artifact_id:
+    if not _upstream_matches_current_head(
+        store,
+        principal_id=principal_id,
+        cycle_run_id=cycle_run_id,
+        artifact=artifact,
+    ):
         raise IntelligenceStaleReferenceError()
 
 
@@ -377,13 +369,14 @@ def _member_lineage_is_stale(
     focus_area_id: FocusAreaId | None,
     artifact: IntelligenceArtifact,
 ) -> bool:
-    if focus_area_id is None:
+    if artifact.stage is not IntelligenceStage.COLLECTOR and focus_area_id is None:
         return True
-    current = store.current_head(
-        principal_id, cycle_run_id, IntelligenceStage.COLLECTOR, focus_area_id, None
+    return not _upstream_matches_current_head(
+        store,
+        principal_id=principal_id,
+        cycle_run_id=cycle_run_id,
+        artifact=artifact,
     )
-    collector_id = _lineage_collector_id(store, principal_id, artifact)
-    return current is None or collector_id != current.artifact_id
 
 
 def _validate_dependencies(
@@ -482,11 +475,10 @@ def _validate_dependencies(
             raise IntelligenceStaleReferenceError()
         if focus_area_id is None:
             raise IntelligenceDependencyError()
-        _require_current_collector_lineage(
+        _require_current_upstream_lineage(
             store,
             principal_id=principal_id,
             cycle_run_id=cycle.cycle_run_id,
-            focus_area_id=focus_area_id,
             artifact=synthesizer,
         )
         deps.append(
@@ -517,11 +509,10 @@ def _validate_dependencies(
                 raise IntelligenceStaleReferenceError()
             if item.focus_area_id is None:
                 raise IntelligenceDependencyError()
-            _require_current_collector_lineage(
+            _require_current_upstream_lineage(
                 store,
                 principal_id=principal_id,
                 cycle_run_id=cycle.cycle_run_id,
-                focus_area_id=item.focus_area_id,
                 artifact=item,
             )
             deps.append(

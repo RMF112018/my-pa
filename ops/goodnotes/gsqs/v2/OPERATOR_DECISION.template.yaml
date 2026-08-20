@@ -6,7 +6,7 @@
 # coordination_request_id: REQ-MYPA-GOODNOTES-GATE-B-CORPUS-V2-REMEDIATION-20260820-001
 
 corpus_version: gsqs-v2
-manifest_digest: 263eaebc14ca4a435ae37d595a9fd26dbb4d403a5ada79d6f5c0cc7a63e97b25
+manifest_digest: e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd
 
 # One of: approve | correct | reject | mark_ambiguous_exclude
 decision: pending

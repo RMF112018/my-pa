@@ -22,7 +22,7 @@ authorization to run now.
 ## Prerequisites
 
 1. Operator has reviewed corpus `gsqs-v2` at manifest digest
-   `263eaebc14ca4a435ae37d595a9fd26dbb4d403a5ada79d6f5c0cc7a63e97b25`.
+   `e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd`.
    Synthetic-regression approval is not by itself B0 readiness.
 2. Operator has admitted a digest-bound
    `SYNTHETIC_NON_PERSONAL_HANDWRITING` sample set per

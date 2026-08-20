@@ -52,7 +52,7 @@
     "C": 30
   },
   "leakage_group_intersections_empty": true,
-  "manifest_digest": "263eaebc14ca4a435ae37d595a9fd26dbb4d403a5ada79d6f5c0cc7a63e97b25",
+  "manifest_digest": "e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd",
   "operator_actions": [
     "approve",
     "correct",

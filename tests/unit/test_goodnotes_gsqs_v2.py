@@ -175,6 +175,32 @@ def test_assign_partitions_by_group_covers_b_and_c() -> None:
         assert GoodNotesTranscriptionStatus.UNREADABLE in statuses
 
 
+def test_identical_region_geometry_does_not_span_partitions() -> None:
+    drafts = v2_drafts()
+    assigned = assign_partitions_by_group(drafts)
+    by_signature: dict[tuple[object, ...], set[CorpusPartition]] = {}
+    for draft in drafts:
+        if not draft.scoreable:
+            continue
+        signature = tuple(
+            (
+                region.kind.value,
+                region.geometry.x_min,
+                region.geometry.y_min,
+                region.geometry.width,
+                region.geometry.height,
+            )
+            for region in draft.regions
+        )
+        by_signature.setdefault(signature, set()).add(assigned[draft.case_id])
+    leaked = {sig: parts for sig, parts in by_signature.items() if len(parts) > 1}
+    assert not leaked
+    context_boxes = {
+        draft.regions[0].geometry for draft in drafts if draft.scenario == "context-only"
+    }
+    assert len(context_boxes) == 3
+
+
 def test_unreadable_pdf_has_no_status_label_and_is_deterministic() -> None:
     drafts = [draft for draft in v2_drafts() if draft.scenario == "obscured-trap"]
     assert drafts

@@ -26,7 +26,7 @@ Handwriting admission: [`../HANDWRITING_ADMISSION.md`](../HANDWRITING_ADMISSION.
 | --- | --- |
 | Corpus version | `gsqs-v2` |
 | Generator | `gsqs-v2-generator-1` |
-| Manifest digest | `263eaebc14ca4a435ae37d595a9fd26dbb4d403a5ada79d6f5c0cc7a63e97b25` |
+| Manifest digest | `e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd` |
 | Fixture class | synthetic, non-personal, deterministic PDF (`gsqs-synthetic-pdf` / `helvetica-times-italic-v1`) |
 | Source layer | `SYNTHETIC_REGRESSION` (96); `CONTROLLED_HANDWRITING` (0) |
 | Personal handwriting | none committed |
@@ -87,7 +87,9 @@ template/layout/scenario family. Partitioning is at **group** level:
    same template cannot split across A/B/C.
 
 Holdout C therefore contains distinct templates, not the same layout with
-substituted text.
+substituted text. Context-only pages use the same layout boxes as
+note-bearing pages (`block` / `margin` / `stacked`), not a shared
+full-width rectangle with a different word.
 
 Proven empty intersections:
 

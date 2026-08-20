@@ -69,11 +69,17 @@ def _status_token(status: GoodNotesTranscriptionStatus) -> str:
     return status.value.lower()
 
 
-def _context(text: str, y_min: float = 0.08, height: float = 0.10) -> GoldRegion:
+def _context(
+    text: str,
+    y_min: float = 0.08,
+    height: float = 0.10,
+    x_min: float = 0.08,
+    width: float = 0.84,
+) -> GoldRegion:
     return GoldRegion(
         region_id="src-1",
         kind=GoodNotesSegmentKind.SOURCE_CONTEXT,
-        geometry=box(0.08, y_min, 0.84, height),
+        geometry=box(x_min, y_min, width, height),
         transcription=text,
     )
 
@@ -234,9 +240,17 @@ def _context_only() -> list[CaseDraft]:
             scenario="context-only",
             family="context-only",
             title="SYNTHETIC agenda without notes",
-            regions=(_context(f"SYNTHETIC printed agenda body {layout}", y_min=0.18, height=0.42),),
+            regions=(
+                _context(
+                    f"SYNTHETIC printed agenda body {layout}",
+                    x_min=x_min,
+                    y_min=y_min,
+                    width=width,
+                    height=height,
+                ),
+            ),
         )
-        for layout, _x, _y, _w, _h in _LAYOUTS
+        for layout, x_min, y_min, width, height in _LAYOUTS
     ]
 
 

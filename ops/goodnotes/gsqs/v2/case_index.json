@@ -989,7 +989,7 @@
       "NOTE_UNIT_count": 0,
       "adversarial": false,
       "case_id": "v2-context-only-block",
-      "content_sha256": "cb8fa0f01b6d529a4fdf7ea1f62247b5383bb9699e8d8f0afdb2a90e7bbdd0c2",
+      "content_sha256": "eaf54ae5929e6b7ae80ce5fdd111e85a93963709fb22325f680169ec8b86ff48",
       "difficulty": [
         "nominal"
       ],
@@ -1008,7 +1008,7 @@
       "NOTE_UNIT_count": 0,
       "adversarial": false,
       "case_id": "v2-context-only-margin",
-      "content_sha256": "f113cc5fa5280b66c79a0c38c0acdb8bb987ddcc360df43796e60ac4bb4a22bd",
+      "content_sha256": "b951643bc80bfb2f4ee2d5c327e00e71ee488579ab74dfcd0b73e6e5d7227cde",
       "difficulty": [
         "nominal"
       ],
@@ -1027,7 +1027,7 @@
       "NOTE_UNIT_count": 0,
       "adversarial": false,
       "case_id": "v2-context-only-stacked",
-      "content_sha256": "c357f0664fb5a6e64a45279f82270a84b6c6f38523460e3b59985e54591aadb6",
+      "content_sha256": "5f8211b2718d11b866025a025508be6d0b58bbd043ede835c1a62fbea03c4670",
       "difficulty": [
         "nominal"
       ],
@@ -2916,5 +2916,5 @@
       "scoreable": true
     }
   },
-  "manifest_digest": "263eaebc14ca4a435ae37d595a9fd26dbb4d403a5ada79d6f5c0cc7a63e97b25"
+  "manifest_digest": "e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd"
 }

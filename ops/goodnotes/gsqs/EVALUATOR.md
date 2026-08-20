@@ -6,24 +6,36 @@ Evaluator version: `1.1`
 
 Code identity hashes evaluator name/version, weights, IoU threshold,
 ranking k, **and** the SHA-256 of the complete evaluator behavior source
-set:
+set. EVALUATOR_BEHAVIOR_IDENTITY binds every repository module whose
+executable behavior determines analyzer admission, case/gold selection,
+scoring, calibration, critical-error disposition, or database-integrity
+floor behavior:
 
 - `application/goodnotes_gsqs.py`
 - `application/goodnotes_gsqs_harness.py`
+- `application/goodnotes_gsqs_corpus.py`
 - `application/goodnotes_evaluation.py`
 - `application/goodnotes_note_unit_contract.py`
 - `domain/goodnotes/models.py`
 
-`9e9602eca854dfd475827fd827fcd548cdae04da374c605508178d37e338ec57`
+`2529953e1028628d603ee6772285e7786c86d81065e2972b866e3d95e2d82ca2`
 
-Implementation digest (those five modules):
-`f07e90d1f3843d21fa993e4b98050c91daad167520fae6a42d0e510b366c5cac`
+Implementation digest (those six modules):
+`885969480d850ebd5f8214147fc737c42b3c09f785f04ef0c084118f76146142`
 
-Changing scoring, admission, schema/enums, or interchange parsing without
-bumping `EVALUATOR_VERSION` still changes the code identity. Measurement
-records bind this identity into `candidate_config_digest` and may also
-record exact repository commit/tree from execution context (library code
-does not read `.git`).
+Changing scoring, admission, case/gold selection, schema/enums, or
+interchange parsing without bumping `EVALUATOR_VERSION` still changes
+the code identity. Measurement records bind this identity into
+`candidate_config_digest`. Ordinary unit/dry-run paths may omit
+repository commit/tree. A live incumbent B0 measurement requires exact
+nonempty lowercase 40-hex `repository_commit` and `repository_tree`
+from execution context (library code does not read `.git`).
+
+`evaluate_gsqs` and `score_partition` re-admit constructed
+`AnalyzerOutput` objects through the shared note-unit.v2 contract
+before a measurement can become valid. Analyzer identity recorded in a
+measurement is derived from the validated artifacts, not from an
+independent caller override.
 
 The evaluator consumes frozen ground truth and analyzer-produced
 `note-unit.v2` output. It does not call the production worker. The worker

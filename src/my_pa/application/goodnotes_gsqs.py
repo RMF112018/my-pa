@@ -26,7 +26,10 @@ from my_pa.application.goodnotes_evaluation import (
     duplicate_active_occurrence_count,
     score_new_note_integrity_loss,
 )
-from my_pa.application.goodnotes_note_unit_contract import admit_v2_segment_list
+from my_pa.application.goodnotes_note_unit_contract import (
+    admit_content_sha256,
+    admit_v2_segment_list,
+)
 from my_pa.domain.goodnotes.models import (
     NOTE_UNIT_SCHEMA_V2,
     GoodNotesNoteClass,
@@ -353,6 +356,7 @@ def evaluator_implementation_files() -> tuple[Path, ...]:
     return (
         here,
         application / "goodnotes_gsqs_harness.py",
+        application / "goodnotes_gsqs_corpus.py",
         application / "goodnotes_evaluation.py",
         application / "goodnotes_note_unit_contract.py",
         domain_models,
@@ -467,6 +471,64 @@ def greedy_note_matches(
     return tuple(matched)
 
 
+def predicted_segment_contract_payload(segment: PredictedSegment) -> dict[str, object]:
+    """Lossless note-unit.v2 payload. Does not drop SOURCE_CONTEXT enrichment."""
+    payload: dict[str, object] = {
+        "kind": segment.kind.value,
+        "geometry": {
+            "x_min": segment.geometry.x_min,
+            "y_min": segment.geometry.y_min,
+            "width": segment.geometry.width,
+            "height": segment.geometry.height,
+        },
+    }
+    if segment.crop_sha256 is not None:
+        payload["crop_sha256"] = segment.crop_sha256
+    if segment.transcription is not None:
+        payload["transcription"] = segment.transcription
+    if segment.primary_class is not None:
+        payload["primary_class"] = segment.primary_class.value
+    if segment.candidate_tags:
+        payload["candidate_tags"] = list(segment.candidate_tags)
+    if segment.ranked_candidates:
+        payload["ranked_candidates"] = [
+            {"rank": item.rank, "candidate": item.candidate} for item in segment.ranked_candidates
+        ]
+    if segment.transcription_status is not None:
+        payload["transcription_status"] = segment.transcription_status.value
+    if segment.confidence is not None:
+        payload["confidence"] = {
+            "transcription": segment.confidence.transcription,
+            "segmentation": segment.confidence.segmentation,
+            "classification": segment.confidence.classification,
+            "linking": segment.confidence.linking,
+            "uncertainty": segment.confidence.uncertainty,
+        }
+    return payload
+
+
+def admit_analyzer_output(output: AnalyzerOutput) -> AnalyzerOutput:
+    """Re-admit constructed analyzer output through the shared note-unit.v2 contract."""
+    if output.schema_version != NOTE_UNIT_V2:
+        raise ValueError("malformed proposal_schema_version")
+    admitted = admit_v2_segment_list(
+        tuple(predicted_segment_contract_payload(segment) for segment in output.segments)
+    )
+    content = output.content_sha256
+    if content is not None:
+        content = admit_content_sha256(content)
+    return AnalyzerOutput(
+        case_id=output.case_id,
+        schema_version=output.schema_version,
+        analyzer_name=output.analyzer_name,
+        analyzer_version=output.analyzer_version,
+        segments=tuple(parse_predicted_segment(item) for item in admitted),
+        extra=output.extra,
+        corpus_version=output.corpus_version,
+        content_sha256=content,
+    )
+
+
 def evaluate_gsqs(
     cases: Sequence[tuple[str, Sequence[GoldRegion]]],
     outputs: Sequence[AnalyzerOutput],
@@ -479,6 +541,36 @@ def evaluate_gsqs(
     output_corpus_version: str | None = None,
     expected_content_sha256: Mapping[str, str] | None = None,
 ) -> EvaluationResult:
+    try:
+        outputs = tuple(admit_analyzer_output(item) for item in outputs)
+    except ValueError:
+        empty = ComponentScores(0, 0, 0, 0, 0, 0, 0)
+        integrity = _integrity_result(
+            occurrences, integrity_labels, integrity_outcomes, path_includes_reconciliation
+        )
+        case_id = outputs[0].case_id if outputs else ""
+        return EvaluationResult(
+            scores=empty,
+            gsqs=0.0,
+            critical_errors=(
+                CriticalError(
+                    CriticalErrorKind.MALFORMED_PROPOSAL,
+                    case_id,
+                    "malformed analyzer output",
+                ),
+            ),
+            database_integrity=integrity,
+            measurement_valid=False,
+            invalid_reason="malformed-proposal",
+            diagnostics=(),
+            case_count=len(cases),
+            note_unit_count=sum(
+                1
+                for _, regions in cases
+                for region in regions
+                if region.kind is GoodNotesSegmentKind.NOTE_UNIT
+            ),
+        )
     if (
         expected_corpus_version is not None
         and output_corpus_version is not None

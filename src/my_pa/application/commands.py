@@ -318,6 +318,7 @@ def _goodnotes_propose_payload_properties() -> dict[str, object]:
         ),
         "items": {
             "type": "object",
+            "additionalProperties": False,
             "required": ["rank", "candidate"],
             "properties": {
                 "rank": {"type": "integer", "minimum": 1},

@@ -38,8 +38,8 @@ Machine copy: [`public_catalog.json`](public_catalog.json).
 | Fixture class | `PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING` |
 | Source layer | `CONTROLLED_HANDWRITING` |
 | Label provenance | `FIRST_PASS_LOCAL_INSPECTION` |
-| Evaluator | `goodnotes-gsqs-independent` `1.1` / `9e9602eca854dfd475827fd827fcd548cdae04da374c605508178d37e338ec57` |
-| Evaluator implementation digest | `f07e90d1f3843d21fa993e4b98050c91daad167520fae6a42d0e510b366c5cac` |
+| Evaluator | `goodnotes-gsqs-independent` `1.1` / `2529953e1028628d603ee6772285e7786c86d81065e2972b866e3d95e2d82ca2` |
+| Evaluator implementation digest | `885969480d850ebd5f8214147fc737c42b3c09f785f04ef0c084118f76146142` |
 | Authorized source roots | the operator-named Moss, Kast, and Altman inbox directories (paths not repeated in JSON) |
 | Private gold | local store only; each case binds `raster_sha256` + `label_sha256` |
 

@@ -8,6 +8,7 @@ artifact scored by `evaluate_gsqs`.
 from __future__ import annotations
 
 import json
+import re
 import statistics
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
@@ -28,6 +29,7 @@ from my_pa.application.goodnotes_gsqs import (
     GoldRegion,
     MeasurementRecord,
     PredictedSegment,
+    admit_analyzer_output,
     evaluate_gsqs,
     evaluator_code_identity,
     parse_predicted_segment,
@@ -49,6 +51,7 @@ INCUMBENT_ANALYZER_NAME = "chatllm-goodnotes-semantic"
 INCUMBENT_ANALYZER_VERSION = "sit-1.0"
 B0_MIN_REPETITIONS = 3
 INTERCHANGE_SCHEMA_VERSION = "gsqs-analyzer-output-v1"
+GIT_OBJECT_ID = re.compile(r"^[0-9a-f]{40}$")
 
 AnalyzerFn = Callable[[CorpusCase], AnalyzerOutput]
 
@@ -239,6 +242,28 @@ def require_live_b0_identities(
         raise ValueError("live B0 requires explicit prompt_config_identity")
 
 
+def require_live_b0_repository_identity(
+    *,
+    repository_commit: str | None,
+    repository_tree: str | None,
+) -> None:
+    if not isinstance(repository_commit, str) or GIT_OBJECT_ID.fullmatch(repository_commit) is None:
+        raise ValueError("live B0 requires exact repository_commit")
+    if not isinstance(repository_tree, str) or GIT_OBJECT_ID.fullmatch(repository_tree) is None:
+        raise ValueError("live B0 requires exact repository_tree")
+
+
+def derive_analyzer_identity(outputs: Sequence[AnalyzerOutput]) -> tuple[str, str]:
+    pairs = {(item.analyzer_name, item.analyzer_version) for item in outputs}
+    if len(pairs) != 1:
+        raise ValueError("analyzer identity is mixed")
+    name, version = next(iter(pairs))
+    for label, value in (("analyzer_name", name), ("analyzer_version", version)):
+        if not 1 <= len(value) <= MAX_GOODNOTES_ANALYZER or "\x00" in value:
+            raise ValueError(f"malformed {label}")
+    return name, version
+
+
 def score_partition(
     cases: Sequence[CorpusCase],
     outputs: Sequence[AnalyzerOutput],
@@ -255,19 +280,38 @@ def score_partition(
     repository_commit: str | None = None,
     repository_tree: str | None = None,
 ) -> tuple[EvaluationResult, MeasurementRecord]:
-    require_live_b0_identities(
-        analyzer_name=analyzer_name,
-        model_identity=model_identity,
-        prompt_config_identity=prompt_config_identity,
-    )
     selected = tuple(case for case in cases if case.partition is partition and case.scoreable)
     gold = gold_for_partition(cases, partition)
     claimed = {item.corpus_version or "missing" for item in outputs}
     output_version = claimed.pop() if len(claimed) == 1 else "mismatch"
     expected_content = {case.case_id: case.content_sha256 for case in selected}
+    try:
+        admitted: tuple[AnalyzerOutput, ...] | None = tuple(
+            admit_analyzer_output(item) for item in outputs
+        )
+    except ValueError:
+        admitted = None
+    if admitted is None:
+        derived_name, derived_version = analyzer_name, analyzer_version
+        scoring_outputs: Sequence[AnalyzerOutput] = outputs
+    else:
+        derived_name, derived_version = derive_analyzer_identity(admitted)
+        if derived_name != analyzer_name or derived_version != analyzer_version:
+            raise ValueError("analyzer identity disagrees with scored artifacts")
+        require_live_b0_identities(
+            analyzer_name=derived_name,
+            model_identity=model_identity,
+            prompt_config_identity=prompt_config_identity,
+        )
+        if derived_name == INCUMBENT_ANALYZER_NAME:
+            require_live_b0_repository_identity(
+                repository_commit=repository_commit,
+                repository_tree=repository_tree,
+            )
+        scoring_outputs = admitted
     result = evaluate_gsqs(
         gold,
-        outputs,
+        scoring_outputs,
         path_includes_reconciliation=path_includes_reconciliation,
         expected_corpus_version=manifest.corpus_version,
         output_corpus_version=output_version,
@@ -277,8 +321,8 @@ def score_partition(
         raise ValueError("outputs must cover the selected partition exactly")
     behavior_identity = evaluator_code_identity()
     digest = candidate_config_digest(
-        analyzer_name=analyzer_name,
-        analyzer_version=analyzer_version,
+        analyzer_name=derived_name,
+        analyzer_version=derived_version,
         model_identity=model_identity,
         prompt_config_identity=prompt_config_identity,
         corpus_manifest_digest=manifest.manifest_digest,
@@ -298,8 +342,8 @@ def score_partition(
         evaluator_name=EVALUATOR_NAME,
         evaluator_version=EVALUATOR_VERSION,
         evaluator_code_identity=behavior_identity,
-        analyzer_name=analyzer_name,
-        analyzer_version=analyzer_version,
+        analyzer_name=derived_name,
+        analyzer_version=derived_version,
         candidate_config_digest=digest,
         model_identity=model_identity,
         prompt_config_identity=prompt_config_identity,

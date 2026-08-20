@@ -426,10 +426,12 @@ def test_evaluator_identity_binds_implementation_bytes() -> None:
     assert names == {
         "goodnotes_gsqs.py",
         "goodnotes_gsqs_harness.py",
+        "goodnotes_gsqs_corpus.py",
         "goodnotes_evaluation.py",
         "goodnotes_note_unit_contract.py",
         "models.py",
     }
+    assert "goodnotes_gsqs_corpus.py" in names
     files = evaluator_implementation_files()
     baseline = {key: path.read_bytes() for key, path in zip(keys, files, strict=True)}
     for key in keys:
@@ -462,3 +464,77 @@ def test_malformed_source_context_fields_invalidate_measurement() -> None:
     assert any(item.kind is CriticalErrorKind.MALFORMED_PROPOSAL for item in result.critical_errors)
     assert result.measurement_valid is False
     assert result.invalid_reason == "malformed-proposal"
+
+
+def _assert_direct_construction_fails_closed(output: AnalyzerOutput) -> None:
+    gold = _gold()
+    result = evaluate_gsqs(((CASE, (gold,)),), (output,))
+    assert result.measurement_valid is False
+    assert result.invalid_reason == "malformed-proposal"
+    assert any(item.kind is CriticalErrorKind.MALFORMED_PROPOSAL for item in result.critical_errors)
+
+
+def test_direct_analyzer_output_bypass_fails_closed() -> None:
+    gold = _gold()
+    valid = _output(_pred(gold))
+    ok = evaluate_gsqs(((CASE, (gold,)),), (valid,))
+    assert ok.measurement_valid is True
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), confidence=Confidence(0.1, 1.2, 0.1, 0.1)))
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), confidence=Confidence(0.1, True, 0.1, 0.1)))  # type: ignore[arg-type]
+    )
+    _assert_direct_construction_fails_closed(
+        _output(
+            replace(
+                _pred(gold),
+                ranked_candidates=(RankedCandidate(1, "alpha"), RankedCandidate(1, "beta")),
+            )
+        )
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), ranked_candidates=(RankedCandidate(1, ""),)))
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), ranked_candidates=(RankedCandidate(1, "x" * 201),)))
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), ranked_candidates=(RankedCandidate(1, "a\x00b"),)))
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), candidate_tags=("FOLLOW_UP_CANDIDATE", "FOLLOW_UP_CANDIDATE")))
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), transcription="x" * 20_001))
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), transcription="clear\x00text"))
+    )
+    _assert_direct_construction_fails_closed(
+        _output(
+            replace(
+                _pred(gold),
+                transcription="",
+                transcription_status=GoodNotesTranscriptionStatus.CLEAR,
+            )
+        )
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), crop_sha256="not-a-digest"))
+    )
+    context = _context()
+    _assert_direct_construction_fails_closed(
+        AnalyzerOutput(
+            CASE,
+            NOTE_UNIT_V2,
+            "synthetic",
+            "1",
+            (_pred(context, candidate_tags=("FOLLOW_UP_CANDIDATE",)),),
+        )
+    )
+    too_many = tuple(
+        replace(_pred(gold), geometry=_geom(0.0, min(0.02 * index, 0.9), 0.05, 0.02))
+        for index in range(51)
+    )
+    _assert_direct_construction_fails_closed(_output(*too_many))

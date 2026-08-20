@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime
 
@@ -20,6 +21,7 @@ from my_pa.application.goodnotes_gsqs import (
     CorpusPartition,
     evaluate_gsqs,
 )
+from my_pa.application.goodnotes_gsqs_corpus import CorpusCase
 from my_pa.application.goodnotes_gsqs_harness import (
     INCUMBENT_ANALYZER_NAME,
     candidate_config_digest,
@@ -396,3 +398,163 @@ def test_candidate_config_digest_binds_model_and_prompt() -> None:
             analyzer_name=INCUMBENT_ANALYZER_NAME,
             analyzer_version="sit-1.0",
         )
+
+
+def _scoreable_b(cases: Sequence[CorpusCase]) -> list[CorpusCase]:
+    return [item for item in cases if item.partition is CorpusPartition.B and item.scoreable]
+
+
+def test_score_partition_derives_analyzer_identity_from_artifacts() -> None:
+    cases, manifest = freeze_v2_corpus()
+    selected = _scoreable_b(cases)
+    local = tuple(
+        gold_as_output(item, analyzer_name="local", analyzer_version="1") for item in selected
+    )
+    incumbent = tuple(
+        gold_as_output(item, analyzer_name=INCUMBENT_ANALYZER_NAME, analyzer_version="sit-1.0")
+        for item in selected
+    )
+    with pytest.raises(ValueError, match="disagrees"):
+        score_partition(
+            cases,
+            incumbent,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name="local",
+            analyzer_version="1",
+            run_repetition=1,
+            model_identity="model-a",
+            prompt_config_identity="prompt-a",
+            repository_commit="aa" * 20,
+            repository_tree="bb" * 20,
+        )
+    with pytest.raises(ValueError, match="disagrees"):
+        score_partition(
+            cases,
+            local,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name=INCUMBENT_ANALYZER_NAME,
+            analyzer_version="sit-1.0",
+            run_repetition=1,
+            model_identity="model-a",
+            prompt_config_identity="prompt-a",
+            repository_commit="aa" * 20,
+            repository_tree="bb" * 20,
+        )
+    mixed_names = (replace(local[0], analyzer_name="other"), *local[1:])
+    with pytest.raises(ValueError, match="mixed"):
+        score_partition(
+            cases,
+            mixed_names,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name="local",
+            analyzer_version="1",
+            run_repetition=1,
+        )
+    mixed_versions = (replace(local[0], analyzer_version="2"), *local[1:])
+    with pytest.raises(ValueError, match="mixed"):
+        score_partition(
+            cases,
+            mixed_versions,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name="local",
+            analyzer_version="1",
+            run_repetition=1,
+        )
+    _, record = score_partition(
+        cases,
+        local,
+        partition=CorpusPartition.B,
+        manifest=manifest,
+        analyzer_name="local",
+        analyzer_version="1",
+        run_repetition=1,
+    )
+    assert record.analyzer_name == "local"
+    assert record.analyzer_version == "1"
+    assert record.measurement_valid is True
+    with pytest.raises(ValueError, match="model_identity"):
+        score_partition(
+            cases,
+            incumbent,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name=INCUMBENT_ANALYZER_NAME,
+            analyzer_version="sit-1.0",
+            run_repetition=1,
+            prompt_config_identity="prompt-a",
+            repository_commit="aa" * 20,
+            repository_tree="bb" * 20,
+        )
+    with pytest.raises(ValueError, match="prompt_config_identity"):
+        score_partition(
+            cases,
+            incumbent,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name=INCUMBENT_ANALYZER_NAME,
+            analyzer_version="sit-1.0",
+            run_repetition=1,
+            model_identity="model-a",
+            repository_commit="aa" * 20,
+            repository_tree="bb" * 20,
+        )
+    with pytest.raises(ValueError, match="repository_commit"):
+        score_partition(
+            cases,
+            incumbent,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name=INCUMBENT_ANALYZER_NAME,
+            analyzer_version="sit-1.0",
+            run_repetition=1,
+            model_identity="model-a",
+            prompt_config_identity="prompt-a",
+        )
+    v2 = tuple(
+        gold_as_output(item, analyzer_name="local", analyzer_version="2") for item in selected
+    )
+    _, record_v2 = score_partition(
+        cases,
+        v2,
+        partition=CorpusPartition.B,
+        manifest=manifest,
+        analyzer_name="local",
+        analyzer_version="2",
+        run_repetition=1,
+    )
+    assert record_v2.candidate_config_digest != record.candidate_config_digest
+    assert record_v2.analyzer_version == "2"
+
+
+def test_direct_construction_score_partition_fails_closed() -> None:
+    from my_pa.application.goodnotes_gsqs import Confidence
+    from my_pa.domain.goodnotes.models import GoodNotesSegmentKind
+
+    cases, manifest = freeze_v2_corpus()
+    selected = _scoreable_b(cases)
+    first = selected[0]
+    good = gold_as_output(first, analyzer_name="local", analyzer_version="1")
+    note = next(
+        segment for segment in good.segments if segment.kind is GoodNotesSegmentKind.NOTE_UNIT
+    )
+    bad_segment = replace(note, confidence=Confidence(0.1, 1.2, 0.1, 0.1))
+    segments = tuple(bad_segment if segment is note else segment for segment in good.segments)
+    bad = replace(good, segments=segments)
+    rest = tuple(
+        gold_as_output(item, analyzer_name="local", analyzer_version="1") for item in selected[1:]
+    )
+    result, record = score_partition(
+        cases,
+        (bad, *rest),
+        partition=CorpusPartition.B,
+        manifest=manifest,
+        analyzer_name="local",
+        analyzer_version="1",
+        run_repetition=1,
+    )
+    assert result.measurement_valid is False
+    assert record.measurement_valid is False

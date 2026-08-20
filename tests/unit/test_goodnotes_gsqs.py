@@ -26,6 +26,8 @@ from my_pa.application.goodnotes_gsqs import (
     character_error_rate,
     disqualified,
     evaluate_gsqs,
+    evaluator_code_identity,
+    evaluator_implementation_digest,
     greedy_note_matches,
     iou,
     normalize_transcription,
@@ -386,3 +388,52 @@ def test_missing_class_or_status_is_not_treated_as_correct() -> None:
     assert missing_class.scores.confidence_calibration < 1.0
     missing_status = _score(gold, _output(_pred(gold[0], transcription_status=None)))
     assert missing_status.scores.transcription_status == pytest.approx(0.0)
+
+
+def test_segmentation_calibration_includes_negative_unmatched_predictions() -> None:
+    gold = (_gold(),)
+    perfect = _score(gold, _output(_pred(gold[0])))
+    assert perfect.scores.confidence_calibration == pytest.approx(1.0)
+    false_positive = _pred(
+        gold[0],
+        geometry=_geom(0.70, 0.40, 0.20, 0.12),
+        confidence=Confidence(0.2, 0.99, 0.2, 0.2),
+    )
+    overconfident_fp = _score(gold, _output(_pred(gold[0]), false_positive))
+    assert overconfident_fp.scores.confidence_calibration < perfect.scores.confidence_calibration
+    wrong_boundary = _score(gold, _output(false_positive))
+    assert wrong_boundary.scores.confidence_calibration < perfect.scores.confidence_calibration
+    silent = _score(
+        gold,
+        _output(_pred(gold[0], confidence=None), replace(false_positive, confidence=None)),
+    )
+    assert silent.scores.confidence_calibration == pytest.approx(0.0)
+
+
+def test_evaluator_identity_binds_implementation_bytes() -> None:
+    first = evaluator_code_identity()
+    second = evaluator_code_identity()
+    assert first == second
+    impl = evaluator_implementation_digest()
+    mutated = evaluator_implementation_digest((b"alpha", b"beta"))
+    assert impl != mutated
+    constants_only = evaluator_code_identity(implementation_sha256="00" * 32)
+    assert constants_only != first
+    assert evaluator_code_identity(implementation_sha256=mutated) != first
+
+
+def test_malformed_source_context_fields_invalidate_measurement() -> None:
+    context = _context()
+    result = _score(
+        (context,),
+        _output(
+            _pred(
+                context,
+                transcription_status=GoodNotesTranscriptionStatus.CLEAR,
+                confidence=Confidence(1.0, 1.0, 1.0, 1.0),
+            )
+        ),
+    )
+    assert any(item.kind is CriticalErrorKind.MALFORMED_PROPOSAL for item in result.critical_errors)
+    assert result.measurement_valid is False
+    assert result.invalid_reason == "malformed-proposal"

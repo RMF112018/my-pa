@@ -59,7 +59,8 @@ genuinely-unreadable.
 Operator review packages:
 
 - [`hw-combined-v1/OPERATOR_REVIEW.md`](hw-combined-v1/OPERATOR_REVIEW.md)
-  — current combined census; labels `OPERATOR_ADJUDICATED` / `APPROVED`
+  — current combined census; first-pass / agent labels `PENDING`;
+  not scoreable until operator adjudication of the bound digest
 - [`hw-moss-v1/OPERATOR_REVIEW.md`](hw-moss-v1/OPERATOR_REVIEW.md) —
   historical Moss-only tranche (`INSUFFICIENT_EVIDENCE`, `PENDING`)
 

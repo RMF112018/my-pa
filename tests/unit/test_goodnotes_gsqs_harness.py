@@ -16,6 +16,7 @@ from my_pa.application.goodnotes_gsqs import (
     SELF_IMPROVEMENT_NOT_YET_ACTIVATED,
     AnalyzerOutput,
     CorpusPartition,
+    evaluate_gsqs,
 )
 from my_pa.application.goodnotes_gsqs_harness import (
     INCUMBENT_ANALYZER_NAME,
@@ -86,6 +87,55 @@ def test_interchange_round_trip_and_gold_replay() -> None:
     assert len(parsed.segments) == len(output.segments)
     with pytest.raises(ValueError, match="unsupported"):
         parse_interchange({**document, "schema_version": "other"})
+
+
+def _valid_interchange() -> dict[str, object]:
+    cases, _manifest = freeze_v2_corpus()
+    case = next(item for item in cases if item.scoreable)
+    output = gold_as_output(case, analyzer_name="deterministic-gold-replay", analyzer_version="1")
+    return interchange_document(case, output)
+
+
+def test_malformed_interchange_fails_closed() -> None:
+    document = _valid_interchange()
+    geometry = {"x_min": 0.1, "y_min": 0.2, "width": 0.3, "height": 0.1}
+    note = {
+        "kind": "NOTE_UNIT",
+        "geometry": geometry,
+        "transcription": "synthetic follow up monday",
+        "transcription_status": "CLEAR",
+        "primary_class": "GENERAL",
+        "candidate_tags": [],
+        "ranked_candidates": [],
+    }
+    with pytest.raises(ValueError, match="malformed segments"):
+        parse_interchange({**document, "segments": ["not-an-object"]})
+    with pytest.raises(ValueError, match="malformed geometry"):
+        parse_interchange({**document, "segments": [{**note, "geometry": {"x_min": "bad"}}]})
+    with pytest.raises(ValueError, match="malformed ranked_candidates"):
+        parse_interchange({**document, "segments": [{**note, "ranked_candidates": ["x"]}]})
+    with pytest.raises(ValueError, match="malformed ranked_candidates rank"):
+        parse_interchange(
+            {
+                **document,
+                "segments": [{**note, "ranked_candidates": [{"rank": True, "candidate": "a"}]}],
+            }
+        )
+    with pytest.raises(ValueError, match="malformed enum"):
+        parse_interchange({**document, "segments": [{**note, "transcription_status": "LOUD"}]})
+    with pytest.raises(ValueError, match="malformed confidence"):
+        parse_interchange({**document, "segments": [{**note, "confidence": "high"}]})
+    context = {
+        "kind": "SOURCE_CONTEXT",
+        "geometry": geometry,
+        "transcription": "printed title",
+        "transcription_status": "CLEAR",
+    }
+    parsed = parse_interchange({**document, "segments": [context]})
+    case_id = str(document["case_id"])
+    result = evaluate_gsqs(((case_id, ()),), (parsed,))
+    assert result.measurement_valid is False
+    assert "malformed" in (result.invalid_reason or "")
 
 
 def test_harness_invalidates_analyzer_corpus_version_mismatch() -> None:

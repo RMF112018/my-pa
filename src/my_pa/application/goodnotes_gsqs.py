@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 from my_pa.application.goodnotes_evaluation import (
@@ -338,14 +339,41 @@ class MeasurementRecord:
         }
 
 
-def evaluator_code_identity() -> str:
+def evaluator_implementation_files() -> tuple[Path, ...]:
+    here = Path(__file__).resolve()
+    return (
+        here,
+        here.with_name("goodnotes_evaluation.py"),
+    )
+
+
+def evaluator_implementation_digest(parts: Sequence[bytes] | None = None) -> str:
+    hasher = sha256()
+    if parts is None:
+        blobs: Sequence[bytes] = tuple(
+            path.read_bytes() for path in evaluator_implementation_files()
+        )
+        names = tuple(path.name.encode() for path in evaluator_implementation_files())
+    else:
+        blobs = parts
+        names = tuple(f"part-{index}".encode() for index, _ in enumerate(blobs))
+    for name, blob in zip(names, blobs, strict=True):
+        hasher.update(name)
+        hasher.update(b"\0")
+        hasher.update(blob)
+        hasher.update(b"\0")
+    return hasher.hexdigest()
+
+
+def evaluator_code_identity(*, implementation_sha256: str | None = None) -> str:
     payload = json.dumps(
         {
             "evaluator": EVALUATOR_NAME,
-            "version": EVALUATOR_VERSION,
-            "weights": dict(GSQS_WEIGHTS),
+            "implementation_sha256": implementation_sha256 or evaluator_implementation_digest(),
             "iou_threshold": BOUNDARY_IOU_THRESHOLD,
             "ranking_k": RANKING_K,
+            "version": EVALUATOR_VERSION,
+            "weights": dict(GSQS_WEIGHTS),
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -524,6 +552,8 @@ def evaluate_gsqs(
             tag_scores.append(_multilabel_f1(gold.candidate_tags, pred.candidate_tags))
             rank_scores.append(_ranking_score(gold.ranked_candidates, pred.ranked_candidates, gold))
             _collect_calibration(calibration_samples, gold, pred, overlap)
+        for pi in extra:
+            _collect_unmatched_segmentation_calibration(calibration_samples, output.segments[pi])
         for gold in gold_notes:
             if gold.region_id not in {regions[gi].region_id for gi, _, _ in matches}:
                 trans_scores.append(0.0)
@@ -571,13 +601,14 @@ def evaluate_gsqs(
                 "duplicate ACTIVE occurrences present",
             )
         )
+    malformed = any(item.kind is CriticalErrorKind.MALFORMED_PROPOSAL for item in errors)
     return EvaluationResult(
         scores=scores,
         gsqs=scores.gsqs,
         critical_errors=tuple(errors),
         database_integrity=integrity,
-        measurement_valid=True,
-        invalid_reason=None,
+        measurement_valid=not malformed,
+        invalid_reason="malformed-proposal" if malformed else None,
         diagnostics=tuple(diagnostics),
         case_count=len(cases),
         note_unit_count=note_unit_count,
@@ -699,6 +730,16 @@ def _collect_calibration(
         if stated is None:
             continue
         samples[name].append((float(stated), actual))
+
+
+def _collect_unmatched_segmentation_calibration(
+    samples: dict[str, list[tuple[float, float]]],
+    pred: PredictedSegment,
+) -> None:
+    conf = pred.confidence
+    if conf is None or conf.segmentation is None:
+        return
+    samples["segmentation"].append((float(conf.segmentation), 0.0))
 
 
 def _calibration_component(samples: Mapping[str, Sequence[tuple[float, float]]]) -> float:
@@ -887,7 +928,7 @@ def _levenshtein(left: str, right: str) -> int:
 def parse_predicted_segment(payload: Mapping[str, Any]) -> PredictedSegment:
     geometry_raw = payload.get("geometry")
     if not isinstance(geometry_raw, Mapping):
-        raise ValueError("predicted segment requires geometry")
+        raise ValueError("malformed geometry")
     extra = {
         key: value
         for key, value in payload.items()
@@ -907,10 +948,16 @@ def parse_predicted_segment(payload: Mapping[str, Any]) -> PredictedSegment:
     status_raw = payload.get("transcription_status")
     class_raw = payload.get("primary_class")
     tags_raw = payload.get("candidate_tags") or ()
+    if tags_raw and not isinstance(tags_raw, (list, tuple)):
+        raise ValueError("malformed candidate_tags")
     ranked_raw = payload.get("ranked_candidates") or ()
+    if ranked_raw and not isinstance(ranked_raw, (list, tuple)):
+        raise ValueError("malformed ranked_candidates")
     conf_raw = payload.get("confidence")
     confidence: Confidence | None = None
-    if isinstance(conf_raw, Mapping):
+    if conf_raw is not None:
+        if not isinstance(conf_raw, Mapping):
+            raise ValueError("malformed confidence")
         confidence = Confidence(
             transcription=_opt_float(conf_raw.get("transcription")),
             segmentation=_opt_float(conf_raw.get("segmentation")),
@@ -918,30 +965,51 @@ def parse_predicted_segment(payload: Mapping[str, Any]) -> PredictedSegment:
             linking=_opt_float(conf_raw.get("linking")),
             uncertainty=str(conf_raw["uncertainty"]) if conf_raw.get("uncertainty") else None,
         )
-    return PredictedSegment(
-        kind=GoodNotesSegmentKind(str(payload["kind"])),
-        geometry=Geometry(
+    try:
+        geometry = Geometry(
             float(geometry_raw["x_min"]),
             float(geometry_raw["y_min"]),
             float(geometry_raw["width"]),
             float(geometry_raw["height"]),
-        ),
+        )
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError("malformed geometry") from exc
+    try:
+        kind = GoodNotesSegmentKind(str(payload["kind"]))
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError("malformed kind") from exc
+    try:
+        transcription_status = (
+            None if status_raw is None else GoodNotesTranscriptionStatus(str(status_raw))
+        )
+        primary_class = None if class_raw is None else GoodNotesNoteClass(str(class_raw))
+    except ValueError as exc:
+        raise ValueError("malformed enum") from exc
+    return PredictedSegment(
+        kind=kind,
+        geometry=geometry,
         transcription=None
         if payload.get("transcription") is None
         else str(payload["transcription"]),
-        transcription_status=(
-            None if status_raw is None else GoodNotesTranscriptionStatus(str(status_raw))
-        ),
-        primary_class=None if class_raw is None else GoodNotesNoteClass(str(class_raw)),
+        transcription_status=transcription_status,
+        primary_class=primary_class,
         candidate_tags=tuple(str(item) for item in tags_raw),
-        ranked_candidates=tuple(
-            RankedCandidate(int(item["rank"]), str(item["candidate"]))
-            for item in ranked_raw
-            if isinstance(item, Mapping)
-        ),
+        ranked_candidates=tuple(_parse_ranked_candidate(item) for item in ranked_raw),
         confidence=confidence,
         extra=extra,
     )
+
+
+def _parse_ranked_candidate(item: object) -> RankedCandidate:
+    if not isinstance(item, Mapping):
+        raise ValueError("malformed ranked_candidates item")
+    rank_raw = item.get("rank")
+    if isinstance(rank_raw, bool) or not isinstance(rank_raw, int) or rank_raw < 1:
+        raise ValueError("malformed ranked_candidates rank")
+    candidate = item.get("candidate")
+    if not isinstance(candidate, str):
+        raise ValueError("malformed ranked_candidates candidate")
+    return RankedCandidate(rank_raw, candidate)
 
 
 def _opt_float(value: object) -> float | None:

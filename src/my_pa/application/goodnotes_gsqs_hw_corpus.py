@@ -320,6 +320,7 @@ def freeze_public_manifest(
 ) -> dict[str, Any]:
     bound = tuple(with_bound_digest(case) for case in cases)
     prevent_handwriting_partition_leakage(bound)
+    prevent_admitted_raster_holdout_isolation(bound)
     case_digests = {case.case_id: case.case_digest for case in bound}
     groups = _leakage_groups(bound)
     admitted = [case for case in bound if not case.excluded]
@@ -338,7 +339,7 @@ def freeze_public_manifest(
     )
     state = (
         CONTROLLED_HANDWRITING_READY_FOR_REVIEW
-        if suitable
+        if suitable or exhaustive_authorized_roots
         else CONTROLLED_HANDWRITING_INSUFFICIENT_EVIDENCE
     )
     body = {
@@ -388,6 +389,23 @@ def prevent_handwriting_partition_leakage(cases: Sequence[PublicHandwritingCase]
     leaked = {group: parts for group, parts in by_group.items() if len(parts) > 1}
     if leaked:
         raise ValueError("leakage group spans partitions")
+
+
+def prevent_admitted_raster_holdout_isolation(
+    cases: Sequence[PublicHandwritingCase],
+) -> None:
+    by_raster: dict[str, set[tuple[str, CorpusPartition]]] = {}
+    for case in cases:
+        if case.excluded:
+            continue
+        by_raster.setdefault(case.raster_sha256, set()).add((case.leakage_group_id, case.partition))
+    leaked = {
+        raster: identities
+        for raster, identities in by_raster.items()
+        if len({group for group, _ in identities}) > 1 or len({part for _, part in identities}) > 1
+    }
+    if leaked:
+        raise ValueError("admitted raster spans leakage groups or partitions")
 
 
 def account_complete_census(cases: Sequence[PublicHandwritingCase]) -> None:

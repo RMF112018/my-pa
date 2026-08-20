@@ -1,10 +1,27 @@
 # Successor prompt — operator corpus approval and MEASURED_B0
 
-coordination_request_id of the remediation that produced `gsqs-v2`:
-`REQ-MYPA-GOODNOTES-GATE-B-CORPUS-V2-REMEDIATION-20260820-001`
-
 This prompt is for a **later, separately authorized** phase. It is not
 authorization to run now.
+
+Failed reviewed head (invalidated by this remediation):
+`16ea8949f7c740733105342d4ee89e53fa617ac4`
+
+Current handwriting identities after GSQS-B-138 remediation:
+
+- corpus: `gsqs-hw-combined-v1`
+- manifest digest: `238c22aa5b51fee3993a8e72e0b2ce9d696fb9f7b164a2853d1ddc3f59eabaed`
+- combined Gate B identity: `bda6e66bbaf5ac068e5b2cf64a52f1e6c06975b5dd86294591de82fe8afdeb8b`
+- evaluator: `goodnotes-gsqs-independent` `1.1`
+- evaluator code identity: `0ed12cb707bc259b2f982bc202523e60f7c899ab38a6c9ed4d58d98fdfbddf65`
+- evaluator implementation digest: `2b55f7de7e5aea4df9dff8f5287aff228f127287b3c10bcfe202775ff1111c04`
+- synthetic layer: `gsqs-v2` / `e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd`
+
+`b0_suitable = false`. Admitted labels are `PENDING` /
+`FIRST_PASS_LOCAL_INSPECTION`. B0 is **not** immediately executable.
+
+Cite the exact repository head/tree of the PR that carries this file
+when that later phase is authorized. A later commit invalidates this
+handoff.
 
 ## Stop / do not
 
@@ -12,32 +29,47 @@ authorization to run now.
 - Do not call production `goodnotes.propose` as the scoring path.
 - Do not activate the Abacus optimizer.
 - Do not set `AUTOMATIC_PROMOTION = ENABLED`.
-- Do not ingest ordinary production GoodNotes or personal/business
-  handwriting.
+- Do not ingest ordinary / uncontrolled production GoodNotes or
+  unmanaged personal handwriting.
+- Do not send the controlled handwriting pages or private gold to an
+  external model unless a **separate explicit private-data disclosure
+  authorization** names this exact digest.
 - Do not deploy, mutate OAuth/grants, schedule the Task, enable Gate C,
   modify TBR, or activate pilot/production.
 - Do not use `gsqs-v1` to establish `MEASURED_B0`. Its disposition is
   `REJECT_FOR_B0`.
+- Do not treat Corpus C private gold or page content as optimizer or
+  prompt-tuning input.
+
+## Controlled handwriting vs uncontrolled production data
+
+The later B0 handwriting layer, if authorized, is only the
+digest-bound `PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING` corpus
+`gsqs-hw-combined-v1` after:
+
+1. operator adjudication that rebinds those labels to
+   `OPERATOR_ADJUDICATED` + `APPROVED` for this exact manifest;
+2. `FIXED_LABELED_CORPUS_APPROVED = true` for that digest;
+3. `b0_suitable = true` with nonempty scoreable B and C;
+4. a separate private-data / external-model disclosure authorization.
+
+Ordinary production GoodNotes ingest remains prohibited.
 
 ## Prerequisites
 
 1. Operator has reviewed corpus `gsqs-v2` at manifest digest
    `e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd`.
    Synthetic-regression approval is not by itself B0 readiness.
-2. Operator has reviewed handwriting corpus `gsqs-hw-combined-v1`
-   (historical Moss-only tranche `gsqs-hw-moss-v1` remains evidence, not
-   an independent B0 floor). Current combined state is `READY_FOR_REVIEW`
-   pending operator approval of that digest. External scoring of that
-   layer requires a separate private-data disclosure authorization.
-   Absence of real-world UNREADABLE pages is a documented limitation;
-   `gsqs-v2` still covers fabricated-unreadable traps. The former 75–150
-   page quota is not a rejection floor.
+2. Operator has adjudicated `gsqs-hw-combined-v1` at the digest above
+   (historical `gsqs-hw-moss-v1` remains evidence, not an independent
+   B0 floor). `UNREADABLE_REAL_WORLD_COVERAGE = NOT_OBSERVED` is a
+   documented limitation; `gsqs-v2` still covers fabricated-unreadable
+   traps. The former 75–150 page quota is not a rejection floor.
 3. Freeze Corpus B (scoreable partition B only) to the **approved**
    digest. Corpus C stays unused for prompt/config tuning.
-4. Freeze evaluator `goodnotes-gsqs-independent` version `1.1` with code
-   identity
-   `4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e`
-   (or a new evaluator version if scoring changed).
+4. Freeze evaluator `goodnotes-gsqs-independent` `1.1` at the
+   implementation-bound code identity above (or a new identity if
+   scoring changed).
 5. Confirm `FIXED_LABELED_CORPUS_APPROVED = true` for that digest only,
    and that the operator has stated the corpus is suitable for B0 — not
    regression-only.
@@ -47,7 +79,7 @@ authorization to run now.
 - analyzer_name: `chatllm-goodnotes-semantic`
 - analyzer_version: `sit-1.0`
 
-## Execution
+## Execution (only after the gates above)
 
 1. For each scoreable Corpus B case, give the analyzer only the visual
    evidence and the interchange contract (`gsqs-analyzer-output-v1`).
@@ -56,7 +88,7 @@ authorization to run now.
    observed variance warrants it). Record run/repetition number.
 3. Score each pass with the repository function `evaluate_gsqs` / harness
    `score_partition`. The analyzer output is an interchange artifact. The
-   evaluator is independent.
+   evaluator is independent. Malformed interchange is fail-closed.
 4. Publish component scores, GSQS, critical errors, and
    `measurement_valid` per repetition.
 5. Compute mean, median, standard deviation (or equivalent spread), and

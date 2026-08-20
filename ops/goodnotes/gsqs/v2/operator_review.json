@@ -33,7 +33,7 @@
   "controlled_handwriting_present": false,
   "coordination_request_id": "REQ-MYPA-GOODNOTES-GATE-B-CORPUS-V2-REMEDIATION-20260820-001",
   "corpus_version": "gsqs-v2",
-  "evaluator_code_identity": "4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e",
+  "evaluator_code_identity": "0ed12cb707bc259b2f982bc202523e60f7c899ab38a6c9ed4d58d98fdfbddf65",
   "evaluator_name": "goodnotes-gsqs-independent",
   "evaluator_version": "1.1",
   "excluded_or_ambiguous": [

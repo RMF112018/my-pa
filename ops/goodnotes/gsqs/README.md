@@ -20,7 +20,8 @@ it does not replace A-X.
   review target (`gsqs-v2`; still not handwriting-B0).
 - [`hw-combined-v1/OPERATOR_REVIEW.md`](hw-combined-v1/OPERATOR_REVIEW.md) —
   complete Moss + Kast + Altman handwriting census. State:
-  `READY_FOR_REVIEW`. No private bytes in Git.
+  `READY_FOR_REVIEW`, `b0_suitable = false` until operator adjudication.
+  No private bytes in Git.
 - [`hw-moss-v1/OPERATOR_REVIEW.md`](hw-moss-v1/OPERATOR_REVIEW.md) —
   historical Moss-only tranche. State: `INSUFFICIENT_EVIDENCE`.
 - [`v2/operator_review.json`](v2/operator_review.json) — machine-readable
@@ -46,8 +47,9 @@ it does not replace A-X.
 2. **Controlled handwriting validation.** Digest-bound private gold from
    the operator-authorized Moss, Kast, and Altman roots. Repository-safe
    catalog: [`hw-combined-v1/`](hw-combined-v1/). State:
-   `CONTROLLED_HANDWRITING_CORPUS = READY_FOR_REVIEW`.
-   Historical Moss-only package: [`hw-moss-v1/`](hw-moss-v1/).
+   `CONTROLLED_HANDWRITING_CORPUS = READY_FOR_REVIEW` with
+   `b0_suitable = false` until per-label operator adjudication of that
+   digest. Historical Moss-only package: [`hw-moss-v1/`](hw-moss-v1/).
    No private image bytes or transcriptions are in Git.
 
 ## Partitioning (`gsqs-v2`)

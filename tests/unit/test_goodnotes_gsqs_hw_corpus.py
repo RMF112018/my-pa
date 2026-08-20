@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 import json
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -45,6 +46,7 @@ from my_pa.application.goodnotes_gsqs_hw_corpus import (
     inventory_pdfs_across_roots,
     limited_population_b0_suitable,
     load_public_catalog,
+    prevent_admitted_raster_holdout_isolation,
     prevent_handwriting_partition_leakage,
     private_label_digest,
     public_case_digest,
@@ -59,7 +61,6 @@ REPO = Path(__file__).resolve().parents[2]
 PUBLIC_CATALOG = REPO / "ops/goodnotes/gsqs/hw-moss-v1/public_catalog.json"
 COMBINED_CATALOG = REPO / "ops/goodnotes/gsqs/hw-combined-v1/public_catalog.json"
 HW_MODULE = REPO / "src/my_pa/application/goodnotes_gsqs_hw_corpus.py"
-EVALUATOR_IDENTITY = "4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e"
 SYNTHETIC_DIGEST = "e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd"
 
 
@@ -111,6 +112,8 @@ def _case(**overrides: object) -> PublicHandwritingCase:
         "label_provenance": LABEL_PROVENANCE_FIRST_PASS,
     }
     base.update(overrides)
+    if "raster_sha256" not in overrides:
+        base["raster_sha256"] = sha256(str(base["case_id"]).encode()).hexdigest()
     return PublicHandwritingCase(**base)  # type: ignore[arg-type]
 
 
@@ -229,7 +232,7 @@ def test_committed_public_catalog_is_repository_safe_and_not_scoreable() -> None
     review = json.loads((PUBLIC_CATALOG.parent / "operator_review.json").read_text())
     assert review["manifest_digest"] == catalog["manifest_digest"]
     assert review["CONTROLLED_HANDWRITING_CORPUS"] == "INSUFFICIENT_EVIDENCE"
-    assert evaluator_code_identity() == EVALUATOR_IDENTITY
+    assert len(evaluator_code_identity()) == 64
 
 
 def test_excluded_cases_are_not_scoreable() -> None:
@@ -436,7 +439,7 @@ def test_limited_population_b0_does_not_require_quota_or_unreadable() -> None:
     )
 
 
-def test_committed_combined_catalog_is_repository_safe_and_scoreable() -> None:
+def test_committed_combined_catalog_is_repository_safe_and_not_scoreable() -> None:
     catalog = load_public_catalog(COMBINED_CATALOG)
     blob = COMBINED_CATALOG.read_text().lower()
     assert 'transcription":' not in blob
@@ -444,32 +447,39 @@ def test_committed_combined_catalog_is_repository_safe_and_scoreable() -> None:
     assert "/volume1/" not in blob
     assert catalog["corpus_version"] == HANDWRITING_CORPUS_VERSION
     assert catalog["historical_moss_corpus_version"] == HANDWRITING_CORPUS_VERSION_MOSS_V1
-    assert catalog["b0_suitable"] is True
+    assert catalog["b0_suitable"] is False
     assert catalog["CONTROLLED_HANDWRITING_CORPUS"] == CONTROLLED_HANDWRITING_READY_FOR_REVIEW
     assert catalog["unreadable_real_world_coverage"] == (
         UNREADABLE_REAL_WORLD_COVERAGE_NOT_OBSERVED
     )
-    assert catalog["scoreable_page_count"] == 239
+    assert catalog["scoreable_page_count"] == 0
     assert catalog["admitted_handwriting_pages"] == 239
     assert catalog["excluded_page_count"] == 1995
     assert catalog["case_count"] == 2234
     assert catalog["pdf_count"] == 86
     assert catalog["total_pages"] == 2234
     assert catalog["unreadable_pdf_count"] == 0
-    assert catalog["label_review_counts"]["PENDING"] == 0
+    assert catalog["label_review_counts"]["PENDING"] == 239
+    assert catalog["label_review_counts"]["APPROVED"] == 0
     assert catalog["partition_counts"]["B"] > 0
     assert catalog["partition_counts"]["C"] > 0
     assert catalog["synthetic_manifest_digest"] == SYNTHETIC_DIGEST
+    rasters: dict[str, tuple[str, str]] = {}
     admitted = [case for case in catalog["cases"] if not case["excluded"]]
     buckets: dict[str, set[str]] = {"A": set(), "B": set(), "C": set()}
     for case in admitted:
         buckets[case["partition"]].add(case["leakage_group_id"])
-        assert case["review_state"] == "APPROVED"
-        assert case["label_provenance"] == LABEL_PROVENANCE_OPERATOR
+        assert case["review_state"] == "PENDING"
+        assert case["label_provenance"] == LABEL_PROVENANCE_FIRST_PASS
         assert case["transcription_status"] != "UNREADABLE"
         assert (
             case["fixture_classification"] == FIXTURE_PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING
         )
+        prior = rasters.get(case["raster_sha256"])
+        identity = (case["leakage_group_id"], case["partition"])
+        if prior is not None:
+            assert prior == identity
+        rasters[case["raster_sha256"]] = identity
     assert buckets["A"] and buckets["B"] and buckets["C"]
     assert not (buckets["A"] & buckets["B"])
     assert not (buckets["A"] & buckets["C"])
@@ -483,5 +493,51 @@ def test_committed_combined_catalog_is_repository_safe_and_scoreable() -> None:
     review = json.loads((COMBINED_CATALOG.parent / "operator_review.json").read_text())
     assert review["manifest_digest"] == catalog["manifest_digest"]
     assert review["CONTROLLED_HANDWRITING_CORPUS"] == "READY_FOR_REVIEW"
-    assert review["b0_suitable"] is True
-    assert evaluator_code_identity() == EVALUATOR_IDENTITY
+    assert review["b0_suitable"] is False
+    assert review["label_provenance"] == LABEL_PROVENANCE_FIRST_PASS
+    assert len(evaluator_code_identity()) == 64
+
+
+def test_admitted_raster_cannot_span_groups_or_partitions() -> None:
+    twin_partition = with_bound_digest(
+        _case(
+            case_id="hw-raster-b",
+            leakage_group_id="lg-b",
+            partition=CorpusPartition.B,
+            raster_sha256="cd" * 32,
+        )
+    )
+    with pytest.raises(ValueError, match="admitted raster spans"):
+        prevent_admitted_raster_holdout_isolation(
+            (
+                with_bound_digest(_case(raster_sha256="cd" * 32)),
+                twin_partition,
+            )
+        )
+    twin_group = with_bound_digest(
+        _case(
+            case_id="hw-raster-g",
+            leakage_group_id="lg-other",
+            partition=CorpusPartition.A,
+            raster_sha256="cd" * 32,
+        )
+    )
+    with pytest.raises(ValueError, match="admitted raster spans"):
+        freeze_public_manifest((with_bound_digest(_case(raster_sha256="cd" * 32)), twin_group))
+    excluded = with_bound_digest(
+        _case(
+            case_id="hw-dup",
+            leakage_group_id="lg-dup",
+            partition=CorpusPartition.C,
+            excluded=True,
+            exclusion_reason="exact-page-duplicate",
+            review_state=ReviewState.REJECTED,
+            note_unit_count=0,
+            transcription_status=None,
+            primary_class=None,
+            raster_sha256="cd" * 32,
+        )
+    )
+    prevent_admitted_raster_holdout_isolation(
+        (with_bound_digest(_case(raster_sha256="cd" * 32)), excluded)
+    )

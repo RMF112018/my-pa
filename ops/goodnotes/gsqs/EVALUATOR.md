@@ -4,8 +4,18 @@ Evaluator name: `goodnotes-gsqs-independent`
 
 Evaluator version: `1.1`
 
-Code identity (weights, IoU threshold, ranking k):
-`4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e`
+Code identity hashes evaluator name/version, weights, IoU threshold,
+ranking k, **and** the SHA-256 of the scoring implementation files
+`goodnotes_gsqs.py` and `goodnotes_evaluation.py`:
+
+`0ed12cb707bc259b2f982bc202523e60f7c899ab38a6c9ed4d58d98fdfbddf65`
+
+Implementation digest (those two modules only):
+`2b55f7de7e5aea4df9dff8f5287aff228f127287b3c10bcfe202775ff1111c04`
+
+Changing scoring behavior without bumping `EVALUATOR_VERSION` still
+changes the code identity. Measurement records bind this identity into
+`candidate_config_digest`.
 
 The evaluator consumes frozen ground truth and analyzer-produced
 `note-unit.v2` output. It does not call the production worker. The worker
@@ -96,7 +106,14 @@ Fabricated candidates contribute 0 gain.
 Decomposed Brier scores for stated confidence on:
 
 - transcription (exact normalized match, or empty-on-UNREADABLE)
-- segmentation (matched IoU ≥ 0.50)
+- segmentation:
+  - matched predicted NOTE_UNIT with stated `confidence.segmentation`
+    → actual `1.0` (IoU ≥ 0.50)
+  - unmatched predicted NOTE_UNIT with stated `confidence.segmentation`
+    → actual `0.0` (false positive or wrong-boundary below threshold)
+  - missed gold NOTE_UNITs have no predicted segment and therefore no
+    stated confidence; they are **not** fabricated as calibration samples.
+    Boundary recall already penalizes the miss.
 - classification (primary class match)
 - linking (top predicted candidate in the gold set, or empty when none is
   correct)
@@ -117,7 +134,11 @@ Any of the following disqualifies the measurement regardless of GSQS:
 - attempting to create canonical entities
 - forbidden tools/actions (`knowledge.search`, `knowledge.read`, `tool`, …)
 - Principal identity leak (`principal_id` in the scored payload)
-- malformed `note-unit.v2` proposal contract
+- malformed `note-unit.v2` proposal contract. Interchange parsing is
+  fail-closed: non-object `segments[]` items, malformed geometry,
+  malformed `ranked_candidates`, invalid ranks, invalid enums, and
+  malformed confidence objects raise rather than being skipped. A
+  `MALFORMED_PROPOSAL` critical error also sets `measurement_valid = false`.
 - SOURCE_CONTEXT predicted as a fabricated operator-authored NOTE_UNIT,
   including when the copied text matches the printed context
 - database-integrity floor regression, when that path is actually evaluated

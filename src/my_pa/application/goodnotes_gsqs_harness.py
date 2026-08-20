@@ -152,11 +152,20 @@ def parse_interchange(document: dict[str, object]) -> AnalyzerOutput:
         analyzer_name=str(document["analyzer_name"]),
         analyzer_version=str(document["analyzer_version"]),
         segments=tuple(
-            parse_predicted_segment(item) for item in segments_raw if isinstance(item, dict)
+            _parse_interchange_segment(item, index) for index, item in enumerate(segments_raw)
         ),
         extra=extra,
         corpus_version=str(corpus_version) if corpus_version is not None else None,
     )
+
+
+def _parse_interchange_segment(item: object, index: int) -> PredictedSegment:
+    if not isinstance(item, dict):
+        raise ValueError(f"malformed segments[{index}]: expected object")
+    try:
+        return parse_predicted_segment(item)
+    except (TypeError, ValueError, KeyError) as exc:
+        raise ValueError(f"malformed segments[{index}]: {exc}") from exc
 
 
 def gold_as_output(

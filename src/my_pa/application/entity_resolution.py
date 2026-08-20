@@ -23,8 +23,15 @@ small is not a fact about them.
 **What this module does not do.** It does not merge, propose, or write anything
 — `RI-AC-039` reserves identity merges from autonomous action and section 21.4
 forbids a model creating a canonical person. It reads, and it returns an answer
-whose type cannot be read as a resolution when it is not one. Contextual
-ranking, calibration, and the false-resolution evaluation are WP-RI-04.
+whose type cannot be read as a resolution when it is not one.
+
+Contextual ranking *is* here, and this paragraph said it was not until the ninth
+review read it against the code. The sentence was written for WP-RI-03, when
+ranking was still ahead; WP-RI-04 then put `_signals_for`, `_assigned_to`,
+`_related_to`, `_narrow_by_signals`, `ContextualSignal` and the
+`RESOLVED_CONTEXTUAL` outcome into this module and did not revise the paragraph
+that promised otherwise. What remains elsewhere is the calibration corpus and
+the false-resolution evaluation, in `tests/evaluation/`.
 """
 
 from __future__ import annotations

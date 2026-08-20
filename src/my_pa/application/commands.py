@@ -32,11 +32,12 @@ inside the payload the caller controls.
 
 from __future__ import annotations
 
+import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import ClassVar
+from typing import ClassVar, Final
 
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
@@ -74,6 +75,7 @@ from my_pa.domain.goodnotes.models import (
 )
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.event import RelationshipEventType
+from my_pa.domain.search.query import MAX_QUERY_CHARACTERS
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     CommitmentDirection,
@@ -160,6 +162,31 @@ class Representation(StrEnum):
 
     RAW_BYTES = "raw_bytes"
     NORMALIZED_TEXT = "normalized_text"
+
+
+#: The categories `domain.search.query` refuses, for the reasons stated there:
+#: `Cc` control, `Cf` formatting, `Cs` surrogate, `Co` private-use, `Cn`
+#: unassigned. Spelled here rather than imported because that module keeps
+#: its set private, and a second name for one rule is checked by
+#: `tests/contract/test_entity_read_bounds.py` rather than assumed.
+_FORBIDDEN_QUERY_CATEGORIES: Final = frozenset({"Cc", "Cf", "Cs", "Co", "Cn"})
+
+
+def _bounded_query(value: str, detail: SafeDetail) -> str:
+    """A caller-supplied search string, bounded the way `domain.search.query` bounds one.
+
+    Length and character class only. The normalization `_normalize_query`
+    performs -- case folding, whitespace collapsing -- is deliberately not done
+    here, because this capability's matching rule is its own and rewriting the
+    string would change which entities match it. What is shared is the pair of
+    refusals that exist so a malformed request is answered as a malformed
+    request rather than as a fault of this service.
+    """
+    if len(value) > MAX_QUERY_CHARACTERS:
+        raise InvalidRequestError(detail)
+    if any(unicodedata.category(character) in _FORBIDDEN_QUERY_CATEGORIES for character in value):
+        raise InvalidRequestError(detail)
+    return value
 
 
 def _identifier(value: str, kind: IdKind | None, detail: SafeDetail) -> str:
@@ -1717,8 +1744,12 @@ class CreateTask:
     client_context: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.title, str):
+            raise InvalidRequestError(SafeDetail.TITLE)
         if not self.title.strip():
             raise InvalidRequestError(SafeDetail.TITLE)
+        if not isinstance(self.origin_evidence_ref, str):
+            raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.origin_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.idempotency_key:
@@ -1995,8 +2026,10 @@ class CreateCommitment:
         _identifier(self.counterparty_person_id, IdKind.PERSON, SafeDetail.COUNTERPARTY_PERSON_ID)
         if not isinstance(self.direction, CommitmentDirection):
             raise InvalidRequestError(SafeDetail.SELECTOR)
+        _text(self.summary, SafeDetail.TITLE)
         if not self.summary.strip():
             raise InvalidRequestError(SafeDetail.TITLE)
+        _text(self.origin_evidence_ref, SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.origin_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.idempotency_key:
@@ -2036,6 +2069,7 @@ class CloseCommitment:
         _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
         if type(self.expected_version) is not int or self.expected_version < 1:
             raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _text(self.closure_evidence_ref, SafeDetail.CLOSURE_EVIDENCE_REF)
         if not self.closure_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
         if not self.idempotency_key:
@@ -2197,8 +2231,20 @@ class SearchEntities:
     after: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.query, str):
+            raise InvalidRequestError(SafeDetail.QUERY)
         if not self.query.strip():
             raise InvalidRequestError(SafeDetail.QUERY)
+        # The bound every other search capability applies, applied here too.
+        # `knowledge.search` and `capture.search` route their query through
+        # `domain.search.query`, which refuses a query over
+        # `MAX_QUERY_CHARACTERS` and refuses control, formatting, surrogate and
+        # private-use characters -- the second for the reason that module's own
+        # comment gives: a NUL byte reaches psycopg as a `DataError` raised from
+        # inside a statement, which is not a `PortError`, so the caller is told
+        # `internal_error` about a request only they can correct. This read is
+        # an `ILIKE` parameter on the same driver and had neither bound.
+        _bounded_query(self.query, SafeDetail.QUERY)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
         if self.after is not None:
             # Validated as an entity identifier for the reason
@@ -2247,6 +2293,8 @@ class ResolveEntity:
     as_of: datetime | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.reference, str):
+            raise InvalidRequestError(SafeDetail.SUBJECT)
         if not self.reference.strip():
             raise InvalidRequestError(SafeDetail.SUBJECT)
         if self.scope_entity_id is not None:

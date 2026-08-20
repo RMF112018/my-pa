@@ -14,6 +14,7 @@ row an autonomous merge would leave behind, and the database refuses to hold it.
 from __future__ import annotations
 
 import dataclasses
+import re
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -41,6 +42,7 @@ from my_pa.domain.relationship.governance import (
 )
 from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence import tables
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 
 pytestmark = pytest.mark.database
@@ -1108,3 +1110,112 @@ def test_merge_lineage_does_not_list_another_principals_merges(
     )
     assert mine_for_their_entity == []
     assert [record.merge_id for record in theirs_for_their_entity] == [B_MERGE]
+
+
+def test_the_declared_check_is_the_one_the_server_holds(two_principals: Engine) -> None:
+    """`tables.py`'s declaration is never emitted, so nothing verified it.
+
+    `METADATA` is not used to create this schema -- the Alembic chain is -- and
+    `tests/schema/test_entity_schema_migration.py` compares constraint *names*
+    only. The ninth review measured what that leaves: replacing the whole
+    declared expression with `1 = 0 AND length(mention_display_name) BETWEEN 1
+    AND 999999` left 103 tests green across the schema and governance suites.
+    The declaration is what a reader of `tables.py` believes the column is
+    bounded by, and it could say anything.
+
+    Compared as normalized text rather than byte-for-byte: PostgreSQL rewrites
+    `BETWEEN` into two comparisons, parenthesizes to its own taste, and requotes
+    the regex literals, so an exact match would fail on formatting and be
+    "fixed" by deleting the assertion. What is compared is the set of operands
+    the two expressions mention, which is what a drift would change.
+    `tests/schema/test_wp12_slice_c_admission.py` does the same comparison for
+    `capability_is_known`; this is the entity plane's.
+    """
+    declared = next(
+        constraint
+        for constraint in tables.entity_observations.constraints
+        if getattr(constraint, "name", None) == "a_disclosed_mention_name_is_bounded"
+    )
+    declared_text = str(declared.sqltext)  # type: ignore[attr-defined]
+
+    with two_principals.connect() as connection:
+        live = connection.execute(
+            text(
+                "SELECT pg_get_constraintdef(oid) FROM pg_constraint "
+                "WHERE conname = 'a_disclosed_mention_name_is_bounded'"
+            )
+        ).scalar_one()
+
+    def operands(expression: str) -> set[str]:
+        """The literals and column names the expression is built out of.
+
+        `::type` casts are stripped first. PostgreSQL renders every literal in a
+        stored constraint with its type -- `'...'::text` -- and the declaration
+        does not, so leaving them in would compare a rendering convention rather
+        than the rule and be "fixed" by deleting the assertion.
+        """
+        without_casts = re.sub(r"::[a-z_ ]+", "", expression)
+        return {
+            token
+            for token in re.findall(r"'[^']*'|\b[a-z_]+\b|\b\d+\b", without_casts)
+            if token.lower() not in {"and", "or", "check"}
+        }
+
+    missing = operands(declared_text) - operands(live)
+    assert missing == set(), (
+        f"`tables.py` declares operands the server's constraint does not hold: "
+        f"{sorted(missing)}. The declaration is not emitted, so only this test "
+        f"can notice.\ndeclared: {declared_text}\nlive:     {live}"
+    )
+    extra = operands(live) - operands(declared_text)
+    assert extra == set(), (
+        f"the server holds operands `tables.py` does not declare: "
+        f"{sorted(extra)}.\ndeclared: {declared_text}\nlive:     {live}"
+    )
+
+
+def test_walking_the_queue_at_the_server_serves_every_mention_exactly_once(
+    two_principals: Engine,
+) -> None:
+    """The observations keyset, against SQL rather than against the double.
+
+    `search` and `relationships` each have a database-tier walk that reddens
+    when their keyset widens from `>` to `>=`. The queue did not: the ninth
+    review made that mutation and 110 database tests and 106 contract tests
+    stayed green. The only walk-the-queue test in the repository --
+    `tests/contract/test_entity_read_bounds.py::
+    test_walking_the_queue_reaches_every_mention_exactly_once`, whose own
+    assertion message reads "a mention was served on two pages" -- runs entirely
+    against `tests/conftest.py::_Entities`.
+
+    So the one paged read whose continuation semantics were proved only by the
+    fake is the operator queue, which is the read where repeating a page is
+    worst: a mention served twice is a mention an operator resolves twice.
+    """
+    identifiers = [f"eobs_walk{index:04d}walk0001" for index in range(5)]
+    with two_principals.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        for identifier in identifiers:
+            repository.record_observation(
+                PRINCIPAL_A, _observation(identifier, principal_id=PRINCIPAL_A)
+            )
+
+    seen: list[str] = []
+    cursor: str | None = None
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        for _ in range(len(identifiers) + 2):
+            page = repository.observations(
+                PRINCIPAL_A, unresolved_only=True, limit=2, after_observation_id=cursor
+            )
+            if not page:
+                break
+            seen.extend(item.observation_id for item in page)
+            if len(page) < 2:
+                break
+            cursor = page[-1].observation_id
+
+    assert len(seen) == len(set(seen)), f"a mention was served on two pages: {seen}"
+    assert sorted(seen) == sorted(identifiers), (
+        f"the walk did not reach every mention exactly once: {sorted(seen)}"
+    )

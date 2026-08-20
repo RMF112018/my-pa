@@ -125,7 +125,7 @@ exists for any of the six required operations, and the new suite deliberately
 does not time anything — a wall-clock assertion on a shared, contended database
 measures the machine.
 
-## A conflict between the controlling spec and a repository rule
+## A conflict between the v0.3 spec and a repository rule
 
 The v0.3 spec asks for "ranked alternatives" (`RI-AC-005`) and describes a
 "contextual ranking" stage. `tests/architecture/test_relationship_scoring_surface_is_denied.py`

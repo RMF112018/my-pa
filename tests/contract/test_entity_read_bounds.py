@@ -29,6 +29,7 @@ from typing import Final
 import pytest
 from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 
+from my_pa.application import commands
 from my_pa.application.commands import (
     GetEntityContext,
     GetEntityRelationships,
@@ -51,6 +52,8 @@ from my_pa.domain.relationship.entity import (
 )
 from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.search import query
+from my_pa.domain.search.query import MAX_QUERY_CHARACTERS
 
 HUB: Final = "ent_hub00001hub00001"
 WHEN: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
@@ -556,3 +559,49 @@ def test_a_search_cursor_the_caller_cannot_read_answers_the_same_way(hub: Scene)
     assert isinstance(error, dict)
     assert error["code"] == ErrorCode.NOT_FOUND.value
     assert error["safe_details"] == [SafeDetail.CURSOR.value]
+
+
+# --- what a browse query may contain ----------------------------------------
+
+
+def test_the_two_spellings_of_the_forbidden_category_set_agree() -> None:
+    """The claim `commands._FORBIDDEN_QUERY_CATEGORIES` makes about itself.
+
+    `domain.search.query` keeps `_FORBIDDEN_CATEGORIES` private, so the entity
+    command spells the set a second time. A second spelling of one rule is a
+    place two rules can grow, and the comment beside it says this test is what
+    stops that -- so this test has to exist for the comment to be true.
+    """
+    assert commands._FORBIDDEN_QUERY_CATEGORIES == query._FORBIDDEN_CATEGORIES
+
+
+@pytest.mark.parametrize(
+    "query_value",
+    [
+        "a" * (MAX_QUERY_CHARACTERS + 1),
+        "Alice\x00Chen",
+        "Alice\x07Chen",
+        "Alice\u200bChen",
+        "Alice\udc80Chen",
+    ],
+    ids=("too-long", "nul", "control", "formatting", "surrogate"),
+)
+def test_a_browse_query_is_bounded_like_every_other_search_query(query_value: str) -> None:
+    """`entities.search` bounded neither length nor character class.
+
+    `knowledge.search` and `capture.search` both refuse these, and the ninth
+    review found this one accepting them and passing them to an `ILIKE`
+    parameter. The NUL case is the one with a wrong *answer* rather than merely
+    a missing bound: psycopg refuses a NUL in a text field with a `DataError`
+    raised from inside the statement, which is a `SQLAlchemyError` and not a
+    `PortError`, so nothing translates it and the caller is told
+    `internal_error` -- "our fault, a retry will not help" -- about a request
+    that is entirely theirs to correct.
+    """
+    with pytest.raises(InvalidRequestError):
+        SearchEntities(query=query_value)
+
+
+def test_a_browse_query_at_the_bound_is_accepted() -> None:
+    """The other side of it, so the bound is a bound and not a ban."""
+    assert SearchEntities(query="a" * MAX_QUERY_CHARACTERS).query

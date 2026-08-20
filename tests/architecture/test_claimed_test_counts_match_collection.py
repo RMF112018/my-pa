@@ -184,11 +184,21 @@ def test_every_claimed_corpus_size_matches_the_corpus() -> None:
 #: with one `--collect-only`, which is the check this closes.
 #:
 #: Collection, not execution: this asserts the claim is about the right *set*.
-#: A tier's pass count may fall below its collected count for a legitimate
-#: reason — a skip — so the rule is that a claim may not exceed collection, and
-#: a shortfall is reported with its size rather than silently allowed.
+#: A tier's pass count may legitimately sit below its collected count when tests
+#: are skipped — so a claim states its skips, and pass + skipped must equal what
+#: the selection collects.
+#:
+#: **It was an upper bound, and that is what let the defect through.** The ninth
+#: review found the plan claiming `8080 passed` for a tier collecting 8082,
+#: stale by exactly the two tests the same commit added one row above the figure
+#: — an *understatement*, which an upper bound admits. Planting `8083` reddened;
+#: planting `1` did not. Nothing is skipped in either tier, so the equality was
+#: available the whole time, and the escape hatch the one-sidedness existed for
+#: is now written down instead: a claim that needs to sit below collection says
+#: how far below, and why is legible from the number.
 TIER_CLAIM: Final = re.compile(
-    r"`pytest\s+-m\s+\"(?P<expr>[^\"]+)\"[^`]*`[^|]{0,400}?\*\*(?P<count>[\d,]+)\s+passed",
+    r"`pytest\s+-m\s+\"(?P<expr>[^\"]+)\"[^`]*`[^|]{0,400}?\*\*(?P<count>[\d,]+)\s+passed"
+    r"(?P<tail>[^|]{0,200})",
 )
 
 _TIER_COLLECTED: dict[str, int] = {}
@@ -225,12 +235,26 @@ def _tier_collected(expression: str) -> int:
     return _TIER_COLLECTED[expression]
 
 
-def _tier_claims() -> list[tuple[str, int, int]]:
+#: `**8080 passed, 0 failed, 987 deselected**` — a skip count if one is stated.
+#: `deselected` is not read: a `-m` collection already excludes those, so they
+#: are not part of the set the claim is about.
+_SKIPPED: Final = re.compile(r"([\d,]+)\s+skipped")
+
+
+def _tier_claims() -> list[tuple[str, int, int, int]]:
     text = PLAN.read_text(encoding="utf-8")
-    found: list[tuple[str, int, int]] = []
+    found: list[tuple[str, int, int, int]] = []
     for match in TIER_CLAIM.finditer(text):
         line = text.count("\n", 0, match.start()) + 1
-        found.append((match.group("expr"), int(match.group("count").replace(",", "")), line))
+        skipped = _SKIPPED.search(match.group("tail"))
+        found.append(
+            (
+                match.group("expr"),
+                int(match.group("count").replace(",", "")),
+                int(skipped.group(1).replace(",", "")) if skipped else 0,
+                line,
+            )
+        )
     return found
 
 
@@ -242,21 +266,106 @@ def test_the_plan_claims_a_pass_count_for_at_least_one_tier() -> None:
     )
 
 
-@pytest.mark.parametrize(("expression", "claimed", "line"), _tier_claims())
-def test_no_claimed_tier_pass_count_exceeds_what_that_selection_collects(
-    expression: str, claimed: int, line: int
+@pytest.mark.parametrize(("expression", "claimed", "skipped", "line"), _tier_claims())
+def test_every_claimed_tier_pass_count_accounts_for_what_that_selection_collects(
+    expression: str, claimed: int, skipped: int, line: int
 ) -> None:
     """A tier figure, against the selection the sentence beside it names.
 
-    Deliberately an upper bound rather than an equality: a skipped test is a
-    real reason for a pass count to sit below collection, and a guard that
-    forbade it would be corrected by weakening the claim rather than by fixing
-    anything. Claiming *more* passes than the selection holds has no benign
-    reading at all.
+    An equality rather than an upper bound, for the reason recorded on
+    `TIER_CLAIM`: the bound admitted the understatement that actually happened,
+    twice, and both times the figure was stale by exactly the tests the same
+    commit had added. A pass count that must sit below collection states its own
+    skip count and is checked against the sum, so the shortfall is a written
+    number rather than an unexamined gap.
     """
     collected = _tier_collected(expression)
-    assert claimed <= collected, (
-        f"{PLAN.name}:{line} claims {claimed} passed for `-m {expression!r}`, which "
-        f"collects only {collected}. The figure was measured against a different "
-        "selection than the one it names. Correct the plan rather than this test."
+    assert claimed + skipped == collected, (
+        f"{PLAN.name}:{line} claims {claimed} passed"
+        + (f" and {skipped} skipped" if skipped else "")
+        + f" for `-m {expression!r}`, which collects {collected}. "
+        + (
+            "The figure is stale — most likely by exactly the tests the commit carrying it added."
+            if claimed + skipped < collected
+            else "The figure was measured against a different selection than the one it names."
+        )
+        + " Correct the plan rather than this test."
+    )
+
+
+# --- the two tool-corpus figures beside the tier figures ---------------------
+#
+# `ruff format --check .` and `mypy` each report the size of the corpus they
+# cleaned, and the plan restates both by hand. That is the same shape as the
+# tier counts above and fails the same way: the ruff figure said 923 for a tree
+# holding 925, stale by exactly the two test modules the commit carrying it
+# added -- caught by cross-reading a commit message rather than by anything
+# here. Both are derived now.
+
+_TOOL_CLAIM: Final = re.compile(
+    # The tool is named inside a code span that carries its arguments too:
+    # `` `ruff check .` ``, not `` `ruff` ``. Anchoring on a bare closing
+    # backtick matched mypy and silently skipped ruff -- which is the half
+    # that was actually wrong.
+    r"`(?P<tool>ruff|mypy)[^`]*`[^|]{0,200}?clean over (?P<count>[\d,]+) files"
+)
+
+
+def _tool_claims() -> list[tuple[str, int, int]]:
+    text = PLAN.read_text(encoding="utf-8")
+    found: list[tuple[str, int, int]] = []
+    for match in _TOOL_CLAIM.finditer(text):
+        line = text.count("\n", 0, match.start()) + 1
+        found.append((match.group("tool"), int(match.group("count").replace(",", "")), line))
+    return found
+
+
+def _measured(tool: str) -> int:
+    command = (
+        [sys.executable, "-m", "ruff", "format", "--check", "."]
+        if tool == "ruff"
+        else [sys.executable, "-m", "mypy"]
+    )
+    result = subprocess.run(  # noqa: S603
+        command, capture_output=True, text=True, cwd=ROOT, check=False
+    )
+    if tool == "ruff":
+        # **The count is only a corpus size when the tool is clean.** A dirty
+        # tree prints "1 file would be reformatted, 924 files already
+        # formatted", and reading the second number off that reports a corpus
+        # one smaller than the tree -- inviting the plan to be "corrected" to a
+        # figure produced by an unformatted file. Measured, not reasoned: that
+        # is exactly what this function did on its first run.
+        assert "would be reformatted" not in result.stdout, (
+            "`ruff format --check .` is not clean, so it reports no corpus size:\n"
+            f"{result.stdout[-2000:]}"
+        )
+        pattern = r"(\d+) files? already formatted"
+    else:
+        pattern = r"in (\d+) source files?"
+    found = re.search(pattern, result.stdout)
+    assert found is not None, (
+        f"could not read a corpus size out of {tool}:\n"
+        f"{result.stdout[-2000:]}\n{result.stderr[-2000:]}"
+    )
+    return int(found.group(1))
+
+
+def test_the_plan_claims_a_corpus_size_for_both_tools() -> None:
+    """An anti-vacuity floor: a pattern that matches nothing checks nothing."""
+    tools = {tool for tool, _, _ in _tool_claims()}
+    assert tools == {"ruff", "mypy"}, (
+        f"expected a `clean over N files` claim for both tools, found {sorted(tools)}"
+    )
+
+
+@pytest.mark.parametrize(("tool", "claimed", "line"), _tool_claims())
+def test_every_claimed_tool_corpus_size_matches_what_that_tool_reports(
+    tool: str, claimed: int, line: int
+) -> None:
+    """The figure beside the tool, against the figure the tool prints."""
+    measured = _measured(tool)
+    assert claimed == measured, (
+        f"{PLAN.name}:{line} says `{tool}` is clean over {claimed} files; it "
+        f"reports {measured}. Correct the plan rather than this test."
     )

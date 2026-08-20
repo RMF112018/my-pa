@@ -64,8 +64,8 @@ joined out of a live `StrEnum` derives exactly as freely as `D-69` forbids, and
 this module goes on passing. Replayed on this chain rather than reasoned about:
 `9d4e7a3b1c62`'s `_STATUS_VOCABULARY` was rewritten to join `ExtractionStatus`'s
 members, which put `CHECK (status IN ('extracted', 'quarantined',
-'unsupported'))` verbatim into the rendered DDL and left this module at **16
-passed**, its unplanted count.
+'unsupported'))` verbatim into the rendered DDL and left this module at its unplanted
+count, whatever that count then was.
 `test_every_revision_declares_its_emission_readably` does not reach it either:
 that test refuses a revision whose *emission* is unreadable, and a revision with
 a readable emission plus an `op.execute` beside it satisfies it — which is

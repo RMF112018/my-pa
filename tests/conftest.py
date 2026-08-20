@@ -2299,11 +2299,24 @@ class _Entities(EntitiesRepository):
         _refuse_empty_limit(limit)
         for entity in self._world.entities:
             if entity.principal_id == principal_id:
-                # Parity with `SqlEntityRepository._row_to_summary`, which
-                # refuses to serve a stored name the resolver's equality
+                # The rule `SqlEntityRepository._row_to_summary` enforces:
+                # refuse to serve a stored name the resolver's equality
                 # predicate could never match. The fake holds real `Entity`
                 # records, so this can only fire on one assembled around the
                 # constructor -- which is exactly what an adversarial test does.
+                #
+                # **Deliberately stricter than the server, and this said
+                # "parity" until the ninth review measured it.** The server
+                # reaches its mapper only for the rows a page actually returns,
+                # so an unnormalized row outside the page does not stop a search
+                # there; here the sweep is over the whole partition, so one
+                # unnormalized row anywhere refuses every search. Stricter is
+                # the safe direction for a fake -- it cannot hide a defect --
+                # but a test asserting "search refuses while any unnormalized
+                # row exists" would pass here and be false of production.
+                # Carried in the plan's section 5 rather than narrowed, because
+                # narrowing it would weaken the one place this rule is cheap to
+                # enforce.
                 _refuse_unnormalized_name(entity.canonical_name)
         needle = query.casefold()
         matched = [
@@ -2545,13 +2558,36 @@ class _Entities(EntitiesRepository):
             raise ValueError("an observation belongs to the acting Principal")
         if observation.entity_id is not None:
             self._require_own(principal_id, observation.entity_id)
+        # Partitioned, because `SqlEntityRepository` partitions it. Without the
+        # predicate the collision read finds another Principal's row and either
+        # tells this caller their own identifier is bound to different values --
+        # a verdict computed from a partition they cannot see -- or silently
+        # accepts their write as a duplicate of it. `tests/database/
+        # test_entity_governance.py` names that comparison as the defect the
+        # server was corrected away from, so a fake without it lets a unit test
+        # prove the opposite of what the server does.
         for held in self._world.entity_observations:
-            if held.observation_id == observation.observation_id:
+            if (
+                held.observation_id == observation.observation_id
+                and held.principal_id == principal_id
+            ):
                 if held != observation:
                     raise ValueError(
                         "an observation identifier cannot be rebound to different values"
                     )
                 return
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_observations
+                    if held.observation_id == observation.observation_id
+                ),
+                None,
+            ),
+            observation.observation_id,
+            "an observation",
+        )
         self._world.entity_observations.append(observation)
 
     def observations(
@@ -2605,11 +2641,31 @@ class _Entities(EntitiesRepository):
         self._world.fail("entities.record_proposal")
         if proposal.principal_id != principal_id:
             raise ValueError("a proposal belongs to the acting Principal")
+        # Partitioned, because `SqlEntityRepository` partitions it. Without the
+        # predicate the collision read finds another Principal's row and either
+        # tells this caller their own identifier is bound to different values --
+        # a verdict computed from a partition they cannot see -- or silently
+        # accepts their write as a duplicate of it. `tests/database/
+        # test_entity_governance.py` names that comparison as the defect the
+        # server was corrected away from, so a fake without it lets a unit test
+        # prove the opposite of what the server does.
         for held in self._world.entity_proposals:
-            if held.proposal_id == proposal.proposal_id:
+            if held.proposal_id == proposal.proposal_id and held.principal_id == principal_id:
                 if held != proposal:
                     raise ValueError("a proposal identifier cannot be rebound to different values")
                 return
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_proposals
+                    if held.proposal_id == proposal.proposal_id
+                ),
+                None,
+            ),
+            proposal.proposal_id,
+            "a proposal",
+        )
         self._world.entity_proposals.append(proposal)
 
     def proposal(self, principal_id: str, proposal_id: str) -> EntityProposal | None:
@@ -2665,8 +2721,17 @@ class _Entities(EntitiesRepository):
             for held in self._world.entity_proposals
         ):
             raise UnknownScopeError("a merge record cites a proposal in this scope")
+        # Partitioned, because `SqlEntityRepository` partitions it. Without the
+        # predicate the collision read finds another Principal's row and either
+        # tells this caller their own identifier is bound to different values --
+        # a verdict computed from a partition they cannot see -- or silently
+        # accepts their write as a duplicate of it. `tests/database/
+        # test_entity_governance.py` names that comparison as the defect the
+        # server was corrected away from, so a fake without it lets a unit test
+        # prove the opposite of what the server does.
         if any(
-            held.merged_entity_id == record.merged_entity_id for held in self._world.entity_merges
+            held.merged_entity_id == record.merged_entity_id and held.principal_id == principal_id
+            for held in self._world.entity_merges
         ):
             raise ValueError("an entity is merged away once")
         self._world.entity_merges.append(record)
@@ -2722,13 +2787,33 @@ class _Entities(EntitiesRepository):
         if assignment.principal_id != principal_id:
             raise ValueError("an assignment belongs to the acting Principal")
         self._require_own(principal_id, assignment.entity_id, assignment.scope_entity_id)
+        # Partitioned, because `SqlEntityRepository` partitions it. Without the
+        # predicate the collision read finds another Principal's row and either
+        # tells this caller their own identifier is bound to different values --
+        # a verdict computed from a partition they cannot see -- or silently
+        # accepts their write as a duplicate of it. `tests/database/
+        # test_entity_governance.py` names that comparison as the defect the
+        # server was corrected away from, so a fake without it lets a unit test
+        # prove the opposite of what the server does.
         for held in self._world.entity_assignments:
-            if held.assignment_id == assignment.assignment_id:
+            if held.assignment_id == assignment.assignment_id and held.principal_id == principal_id:
                 if held != assignment:
                     raise ValueError(
                         "an assignment identifier cannot be rebound to different values"
                     )
                 return
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_assignments
+                    if held.assignment_id == assignment.assignment_id
+                ),
+                None,
+            ),
+            assignment.assignment_id,
+            "an assignment",
+        )
         self._world.entity_assignments.append(assignment)
 
     def record_relationship(self, principal_id: str, rel: EntityRelationship) -> None:
@@ -2736,14 +2821,50 @@ class _Entities(EntitiesRepository):
         if rel.principal_id != principal_id:
             raise ValueError("an entity relationship belongs to the acting Principal")
         self._require_own(principal_id, rel.from_entity_id, rel.to_entity_id, rel.scope_entity_id)
+        # Partitioned, because `SqlEntityRepository` partitions it. Without the
+        # predicate the collision read finds another Principal's row and either
+        # tells this caller their own identifier is bound to different values --
+        # a verdict computed from a partition they cannot see -- or silently
+        # accepts their write as a duplicate of it. `tests/database/
+        # test_entity_governance.py` names that comparison as the defect the
+        # server was corrected away from, so a fake without it lets a unit test
+        # prove the opposite of what the server does.
         for held in self._world.entity_relationships:
-            if held.relationship_id == rel.relationship_id:
+            if held.relationship_id == rel.relationship_id and held.principal_id == principal_id:
                 if held != rel:
                     raise ValueError(
                         "an entity relationship identifier cannot be rebound to different values"
                     )
                 return
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_relationships
+                    if held.relationship_id == rel.relationship_id
+                ),
+                None,
+            ),
+            rel.relationship_id,
+            "an entity relationship",
+        )
         self._world.entity_relationships.append(rel)
+
+
+def _refuse_taken_identifier(held: object, identifier: str, noun: str) -> None:
+    """Refuse an identifier some other partition already holds, as the server does.
+
+    Every table on this plane keys on a *global* primary key, so an identifier
+    another Principal holds is unavailable to this one -- the server answers
+    `IntegrityError`. The collision reads above are partitioned, matching
+    `SqlEntityRepository`, which is what decides *on whose evidence* a write is
+    judged; this is the separate rule that decides whether the key is free at
+    all. Without it, partitioning those reads would have made the fake accept a
+    duplicate key the database refuses, and a unit test could then prove two
+    Principals may hold one observation identifier.
+    """
+    if held is not None:
+        raise ValueError(f"{noun} identifier is already taken: {identifier}")
 
 
 def _refuse_unnormalized_name(value: str) -> None:

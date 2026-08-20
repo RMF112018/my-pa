@@ -3134,7 +3134,7 @@ class ApplicationService:
                 truncation=Truncation(
                     is_truncated=truncated,
                     reason="page_size_reached" if truncated else None,
-                    next_cursor=page[-1].relationship_id if truncated else None,
+                    next_cursor=page[-1].relationship_id if truncated and page else None,
                 ),
             ),
         )

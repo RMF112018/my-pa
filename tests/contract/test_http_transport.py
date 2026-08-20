@@ -947,6 +947,75 @@ def test_a_malformed_identifier_is_refused_with_the_field_it_names(
     assert "/etc/passwd" not in reply.rendered()
 
 
+@pytest.mark.parametrize(
+    ("capability", "field", "detail"),
+    [
+        (Capability.ENTITIES_SEARCH, "query", "query"),
+        (Capability.ENTITIES_RESOLVE, "reference", "subject"),
+        (Capability.TASKS_CREATE, "title", "title"),
+    ],
+    ids=lambda value: value.value if isinstance(value, Capability) else str(value),
+)
+def test_a_field_of_the_wrong_type_is_refused_rather_than_crashing(
+    staged: tuple[Scene, KnowledgeRecord],
+    wire: Wire,
+    capability: Capability,
+    field: str,
+    detail: str,
+) -> None:
+    """The ninth review's blocking finding, pinned at the wire.
+
+    `{"query": 123}` used to raise `AttributeError` inside the command, which
+    `normalization._command` did not convert (it catches `TypeError`) and this
+    transport did not render (it caught `ApplicationError`). The caller received
+    a bare `500 Internal Server Error` with no envelope, no typed code and no
+    correlation identifier — on a build with the entity plane switched off, too,
+    because the command is built before the handler's floor is reached.
+
+    Asserted at 400 rather than merely "not 500": the terminal catch added to
+    `invoke` would satisfy the weaker claim with an `internal_error` envelope,
+    and `internal_error` tells a caller their correction cannot help. The rule
+    across the whole command set is
+    `tests/architecture/test_commands_check_the_type_before_the_content.py`;
+    this is the transport half, and `tasks.create` is here because it carried
+    the same defect at the merge base.
+    """
+    scene, record = staged
+    payload = dict(payloads_for(scene, record)[capability])
+    payload[field] = 123
+    document = document_for(capability, scene, payload)
+    reply = wire.send(capability.value, document)
+    assert reply.status == 400, reply.body
+    assert reply.document()["code"] == ErrorCode.INVALID_REQUEST.value
+    assert reply.document()["safe_details"] == [detail]
+
+
+def test_a_fault_below_normalization_is_still_answered_in_the_envelope(
+    scene: Scene, wire: Wire, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The floor under the rule above, measured rather than asserted.
+
+    A command that reads a field before checking its type is one way to raise
+    something that is not an `ApplicationError`; it is not the only way. The CLI
+    and MCP transports have always carried a terminal `except Exception` and
+    this one did not, which is why HTTP was the transport that answered a bare
+    `500`. Here `normalize` is replaced with one that raises the same
+    `AttributeError` the missing type check used to raise, and the answer is
+    required to be this repository's own vocabulary.
+    """
+
+    def explode(capability: str, arguments: Any) -> Any:  # noqa: ANN401 - stand-in
+        raise AttributeError("'int' object has no attribute 'strip'")
+
+    monkeypatch.setattr("my_pa.adapters.http.app.normalize", explode)
+    document = document_for(Capability.CAPABILITIES_GET, scene, {})
+    reply = wire.send("capabilities.get", document)
+    assert reply.status == 500, reply.body
+    assert reply.document()["code"] == ErrorCode.INTERNAL_ERROR.value
+    assert reply.document()["correlation_id"]
+    assert "strip" not in reply.rendered()
+
+
 def test_an_unknown_path_is_404_and_a_wrong_method_is_405(scene: Scene, wire: Wire) -> None:
     """HTTP's own answers about a URL, in this repository's error vocabulary."""
     document = document_for(Capability.CAPABILITIES_GET, scene, {})

@@ -23,8 +23,13 @@ properties follow, none of which prose could give:
 * an auditor greps one column's writers instead of every producer of a matched
   form.
 
-Additive, over zero rows: nothing in `src/` writes `entity_observations`, so
-there is no backfill and no existing value is reclassified. That is why it is
+Additive, over zero rows: nothing composes the one thing in `src/` that could
+write `entity_observations`. `application/entity_governance.py` does call
+`record_observation`, but `EntityGovernanceService` is constructed nowhere
+outside its own module and its tests, so no deployment holds a row -- so there
+is no backfill and no existing value is reclassified. Stated the loose way
+("nothing in `src/` writes") until the ninth review read it against the
+call site; the substance held and the sentence did not. That is why it is
 taken now -- after ingestion lands it is a data-migration question about text
 that has already been stored, and the answer stops being free.
 

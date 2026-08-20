@@ -1414,3 +1414,73 @@ def test_the_classifier_separates_counts_from_articles_and_other_enums(
     planted = tmp_path / "planted.md"
     planted.write_text(body + "\n", encoding="utf-8")
     assert bool(_claims_in(planted, planted.read_text(encoding="utf-8"))) is reads
+
+
+#: `added six, \`entities.search\`, \`entities.get\`, ...` — a spelled number
+#: followed immediately by the list it counts, with no noun between them.
+#:
+#: `CLAIM` cannot read this shape: it requires a noun after the number, and here
+#: the number is followed by a comma. That is not a hypothetical. `README.md`
+#: said "the later Relationship Intelligence entity plane added **five**,
+#: \`entities.search\`, ..." while three other sentences in the same file said
+#: six, and the ninth review found it by reading rather than by any guard.
+#:
+#: This rule needs no domain set at all, which is what makes it worth having: a
+#: sentence that states a number and then enumerates the members is checkable
+#: against *itself*. A miscount here is arithmetic, not a claim about the world.
+_COUNTED_LIST = re.compile(
+    rf"\b(?P<number>{_NUMBER}),\s+"
+    r"(?P<items>`[^`]+`(?:,\s+`[^`]+`)*(?:,?\s+and\s+`[^`]+`)?)",
+    re.IGNORECASE,
+)
+
+_CODE_SPAN = re.compile(r"`[^`]+`")
+
+
+def counted_lists() -> list[tuple[str, str, int, int]]:
+    r"""Every ``N, `a`, `b`, ... and `c` `` in the swept corpus."""
+    found: list[tuple[str, str, int, int]] = []
+    for path in swept_files():
+        text = path.read_text(encoding="utf-8")
+        for match in _COUNTED_LIST.finditer(text):
+            line = text.count("\n", 0, match.start()) + 1
+            found.append(
+                (
+                    f"{path.name}:{line}",
+                    match.group("number"),
+                    stated(match.group("number")),
+                    len(_CODE_SPAN.findall(match.group("items"))),
+                )
+            )
+    return found
+
+
+COUNTED_LISTS = counted_lists()
+
+
+def test_the_sweep_found_a_counted_list_to_check() -> None:
+    """An anti-vacuity floor. A pattern that matches nothing reports nothing wrong."""
+    assert COUNTED_LISTS, (
+        "no `<number>, `a`, `b`` claim parsed from the swept corpus; the pattern "
+        "has gone stale and this rule is deciding nothing"
+    )
+
+
+def test_every_number_followed_by_its_list_matches_that_list() -> None:
+    """The shape `CLAIM` structurally cannot see, checked against itself.
+
+    Deliberately *not* checked against a domain set: what makes this rule safe
+    to state broadly is that both halves are in the sentence. If a list is
+    genuinely partial the sentence should say so in words ("six, among them
+    `a` and `b`"), which this pattern does not match, rather than by stating a
+    number the reader is expected to disbelieve.
+    """
+    wrong = sorted(
+        f"{where} says {stated_count} and then lists {listed}"
+        for where, _, stated_count, listed in COUNTED_LISTS
+        if stated_count != listed
+    )
+    assert wrong == [], (
+        f"{wrong}. A sentence that states a count and then enumerates the "
+        "members has to agree with itself."
+    )

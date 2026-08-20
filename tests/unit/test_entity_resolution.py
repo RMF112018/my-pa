@@ -17,7 +17,11 @@ from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
+from my_pa.application.entity_resolution import (
+    EntityResolutionService,
+    ResolutionRequest,
+    is_in_force,
+)
 from my_pa.contracts.ports import EntitiesRepository
 from my_pa.domain.relationship.entity import (
     AliasType,
@@ -1583,3 +1587,61 @@ def test_an_identifier_held_by_the_wrong_kind_of_entity_is_not_found(
     )
     assert answer.outcome is ResolutionOutcome.NOT_FOUND
     assert answer.resolved_entity_id is None
+
+
+# --- the boundary the currency rule is inclusive at -------------------------
+
+
+@pytest.mark.parametrize(
+    ("moment", "in_force"),
+    [
+        (datetime(2026, 1, 1, tzinfo=UTC), False),
+        (datetime(2026, 2, 1, tzinfo=UTC), True),
+        (datetime(2026, 6, 1, tzinfo=UTC), True),
+        (datetime(2026, 12, 31, tzinfo=UTC), True),
+        (datetime(2027, 1, 1, tzinfo=UTC), False),
+    ],
+    ids=("before-start", "at-start", "inside", "at-end", "after-end"),
+)
+def test_a_dated_record_is_in_force_inclusively_at_both_ends(
+    moment: datetime, in_force: bool
+) -> None:
+    """Both bounds are closed, and nothing said so until the ninth review asked.
+
+    `is_in_force` ends with `not (effective_to is not None and moment >
+    effective_to)`, which makes a record in force *on* the day it ends. The
+    reviewer flipped that `>` to `>=` and the entire fast tier stayed green:
+    8,082 tests, and none of them was about the boundary.
+
+    The choice is deliberate and worth pinning rather than merely recording. A
+    contract dated "to 31 December" is a contract that covers 31 December, and
+    an assignment read as ended on its final day would drop `is_current` on a
+    card assembled that day -- the one day a reader is most likely to be looking
+    at it. The start bound is closed for the same reason and by the same
+    reading, so the two ends agree.
+
+    `is_current` on both the assignment and the relationship view is computed
+    from this function at the card's `assembled_at`, so this is also the rule a
+    frontend is being kept from re-deriving.
+    """
+    assert (
+        is_in_force(
+            datetime(2026, 2, 1, tzinfo=UTC),
+            datetime(2026, 12, 31, tzinfo=UTC),
+            moment,
+        )
+        is in_force
+    )
+
+
+def test_an_undated_record_is_in_force_at_every_moment_and_at_none() -> None:
+    """The open-bound cases beside the closed ones, so the pair reads as one rule."""
+    far_past = datetime(1970, 1, 1, tzinfo=UTC)
+    far_future = datetime(2999, 1, 1, tzinfo=UTC)
+    assert is_in_force(None, None, far_past) is True
+    assert is_in_force(None, None, far_future) is True
+    assert is_in_force(None, None, None) is True
+    # Open at the end: still running, so still corroborating.
+    assert is_in_force(datetime(2026, 2, 1, tzinfo=UTC), None, far_future) is True
+    # Closed at the end and no moment named: an ended record does not corroborate.
+    assert is_in_force(None, datetime(2026, 12, 31, tzinfo=UTC), None) is False

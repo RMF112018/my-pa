@@ -1218,6 +1218,69 @@ def unpartitioned_references(
     return checked, offending
 
 
+def test_every_entity_statement_reaches_the_partition_of_each_table_it_names() -> None:
+    """The entity plane, per *table* rather than per statement.
+
+    `test_every_entity_statement_reaches_the_partition` above asks whether a
+    statement naming a partitioned table also names `_mine` or `_bound`
+    somewhere. The ninth review measured the gap that leaves, and two reviewers
+    found it independently: `entities_by_identifier` and `entities_by_alias`
+    each join two partitioned tables in one statement and carry two `_mine(...)`
+    calls to match — one for the parent entity, one for the child row. Delete
+    either and the statement still contains a `_mine(`, so the older claim stays
+    green while a partition is gone.
+
+    The child-side predicate is the one that matters most. It is the only thing
+    standing between a caller and *a row another Principal owns hanging off an
+    entity the caller owns* — the arrangement `tests/security/
+    test_entity_privacy_regression.py` names as the threat. With it removed,
+    `entities.resolve` answers `resolved_exact` from another Principal's alias
+    row.
+
+    `_mine` and `_bound` both take the table as their first argument, so the
+    stronger claim needs no new vocabulary: for each partitioned table a
+    statement names, that same statement must guard *that* table. One `_mine`
+    can no longer stand in for a second table's missing one.
+
+    The statement-level test is kept rather than replaced. This one is strictly
+    stronger, but the two are read together: a reader who sees only this one
+    would not learn that the weaker claim was ever insufficient, which is the
+    fact the campaign keeps paying to rediscover.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "entity.py"
+    partitioned = set(_partitioned_tables())
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    checked = 0
+    offending: list[str] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        for statement in ast.walk(function):
+            if not isinstance(statement, ast.stmt):
+                continue
+            rendered = _own_source(statement)
+            named = [table for table in partitioned if _names_table(table).search(rendered)]
+            if not named:
+                continue
+            checked += 1
+            for table in named:
+                guarded = re.search(rf"_(?:mine|bound)\(\s*{re.escape(table)}\s*,", rendered)
+                if guarded is None:
+                    offending.append(f"{function.name}:{statement.lineno}:{table}")
+
+    assert checked >= 20, (
+        f"only {checked} statements naming a partitioned table were examined; "
+        "the walk is not reaching the entity plane's queries"
+    )
+    assert sorted(set(offending)) == [], (
+        f"{sorted(set(offending))} name a principal-partitioned table that the "
+        "same statement does not guard. A join whose parent side is partitioned "
+        "and whose child side is not answers from another Principal's row under "
+        "this Principal's name"
+    )
+
+
 def test_every_corpus_coverage_statement_reaches_the_partition() -> None:
     """WP-23's corpus read, one mention of the partitioned table at a time.
 

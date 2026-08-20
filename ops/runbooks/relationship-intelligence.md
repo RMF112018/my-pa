@@ -9,7 +9,7 @@ Related: [`docs/plans/relationship-intelligence-implementation-plan.md`](../../d
 | --- | --- |
 | Plane status | Implemented, **off by default** |
 | Process gate | `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`, default `false` |
-| Capabilities | `entities.search`, `entities.get`, `entities.resolve`, `entities.context`, `entities.relationships` |
+| Capabilities | `entities.search`, `entities.get`, `entities.resolve`, `entities.context`, `entities.relationships`, `entities.unresolved_mentions` |
 | Purpose | `entity_read` — one, read-only |
 | Write capabilities | **None.** Observation, proposal and merge are in-process only |
 | Tables | `entities`, `entity_aliases`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, `entity_observations`, `entity_proposals`, `entity_merge_records` |

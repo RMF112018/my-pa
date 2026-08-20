@@ -154,12 +154,22 @@ what it produced. `P00-OD-006` is **open**.
 
 Evidence: `src/my_pa/infrastructure/extraction/`, `pyproject.toml`.
 
-## 6. Listings stop at the page size, and two issue a continuation cursor
+## 6. Listings stop at the page size, and four issue a continuation cursor
 
 Truncation is disclosed rather than hidden — `truncation.is_truncated` with a
-reason. `knowledge.search` and `entities.relationships` issue a `next_cursor` a
-caller can page with. **Every other listing does not**, so a caller that needs
-the whole of a large scope still cannot get it.
+reason. `knowledge.search`, `entities.relationships`, `entities.search` and
+`entities.unresolved_mentions` issue a `next_cursor` a caller can page with.
+**Every other listing does not**, so a caller that needs the whole of a large
+scope still cannot get it.
+
+Corrected 2026-08-20, a third time. It then said *two*, naming
+`knowledge.search` and `entities.relationships`, while `entities.search` and
+`entities.unresolved_mentions` had both shipped keyset cursors in the same
+campaign — the count was restated by hand each time a cursor shipped and was
+wrong each time. The paragraph below already says the build derives this; the
+derived text names all four. `test_limitations_cite_evidence.py` checks that
+cited paths exist and deliberately not that the sentence is true, so nothing
+caught any of the three.
 
 Corrected 2026-08-19, twice over. This section read "`next_cursor` is **always**
 `null`" after `entities.relationships` shipped a keyset cursor; correcting it to

@@ -36,6 +36,7 @@ from my_pa.application.commands import (
     ResolveEntity,
     SearchEntities,
 )
+from my_pa.application.errors import SafeDetail
 from my_pa.bootstrap.relationship_intelligence_task import (
     ALLOWED_CAPABILITIES,
     DRAFT_STATUS,
@@ -44,6 +45,7 @@ from my_pa.bootstrap.relationship_intelligence_task import (
     profile_tool_names,
 )
 from my_pa.bootstrap.settings import Settings
+from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.entity import (
@@ -61,6 +63,7 @@ from my_pa.domain.relationship.entity import (
 )
 from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
+from my_pa.domain.relationship.resolution import ResolutionOutcome
 
 WHEN: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
 
@@ -496,6 +499,147 @@ def test_the_card_of_my_own_entity_carries_no_other_principals_rows(staged: Scen
         staged, Capability.ENTITIES_RELATIONSHIPS, GetEntityRelationships(entity_id=OWN_ENTITY)
     )
     assert "erel_crossed" not in repr(edges)
+
+    # `entities.resolve` reaches the crossed alias and the crossed identifier by
+    # a different route from the card, and until the ninth review nothing
+    # exercised it. Both `entities_by_alias` and `entities_by_identifier` carry
+    # two partition predicates -- one on the parent entity, one on the child row
+    # -- and the parent's is satisfied here, because the entity really is mine.
+    # The child-side predicate is the only thing refusing these two, and it was
+    # deletable with the whole fast tier green: two independent reviewers
+    # measured the double answering `resolved_exact` from another Principal's
+    # alias row. `test_resolving_a_value_only_another_principal_holds_finds_nothing`
+    # cannot reach it, because it stages its rows on the *foreign* entity, where
+    # the parent predicate refuses first and the child-side one never decides
+    # anything.
+    for reference, namespace in (
+        ("Crossed Predecessor", None),
+        ("crossed@rival.test", ExternalIdentifierNamespace.EMAIL.value),
+    ):
+        resolved = _answer(
+            staged,
+            Capability.ENTITIES_RESOLVE,
+            ResolveEntity(reference=reference, namespace=namespace),
+        )
+        result = resolved["result"]
+        assert isinstance(result, dict)
+        resolution = result["resolution"]
+        assert isinstance(resolution, dict)
+        assert resolution["outcome"] == ResolutionOutcome.NOT_FOUND.value, (
+            f"{reference!r} resolved through a row another Principal owns"
+        )
+        assert resolution["entity_id"] is None
+        assert resolution["candidates"] == []
+        assert OWN_ENTITY not in repr(result)
+
+
+# --- a cursor naming a record the caller may not read ------------------------
+
+
+@pytest.mark.parametrize(
+    ("capability", "command"),
+    [
+        (
+            Capability.ENTITIES_SEARCH,
+            SearchEntities(query="Confidential", after=FOREIGN_ENTITY),
+        ),
+        (
+            Capability.ENTITIES_RELATIONSHIPS,
+            GetEntityRelationships(entity_id=OWN_ENTITY, after="erel_foreign1foreign1"),
+        ),
+        (
+            Capability.ENTITIES_UNRESOLVED_MENTIONS,
+            ListUnresolvedMentions(after="eobs_foreign01foreign1"),
+        ),
+    ],
+    ids=("search", "relationships", "unresolved_mentions"),
+)
+def test_a_cursor_naming_another_principals_record_is_refused(
+    staged: Scene, capability: Capability, command: object
+) -> None:
+    """The partition half of the cursor refusal, which had no fast coverage.
+
+    Each of the three paged reads refuses a cursor it cannot place, and the
+    refusal has two halves: the record must exist, and it must be the caller's.
+    `tests/contract/test_entity_read_bounds.py` proves the first half — its
+    cursors are `eobs_9999zzzz9999zzzz` and siblings, which name nothing at all,
+    so the identifier comparison alone refuses them and the partition predicate
+    never decides anything. The ninth review measured the consequence: deleting
+    the partition from any of the three cursor lookups left the entire fast tier
+    green.
+
+    The cursors here name records that really exist and belong to the other
+    Principal, so only the partition can refuse them. Without it the read
+    answers an empty page with no error, which is the outcome
+    `SqlEntityRepository.observations` names in its own comment as the one the
+    refusal exists to prevent: an empty page reported as complete reads as
+    "nothing left to resolve".
+    """
+    body = _answer(staged, capability, command)
+    assert body["result"] is None
+    error = body["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == ErrorCode.NOT_FOUND.value
+    assert error["safe_details"] == [SafeDetail.CURSOR.value]
+    # The refusal is identical to the one an absent cursor gets, so it cannot be
+    # read as evidence that the record exists somewhere.
+    assert "foreign" not in repr(error)
+
+
+# --- a write judged on the writer's own rows --------------------------------
+
+
+def test_a_write_colliding_with_another_principals_identifier_is_judged_on_its_own_rows(
+    staged: Scene,
+) -> None:
+    """The idempotency read is partitioned, so it judges this caller's rows only.
+
+    `observation_id` is a *global* primary key, so an identifier the other
+    Principal already holds is unavailable here either way. What the partition
+    decides is **which refusal this caller receives, and on what evidence.**
+    Unpartitioned, the collision read finds the foreign row, compares it against
+    what this caller described, and answers "your identifier is bound to
+    different values" — a verdict computed entirely from a partition this caller
+    cannot see, and one they cannot act on because they cannot look at the row
+    it cites. Partitioned, the read finds nothing of theirs and the key
+    collision that is really there is what refuses them.
+
+    `tests/database/test_entity_governance.py::
+    test_an_observation_write_decides_a_collision_on_its_own_partitions_rows`
+    is the server's half, where the collision surfaces as an `IntegrityError`
+    from the primary key. This is the fake's, and until the ninth review the
+    fake did the thing the server had been corrected away from — so a unit test
+    written against it would have proved the opposite of the server's behaviour.
+    """
+    mine = staged.principal.principal_id
+    taken = "eobs_foreign01foreign1"
+    with FakeUnitOfWork(staged.world) as unit_of_work:
+        with pytest.raises(ValueError, match="already taken") as refusal:
+            unit_of_work.entities.record_observation(
+                mine,
+                EntityObservation(
+                    observation_id=taken,
+                    principal_id=mine,
+                    kind=ObservationKind.MESSAGE_PARTICIPANT,
+                    observed_value="Someone Else <else@mine.test>",
+                    normalized_value=normalize_name("Someone Else"),
+                    mention_display_name="Someone Else",
+                    source_id=staged.source.source_id,
+                    source_object_id=staged.markdown.source_object_id,
+                    source_version_id="ver_mine00001mine0001",
+                    observed_at=WHEN,
+                    recorded_at=WHEN,
+                    entity_id=None,
+                ),
+            )
+        assert "rebound" not in str(refusal.value), (
+            "the collision was judged against a row in another Principal's partition"
+        )
+
+        # The foreign row is untouched and still theirs.
+        theirs = [held for held in staged.world.entity_observations if held.observation_id == taken]
+        assert len(theirs) == 1
+        assert theirs[0].principal_id != mine
 
 
 # --- what a browse result may not disclose ---------------------------------

@@ -30,7 +30,8 @@ PRIOR: Final = "e8c1b5a7d204"
 #: is written not to depend on it.
 ALIAS_REVISION: Final = "b7f4d1a92c36"
 CAPABILITY_REVISION: Final = "c1a7e4b93d58"
-HEAD_REVISION: Final = "d2b8f5c04e71"
+GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
+HEAD_REVISION: Final = "e4d7b2f9a316"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_c3e9a7f1b204_add_goodnotes_exact_render_digest.py"
 )
@@ -97,7 +98,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 62
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 63
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

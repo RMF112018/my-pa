@@ -2178,6 +2178,10 @@ class GetGoodNotesContent:
 class SearchEntities:
     """`entities.search`: one bounded page of entities whose name matches a query.
 
+    `page_size` and `after` bound and continue the page. This was the last read
+    on the plane without a continuation cursor -- the browse surface a person
+    actually scrolls could be truncated and not paged.
+
     A case-insensitive substring match over the canonical and display names of
     the acting Principal's own entities. This is the *browse* surface, and it is
     deliberately not the resolution surface: it answers "who is like this", and
@@ -2190,11 +2194,18 @@ class SearchEntities:
     query: str = field(repr=False)
     entity_type: str | None = None
     page_size: int | None = None
+    after: str | None = None
 
     def __post_init__(self) -> None:
         if not self.query.strip():
             raise InvalidRequestError(SafeDetail.QUERY)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            # Validated as an entity identifier for the reason
+            # `GetEntityRelationships.after` is: the repository looks the cursor
+            # up to find its place in the sort order, and an arbitrary string
+            # would silently locate nowhere and quietly restart the walk.
+            _identifier(self.after, IdKind.ENTITY, SafeDetail.CURSOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2258,6 +2269,36 @@ class GetEntityContext:
 
     def __post_init__(self) -> None:
         _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListUnresolvedMentions:
+    """`entities.unresolved_mentions`: references nothing has placed yet.
+
+    The queue is a first-class state rather than a gap in the data
+    (`RI-AC-006`): these are the mentions the system knows it has not resolved,
+    and being able to list them is what makes "unresolved" something a person
+    can look at instead of an absence they have to infer.
+
+    **Read-only, and the queue cannot be worked from here.** Deciding what an
+    unresolved mention refers to is a governed write, and this plane publishes no
+    write capability at all (`D-RI-21`). A surface built on this must show the
+    queue and must not offer to resolve it.
+
+    Bounded and continuable like every other listing here. Unbounded is
+    especially wrong for this one: observations are the collection that grows
+    with every source record that ever mentioned anyone.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_UNRESOLVED_MENTIONS
+
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_OBSERVATION, SafeDetail.CURSOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2437,6 +2478,7 @@ type Command = (
     | ResolveEntity
     | GetEntityContext
     | GetEntityRelationships
+    | ListUnresolvedMentions
 )
 
 

@@ -7,12 +7,30 @@ scope by the operator's 2026-08-01 reprioritization (`AGENTS.md` sections 1 and
 **Specification.** [`docs/specs/relationship-intelligence-v0.2.md`](../specs/relationship-intelligence-v0.2.md)
 remains this plan's requirements source.
 [`docs/specs/relationship-intelligence-v0.3.md`](../specs/relationship-intelligence-v0.3.md)
-is a **proposed successor**, mirrored under governing plan
-`PLAN-MYPA-RELATIONSHIP-INTELLIGENCE-v0.3-20260817-001`, and it is not yet
-controlling: its own front matter reads
-`status: PROPOSED_SUCCESSOR_READY_FOR_OPERATOR_REVIEW` and
-`implementation_authority: false`, so the operator decision that would supersede
-v0.2 has not been recorded. Neither document carries implementation authority;
+is **DEMOTED as of 2026-08-20 and governs nothing.**
+
+**The operator's decision, recorded.** Asked what v0.3 was, the operator answered
+that they do not know where it came from, and directed that it be demoted. That
+settles a question three review rounds had circled: the document has no publisher
+receipt (unlike v0.2, which was fetched by `rclone` and hashed against one), its
+`governing_plan` and `governing_audit` identifiers appear nowhere in this
+repository, and an agent wrote it into the tree and rewrote this plan to cite it
+— outside any instruction the operator or the session had given. Its own front
+matter already read `status: PROPOSED_SUCCESSOR_READY_FOR_OPERATOR_REVIEW` and
+`implementation_authority: false`, so no operator decision to supersede v0.2 had
+ever been recorded; none is coming.
+
+**What that changes here.** Nothing below is scored against v0.3. Section 3 is
+this campaign's ledger and is scored against v0.2. Where a work-package number
+in section 0.1 quotes a v0.3 requirement, it quotes a document that governs
+nothing and is retained only so the reader can see what was compared.
+
+**What it does not change.** The program-scale fixture and
+`tests/database/test_program_scale_acceptance.py` stay. They were built to
+requirements v0.3 stated, and they earn their place on evidence rather than on
+authority: they prove the resolver holds at 748 entities against real SQL, where
+the hand-labelled corpus proves it at 23 against an in-memory double. A test is
+worth what it demonstrates, not what commissioned it. Neither document carries implementation authority;
 the authorization for the work recorded below is the operator's 2026-08-01 scope
 reprioritization in `AGENTS.md`, and nothing else.
 
@@ -610,14 +628,15 @@ Every figure below was produced by running the command named, on this branch.
 
 | Claim | Evidence |
 |---|---|
-| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **8017 passed, 0 failed, 956 deselected** |
+| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **8052 passed, 0 failed**. Architecture tier **3570 passed** |
 | Lint and format | `ruff check .` and `ruff format --check .` — clean over 921 files |
 | Types | `mypy` (configured targets: `src`, `migrations`, `apps`, `ops`) — clean over 337 files |
-| Full database tier green | `pytest -m "database or recovery or e2e"` against a live PostgreSQL 17 — **946 passed, 0 failed**. Measured in four disjoint chunks — `tests/database` (208), `tests/schema` in two halves (168 + 170), and the remainder (400) — because the single-command run is killed in this environment, twice at 84% and 53% and once more at 63%, and a partial run is not evidence. The chunks partition the same marker selection and the two schema halves sum to the 338 the whole directory reported when it did complete. Stated this way rather than as one number, because it was not one command. The four schema-suite failures adversarial review surfaced (accumulation sets in the audit, enrollment, capture and entity migration tests, outgrown by this plane's eight tables and five capabilities) are fixed, not deselected |
+| Full database tier green | `pytest -m "database or recovery or e2e"` against a live PostgreSQL 17 — **1,926 passed, 0 failed**. Measured in four disjoint chunks — `tests/database` (210), `tests/schema` in two halves (168 + 216), and the remainder (1,332) — because the single-command run is killed in this environment, twice at 84% and 53% and once more at 63%, and a partial run is not evidence. The chunks partition the same marker selection and the two schema halves sum to 384 across the directory's 43 files. Stated this way rather than as one number, because it was not one command. The four schema-suite failures adversarial review surfaced (accumulation sets in the audit, enrollment, capture and entity migration tests, outgrown by this plane's eight tables and five capabilities) are fixed, not deselected. **A fifth, of exactly the same kind, was surfaced 2026-08-20 by running the tier rather than by review:** `entities.unresolved_mentions` had its forward `ALTER` and head admitted it, but `CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION` — the frozen literal naming what the chain has added since the capture revision — did not list it, so the one test that can catch a capability added without an `ALTER` reddened on a capability that had one. Fixed by extending the literal. The recurrence is the point: this accumulation set is the fifth instance of a pattern this plane keeps hitting, and it is caught only by execution |
 | Claimed suite sizes are checked | `tests/architecture/test_claimed_test_counts_match_collection.py` parses every `` `tests/….py` — N tests `` claim in this table and compares it against `--collect-only`. Added because both figures above were wrong at the head that wrote them: one cell was rewritten as a dated correction to 19 by the same commit that took the file to 25, and printed the command that disproves it. The spelled-count sweep reads words and is blind to digits, so the evidence table was the one place bound to nothing |
 | Evaluation tier | `pytest -m evaluation` — 2 passed. Selected by no CI job by design; the frozen record is what CI checks |
-| Migrations apply and reverse | `tests/schema/test_entity_schema_migration.py` — 54 tests: empty-to-head, head-to-empty, and declaration-to-server constraint, column and partition parity across **all eight** plane tables, against a disposable PostgreSQL 17 — `NEW_TABLES`'s five (the four `9def3c2e63bb` created plus `entity_aliases`, added on `b7f4d1a92c36`) and `GOVERNANCE_TABLES`'s three, on `d2b8f5c04e71`. Corrected 2026-08-19: this cell said the parity groups covered "this revision's four" and then three more, which totals seven and silently dropped the alias table; the same off-by-one named a test in that file `..._the_four_tables_...` while it compared five, and both are fixed. Derived from the sets themselves, not counted by hand: `len(NEW_TABLES)` is 5, `len(GOVERNANCE_TABLES)` is 3, `len(PLANE_TABLES)` is 8 |
-| Partition holds at the server | `tests/database/test_entity_repository.py` — 47 tests: cross-Principal isolation on every read and every write, including the joined resolution lookups and the redirect refusals (cycle, chain in **both** orders, absent survivor, cross-partition). Six were added after the independent review: the second-side partition predicate on each joined lookup, isolated by a child row whose partition disagrees with its parent's — the case the previous test could not reach, so both predicates were deletable with the suite green — plus `record_alias`'s write refusal, the `aliases` enumeration, `record_relationship`'s scope check, and the reverse-order chain |
+| The frontend package is aligned with this plane | The production frontend package's contract-map set reserved a named artifact for this workstream — `FRONTEND-FEATURE-CONTRACT-MAP-INDEX` recorded People / Relationship / Entity Intelligence as `EXCLUDED — OWNED BY CONCURRENT RELATIONSHIP WORKSTREAM` and that no `FEATURE-CONTRACT-MAP-RELATIONSHIPS.md` existed, and all fifteen sibling maps deferred person semantics to it. That artifact was written on 2026-08-20 and published to Drive `17_FhWTDO35-9o-NHLsaNtJyGtqAFQH57/FEATURE-CONTRACT-MAPS`, with the index, the gap register (`FBCG-015`, `FBCG-016`, `FBCG-017`), the acceptance traceability (`PFE-AC-071..076`, previously six `EXCLUDED` rows) and the readiness classification updated to match, and the change recorded in that folder's own source manifest. **The numbered package artifacts 00–11 were not touched, so every `source_bytes` hash in `11_PACKAGE_PUBLICATION_MANIFEST` remains valid.** Both directions were carried: `entities.search` gained pagination, `entities.unresolved_mentions` was added for the People landing, `is_current` was added so no surface re-derives currency, and an unreadable cursor now refuses rather than answering an empty page. Readback verified against Drive after publication |
+| Migrations apply and reverse | `tests/schema/test_entity_schema_migration.py` — 54 tests: empty-to-head, head-to-empty, and declaration-to-server constraint, column and partition parity across **all eight** plane tables, against a disposable PostgreSQL 17 — `NEW_TABLES`'s five (the four `9def3c2e63bb` created plus `entity_aliases`, added on `b7f4d1a92c36`) and `GOVERNANCE_TABLES`'s three, on `e4d7b2f9a316`. Corrected 2026-08-19: this cell said the parity groups covered "this revision's four" and then three more, which totals seven and silently dropped the alias table; the same off-by-one named a test in that file `..._the_four_tables_...` while it compared five, and both are fixed. Derived from the sets themselves, not counted by hand: `len(NEW_TABLES)` is 5, `len(GOVERNANCE_TABLES)` is 3, `len(PLANE_TABLES)` is 8 |
+| Partition holds at the server | `tests/database/test_entity_repository.py` — 49 tests: cross-Principal isolation on every read and every write, including the joined resolution lookups and the redirect refusals (cycle, chain in **both** orders, absent survivor, cross-partition). Six were added after the independent review: the second-side partition predicate on each joined lookup, isolated by a child row whose partition disagrees with its parent's — the case the previous test could not reach, so both predicates were deletable with the suite green — plus `record_alias`'s write refusal, the `aliases` enumeration, `record_relationship`'s scope check, and the reverse-order chain |
 | Governance holds at the server | `tests/database/test_entity_governance.py` — 25 tests: a proposal cannot be accepted without an actor in either direction; a decided proposal cannot be decided again (asserted at the repository, below the service's own check); a merge record cannot cite another Principal's proposal |
 | The context card is honest about its own bounds | `tests/unit/test_entity_context.py` — 9 tests: coverage counts past the page the card displays, discloses when the read ceiling bit, holds at the off-by-one, never counts another Principal's observation, and asks the repository for a bounded read. `tests/database/test_entity_governance.py` captures the SQL actually issued and asserts a `LIMIT` clause reaches the server. It previously counted only the rows returned, which is equally true of a slice of a full fetch — so the guard on the one property the cap exists for was inert until the independent review mutated it. Before this the module had no direct test at all |
 | The plane refuses when it is off | `tests/contract/test_entity_capabilities.py` — every one of the five, parameterized, answers `unsupported` on a build that never enabled the relationship plane. Parameterized deliberately: the floor was missing from all five, so a test covering one would have gone green over four open holes. `tests/contract/test_http_transport.py` composes the plane explicitly, having previously asserted `200` for capabilities the same process reported `not_implemented` |
@@ -746,7 +765,7 @@ Round 1's lenses, in full:
   evidence a reference itself matched, plus edge-state filtering and the two
   missing disclosures.
 * **The off-switch withheld publication and not execution.**
-  `available_capabilities` subtracts the five `entities.` names, and its two
+  `available_capabilities` subtracts the six `entities.` names, and its two
   readers are `capabilities.get` and the MCP tool list. The HTTP transport is
   neither: `/v1/{capability}` routes by path segment and dispatch goes straight
   to `_HANDLERS`, so every one of the five answered with real entity rows on a
@@ -789,7 +808,7 @@ repository walks 252 arrangements, and stating it as though it did would be the
 false-citation defect this campaign has now committed three times.
 
 **And a stale-count guard that could not see emphasis.** Two runbooks read
-`**forty-eight** capabilities` against a set of fifty-three, and
+`**forty-eight** capabilities` against a set of fifty-four, and
 `test_spelled_counts_match_the_sets_they_name.py` found no claim there at all,
 because its pattern allowed only whitespace or a hyphen between the number and
 the noun. Those two counts were corrected and the pattern now reads across

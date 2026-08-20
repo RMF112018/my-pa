@@ -22,6 +22,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityRelationships,
+    ListUnresolvedMentions,
     ResolveEntity,
     SearchEntities,
 )
@@ -501,5 +502,126 @@ def test_a_disabled_plane_refuses_every_capability_rather_than_answering(
     fails loudly with a payload, instead of passing as an empty answer.
     """
     body = _disabled(staged, capability, command)
+    assert body["result"] is None
+    assert body["error"]["code"] == ErrorCode.UNSUPPORTED.value  # type: ignore[index]
+
+
+# ---- the card labels currency so no surface re-derives it -------------------
+
+
+def test_the_card_labels_each_assignment_current_or_historical(staged: Scene) -> None:
+    """`PFE-AC-072` asks a surface to separate current from historical assignments.
+
+    The raw columns were already on the wire, so a frontend could have derived
+    it — and that is the failure this test exists to prevent. Currency on this
+    plane is one rule, and it is the rule `entities.resolve` applies when
+    deciding whether an assignment may corroborate an identity. A People detail
+    screen that computed its own would be a second business logic plane
+    (`RI-I-012`), diverging from the resolver at exactly the boundaries this
+    campaign has already got wrong twice: a role that has not begun, and a
+    contract with a recorded end date still running.
+    """
+    scene = staged
+    principal_id = scene.principal.principal_id
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        unit_of_work.entities.record_assignment(
+            principal_id,
+            Assignment(
+                assignment_id="asn_ended0003ended0003",
+                entity_id=ALICE,
+                assignment_type=AssignmentType.EMPLOYMENT,
+                principal_id=principal_id,
+                scope_entity_id=ACME,
+                effective_from=datetime(2020, 1, 1, tzinfo=UTC),
+                effective_to=datetime(2021, 1, 1, tzinfo=UTC),
+            ),
+        )
+        unit_of_work.entities.record_assignment(
+            principal_id,
+            Assignment(
+                assignment_id="asn_future0004future04",
+                entity_id=ALICE,
+                assignment_type=AssignmentType.EMPLOYMENT,
+                principal_id=principal_id,
+                scope_entity_id=ACME,
+                effective_from=datetime(2030, 1, 1, tzinfo=UTC),
+            ),
+        )
+    body = _payload(scene, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE))
+    labelled = {
+        str(row["assignment_id"]): row["is_current"]  # type: ignore[index]
+        for row in body["context_card"]["assignments"]  # type: ignore[index,union-attr]
+    }
+    # Staged live by the fixture, and open-ended.
+    assert labelled["asn_alice0001alice0001"] is True
+    # Over: its end date is in the past.
+    assert labelled["asn_ended0003ended0003"] is False
+    # Not begun: no end date at all, which the plane refuses to read as "current".
+    assert labelled["asn_future0004future04"] is False
+
+
+# ---- the unresolved-mention queue ------------------------------------------
+
+
+def _stage_unresolved(scene: Scene) -> None:
+    """One observation nothing has linked — the shape the queue exists to list.
+
+    The suite's own fixture links every observation it records, which is right
+    for a card and wrong for this: a queue asserted against no rows is a queue
+    asserted against nothing.
+    """
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        unit_of_work.entities.record_observation(
+            scene.principal.principal_id,
+            EntityObservation(
+                observation_id="eobs_unplaced01unplaced",
+                principal_id=scene.principal.principal_id,
+                kind=ObservationKind.MESSAGE_PARTICIPANT,
+                observed_value="A. Chen <a.chen@northwind.test>",
+                normalized_value=normalize_name("A Chen"),
+                source_id=scene.source.source_id,
+                source_object_id=scene.markdown.source_object_id,
+                source_version_id="ver_unplaced01unplaced",
+                observed_at=WHEN,
+                recorded_at=WHEN,
+            ),
+        )
+
+
+def test_the_queue_lists_mentions_nothing_has_placed(staged: Scene) -> None:
+    """`RI-AC-006`: unresolved is a state a person can look at, not an absence.
+
+    The fixture stages one observation linked to nobody. It comes back with the
+    form that would match — which is what makes the queue actionable — and
+    without the raw text the source carried.
+    """
+    scene = staged
+    _stage_unresolved(scene)
+    body = _payload(scene, Capability.ENTITIES_UNRESOLVED_MENTIONS, ListUnresolvedMentions())
+    mentions = body["mentions"]
+    assert mentions, "an unlinked observation was staged, so this must not be empty"
+    first = mentions[0]  # type: ignore[index]
+    assert first["normalized_value"]  # type: ignore[index]
+    assert "observed_value" not in first  # type: ignore[operator]
+
+
+def test_the_queue_omits_mentions_that_have_been_placed(staged: Scene) -> None:
+    """Linked observations are not unresolved, and a queue that showed them would lie."""
+    scene = staged
+    principal_id = scene.principal.principal_id
+    _stage_unresolved(scene)
+    before = _payload(scene, Capability.ENTITIES_UNRESOLVED_MENTIONS, ListUnresolvedMentions())
+    assert before["mentions"], "nothing staged, so the emptiness below would prove nothing"
+    listed = {str(row["observation_id"]) for row in before["mentions"]}  # type: ignore[index,union-attr]
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        for observation_id in listed:
+            unit_of_work.entities.link_observation(principal_id, observation_id, ALICE)
+    after = _payload(scene, Capability.ENTITIES_UNRESOLVED_MENTIONS, ListUnresolvedMentions())
+    assert after["mentions"] == []
+
+
+def test_the_queue_is_withheld_when_the_plane_is_off(staged: Scene) -> None:
+    """The queue is gated exactly as the rest of the family is."""
+    body = _disabled(staged, Capability.ENTITIES_UNRESOLVED_MENTIONS, ListUnresolvedMentions())
     assert body["result"] is None
     assert body["error"]["code"] == ErrorCode.UNSUPPORTED.value  # type: ignore[index]

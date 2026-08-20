@@ -936,6 +936,67 @@ def test_a_redirect_chain_is_refused(migrated_engine: Engine) -> None:
             repository.redirect_entity(PRINCIPAL_A, ACME, BOB)
 
 
+def test_walking_the_search_pages_returns_each_entity_exactly_once(
+    migrated_engine: Engine,
+) -> None:
+    """The browse surface pages, and the walk is complete and duplicate-free.
+
+    `entities.search` was the last read on this plane without a continuation:
+    every other listing could be paged and the one a person actually scrolls
+    could only be truncated. Its sort key is `(canonical_name, entity_id)`
+    rather than a single unique column, so the cursor names the last entity and
+    the repository looks up its place in that order — which is the part a test
+    against the in-memory double cannot check, because the double holds its own
+    copy of the comparison.
+    """
+    names = [f"Walker {index:02d} Synthetic" for index in range(10)]
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        for index, name in enumerate(names):
+            repository.create(
+                PRINCIPAL_A, an_entity(f"ent_walk{index:04d}walk{index:04d}", PRINCIPAL_A, name)
+            )
+        # A second Principal's rows, identically named, so a walk that lost the
+        # partition would show up as duplicates rather than as nothing.
+        for index, name in enumerate(names):
+            repository.create(
+                PRINCIPAL_B, an_entity(f"ent_othr{index:04d}othr{index:04d}", PRINCIPAL_B, name)
+            )
+
+    walked: list[str] = []
+    cursor: str | None = None
+    with migrated_engine.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        for _ in range(12):  # bounded, so a non-advancing cursor fails rather than hangs
+            page = repository.search(PRINCIPAL_A, "Walker", limit=3, after_entity_id=cursor)
+            if not page:
+                break
+            walked.extend(summary.entity_id for summary in page)
+            cursor = page[-1].entity_id
+
+    expected = [f"ent_walk{index:04d}walk{index:04d}" for index in range(10)]
+    assert walked == expected, walked
+    assert len(walked) == len(set(walked))
+
+
+def test_a_search_cursor_naming_another_principals_entity_is_refused(
+    two_principals: Engine,
+) -> None:
+    """An unreadable cursor is refused, not answered with an empty page.
+
+    The lookup is `_mine`-scoped, so a cursor naming a foreign entity locates no
+    position. Left as a subquery that evaluated to NULL, the row comparison went
+    unknown and the read returned nothing — indistinguishable, to the caller,
+    from having paged to the end. A wrong answer shaped like a complete one is
+    the failure this plane refuses everywhere else, so it refuses here too.
+    """
+    with (
+        pytest.raises(UnknownScopeError, match="search cursor"),
+        two_principals.connect() as connection,
+    ):
+        SqlEntityRepository(connection).search(PRINCIPAL_A, "synthetic", after_entity_id=BOB)
+
+
 def test_an_already_merged_entity_is_not_merged_again(migrated_engine: Engine) -> None:
     """The fourth arrangement, and the third one a reviewer found rather than this code.
 

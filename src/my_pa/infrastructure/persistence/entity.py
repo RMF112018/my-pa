@@ -74,7 +74,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import Row, Select, Table, insert, or_, select, true, update
+from sqlalchemy import Row, Select, Table, insert, or_, select, true, tuple_, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 from sqlalchemy.sql.elements import ColumnElement
@@ -286,11 +286,38 @@ class SqlEntityRepository(EntitiesRepository):
         query: str,
         entity_type: EntityType | None = None,
         limit: int = 50,
+        *,
+        after_entity_id: str | None = None,
     ) -> list[EntitySummary]:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
-        if limit < 1:
-            limit = 50
+        _require_row_limit(limit)
         pattern = _contains(query)
+        # **The cursor is an entity identifier, and the keyset is the sort key.**
+        # This read orders by `(canonical_name, entity_id)` because a browse
+        # surface sorts by name, so a cursor naming only the identifier would not
+        # locate a position in that order. Rather than hand the caller an opaque
+        # encoded pair, the cursor stays the last row's `entity_id` — validated,
+        # partition-scoped, and already in the payload — and its sort position is
+        # looked up here. A caller cannot forge a position it could not read.
+        after = None
+        if after_entity_id is not None:
+            validate_identifier(after_entity_id, IdKind.ENTITY)
+            located = self._connection.execute(
+                select(entities.c.canonical_name, entities.c.entity_id).where(
+                    _mine(entities, principal_id),
+                    entities.c.entity_id == after_entity_id,
+                )
+            ).first()
+            # **Refused, not silently restarted and not silently emptied.** A
+            # cursor naming an entity this Principal cannot read is not a
+            # position in their ordering. Left as a subquery it evaluated to
+            # NULL, the row comparison went unknown, and the read answered with
+            # an empty page — which a caller cannot tell from having reached the
+            # end. Reporting completeness on a cursor that was never valid is
+            # the shape of wrong answer this plane refuses everywhere else.
+            if located is None:
+                raise UnknownScopeError("a search cursor names an entity in this scope")
+            after = (located.canonical_name, located.entity_id)
         rows = self._connection.execute(
             select(
                 entities.c.entity_id,
@@ -306,6 +333,11 @@ class SqlEntityRepository(EntitiesRepository):
                     entities.c.display_name.ilike(pattern, escape="\\"),
                 ),
                 _optional(entities.c.entity_type == entity_type.value if entity_type else None),
+                _optional(
+                    tuple_(entities.c.canonical_name, entities.c.entity_id) > after
+                    if after is not None
+                    else None
+                ),
             )
             .order_by(entities.c.canonical_name, entities.c.entity_id)
             .limit(limit)
@@ -683,17 +715,28 @@ class SqlEntityRepository(EntitiesRepository):
         *,
         unresolved_only: bool = False,
         limit: int | None = None,
+        after_observation_id: str | None = None,
     ) -> list[EntityObservation]:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if entity_id is not None:
             validate_identifier(entity_id, IdKind.ENTITY)
         _require_row_limit(limit)
+        if after_observation_id is not None:
+            validate_identifier(after_observation_id, IdKind.ENTITY_OBSERVATION)
         statement = (
             select(entity_observations)
             .where(
                 _mine(entity_observations, principal_id),
                 _optional(entity_observations.c.entity_id == entity_id if entity_id else None),
                 _optional(entity_observations.c.entity_id.is_(None) if unresolved_only else None),
+                # Keyset on the column the order is taken on, which is the
+                # primary key — so the cursor is unique, nothing shifts between
+                # pages, and a caller walking the queue sees each mention once.
+                _optional(
+                    entity_observations.c.observation_id > after_observation_id
+                    if after_observation_id is not None
+                    else None
+                ),
             )
             .order_by(entity_observations.c.observation_id)
         )

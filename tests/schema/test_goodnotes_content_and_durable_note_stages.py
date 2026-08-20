@@ -31,7 +31,8 @@ GROUNDING_REVISION: Final = "b7f2c9e4a618"
 #: is written not to depend on it.
 ALIAS_REVISION: Final = "b7f4d1a92c36"
 CAPABILITY_REVISION: Final = "c1a7e4b93d58"
-HEAD_REVISION: Final = "d2b8f5c04e71"
+GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
+HEAD_REVISION: Final = "e4d7b2f9a316"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_a4d9c2e7b815_admit_goodnotes_content_and_durable_note_stages.py"
 )
@@ -61,6 +62,25 @@ def _frozen_names(path: Path, constant: str) -> list[str]:
 
 def _frozen_literals(constant: str) -> frozenset[str]:
     return frozenset(_frozen_names(MIGRATION, constant))
+
+
+def _latest_declaring(constant: str) -> Path:
+    """The most recent revision in the chain that freezes `constant`.
+
+    Capability vocabulary and purpose vocabulary are frozen independently: a
+    revision may widen one and leave the other alone, and `e4d7b2f9a316` does
+    exactly that. Asking a single "latest admitting revision" for both is asking
+    one revision to answer for a set it never touched.
+    """
+    script = ScriptDirectory.from_config(_config())
+    for entry in script.walk_revisions():
+        path = Path(entry.path)
+        if f"{constant}: Final = (" in path.read_text(encoding="utf-8"):
+            return path
+    raise AssertionError(
+        f"no revision in the chain declares {constant}; the audited closed set "
+        "is then installed by nothing and this comparison is vacuous"
+    )
 
 
 def _latest_vocabulary_migration() -> Path:
@@ -115,8 +135,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(ENTITY_REVISION).down_revision == ATTEMPT_REVISION
     assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
     assert script.get_revision(CAPABILITY_REVISION).down_revision == ALIAS_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == CAPABILITY_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 62
+    assert script.get_revision(GOVERNANCE_REVISION).down_revision == CAPABILITY_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == GOVERNANCE_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 63
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -196,10 +217,17 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
         f"the last admitting revision {admitting.name} freezes a capability vocabulary "
         f"that is not the domain; the difference is {sorted(admitted ^ declared)}"
     )
-    purposes = frozenset(_frozen_names(admitting, "_PURPOSES_AT_THIS_REVISION"))
+    # Asked of the last revision that freezes *purposes*, which is not always the
+    # last that freezes capabilities. `e4d7b2f9a316` admits one capability and
+    # leaves the purpose set untouched, so it declares no purpose vocabulary —
+    # and demanding one of it would force every capability-only revision to
+    # restate a closed set it never altered, which is how a frozen literal stops
+    # meaning "what this revision installed".
+    purposes_at = _latest_declaring("_PURPOSES_AT_THIS_REVISION")
+    purposes = frozenset(_frozen_names(purposes_at, "_PURPOSES_AT_THIS_REVISION"))
     assert purposes == {member.value for member in Purpose}, (
-        f"the last admitting revision {admitting.name} freezes a purpose vocabulary that "
-        f"is not the domain; the difference is "
+        f"the last purpose-freezing revision {purposes_at.name} freezes a purpose "
+        f"vocabulary that is not the domain; the difference is "
         f"{sorted(purposes ^ {member.value for member in Purpose})}"
     )
 
@@ -208,8 +236,15 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     before = _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION")
     assert this_revision - before == CAPABILITIES_ADDED
     assert this_purposes - _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION") == PURPOSES_ADDED
-    for path in (MIGRATION, admitting):
+    for path in (MIGRATION, admitting, _latest_declaring("_PURPOSES_AT_THIS_REVISION")):
         for constant in _FROZEN_CONSTANTS:
+            if f"{constant}: Final = (" not in path.read_text(encoding="utf-8"):
+                # A revision may widen one vocabulary and not the other, and
+                # since `e4d7b2f9a316` one does: it admits a capability and
+                # leaves the purposes alone, so it declares no purpose constant
+                # at all. Demanding both of every admitting revision would force
+                # a revision to restate a set it did not touch.
+                continue
             names = _frozen_names(path, constant)
             assert names == sorted(names), f"{path.name}'s {constant} is not in sorted order"
 

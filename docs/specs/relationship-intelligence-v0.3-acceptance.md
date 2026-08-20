@@ -1,5 +1,23 @@
 # Relationship Intelligence v0.3 — acceptance matrix
 
+
+> **DEMOTED 2026-08-20 — this is not a compliance ledger.**
+>
+> It scores `relationship-intelligence-v0.3.md`, which governs nothing: the
+> operator has stated they do not know where that document came from, it carries
+> no publisher receipt, and an agent wrote it into the repository outside any
+> instruction. A disposition against an ungoverning document is a record of what
+> was checked, not a statement of what the campaign owes.
+>
+> The campaign's own acceptance ledger is section 3 of
+> [`docs/plans/relationship-intelligence-implementation-plan.md`](../plans/relationship-intelligence-implementation-plan.md),
+> scored against `relationship-intelligence-v0.2.md`. Where the two disagree,
+> that one is the ledger.
+>
+> Retained because the work it records is real — the program-scale fixture and
+> its acceptance suite exist, run, and are mutation-checked — and deleting the
+> scoring would lose the evidence along with the authority it never had.
+
 Disposition of `RI-AC-001` through `RI-AC-040` from
 `FEATURE-MYPA-RELATIONSHIP-INTELLIGENCE-001 v0.3`, mirrored at
 [`relationship-intelligence-v0.3.md`](relationship-intelligence-v0.3.md).

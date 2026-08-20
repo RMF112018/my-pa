@@ -392,6 +392,10 @@ class Capability(StrEnum):
     ENTITIES_RESOLVE = "entities.resolve"
     ENTITIES_CONTEXT = "entities.context"
     ENTITIES_RELATIONSHIPS = "entities.relationships"
+    #: The queue of references nothing has placed. Named for exactly what it
+    #: returns: `entities.mentions` would read as every mention, and this answers
+    #: only the unresolved ones, which is the whole of its use.
+    ENTITIES_UNRESOLVED_MENTIONS = "entities.unresolved_mentions"
 
 
 class NativeSourceCapability(StrEnum):
@@ -630,6 +634,7 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.GOODNOTES_PROPOSE: frozenset({Purpose.GOODNOTES_PROPOSAL}),
         Capability.GOODNOTES_CONTENT: frozenset({Purpose.GOODNOTES_CONTENT}),
         Capability.ENTITIES_SEARCH: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_GET: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_RESOLVE: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_CONTEXT: frozenset({Purpose.ENTITY_READ}),

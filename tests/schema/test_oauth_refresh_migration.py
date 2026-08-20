@@ -54,7 +54,8 @@ ENTITY_REVISION = "9def3c2e63bb"
 #: is written not to depend on it.
 ALIAS_REVISION = "b7f4d1a92c36"
 CAPABILITY_REVISION = "c1a7e4b93d58"
-HEAD_REVISION = "d2b8f5c04e71"
+GOVERNANCE_REVISION = "d2b8f5c04e71"
+HEAD_REVISION = "e4d7b2f9a316"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -145,8 +146,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(ENTITY_REVISION).down_revision == ATTEMPT_REVISION
     assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
     assert script.get_revision(CAPABILITY_REVISION).down_revision == ALIAS_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == CAPABILITY_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 62
+    assert script.get_revision(GOVERNANCE_REVISION).down_revision == CAPABILITY_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == GOVERNANCE_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 63
 
 
 @pytest.mark.database

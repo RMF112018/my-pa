@@ -31,7 +31,8 @@ ENTITY_REVISION: Final = "9def3c2e63bb"
 #: is written not to depend on it.
 ALIAS_REVISION: Final = "b7f4d1a92c36"
 CAPABILITY_REVISION: Final = "c1a7e4b93d58"
-HEAD_REVISION: Final = "d2b8f5c04e71"
+GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
+HEAD_REVISION: Final = "e4d7b2f9a316"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_d9c4e1a7b628_widen_goodnotes_entity_kind_meeting_agenda.py"
 )
@@ -102,8 +103,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(ENTITY_REVISION).down_revision == ATTEMPT_REVISION
     assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
     assert script.get_revision(CAPABILITY_REVISION).down_revision == ALIAS_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == CAPABILITY_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 62
+    assert script.get_revision(GOVERNANCE_REVISION).down_revision == CAPABILITY_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == GOVERNANCE_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 63
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

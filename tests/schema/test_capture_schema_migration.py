@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with fifty-three capabilities and twenty-three
+emits what it emitted on the day it merged, with fifty-four capabilities and twenty-three
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -243,6 +243,10 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "entities.resolve",
         "entities.context",
         "entities.relationships",
+        # The People landing this plane serves needs the queue of references
+        # nothing has placed. `e4d7b2f9a316` is the forward `ALTER` that admits
+        # it, and this line is why a further one cannot arrive without it.
+        "entities.unresolved_mentions",
     }
 )
 

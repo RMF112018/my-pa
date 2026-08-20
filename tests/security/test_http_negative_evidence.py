@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes fifty-three capability names and none of them mutates a source,
+  ends: the transport routes fifty-four capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -424,6 +424,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         },
         Capability.ENTITIES_CONTEXT: {"entity_id": person.entity_id},
         Capability.ENTITIES_RELATIONSHIPS: {"entity_id": person.entity_id, "direction": "any"},
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
     }
 
 
@@ -605,6 +606,7 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_RESOLVE,
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
     }
 ]
 

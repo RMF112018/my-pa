@@ -84,6 +84,7 @@ from my_pa.application.commands import (
     ListSituations,
     ListSources,
     ListTasks,
+    ListUnresolvedMentions,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -323,6 +324,7 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(
             entity_id=issue_identifier(IdKind.ENTITY)
         ),
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
     }
 
 
@@ -550,6 +552,7 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_RESOLVE,
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
     }
 ]
 
@@ -652,6 +655,7 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_RESOLVE,
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

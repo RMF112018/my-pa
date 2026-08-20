@@ -63,17 +63,17 @@ closes.**
   quietly.
 - **`all <number>` closed by an em-dash is read now.** `ALL_OF` used to require a
   comma or a full stop after the number, so `publishing all thirty — does read
-  one` escaped it: a genuine stale count of a set holding fifty-three, in the
+  one` escaped it: a genuine stale count of a set holding fifty-four, in the
   docstring of the test this module's sibling rule cites as its own evidence.
   The rule was deliberately left open while that word sat outside the allowlist
   of the package that found it, on the grounds that closing it would land either
   half-red or with a real defect excused. Both halves landed together: the
-  docstring now says `all fifty-three`, the dash is admitted, and the corpus
+  docstring now says `all fifty-four`, the dash is admitted, and the corpus
   yields no new claims. Recorded because "left open on purpose" is a note with a
   shelf life, and this one expired one commit after it was written.
 - **The published subset is seen but not derived.** `BARE_EMPHASIS` reads
   `publishes **forty-two**` and compares it against `Capability`, which holds
-  fifty-three, so the two runbook lines stating the default publication count
+  fifty-four, so the two runbook lines stating the default publication count
   are excused below rather than checked. They are *bound* — a reworded or
   renumbered claim reddens `test_every_excused_claim_is_still_there` — but the
   figure itself rests on a reason in an allowlist, not on a derivation. Deriving
@@ -280,7 +280,7 @@ _ORDINAL_UNITS = (
     "forty-eighth",
     "forty-ninth",
     # The fifties, added when WP-RI-05 admitted the five `entities.*` capabilities
-    # and the public set reached fifty-three, so `a fifty-fourth capability` became
+    # and the public set reached fifty-four, so `a fifty-fifth capability` became
     # the ordinal a correct claim would use. This boundary announced itself exactly
     # as the two above did — an `IndexError` in the green-half plant rather than a
     # false pass — which is the property the density of this tuple buys.
@@ -288,7 +288,7 @@ _ORDINAL_UNITS = (
     "fifty-first",
     "fifty-second",
     "fifty-third",
-    "fifty-fourth",
+    "fifty-fifth",
     "fifty-fifth",
     "fifty-sixth",
     "fifty-seventh",
@@ -370,7 +370,7 @@ BORROWED_NOUNS = ("members?", "names?", "strings?", "tools?")
 #: The emphasis half was missing, and it hid two stale counts. Both runbooks
 #: wrote `**forty-eight** capabilities`, and `[\s-]+` does not match the `**`
 #: between them -- so the sweep found no claim there at all and stayed green
-#: while the documents said forty-eight of a set holding fifty-three. A guard
+#: while the documents said forty-eight of a set holding fifty-four. A guard
 #: that reads unformatted prose only is a guard that stops reading exactly where
 #: an author put emphasis, which is where the load-bearing numbers tend to be.
 _GAP = r"[\s\-*_]+"
@@ -494,7 +494,7 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "ninth member",
         "closed against a ninth *source-registration* capability",
         "about what the set is closed against, not how large it is; the size "
-        "claim beside it was stale and was corrected to fifty-three",
+        "claim beside it was stale and was corrected to fifty-four",
     ),
     (
         "docs/architecture/system-context.md",
@@ -646,7 +646,7 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
         "`documents.` and five `entities.` names it withholds — not the size of "
-        "`Capability`, which the same block states correctly as fifty-three",
+        "`Capability`, which the same block states correctly as fifty-four",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
@@ -660,7 +660,7 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "a default process publishes forty-two tools",
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
-        "from `Capability`, which the same bullet states correctly as fifty-three",
+        "from `Capability`, which the same bullet states correctly as fifty-four",
     ),
     # --- the Relationship Intelligence plan, newly swept -----------------------
     #

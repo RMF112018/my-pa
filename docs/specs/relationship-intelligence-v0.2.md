@@ -27,25 +27,22 @@ deployment\_authority: false
 risk\_acceptance\_authority: false  
 \---
 
-> **Successor notice (2026-08-19).** A proposed successor to this document
-> exists: [`relationship-intelligence-v0.3.md`](relationship-intelligence-v0.3.md),
-> which extends this specification to program scale and carries its own
-> `RI-AC-001..040` ledger and `WP-RI-00..13` work-package map.
+> **This is the requirements source (restated 2026-08-20).**
 >
-> **v0.3 is not yet controlling, and this notice does not make it so.** Its own
-> front matter reads `status: PROPOSED_SUCCESSOR_READY_FOR_OPERATOR_REVIEW` and
-> `implementation_authority: false`, so the operator decision that would
-> supersede this document has not been recorded. An earlier draft of this notice
-> declared v0.2 "no longer the controlling specification" — that asserted an
-> acceptance v0.3 itself says has not happened, and is exactly the kind of claim
-> the campaign's own record standard forbids.
+> `relationship-intelligence-v0.3.md` sits beside this file and is **demoted**:
+> the operator has stated they do not know where it came from, it carries no
+> publisher receipt, and it was written into the repository by an agent acting
+> outside instruction. It governs nothing. See the notice at its head.
 >
-> Until that decision exists, this document remains the requirements source
-> cited by the campaign, and v0.3 section 5.1's statement that v0.2 "remains
-> lineage evidence" describes what v0.2 becomes *after* an acceptance, not
-> before one. Neither document carries implementation authority; the
-> authorization is the operator's scope reprioritization recorded in
-> `AGENTS.md`.
+> This document therefore remains what it has been throughout: the requirements
+> source the Relationship Intelligence campaign is built against. Its authority
+> is the operator's 2026-08-01 scope reprioritization recorded in `AGENTS.md`,
+> not this file's own front matter — it carries `implementation_authority:
+> false` and describes itself as a proposal.
+>
+> An earlier version of this notice declared this document superseded. It was
+> not, and the declaration asserted an operator decision that had not been
+> made.
 
 \# Relationship Intelligence
 

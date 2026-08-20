@@ -89,6 +89,7 @@ from my_pa.application.commands import (
     ListSituations,
     ListSources,
     ListTasks,
+    ListUnresolvedMentions,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -613,6 +614,10 @@ def _get_entity_relationships(payload: Mapping[str, Any]) -> Command:
     return GetEntityRelationships(**payload)
 
 
+def _list_unresolved_mentions(payload: Mapping[str, Any]) -> Command:
+    return ListUnresolvedMentions(**payload)
+
+
 def _get_goodnotes_content(payload: Mapping[str, Any]) -> Command:
     if "path" in payload or "principal_id" in payload:
         raise InvalidRequestError(SafeDetail.RUN_ID)
@@ -766,6 +771,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_RESOLVE: _resolve_entity,
         Capability.ENTITIES_CONTEXT: _get_entity_context,
         Capability.ENTITIES_RELATIONSHIPS: _get_entity_relationships,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: _list_unresolved_mentions,
     }
 )
 
@@ -775,7 +781,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the fifty-three names nothing.
+    not one of the fifty-four names nothing.
     """
     try:
         return Capability(capability)

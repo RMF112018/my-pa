@@ -1,4 +1,4 @@
-"""The ports the fifty-three capability use cases call, and nothing else.
+"""The ports the fifty-four capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -335,8 +335,16 @@ class EntitiesRepository(ABC):
         query: str,
         entity_type: EntityType | None = None,
         limit: int = 50,
+        *,
+        after_entity_id: str | None = None,
     ) -> list[EntitySummary]:
         """One bounded page of entities whose canonical or display name matches `query`.
+
+        `after_entity_id` continues a previous page: it names the last entity of
+        that page, and the rows after it in this read's own `(canonical_name,
+        entity_id)` order come back. It was the last read on this plane without a
+        continuation — every other listing could be paged and this one, the
+        browse surface a person actually scrolls, could only be truncated.
 
         A case-insensitive substring match over `canonical_name` and
         `display_name`, scoped by `principal_id` and optionally by
@@ -463,6 +471,7 @@ class EntitiesRepository(ABC):
         *,
         unresolved_only: bool = False,
         limit: int | None = None,
+        after_observation_id: str | None = None,
     ) -> list[EntityObservation]:
         """Observations in this Principal's partition.
 

@@ -2287,6 +2287,8 @@ class _Entities(EntitiesRepository):
         query: str,
         entity_type: EntityType | None = None,
         limit: int = 50,
+        *,
+        after_entity_id: str | None = None,
     ) -> list[EntitySummary]:
         self._world.fail("entities.search")
         for entity in self._world.entities:
@@ -2309,6 +2311,25 @@ class _Entities(EntitiesRepository):
             )
         ]
         matched.sort(key=lambda entity: (entity.canonical_name, entity.entity_id))
+        # Mirrors `SqlEntityRepository.search`'s keyset: the cursor names the
+        # last entity of the previous page, and its position in *this* read's
+        # `(canonical_name, entity_id)` order is what the rows come after. Held
+        # here as well, because a fake that paged differently would let a unit
+        # test assert a walk the server does not perform.
+        if after_entity_id is not None:
+            position = next(
+                (
+                    (entity.canonical_name, entity.entity_id)
+                    for entity in self._world.entities
+                    if entity.principal_id == principal_id and entity.entity_id == after_entity_id
+                ),
+                None,
+            )
+            if position is None:
+                raise UnknownScopeError("a search cursor names an entity in this scope")
+            matched = [
+                entity for entity in matched if (entity.canonical_name, entity.entity_id) > position
+            ]
         return [
             EntitySummary(
                 entity_id=entity.entity_id,
@@ -2520,6 +2541,7 @@ class _Entities(EntitiesRepository):
         *,
         unresolved_only: bool = False,
         limit: int | None = None,
+        after_observation_id: str | None = None,
     ) -> list[EntityObservation]:
         self._world.fail("entities.observations")
         _refuse_empty_limit(limit)
@@ -2533,6 +2555,15 @@ class _Entities(EntitiesRepository):
             ),
             key=lambda observation: observation.observation_id,
         )
+        # Mirrors the SQL keyset: the cursor is the primary key the order is
+        # taken on, so a fake that paged differently would let a unit test
+        # assert a walk the server does not perform.
+        if after_observation_id is not None:
+            found = [
+                observation
+                for observation in found
+                if observation.observation_id > after_observation_id
+            ]
         return found if limit is None else found[:limit]
 
     def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:

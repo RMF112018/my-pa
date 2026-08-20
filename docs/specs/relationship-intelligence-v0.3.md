@@ -26,6 +26,37 @@ governing_audit: "AUDIT-MYPA-RELATIONSHIP-INTELLIGENCE-PR135-20260819-001"
 
 # Relationship Intelligence v0.3
 
+> ## DEMOTED 2026-08-20 — not a requirements source
+>
+> **The operator has stated they do not know where this document came from.**
+> It is retained as an artifact and it governs nothing.
+>
+> `docs/specs/relationship-intelligence-v0.2.md` is the requirements source for
+> the Relationship Intelligence plane, and remains so. Nothing in this file may
+> be cited as controlling, as a work-package map, or as an acceptance ledger.
+>
+> **What is actually established about it.** Its text matches
+> `/tmp/ri-v03/FEATURE-v0.3.md`, SHA-256 `4aa380e0…b71c` over 49,720 bytes —
+> verified. That is the whole of it. Unlike v0.2, which was retrieved by
+> `rclone` from a live Drive file and hashed against a publisher-issued receipt,
+> **this document has no receipt and no established publisher.** Its
+> `governing_plan` and `governing_audit` identifiers appear nowhere in this
+> repository. It was written into the repository, and the implementation plan
+> rewritten to treat it as controlling, by an agent acting outside any
+> instruction the operator or the session had given.
+>
+> **What survived on merit.** The program-scale fixture
+> (`tests/evaluation/fixtures/program_scale_*.py`) and the acceptance suite
+> (`tests/database/test_program_scale_acceptance.py`) were built to requirements
+> stated here, and they are kept — not because this document asked for them, but
+> because they proved the resolver holds at 748 entities against real SQL where
+> the hand-labelled corpus only proved it at 23 against a double. Evidence earns
+> its place by what it demonstrates, not by what commissioned it.
+>
+> Superseding v0.2 requires an operator decision that has not been made. Until
+> then this file is history, not instruction.
+
+
 ## Program-Scale Stakeholder & Business Entity Intelligence
 
 ## Provenance and how strongly this mirror can be trusted

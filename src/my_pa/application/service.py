@@ -153,6 +153,7 @@ from my_pa.application.commands import (
     ListSituations,
     ListSources,
     ListTasks,
+    ListUnresolvedMentions,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -190,7 +191,13 @@ from my_pa.application.disclosure import (
     with_corpus_caveat,
 )
 from my_pa.application.entity_context import EntityContextService
-from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
+from my_pa.application.entity_resolution import (
+    ACTIVE_ASSIGNMENT_STATUS,
+    ACTIVE_RELATIONSHIP_STATE,
+    EntityResolutionService,
+    ResolutionRequest,
+    is_in_force,
+)
 from my_pa.application.errors import (
     AmbiguousRequestError,
     ApplicationError,
@@ -801,7 +808,27 @@ def _identifier_view(identifier: ExternalIdentifier) -> dict[str, object]:
     }
 
 
-def _assignment_view(assignment: Assignment) -> dict[str, object]:
+def _assignment_view(assignment: Assignment, at: datetime | None = None) -> dict[str, object]:
+    """One assignment as the wire sees it, labelled current or historical.
+
+    **`is_current` is computed here rather than left to the reader.** The raw
+    columns are all present, so a caller could derive it — and that is the
+    problem. Currency on this plane is one rule (`is_in_force`, plus the status
+    the assignment plane uses to say a row is over), and it is the rule the
+    resolver applies when deciding whether an assignment may corroborate an
+    identity. A surface that separates "current" from "historical" by
+    re-implementing that rule would be a second business logic plane, which
+    `RI-I-012` forbids, and the two would diverge at exactly the boundaries this
+    campaign has already got wrong twice.
+
+    `None` when the caller supplies no moment: a listing that is not asked
+    "as of when" does not get an answer invented for it.
+    """
+    is_current: bool | None = None
+    if at is not None:
+        is_current = assignment.status == ACTIVE_ASSIGNMENT_STATUS and is_in_force(
+            assignment.effective_from, assignment.effective_to, at
+        )
     return {
         "assignment_id": assignment.assignment_id,
         "assignment_type": assignment.assignment_type.value,
@@ -810,14 +837,29 @@ def _assignment_view(assignment: Assignment) -> dict[str, object]:
         "discipline": assignment.discipline,
         "responsibility_class": assignment.responsibility_class,
         "status": assignment.status,
+        "is_current": is_current,
         "effective_from": _moment_or_none(assignment.effective_from),
         "effective_to": _moment_or_none(assignment.effective_to),
     }
 
 
-def _relationship_view(edge: EntityRelationship) -> dict[str, object]:
+def _relationship_view(edge: EntityRelationship, at: datetime | None = None) -> dict[str, object]:
+    """One edge as the wire sees it, labelled current or historical.
+
+    The same rule as `_assignment_view`, for the same reason, spelled with the
+    edge plane's own liveness column (`state`) instead of the assignment plane's
+    (`status`). The resolver treats an edge whose state says it ended as unable
+    to corroborate; a surface that showed it as a live relationship would
+    disagree with the answer `entities.resolve` gives about the same row.
+    """
+    is_current: bool | None = None
+    if at is not None:
+        is_current = edge.state == ACTIVE_RELATIONSHIP_STATE and is_in_force(
+            edge.effective_from, edge.effective_to, at
+        )
     return {
         "relationship_id": edge.relationship_id,
+        "is_current": is_current,
         "from_entity_id": edge.from_entity_id,
         "relationship_type": edge.relationship_type.value,
         "to_entity_id": edge.to_entity_id,
@@ -882,8 +924,10 @@ def _context_card_view(card: EntityContextCard) -> dict[str, object]:
         "is_complete": card.is_complete,
         "aliases": [_alias_view(alias) for alias in card.aliases],
         "identifiers": [_identifier_view(item) for item in card.identifiers],
-        "assignments": [_assignment_view(item) for item in card.assignments],
-        "relationships": [_relationship_view(edge) for edge in card.relationships],
+        "assignments": [_assignment_view(item, card.assembled_at) for item in card.assignments],
+        "relationships": [
+            _relationship_view(edge, card.assembled_at) for edge in card.relationships
+        ],
         "observations": [_observation_view(item) for item in card.observations],
     }
 
@@ -899,6 +943,25 @@ def _observation_view(observation: EntityObservation) -> dict[str, object]:
     return {
         "observation_id": observation.observation_id,
         "kind": observation.kind.value,
+        "source_id": observation.source_id,
+        "source_object_id": observation.source_object_id,
+        "source_version_id": observation.source_version_id,
+        "observed_at": format_rfc3339(observation.observed_at),
+        "recorded_at": format_rfc3339(observation.recorded_at),
+    }
+
+
+def _unresolved_mention_view(observation: EntityObservation) -> dict[str, object]:
+    """One unresolved mention, with the form that would match and not the raw text.
+
+    See `_entities_unresolved_mentions` for why this differs from
+    `_observation_view`: a queue of things nobody could place is useless without
+    the thing that could not be placed.
+    """
+    return {
+        "observation_id": observation.observation_id,
+        "kind": observation.kind.value,
+        "normalized_value": observation.normalized_value,
         "source_id": observation.source_id,
         "source_object_id": observation.source_object_id,
         "source_version_id": observation.source_version_id,
@@ -2789,7 +2852,11 @@ class ApplicationService:
         page_size = self._page_size(command.page_size)
         with _translated():
             found = unit_of_work.entities.search(
-                principal_id, command.query, entity_type=entity_type, limit=page_size + 1
+                principal_id,
+                command.query,
+                entity_type=entity_type,
+                limit=page_size + 1,
+                after_entity_id=command.after,
             )
         truncated = len(found) > page_size
         page = found[:page_size]
@@ -2798,10 +2865,15 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_ENTITY_TRUST_BASIS,
+                # A real cursor now, so `LISTING_HAS_NO_CONTINUATION` is not
+                # issued: it would tell a caller to stop while handing them the
+                # means to go on, which is the contradiction
+                # `_entities_relationships` names.
                 truncation=Truncation(
-                    is_truncated=truncated, reason="page_size_reached" if truncated else None
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].entity_id if truncated and page else None,
                 ),
-                extra_limitations=(Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else (),
             ),
         )
 
@@ -2903,6 +2975,58 @@ class ApplicationService:
             ),
         )
 
+    def _entities_unresolved_mentions(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListUnresolvedMentions,
+    ) -> _Result:
+        """`entities.unresolved_mentions`: one page of references nothing has placed.
+
+        An unlinked `entity_observations` row *is* the unresolved mention, so
+        this is a read of that table filtered to rows no entity claims. It is
+        the queue `RI-AC-006` asks to be first-class and searchable rather than
+        an absence a reader has to infer.
+
+        **The normalized value is disclosed; the observed value is not.** The
+        context card omits both, because a card summarises an entity that has
+        already been identified and the raw text is evidence that lives at its
+        source. Here the identifying text is the entire point — a queue that
+        said only "three mentions could not be placed" would give an operator
+        nothing to recognise. So the matchable form goes out, which is the same
+        class of datum as a `canonical_name` that `entities.search` already
+        returns freely, and the raw lifted text — a name inside a mail envelope,
+        with whatever else the envelope carried — does not.
+
+        **Read-only, and it stays that way.** Linking a mention to an entity is
+        a governed write and this plane publishes none (`D-RI-21`). A caller can
+        see the queue and cannot work it, which the runbook states plainly.
+        """
+        self._entity_plane()
+        principal_id = authorization.principal.principal_id
+        page_size = self._page_size(command.page_size)
+        with _translated():
+            found = unit_of_work.entities.observations(
+                principal_id,
+                unresolved_only=True,
+                limit=page_size + 1,
+                after_observation_id=command.after,
+            )
+        truncated = len(found) > page_size
+        page = found[:page_size]
+        return _Result(
+            payload={"mentions": [_unresolved_mention_view(item) for item in page]},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].observation_id if truncated and page else None,
+                ),
+            ),
+        )
+
     def _entities_relationships(
         self,
         unit_of_work: UnitOfWork,
@@ -2949,7 +3073,9 @@ class ApplicationService:
         truncated = len(found) > page_size
         page = found[:page_size]
         return _Result(
-            payload={"relationships": [_relationship_view(edge) for edge in page]},
+            payload={
+                "relationships": [_relationship_view(edge, authorization.at) for edge in page]
+            },
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_ENTITY_TRUST_BASIS,
@@ -4192,6 +4318,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,
         Capability.ENTITIES_CONTEXT: ApplicationService._entities_context,
         Capability.ENTITIES_RELATIONSHIPS: ApplicationService._entities_relationships,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: (ApplicationService._entities_unresolved_mentions),
     }
 )
 
@@ -4209,6 +4336,7 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_RESOLVE,
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
     }
 )
 

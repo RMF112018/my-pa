@@ -270,13 +270,42 @@ def test_search_does_not_call_an_exactly_full_page_truncated(hub: Scene) -> None
     assert envelope.disclosure.truncation.is_truncated is False
 
 
-def test_search_reports_truncation_with_a_reason_when_a_row_was_left_out(hub: Scene) -> None:
+def test_search_reports_truncation_with_a_cursor_when_a_row_was_left_out(hub: Scene) -> None:
+    """Search pages now, so it discloses a continuation rather than the absence of one.
+
+    This test asserted `listing_has_no_continuation_cursor` — correctly, while
+    `entities.search` was the last read on the plane that could be truncated and
+    not paged. Issuing that limitation beside a real cursor would tell a caller
+    to stop while handing them the means to go on.
+    """
     envelope = _envelope(
         hub, Capability.ENTITIES_SEARCH, SearchEntities(query="Person", page_size=EDGES - 1)
     )
     assert envelope.disclosure.truncation.is_truncated
     assert envelope.disclosure.truncation.reason == "page_size_reached"
-    assert "listing_has_no_continuation_cursor" in list(envelope.disclosure.limitations)
+    assert envelope.disclosure.truncation.next_cursor is not None
+    assert "listing_has_no_continuation_cursor" not in list(envelope.disclosure.limitations)
+
+
+def test_walking_the_search_pages_reaches_every_entity_exactly_once(hub: Scene) -> None:
+    """The cursor the capability issues is one a caller can actually walk with."""
+    walked: list[str] = []
+    cursor: str | None = None
+    for _ in range(EDGES + 2):
+        envelope = _envelope(
+            hub,
+            Capability.ENTITIES_SEARCH,
+            SearchEntities(query="Person", page_size=2, after=cursor),
+        )
+        page = envelope.to_canonical_dict()["result"]["entities"]  # type: ignore[index,call-overload]
+        if not page:
+            break
+        walked.extend(str(row["entity_id"]) for row in page)  # type: ignore[index]
+        cursor = envelope.disclosure.truncation.next_cursor
+        if cursor is None:
+            break
+    assert len(walked) == len(set(walked)), walked
+    assert len(walked) >= EDGES
 
 
 # --- entities.context: the card's collections are bounded at the query -------

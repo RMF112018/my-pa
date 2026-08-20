@@ -61,7 +61,13 @@ from my_pa.domain.relationship.resolution import (
     order_candidates,
 )
 
-__all__ = ["EntityResolutionService", "ResolutionRequest"]
+__all__ = [
+    "ACTIVE_ASSIGNMENT_STATUS",
+    "ACTIVE_RELATIONSHIP_STATE",
+    "EntityResolutionService",
+    "ResolutionRequest",
+    "is_in_force",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -135,7 +141,7 @@ def _is_effective(
     return not (effective_to is not None and as_of > effective_to)
 
 
-def _is_in_force(
+def is_in_force(
     effective_from: datetime | None, effective_to: datetime | None, moment: datetime | None
 ) -> bool:
     """Whether a *corroborating* record is in force. Stricter than `_is_effective`.
@@ -235,7 +241,7 @@ def _reach(
     found = False
     withheld = False
     for effective_from, effective_to, recorded_live in records:
-        if recorded_live and _is_in_force(effective_from, effective_to, moment):
+        if recorded_live and is_in_force(effective_from, effective_to, moment):
             found = True
         else:
             withheld = True

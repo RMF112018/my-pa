@@ -13,7 +13,7 @@ Related: [`docs/plans/relationship-intelligence-implementation-plan.md`](../../d
 | Purpose | `entity_read` — one, read-only |
 | Write capabilities | **None.** Observation, proposal and merge are in-process only |
 | Tables | `entities`, `entity_aliases`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, `entity_observations`, `entity_proposals`, `entity_merge_records` |
-| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `d2b8f5c04e71` (governance tables) |
+| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `e4d7b2f9a316` (governance tables) |
 | Calibration | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) |
 | Frontend | Not implemented. Held by the operator's `D-09` instruction |
 
@@ -34,7 +34,7 @@ off, or grant no `remote_capability_grants` row for the `entities.` names: in
 production a remote client reaches a capability only if an operator inserted a
 grant for it.
 
-Turning it off again withholds all five immediately. It deletes nothing.
+Turning it off again withholds all six immediately. It deletes nothing.
 
 ## 3. Inspecting the plane
 
@@ -47,6 +47,19 @@ Read-only, and prints no personal data — counts, closed-set status names, and
 opaque identifiers only. `--principal` is required: the plane is partitioned and
 a report across all Principals would be the cross-Principal read the partition
 exists to prevent.
+
+**`entities.unresolved_mentions` reads the queue over a transport.** Added
+2026-08-20 for the frontend package's People landing, which lists unresolved
+identity ambiguities as a section: until then the queue existed in
+`EntityGovernanceService`, which nothing composes, so it was reachable only by
+this script. It returns the *normalized* value — the form resolution compares —
+and never `observed_value`, the raw text lifted out of a source. The card omits
+both because a card summarises an entity already identified; a queue of things
+nobody could place is useless without the thing that could not be placed.
+
+It remains a **read**. Nothing on this plane links a mention to an entity, so
+this capability shows the queue and cannot work it. That is section 4's gap,
+unchanged.
 
 Read `unresolved_mentions` and `open_proposals` first. The first is references
 the system knows it has not placed; the second is decisions waiting on a person

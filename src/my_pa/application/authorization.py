@@ -82,6 +82,7 @@ from my_pa.application.commands import (
     ListSituations,
     ListSources,
     ListTasks,
+    ListUnresolvedMentions,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -276,6 +277,7 @@ def _requested_scope(
             | ResolveEntity()
             | GetEntityContext()
             | GetEntityRelationships()
+            | ListUnresolvedMentions()
         ):
             return frozenset()
         case CreateCapture():

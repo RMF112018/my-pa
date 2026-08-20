@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the fifty-three capabilities is addressable over HTTP
+**Reachability.** Every one of the fifty-four capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a fifty-fourth capability added to the domain arrives as a failing row instead
+here, so a fifty-fifth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -96,6 +96,7 @@ from my_pa.application.commands import (
     ListSituations,
     ListSources,
     ListTasks,
+    ListUnresolvedMentions,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -390,6 +391,9 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_id": person.entity_id,
             "direction": "any",
         },
+        # No arguments: the queue is every unplaced mention in the Principal's
+        # own partition, so there is nothing to name.
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
     }
 
 
@@ -600,6 +604,7 @@ def commands_for(
         Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(
             entity_id=person.entity_id, direction="any"
         ),
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
     }
 
 

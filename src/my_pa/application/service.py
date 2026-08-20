@@ -980,18 +980,27 @@ def _observation_view(observation: EntityObservation) -> dict[str, object]:
 
 
 def _unresolved_mention_view(observation: EntityObservation) -> dict[str, object]:
-    """One unresolved mention, with the matchable form and not the observed text.
+    """One unresolved mention, disclosing the name a writer chose to publish.
 
-    See `_entities_unresolved_mentions` for why this differs from
-    `_observation_view`: a queue of things nobody could place is useless without
-    the thing that could not be placed. Withholding `observed_value` is a real
-    boundary and it is **not** a redaction of it — see that handler on why the
-    writer, not this view, is what keeps raw text out of `normalized_value`.
+    **Neither `observed_value` nor `normalized_value` goes out.** This view used
+    to publish the normalized form on the argument that it was the matchable
+    datum and therefore the same class of thing as a `canonical_name`. An
+    independent review established that the argument does not hold:
+    `normalize_name` casefolds and turns punctuation into spaces and removes no
+    content, so a writer deriving it from raw text publishes that text with its
+    dots turned into spaces, and the result is `is_normalized_name`-true — no
+    predicate over the stored string can tell it from a long real name.
+
+    So the disclosure is a column rather than a promise. `mention_display_name`
+    is optional and defaults to `None`, which makes forgetting fail *closed*:
+    the mention is still listed, still has its source pointers, and simply
+    carries no text. Publishing text is an affirmative write into a field whose
+    name says what it is for. `f3a8c1d7e592` carries the full argument.
     """
     return {
         "observation_id": observation.observation_id,
         "kind": observation.kind.value,
-        "normalized_value": observation.normalized_value,
+        "mention_display_name": observation.mention_display_name,
         "source_id": observation.source_id,
         "source_object_id": observation.source_object_id,
         "source_version_id": observation.source_version_id,
@@ -3018,29 +3027,28 @@ class ApplicationService:
         the queue `RI-AC-006` asks to be first-class and searchable rather than
         an absence a reader has to infer.
 
-        **The normalized value is disclosed; the observed value is not — and
-        that is a weaker guarantee than it looks.** The context card omits both,
-        because a card summarises an entity that has already been identified and
-        the raw text is evidence that lives at its source. Here the identifying
-        text is the entire point: a queue that said only "three mentions could
-        not be placed" would give an operator nothing to recognise. So the
-        matchable form goes out, which is the same class of datum as a
-        `canonical_name` that `entities.search` already returns freely.
+        **Neither value the source produced is disclosed.** The context card
+        omits both, because a card summarises an entity that has already been
+        identified and the raw text is evidence that lives at its source. This
+        queue omits both as well, and publishes `mention_display_name` — a
+        separate, optional column a writer fills in deliberately.
 
-        **Normalization is not redaction, and this docstring used to claim it
-        was.** `normalize_name` casefolds and turns punctuation into spaces. It
-        removes no content. A writer that sets `normalized_value` to
-        `normalize_name(<raw lifted text>)` therefore publishes that text with
-        its dots turned into spaces — `"A. Chen <a.chen@northwind.test>"`
-        becomes `"a chen a chen northwind test"`, which carries the local part
-        and the domain and is `is_normalized_name`-true. The obligation is
-        consequently on the **writer**, and it is stated as a contract on
-        `EntityRepository.record_observation`: the normalized value must be a
-        normalized *extracted name*, never normalized raw text. Nothing in
-        `src/` writes this table yet, so the queue is empty on every build and
-        the exposure is prospective — but it lands the moment ingestion does,
-        which is why the constraint is written down before the writer exists
-        rather than after.
+        That column exists because the obvious design was wrong and shipped.
+        This handler used to publish `normalized_value` on the argument that the
+        matchable form is the same class of datum as a `canonical_name` that
+        `entities.search` already returns freely. It is not: `normalize_name`
+        casefolds and turns punctuation into spaces and removes **no content**,
+        so `"A. Chen <a.chen@northwind.test>"` becomes
+        `"a chen a chen northwind test"` — local part and domain intact, and
+        `is_normalized_name`-true, so nothing downstream can tell it from a long
+        real name. The mitigation was then a sentence on the port asking writers
+        to supply an extracted name. `f3a8c1d7e592` replaced the sentence with a
+        column, while the table still held zero rows and the change cost no
+        backfill.
+
+        **Forgetting now fails closed.** A writer that fills nothing publishes
+        nothing: the mention is still listed, still carries its source pointers,
+        and simply has no text beside it. Disclosure is an affirmative write.
 
         **Read-only, and it stays that way.** Linking a mention to an entity is
         a governed write and this plane publishes none (`D-RI-21`). A caller can

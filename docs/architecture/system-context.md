@@ -82,7 +82,7 @@ HTTP, and reports readiness `degraded`. Corrected 2026-08-19: this sentence read
 "exposes fifty-four capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns sixty-three revisions at head `e4d7b2f9a316`, including the merge of
+Alembic owns sixty-four revisions at head `f3a8c1d7e592`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
 semantic-retrieval gate remains `SEMANTIC_GATE_FAIL` and production semantic

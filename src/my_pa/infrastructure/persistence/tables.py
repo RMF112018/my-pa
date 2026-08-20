@@ -3029,6 +3029,13 @@ entity_observations = Table(
     Column("kind", Text, nullable=False),
     Column("observed_value", Text, nullable=False),
     Column("normalized_value", Text, nullable=False),
+    # The only column `entities.unresolved_mentions` discloses. Nullable and
+    # defaulting to NULL so that a writer which does nothing deliberate
+    # discloses nothing: `normalized_value` is the form matching compares
+    # against and is *not* a redaction of `observed_value`, because
+    # `normalize_name` removes no content. `f3a8c1d7e592` explains the whole
+    # argument.
+    Column("mention_display_name", Text),
     Column("source_id", Text, nullable=False),
     Column("source_object_id", Text, nullable=False),
     Column("source_version_id", Text, nullable=False),
@@ -3053,6 +3060,10 @@ entity_observations = Table(
     CheckConstraint(
         "recorded_at >= observed_at",
         name="an_observation_is_not_recorded_before_it_was_observed",
+    ),
+    CheckConstraint(
+        "mention_display_name IS NULL OR length(trim(mention_display_name)) BETWEEN 1 AND 200",
+        name="a_disclosed_mention_name_is_bounded",
     ),
     Index("entity_observations_by_principal", "principal_id"),
     Index("entity_observations_by_normalized_value", "principal_id", "normalized_value"),

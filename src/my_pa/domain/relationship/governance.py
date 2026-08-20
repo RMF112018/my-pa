@@ -38,6 +38,7 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 
 __all__ = [
+    "MENTION_DISPLAY_NAME_LIMIT",
     "EntityMergeRecord",
     "EntityObservation",
     "EntityProposal",
@@ -46,6 +47,13 @@ __all__ = [
     "ObservationKind",
     "ReviewRequirement",
 ]
+
+#: How long a disclosed mention name may be. Stated here and repeated as a CHECK
+#: in `f3a8c1d7e592`, because this is the one field the queue publishes and a
+#: column with no ceiling is a column an ingester can put a document in. Long
+#: enough for a person's full name with honorifics and a long organization name;
+#: short enough that a paragraph of lifted text does not fit.
+MENTION_DISPLAY_NAME_LIMIT = 200
 
 
 class ObservationKind(StrEnum):
@@ -151,6 +159,17 @@ class EntityObservation:
     `observed_value` is `repr=False`: it is a name or an address read out of
     someone's mail, and a dataclass `repr` reaches a traceback and a log record
     without anyone deciding it should (`AGENTS.md` section 5).
+
+    **Three values, and only one of them is published.** `observed_value` is
+    what the source wrote. `normalized_value` is what matching compares against,
+    and it is **not** a redaction of the first -- `normalize_name` casefolds and
+    unpunctuates and removes no content, so a writer that derives it from raw
+    text produces a value that is `is_normalized_name`-true and still carries
+    the envelope. `mention_display_name` is the one field
+    `entities.unresolved_mentions` discloses, it is optional, and it defaults to
+    `None`: a writer that does nothing deliberate publishes nothing, and
+    disclosing is an affirmative act into a field whose name says what it is
+    for. `f3a8c1d7e592` records the argument.
     """
 
     observation_id: str
@@ -164,6 +183,7 @@ class EntityObservation:
     observed_at: datetime
     recorded_at: datetime
     entity_id: str | None = None
+    mention_display_name: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         validate_identifier(self.observation_id, IdKind.ENTITY_OBSERVATION)
@@ -179,6 +199,16 @@ class EntityObservation:
             raise ValueError("an observation records the form it is matched by")
         if self.entity_id is not None:
             validate_identifier(self.entity_id, IdKind.ENTITY)
+        if self.mention_display_name is not None:
+            # Bounded, and blank is not a disclosure. A caller that meant to
+            # publish nothing passes `None`; a whitespace-only string is a
+            # writer bug, and admitting it would put an empty row on a queue
+            # whose whole purpose is showing the operator what could not be
+            # placed.
+            if not self.mention_display_name.strip():
+                raise ValueError("a disclosed mention name is not blank")
+            if len(self.mention_display_name.strip()) > MENTION_DISPLAY_NAME_LIMIT:
+                raise ValueError("a disclosed mention name is bounded")
         ensure_utc(self.observed_at)
         ensure_utc(self.recorded_at)
         if self.recorded_at < self.observed_at:

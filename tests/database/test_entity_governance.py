@@ -245,6 +245,48 @@ def test_a_row_written_around_the_repository_is_refused_on_the_way_out(
         SqlEntityRepository(connection).observations(PRINCIPAL_A, unresolved_only=True)
 
 
+def test_the_disclosed_mention_name_round_trips_and_defaults_to_nothing(
+    two_principals: Engine,
+) -> None:
+    """The column the queue reads, against a real server.
+
+    Two properties, and the second is the one the change was made for: a value
+    a writer supplies comes back exactly, and a writer that supplies nothing
+    stores `NULL` rather than anything derived from the matched form.
+    """
+    named = dataclasses.replace(
+        _observation("eobs_named0001named01"), mention_display_name="A. Chen"
+    )
+    with two_principals.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.record_observation(PRINCIPAL_A, named)
+        repository.record_observation(PRINCIPAL_A, _observation("eobs_plain0001plain01"))
+    with two_principals.connect() as connection:
+        stored = {
+            item.observation_id: item.mention_display_name
+            for item in SqlEntityRepository(connection).observations(PRINCIPAL_A)
+        }
+    assert stored["eobs_named0001named01"] == "A. Chen"
+    assert stored["eobs_plain0001plain01"] is None
+
+
+def test_the_server_refuses_a_disclosed_mention_name_past_its_bound(
+    two_principals: Engine,
+) -> None:
+    """The CHECK, not the record's own guard.
+
+    `EntityObservation.__post_init__` bounds this too, so the assertion has to
+    reach the server around it — `object.__setattr__` writes the value the
+    record would have refused, which is the row a bulk import produces. A column
+    with no ceiling is a column an ingester can put a document in, and this is
+    the one column the queue publishes.
+    """
+    oversized = _observation("eobs_longer001longer1")
+    object.__setattr__(oversized, "mention_display_name", "x" * 400)
+    with pytest.raises(IntegrityError), two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_observation(PRINCIPAL_A, oversized)
+
+
 def test_an_observation_cursor_the_caller_cannot_read_is_refused(
     two_principals: Engine,
 ) -> None:

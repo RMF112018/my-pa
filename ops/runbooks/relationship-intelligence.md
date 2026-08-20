@@ -13,7 +13,7 @@ Related: [`docs/plans/relationship-intelligence-implementation-plan.md`](../../d
 | Purpose | `entity_read` — one, read-only |
 | Write capabilities | **None.** Observation, proposal and merge are in-process only |
 | Tables | `entities`, `entity_aliases`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, `entity_observations`, `entity_proposals`, `entity_merge_records` |
-| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `d2b8f5c04e71` (governance tables), `e4d7b2f9a316` (`entities.unresolved_mentions`) |
+| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `d2b8f5c04e71` (governance tables), `e4d7b2f9a316` (`entities.unresolved_mentions`), `f3a8c1d7e592` (the disclosed mention name) |
 | Calibration | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) |
 | Frontend | Not implemented. Held by the operator's `D-09` instruction |
 
@@ -57,16 +57,23 @@ and never `observed_value`, the raw text lifted out of a source. The card omits
 both because a card summarises an entity already identified; a queue of things
 nobody could place is useless without the thing that could not be placed.
 
-**Withholding `observed_value` is a real boundary and it is not a redaction of
-it.** `normalize_name` casefolds and turns punctuation into spaces; it removes
-no content. A writer that sets `normalized_value` to `normalize_name(<raw lifted
-text>)` therefore publishes that text with its dots turned into spaces, and the
-result passes every check this plane can make on it. The rule lives on
-`EntityRepository.record_observation`: the normalized value must be a normalized
-*extracted name*, never normalized raw text. **Nothing in `src/` writes this
-table today**, so the queue is empty on every build and the exposure arrives
-with ingestion, not before. An operator reviewing this surface should treat what
-it displays as source-derived text rather than as redacted text.
+**Corrected 2026-08-20: it returns neither value the source produced.** The
+sentence above described the design before `f3a8c1d7e592` and is kept because
+the reason it changed is worth an operator's time. The queue used to publish
+`normalized_value`, on the argument that a matchable form is the same class of
+datum as a canonical name. It is not: `normalize_name` casefolds and turns
+punctuation into spaces and removes **no content**, so a writer deriving it from
+raw text published that text with its dots turned into spaces — and the result
+is `is_normalized_name`-true, so no check on this plane could have refused it.
+
+The queue now reads `entity_observations.mention_display_name`, a separate
+optional column, and `normalized_value` is internal to matching. **A writer that
+fills nothing publishes nothing**: the mention is still queued with its source
+pointers and carries no text. Disclosure is an affirmative write into a column
+whose name says what it is for, so "did anyone mean to publish this?" is a
+question with an answer, and an auditor greps one column's writers.
+
+Nothing in `src/` writes this table, so the queue is empty on every build.
 
 It remains a **read**. Nothing on this plane links a mention to an entity, so
 this capability shows the queue and cannot work it. That is section 4's gap,

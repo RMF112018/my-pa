@@ -666,7 +666,14 @@ def _stage_unresolved(scene: Scene) -> None:
                 principal_id=scene.principal.principal_id,
                 kind=ObservationKind.MESSAGE_PARTICIPANT,
                 observed_value="A. Chen <a.chen@northwind.test>",
-                normalized_value=normalize_name("A Chen"),
+                # Derived from the raw text **on purpose**. This is the write
+                # the old design could not defend against: it is
+                # `is_normalized_name`-true and carries the local part and the
+                # domain, so no check over the string could refuse it. Staging
+                # it here is what makes the assertions below adversarial rather
+                # than a restatement of a well-behaved fixture.
+                normalized_value=normalize_name("A. Chen <a.chen@northwind.test>"),
+                mention_display_name="A. Chen",
                 source_id=scene.source.source_id,
                 source_object_id=scene.markdown.source_object_id,
                 source_version_id="ver_unplaced01unplaced",
@@ -679,19 +686,20 @@ def _stage_unresolved(scene: Scene) -> None:
 def test_the_queue_lists_mentions_nothing_has_placed(staged: Scene) -> None:
     """`RI-AC-006`: unresolved is a state a person can look at, not an absence.
 
-    The fixture stages one observation linked to nobody. It comes back with the
-    form that would match — which is what makes the queue actionable — and
-    without the `observed_value` the source carried.
+    The fixture stages one observation linked to nobody, and it comes back with
+    the name a writer chose to publish.
 
-    **That is a key check, not a content check, and the difference matters.**
-    The fixture sets `normalized_value` from the *extracted name*, not from the
-    observed text, which is exactly what
-    `EntityRepository.record_observation` requires of a writer. It has to be
-    staged that way for the assertion below to mean anything: normalization
-    casefolds and unpunctuates but removes no content, so a writer that passed
-    `normalize_name(observed_value)` would publish the envelope with its dots
-    turned into spaces and this test would still pass. The guard against that
-    is the port contract, not this view.
+    **The fixture derives `normalized_value` from the raw envelope on purpose,
+    and that is what this test is really about.** The queue used to publish that
+    field, on the argument that a matchable form is the same class of datum as a
+    `canonical_name`. It is not: normalization removes no content, so the value
+    staged here carries `northwind.test` and the local part and is
+    `is_normalized_name`-true. Publishing it would have disclosed the envelope
+    while every check on the plane stayed green.
+
+    So the assertions are content checks, not key checks. Nothing the source
+    wrote reaches the wire, and what does reach it is the field a writer filled
+    in deliberately.
     """
     scene = staged
     _stage_unresolved(scene)
@@ -699,8 +707,51 @@ def test_the_queue_lists_mentions_nothing_has_placed(staged: Scene) -> None:
     mentions = body["mentions"]
     assert mentions, "an unlinked observation was staged, so this must not be empty"
     first = mentions[0]  # type: ignore[index]
-    assert first["normalized_value"]  # type: ignore[index]
+    assert first["mention_display_name"] == "A. Chen"  # type: ignore[index]
     assert "observed_value" not in first  # type: ignore[operator]
+    assert "normalized_value" not in first  # type: ignore[operator]
+    # The envelope is not on the wire under any key, which a key check would not
+    # have established.
+    rendered = repr(body)
+    assert "northwind" not in rendered
+    assert "a.chen" not in rendered
+
+
+def test_a_mention_nobody_named_is_queued_and_carries_no_text(staged: Scene) -> None:
+    """Forgetting fails closed, which is the whole reason the column exists.
+
+    `mention_display_name` is optional. A writer that fills nothing publishes
+    nothing — and the mention is still queued, still carries its source
+    pointers, and simply has no text beside it. The alternative the plane
+    rejected was a field that always carried *something*, where the something
+    was whatever matching happened to store.
+    """
+    scene = staged
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        unit_of_work.entities.record_observation(
+            scene.principal.principal_id,
+            EntityObservation(
+                observation_id="eobs_unnamed01unnamed1",
+                principal_id=scene.principal.principal_id,
+                kind=ObservationKind.MESSAGE_PARTICIPANT,
+                observed_value="B. Okafor <b.okafor@rival.test>",
+                normalized_value=normalize_name("B. Okafor <b.okafor@rival.test>"),
+                source_id=scene.source.source_id,
+                source_object_id=scene.markdown.source_object_id,
+                source_version_id="ver_unnamed01unnamed01",
+                observed_at=WHEN,
+                recorded_at=WHEN,
+            ),
+        )
+    body = _payload(scene, Capability.ENTITIES_UNRESOLVED_MENTIONS, ListUnresolvedMentions())
+    queued = {str(row["observation_id"]): row for row in body["mentions"]}  # type: ignore[index,union-attr]
+    assert "eobs_unnamed01unnamed1" in queued, "the mention must still be listed"
+    assert queued["eobs_unnamed01unnamed1"]["mention_display_name"] is None  # type: ignore[index]
+    # The source pointers are what make an unnamed mention still actionable.
+    assert queued["eobs_unnamed01unnamed1"]["source_object_id"]  # type: ignore[index]
+    rendered = repr(body)
+    assert "rival" not in rendered
+    assert "okafor" not in rendered.lower()
 
 
 def test_the_queue_omits_mentions_that_have_been_placed(staged: Scene) -> None:

@@ -39,7 +39,9 @@ ENTITY_REVISION: Final = "9def3c2e63bb"
 ALIAS_REVISION: Final = "b7f4d1a92c36"
 CAPABILITY_REVISION: Final = "c1a7e4b93d58"
 GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
-HEAD_REVISION: Final = "e4d7b2f9a316"
+#: The unresolved-mention capability admission, between governance and head.
+QUEUE_REVISION: Final = "e4d7b2f9a316"
+HEAD_REVISION: Final = "f3a8c1d7e592"
 PRIOR: Final = "d4a8c1e7b930"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_f8c3a1e6b247_add_goodnotes_notebook_lineage_logical_.py"
@@ -162,8 +164,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
     assert script.get_revision(CAPABILITY_REVISION).down_revision == ALIAS_REVISION
     assert script.get_revision(GOVERNANCE_REVISION).down_revision == CAPABILITY_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == GOVERNANCE_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 63
+    assert script.get_revision(QUEUE_REVISION).down_revision == GOVERNANCE_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == QUEUE_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 64
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

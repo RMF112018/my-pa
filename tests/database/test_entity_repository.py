@@ -1421,3 +1421,156 @@ def test_a_foreign_redirect_at_ones_own_entity_does_not_block_merging_it(
         assert theirs is not None, "the staged foreign row went missing"
         assert theirs.superseded_by_entity_id == ACME
         assert repository.get(PRINCIPAL_A, bee) is None
+
+
+# --- the repository-boundary normalization guards ---------------------------
+
+
+def _smuggle(record: object, field: str, value: str) -> object:
+    """A record carrying a value its own `__post_init__` would have refused.
+
+    `dataclasses.replace` re-runs `__post_init__`, so it raises the *domain's*
+    error and never reaches the repository — a test written that way asserts the
+    domain guard a second time while appearing to assert this one. Writing the
+    attribute directly is what produces the row a bulk import or a backfill
+    hands over, which is the population `RI-PR135-MAJOR-002` is about.
+    """
+    object.__setattr__(record, field, value)
+    return record
+
+
+def test_the_repository_refuses_every_unnormalized_matched_form_it_is_handed(
+    two_principals: Engine,
+) -> None:
+    """`RI-PR135-MAJOR-002`, asserted at the boundary it is argued for.
+
+    The domain records refuse an unnormalized value in `__post_init__`, and
+    those refusals are tested. This is the *other* population the module
+    docstring argues about at length: anything that reaches the table without
+    building a record — a bulk import, a backfill, a writer reusing a stored
+    value — and it was tested nowhere. Replacing both guards with no-ops left
+    every entity test in the repository green.
+
+    The consequence if this regresses is the one the module names: a row stored
+    in a form the resolver's equality predicate cannot match does not merely
+    fail to resolve, it **removes itself from the candidate set**, so a
+    same-named neighbour stops being ambiguous and is returned as a confident
+    wrong answer.
+    """
+    with two_principals.begin() as connection:
+        repository = SqlEntityRepository(connection)
+
+        with pytest.raises(ValueError, match="form resolution compares in"):
+            repository.create(
+                PRINCIPAL_A,
+                _smuggle(  # type: ignore[arg-type]
+                    an_entity("ent_raw00007raw00007", PRINCIPAL_A, "Raw Synthetic"),
+                    "canonical_name",
+                    "Alice CHEN",
+                ),
+            )
+
+        with pytest.raises(ValueError, match="form resolution compares in"):
+            repository.record_alias(
+                PRINCIPAL_A,
+                _smuggle(  # type: ignore[arg-type]
+                    EntityAlias(
+                        alias_id="eals_raw00001raw00001",
+                        entity_id=ALICE,
+                        alias_type=AliasType.NICKNAME,
+                        normalized_value=normalize_name("Ali"),
+                        display_value="Ali",
+                        principal_id=PRINCIPAL_A,
+                    ),
+                    "normalized_value",
+                    "Alice CHEN",
+                ),
+            )
+
+        with pytest.raises(ValueError, match="form resolution compares in"):
+            repository.bind_identifier(
+                PRINCIPAL_A,
+                ALICE,
+                _smuggle(  # type: ignore[arg-type]
+                    ExternalIdentifier(
+                        identifier_id="xid_raw00001raw00001",
+                        entity_id=ALICE,
+                        namespace=ExternalIdentifierNamespace.EMAIL,
+                        normalized_value=normalize_identifier(
+                            ExternalIdentifierNamespace.EMAIL, "alice@acme.test"
+                        ),
+                        display_value="alice@acme.test",
+                        principal_id=PRINCIPAL_A,
+                    ),
+                    "normalized_value",
+                    "Alice@ACME.test",
+                ),
+            )
+
+
+def test_an_entity_row_written_around_the_repository_is_refused_on_the_way_out(
+    two_principals: Engine,
+) -> None:
+    """The read half, which had no test either.
+
+    `_row_to_summary` guards `canonical_name` so a row that arrived some other
+    way cannot be *served* in a form the resolver could never match. The write
+    guard above cannot cover this: the module is explicit that there is no CHECK
+    constraint and that a hand-run `INSERT` still bypasses the boundary, so the
+    read is the last place the invariant can hold.
+
+    Staged with SQL for exactly that reason — the repository is what refuses to
+    write such a row.
+    """
+    with two_principals.begin() as connection:
+        connection.execute(
+            text(
+                f"UPDATE {SCHEMA}.entities SET canonical_name = :raw "  # noqa: S608
+                "WHERE entity_id = :identifier"
+            ),
+            {"raw": "Alice CHEN", "identifier": ALICE},
+        )
+    with (
+        pytest.raises(ValueError, match="form resolution compares in"),
+        two_principals.connect() as connection,
+    ):
+        SqlEntityRepository(connection).search(PRINCIPAL_A, "alice")
+
+
+def test_search_does_not_match_an_alias_at_the_server(two_principals: Engine) -> None:
+    """The alias non-disclosure rule, against real SQL rather than against the double.
+
+    `tests/security/test_entity_privacy_regression.py` asserts this rule twice
+    and runs entirely on `FakeUnitOfWork`, so both of those tests prove the
+    *fake* refuses to match aliases. The rule that matters at runtime is the
+    `or_(canonical_name ILIKE, display_name ILIKE)` in this repository, and
+    adding an `entity_aliases` join to it — the sympathetic feature request
+    those tests name — would leave the whole suite green.
+
+    Staged so the alias shares no substring with either name the entity is
+    stored under, so a hit could come only from the alias.
+    """
+    with two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_alias(
+            PRINCIPAL_A,
+            EntityAlias(
+                alias_id="eals_srvr0001srvr0001",
+                entity_id=ALICE,
+                alias_type=AliasType.FORMER_NAME,
+                normalized_value=normalize_name("Roberta Vandenberg"),
+                display_value="Roberta Vandenberg",
+                principal_id=PRINCIPAL_A,
+            ),
+        )
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        # The control: the alias really is stored, so an empty result below is
+        # the rule holding rather than the write having silently failed.
+        assert [alias.display_value for alias in repository.aliases(PRINCIPAL_A, ALICE)] == [
+            "Roberta Vandenberg"
+        ]
+        assert repository.search(PRINCIPAL_A, "Roberta") == []
+        assert repository.search(PRINCIPAL_A, "Vandenberg") == []
+        # And the name it *is* stored under still matches, so the query is not
+        # simply finding nothing.
+        assert [summary.entity_id for summary in repository.search(PRINCIPAL_A, "Alice")] == [ALICE]

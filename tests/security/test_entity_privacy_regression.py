@@ -4,7 +4,7 @@ This plane holds the most sensitive records the product has: who a person is,
 what they are called, how to reach them, and who they work with. The suites
 elsewhere prove it *works*. This one proves the ways it must not.
 
-Five claims, each with a way it could plausibly fail:
+Five claims about the plane, each with a way it could plausibly fail:
 
 * **A refusal discloses nothing.** A denied request must not leak whether the
   entity exists, what it is called, or who else shares its name — an error that
@@ -171,7 +171,7 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
 def test_no_capability_discloses_another_principals_entity(
     staged: Scene, capability: Capability, command: object
 ) -> None:
-    """Each of the five has its own query; each is asserted separately."""
+    """Each of them has its own query; each is asserted separately."""
     body = str(_answer(staged, capability, command))
     leaked = [secret for secret in FOREIGN_SECRETS if secret in body]
     assert leaked == [], f"{capability.value} disclosed {leaked}"

@@ -115,7 +115,7 @@ def test_none_of_the_six_is_classified_as_a_write() -> None:
         assert not permitted_purposes(capability) & _WRITE_PURPOSES
 
 
-def test_none_of_the_five_is_operator_only() -> None:
+def test_none_of_the_six_is_operator_only() -> None:
     """Operator-only is about who may call one, not about whether this build has it.
 
     The two are different gates and the plane uses the second. Asserted so a

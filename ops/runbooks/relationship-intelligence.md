@@ -57,6 +57,17 @@ and never `observed_value`, the raw text lifted out of a source. The card omits
 both because a card summarises an entity already identified; a queue of things
 nobody could place is useless without the thing that could not be placed.
 
+**Withholding `observed_value` is a real boundary and it is not a redaction of
+it.** `normalize_name` casefolds and turns punctuation into spaces; it removes
+no content. A writer that sets `normalized_value` to `normalize_name(<raw lifted
+text>)` therefore publishes that text with its dots turned into spaces, and the
+result passes every check this plane can make on it. The rule lives on
+`EntityRepository.record_observation`: the normalized value must be a normalized
+*extracted name*, never normalized raw text. **Nothing in `src/` writes this
+table today**, so the queue is empty on every build and the exposure arrives
+with ingestion, not before. An operator reviewing this surface should treat what
+it displays as source-derived text rather than as redacted text.
+
 It remains a **read**. Nothing on this plane links a mention to an entity, so
 this capability shows the queue and cannot work it. That is section 4's gap,
 unchanged.

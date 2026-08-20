@@ -74,7 +74,7 @@ The repository is an executable local candidate, not a documentation scaffold.
 The `my_pa` application defines and wires fifty-four capabilities through HTTP,
 MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
 planes. **A default composition exposes forty-two of them.** The six
-`documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT` and the five
+`documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT` and the six
 `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`; neither has
 a default, so an unconfigured process withholds both families from
 `capabilities.get` and from the MCP tool list, refuses them `unsupported` over

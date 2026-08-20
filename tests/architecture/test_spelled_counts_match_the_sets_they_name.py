@@ -385,9 +385,28 @@ BORROWED_NOUNS = ("members?", "names?", "strings?", "tools?")
 #: an author put emphasis, which is where the load-bearing numbers tend to be.
 _GAP = r"[\s\-*_]+"
 
+#: One code span sitting between the number and a *borrowed* noun, which is this
+#: corpus's most common way of writing a count: `the six \`documents.\` names`,
+#: `the five \`entities.\` names`.
+#:
+#: Admitted 2026-08-20, and the reason is a live miss in both directions.
+#: `docs/architecture/system-context.md` read "**A default composition exposes
+#: forty-two of them.** The six \`documents.\` names ... and the five
+#: \`entities.\` names" -- forty-two is only consistent with six and six, so the
+#: paragraph contradicted itself in one sentence, and the sweep found *no claim
+#: at all* there because `_GAP` excludes a backtick.
+#:
+#: Restricted to `BORROWED_NOUNS`, which is what keeps the original rule intact:
+#: the excluded case that rule was written for is `the first
+#: \`capabilities.get\``, where the code span is the thing being counted and the
+#: noun that follows is `capability` -- a `NAMED_NOUN`. A borrowed noun after a
+#: code span is the corpus naming a family and then counting its members.
+_SPANNED = r"(?:`(?P<span>[^`\n]{1,60})`" + _GAP + r")?"
+
 CLAIM = re.compile(
     rf"\b(?P<number>{_NUMBER}){_GAP}(?:{_ADJECTIVE})?"
-    rf"(?P<noun>{'|'.join(NAMED_NOUNS + BORROWED_NOUNS)})\b",
+    rf"(?:{_SPANNED}(?P<borrowed>{'|'.join(BORROWED_NOUNS)})"
+    rf"|(?P<noun>{'|'.join(NAMED_NOUNS + BORROWED_NOUNS)}))\b",
     re.IGNORECASE,
 )
 
@@ -474,6 +493,24 @@ def entity_plane_count() -> int:
     return len([c for c in Capability if c.value.startswith("entities.")])
 
 
+def _family(span: str | None) -> str | None:
+    """The capability family a code span names, if it names one.
+
+    `` `entities.` ``, `` `documents.` ``, `` `capture.*` `` and `` `tasks.` ``
+    are how this corpus writes a family before counting its members. Reading the
+    prefix out of the span is what lets those counts be **checked** against the
+    family rather than excused one by one: the sweep derives the size from
+    `Capability`, so the same edit that adds a member to a family reddens every
+    sentence that states that family's size.
+    """
+    if span is None:
+        return None
+    prefix = span.strip().rstrip("*")
+    if not prefix.endswith("."):
+        return None
+    return prefix if any(c.value.startswith(prefix) for c in Capability) else None
+
+
 #: Claims counting a *named subset* rather than the whole enum, and the set each
 #: one counts.
 #:
@@ -488,6 +525,16 @@ def entity_plane_count() -> int:
 #: the block, so an entry binds one occurrence rather than every occurrence of
 #: the same words in the same file.
 SUBSET_CLAIMS: tuple[tuple[str, str, str], ...] = (
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "Six `Capability` members",
+        "Delivered in full",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "six `Capability` members",
+        "The capability and MCP surface",
+    ),
     (
         "docs/operations/mcv-limitations.md",
         "six** public read capabilities",
@@ -527,6 +574,8 @@ def expected(noun: str, number: str, subset: str | None = None) -> int:
     """
     if subset == "entity_plane":
         size = entity_plane_count()
+    elif subset is not None:
+        size = len([c for c in Capability if c.value.startswith(subset)])
     elif noun.lower().startswith("purpose"):
         size = purpose_count()
     else:
@@ -547,6 +596,22 @@ def stated(number: str) -> int:
 #: distinctive fragment of the block, so an entry excuses one occurrence rather
 #: than every occurrence of the same words in the same file.
 EXCUSED: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "README.md",
+        "four `capture.*` names",
+        "WP-6 added four `capture.*` names and two capture",
+        "what one work package added on the day it merged, not the family's "
+        "size now -- `capture.search` arrived later and the sentence is about "
+        "WP-6",
+    ),
+    (
+        "tests/schema/test_task_read_capability_migration.py",
+        "four `tasks.` names",
+        "`capability_is_known` gains the four `tasks.` names",
+        "the four names *this revision* admits, which is the task read plane; "
+        "the `tasks.` family has since grown a write plane that this revision "
+        "does not mention and must not count",
+    ),
     (
         "src/my_pa/domain/identity/purpose.py",
         "second read purpose",
@@ -952,6 +1017,7 @@ class Claim:
     number: str
     noun: str
     block: str
+    family: str | None = None
 
     @property
     def where(self) -> str:
@@ -971,7 +1037,14 @@ class Claim:
         return None
 
     def subset(self) -> str | None:
-        """The named set this claim counts, when it is not the whole enum."""
+        """The named set this claim counts, when it is not the whole enum.
+
+        A family read out of the claim's own code span wins over the allowlist
+        below, because it is derived from the sentence rather than recorded
+        beside it — there is nothing to keep in step.
+        """
+        if self.family is not None:
+            return self.family
         relative = str(self.path.relative_to(ROOT))
         collapsed = " ".join(self.phrase.split()).lower()
         for path, phrase, context in SUBSET_CLAIMS:
@@ -991,7 +1064,9 @@ def _claims_in(path: Path, text: str, offset: int = 0) -> list[Claim]:
         taken: list[tuple[int, int]] = []
         for pattern in (CLAIM, CLOSED_AT, ALL_OF, BARE_EMPHASIS):
             for match in pattern.finditer(block):
-                noun = match.groupdict().get("noun") or "capabilities"
+                groups = match.groupdict()
+                noun = groups.get("noun") or groups.get("borrowed") or "capabilities"
+                family = _family(groups.get("span"))
                 if pattern is not CLAIM and not about_capabilities:
                     # `member`, `closed at N`, a bare `all N` and a bare `**N**`
                     # name no set of their own; they are read only where the
@@ -1014,6 +1089,7 @@ def _claims_in(path: Path, text: str, offset: int = 0) -> list[Claim]:
                         match["number"],
                         noun,
                         block,
+                        family,
                     )
                 )
     return found

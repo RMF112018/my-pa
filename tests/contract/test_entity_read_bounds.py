@@ -36,8 +36,9 @@ from my_pa.application.commands import (
     ResolveEntity,
     SearchEntities,
 )
-from my_pa.application.errors import InvalidRequestError
+from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.contracts.v1.envelope import ResponseEnvelope
+from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.context_card import CONTEXT_CARD_COLLECTION_LIMIT
@@ -488,3 +489,70 @@ def test_the_queue_refuses_a_cursor_that_is_not_an_observation_identifier() -> N
         ListUnresolvedMentions(after=HUB)
     with pytest.raises(InvalidRequestError):
         ListUnresolvedMentions(page_size=0)
+
+
+# --- what an unreadable cursor answers on the wire --------------------------
+
+
+def test_an_unreadable_cursor_answers_not_found_naming_the_cursor(queue: Scene) -> None:
+    """The classifier `_entity_translated` exists for, pinned at the wire.
+
+    Every `UnknownScopeError` used to become `not_found` naming
+    `enrollment_id` — a field this plane does not model and the request does not
+    carry. The three paged entity reads classify it as `cursor` instead, which
+    is the same field the command already names when the cursor is *malformed*.
+
+    **This is a FAST test deliberately.** The rule had coverage only in the
+    database tier, and `_entity_translated` itself had none anywhere: replacing
+    it with a null context left the whole fast selection green, so the wrong
+    field could return without a single test noticing.
+
+    The cursor here is well-formed and names an observation the acting
+    Principal does not hold, which is what the repository refuses.
+    """
+    foreign = "eobs_9999zzzz9999zzzz"
+    envelope = _envelope(
+        queue,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        ListUnresolvedMentions(after=foreign),
+    )
+    body = envelope.to_canonical_dict()
+    assert body["result"] is None
+    error = body["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == ErrorCode.NOT_FOUND.value
+    assert error["safe_details"] == [SafeDetail.CURSOR.value]
+    # The refusal names the field and nothing about the record, so it cannot be
+    # used to learn that some other Principal holds one.
+    assert foreign not in repr(body)
+
+
+def test_a_relationship_cursor_the_caller_cannot_read_answers_the_same_way(hub: Scene) -> None:
+    """The sibling, because a rule proved on one read is proved on one read."""
+    foreign = "erel_9999zzzz9999zzzz"
+    envelope = _envelope(
+        hub,
+        Capability.ENTITIES_RELATIONSHIPS,
+        GetEntityRelationships(entity_id=HUB, after=foreign),
+    )
+    body = envelope.to_canonical_dict()
+    assert body["result"] is None
+    error = body["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == ErrorCode.NOT_FOUND.value
+    assert error["safe_details"] == [SafeDetail.CURSOR.value]
+
+
+def test_a_search_cursor_the_caller_cannot_read_answers_the_same_way(hub: Scene) -> None:
+    """The third of three. All the same answer, so a BFF handles one case."""
+    envelope = _envelope(
+        hub,
+        Capability.ENTITIES_SEARCH,
+        SearchEntities(query="Person", after="ent_9999zzzz9999zzzz9"),
+    )
+    body = envelope.to_canonical_dict()
+    assert body["result"] is None
+    error = body["error"]
+    assert isinstance(error, dict)
+    assert error["code"] == ErrorCode.NOT_FOUND.value
+    assert error["safe_details"] == [SafeDetail.CURSOR.value]

@@ -2291,6 +2291,12 @@ class _Entities(EntitiesRepository):
         after_entity_id: str | None = None,
     ) -> list[EntitySummary]:
         self._world.fail("entities.search")
+        # Parity with `SqlEntityRepository.search`, which calls
+        # `_require_row_limit`. This clamped a non-positive limit to fifty while
+        # the double's five other bounded reads refused one — so the single read
+        # that guard's own docstring is written about was the one place the fake
+        # and the server disagreed about what a caller may ask for.
+        _refuse_empty_limit(limit)
         for entity in self._world.entities:
             if entity.principal_id == principal_id:
                 # Parity with `SqlEntityRepository._row_to_summary`, which
@@ -2338,7 +2344,7 @@ class _Entities(EntitiesRepository):
                 display_name=entity.display_name,
                 status=entity.status,
             )
-            for entity in matched[: limit if limit >= 1 else 50]
+            for entity in matched[:limit]
         ]
 
     def get(self, principal_id: str, entity_id: str) -> Entity | None:
@@ -2529,6 +2535,11 @@ class _Entities(EntitiesRepository):
     # --- WP-RI-06 governance ----------------------------------------------
 
     def record_observation(self, principal_id: str, observation: EntityObservation) -> None:
+        # Parity with `SqlEntityRepository.record_observation`, which refuses an
+        # unnormalized value. Without this the fake accepted what the database
+        # rejects, so a unit test could store a raw mail envelope here and be
+        # cited as evidence that the queue serves such a row.
+        _refuse_unnormalized_name(observation.normalized_value)
         self._world.fail("entities.record_observation")
         if observation.principal_id != principal_id:
             raise ValueError("an observation belongs to the acting Principal")
@@ -3035,7 +3046,7 @@ def build_service(
         # names its own service refuses.
         task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
         commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
-        # Enabled by the same default reasoning: the five `entities.` names are
+        # Enabled by the same default reasoning: the six `entities.` names are
         # withheld from a build that has not turned the plane on, and a suite
         # that quantifies over `Capability` would be quantifying over names its
         # own service refuses. A test about the *withheld* build passes `False`

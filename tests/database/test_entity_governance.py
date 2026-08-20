@@ -13,6 +13,7 @@ row an autonomous merge would leave behind, and the database refuses to hold it.
 
 from __future__ import annotations
 
+import dataclasses
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -180,6 +181,68 @@ def test_observations_cannot_reach_another_principals_partition(two_principals: 
         )
     with two_principals.connect() as connection:
         assert SqlEntityRepository(connection).observations(PRINCIPAL_A) == []
+
+
+def test_the_server_refuses_an_observation_whose_matched_form_is_not_normalized(
+    two_principals: Engine,
+) -> None:
+    """The write half of the one guard on the field the queue discloses.
+
+    `entities.unresolved_mentions` publishes `normalized_value` and withholds
+    `observed_value`. `EntityObservation` itself checks only that the value is
+    non-blank — unlike `Entity`, `EntityAlias` and `ExternalIdentifier`, whose
+    own `__post_init__` refuse an unnormalized value — so before this guard the
+    repository accepted a raw mail envelope into the column it later serves.
+
+    **The guard is necessary and it is not sufficient, and that distinction is
+    the whole point of this test's neighbour below.** It establishes that the
+    value is normalized, not that it is a *name*: normalized raw text passes it.
+    What keeps an envelope out is the contract on
+    `EntityRepository.record_observation`, which no predicate over the stored
+    string can check.
+    """
+    envelope = dataclasses.replace(
+        _observation(), normalized_value="A. Chen <a.chen@northwind.test>"
+    )
+    with (
+        pytest.raises(ValueError, match="form resolution compares in"),
+        two_principals.begin() as connection,
+    ):
+        SqlEntityRepository(connection).record_observation(PRINCIPAL_A, envelope)
+
+
+def test_a_row_written_around_the_repository_is_refused_on_the_way_out(
+    two_principals: Engine,
+) -> None:
+    """The read half, and the reason the module docstring can say "every read mapper".
+
+    The matched form has no CHECK constraint — the module explains at length why
+    `normalize_name` does not survive translation to SQL — so a hand-run INSERT
+    can still store an unnormalized value. That residual is documented. What is
+    *not* acceptable is serving such a row to
+    `entities.unresolved_mentions`, which is the one capability that discloses
+    this column: the row would go out with its angle brackets and its `@`
+    intact, past a boundary whose stated job is to withhold the raw text.
+
+    So the mapper refuses it. Staged with SQL deliberately, because the
+    repository is what refuses to *write* such a row and the row this guards
+    against is the one that arrived some other way.
+    """
+    with two_principals.begin() as connection:
+        SqlEntityRepository(connection).record_observation(PRINCIPAL_A, _observation())
+    with two_principals.begin() as connection:
+        connection.execute(
+            text(
+                f"UPDATE {SCHEMA}.entity_observations "  # noqa: S608
+                "SET normalized_value = :raw WHERE observation_id = :identifier"
+            ),
+            {"raw": "A. Chen <a.chen@northwind.test>", "identifier": "eobs_aaaa0001aaaa0001"},
+        )
+    with (
+        pytest.raises(ValueError, match="form resolution compares in"),
+        two_principals.connect() as connection,
+    ):
+        SqlEntityRepository(connection).observations(PRINCIPAL_A, unresolved_only=True)
 
 
 def test_an_observation_cursor_the_caller_cannot_read_is_refused(

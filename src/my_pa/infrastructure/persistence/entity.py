@@ -1135,6 +1135,15 @@ def _row_to_relationship(row: Row[Any]) -> EntityRelationship:
 
 
 def _row_to_observation(row: Row[Any]) -> EntityObservation:
+    # The read half of the guard on `record_observation`. `EntityObservation`
+    # checks only that its normalized value is non-blank -- unlike `Entity`,
+    # `EntityAlias` and `ExternalIdentifier`, whose own `__post_init__` refuse an
+    # unnormalized value and so make this repository's claim true for their
+    # mappers without a line here. Without this, the module docstring's "on
+    # every read mapper" was false of the one field
+    # `entities.unresolved_mentions` discloses: a row written around the
+    # repository came back verbatim, angle brackets and all.
+    _require_normalized_name(str(row.normalized_value))
     return EntityObservation(
         observation_id=str(row.observation_id),
         principal_id=str(row.principal_id),

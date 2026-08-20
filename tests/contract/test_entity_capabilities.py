@@ -1,4 +1,4 @@
-"""The five entity capabilities, through the application service.
+"""The entity capabilities, through the application service.
 
 The unit suites prove the repository, the resolver, and the card. This proves
 the *capability* — that a request carrying the right purpose reaches the right
@@ -475,28 +475,52 @@ def _disabled(scene: Scene, capability: Capability, command: object) -> dict[str
     return envelope.to_canonical_dict()
 
 
+#: One command per entity capability, keyed by the capability itself so the
+#: parameterization below can be checked for completeness rather than trusted.
+#: A hand-written list is how `entities.unresolved_mentions` came to be covered
+#: by a separate test instead of this sweep — and how the next one would be
+#: missed.
+_OFF_SWITCH_COMMANDS: dict[Capability, object] = {
+    Capability.ENTITIES_SEARCH: SearchEntities(query="Alice"),
+    Capability.ENTITIES_GET: GetEntity(entity_id=ALICE),
+    Capability.ENTITIES_RESOLVE: ResolveEntity(reference="Alice Chen"),
+    Capability.ENTITIES_CONTEXT: GetEntityContext(entity_id=ALICE),
+    Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(entity_id=ALICE),
+    Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
+}
+
+
+def test_the_off_switch_sweep_covers_every_capability_on_the_plane() -> None:
+    """The completeness guard the sweep below cannot provide for itself.
+
+    Derived from the `entities.` prefix and compared against the hand-written
+    mapping, so a capability added to the plane without a command here fails
+    *this* test by name rather than silently shrinking the sweep.
+    """
+    served = {capability for capability in Capability if capability.value.startswith("entities.")}
+    assert set(_OFF_SWITCH_COMMANDS) == served
+    assert len(served) == 6
+
+
 @pytest.mark.parametrize(
     ("capability", "command"),
-    [
-        (Capability.ENTITIES_SEARCH, SearchEntities(query="Alice")),
-        (Capability.ENTITIES_GET, GetEntity(entity_id=ALICE)),
-        (Capability.ENTITIES_RESOLVE, ResolveEntity(reference="Alice Chen")),
-        (Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE)),
-        (Capability.ENTITIES_RELATIONSHIPS, GetEntityRelationships(entity_id=ALICE)),
-    ],
+    sorted(_OFF_SWITCH_COMMANDS.items(), key=lambda pair: pair[0].value),
+    ids=lambda value: value.value if isinstance(value, Capability) else "",
 )
 def test_a_disabled_plane_refuses_every_capability_rather_than_answering(
     staged: Scene, capability: Capability, command: object
 ) -> None:
-    """Withholding the five from the manifest did not stop them executing.
+    """Withholding them from the manifest did not stop them executing.
 
     `available_capabilities` subtracts them, and two readers consult it —
     `capabilities.get` and the MCP tool list. The HTTP transport is not one of
     them: `/v1/{capability}` routes by path segment and dispatch goes straight to
-    `_HANDLERS`, so each of the five answered with real rows on a build that
-    reported it as `not_implemented`. Parameterized over all five deliberately:
-    the floor was absent from every one of them, so a test covering a single
-    capability would have gone green while four holes stayed open.
+    `_HANDLERS`, so each of them answered with real rows on a build that
+    reported it as `not_implemented`. Parameterized over the whole family
+    deliberately: the floor was absent from every one of them, so a test
+    covering a single capability would have gone green while the rest stayed
+    open. The family is derived and checked by the test above, because when
+    `entities.unresolved_mentions` arrived this list was not extended.
 
     Staged data is used rather than an empty world so that a missing refusal
     fails loudly with a payload, instead of passing as an empty answer.
@@ -560,6 +584,70 @@ def test_the_card_labels_each_assignment_current_or_historical(staged: Scene) ->
     assert labelled["asn_future0004future04"] is False
 
 
+def test_the_card_labels_each_relationship_current_or_historical(staged: Scene) -> None:
+    """The sibling of the test above, and it had none.
+
+    `_relationship_view` computes `is_current` the same way `_assignment_view`
+    does, and nothing asserted it: replacing the whole guard with a literal
+    `True` left every test in the repository green. Half of a claim proved is
+    the shape this branch keeps producing, so the edge half is pinned here.
+
+    An edge is current when its state is active **and** it is in force at the
+    card's moment. Both halves are staged, because a test that only ended a
+    contract would pass against a rule that read the state and ignored the
+    dates, and one that only expired the dates would pass against the reverse.
+    """
+    scene = staged
+    principal_id = scene.principal.principal_id
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        unit_of_work.entities.record_relationship(
+            principal_id,
+            EntityRelationship(
+                relationship_id="erel_ended0002ended02",
+                from_entity_id=ALICE,
+                relationship_type=EntityRelationshipType.WORKS_FOR,
+                to_entity_id=ACME,
+                principal_id=principal_id,
+                effective_from=datetime(2020, 1, 1, tzinfo=UTC),
+                effective_to=datetime(2021, 1, 1, tzinfo=UTC),
+            ),
+        )
+        unit_of_work.entities.record_relationship(
+            principal_id,
+            EntityRelationship(
+                relationship_id="erel_future003future3",
+                from_entity_id=ALICE,
+                relationship_type=EntityRelationshipType.WORKS_FOR,
+                to_entity_id=ACME,
+                principal_id=principal_id,
+                effective_from=datetime(2030, 1, 1, tzinfo=UTC),
+            ),
+        )
+        unit_of_work.entities.record_relationship(
+            principal_id,
+            EntityRelationship(
+                relationship_id="erel_stopped04stoppd4",
+                from_entity_id=ALICE,
+                relationship_type=EntityRelationshipType.WORKS_FOR,
+                to_entity_id=ACME,
+                principal_id=principal_id,
+                state="ended",
+            ),
+        )
+    body = _payload(scene, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE))
+    labelled = {
+        str(row["relationship_id"]): row["is_current"]  # type: ignore[index]
+        for row in body["context_card"]["relationships"]  # type: ignore[index,union-attr]
+    }
+    # Staged live by the fixture: active state, no dates bounding it.
+    assert labelled["erel_alice0001alice01"] is True
+    # In force is not enough on its own — this one's state says it stopped.
+    assert labelled["erel_stopped04stoppd4"] is False
+    # Active state is not enough on its own either.
+    assert labelled["erel_ended0002ended02"] is False
+    assert labelled["erel_future003future3"] is False
+
+
 # ---- the unresolved-mention queue ------------------------------------------
 
 
@@ -593,7 +681,17 @@ def test_the_queue_lists_mentions_nothing_has_placed(staged: Scene) -> None:
 
     The fixture stages one observation linked to nobody. It comes back with the
     form that would match — which is what makes the queue actionable — and
-    without the raw text the source carried.
+    without the `observed_value` the source carried.
+
+    **That is a key check, not a content check, and the difference matters.**
+    The fixture sets `normalized_value` from the *extracted name*, not from the
+    observed text, which is exactly what
+    `EntityRepository.record_observation` requires of a writer. It has to be
+    staged that way for the assertion below to mean anything: normalization
+    casefolds and unpunctuates but removes no content, so a writer that passed
+    `normalize_name(observed_value)` would publish the envelope with its dots
+    turned into spaces and this test would still pass. The guard against that
+    is the port contract, not this view.
     """
     scene = staged
     _stage_unresolved(scene)

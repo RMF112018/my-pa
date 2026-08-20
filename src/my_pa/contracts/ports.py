@@ -461,6 +461,17 @@ class EntitiesRepository(ABC):
         Recording an observation never creates or modifies an entity.  Section
         12.2 is explicit that a source row "does not become the canonical person
         by itself", and this method is where that is true rather than intended.
+
+        **`normalized_value` must be a normalized extracted name, never
+        normalized raw text.** `entities.unresolved_mentions` discloses this
+        field and withholds `observed_value`, and that boundary only means
+        something if the caller honours this. `normalize_name` casefolds and
+        replaces punctuation; it removes no content, so
+        `normalize_name("A. Chen <a.chen@northwind.test>")` is
+        `"a chen a chen northwind test"` — the local part and the domain intact,
+        and `is_normalized_name`-true. The repository checks the form and
+        **cannot** check the provenance, so passing normalized raw text here
+        publishes it. Extract the name first, then normalize the name.
         """
 
     @abstractmethod

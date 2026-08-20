@@ -60,7 +60,7 @@ reaches the handler, which refuses with `unsupported` and the transport maps tha
 to **`501`**. This section already discloses the source-root gate below in the
 same detail; it said nothing about these two, which is the omission being
 corrected. `capabilities.get` on such a process reports readiness `degraded` and
-`11 of 53 capabilities are unwired.` rather than `ready`.
+`12 of 54 capabilities are unwired.` rather than `ready`.
 
 **It is bound to `127.0.0.1` and there is no option to bind elsewhere.** That is
 `D-30` and `AGENTS.md` §5: `P00-OD-010` — which authentication mechanism this

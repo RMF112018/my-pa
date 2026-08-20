@@ -2453,6 +2453,15 @@ class _Entities(EntitiesRepository):
         _refuse_empty_limit(limit)
         if after_relationship_id is not None:
             validate_identifier(after_relationship_id, IdKind.ENTITY_RELATIONSHIP)
+            # Refused here too, because the server refuses it. A fake that
+            # emptied the page instead would let a unit test assert a
+            # continuation the database does not perform.
+            if not any(
+                relationship.principal_id == principal_id
+                and relationship.relationship_id == after_relationship_id
+                for relationship in self._world.entity_relationships
+            ):
+                raise UnknownScopeError("a relationship cursor names an edge in this scope")
         found = sorted(
             (
                 relationship
@@ -2559,6 +2568,12 @@ class _Entities(EntitiesRepository):
         # taken on, so a fake that paged differently would let a unit test
         # assert a walk the server does not perform.
         if after_observation_id is not None:
+            if not any(
+                observation.principal_id == principal_id
+                and observation.observation_id == after_observation_id
+                for observation in self._world.entity_observations
+            ):
+                raise UnknownScopeError("an observation cursor names an observation in this scope")
             found = [
                 observation
                 for observation in found

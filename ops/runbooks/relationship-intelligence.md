@@ -13,7 +13,7 @@ Related: [`docs/plans/relationship-intelligence-implementation-plan.md`](../../d
 | Purpose | `entity_read` — one, read-only |
 | Write capabilities | **None.** Observation, proposal and merge are in-process only |
 | Tables | `entities`, `entity_aliases`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, `entity_observations`, `entity_proposals`, `entity_merge_records` |
-| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `e4d7b2f9a316` (governance tables) |
+| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `d2b8f5c04e71` (governance tables), `e4d7b2f9a316` (`entities.unresolved_mentions`) |
 | Calibration | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) |
 | Frontend | Not implemented. Held by the operator's `D-09` instruction |
 

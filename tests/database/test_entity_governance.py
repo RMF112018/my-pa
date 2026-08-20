@@ -182,6 +182,32 @@ def test_observations_cannot_reach_another_principals_partition(two_principals: 
         assert SqlEntityRepository(connection).observations(PRINCIPAL_A) == []
 
 
+def test_an_observation_cursor_the_caller_cannot_read_is_refused(
+    two_principals: Engine,
+) -> None:
+    """The third of the plane's three paged reads, and the last to get this rule.
+
+    `search` refused an unreadable cursor from the day it was paged; the other
+    two applied a bare `>` to whatever they were handed. On this read that is
+    the worst of the three: a foreign cursor sorting above the caller's own
+    mentions answers with an empty page and no truncation, which an operator
+    reads as "nothing left to resolve" — the exact opposite of what an
+    unreadable cursor establishes.
+    """
+    foreign = "eobs_bbbb0002bbbb0002"
+    with two_principals.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.record_observation(PRINCIPAL_A, _observation())
+        repository.record_observation(PRINCIPAL_B, _observation(foreign, principal_id=PRINCIPAL_B))
+    with (
+        pytest.raises(UnknownScopeError, match="observation cursor"),
+        two_principals.connect() as connection,
+    ):
+        SqlEntityRepository(connection).observations(
+            PRINCIPAL_A, unresolved_only=True, after_observation_id=foreign
+        )
+
+
 def test_the_server_refuses_an_observation_recorded_before_it_was_observed(
     two_principals: Engine,
 ) -> None:

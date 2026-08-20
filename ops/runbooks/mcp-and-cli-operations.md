@@ -174,7 +174,7 @@ inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
 same child publishes those six, reaching forty-eight of the fifty-four. The
-remaining five are the `entities.` names, which `D-RI-20` gates behind
+remaining six are the `entities.` names, which `D-RI-20` gates behind
 `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms; a child
 publishing all fifty-four has both variables set. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
@@ -194,9 +194,9 @@ measured.** The test named here derives what it asserts from `Capability` minus
 the withheld prefixes, so it never carried the stale figure; the prose beside it
 did, under a heading that said "Measured at this head". Twenty was the default
 count some earlier head published, and it was left standing through every
-package that widened the set — including the one that added the five
+package that widened the set — including the one that added the
 `entities.` names this same section describes. Re-derived rather than restated:
-`len(Capability)` is 53 and the two withheld families hold 6 and 5, so a default
+`len(Capability)` is 54 and the two withheld families hold 6 and 6, so a default
 process publishes 42. The emphasised spelling is deliberate — it is the form
 `tests/architecture/test_spelled_counts_match_the_sets_they_name.py` reads, and
 until this correction the bare `twenty` on both lines was bound to nothing.

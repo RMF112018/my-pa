@@ -169,3 +169,94 @@ def test_every_claimed_corpus_size_matches_the_corpus() -> None:
             )
     assert seen, "no corpus-size claim found; the pattern or the prose changed shape"
     assert not wrong, wrong
+
+
+#: A claim of the form `` `pytest -m "<expr>"` … **N passed** ``: a whole-tier
+#: figure, stated as a bare number beside the exact command that produces it.
+#:
+#: **This is the shape that carried the largest wrong number this plan has
+#: held.** The database-tier row claimed 1,926 passed for a selection that
+#: collects 951 — the figure was produced by running whole directories with no
+#: `-m` filter and then described as partitioning the marker selection. Every
+#: guard in the repository was green: the spelled-count sweep reads words and
+#: not digits, and the file-claim pattern above requires a backticked test
+#: *path*, which a tier figure does not have. An independent reviewer found it
+#: with one `--collect-only`, which is the check this closes.
+#:
+#: Collection, not execution: this asserts the claim is about the right *set*.
+#: A tier's pass count may fall below its collected count for a legitimate
+#: reason — a skip — so the rule is that a claim may not exceed collection, and
+#: a shortfall is reported with its size rather than silently allowed.
+TIER_CLAIM: Final = re.compile(
+    r"`pytest\s+-m\s+\"(?P<expr>[^\"]+)\"[^`]*`[^|]{0,400}?\*\*(?P<count>[\d,]+)\s+passed",
+)
+
+_TIER_COLLECTED: dict[str, int] = {}
+
+
+def _tier_collected(expression: str) -> int:
+    if expression not in _TIER_COLLECTED:
+        result = subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                "-m",
+                expression,
+                "tests",
+            ],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            check=False,
+        )
+        found = re.search(r"(\d+)/\d+ tests collected", result.stdout) or re.search(
+            r"(\d+) tests? collected", result.stdout
+        )
+        assert found is not None, (
+            f"could not collect -m {expression!r}:\n"
+            f"{result.stdout[-2000:]}\n{result.stderr[-2000:]}"
+        )
+        _TIER_COLLECTED[expression] = int(found.group(1))
+    return _TIER_COLLECTED[expression]
+
+
+def _tier_claims() -> list[tuple[str, int, int]]:
+    text = PLAN.read_text(encoding="utf-8")
+    found: list[tuple[str, int, int]] = []
+    for match in TIER_CLAIM.finditer(text):
+        line = text.count("\n", 0, match.start()) + 1
+        found.append((match.group("expr"), int(match.group("count").replace(",", "")), line))
+    return found
+
+
+def test_the_plan_claims_a_pass_count_for_at_least_one_tier() -> None:
+    """If this pattern stops matching, the guard guards nothing — and it did once."""
+    assert _tier_claims(), (
+        'no `pytest -m "..."` — **N passed** claim found in the plan; either the '
+        "evidence table changed shape or this pattern went stale"
+    )
+
+
+@pytest.mark.parametrize(("expression", "claimed", "line"), _tier_claims())
+def test_no_claimed_tier_pass_count_exceeds_what_that_selection_collects(
+    expression: str, claimed: int, line: int
+) -> None:
+    """A tier figure, against the selection the sentence beside it names.
+
+    Deliberately an upper bound rather than an equality: a skipped test is a
+    real reason for a pass count to sit below collection, and a guard that
+    forbade it would be corrected by weakening the claim rather than by fixing
+    anything. Claiming *more* passes than the selection holds has no benign
+    reading at all.
+    """
+    collected = _tier_collected(expression)
+    assert claimed <= collected, (
+        f"{PLAN.name}:{line} claims {claimed} passed for `-m {expression!r}`, which "
+        f"collects only {collected}. The figure was measured against a different "
+        "selection than the one it names. Correct the plan rather than this test."
+    )

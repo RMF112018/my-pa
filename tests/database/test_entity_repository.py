@@ -69,6 +69,10 @@ ACME: Final = "ent_bbbb0002bbbb0002"
 TOWER: Final = "ent_cccc0003cccc0003"
 BOB: Final = "ent_dddd0004dddd0004"
 BOB_TWO: Final = "ent_ffff0006ffff0006"
+#: One edge that belongs to B, so a cursor test has a real foreign position to
+#: name rather than an absent one. The observation equivalent lives in
+#: `test_entity_governance.py`, where observations already have a staged source.
+FOREIGN_RELATIONSHIP: Final = "erel_bbbb0001bbbb01"
 
 WHEN: Final = datetime(2026, 8, 17, 12, tzinfo=UTC)
 
@@ -995,6 +999,72 @@ def test_a_search_cursor_naming_another_principals_entity_is_refused(
         two_principals.connect() as connection,
     ):
         SqlEntityRepository(connection).search(PRINCIPAL_A, "synthetic", after_entity_id=BOB)
+
+
+def test_an_unreadable_cursor_and_an_unused_one_are_refused_identically(
+    two_principals: Engine,
+) -> None:
+    """No oracle: the refusal must not distinguish "not yours" from "not a thing".
+
+    The test above covers the foreign half only, and a change of the shape
+    `raise if the identifier exists anywhere, else restart` would keep it green
+    while creating a live oracle — submit a guessed well-formed `ent_…`, and a
+    full first page means the identifier is unused while a refusal means it
+    names an entity in someone else's partition. Repeated, that enumerates the
+    existence of other Principals' entity identifiers, which is precisely what
+    `test_no_capability_discloses_another_principals_identifier` says must not
+    happen: knowing one exists is knowing something.
+
+    So both are asserted to be the same exception with the same message.
+    """
+    never_issued = "ent_never0001never01"
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        with pytest.raises(UnknownScopeError) as foreign:
+            repository.search(PRINCIPAL_A, "synthetic", after_entity_id=BOB)
+        with pytest.raises(UnknownScopeError) as unused:
+            repository.search(PRINCIPAL_A, "synthetic", after_entity_id=never_issued)
+    assert type(foreign.value) is type(unused.value)
+    assert str(foreign.value) == str(unused.value)
+    # And neither says which of the two it was.
+    assert BOB not in str(foreign.value)
+    assert never_issued not in str(unused.value)
+
+
+def test_a_relationship_cursor_the_caller_cannot_read_is_refused(
+    two_principals: Engine,
+) -> None:
+    """The sibling `search` had and `relationships` did not.
+
+    The commit that added the search refusal stated the rule without
+    qualification and applied it to one of three paged reads. Here the bare `>`
+    was true of a foreign edge identifier, so the read answered with whatever
+    of the caller's own rows sorted above it — an empty page and no truncation
+    when the cursor sorted high, which is the same wrong answer shaped like a
+    right one.
+    """
+    with two_principals.begin() as connection:
+        # Staged in the test rather than in `two_principals`: several tests
+        # there assert the exact size of B's enumerations, and an extra edge in
+        # the shared fixture breaks four of them. A decoy belongs to the test
+        # that needs a decoy.
+        SqlEntityRepository(connection).record_relationship(
+            PRINCIPAL_B,
+            EntityRelationship(
+                relationship_id=FOREIGN_RELATIONSHIP,
+                from_entity_id=BOB,
+                relationship_type=EntityRelationshipType.WORKS_FOR,
+                to_entity_id=BOB_TWO,
+                principal_id=PRINCIPAL_B,
+            ),
+        )
+    with (
+        pytest.raises(UnknownScopeError, match="relationship cursor"),
+        two_principals.connect() as connection,
+    ):
+        SqlEntityRepository(connection).relationships(
+            PRINCIPAL_A, ALICE, after_relationship_id=FOREIGN_RELATIONSHIP
+        )
 
 
 def test_an_already_merged_entity_is_not_merged_again(migrated_engine: Engine) -> None:

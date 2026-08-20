@@ -360,9 +360,9 @@ class Capability(StrEnum):
     # admits the live vocabulary. Not operator-only: it reads the acting
     # Principal's own partition and grants no authority.
     GOODNOTES_CONTENT = "goodnotes.content"
-    # The relationship-intelligence entity plane (WP-RI-05). Five read
-    # capabilities over `knowledge.entities` and the four tables around it.
-    # Alembic revision `c1a7e4b93d58` admits the live vocabulary and the
+    # The relationship-intelligence entity plane (WP-RI-05). Six read
+    # capabilities over `knowledge.entities` and the tables around it.
+    # Alembic revision `c1a7e4b93d58` admits the first five and the
     # `entity_read` purpose; the freeze is written before the members, because a
     # member with no `ALTER` leaves every test green and is refused by the
     # stored constraint on the first audited operation in the field.
@@ -373,14 +373,15 @@ class Capability(StrEnum):
     # return extracted document text. They are different custody planes over
     # different tables.
     #
-    # Five rather than one, because they answer different questions and a caller
+    # Six rather than one, because they answer different questions and a caller
     # granted one has no occasion to hold the others. `search` is a name-shaped
     # lookup over a Principal's own entities. `get` is one entity by identifier.
     # `resolve` answers "who is this reference", and is the one whose answer can
     # be *ambiguous on purpose*. `context` assembles a bounded card. `relationships`
-    # walks one entity's typed edges to depth one. None of them writes: this plane
-    # has no write capability at all, which is why `_PERMITTED_PURPOSES` maps all
-    # five to a single read purpose.
+    # walks one entity's typed edges to depth one. `unresolved_mentions` lists the
+    # references nothing has placed, admitted later by `e4d7b2f9a316`. None of them
+    # writes: this plane has no write capability at all, which is why
+    # `_PERMITTED_PURPOSES` maps all six to a single read purpose.
     #
     # Not operator-only: each reads the acting Principal's own partition and
     # grants no authority. Withholding from a process that has not enabled the

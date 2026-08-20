@@ -211,7 +211,7 @@ def _require_row_limit(limit: int | None) -> None:
     negative limit is refused for the same reason rather than clamped, because
     silently substituting a limit the caller did not ask for is how a bound
     stops matching what the caller then discloses about it. This is the rule
-    `observations` already states, factored out so that the five bounded reads
+    `observations` already states, factored out so that the six bounded reads
     on this plane cannot drift apart on it.
     """
     if limit is not None and limit < 1:
@@ -484,6 +484,19 @@ class SqlEntityRepository(EntitiesRepository):
         _require_row_limit(limit)
         if after_relationship_id is not None:
             validate_identifier(after_relationship_id, IdKind.ENTITY_RELATIONSHIP)
+            # Refused on the same terms `search` refuses one. A well-formed
+            # cursor naming an edge this Principal cannot read is not a position
+            # in their ordering, and the bare `>` below is true of it — so the
+            # read would answer with an empty page and no truncation, which a
+            # caller cannot tell from having reached the end.
+            reachable = self._connection.execute(
+                select(entity_relationships.c.relationship_id).where(
+                    _mine(entity_relationships, principal_id),
+                    entity_relationships.c.relationship_id == after_relationship_id,
+                )
+            ).first()
+            if reachable is None:
+                raise UnknownScopeError("a relationship cursor names an edge in this scope")
         # The continuation predicate is `>` against the same column the
         # `order_by` uses, inside the same statement as the partition. A cursor
         # applied by dropping rows after the fetch would still have read them,
@@ -677,6 +690,13 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if observation.principal_id != principal_id:
             raise ValueError("an observation belongs to the acting Principal")
+        # This was the one write on the plane that constrained no form, and it
+        # feeds the one field `entities.unresolved_mentions` discloses. The
+        # guard is necessary and it is **not sufficient**: it establishes that
+        # the value is normalized, not that it is a name — normalized raw text
+        # passes it. What keeps an envelope out is the caller's contract on
+        # `EntityRepository.record_observation`, which this cannot check.
+        _require_normalized_name(observation.normalized_value)
         if observation.entity_id is not None:
             self._require_own_entity(principal_id, observation.entity_id)
         existing = self._connection.execute(
@@ -723,6 +743,18 @@ class SqlEntityRepository(EntitiesRepository):
         _require_row_limit(limit)
         if after_observation_id is not None:
             validate_identifier(after_observation_id, IdKind.ENTITY_OBSERVATION)
+            # Refused on the same terms the other two paged reads refuse one.
+            # The queue is the surface where this matters most: an empty page
+            # reported as complete reads as "nothing left to resolve", which is
+            # the opposite of what an unreadable cursor establishes.
+            reachable = self._connection.execute(
+                select(entity_observations.c.observation_id).where(
+                    _mine(entity_observations, principal_id),
+                    entity_observations.c.observation_id == after_observation_id,
+                )
+            ).first()
+            if reachable is None:
+                raise UnknownScopeError("an observation cursor names an observation in this scope")
         statement = (
             select(entity_observations)
             .where(

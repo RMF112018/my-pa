@@ -250,7 +250,7 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     50: "Fifty",
     51: "Fifty-one",
     52: "Fifty-two",
-    53: "Fifty-four",
+    53: "Fifty-three",
     54: "Fifty-four",
     55: "Fifty-five",
     56: "Fifty-six",

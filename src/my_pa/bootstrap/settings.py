@@ -335,7 +335,7 @@ class Settings(StrictModel):
     goodnotes_user_facing_summary_delivery_enabled: bool = False
     goodnotes_tbr_bridge_enabled: bool = False
     #: Process-local gate for the relationship-intelligence entity plane
-    #: (WP-RI-05). Default off. True publishes five read capabilities over the
+    #: (WP-RI-05). Default off. True publishes six read capabilities over the
     #: acting Principal's own entities; it enables no write, no observation, and
     #: no source traversal, because none exists. Off by default because the
     #: remote MCP profile is derived from the capability set with no

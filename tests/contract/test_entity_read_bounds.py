@@ -32,6 +32,7 @@ from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 from my_pa.application.commands import (
     GetEntityContext,
     GetEntityRelationships,
+    ListUnresolvedMentions,
     ResolveEntity,
     SearchEntities,
 )
@@ -47,6 +48,7 @@ from my_pa.domain.relationship.entity import (
     EntityStatus,
     EntityType,
 )
+from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
 from my_pa.domain.relationship.normalization import normalize_name
 
 HUB: Final = "ent_hub00001hub00001"
@@ -379,3 +381,110 @@ def test_resolve_answers_rather_than_raising_when_it_drops_a_candidate(hub: Scen
     assert body.get("error") is None, body.get("error")
     truncation = envelope.disclosure.truncation
     assert truncation.is_truncated is False or truncation.reason == "candidate_limit_reached"
+
+
+# --- the queue's continuation ----------------------------------------------
+
+
+QUEUED: Final = 12
+
+
+@pytest.fixture
+def queue(scene: Scene) -> Scene:
+    """`QUEUED` mentions nothing has placed, in the order the queue serves them."""
+    principal_id = scene.principal.principal_id
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        for index in range(QUEUED):
+            unit_of_work.entities.record_observation(
+                principal_id,
+                EntityObservation(
+                    # Zero-padded for the reason the edge identifiers are: the
+                    # queue orders and pages on this column, so staging order
+                    # and served order have to be the same or a walk test
+                    # proves nothing about which rows were skipped.
+                    observation_id=f"eobs_{index:04d}queue{index:04d}",
+                    principal_id=principal_id,
+                    kind=ObservationKind.MESSAGE_PARTICIPANT,
+                    observed_value=f"Unplaced Person {index:04d}",
+                    normalized_value=normalize_name(f"Unplaced Person {index:04d}"),
+                    source_id=scene.source.source_id,
+                    source_object_id=scene.markdown.source_object_id,
+                    source_version_id=f"ver_{index:04d}queue{index:04d}",
+                    observed_at=WHEN,
+                    recorded_at=WHEN,
+                ),
+            )
+    return scene
+
+
+def _mentions(envelope: ResponseEnvelope) -> list[dict[str, object]]:
+    body = envelope.to_canonical_dict()
+    assert body.get("error") is None, body.get("error")
+    result = body["result"]
+    assert isinstance(result, dict)
+    mentions = result["mentions"]
+    assert isinstance(mentions, list)
+    return mentions
+
+
+def test_walking_the_queue_reaches_every_mention_exactly_once(queue: Scene) -> None:
+    """The queue shipped with a cursor and no test of it.
+
+    Deleting `after_observation_id=command.after` from the handler left the
+    whole suite green: the cursor was accepted, ignored, and every page was page
+    one. An operator working a queue longer than one page would have seen the
+    same mentions forever and never reached the tail — and the plane would have
+    reported that as normal operation.
+    """
+    seen: list[str] = []
+    cursor: str | None = None
+    for _ in range(QUEUED):
+        envelope = _envelope(
+            queue,
+            Capability.ENTITIES_UNRESOLVED_MENTIONS,
+            ListUnresolvedMentions(page_size=5, after=cursor),
+        )
+        seen.extend(str(row["observation_id"]) for row in _mentions(envelope))
+        cursor = envelope.disclosure.truncation.next_cursor
+        if cursor is None:
+            break
+    assert cursor is None, "the walk never terminated"
+    assert seen == [f"eobs_{index:04d}queue{index:04d}" for index in range(QUEUED)]
+    assert len(seen) == len(set(seen)), "a mention was served on two pages"
+
+
+def test_the_queue_discloses_a_continuation_only_while_one_remains(queue: Scene) -> None:
+    """`is_truncated` and `next_cursor` are one fact and may not disagree."""
+    first = _envelope(
+        queue,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        ListUnresolvedMentions(page_size=5),
+    )
+    assert first.disclosure.truncation.is_truncated is True
+    cursor = first.disclosure.truncation.next_cursor
+    assert cursor == f"eobs_{4:04d}queue{4:04d}"
+
+    last = _envelope(
+        queue,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        ListUnresolvedMentions(page_size=50, after=cursor),
+    )
+    assert last.disclosure.truncation.is_truncated is False
+    assert last.disclosure.truncation.next_cursor is None
+
+
+def test_the_queue_refuses_a_cursor_that_is_not_an_observation_identifier() -> None:
+    """Refused at the command, on the same terms `entities.relationships` is.
+
+    The cursor is compared against `observation_id` directly, so an arbitrary
+    string does not fail — it sorts somewhere, and every mention before that
+    point is skipped with nothing saying so. An entity identifier is the
+    plausible mistake and is refused too: it is well-formed, and it is not a
+    position in this ordering.
+    """
+    with pytest.raises(InvalidRequestError):
+        ListUnresolvedMentions(after="not-an-identifier")
+    with pytest.raises(InvalidRequestError):
+        ListUnresolvedMentions(after=HUB)
+    with pytest.raises(InvalidRequestError):
+        ListUnresolvedMentions(page_size=0)

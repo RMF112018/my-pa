@@ -8,6 +8,8 @@ repository before anyone is in a position to grant it.
 
 **The profile is read-only, and that is the whole of it.** A Task may search,
 read, resolve, assemble a context card, and walk one entity's edges. It may not
+read the unresolved-mention queue, which the plane serves and this profile
+deliberately withholds — see `ALLOWED_CAPABILITIES`. It may not
 observe, propose, decide, or merge — those capabilities do not exist on any
 transport (`D-RI-21`), and if they did they would still be absent here.
 Specification section 21.4 forbids a model creating a canonical person or
@@ -46,12 +48,23 @@ __all__ = [
 TASK_NAME: Final = "Relationship Intelligence"
 DRAFT_STATUS: Final = "DRAFT_NOT_ACTIVATED"
 
-#: Every capability the proposed Task may call. All five are reads.
+#: Every capability the proposed Task may call. All five are reads, and the
+#: plane serves six.
 #:
 #: Written out rather than derived from the `entities.` prefix, for the reason
 #: `application.service._ENTITY_CAPABILITIES` is: admitting another has to be a
 #: decision here and not a spelling that happens to start the right way. If a
 #: write capability is ever added to the plane, this set does not grow with it.
+#:
+#: **`entities.unresolved_mentions` is deliberately excluded**, decided when it
+#: was added rather than left as an omission the hand-written set would hide.
+#: The proposed Task's job is attaching canonical entity IDs to intelligence
+#: output — it asks "who is this reference", which is `resolve`. The queue of
+#: references *nobody* could place is a human review surface: it exists to be
+#: worked, working it is a governed write, and no transport publishes one. A
+#: grant to read it would let a Task enumerate every mention the system failed
+#: to resolve while being unable to act on any of them, which is reach without
+#: purpose. Least privilege, and revisit it if a Task is ever given a reason.
 ALLOWED_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.ENTITIES_SEARCH,

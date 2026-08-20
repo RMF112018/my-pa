@@ -288,7 +288,7 @@ _ORDINAL_UNITS = (
     "fifty-first",
     "fifty-second",
     "fifty-third",
-    "fifty-fifth",
+    "fifty-fourth",
     "fifty-fifth",
     "fifty-sixth",
     "fifty-seventh",
@@ -350,7 +350,17 @@ _READ_ORDINALS = sorted(set(ORDINALS) - {"zeroth"}, key=len, reverse=True)
 _NUMBER = "|".join(re.escape(word) for word in _READ_CARDINALS + _READ_ORDINALS)
 
 #: Adjectives the corpus writes between the number and the noun.
-_ADJECTIVE = r"(?:existing|new|public|remaining|other|further|capability)\s+"
+#:
+#: **Repeated, not single.** This admitted exactly one adjective until
+#: 2026-08-20, and that is how "the entity plane adds **five** public read
+#: capabilities" sat in a swept file, in a document whose job is stating what
+#: the build does not do, while the plane served six — the guard read the file,
+#: found no claim, and reported nothing. A count is no less a count for having
+#: two words in front of the noun, and the failure mode of a guard that stops
+#: reading is silence rather than a wrong answer, which is the harder kind to
+#: notice. `read` and `entity` are admitted for the same reason: the corpus
+#: writes them there.
+_ADJECTIVE = r"(?:(?:existing|new|public|remaining|other|further|capability|read|entity)\s+)+"
 
 #: Nouns that name the set outright, wherever they are written.
 NAMED_NOUNS = ("capabilit(?:y|ies)", "purposes?")
@@ -459,13 +469,68 @@ def alembic_head() -> str:
     return heads[0]
 
 
-def expected(noun: str, number: str) -> int:
+def entity_plane_count() -> int:
+    """The entity plane's own size, derived from the `entities.` prefix."""
+    return len([c for c in Capability if c.value.startswith("entities.")])
+
+
+#: Claims counting a *named subset* rather than the whole enum, and the set each
+#: one counts.
+#:
+#: These would otherwise have to be excused, and an excuse is checked against
+#: nothing — `EXCUSED` verifies that the phrase is still present, never that the
+#: reason still holds, so four entries here sat saying "the entity plane's own
+#: five" while the plane served six. Resolving them against the subset instead
+#: makes them **claims that are checked**, so the same edit that grows the plane
+#: reddens them by name.
+#:
+#: Matched exactly as `EXCUSED` is: path, phrase, and a distinctive fragment of
+#: the block, so an entry binds one occurrence rather than every occurrence of
+#: the same words in the same file.
+SUBSET_CLAIMS: tuple[tuple[str, str, str], ...] = (
+    (
+        "docs/operations/mcv-limitations.md",
+        "six** public read capabilities",
+        "this document, whose job is stating what the build does not do",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "Six read capabilities",
+        "each bounded and paginated",
+    ),
+    (
+        "ops/runbooks/README.md",
+        "six read capabilities",
+        "how to read the unresolved-mention",
+    ),
+    (
+        "src/my_pa/bootstrap/settings.py",
+        "six read capabilities",
+        "Default off",
+    ),
+    (
+        "src/my_pa/domain/identity/operation.py",
+        "Six read capabilities",
+        "over `knowledge.entities` and the tables around it",
+    ),
+)
+
+
+def expected(noun: str, number: str, subset: str | None = None) -> int:
     """What a claim about `noun` written as `number` must say.
 
     An ordinal names the *next* member, so it asserts a set one smaller than
     itself: `a thirteenth capability` is right exactly when the set holds twelve.
+
+    `subset` names a set smaller than the enum when the claim is about one — see
+    `SUBSET_CLAIMS` for why those are resolved rather than excused.
     """
-    size = purpose_count() if noun.lower().startswith("purpose") else capability_count()
+    if subset == "entity_plane":
+        size = entity_plane_count()
+    elif noun.lower().startswith("purpose"):
+        size = purpose_count()
+    else:
+        size = capability_count()
     return size + 1 if number.lower() in ORDINALS else size
 
 
@@ -482,6 +547,21 @@ def stated(number: str) -> int:
 #: distinctive fragment of the block, so an entry excuses one occurrence rather
 #: than every occurrence of the same words in the same file.
 EXCUSED: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "src/my_pa/domain/identity/purpose.py",
+        "second read purpose",
+        "would map to exactly one capability and separate",
+        "counts read purposes, which is neither `Purpose` nor a capability set, "
+        "and argues that a second one would separate nothing -- a claim about "
+        "what a purpose would buy, not about how many exist",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "second read purpose",
+        "would map to exactly one capability and",
+        "the same argument as `purpose.py`, quoted in the plan: about what a "
+        "second read purpose would separate, not about the size of any set",
+    ),
     (
         "docs/architecture/module-boundaries.md",
         "closed at eight",
@@ -674,9 +754,10 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
     (
         "docs/plans/relationship-intelligence-implementation-plan.md",
         "two capabilities",
-        "one of the two capabilities that need pagination",
-        "the two entity reads that return a list and so need a cursor, "
-        "`entities.search` and `entities.relationships`; not a count of any enum",
+        "said pagination was delivered for one of the two capabilities",
+        "quotes the superseded wording of this cell in order to withdraw it, "
+        "and says in the same sentence that both halves are out of date; three "
+        "entity reads page now, not two",
     ),
     (
         "docs/plans/relationship-intelligence-implementation-plan.md",
@@ -690,13 +771,6 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "all five",
         "one purpose, `entity_read`, for all five",
         "`D-RI-19`: the same five `entities.*` names sharing one purpose",
-    ),
-    (
-        "docs/plans/relationship-intelligence-implementation-plan.md",
-        "five capabilities",
-        "eight tables and five capabilities) are fixed, not deselected",
-        "the entity plane's own five, naming what four schema suites had "
-        "outgrown; not the size of `Capability`",
     ),
     (
         "docs/plans/relationship-intelligence-implementation-plan.md",
@@ -896,6 +970,19 @@ class Claim:
                 return entry
         return None
 
+    def subset(self) -> str | None:
+        """The named set this claim counts, when it is not the whole enum."""
+        relative = str(self.path.relative_to(ROOT))
+        collapsed = " ".join(self.phrase.split()).lower()
+        for path, phrase, context in SUBSET_CLAIMS:
+            if path != relative:
+                continue
+            if " ".join(phrase.split()).lower() != collapsed:
+                continue
+            if " ".join(context.split()) in " ".join(self.block.split()):
+                return "entity_plane"
+        return None
+
 
 def _claims_in(path: Path, text: str, offset: int = 0) -> list[Claim]:
     found: list[Claim] = []
@@ -955,9 +1042,10 @@ def test_the_sweep_found_claims_to_check() -> None:
 def test_every_spelled_count_matches_the_set_it_names() -> None:
     wrong = sorted(
         f"{claim.where} says {stated(claim.number)}, the set holds "
-        f"{expected(claim.noun, claim.number)}"
+        f"{expected(claim.noun, claim.number, claim.subset())}"
         for claim in CLAIMS
-        if claim.excused_by() is None and stated(claim.number) != expected(claim.noun, claim.number)
+        if claim.excused_by() is None
+        and stated(claim.number) != expected(claim.noun, claim.number, claim.subset())
     )
     assert not wrong, (
         f"{len(wrong)} spelled count(s) disagree with `Capability` or `Purpose`, which "

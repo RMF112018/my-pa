@@ -346,14 +346,15 @@ it adds no public capability and has not been exercised against live contacts,
 email, or calendar data.
 
 **That describes WP-9, and is no longer true of the plane.** Corrected
-2026-08-19: the Relationship Intelligence entity plane adds **five** public read
+2026-08-19: the Relationship Intelligence entity plane adds **six** public read
 capabilities — `entities.search`, `entities.get`, `entities.resolve`,
-`entities.context`, `entities.relationships` — and this document, whose job is
+`entities.context`, `entities.relationships`, `entities.unresolved_mentions` —
+and this document, whose job is
 stating what the build does not do, said nothing about them. What remains true,
 and is the limitation:
 
 * **They are off by default.** A process that has not set
-  `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the five and
+  `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the six and
   refuses each with `unsupported` on every transport.
 * **Nothing writes.** The plane has no write capability.
   `src/my_pa/application/entity_governance.py` and

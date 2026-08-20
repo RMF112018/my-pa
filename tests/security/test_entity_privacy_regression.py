@@ -32,6 +32,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityRelationships,
+    ListUnresolvedMentions,
     ResolveEntity,
     SearchEntities,
 )
@@ -45,7 +46,14 @@ from my_pa.bootstrap.relationship_intelligence_task import (
 from my_pa.bootstrap.settings import Settings
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
-from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
+from my_pa.domain.relationship.entity import (
+    AliasType,
+    Entity,
+    EntityAlias,
+    EntityStatus,
+    EntityType,
+)
+from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
 from my_pa.domain.relationship.normalization import normalize_name
 
 WHEN: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
@@ -84,13 +92,35 @@ def _entity(
 
 @pytest.fixture
 def staged(scene: Scene) -> Scene:
-    """One entity the caller owns, and one another Principal owns."""
+    """One entity the caller owns, and one another Principal owns.
+
+    The foreign Principal also holds an *unplaced observation*. Without it,
+    adding `entities.unresolved_mentions` to the sweep below would prove
+    nothing: the queue would answer empty because there was nothing to leak,
+    not because the partition held.
+    """
     mine = scene.principal.principal_id
     theirs = "prn_ffff0009ffff0009ffff0009"
     with FakeUnitOfWork(scene.world) as unit_of_work:
         unit_of_work.entities.create(mine, _entity(OWN_ENTITY, INJECTION_NAME, mine))
         unit_of_work.entities.create(
             theirs, _entity(FOREIGN_ENTITY, "Confidential Counterparty", theirs)
+        )
+        unit_of_work.entities.record_observation(
+            theirs,
+            EntityObservation(
+                observation_id="eobs_foreign01foreign1",
+                principal_id=theirs,
+                kind=ObservationKind.MESSAGE_PARTICIPANT,
+                observed_value="Confidential Counterparty <cc@rival.test>",
+                normalized_value=normalize_name("Confidential Counterparty"),
+                source_id=scene.source.source_id,
+                source_object_id=scene.markdown.source_object_id,
+                source_version_id="ver_foreign01foreign01",
+                observed_at=WHEN,
+                recorded_at=WHEN,
+                entity_id=None,
+            ),
         )
     return scene
 
@@ -111,7 +141,25 @@ _EVERY_CAPABILITY: Final = (
     (Capability.ENTITIES_RESOLVE, ResolveEntity(reference="Confidential Counterparty")),
     (Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=FOREIGN_ENTITY)),
     (Capability.ENTITIES_RELATIONSHIPS, GetEntityRelationships(entity_id=FOREIGN_ENTITY)),
+    (Capability.ENTITIES_UNRESOLVED_MENTIONS, ListUnresolvedMentions()),
 )
+
+
+def test_this_file_exercises_every_capability_on_the_plane() -> None:
+    """The completeness guard this file's docstring already promised.
+
+    The tuple above is hand-written, so it cannot notice an addition — which is
+    the defect class this module's own docstring names, and which then happened
+    to this module: `entities.unresolved_mentions` was served for a full
+    revision while the sweep below still covered the original five and the
+    docstring still said "every capability".
+
+    Derived from the `entities.` prefix, so a further capability reddens here by
+    name rather than quietly narrowing the sweep.
+    """
+    served = {capability for capability in Capability if capability.value.startswith("entities.")}
+    assert {capability for capability, _ in _EVERY_CAPABILITY} == served
+    assert len(served) == 6
 
 
 # --- the partition, under every capability ---------------------------------
@@ -263,3 +311,92 @@ def test_the_task_profile_refuses_every_capability_outside_it() -> None:
     for capability in Capability:
         outside = capability not in ALLOWED_CAPABILITIES
         assert mcp_profile_refuses(capability.value, published=published) is outside
+
+
+# --- what a browse result may not disclose ---------------------------------
+
+
+def test_search_does_not_match_an_alias_and_so_cannot_surface_a_former_name(
+    staged: Scene,
+) -> None:
+    """The rule `EntityRepository.search` states, asserted rather than assumed.
+
+    `search` matches canonical and display name only. It deliberately does not
+    match aliases, because putting a nickname, a maiden name or a former legal
+    name into a browse result that nobody asked a question about is a
+    disclosure this plane refuses. A caller who wants alias matching asks the
+    question that means it — `entities.resolve` — which discloses *that* an
+    alias matched.
+
+    **This had no test.** Adding alias matching to `search` — a sympathetic
+    feature request, and one the frontend package would plausibly file — left
+    the entire suite green while turning an unprompted browse into a disclosure
+    of a former legal name. Staged so the alias shares no substring with either
+    name the entity is stored under, so a match could only come from the alias.
+    """
+    mine = staged.principal.principal_id
+    with FakeUnitOfWork(staged.world) as unit_of_work:
+        unit_of_work.entities.record_alias(
+            mine,
+            EntityAlias(
+                alias_id="eals_former01former01",
+                entity_id=OWN_ENTITY,
+                alias_type=AliasType.FORMER_NAME,
+                normalized_value=normalize_name("Roberta Vandenberg"),
+                display_value="Roberta Vandenberg",
+                principal_id=mine,
+            ),
+        )
+
+    answer = _answer(staged, Capability.ENTITIES_SEARCH, SearchEntities(query="Roberta"))
+    result = answer["result"]
+    assert isinstance(result, dict)
+    assert result["entities"] == []
+    assert "Roberta" not in repr(answer)
+    assert "Vandenberg" not in repr(answer)
+
+
+def test_the_alias_rule_holds_on_the_paginated_path_too(staged: Scene) -> None:
+    """The sibling the previous test does not reach.
+
+    `search` gained a cursor, so it has two paths into the same predicate, and a
+    rule proved on one of them is proved on one of them — the defect shape this
+    branch has produced four times.
+
+    The cursor names a *different* entity that sorts first, so the aliased one
+    is genuinely on the continuation page and an alias match would surface it.
+    Pointing the cursor at the aliased entity itself would exclude it by keyset
+    and the test would pass for the wrong reason — which is what the first
+    draft of this test did.
+    """
+    mine = staged.principal.principal_id
+    first = "ent_first0003first003"
+    with FakeUnitOfWork(staged.world) as unit_of_work:
+        unit_of_work.entities.create(mine, _entity(first, "Aaa Sorts First", mine))
+        unit_of_work.entities.record_alias(
+            mine,
+            EntityAlias(
+                alias_id="eals_former02former02",
+                entity_id=OWN_ENTITY,
+                alias_type=AliasType.NICKNAME,
+                normalized_value=normalize_name("Vandenberg"),
+                display_value="Vandenberg",
+                principal_id=mine,
+            ),
+        )
+
+    # The control: the cursor really does leave the aliased entity reachable.
+    reachable = _answer(
+        staged, Capability.ENTITIES_SEARCH, SearchEntities(query="Ignore", after=first)
+    )["result"]
+    assert isinstance(reachable, dict)
+    assert [entity["entity_id"] for entity in reachable["entities"]] == [OWN_ENTITY]  # type: ignore[index,union-attr]
+
+    answer = _answer(
+        staged,
+        Capability.ENTITIES_SEARCH,
+        SearchEntities(query="Vandenberg", after=first),
+    )
+    result = answer["result"]
+    assert isinstance(result, dict)
+    assert result["entities"] == []

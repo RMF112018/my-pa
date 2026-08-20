@@ -735,6 +735,34 @@ def _managed_translated() -> Iterator[None]:
         raise failure
 
 
+@contextmanager
+def _entity_translated() -> Iterator[None]:
+    """Classify what the entity plane's paged reads refuse.
+
+    Inside `_translated`, for the same reason `_managed_translated` is: that one
+    turns every `UnknownScopeError` into the enrollment-shaped `not_found` most
+    capabilities want, and **this plane has no enrollments at all**. An entity
+    carries no enrollment a scope could be compared against, which is the whole
+    argument for its unenrolled trust basis — so answering `not_found` naming
+    `enrollment_id` names a field the request does not have and the plane does
+    not model.
+
+    The three paged reads raise `UnknownScopeError` for exactly one reason: a
+    cursor that names a record this Principal cannot read. `cursor` is
+    therefore what the answer names, and it is the same field the command
+    already names when the cursor is *malformed* — so a caller sees one field
+    for one problem, differing only in whether the request was badly formed or
+    the position was not theirs.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except UnknownScopeError:
+        failure = NotFoundError(SafeDetail.CURSOR)
+    if failure is not None:
+        raise failure
+
+
 #: What a managed-document answer's trust rests on. `principal_partition`
 #: because every statement under it carries the authenticated partition, and
 #: `product_managed_custody` because the bytes are the product's own — written
@@ -952,11 +980,13 @@ def _observation_view(observation: EntityObservation) -> dict[str, object]:
 
 
 def _unresolved_mention_view(observation: EntityObservation) -> dict[str, object]:
-    """One unresolved mention, with the form that would match and not the raw text.
+    """One unresolved mention, with the matchable form and not the observed text.
 
     See `_entities_unresolved_mentions` for why this differs from
     `_observation_view`: a queue of things nobody could place is useless without
-    the thing that could not be placed.
+    the thing that could not be placed. Withholding `observed_value` is a real
+    boundary and it is **not** a redaction of it — see that handler on why the
+    writer, not this view, is what keeps raw text out of `normalized_value`.
     """
     return {
         "observation_id": observation.observation_id,
@@ -1029,7 +1059,7 @@ class ApplicationService:
         #: than publish six a caller cannot reach.
         self._managed_store_or_none = managed_store
         #: Whether this build serves the relationship-intelligence entity plane.
-        #: Default `False`, and the default is the point: the five `entities.*`
+        #: Default `False`, and the default is the point: the six `entities.*`
         #: capabilities read who a person is, and `adapters.mcp.remote` derives
         #: the remote tool profile from `Capability` with no per-capability
         #: exclusion list — so a non-operator read joins the remote surface the
@@ -1073,7 +1103,7 @@ class ApplicationService:
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
         something the composition root did not supply — the six `documents.`
-        names in a process with no managed root, and the five `entities.` names
+        names in a process with no managed root, and the six `entities.` names
         in one that has not enabled the relationship plane. It is one answer with
         two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
@@ -2801,7 +2831,7 @@ class ApplicationService:
 
     # --- the relationship-intelligence entity plane (WP-RI-05) ---------------
     #
-    # Five reads, one purpose, no writes. Each answers from the acting
+    # Six reads, one purpose, no writes. Each answers from the acting
     # Principal's own partition, so each carries `_ENTITY_TRUST_BASIS` and an
     # unenrolled disclosure: an entity belongs to no `src_…` and no `enr_…`, and
     # naming one would be inventing a grant.
@@ -2815,10 +2845,10 @@ class ApplicationService:
         the request.
 
         **This is the floor, and it was missing.** `available_capabilities`
-        withholds the five `entities.` names, and two readers consult it —
+        withholds the six `entities.` names, and two readers consult it —
         `capabilities.get` and the MCP tool list. The HTTP transport is not one
         of them: `/v1/{capability}` routes by path segment and `_run` dispatches
-        straight from `_HANDLERS`, so every one of the five executed and
+        straight from `_HANDLERS`, so every one of the six executed and
         answered with entity rows on a build that reported them as
         `not_implemented`. A manifest describing a different build than the one
         running is exactly what `_capabilities_get` says it exists to prevent,
@@ -2850,7 +2880,7 @@ class ApplicationService:
         principal_id = authorization.principal.principal_id
         entity_type = _entity_type_or_refuse(command.entity_type)
         page_size = self._page_size(command.page_size)
-        with _translated():
+        with _translated(), _entity_translated():
             found = unit_of_work.entities.search(
                 principal_id,
                 command.query,
@@ -2988,15 +3018,29 @@ class ApplicationService:
         the queue `RI-AC-006` asks to be first-class and searchable rather than
         an absence a reader has to infer.
 
-        **The normalized value is disclosed; the observed value is not.** The
-        context card omits both, because a card summarises an entity that has
-        already been identified and the raw text is evidence that lives at its
-        source. Here the identifying text is the entire point — a queue that
-        said only "three mentions could not be placed" would give an operator
-        nothing to recognise. So the matchable form goes out, which is the same
-        class of datum as a `canonical_name` that `entities.search` already
-        returns freely, and the raw lifted text — a name inside a mail envelope,
-        with whatever else the envelope carried — does not.
+        **The normalized value is disclosed; the observed value is not — and
+        that is a weaker guarantee than it looks.** The context card omits both,
+        because a card summarises an entity that has already been identified and
+        the raw text is evidence that lives at its source. Here the identifying
+        text is the entire point: a queue that said only "three mentions could
+        not be placed" would give an operator nothing to recognise. So the
+        matchable form goes out, which is the same class of datum as a
+        `canonical_name` that `entities.search` already returns freely.
+
+        **Normalization is not redaction, and this docstring used to claim it
+        was.** `normalize_name` casefolds and turns punctuation into spaces. It
+        removes no content. A writer that sets `normalized_value` to
+        `normalize_name(<raw lifted text>)` therefore publishes that text with
+        its dots turned into spaces — `"A. Chen <a.chen@northwind.test>"`
+        becomes `"a chen a chen northwind test"`, which carries the local part
+        and the domain and is `is_normalized_name`-true. The obligation is
+        consequently on the **writer**, and it is stated as a contract on
+        `EntityRepository.record_observation`: the normalized value must be a
+        normalized *extracted name*, never normalized raw text. Nothing in
+        `src/` writes this table yet, so the queue is empty on every build and
+        the exposure is prospective — but it lands the moment ingestion does,
+        which is why the constraint is written down before the writer exists
+        rather than after.
 
         **Read-only, and it stays that way.** Linking a mention to an entity is
         a governed write and this plane publishes none (`D-RI-21`). A caller can
@@ -3005,7 +3049,7 @@ class ApplicationService:
         self._entity_plane()
         principal_id = authorization.principal.principal_id
         page_size = self._page_size(command.page_size)
-        with _translated():
+        with _translated(), _entity_translated():
             found = unit_of_work.entities.observations(
                 principal_id,
                 unresolved_only=True,
@@ -3059,7 +3103,7 @@ class ApplicationService:
         self._entity_plane()
         principal_id = authorization.principal.principal_id
         page_size = self._page_size(command.page_size)
-        with _translated():
+        with _translated(), _entity_translated():
             entity = unit_of_work.entities.get(principal_id, command.entity_id)
             if entity is None:
                 raise NotFoundError(SafeDetail.TARGET_ID)

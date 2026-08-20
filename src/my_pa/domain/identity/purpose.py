@@ -158,8 +158,8 @@ class Purpose(StrEnum):
     # edges. A grant issued to search extracted text has no occasion to also
     # return who a person is.
     #
-    # One rather than two, on the `capture.search` argument (`D-91`): all five
-    # `entities.*` capabilities read the same rows under the same authority, so
+    # One rather than two, on the `capture.search` argument (`D-91`): every
+    # `entities.*` capability reads the same rows under the same authority, so
     # a second read purpose would map to exactly one capability and separate
     # nothing while costing another frozen-constraint `ALTER`. The *write*
     # purpose is deliberately absent rather than declared unused — this plane

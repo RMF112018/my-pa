@@ -472,7 +472,7 @@ def greedy_note_matches(
 
 
 def predicted_segment_contract_payload(segment: PredictedSegment) -> dict[str, object]:
-    """Lossless note-unit.v2 payload. Does not drop SOURCE_CONTEXT enrichment."""
+    """Lossless note-unit.v2 payload. Does not drop SOURCE_CONTEXT enrichment or extra."""
     payload: dict[str, object] = {
         "kind": segment.kind.value,
         "geometry": {
@@ -504,6 +504,12 @@ def predicted_segment_contract_payload(segment: PredictedSegment) -> dict[str, o
             "linking": segment.confidence.linking,
             "uncertainty": segment.confidence.uncertainty,
         }
+    extra = dict(segment.extra)
+    if extra:
+        overlap = extra.keys() & payload.keys()
+        if overlap:
+            raise ValueError("malformed segment extra")
+        payload.update(extra)
     return payload
 
 

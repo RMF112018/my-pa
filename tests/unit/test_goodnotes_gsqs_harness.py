@@ -558,3 +558,125 @@ def test_direct_construction_score_partition_fails_closed() -> None:
     )
     assert result.measurement_valid is False
     assert record.measurement_valid is False
+    assert record.analyzer_name == "local"
+    assert record.analyzer_version == "1"
+
+
+def _malformed_partition_outputs(
+    selected: Sequence[CorpusCase], *, analyzer_name: str, analyzer_version: str
+) -> tuple[AnalyzerOutput, ...]:
+    from my_pa.application.goodnotes_gsqs import Confidence
+    from my_pa.domain.goodnotes.models import GoodNotesSegmentKind
+
+    docs: list[AnalyzerOutput] = []
+    for index, item in enumerate(selected):
+        doc = gold_as_output(item, analyzer_name=analyzer_name, analyzer_version=analyzer_version)
+        if index == 0:
+            note = next(
+                segment
+                for segment in doc.segments
+                if segment.kind is GoodNotesSegmentKind.NOTE_UNIT
+            )
+            bad_segment = replace(note, confidence=Confidence(0.1, 1.2, 0.1, 0.1))
+            segments = tuple(
+                bad_segment if segment is note else segment for segment in doc.segments
+            )
+            doc = replace(doc, segments=segments)
+        docs.append(doc)
+    return tuple(docs)
+
+
+def test_score_partition_retains_artifact_identity_when_admission_fails() -> None:
+    cases, manifest = freeze_v2_corpus()
+    selected = _scoreable_b(cases)
+    malformed_incumbent = _malformed_partition_outputs(
+        selected, analyzer_name=INCUMBENT_ANALYZER_NAME, analyzer_version="sit-1.0"
+    )
+    malformed_local = _malformed_partition_outputs(
+        selected, analyzer_name="local", analyzer_version="1"
+    )
+    with pytest.raises(ValueError, match="disagrees"):
+        score_partition(
+            cases,
+            malformed_incumbent,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name="local",
+            analyzer_version="1",
+            run_repetition=1,
+            model_identity="model-a",
+            prompt_config_identity="prompt-a",
+            repository_commit="aa" * 20,
+            repository_tree="bb" * 20,
+        )
+    with pytest.raises(ValueError, match="model_identity"):
+        score_partition(
+            cases,
+            malformed_incumbent,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name=INCUMBENT_ANALYZER_NAME,
+            analyzer_version="sit-1.0",
+            run_repetition=1,
+            prompt_config_identity="prompt-a",
+            repository_commit="aa" * 20,
+            repository_tree="bb" * 20,
+        )
+    with pytest.raises(ValueError, match="prompt_config_identity"):
+        score_partition(
+            cases,
+            malformed_incumbent,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name=INCUMBENT_ANALYZER_NAME,
+            analyzer_version="sit-1.0",
+            run_repetition=1,
+            model_identity="model-a",
+            repository_commit="aa" * 20,
+            repository_tree="bb" * 20,
+        )
+    with pytest.raises(ValueError, match="repository_commit"):
+        score_partition(
+            cases,
+            malformed_incumbent,
+            partition=CorpusPartition.B,
+            manifest=manifest,
+            analyzer_name=INCUMBENT_ANALYZER_NAME,
+            analyzer_version="sit-1.0",
+            run_repetition=1,
+            model_identity="model-a",
+            prompt_config_identity="prompt-a",
+        )
+    result, record = score_partition(
+        cases,
+        malformed_incumbent,
+        partition=CorpusPartition.B,
+        manifest=manifest,
+        analyzer_name=INCUMBENT_ANALYZER_NAME,
+        analyzer_version="sit-1.0",
+        run_repetition=1,
+        model_identity="model-a",
+        prompt_config_identity="prompt-a",
+        repository_commit="aa" * 20,
+        repository_tree="bb" * 20,
+    )
+    assert result.measurement_valid is False
+    assert result.invalid_reason == "malformed-proposal"
+    assert record.measurement_valid is False
+    assert record.analyzer_name == INCUMBENT_ANALYZER_NAME
+    assert record.analyzer_version == "sit-1.0"
+    assert record.model_identity == "model-a"
+    assert record.prompt_config_identity == "prompt-a"
+    _, local_record = score_partition(
+        cases,
+        malformed_local,
+        partition=CorpusPartition.B,
+        manifest=manifest,
+        analyzer_name="local",
+        analyzer_version="1",
+        run_repetition=1,
+    )
+    assert local_record.measurement_valid is False
+    assert local_record.analyzer_name == "local"
+    assert local_record.analyzer_version == "1"
+    assert local_record.candidate_config_digest != record.candidate_config_digest

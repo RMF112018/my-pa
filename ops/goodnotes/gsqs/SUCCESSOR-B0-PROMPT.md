@@ -12,8 +12,8 @@ Current handwriting identities after GSQS-B-138 remediation:
 - manifest digest: `238c22aa5b51fee3993a8e72e0b2ce9d696fb9f7b164a2853d1ddc3f59eabaed`
 - combined Gate B identity: `bda6e66bbaf5ac068e5b2cf64a52f1e6c06975b5dd86294591de82fe8afdeb8b`
 - evaluator: `goodnotes-gsqs-independent` `1.1`
-- evaluator code identity: `2529953e1028628d603ee6772285e7786c86d81065e2972b866e3d95e2d82ca2`
-- evaluator implementation digest: `885969480d850ebd5f8214147fc737c42b3c09f785f04ef0c084118f76146142`
+- evaluator code identity: `3673a9dbf99214dc6d724822682c2b5547c7a0343d56c7024956734f1516fc7d`
+- evaluator implementation digest: `ca23ecebd5252c3924da0e29e7320f1fd301111290340a0105daeb8f3470b5e4`
 - synthetic layer: `gsqs-v2` / `e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd`
 
 `b0_suitable = false`. Admitted labels are `PENDING` /
@@ -84,17 +84,20 @@ Ordinary production GoodNotes ingest remains prohibited.
 1. For each scoreable Corpus B case, give the analyzer only the visual
    evidence and the interchange contract (`gsqs-analyzer-output-v1`).
    Capture `note-unit.v2` segments. Do not persist production proposals.
-2. Repeat the full Corpus B pass at least **3** independent times (more if
+   2. Repeat the full Corpus B pass at least **3** independent times (more if
    observed variance warrants it). Record run/repetition number.
 3. Score each pass with harness `score_partition` after `parse_interchange`
    (or equivalent validated admission). `evaluate_gsqs` re-admits constructed
    analyzer output through the shared note-unit.v2 contract; it is not a
-   bypass around that contract. Do not score raw/unvalidated
-   `AnalyzerOutput` objects. Analyzer identity is derived from the
-   validated artifacts actually scored. Incumbent outputs require explicit
-   `model_identity` and `prompt_config_identity`, plus exact repository
-   commit/tree. Frozen-case `content_sha256` must match. Malformed
-   interchange is fail-closed. The evaluator is independent.
+   bypass around that contract. Per-segment `extra` is preserved into that
+   contract and fail-closes when unknown or forbidden. Do not score
+   raw/unvalidated `AnalyzerOutput` objects. Analyzer identity is derived
+   from the raw scored artifacts even when segment admission later fails.
+   Incumbent identity requirements are not bypassable by malformed output.
+   Incumbent outputs require explicit `model_identity` and
+   `prompt_config_identity`, plus exact repository commit/tree. Frozen-case
+   `content_sha256` must match. Malformed interchange is fail-closed. The
+   evaluator is independent.
 4. Publish component scores, GSQS, critical errors, and
    `measurement_valid` per repetition.
 5. Compute mean, median, standard deviation (or equivalent spread), and

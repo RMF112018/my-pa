@@ -29,7 +29,6 @@ from my_pa.application.goodnotes_gsqs import (
     GoldRegion,
     MeasurementRecord,
     PredictedSegment,
-    admit_analyzer_output,
     evaluate_gsqs,
     evaluator_code_identity,
     parse_predicted_segment,
@@ -285,33 +284,22 @@ def score_partition(
     claimed = {item.corpus_version or "missing" for item in outputs}
     output_version = claimed.pop() if len(claimed) == 1 else "mismatch"
     expected_content = {case.case_id: case.content_sha256 for case in selected}
-    try:
-        admitted: tuple[AnalyzerOutput, ...] | None = tuple(
-            admit_analyzer_output(item) for item in outputs
+    derived_name, derived_version = derive_analyzer_identity(outputs)
+    if derived_name != analyzer_name or derived_version != analyzer_version:
+        raise ValueError("analyzer identity disagrees with scored artifacts")
+    require_live_b0_identities(
+        analyzer_name=derived_name,
+        model_identity=model_identity,
+        prompt_config_identity=prompt_config_identity,
+    )
+    if derived_name == INCUMBENT_ANALYZER_NAME:
+        require_live_b0_repository_identity(
+            repository_commit=repository_commit,
+            repository_tree=repository_tree,
         )
-    except ValueError:
-        admitted = None
-    if admitted is None:
-        derived_name, derived_version = analyzer_name, analyzer_version
-        scoring_outputs: Sequence[AnalyzerOutput] = outputs
-    else:
-        derived_name, derived_version = derive_analyzer_identity(admitted)
-        if derived_name != analyzer_name or derived_version != analyzer_version:
-            raise ValueError("analyzer identity disagrees with scored artifacts")
-        require_live_b0_identities(
-            analyzer_name=derived_name,
-            model_identity=model_identity,
-            prompt_config_identity=prompt_config_identity,
-        )
-        if derived_name == INCUMBENT_ANALYZER_NAME:
-            require_live_b0_repository_identity(
-                repository_commit=repository_commit,
-                repository_tree=repository_tree,
-            )
-        scoring_outputs = admitted
     result = evaluate_gsqs(
         gold,
-        scoring_outputs,
+        outputs,
         path_includes_reconciliation=path_includes_reconciliation,
         expected_corpus_version=manifest.corpus_version,
         output_corpus_version=output_version,

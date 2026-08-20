@@ -538,3 +538,17 @@ def test_direct_analyzer_output_bypass_fails_closed() -> None:
         for index in range(51)
     )
     _assert_direct_construction_fails_closed(_output(*too_many))
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), extra={"change_state": "NEW"}))
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), extra={"principal_id": "p-1"}))
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), extra={"tool": "knowledge.search"}))
+    )
+    _assert_direct_construction_fails_closed(
+        _output(replace(_pred(gold), extra={"unknown_field": "x"}))
+    )
+    valid_empty_extra = _output(replace(_pred(gold), extra={}))
+    assert evaluate_gsqs(((CASE, (gold,)),), (valid_empty_extra,)).measurement_valid is True

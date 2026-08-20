@@ -18,10 +18,10 @@ floor behavior:
 - `application/goodnotes_note_unit_contract.py`
 - `domain/goodnotes/models.py`
 
-`2529953e1028628d603ee6772285e7786c86d81065e2972b866e3d95e2d82ca2`
+`3673a9dbf99214dc6d724822682c2b5547c7a0343d56c7024956734f1516fc7d`
 
 Implementation digest (those six modules):
-`885969480d850ebd5f8214147fc737c42b3c09f785f04ef0c084118f76146142`
+`ca23ecebd5252c3924da0e29e7320f1fd301111290340a0105daeb8f3470b5e4`
 
 Changing scoring, admission, case/gold selection, schema/enums, or
 interchange parsing without bumping `EVALUATOR_VERSION` still changes
@@ -33,9 +33,13 @@ from execution context (library code does not read `.git`).
 
 `evaluate_gsqs` and `score_partition` re-admit constructed
 `AnalyzerOutput` objects through the shared note-unit.v2 contract
-before a measurement can become valid. Analyzer identity recorded in a
-measurement is derived from the validated artifacts, not from an
-independent caller override.
+before a measurement can become valid. Per-segment `extra` is included
+in that reconstructed payload and is never sanitized away; unknown or
+forbidden extras fail closed. Analyzer identity recorded in a
+measurement is derived from the raw scored artifacts' analyzer
+name/version before segment admission, including when later admission
+fails. Caller arguments are assertions against that artifact identity,
+not a fallback.
 
 The evaluator consumes frozen ground truth and analyzer-produced
 `note-unit.v2` output. It does not call the production worker. The worker

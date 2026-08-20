@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes forty-eight capability names and none of them mutates a source,
+  ends: the transport routes fifty-six capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -40,7 +40,7 @@ import logging
 from base64 import b64encode
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -74,6 +74,7 @@ from my_pa.adapters.http import (
     create_http_app,
 )
 from my_pa.adapters.normalization import _BUILDERS
+from my_pa.application.intelligence import begin_cycle, commit_artifact
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import EvidenceUnavailableError, KnowledgeRecord
 from my_pa.contracts.v1.errors import ErrorCode
@@ -82,6 +83,13 @@ from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.intelligence.catalog import (
+    CYCLE_MORNING_INTELLIGENCE,
+    ArtifactKind,
+    ArtifactState,
+    FocusAreaId,
+    IntelligenceStage,
+)
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.source.registry import issue_identifier
 
@@ -223,6 +231,41 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     commitment = staged_commitment(marked)
     work = staged_goodnotes_work(marked)
     raster = staged_goodnotes_raster(marked)
+    at = datetime(2026, 8, 2, 11, tzinfo=UTC)
+    cycle_admission = begin_cycle(
+        marked.world.intelligence,
+        principal_id=marked.principal.principal_id,
+        cycle_id=CYCLE_MORNING_INTELLIGENCE,
+        business_date=date(2026, 8, 20),
+        idempotency_key="wire-cycle-setup",
+        at=at,
+        automation_platform=None,
+        external_orchestration_id=None,
+    )
+    assert cycle_admission.cycle is not None
+    cycle_run_id = cycle_admission.cycle.cycle_run_id
+    collector_admission = commit_artifact(
+        marked.world.intelligence,
+        principal_id=marked.principal.principal_id,
+        cycle_run_id=cycle_run_id,
+        stage=IntelligenceStage.COLLECTOR,
+        artifact_kind=ArtifactKind.COLLECTOR_CANDIDATES,
+        focus_area_id=FocusAreaId.COMMUNICATIONS,
+        source_lane=None,
+        producer_task_id="wire-setup-collector",
+        producer_task_name="Wire setup collector",
+        automation_platform="abacus_chatllm",
+        automation_run_id=None,
+        report_date=date(2026, 8, 20),
+        title="Wire setup collector",
+        body_markdown=MARKER_CONTENT,
+        artifact_state=ArtifactState.FINAL,
+        schema_version="1",
+        idempotency_key="wire-setup-collector",
+        at=at,
+    )
+    assert collector_admission.artifact is not None
+    report_id = collector_admission.artifact.artifact_id
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -406,6 +449,62 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
                 }
             ],
         },
+        Capability.REPORTS_BEGIN_CYCLE: {
+            "cycle_id": "morning_intelligence",
+            "business_date": "2026-08-20",
+            "idempotency_key": "wire-cycle-0001",
+        },
+        Capability.REPORTS_COMMIT: {
+            "cycle_run_id": cycle_run_id,
+            "stage": "collector",
+            "artifact_kind": "collector_candidates",
+            "focus_area_id": "communications",
+            "producer_task_id": "wire-collector",
+            "producer_task_name": "Wire Collector",
+            "automation_platform": "abacus_chatllm",
+            "report_date": "2026-08-20",
+            "title": "Wire collector",
+            "body_markdown": MARKER_CONTENT,
+            "artifact_state": "final",
+            "schema_version": "1",
+            "idempotency_key": "wire-report-commit-0001",
+        },
+        Capability.REPORTS_RECORD_RUN_STATE: {
+            "cycle_run_id": cycle_run_id,
+            "stage": "researcher",
+            "artifact_kind": "research_context",
+            "focus_area_id": "communications",
+            "source_lane": "teams",
+            "producer_task_id": "wire-researcher",
+            "producer_task_name": "Wire Researcher",
+            "automation_platform": "abacus_chatllm",
+            "report_date": "2026-08-20",
+            "state": "failed",
+            "idempotency_key": "wire-run-state-0001",
+            "failure_code": "source_unavailable",
+        },
+        Capability.REPORTS_READ: {
+            "report_id": report_id,
+            "include_body": True,
+        },
+        Capability.REPORTS_LATEST: {
+            "cycle_run_id": cycle_run_id,
+            "stage": "collector",
+            "focus_area_id": "communications",
+        },
+        Capability.REPORTS_LIST: {
+            "cycle_run_id": cycle_run_id,
+            "page_size": 10,
+        },
+        Capability.REPORTS_SEARCH: {
+            "query": MARKER_QUERY,
+            "cycle_run_id": cycle_run_id,
+            "page_size": 10,
+        },
+        Capability.REPORTS_RESOLVE_SET: {
+            "cycle_run_id": cycle_run_id,
+            "set_id": "collectors",
+        },
     }
 
 
@@ -577,6 +676,14 @@ SCOPED_CAPABILITIES = [
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.REPORTS_READ,
+        Capability.REPORTS_LATEST,
+        Capability.REPORTS_LIST,
+        Capability.REPORTS_SEARCH,
+        Capability.REPORTS_RESOLVE_SET,
     }
 ]
 

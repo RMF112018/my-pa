@@ -150,3 +150,15 @@ class Purpose(StrEnum):
     # wide enough to cover both the handle and the handwriting raster is a
     # purpose that grants both.
     GOODNOTES_CONTENT = "goodnotes_content"
+    # Intelligence Artifact / Report plane. Two purposes rather than a reuse of
+    # `capture_authoring`, `document_authoring`, or `knowledge_read`. `D-91`'s
+    # test: would reuse widen the grant? Yes. Capture authoring writes
+    # user-authored notes. Document authoring writes managed-document bytes.
+    # Knowledge read is one enrollment's extraction plane. Admitting a
+    # synthesized Morning Intelligence artifact under any of those would let a
+    # grant issued to store a note, write a file, or read extracted text also
+    # persist or retrieve pipeline artifacts. Writing and reading are separated
+    # for the same reason the capture and document pairs are two: a purpose wide
+    # enough to cover both is a purpose that grants both.
+    REPORT_AUTHORING = "report_authoring"
+    REPORT_READ = "report_read"

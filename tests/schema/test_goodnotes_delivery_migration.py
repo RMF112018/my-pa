@@ -27,7 +27,7 @@ EXACT_RENDER_REVISION: Final = "c3e9a7f1b204"
 CONTENT_REVISION: Final = "a4d9c2e7b815"
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
 ENTITY_KIND_REVISION: Final = "d9c4e1a7b628"
-HEAD_REVISION: Final = "f4c1a8e6b205"
+HEAD_REVISION: Final = "e9b2c4d7a150"
 PRIOR: Final = "d7e1a4c8b926"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_e8c1b5a7d204_add_goodnotes_new_only_delivery_receipts.py"
@@ -90,8 +90,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(CONTENT_REVISION).down_revision == EXACT_RENDER_REVISION
     assert script.get_revision(GROUNDING_REVISION).down_revision == CONTENT_REVISION
     assert script.get_revision(ENTITY_KIND_REVISION).down_revision == GROUNDING_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ENTITY_KIND_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 58
+    assert script.get_revision("f4c1a8e6b205").down_revision == ENTITY_KIND_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == "f4c1a8e6b205"
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 59
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

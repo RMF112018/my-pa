@@ -256,6 +256,14 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.GOODNOTES_WORK, Purpose.GOODNOTES_WORK),
         (Capability.GOODNOTES_CONTENT, Purpose.GOODNOTES_CONTENT),
         (Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL),
+        (Capability.REPORTS_BEGIN_CYCLE, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_COMMIT, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_RECORD_RUN_STATE, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_READ, Purpose.REPORT_READ),
+        (Capability.REPORTS_LATEST, Purpose.REPORT_READ),
+        (Capability.REPORTS_LIST, Purpose.REPORT_READ),
+        (Capability.REPORTS_SEARCH, Purpose.REPORT_READ),
+        (Capability.REPORTS_RESOLVE_SET, Purpose.REPORT_READ),
     }
 )
 
@@ -283,9 +291,9 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # WP-TM-05 added 5 and 2; context.prepare/feedback added 2 capabilities and
     # 2 purposes; goodnotes.work/propose added 2 capabilities and 2 purposes;
     # goodnotes.content added 1 capability and 1 purpose.
-    # Unioned: 48 capabilities, 22 purposes, 50 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 50
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 50 == 1006
+    # Unioned: 56 capabilities, 24 purposes, 58 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 58
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 58 == 1286
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

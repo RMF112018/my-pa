@@ -176,6 +176,17 @@ _ORDINAL_UNITS = (
     "forty-seventh",
     "forty-eighth",
     "forty-ninth",
+    "fiftieth",
+    "fifty-first",
+    "fifty-second",
+    "fifty-third",
+    "fifty-fourth",
+    "fifty-fifth",
+    "fifty-sixth",
+    "fifty-seventh",
+    "fifty-eighth",
+    "fifty-ninth",
+    "sixtieth",
 )
 
 

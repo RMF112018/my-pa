@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with forty-eight capabilities and twenty-two
+emits what it emitted on the day it merged, with fifty-six capabilities and twenty-four
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -237,6 +237,14 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "goodnotes.work",
         # RWP-02. `a4d9c2e7b815` is the forward `ALTER` that admits it.
         "goodnotes.content",
+        "reports.begin_cycle",
+        "reports.commit",
+        "reports.latest",
+        "reports.list",
+        "reports.read",
+        "reports.record_run_state",
+        "reports.resolve_set",
+        "reports.search",
     }
 )
 

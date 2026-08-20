@@ -23,6 +23,7 @@ The current remediation candidate is `bf/pilot-blocker-remediation`, forked from
 - [`docs/decisions/ADR-004-mossaic-frontend-nextjs-app-router.md`](decisions/ADR-004-mossaic-frontend-nextjs-app-router.md) — Next.js App Router PWA as the MossAIc frontend, with a synthetic identity provider until a real Entra registration exists.
 - [`docs/decisions/ADR-008-nas-runtime-topology.md`](decisions/ADR-008-nas-runtime-topology.md) — accepted NAS runtime placement, filesystem authority, ingress, auth, image-platform, restart, and Mac Apple-TCC split.
 - [`docs/decisions/ADR-009-oauth-refresh-token-families.md`](decisions/ADR-009-oauth-refresh-token-families.md) — rotating opaque refresh-token families for remote MCP; 1-hour access tokens remain; existing clients refresh-disabled by default.
+- [`docs/decisions/ADR-010-intelligence-artifact-report-plane.md`](decisions/ADR-010-intelligence-artifact-report-plane.md) — product-owned Intelligence Artifact / Report plane: immutable artifacts, cycle-run identity, staged pipeline lineage.
 - [`docs/architecture/system-context.md`](architecture/system-context.md) — actors, external systems, trust and authority boundaries.
 - [`docs/architecture/module-boundaries.md`](architecture/module-boundaries.md) — module ownership, dependency direction, and split triggers.
 - [`docs/architecture/data-authority.md`](architecture/data-authority.md) — data ownership, authority, lifecycle, and disclosure.

@@ -45,7 +45,7 @@ request does too, because `1a4c9e77b2d5` creates the capture tables and widens
 
 ## What the gateway is, and what it does not yet do
 
-`apps/gateway.py` serves the forty-eight public capabilities over HTTP on loopback.
+`apps/gateway.py` serves the fifty-six public capabilities over HTTP on loopback.
 One request is one call to `ApplicationService.invoke`, and the response body is
 the envelope that call produced — the transport maps and does not decide.
 
@@ -131,8 +131,8 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
        "payload":{}}'
 ```
 
-**Current-state correction (2026-08-15):** the candidate has **forty-eight**
-capabilities and **fifty-eight** Alembic revisions at head `f4c1a8e6b205`.
+**Current-state correction (2026-08-15):** the candidate has **fifty-six**
+capabilities and **fifty-eight** Alembic revisions at head `e9b2c4d7a150`.
 `capabilities.get` now also returns `worker_planes`; backlog without a live
 heartbeat is `worker_absent`/`worker_stale`, never silently healthy. The dated
 transcript below remains historical evidence for its stated head.

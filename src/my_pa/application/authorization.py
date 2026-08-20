@@ -50,10 +50,12 @@ from datetime import datetime
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
     Command,
+    CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
     CreateManagedDocument,
@@ -67,12 +69,14 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetLatestIntelligenceArtifact,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
     ListReviewCases,
@@ -82,16 +86,20 @@ from my_pa.application.commands import (
     PrepareContext,
     ReadCapture,
     ReadCommitment,
+    ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
     ReadTask,
     RecordContextFeedback,
+    RecordIntelligenceRunState,
     RecordTask,
+    ResolveIntelligenceSet,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -264,6 +272,14 @@ def _requested_scope(
             | GetGoodNotesWork()
             | GetGoodNotesContent()
             | SubmitGoodNotesProposal()
+            | BeginIntelligenceCycle()
+            | CommitIntelligenceArtifact()
+            | RecordIntelligenceRunState()
+            | ReadIntelligenceArtifact()
+            | GetLatestIntelligenceArtifact()
+            | ListIntelligenceArtifacts()
+            | SearchIntelligenceArtifacts()
+            | ResolveIntelligenceSet()
         ):
             return frozenset()
         case CreateCapture():

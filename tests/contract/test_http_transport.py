@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the forty-eight capabilities is addressable over HTTP
+**Reachability.** Every one of the fifty-six capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a forty-ninth capability added to the domain arrives as a failing row instead
+here, so a fifty-seventh capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -31,7 +31,7 @@ from __future__ import annotations
 import json
 from base64 import b64encode
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any
 
 import pytest
@@ -63,10 +63,12 @@ from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
     Command,
+    CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
     CreateManagedDocument,
@@ -80,12 +82,14 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetLatestIntelligenceArtifact,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
     ListReviewCases,
@@ -95,17 +99,21 @@ from my_pa.application.commands import (
     PrepareContext,
     ReadCapture,
     ReadCommitment,
+    ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
     ReadTask,
     RecordContextFeedback,
+    RecordIntelligenceRunState,
     RecordTask,
     Representation,
+    ResolveIntelligenceSet,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -113,6 +121,7 @@ from my_pa.application.commands import (
     UpdateTask,
     WaitingOn,
 )
+from my_pa.application.intelligence import begin_cycle, commit_artifact
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
@@ -124,6 +133,16 @@ from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.intelligence.catalog import (
+    CYCLE_MORNING_INTELLIGENCE,
+    ArtifactKind,
+    ArtifactState,
+    FocusAreaId,
+    IntelligenceStage,
+    ProducerRunState,
+    ResolverSetId,
+    SourceLaneId,
+)
 from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.lifecycle import TaskLifecycleState
@@ -182,6 +201,41 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    at = datetime(2026, 8, 2, 11, tzinfo=UTC)
+    cycle_admission = begin_cycle(
+        scene.world.intelligence,
+        principal_id=scene.principal.principal_id,
+        cycle_id=CYCLE_MORNING_INTELLIGENCE,
+        business_date=date(2026, 8, 20),
+        idempotency_key="http-cycle-setup",
+        at=at,
+        automation_platform=None,
+        external_orchestration_id=None,
+    )
+    assert cycle_admission.cycle is not None
+    cycle_run_id = cycle_admission.cycle.cycle_run_id
+    collector_admission = commit_artifact(
+        scene.world.intelligence,
+        principal_id=scene.principal.principal_id,
+        cycle_run_id=cycle_run_id,
+        stage=IntelligenceStage.COLLECTOR,
+        artifact_kind=ArtifactKind.COLLECTOR_CANDIDATES,
+        focus_area_id=FocusAreaId.COMMUNICATIONS,
+        source_lane=None,
+        producer_task_id="http-setup-collector",
+        producer_task_name="HTTP setup collector",
+        automation_platform="abacus_chatllm",
+        automation_run_id=None,
+        report_date=date(2026, 8, 20),
+        title="HTTP setup collector",
+        body_markdown="synthetic collector",
+        artifact_state=ArtifactState.FINAL,
+        schema_version="1",
+        idempotency_key="http-setup-collector",
+        at=at,
+    )
+    assert collector_admission.artifact is not None
+    report_id = collector_admission.artifact.artifact_id
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -367,6 +421,56 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 }
             ],
         },
+        Capability.REPORTS_BEGIN_CYCLE: {
+            "cycle_id": CYCLE_MORNING_INTELLIGENCE,
+            "business_date": "2026-08-20",
+            "idempotency_key": "http-cycle-0001",
+        },
+        Capability.REPORTS_COMMIT: {
+            "cycle_run_id": cycle_run_id,
+            "stage": "collector",
+            "artifact_kind": "collector_candidates",
+            "focus_area_id": "communications",
+            "producer_task_id": "http-collector",
+            "producer_task_name": "HTTP Collector",
+            "automation_platform": "abacus_chatllm",
+            "report_date": "2026-08-20",
+            "title": "HTTP collector",
+            "body_markdown": "synthetic collector",
+            "artifact_state": "final",
+            "schema_version": "1",
+            "idempotency_key": "http-report-commit-0001",
+        },
+        Capability.REPORTS_RECORD_RUN_STATE: {
+            "cycle_run_id": cycle_run_id,
+            "stage": "researcher",
+            "artifact_kind": "research_context",
+            "focus_area_id": "communications",
+            "source_lane": "teams",
+            "producer_task_id": "http-researcher",
+            "producer_task_name": "HTTP Researcher",
+            "automation_platform": "abacus_chatllm",
+            "report_date": "2026-08-20",
+            "state": "failed",
+            "idempotency_key": "http-run-state-0001",
+            "failure_code": "source_unavailable",
+        },
+        Capability.REPORTS_READ: {"report_id": report_id, "include_body": True},
+        Capability.REPORTS_LATEST: {
+            "cycle_run_id": cycle_run_id,
+            "stage": "collector",
+            "focus_area_id": "communications",
+        },
+        Capability.REPORTS_LIST: {"cycle_run_id": cycle_run_id, "page_size": 10},
+        Capability.REPORTS_SEARCH: {
+            "query": "synthetic",
+            "cycle_run_id": cycle_run_id,
+            "page_size": 10,
+        },
+        Capability.REPORTS_RESOLVE_SET: {
+            "cycle_run_id": cycle_run_id,
+            "set_id": "collectors",
+        },
     }
 
 
@@ -395,6 +499,41 @@ def commands_for(
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    at = datetime(2026, 8, 2, 11, tzinfo=UTC)
+    cycle_admission = begin_cycle(
+        scene.world.intelligence,
+        principal_id=scene.principal.principal_id,
+        cycle_id=CYCLE_MORNING_INTELLIGENCE,
+        business_date=date(2026, 8, 20),
+        idempotency_key="http-cycle-setup",
+        at=at,
+        automation_platform=None,
+        external_orchestration_id=None,
+    )
+    assert cycle_admission.cycle is not None
+    cycle_run_id = cycle_admission.cycle.cycle_run_id
+    collector_admission = commit_artifact(
+        scene.world.intelligence,
+        principal_id=scene.principal.principal_id,
+        cycle_run_id=cycle_run_id,
+        stage=IntelligenceStage.COLLECTOR,
+        artifact_kind=ArtifactKind.COLLECTOR_CANDIDATES,
+        focus_area_id=FocusAreaId.COMMUNICATIONS,
+        source_lane=None,
+        producer_task_id="http-setup-collector",
+        producer_task_name="HTTP setup collector",
+        automation_platform="abacus_chatllm",
+        automation_run_id=None,
+        report_date=date(2026, 8, 20),
+        title="HTTP setup collector",
+        body_markdown="synthetic collector",
+        artifact_state=ArtifactState.FINAL,
+        schema_version="1",
+        idempotency_key="http-setup-collector",
+        at=at,
+    )
+    assert collector_admission.artifact is not None
+    report_id = collector_admission.artifact.artifact_id
     return {
         Capability.CAPABILITIES_GET: GetCapabilities(),
         Capability.SOURCES_LIST: ListSources(source_id=scene.source.source_id),
@@ -564,6 +703,56 @@ def commands_for(
                     "primary_class": "MEETING",
                 },
             ),
+        ),
+        Capability.REPORTS_BEGIN_CYCLE: BeginIntelligenceCycle(
+            cycle_id=CYCLE_MORNING_INTELLIGENCE,
+            business_date="2026-08-20",
+            idempotency_key="http-cycle-0001",
+        ),
+        Capability.REPORTS_COMMIT: CommitIntelligenceArtifact(
+            cycle_run_id=cycle_run_id,
+            stage=IntelligenceStage.COLLECTOR,
+            artifact_kind=ArtifactKind.COLLECTOR_CANDIDATES,
+            producer_task_id="http-collector",
+            producer_task_name="HTTP Collector",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="HTTP collector",
+            body_markdown="synthetic collector",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="http-report-commit-0001",
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+        ),
+        Capability.REPORTS_RECORD_RUN_STATE: RecordIntelligenceRunState(
+            cycle_run_id=cycle_run_id,
+            stage=IntelligenceStage.RESEARCHER,
+            artifact_kind=ArtifactKind.RESEARCH_CONTEXT,
+            producer_task_id="http-researcher",
+            producer_task_name="HTTP Researcher",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            state=ProducerRunState.FAILED,
+            idempotency_key="http-run-state-0001",
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+            source_lane=SourceLaneId.TEAMS,
+            failure_code="source_unavailable",
+        ),
+        Capability.REPORTS_READ: ReadIntelligenceArtifact(report_id=report_id, include_body=True),
+        Capability.REPORTS_LATEST: GetLatestIntelligenceArtifact(
+            cycle_run_id=cycle_run_id,
+            stage=IntelligenceStage.COLLECTOR,
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+        ),
+        Capability.REPORTS_LIST: ListIntelligenceArtifacts(cycle_run_id=cycle_run_id, page_size=10),
+        Capability.REPORTS_SEARCH: SearchIntelligenceArtifacts(
+            query="synthetic",
+            cycle_run_id=cycle_run_id,
+            page_size=10,
+        ),
+        Capability.REPORTS_RESOLVE_SET: ResolveIntelligenceSet(
+            cycle_run_id=cycle_run_id,
+            set_id=ResolverSetId.COLLECTORS,
         ),
     }
 

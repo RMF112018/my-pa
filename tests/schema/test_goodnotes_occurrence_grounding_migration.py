@@ -24,7 +24,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "b7f2c9e4a618"
 PRIOR: Final = "a4d9c2e7b815"
 ENTITY_KIND_REVISION: Final = "d9c4e1a7b628"
-HEAD_REVISION: Final = "f4c1a8e6b205"
+HEAD_REVISION: Final = "e9b2c4d7a150"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_b7f2c9e4a618_ground_goodnotes_note_unit_visual_identity.py"
 )
@@ -82,8 +82,9 @@ def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     assert list(script.get_heads()) == [HEAD_REVISION]
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(ENTITY_KIND_REVISION).down_revision == REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ENTITY_KIND_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 58
+    assert script.get_revision("f4c1a8e6b205").down_revision == ENTITY_KIND_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == "f4c1a8e6b205"
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 59
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

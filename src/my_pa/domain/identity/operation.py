@@ -360,6 +360,28 @@ class Capability(StrEnum):
     # admits the live vocabulary. Not operator-only: it reads the acting
     # Principal's own partition and grants no authority.
     GOODNOTES_CONTENT = "goodnotes.content"
+    # Intelligence Artifact / Report plane. Eight `reports.*` names rather than a
+    # widening of `capture.*`, `documents.*`, `knowledge.*`, or `context.*`
+    # (`D-91`). Capture is user-authored notes. Documents are managed bytes.
+    # Knowledge is enrollment-scoped extraction. Context assembles a retrieval
+    # packet. None of those is "begin a Morning Intelligence cycle", "commit an
+    # immutable pipeline artifact", or "resolve the exact fan-in set for one
+    # cycle run". Writes and reads stay distinct: a grant issued to commit a
+    # Collector must not also authorize reading another Principal's Brief, and
+    # a grant issued to read a Brief must not authorize writing one. Alembic
+    # revision `e9b2c4d7a150` admits the live vocabulary.
+    #
+    # None is operator-only: each reads or writes the acting Principal's own
+    # partition and grants no authority. Production remote grants stay off;
+    # this only names the capabilities.
+    REPORTS_BEGIN_CYCLE = "reports.begin_cycle"
+    REPORTS_COMMIT = "reports.commit"
+    REPORTS_RECORD_RUN_STATE = "reports.record_run_state"
+    REPORTS_READ = "reports.read"
+    REPORTS_LATEST = "reports.latest"
+    REPORTS_LIST = "reports.list"
+    REPORTS_SEARCH = "reports.search"
+    REPORTS_RESOLVE_SET = "reports.resolve_set"
 
 
 class NativeSourceCapability(StrEnum):
@@ -597,6 +619,14 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.GOODNOTES_WORK: frozenset({Purpose.GOODNOTES_WORK}),
         Capability.GOODNOTES_PROPOSE: frozenset({Purpose.GOODNOTES_PROPOSAL}),
         Capability.GOODNOTES_CONTENT: frozenset({Purpose.GOODNOTES_CONTENT}),
+        Capability.REPORTS_BEGIN_CYCLE: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_COMMIT: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_RECORD_RUN_STATE: frozenset({Purpose.REPORT_AUTHORING}),
+        Capability.REPORTS_READ: frozenset({Purpose.REPORT_READ}),
+        Capability.REPORTS_LATEST: frozenset({Purpose.REPORT_READ}),
+        Capability.REPORTS_LIST: frozenset({Purpose.REPORT_READ}),
+        Capability.REPORTS_SEARCH: frozenset({Purpose.REPORT_READ}),
+        Capability.REPORTS_RESOLVE_SET: frozenset({Purpose.REPORT_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

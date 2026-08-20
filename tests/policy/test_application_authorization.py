@@ -52,10 +52,12 @@ from tests.conftest import (
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
     Command,
+    CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
     CreateManagedDocument,
@@ -69,12 +71,14 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetLatestIntelligenceArtifact,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
     ListReviewCases,
@@ -84,16 +88,20 @@ from my_pa.application.commands import (
     PrepareContext,
     ReadCapture,
     ReadCommitment,
+    ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
     ReadTask,
     RecordContextFeedback,
+    RecordIntelligenceRunState,
     RecordTask,
+    ResolveIntelligenceSet,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -112,6 +120,16 @@ from my_pa.domain.goodnotes.models import issue_stable_id
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.intelligence.catalog import (
+    CYCLE_MORNING_INTELLIGENCE,
+    ArtifactKind,
+    ArtifactState,
+    FocusAreaId,
+    IntelligenceStage,
+    ProducerRunState,
+    ResolverSetId,
+    SourceLaneId,
+)
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.provider import SourceProvider
@@ -306,6 +324,61 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
                     },
                 },
             ),
+        ),
+        Capability.REPORTS_BEGIN_CYCLE: BeginIntelligenceCycle(
+            cycle_id=CYCLE_MORNING_INTELLIGENCE,
+            business_date="2026-08-20",
+            idempotency_key="denial-cycle-0001",
+        ),
+        Capability.REPORTS_COMMIT: CommitIntelligenceArtifact(
+            cycle_run_id=issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN),
+            stage=IntelligenceStage.COLLECTOR,
+            artifact_kind=ArtifactKind.COLLECTOR_CANDIDATES,
+            producer_task_id="denial-collector",
+            producer_task_name="Denial Collector",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="Denial collector",
+            body_markdown="synthetic collector",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="denial-report-commit-0001",
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+        ),
+        Capability.REPORTS_RECORD_RUN_STATE: RecordIntelligenceRunState(
+            cycle_run_id=issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN),
+            stage=IntelligenceStage.RESEARCHER,
+            artifact_kind=ArtifactKind.RESEARCH_CONTEXT,
+            producer_task_id="denial-researcher",
+            producer_task_name="Denial Researcher",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            state=ProducerRunState.FAILED,
+            idempotency_key="denial-run-state-0001",
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+            source_lane=SourceLaneId.TEAMS,
+            failure_code="source_unavailable",
+        ),
+        Capability.REPORTS_READ: ReadIntelligenceArtifact(
+            report_id=issue_identifier(IdKind.INTELLIGENCE_ARTIFACT)
+        ),
+        Capability.REPORTS_LATEST: GetLatestIntelligenceArtifact(
+            cycle_run_id=issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN),
+            stage=IntelligenceStage.COLLECTOR,
+            focus_area_id=FocusAreaId.COMMUNICATIONS,
+        ),
+        Capability.REPORTS_LIST: ListIntelligenceArtifacts(
+            cycle_run_id=issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN),
+            page_size=10,
+        ),
+        Capability.REPORTS_SEARCH: SearchIntelligenceArtifacts(
+            query="synthetic",
+            cycle_run_id=issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN),
+            page_size=10,
+        ),
+        Capability.REPORTS_RESOLVE_SET: ResolveIntelligenceSet(
+            cycle_run_id=issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN),
+            set_id=ResolverSetId.COLLECTORS,
         ),
     }
 
@@ -524,6 +597,14 @@ SCOPED_CAPABILITIES = [
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.REPORTS_READ,
+        Capability.REPORTS_LATEST,
+        Capability.REPORTS_LIST,
+        Capability.REPORTS_SEARCH,
+        Capability.REPORTS_RESOLVE_SET,
     }
 ]
 
@@ -621,6 +702,14 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.REPORTS_READ,
+        Capability.REPORTS_LATEST,
+        Capability.REPORTS_LIST,
+        Capability.REPORTS_SEARCH,
+        Capability.REPORTS_RESOLVE_SET,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

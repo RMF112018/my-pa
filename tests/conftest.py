@@ -46,6 +46,7 @@ import pytest
 
 from my_pa.application.commands import CreateManagedDocumentCommand
 from my_pa.application.commitments import CommitmentManagementService
+from my_pa.application.intelligence import InMemoryIntelligenceStore
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.service import ApplicationService
 from my_pa.application.tasks import TaskManagementService
@@ -384,6 +385,7 @@ class World:
         default_factory=dict
     )
     goodnotes_rasters: dict[tuple[str, str], GoodNotesPageRaster] = field(default_factory=dict)
+    intelligence: InMemoryIntelligenceStore = field(default_factory=InMemoryIntelligenceStore)
     commits: int = 0
     rollbacks: int = 0
     #: Port failures a test wants raised, keyed by the method that should raise.
@@ -2302,6 +2304,9 @@ class FakeUnitOfWork(UnitOfWork):
     def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
         """Immutable page-version work and semantic proposal receipts over this `World`."""
         return _GoodNotesSemantics(self._world)
+
+    def intelligence_for(self, principal_id: str) -> InMemoryIntelligenceStore:
+        return self._world.intelligence
 
     @property
     def audit(self) -> AuditSink:

@@ -21,7 +21,7 @@ from my_pa.domain.identity.purpose import Purpose
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "a4d9c2e7b815"
 PRIOR: Final = "c3e9a7f1b204"
-HEAD_REVISION: Final = "f4c1a8e6b205"
+HEAD_REVISION: Final = "e9b2c4d7a150"
 ENTITY_KIND_REVISION: Final = "d9c4e1a7b628"
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
 MIGRATION: Final = ROOT / (
@@ -51,8 +51,9 @@ def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(GROUNDING_REVISION).down_revision == REVISION
     assert script.get_revision(ENTITY_KIND_REVISION).down_revision == GROUNDING_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == ENTITY_KIND_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 58
+    assert script.get_revision("f4c1a8e6b205").down_revision == ENTITY_KIND_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == "f4c1a8e6b205"
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 59
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -76,9 +77,9 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
-    assert admitted == declared
+    assert admitted <= declared
     purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
-    assert purposes == {member.value for member in Purpose}
+    assert purposes <= {member.value for member in Purpose}
     assert admitted - _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION") == CAPABILITIES_ADDED
     assert purposes - _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION") == PURPOSES_ADDED
     source = MIGRATION.read_text(encoding="utf-8")

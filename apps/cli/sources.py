@@ -26,8 +26,8 @@ list, fetch, search, read, or enroll even if somebody wanted it to.
 by reading this file rather than by trusting this paragraph.
 
 **It writes no audit event, and that is a decision rather than an omission.**
-`audit_events.capability` is constrained to the forty-eight `Capability` values,
-so recording a registration would mean a forty-ninth member — exactly what
+`audit_events.capability` is constrained to the fifty-six `Capability` values,
+so recording a registration would mean a fifty-seventh member — exactly what
 makes an operator command look like the capability it is not. WP-6 widened that
 constraint by an explicit `ALTER` in its own revision rather than by re-deriving
 it from the enum (`D-69`), so the argument here is unchanged: adding a member is

@@ -112,6 +112,7 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         "infrastructure/persistence/goodnotes.py",
         "infrastructure/persistence/goodnotes_semantics.py",
         "infrastructure/persistence/goodnotes_delivery.py",
+        "infrastructure/persistence/intelligence.py",
         # Both job queues gained `principal_id` at revision `4f1a8b6d92e3`; the
         # dequeue and the reap carry the partition and the enqueue stamps it
         # from the subject's stored owner. It also names `enrollments` and
@@ -323,6 +324,11 @@ PER_MODULE_ONLY: Final = {
         "`review_case_id`/`proposal_id`/`version_id` rather than by Principal, "
         "relying on the one `principal_scoped` read that resolves the case. That "
         "is the review plane's own chain and repairing it is WP-06's."
+    ),
+    "infrastructure/persistence/intelligence.py": (
+        "every read is principal_scoped and every insert is principal_bound_values; "
+        "run and artifact updates use partition_criterion. Helper mappers consume "
+        "already-scoped rows."
     ),
 }
 

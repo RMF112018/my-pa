@@ -105,6 +105,10 @@ def test_contract_prefixes_are_stable() -> None:
         "bulk",
         "ctxm",
         "cpref",
+        "micr",
+        "rrun",
+        "rpt",
+        "rrc",
     }
 
 

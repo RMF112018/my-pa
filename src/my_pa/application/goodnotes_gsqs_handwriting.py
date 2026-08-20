@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from my_pa.application.goodnotes_gsqs import (
-    CONTROLLED_HANDWRITING_INSUFFICIENT_EVIDENCE,
+    CONTROLLED_HANDWRITING_READY_FOR_REVIEW,
     CorpusPartition,
 )
 from my_pa.application.goodnotes_gsqs_corpus import (
@@ -16,7 +16,7 @@ from my_pa.application.goodnotes_gsqs_corpus import (
     refuse_production_fixture,
 )
 
-HANDWRITING_STATE = CONTROLLED_HANDWRITING_INSUFFICIENT_EVIDENCE
+HANDWRITING_STATE = CONTROLLED_HANDWRITING_READY_FOR_REVIEW
 ALLOWED_HANDWRITING_CLASSES = frozenset(
     {
         FIXTURE_PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING,

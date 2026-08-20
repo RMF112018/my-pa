@@ -10,6 +10,7 @@ import pytest
 
 from my_pa.application.goodnotes_gsqs import (
     CONTROLLED_HANDWRITING_INSUFFICIENT_EVIDENCE,
+    CONTROLLED_HANDWRITING_READY_FOR_REVIEW,
     GATE_B_STATE,
     CorpusPartition,
     evaluator_code_identity,
@@ -18,6 +19,7 @@ from my_pa.application.goodnotes_gsqs_corpus import (
     FIXTURE_PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING,
     FIXTURE_PRODUCTION_GOODNOTES,
     FIXTURE_SYNTHETIC_NON_PERSONAL_HANDWRITING,
+    LABEL_PROVENANCE_OPERATOR,
     ReviewState,
     SourceLayer,
 )
@@ -28,18 +30,26 @@ from my_pa.application.goodnotes_gsqs_handwriting import (
 )
 from my_pa.application.goodnotes_gsqs_hw_corpus import (
     AUTHORIZED_SOURCE_ROOT,
+    AUTHORIZED_SOURCE_ROOTS,
     HANDWRITING_CORPUS_VERSION,
+    HANDWRITING_CORPUS_VERSION_MOSS_V1,
+    LABEL_PROVENANCE_FIRST_PASS,
+    UNREADABLE_REAL_WORLD_COVERAGE_NOT_OBSERVED,
     PageCounter,
     PublicHandwritingCase,
     authorized_source_root,
+    authorized_source_roots,
     freeze_public_manifest,
     inventory_page_rasters,
     inventory_pdfs,
+    inventory_pdfs_across_roots,
+    limited_population_b0_suitable,
     load_public_catalog,
     prevent_handwriting_partition_leakage,
     private_label_digest,
     public_case_digest,
     public_source_record,
+    unreadable_real_world_coverage,
     with_bound_digest,
 )
 from my_pa.application.goodnotes_gsqs_pages import synthetic_labeled_page_pdf
@@ -47,8 +57,10 @@ from my_pa.application.goodnotes_gsqs_v2_freeze import freeze_v2_corpus
 
 REPO = Path(__file__).resolve().parents[2]
 PUBLIC_CATALOG = REPO / "ops/goodnotes/gsqs/hw-moss-v1/public_catalog.json"
+COMBINED_CATALOG = REPO / "ops/goodnotes/gsqs/hw-combined-v1/public_catalog.json"
 HW_MODULE = REPO / "src/my_pa/application/goodnotes_gsqs_hw_corpus.py"
 EVALUATOR_IDENTITY = "4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e"
+SYNTHETIC_DIGEST = "e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd"
 
 
 def _pdf(name: str) -> bytes:
@@ -95,6 +107,8 @@ def _case(**overrides: object) -> PublicHandwritingCase:
         "exclusion_reason": None,
         "candidate_tag_count": 1,
         "ranked_candidate_count": 1,
+        "source_cohort": "Moss",
+        "label_provenance": LABEL_PROVENANCE_FIRST_PASS,
     }
     base.update(overrides)
     return PublicHandwritingCase(**base)  # type: ignore[arg-type]
@@ -190,7 +204,7 @@ def test_committed_public_catalog_is_repository_safe_and_not_scoreable() -> None
     assert 'transcription":' not in blob
     assert "goodnotes-inbox" not in blob
     assert "/volume1/" not in blob
-    assert catalog["corpus_version"] == HANDWRITING_CORPUS_VERSION
+    assert catalog["corpus_version"] == HANDWRITING_CORPUS_VERSION_MOSS_V1
     assert catalog["b0_suitable"] is False
     assert catalog["scoreable_page_count"] == 0
     assert catalog["admitted_handwriting_pages"] == 27
@@ -235,6 +249,8 @@ def test_excluded_cases_are_not_scoreable() -> None:
             leakage_group_id="lg-b",
             partition=CorpusPartition.B,
             review_state=ReviewState.APPROVED,
+            label_provenance=LABEL_PROVENANCE_OPERATOR,
+            page_index=2,
         )
     )
     manifest = freeze_public_manifest((excluded, approved))
@@ -289,9 +305,10 @@ def test_admit_authorized_real_handwriting_without_storing_phrases() -> None:
 
 
 def test_gate_b_state_and_no_external_model_imports() -> None:
-    assert GATE_B_STATE["CONTROLLED_HANDWRITING_CORPUS"] == "INSUFFICIENT_EVIDENCE"
-    assert HANDWRITING_STATE == CONTROLLED_HANDWRITING_INSUFFICIENT_EVIDENCE
+    assert GATE_B_STATE["CONTROLLED_HANDWRITING_CORPUS"] == "READY_FOR_REVIEW"
+    assert HANDWRITING_STATE == CONTROLLED_HANDWRITING_READY_FOR_REVIEW
     assert authorized_source_root() == AUTHORIZED_SOURCE_ROOT
+    assert authorized_source_roots() == dict(AUTHORIZED_SOURCE_ROOTS)
     tree = ast.parse(HW_MODULE.read_text())
     names: set[str] = set()
     for node in ast.walk(tree):
@@ -301,3 +318,170 @@ def test_gate_b_state_and_no_external_model_imports() -> None:
             names.add(node.module.split(".", 1)[0])
     forbidden = {"httpx", "openai", "urllib", "requests", "aiohttp", "pypdfium2"}
     assert names.isdisjoint(forbidden)
+
+
+def test_combined_corpus_version_is_distinct_from_moss() -> None:
+    assert HANDWRITING_CORPUS_VERSION == "gsqs-hw-combined-v1"
+    assert HANDWRITING_CORPUS_VERSION != HANDWRITING_CORPUS_VERSION_MOSS_V1
+
+
+def test_multi_root_inventory_and_cross_root_file_duplicates(tmp_path: Path) -> None:
+    moss = tmp_path / "Moss"
+    kast = tmp_path / "Kast"
+    altman = tmp_path / "Altman" / "nested"
+    moss.mkdir()
+    kast.mkdir()
+    altman.mkdir(parents=True)
+    shared = _pdf("shared")
+    (moss / "note.pdf").write_bytes(shared)
+    (kast / "copy.pdf").write_bytes(shared)
+    (altman / "other.pdf").write_bytes(_pdf("other"))
+    rows = inventory_pdfs_across_roots(
+        {"Moss": moss, "Kast": kast, "Altman": altman.parent},
+        page_counter=_counter(2),
+    )
+    by_id = {row.source_id: row for row in rows}
+    assert set(by_id) == {"m-001", "k-001", "a-001"}
+    assert by_id["m-001"].source_cohort == "Moss"
+    assert by_id["k-001"].source_cohort == "Kast"
+    assert by_id["a-001"].source_cohort == "Altman"
+    assert "k-001" in by_id["m-001"].exact_file_duplicate_ids
+    assert "m-001" in by_id["k-001"].exact_file_duplicate_ids
+    assert by_id["a-001"].exact_file_duplicate_ids == ()
+    with pytest.raises(ValueError, match="authorized source roots missing"):
+        inventory_pdfs_across_roots({"Moss": moss}, page_counter=_counter(1))
+
+
+def test_pending_and_ambiguous_are_not_scoreable() -> None:
+    pending = with_bound_digest(_case(case_id="p", review_state=ReviewState.PENDING))
+    ambiguous = with_bound_digest(
+        _case(
+            case_id="x",
+            page_index=2,
+            leakage_group_id="lg-x",
+            review_state=ReviewState.AMBIGUOUS_EXCLUDE,
+            excluded=True,
+            exclusion_reason="ambiguous-intent",
+            note_unit_count=0,
+            transcription_status=None,
+            primary_class=None,
+        )
+    )
+    first_pass = with_bound_digest(
+        _case(
+            case_id="fp",
+            page_index=3,
+            leakage_group_id="lg-fp",
+            partition=CorpusPartition.B,
+            review_state=ReviewState.APPROVED,
+            label_provenance=LABEL_PROVENANCE_FIRST_PASS,
+        )
+    )
+    manifest = freeze_public_manifest((pending, ambiguous, first_pass))
+    assert manifest["scoreable_page_count"] == 0
+    assert manifest["label_review_counts"]["PENDING"] == 1
+    assert manifest["label_review_counts"]["AMBIGUOUS_EXCLUDE"] == 1
+
+
+def test_limited_population_b0_does_not_require_quota_or_unreadable() -> None:
+    cases = []
+    for index, (cohort, part, group) in enumerate(
+        (
+            ("Moss", CorpusPartition.A, "lg-a"),
+            ("Kast", CorpusPartition.C, "lg-c"),
+            ("Altman", CorpusPartition.B, "lg-b"),
+        ),
+        start=1,
+    ):
+        cases.append(
+            with_bound_digest(
+                _case(
+                    case_id=f"hw-{cohort.lower()}",
+                    source_id=f"s-{index:03d}",
+                    page_index=1,
+                    leakage_group_id=group,
+                    partition=part,
+                    review_state=ReviewState.APPROVED,
+                    label_provenance=LABEL_PROVENANCE_OPERATOR,
+                    source_cohort=cohort,
+                    transcription_status="CLEAR" if cohort != "Kast" else "UNCERTAIN",
+                )
+            )
+        )
+    assert unreadable_real_world_coverage(0) == UNREADABLE_REAL_WORLD_COVERAGE_NOT_OBSERVED
+    assert limited_population_b0_suitable(cases, exhaustive_authorized_roots=True) is True
+    manifest = freeze_public_manifest(
+        cases,
+        synthetic_manifest_digest="aa" * 32,
+        exhaustive_authorized_roots=True,
+    )
+    assert manifest["b0_suitable"] is True
+    assert manifest["CONTROLLED_HANDWRITING_CORPUS"] == CONTROLLED_HANDWRITING_READY_FOR_REVIEW
+    assert manifest["unreadable_real_world_coverage"] == UNREADABLE_REAL_WORLD_COVERAGE_NOT_OBSERVED
+    assert manifest["scoreable_page_count"] == 3
+    assert any("former 75-150" in item for item in manifest["b0_limitations"])
+    pending = with_bound_digest(
+        _case(
+            case_id="hw-pending",
+            source_id="s-004",
+            page_index=2,
+            leakage_group_id="lg-a",
+            partition=CorpusPartition.A,
+            source_cohort="Moss",
+            review_state=ReviewState.PENDING,
+        )
+    )
+    assert (
+        limited_population_b0_suitable((*cases, pending), exhaustive_authorized_roots=True) is False
+    )
+
+
+def test_committed_combined_catalog_is_repository_safe_and_scoreable() -> None:
+    catalog = load_public_catalog(COMBINED_CATALOG)
+    blob = COMBINED_CATALOG.read_text().lower()
+    assert 'transcription":' not in blob
+    assert "goodnotes-inbox" not in blob
+    assert "/volume1/" not in blob
+    assert catalog["corpus_version"] == HANDWRITING_CORPUS_VERSION
+    assert catalog["historical_moss_corpus_version"] == HANDWRITING_CORPUS_VERSION_MOSS_V1
+    assert catalog["b0_suitable"] is True
+    assert catalog["CONTROLLED_HANDWRITING_CORPUS"] == CONTROLLED_HANDWRITING_READY_FOR_REVIEW
+    assert catalog["unreadable_real_world_coverage"] == (
+        UNREADABLE_REAL_WORLD_COVERAGE_NOT_OBSERVED
+    )
+    assert catalog["scoreable_page_count"] == 232
+    assert catalog["admitted_handwriting_pages"] == 232
+    assert catalog["excluded_page_count"] == 2002
+    assert catalog["case_count"] == 2234
+    assert catalog["pdf_count"] == 86
+    assert catalog["total_pages"] == 2234
+    assert catalog["unreadable_pdf_count"] == 0
+    assert catalog["label_review_counts"]["PENDING"] == 0
+    assert catalog["partition_counts"]["B"] > 0
+    assert catalog["partition_counts"]["C"] > 0
+    assert catalog["synthetic_manifest_digest"] == SYNTHETIC_DIGEST
+    admitted = [case for case in catalog["cases"] if not case["excluded"]]
+    buckets: dict[str, set[str]] = {"A": set(), "B": set(), "C": set()}
+    for case in admitted:
+        buckets[case["partition"]].add(case["leakage_group_id"])
+        assert case["review_state"] == "APPROVED"
+        assert case["label_provenance"] == LABEL_PROVENANCE_OPERATOR
+        assert case["transcription_status"] != "UNREADABLE"
+        assert (
+            case["fixture_classification"] == FIXTURE_PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING
+        )
+    assert buckets["A"] and buckets["B"] and buckets["C"]
+    assert not (buckets["A"] & buckets["B"])
+    assert not (buckets["A"] & buckets["C"])
+    assert not (buckets["B"] & buckets["C"])
+    moss = load_public_catalog(PUBLIC_CATALOG)
+    assert moss["corpus_version"] == HANDWRITING_CORPUS_VERSION_MOSS_V1
+    assert moss["b0_suitable"] is False
+    assert moss["scoreable_page_count"] == 0
+    freeze_v2, _manifest = freeze_v2_corpus()
+    assert freeze_v2
+    review = json.loads((COMBINED_CATALOG.parent / "operator_review.json").read_text())
+    assert review["manifest_digest"] == catalog["manifest_digest"]
+    assert review["CONTROLLED_HANDWRITING_CORPUS"] == "READY_FOR_REVIEW"
+    assert review["b0_suitable"] is True
+    assert evaluator_code_identity() == EVALUATOR_IDENTITY

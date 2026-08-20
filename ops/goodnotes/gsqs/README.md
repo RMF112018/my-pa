@@ -3,7 +3,8 @@
 Repository-side measurement system for Gate B of GoodNotes Durable Note
 Intelligence. It holds a versioned labeled corpus, an independent GSQS
 evaluator, critical-error gates, a side-effect-free B0 harness, and a
-repository-safe digest-bound handwriting catalog (`gsqs-hw-moss-v1`).
+repository-safe digest-bound handwriting catalog (`gsqs-hw-combined-v1`,
+with historical `gsqs-hw-moss-v1` preserved).
 
 This is not another MCP interoperability project. It does not run the live
 ChatLLM Task, does not establish `MEASURED_B0`, does not activate the Abacus
@@ -17,9 +18,11 @@ it does not replace A-X.
 
 - [`v2/OPERATOR_REVIEW.md`](v2/OPERATOR_REVIEW.md) — synthetic regression
   review target (`gsqs-v2`; still not handwriting-B0).
+- [`hw-combined-v1/OPERATOR_REVIEW.md`](hw-combined-v1/OPERATOR_REVIEW.md) —
+  complete Moss + Kast + Altman handwriting census. State:
+  `READY_FOR_REVIEW`. No private bytes in Git.
 - [`hw-moss-v1/OPERATOR_REVIEW.md`](hw-moss-v1/OPERATOR_REVIEW.md) —
-  controlled real-handwriting layer. State:
-  `INSUFFICIENT_EVIDENCE`. No private bytes in Git.
+  historical Moss-only tranche. State: `INSUFFICIENT_EVIDENCE`.
 - [`v2/operator_review.json`](v2/operator_review.json) — machine-readable
   review payload, including per-partition distributions.
 - [`v2/case_index.json`](v2/case_index.json) — per-case identity, partition,
@@ -41,9 +44,10 @@ it does not replace A-X.
    canary). Helvetica / Times-Italic PDFs. Valid for evaluator, schema,
    tags, ranking, critical errors, injection, and CI. Not handwriting.
 2. **Controlled handwriting validation.** Digest-bound private gold from
-   the operator-authorized Moss root. Repository-safe catalog:
-   [`hw-moss-v1/`](hw-moss-v1/). State:
-   `CONTROLLED_HANDWRITING_CORPUS = INSUFFICIENT_EVIDENCE`.
+   the operator-authorized Moss, Kast, and Altman roots. Repository-safe
+   catalog: [`hw-combined-v1/`](hw-combined-v1/). State:
+   `CONTROLLED_HANDWRITING_CORPUS = READY_FOR_REVIEW`.
+   Historical Moss-only package: [`hw-moss-v1/`](hw-moss-v1/).
    No private image bytes or transcriptions are in Git.
 
 ## Partitioning (`gsqs-v2`)
@@ -69,7 +73,7 @@ replicas of one template can split.
 
 `B0_HARNESS = READY`
 
-`CONTROLLED_HANDWRITING_CORPUS = INSUFFICIENT_EVIDENCE`
+`CONTROLLED_HANDWRITING_CORPUS = READY_FOR_REVIEW`
 
 `GSQS_V1_B0_DISPOSITION = REJECT_FOR_B0`
 
@@ -82,5 +86,7 @@ replicas of one template can split.
 `FIXED_LABELED_CORPUS_APPROVED` remains false until explicit operator
 approval of a digest. Changing a label or case after that approval requires
 a new corpus version. Synthetic-regression approval still does not
-establish `MEASURED_B0`. The handwriting layer is below the B0 population
-floor and is not operator-adjudicated.
+establish `MEASURED_B0`. The handwriting layer is the complete eligible
+census from the three authorized roots; B0, if later authorized, measures
+that corpus only. The former 75–150 page quota is a limitation, not a
+rejection floor.

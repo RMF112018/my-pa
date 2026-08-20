@@ -1,0 +1,46 @@
+{
+  "AUTOMATIC_PROMOTION": "DISABLED",
+  "CONTROLLED_HANDWRITING_CORPUS": "READY_FOR_REVIEW",
+  "EXTERNAL_MODEL_DISCLOSURE": "NONE",
+  "FIXED_LABELED_CORPUS_APPROVED": false,
+  "MEASURED_B0": "NOT_YET_ESTABLISHED",
+  "SELF_IMPROVEMENT_EVALUATION": "NOT_YET_ACTIVATED",
+  "b0_suitable": true,
+  "combined_identity": "6b77a96575668c0ba2f833050b48699022abef5393a778cc1d2e6507d23ce076",
+  "coordination_request_id": "REQ-MYPA-GOODNOTES-GATE-B-HANDWRITING-EXPANSION-20260820-002",
+  "corpus_version": "gsqs-hw-combined-v1",
+  "evaluator_code_identity": "4ba262fcd32f3a8e2801db9029a85d1a6d4844ab8aff868f33cc70caf3940f0e",
+  "exhaustive_authorized_roots": true,
+  "geometry_quality": "INSPECTION_ESTIMATED",
+  "historical_moss_corpus_version": "gsqs-hw-moss-v1",
+  "historical_moss_manifest_digest": "3bed9cc9bfe4a7cb3d28383232e940268ab3435429312c0977eb82a326158f9d",
+  "label_provenance": "OPERATOR_ADJUDICATED",
+  "leakage_group_intersections_empty": true,
+  "manifest_digest": "2f06ee84d5fa1e7ce7168a49a43dcfd1a1f9df9bc78071876b7beb847207fbc2",
+  "operator_review_disposition": "READY_FOR_OPERATOR_REVIEW",
+  "personal_page_bytes_in_git": false,
+  "scoreable_page_count": 232,
+  "source_cohort_counts": {
+    "Altman": {
+      "admitted": 140,
+      "excluded": 1950,
+      "pages": 2090,
+      "scoreable": 140
+    },
+    "Kast": {
+      "admitted": 65,
+      "excluded": 39,
+      "pages": 104,
+      "scoreable": 65
+    },
+    "Moss": {
+      "admitted": 27,
+      "excluded": 13,
+      "pages": 40,
+      "scoreable": 27
+    }
+  },
+  "synthetic_corpus_version": "gsqs-v2",
+  "synthetic_manifest_digest": "e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd",
+  "unreadable_real_world_coverage": "NOT_OBSERVED"
+}

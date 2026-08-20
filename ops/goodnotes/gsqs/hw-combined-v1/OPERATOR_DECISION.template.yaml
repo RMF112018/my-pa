@@ -1,0 +1,30 @@
+# Operator decision for Gate B handwriting corpus gsqs-hw-combined-v1
+#
+# Copy this file (do not edit the template in place) and fill one decision.
+# Cite the exact manifest digest. Do not edit database rows.
+# Do not attach PDFs, page renders, or transcriptions to this decision file.
+#
+# coordination_request_id: REQ-MYPA-GOODNOTES-GATE-B-HANDWRITING-EXPANSION-20260820-002
+
+corpus_version: gsqs-hw-combined-v1
+manifest_digest: 2f06ee84d5fa1e7ce7168a49a43dcfd1a1f9df9bc78071876b7beb847207fbc2
+combined_identity: 6b77a96575668c0ba2f833050b48699022abef5393a778cc1d2e6507d23ce076
+historical_moss_corpus_version: gsqs-hw-moss-v1
+historical_moss_manifest_digest: 3bed9cc9bfe4a7cb3d28383232e940268ab3435429312c0977eb82a326158f9d
+
+# One of: approve_for_bounded_b0 | correct_labels | reject
+decision: pending
+
+operator: ""
+decided_at: ""
+notes: ""
+
+FIXED_LABELED_CORPUS_APPROVED: false
+CONTROLLED_HANDWRITING_CORPUS: READY_FOR_REVIEW
+b0_suitable: true
+
+# These remain until a later authorized B0 phase that covers private-data disclosure.
+MEASURED_B0: NOT_YET_ESTABLISHED
+SELF_IMPROVEMENT_EVALUATION: NOT_YET_ACTIVATED
+AUTOMATIC_PROMOTION: DISABLED
+EXTERNAL_MODEL_DISCLOSURE: NONE

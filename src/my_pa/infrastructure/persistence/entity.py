@@ -893,6 +893,23 @@ class SqlEntityRepository(EntitiesRepository):
         survivor = self.get(principal_id, retained_entity_id)
         if survivor is None or survivor.status is EntityStatus.MERGED_REDIRECT:
             raise ValueError("an entity is merged into one that is still current")
+        # And the entity being merged away must not already be merged. This is
+        # the fourth arrangement of the same guard, and the third one found by a
+        # reviewer rather than by this code: the survivor check inspects only
+        # `retained`, and the inbound check looks for rows pointing *at*
+        # `merged` -- neither asks whether `merged` already points somewhere.
+        # So `redirect(M, S1)` then `redirect(M, S2)` was accepted and silently
+        # rewrote M's target, leaving `entity_merge_records` naming S1 while the
+        # entity plane named S2.
+        #
+        # The invariant was previously held by `entity_merge_records`'s unique
+        # constraint on `merged_entity_id` -- a table this method does not
+        # touch, enforcing a rule about this method, and only for callers that
+        # write a merge record afterwards. A repair script or a backfill that
+        # redirects without recording would not have met it.
+        merged = self.get(principal_id, merged_entity_id)
+        if merged is not None and merged.status is EntityStatus.MERGED_REDIRECT:
+            raise ValueError("an entity that is already merged away is not merged again")
         # And nothing may already point *at* the entity being merged away. The
         # survivor check above closes cycles and closes chains built in one
         # order; it does not close them built in the other. `redirect(BOB,

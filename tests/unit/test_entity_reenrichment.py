@@ -30,7 +30,9 @@ from my_pa.domain.relationship.entity import (
 from my_pa.domain.relationship.governance import (
     EntityMergeRecord,
     EntityObservation,
+    EntityProposal,
     EntityProposalKind,
+    EntityProposalState,
     ObservationKind,
 )
 from my_pa.domain.relationship.normalization import normalize_name
@@ -108,6 +110,23 @@ def _record_merge(entities, merged: str = ALICE_TWO, retained: str = ALICE) -> N
     else. A test that skipped this would be exercising the method in a state the
     product cannot reach.
     """
+    # The proposal the record cites, staged first. `record_merge` partition-checks
+    # `proposal_id` against `entity_proposals` in SQL, and the in-memory double
+    # now does the same — so a merge record citing a proposal nobody wrote is a
+    # state the product cannot reach, and this helper must not build one.
+    entities.record_proposal(
+        PRINCIPAL,
+        EntityProposal(
+            proposal_id="eprp_aaaa0001aaaa0001",
+            principal_id=PRINCIPAL,
+            kind=EntityProposalKind.MERGE_ENTITIES,
+            state=EntityProposalState.PROPOSED,
+            payload={"retained_entity_id": retained, "merged_entity_id": merged},
+            observation_ids=(),
+            proposed_by="resolver",
+            proposed_at=WHEN,
+        ),
+    )
     entities.record_merge(
         PRINCIPAL,
         EntityMergeRecord(

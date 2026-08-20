@@ -12,10 +12,16 @@ produce.
 
 from __future__ import annotations
 
+import re
+from dataclasses import fields, is_dataclass
+from typing import Final
+
 import pytest
 from pydantic import ValidationError
 
+from my_pa.application import commands
 from my_pa.application.capabilities import (
+    CONTINUATION_FIELD_NAMES,
     DECISION_GATED_MEDIA_TYPE,
     build_capability_manifest,
     build_readiness_report,
@@ -307,25 +313,67 @@ def test_manifest_exposes_no_internal_topology() -> None:
 def test_the_continuation_limitation_describes_the_build_that_publishes_it() -> None:
     """A limitation is a claim about *this* build, not about the contract.
 
-    The sentence was a hardcoded "listings issue no continuation cursor" that
-    outlived its condition once `entities.relationships` began issuing a keyset
-    one. Deriving it from the commands that accept `after` fixed the staleness
-    and introduced the opposite falsehood: a default build reported that
-    capability `not_implemented` in the very envelope promising it paged. Both
-    halves are asserted here because fixing either alone has already produced
-    the other.
+    Three versions of this sentence have been wrong. It was a hardcoded
+    "listings issue no continuation cursor" that outlived its condition when
+    `entities.relationships` began issuing one. Deriving it from the commands
+    that accept `after` fixed that and introduced the opposite falsehood — a
+    default build reported that capability `not_implemented` in the very
+    envelope promising it paged. Intersecting with the served set fixed *that*
+    and left a third: `knowledge.search` pages via a field called `cursor`, is
+    served in every build, and was being described as unpageable.
+
+    All three are asserted, because each fix has so far produced the next.
     """
     withheld = {capability for capability in Capability if capability.value.startswith("entities.")}
     default = build_readiness_report(manifest(implemented=EVERYTHING - withheld))
     composed = build_readiness_report(manifest())
 
-    assert not any("entities.relationships" in line for line in default.limitations), (
-        "a build that withholds the capability must not advertise its cursor"
+    def _cursor_line(report: ReadinessReport) -> str:
+        lines = [line for line in report.limitations if "continuation cursor" in line]
+        assert len(lines) == 1, lines
+        return lines[0]
+
+    default_line = _cursor_line(default)
+    assert "knowledge.search" in default_line, (
+        "a build serving a paginated capability must say so, whatever its field is called"
     )
-    assert any("issue no continuation cursor" in line for line in default.limitations), (
-        "and it must still say listings cannot be continued"
+    assert "entities.relationships" not in default_line, (
+        "a build that withholds a capability must not advertise its cursor"
     )
-    assert any(
-        "These issue a continuation cursor: entities.relationships" in line
-        for line in composed.limitations
-    ), "a build that serves it must say so"
+
+    composed_line = _cursor_line(composed)
+    assert "entities.relationships" in composed_line
+    assert "knowledge.search" in composed_line
+
+
+#: Field names that read as a continuation token. Deliberately wider than the
+#: set the derivation honours, so a command introducing a new spelling fails
+#: here instead of being silently unread.
+_CONTINUATION_SHAPED: Final = re.compile(r"cursor|after|offset|page_token|continuation", re.I)
+
+
+def test_no_command_carries_a_continuation_field_the_derivation_cannot_read() -> None:
+    """A third spelling must fail loudly, not go unread.
+
+    `capabilities.get` derives its continuation limitation from the field names
+    in `CONTINUATION_FIELD_NAMES`. That derivation read only `after` until
+    `knowledge.search` — paginated since long before this plane, via a field
+    called `cursor` — was found publishing the opposite of its own behaviour in
+    every build. The failure was not the missing name; it was that a name the
+    derivation did not know cost nothing to introduce.
+    """
+    unread: list[str] = []
+    for member in vars(commands).values():
+        capability = getattr(member, "capability", None)
+        if not isinstance(capability, Capability) or not is_dataclass(member):
+            continue
+        for field in fields(member):
+            if _CONTINUATION_SHAPED.search(field.name) and (
+                field.name not in CONTINUATION_FIELD_NAMES
+            ):
+                unread.append(f"{capability.value}.{field.name}")
+    assert not unread, (
+        "these fields read as continuation tokens but are not in "
+        f"`CONTINUATION_FIELD_NAMES`, so `capabilities.get` will describe their "
+        f"capability as unpageable: {unread}"
+    )

@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import ast
 import re
+from functools import cache
 from pathlib import Path
 from typing import Final
 
@@ -784,11 +785,59 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
     )
 
 
-#: A floor under the anti-vacuity floor. `entity.py` holds thirty-one statements
-#: touching a partitioned table at this head; twenty-eight leaves room for a
-#: query to be removed without reddening the suite, while a walk that silently
-#: stopped reaching most of the module fails loudly.
-_MINIMUM_ENTITY_STATEMENTS: Final = 28
+#: A floor under the anti-vacuity floor. The widened walk reaches **thirty-two**
+#: statements touching a partitioned table at this head; thirty leaves room for
+#: one or two to be removed without reddening the suite, while a walk that
+#: silently stopped reaching the module fails loudly.
+#:
+#: Both numbers here have been wrong before. The floor was 9 against 31, which
+#: would have let two thirds of the module go blind; then 28 against a comment
+#: claiming 31 when the true count was 32. A floor is only anti-vacuity if it
+#: sits just under the real figure, and the figure is derived by running the
+#: walk rather than by counting queries by eye.
+_MINIMUM_ENTITY_STATEMENTS: Final = 30
+
+
+#: Each partitioned table matched as a whole word, so `select(entities)` counts
+#: as naming `entities` while `entity_aliases` does not match `entities`.
+#: Cached, because the walk asks per statement per table.
+@cache
+def _names_table(table: str) -> re.Pattern[str]:
+    return re.compile(rf"\b{re.escape(table)}\b")
+
+
+#: The source a statement contributes *itself*, excluding any body it encloses.
+#:
+#: Walking every `ast.stmt` and unparsing it whole is wrong in the other
+#: direction: a `FunctionDef` unparses to its entire body, so every function
+#: containing a query matches, and so does its docstring. What the guard wants
+#: is the part of each statement that can carry a query — the value of an
+#: assignment, the iterable of a `for`, the test of an `if`, the subject of a
+#: `with` — so a query hidden in any of those is read exactly once, and an
+#: enclosing block is not read at all.
+def _own_source(statement: ast.stmt) -> str:
+    carried: list[ast.expr] = []
+    if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant):
+        # A docstring is an `Expr` over a string constant. It carries no query,
+        # and prose about `entities.resolve` is not a read of `entities`.
+        return ""
+    if (
+        (isinstance(statement, ast.Expr | ast.Return) and statement.value is not None)
+        or isinstance(statement, ast.Assign | ast.AugAssign)
+        or (isinstance(statement, ast.AnnAssign) and statement.value is not None)
+    ):
+        carried.append(statement.value)
+    elif isinstance(statement, ast.For | ast.AsyncFor):
+        carried.append(statement.iter)
+    elif isinstance(statement, ast.If | ast.While):
+        carried.append(statement.test)
+    elif isinstance(statement, ast.With | ast.AsyncWith):
+        carried.extend(item.context_expr for item in statement.items)
+    elif isinstance(statement, ast.Raise) and statement.exc is not None:
+        carried.append(statement.exc)
+    elif isinstance(statement, ast.Assert):
+        carried.append(statement.test)
+    return " ".join(ast.unparse(expression) for expression in carried)
 
 
 def test_every_entity_statement_reaches_the_partition() -> None:
@@ -812,15 +861,27 @@ def test_every_entity_statement_reaches_the_partition() -> None:
     checked = 0
     offending: list[str] = []
     for function in ast.walk(tree):
-        if not isinstance(function, ast.FunctionDef):
+        if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
             continue
         for statement in ast.walk(function):
-            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
+            # **Every statement kind, and the table named any way at all.**
+            # This walk used to admit four kinds and to recognise a table only
+            # as `entities.c` or `(entities,`. Both halves let real reads
+            # through: `for row in conn.execute(select(entities.c.x)).all():`
+            # is a `For`, `if conn.execute(...).first():` is an `If`, and
+            # `conn.execute(select(entities)).all()` — a whole-table read of
+            # every Principal's rows, in the idiom this very module uses for
+            # `assignments`, `relationships` and `observations` — matches
+            # neither spelling. That last one was planted into `get` and the
+            # entire architecture tier passed.
+            #
+            # A guard whose job is to catch the statement nobody wrote a test
+            # for cannot afford a shape it does not read, so it reads them all
+            # and matches the table as a bare name.
+            if not isinstance(statement, ast.stmt):
                 continue
-            rendered = ast.unparse(statement)
-            if not any(
-                f"{table}.c" in rendered or f"({table}," in rendered for table in partitioned
-            ):
+            rendered = _own_source(statement)
+            if not any(_names_table(table).search(rendered) for table in partitioned):
                 continue
             checked += 1
             if "_mine(" not in rendered and "_bound(" not in rendered:

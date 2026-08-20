@@ -186,12 +186,26 @@ def _limitations(
 #: command contract rather than listed here: a command carrying `after` is one a
 #: caller can page past the first page of. Computed at import, so the readiness
 #: limitation cannot disagree with the schema a caller actually reads.
+#: The field names a command uses to carry a continuation token.
+#:
+#: Two spellings, because the contract has two: `entities.relationships` takes
+#: `after` and `knowledge.search` takes `cursor`. Deriving from `after` alone
+#: read one of them and published "every other listing" cannot be continued —
+#: false in every build, since `knowledge.search` is served unconditionally and
+#: was emitting a `next_cursor` the same envelope said could not exist.
+#:
+#: `tests/contract/test_capabilities_and_readiness.py` asserts that no command
+#: carries a continuation-shaped field outside this set, so a third spelling
+#: fails rather than going quietly unread.
+CONTINUATION_FIELD_NAMES: Final[frozenset[str]] = frozenset({"after", "cursor"})
+
+
 def _accepts_a_continuation(member: object) -> Capability | None:
     """The capability of a command whose listing can be continued, or `None`."""
     capability = getattr(member, "capability", None)
     if not isinstance(capability, Capability) or not is_dataclass(member):
         return None
-    if "after" not in {field.name for field in fields(member)}:
+    if not ({field.name for field in fields(member)} & CONTINUATION_FIELD_NAMES):
         return None
     return capability
 

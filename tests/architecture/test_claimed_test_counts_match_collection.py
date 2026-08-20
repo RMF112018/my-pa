@@ -1,4 +1,4 @@
-"""Every "N tests" the plan claims about a suite, checked against collection.
+"""Every "N tests" claim the plan makes about a suite, checked against collection.
 
 The spelled-count sweep next door reads *words* — "fifty-three capabilities" —
 and is blind to digits. The implementation plan's evidence table is written in
@@ -32,10 +32,17 @@ import pytest
 ROOT: Final = Path(__file__).resolve().parents[2]
 PLAN: Final = ROOT / "docs" / "plans" / "relationship-intelligence-implementation-plan.md"
 
-#: A claim naming a test file and how many tests it holds:
-#: `` `tests/unit/test_entity_context.py` — 9 tests ``. The dash may be an em
-#: dash or a hyphen, and the number may carry a comma.
-CLAIM: Final = re.compile(r"`(tests/[\w/]+\.py)`\s*[—-]\s*(\d+)\s+tests\b")
+#: A claim naming a test file and how many tests it holds. The separator is
+#: whatever short punctuation the prose uses, because it varies and the guard
+#: must not: `` `…test_entity_repository.py` — 46 tests ``,
+#: `` `…test_entity_context.py`, 9 tests ``, `` `…privacy_regression.py` (19
+#: tests ``.
+#:
+#: Requiring an em dash bound four of the seven claims in this table. A plant
+#: changing `, 9 tests` to `, 44 tests` and `(19 tests` to `(31 tests` was not
+#: caught — the guard's docstring said "every" and it meant "every one written
+#: with a dash".
+CLAIM: Final = re.compile(r"`(tests/[\w/]+\.py)`[^.\n|]{0,4}?(\d+)\s+tests\b")
 
 #: Collection counts are stable but not free; one subprocess per *file*, not per
 #: claim, since the plan names some files more than once.
@@ -94,3 +101,71 @@ def test_every_claimed_test_count_matches_collection(path: str, claimed: int, li
         f"{PLAN.name}:{line} says {path} holds {claimed} tests; collection finds {actual}. "
         "Correct the plan rather than this test."
     )
+
+
+#: The plan's claims about the labelled resolution corpus, which no other guard
+#: reads. The spelled-count sweep only reads numbers before capability/purpose
+#: nouns; the pattern above only reads `` `tests/….py` — N tests ``. So the
+#: corpus figures sat between two guards and drifted twice — once by four cases
+#: when the currency axis was added, and again by two when the liveness axis
+#: was. Both times the commit that moved the number left the prose behind, and
+#: both times a reviewer found it rather than a test.
+CORPUS_CLAIM: Final = re.compile(
+    r"(?P<cases>[\w-]+) labelled (?:collision-biased )?cases (?:in|over) (?P<over>[\w-]+) "
+    r"(?P<noun>famil(?:y|ies)|entities)"
+)
+
+_WORDS: Final = {
+    "thirty-one": 31,
+    "thirty-three": 33,
+    "thirty-five": 35,
+    "thirty-seven": 37,
+    "fifteen": 15,
+    "nineteen": 19,
+    "twenty": 20,
+    "twenty-one": 21,
+    "twenty-three": 23,
+    "twenty-five": 25,
+}
+
+
+def _spelled(value: str) -> int | None:
+    if value.isdigit():
+        return int(value)
+    return _WORDS.get(value.lower())
+
+
+def _corpus_truth() -> dict[str, int]:
+    from tests.evaluation.fixtures.resolution_cases import RESOLUTION_CASES
+    from tests.evaluation.fixtures.resolution_corpus import CORPUS_ENTITIES
+
+    return {
+        "cases": len(RESOLUTION_CASES),
+        "families": len({case.family for case in RESOLUTION_CASES}),
+        "entities": len(CORPUS_ENTITIES),
+    }
+
+
+def test_every_claimed_corpus_size_matches_the_corpus() -> None:
+    """Corpus-size claims in the plan, against the fixture that is measured."""
+    text = PLAN.read_text(encoding="utf-8")
+    truth = _corpus_truth()
+    wrong: list[str] = []
+    seen = 0
+    for match in CORPUS_CLAIM.finditer(text):
+        line = text.count("\n", 0, match.start()) + 1
+        cases = _spelled(match.group("cases"))
+        over = _spelled(match.group("over"))
+        if cases is None or over is None:
+            wrong.append(f"{PLAN.name}:{line} spells a number this guard cannot read")
+            continue
+        seen += 1
+        over_noun = match.group("noun")
+        expected_over = truth["entities"] if over_noun == "entities" else truth["families"]
+        if cases != truth["cases"] or over != expected_over:
+            wrong.append(
+                f"{PLAN.name}:{line} says {cases} cases over {over} "
+                f"{over_noun}; the corpus holds {truth['cases']} and {expected_over}"
+            )
+    assert seen, "no corpus-size claim found; the pattern or the prose changed shape"
+    assert not wrong, wrong

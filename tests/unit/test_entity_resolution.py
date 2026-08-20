@@ -12,6 +12,7 @@ holds for every future branch too.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -1311,6 +1312,59 @@ def test_an_assignment_running_to_a_future_end_date_still_corroborates(
     )
     assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
     assert answer.candidates[0].signals == (ContextualSignal.ASSIGNED_TO_THE_NAMED_SCOPE,)
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT not in answer.warnings
+
+
+def test_a_refused_answer_does_not_claim_a_scope_lifted_it(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """`NARROWED_BY_SUPPLIED_SCOPE` on an `AMBIGUOUS` answer says two false things.
+
+    Its vocabulary entry is "a supplied scope narrowed the candidate set... the
+    answer would have been `AMBIGUOUS` without it". An archived entity matched by
+    canonical name alone, with a live assignment to the named scope, corroborates
+    — and is then refused by the currency branch. The warning was appended before
+    that branch, so a refusal carried a disclosure claiming a scope had lifted it.
+    """
+    entities = _Entities(world)
+    entities.create(
+        PRINCIPAL, replace(an_entity(ALICE, "Alice Synthetic"), status=EntityStatus.ARCHIVED)
+    )
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001"))
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE not in answer.warnings
+
+
+def test_a_resolved_answer_does_not_report_a_rivals_stale_evidence(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The staleness disclosure must describe the answer, not what was excluded.
+
+    Two people share a name. The winner's assignment to the scope is live; the
+    rival's is cancelled. Asked of every candidate considered, the warning fired
+    and told the reader the named entity's evidence was not current — it was, and
+    the record that was not is absent from the answer they can inspect.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
+    entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001"))
+    entities.record_assignment(
+        PRINCIPAL,
+        replace(_assignment("asn_bbbb0002bbbb0002"), entity_id=ALICE_TWO, status="cancelled"),
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.resolved_entity_id == ALICE
     assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT not in answer.warnings
 
 

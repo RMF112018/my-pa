@@ -130,15 +130,29 @@ SKIPPED_DIRECTORIES = frozenset({"__pycache__", ".ruff_cache", ".mypy_cache", ".
 #: must not undo that.
 SECTION_SWEPT_FILES = frozenset({"docs/plans/mcv-completion-plan.md"})
 
-#: Specifications are not swept. A spec records what was proposed and what was
-#: true when it was written; `docs/specs/mcv-read-only-vertical-slice.md` says
+#: Lineage specifications are not swept. A spec records what was proposed and
+#: what was true when it was written: `mcv-read-only-vertical-slice.md` says
 #: twelve capabilities because twelve is what that slice specified, and
-#: `relationship-intelligence-v0.2.md` is explicitly lineage evidence carrying an
-#: operator-review status of its own. Sweeping them would demand that a historical
-#: proposal be rewritten every time the product grew, which is the opposite of
-#: what a lineage document is for — and this repository forbids editing them from
-#: an implementation change in any case.
-SKIPPED_DOCUMENT_DIRECTORIES = frozenset({"specs"})
+#: `relationship-intelligence-v0.2.md` and `-v0.3.md` carry operator-review
+#: statuses of their own. Sweeping them would demand that a historical proposal
+#: be rewritten every time the product grew, which is the opposite of what a
+#: lineage document is for.
+#:
+#: **Named individually rather than by directory, and an earlier version was not.**
+#: Excluding all of `docs/specs/` also excluded
+#: `relationship-intelligence-v0.3-acceptance.md`, which this campaign authored
+#: and which makes present-tense claims about repository artifacts ("a seeded
+#: synthetic fixture now exists at…", proof tiers) — exactly the kind of claim
+#: this guard exists to bind. The blanket exclusion was then *cited* as the
+#: reason a defect in that file could stay open. A directory is a convenient
+#: unit; what a document claims about is the honest one.
+LINEAGE_SPECIFICATIONS = frozenset(
+    {
+        "docs/specs/mcv-read-only-vertical-slice.md",
+        "docs/specs/relationship-intelligence-v0.2.md",
+        "docs/specs/relationship-intelligence-v0.3.md",
+    }
+)
 
 #: Every other Markdown document under `docs/`, plus the top-level `README.md`.
 #:
@@ -153,12 +167,20 @@ SKIPPED_DOCUMENT_DIRECTORIES = frozenset({"specs"})
 #: here is derived rather than written down.
 SWEPT_FILES = (
     "README.md",
+    # Root-level governance documents. A plant of `forty-one capabilities` in
+    # each went uncaught: they sit under no swept root, and the file list held
+    # only `README.md`. `AGENTS.md` is the document every agent is pointed at
+    # first, so a stale set size there is read more often than one in a runbook.
+    "AGENTS.md",
+    "CONTRIBUTING.md",
+    "AI_OPERATING_MANUAL.md",
+    "SECURITY.md",
     *sorted(
         str(path.relative_to(ROOT))
         for path in (ROOT / "docs").rglob("*.md")
         if not any(part in SKIPPED_DIRECTORIES for part in path.parts)
         and str(path.relative_to(ROOT)) not in SECTION_SWEPT_FILES
-        and not (set(path.relative_to(ROOT).parts) & SKIPPED_DOCUMENT_DIRECTORIES)
+        and str(path.relative_to(ROOT)) not in LINEAGE_SPECIFICATIONS
     ),
 )
 

@@ -119,10 +119,18 @@ LATE: Final = datetime(2025, 6, 1, tzinfo=UTC)
 
 # --- population sizes, stated once ------------------------------------------
 #
-# Named constants rather than literals scattered through the builder, because
-# `tests/evaluation/test_program_scale_acceptance.py` asserts the controlling
-# minimums against the *built* corpus and a reader has to be able to check the
-# intent against the requirement without reading the loops.
+# Named constants rather than literals scattered through the builder, so a
+# reader can check the intent against the requirement without reading the loops.
+#
+# **No test asserts these minimums against the built corpus.** This module is
+# imported by nothing and executed by no tier, which
+# `docs/plans/relationship-intelligence-implementation-plan.md` records as the
+# honest fact about it: a fixture no test reads proves the same amount as no
+# fixture. An earlier version of this comment cited
+# `tests/evaluation/test_program_scale_acceptance.py` for that assertion; that
+# file has never existed. It was the third citation in this campaign naming a
+# test file that does not exist, which is why the two others now say so in place
+# of the citation rather than being quietly deleted.
 
 ACTIVE_PERSONS: Final = 500
 MERGED_PERSONS: Final = 40

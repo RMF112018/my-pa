@@ -30,11 +30,15 @@ from tests.evaluation.fixtures.resolution_corpus import (
     BOB_CHEN_OTHER_PRINCIPAL,
     CHEN_PARTNERS,
     DEPARTED_CONTRACTOR,
+    IRIS_BELL_CANCELLED,
+    IRIS_BELL_OTHER,
     JOSE_ALVAREZ,
     LEO_MARCHETTI,
     MAYA_OSEI,
     NADIA_OKONKWO_INCOMING,
     NADIA_OKONKWO_OTHER,
+    OMAR_DIALLO_ENDED,
+    OMAR_DIALLO_OTHER,
     PRINCIPAL_A,
     PRIYA_RAO,
     ROBERT_CHEN,
@@ -216,6 +220,34 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
         note=(
             "A caller who names a moment gets that moment's answer. Refusing here would "
             "be the other failure: a currency rule strict enough to answer nothing."
+        ),
+    ),
+    ResolutionCase(
+        name="a_tie_cancelled_by_its_status_does_not_resolve_a_shared_name",
+        family="signal_currency",
+        reference="Iris Bell",
+        scope_entity_id=TOWER_PROJECT,
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({IRIS_BELL_CANCELLED, IRIS_BELL_OTHER}),
+        note=(
+            "Her assignment's window is open and began in the past, so every date rule "
+            "admits it; only `status` says it is over. The corpus's other stale assignment "
+            "is expired *and* active, so the date rule excluded it first and the status "
+            "flag could be deleted with this gate green — a corpus hostile on one axis "
+            "and blind on the other."
+        ),
+    ),
+    ResolutionCase(
+        name="an_edge_ended_by_its_state_does_not_resolve_a_shared_name",
+        family="signal_currency",
+        reference="Omar Diallo",
+        scope_entity_id=TOWER_PROJECT,
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({OMAR_DIALLO_ENDED, OMAR_DIALLO_OTHER}),
+        note=(
+            "The edge equivalent, and the pair of the case above. Leo's ended edge carries "
+            "expired dates too, so it never reached the state filter; this one is in force "
+            "by every date and ended only by its state."
         ),
     ),
     ResolutionCase(

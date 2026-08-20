@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
@@ -31,6 +32,8 @@ from my_pa.application.entity_governance import EntityGovernanceService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.relationship.entity import (
     AliasType,
+    Assignment,
+    AssignmentType,
     Entity,
     EntityAlias,
     EntityStatus,
@@ -41,6 +44,7 @@ from my_pa.domain.relationship.entity import (
 from my_pa.domain.relationship.governance import (
     EntityObservation,
     EntityProposalKind,
+    EntityProposalState,
     ObservationKind,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
@@ -64,10 +68,28 @@ BOB: Final = "ent_cccc0003cccc0003"
 PLANTED_PERSONAL_DATA: Final[tuple[str, ...]] = (
     "Alice Chen",
     "alice chen",
-    "Ali",
+    "Birgitta",
     "a.chen@acme.test",
     "Bob Chen",
     "bob chen",
+    #: One value per remaining free-text column on the eight plane tables. Six
+    #: of fourteen were planted before, so the same defect one column over
+    #: stayed green: adding `entity_aliases.normalized_value` to the report
+    #: printed a person's nickname and every test passed, because the alias
+    #: plant was `"Ali"` while the stored value is the normalized `"ali"`, and
+    #: the scan is a case-sensitive substring test.
+    #:
+    #: The nickname is `"Birgitta"` rather than something short for a second
+    #: reason: `"ali"` is a substring of the report's own `"aliases"` key, so
+    #: planting it made the scan fail on the report's structure rather than on
+    #: any personal value. A plant has to be distinctive enough that a hit means
+    #: what the test says it means.
+    "birgitta",
+    "Marguerite Okorie",
+    "Priyanka Raval",
+    "Theodore Lindqvist",
+    "Ingrid Vasquez-Thorne",
+    "Cornelius Adeyemi-Blackwood",
     #: Planted into `entity_proposals.proposed_by`, which the inspection script
     #: argues at length must never be selected because it is free text that will
     #: carry "a person's name or address the moment anything records who asked
@@ -143,8 +165,8 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                     alias_id="eals_aaaa0001aaaa0001",
                     entity_id=ALICE,
                     alias_type=AliasType.NICKNAME,
-                    normalized_value=normalize_name("Ali"),
-                    display_value="Ali",
+                    normalized_value=normalize_name("Birgitta"),
+                    display_value="Birgitta",
                     principal_id=PRINCIPAL_A,
                 ),
             )
@@ -187,6 +209,45 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                 proposed_by="Dana Whitfield",
                 proposed_at=WHEN,
             )
+            # An assignment, so `role`, `discipline` and `responsibility_class`
+            # are non-empty. Zero rows made three free-text columns unplantable:
+            # selecting any of them would have printed nothing and the scan
+            # would have stayed green on an empty table.
+            repository.record_assignment(
+                PRINCIPAL_A,
+                Assignment(
+                    assignment_id="asn_aaaa0001aaaa0001",
+                    entity_id=ALICE,
+                    assignment_type=AssignmentType.EMPLOYMENT,
+                    principal_id=PRINCIPAL_A,
+                    role="Marguerite Okorie's deputy",
+                    discipline="Structural, reporting to Priyanka Raval",
+                    responsibility_class="Signs for Theodore Lindqvist",
+                ),
+            )
+            # A decided proposal and its merge record, so `decided_by`,
+            # `decision_reason` and the merge `reason` carry text. `decided_by`
+            # is the same free-text "who made this call" column the script's
+            # docstring argues must never be selected, and it was unplanted.
+            EntityGovernanceService(repository).propose(
+                PRINCIPAL_A,
+                proposal_id="eprp_bbbb0002bbbb0002",
+                kind=EntityProposalKind.RECORD_ALIAS,
+                payload={"entity_id": ALICE, "value": "Birgitta"},
+                observation_ids=(),
+                proposed_by="Ingrid Vasquez-Thorne",
+                proposed_at=WHEN,
+            )
+            repository.decide_proposal(
+                PRINCIPAL_A,
+                replace(
+                    repository.proposal(PRINCIPAL_A, "eprp_bbbb0002bbbb0002"),
+                    state=EntityProposalState.REJECTED,
+                    decided_by="Ingrid Vasquez-Thorne",
+                    decided_at=WHEN,
+                    decision_reason="Refused by Cornelius Adeyemi-Blackwood",
+                ),
+            )
         yield engine
     finally:
         engine.dispose()
@@ -198,16 +259,16 @@ def test_the_report_counts_the_plane(populated: Engine) -> None:
         "entities": 2,
         "aliases": 1,
         "external_identifiers": 1,
-        "assignments": 0,
+        "assignments": 1,
         "relationships": 0,
         "observations": 1,
-        "proposals": 1,
+        "proposals": 2,
         "merges": 0,
     }
     assert produced["entities_by_status"] == {"active": 2}
     assert produced["entities_by_type"] == {"person": 2}
     assert produced["observations_by_kind"] == {"message_participant": 1}
-    assert produced["proposals_by_state"] == {"proposed": 1}
+    assert produced["proposals_by_state"] == {"proposed": 1, "rejected": 1}
 
 
 def test_the_report_shows_the_unresolved_queue(populated: Engine) -> None:

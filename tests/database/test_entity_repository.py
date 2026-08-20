@@ -936,6 +936,34 @@ def test_a_redirect_chain_is_refused(migrated_engine: Engine) -> None:
             repository.redirect_entity(PRINCIPAL_A, ACME, BOB)
 
 
+def test_an_already_merged_entity_is_not_merged_again(migrated_engine: Engine) -> None:
+    """The fourth arrangement, and the third one a reviewer found rather than this code.
+
+    `redirect(M, S1)` then `redirect(M, S2)` passed every guard: the survivor
+    check inspects only the entity being kept, and the inbound check looks for
+    rows pointing *at* M — neither asks whether M already points somewhere. So
+    the second call silently rewrote M's target, leaving `entity_merge_records`
+    naming S1 while the entity plane named S2.
+
+    The invariant was held, until now, by `entity_merge_records`'s unique
+    constraint on `merged_entity_id`: a table this method does not touch,
+    enforcing a rule about this method, and only for callers that write a merge
+    record afterwards. A repair script or a backfill that redirected without
+    recording would not have met it.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        repository.create(PRINCIPAL_A, an_entity(ACME, PRINCIPAL_A, "Carla Synthetic"))
+        repository.redirect_entity(PRINCIPAL_A, BOB, ALICE)
+        with pytest.raises(ValueError, match="already merged away"):
+            repository.redirect_entity(PRINCIPAL_A, BOB, ACME)
+    with migrated_engine.connect() as connection:
+        merged = SqlEntityRepository(connection).get(PRINCIPAL_A, BOB)
+        assert merged.superseded_by_entity_id == ALICE
+
+
 def test_two_concurrent_redirects_cannot_build_a_chain(migrated_engine: Engine) -> None:
     """The guards read one row and update another, so they must not race.
 

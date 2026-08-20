@@ -154,12 +154,19 @@ what it produced. `P00-OD-006` is **open**.
 
 Evidence: `src/my_pa/infrastructure/extraction/`, `pyproject.toml`.
 
-## 6. Listings stop at the page size, and only one issues a continuation cursor
+## 6. Listings stop at the page size, and two issue a continuation cursor
 
 Truncation is disclosed rather than hidden — `truncation.is_truncated` with a
-reason. `entities.relationships` issues a keyset `next_cursor` a caller can page
-with. **Every other listing does not**, so a caller that needs the whole of a
-large scope still cannot get it.
+reason. `knowledge.search` and `entities.relationships` issue a `next_cursor` a
+caller can page with. **Every other listing does not**, so a caller that needs
+the whole of a large scope still cannot get it.
+
+Corrected 2026-08-19, twice over. This section read "`next_cursor` is **always**
+`null`" after `entities.relationships` shipped a keyset cursor; correcting it to
+name that one capability was still wrong, because `knowledge.search` has paged
+via a field called `cursor` since long before this plane existed. The published
+readiness text had the same hole, for the same reason — it derived
+continuability from the field name `after` and did not know the other spelling.
 
 This one the build states about itself: it is derived into every
 `capabilities.get` envelope rather than written here — from which commands
@@ -337,6 +344,27 @@ and source-backed profile and timeline reads. It does so only through the
 fixture personal-source provider and an internal application/read-model path;
 it adds no public capability and has not been exercised against live contacts,
 email, or calendar data.
+
+**That describes WP-9, and is no longer true of the plane.** Corrected
+2026-08-19: the Relationship Intelligence entity plane adds **five** public read
+capabilities — `entities.search`, `entities.get`, `entities.resolve`,
+`entities.context`, `entities.relationships` — and this document, whose job is
+stating what the build does not do, said nothing about them. What remains true,
+and is the limitation:
+
+* **They are off by default.** A process that has not set
+  `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the five and
+  refuses each with `unsupported` on every transport.
+* **Nothing writes.** The plane has no write capability.
+  `src/my_pa/application/entity_governance.py` and
+  `src/my_pa/application/entity_reenrichment.py` — which hold every mutation,
+  including merge — are composed by no bootstrap, capability, script or worker,
+  so the review queue can be *read* and cannot be *worked*. An operator with a
+  proposal to decide has no supported action.
+* **No live personal data has reached it.** Every figure and every test is
+  synthetic, and no connector writes an observation.
+* **Split does not exist**, so the "reversible merge/split" above overstates what
+  the plane supports: a merge is recorded and redirects, and cannot be undone.
 
 Profiles disclose coverage, unavailable domains, freshness, calculation basis,
 and time windows. They do not claim completeness. There is no automatic identity

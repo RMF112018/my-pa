@@ -74,12 +74,16 @@ __all__ = [
     "CORPUS_IDENTIFIERS",
     "CORPUS_RELATIONSHIPS",
     "DEPARTED_CONTRACTOR",
+    "IRIS_BELL_CANCELLED",
+    "IRIS_BELL_OTHER",
     "JOSE_ALVAREZ",
     "LEO_MARCHETTI",
     "MAYA_OSEI",
     "NADIA_OKONKWO_INCOMING",
     "NADIA_OKONKWO_OTHER",
     "NORTHWIND",
+    "OMAR_DIALLO_ENDED",
+    "OMAR_DIALLO_OTHER",
     "PRINCIPAL_A",
     "PRINCIPAL_B",
     "PRIYA_RAO",
@@ -123,6 +127,10 @@ NADIA_OKONKWO_INCOMING: Final = "ent_nadia0016incoming1"
 NADIA_OKONKWO_OTHER: Final = "ent_nadia0017other0017"
 TOMAS_HALL_CURRENT: Final = "ent_tomas0018current18"
 TOMAS_HALL_OTHER: Final = "ent_tomas0019other0019"
+IRIS_BELL_CANCELLED: Final = "ent_iris0020cancelled"
+IRIS_BELL_OTHER: Final = "ent_iris0021other0021"
+OMAR_DIALLO_ENDED: Final = "ent_omar0022ended0022"
+OMAR_DIALLO_OTHER: Final = "ent_omar0023other0023"
 
 ACME: Final = "ent_acme0009org000009a"
 NORTHWIND: Final = "ent_northwind0010org10"
@@ -182,6 +190,13 @@ CORPUS_ENTITIES: Final[tuple[Entity, ...]] = (
     _entity(NADIA_OKONKWO_OTHER, "Nadia Okonkwo"),
     _entity(TOMAS_HALL_CURRENT, "Tomas Hall"),
     _entity(TOMAS_HALL_OTHER, "Tomas Hall"),
+    # Two more shared-name pairs, for the axis the four above do not test: a tie
+    # whose *dates are live* and whose status or state says it is over. Without
+    # them the liveness flags were deletable with the calibration gate green.
+    _entity(IRIS_BELL_CANCELLED, "Iris Bell"),
+    _entity(IRIS_BELL_OTHER, "Iris Bell"),
+    _entity(OMAR_DIALLO_ENDED, "Omar Diallo"),
+    _entity(OMAR_DIALLO_OTHER, "Omar Diallo"),
     # Another Principal's person, whose surname collides on purpose.
     _entity(BOB_CHEN_OTHER_PRINCIPAL, "Bob Chen", principal_id=PRINCIPAL_B),
     # Three uniquely named people whose *only* evidence is a bare canonical name
@@ -400,6 +415,20 @@ CORPUS_ASSIGNMENTS: Final[tuple[Assignment, ...]] = (
         effective_from=BEFORE,
         effective_to=AFTER,
     ),
+    # **Liveness is the only thing excluding this row.** Its window is open and
+    # began in the past, so every date rule admits it; only `status` says it is
+    # over. Priya's row above is `status="active"` with expired dates, which is
+    # the mirror — so before this one, deleting the status flag changed no
+    # measurement and the corpus could not see the guard it was cited for.
+    Assignment(
+        assignment_id="asn_iris0008cancelled",
+        entity_id=IRIS_BELL_CANCELLED,
+        assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+        principal_id=PRINCIPAL_A,
+        scope_entity_id=TOWER_PROJECT,
+        effective_from=BEFORE,
+        status="cancelled",
+    ),
 )
 
 
@@ -435,9 +464,12 @@ CORPUS_RELATIONSHIPS: Final[tuple[EntityRelationship, ...]] = (
     # Leo contracted on the tower and does not any more. The edge is kept as
     # lineage, which is what makes it dangerous: `relationships()` takes no
     # `active_only`, so an ended edge came back indistinguishable from a live one
-    # and corroborated exactly as strongly. Every other edge in this corpus is
-    # open and active, so before this row the state filter had nothing to bite
-    # on and its deletion changed no measurement.
+    # and corroborated exactly as strongly.
+    #
+    # This row does **not** isolate the state filter, and an earlier version of
+    # this comment claimed it did. Leo's dates are expired as well as his state,
+    # so the date rule excludes him first and deleting the state flag changes no
+    # measurement. `erel_omar0006endedopen` below is the row that isolates it.
     EntityRelationship(
         relationship_id="erel_leo0005offtower0",
         from_entity_id=LEO_MARCHETTI,
@@ -446,6 +478,20 @@ CORPUS_RELATIONSHIPS: Final[tuple[EntityRelationship, ...]] = (
         principal_id=PRINCIPAL_A,
         effective_from=BEFORE,
         effective_to=MIDPOINT,
+        state="ended",
+        version=2,
+    ),
+    # The edge equivalent of Iris's assignment, and the reason Leo's row above
+    # was not enough: Leo's dates are expired *as well as* his state, so the
+    # date rule excluded him before the state filter was consulted. This one is
+    # open-ended and in force by every date, and only `state` says otherwise.
+    EntityRelationship(
+        relationship_id="erel_omar0006endedopen",
+        from_entity_id=OMAR_DIALLO_ENDED,
+        relationship_type=EntityRelationshipType.CONTRACTOR_ON,
+        to_entity_id=TOWER_PROJECT,
+        principal_id=PRINCIPAL_A,
+        effective_from=BEFORE,
         state="ended",
         version=2,
     ),

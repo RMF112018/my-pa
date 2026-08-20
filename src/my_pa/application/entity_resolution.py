@@ -455,13 +455,21 @@ class EntityResolutionService:
             for entity_id in by_entity
         }
         signals = {entity_id: found.found for entity_id, found in scoped.items()}
-        if any(found.withheld for found in scoped.values()):
+        narrowed = _narrow_by_signals(by_entity, signals)
+        if any(scoped[entity_id].withheld for entity_id in narrowed):
             # Something did connect a candidate to the named scope, and it is
             # over. Said out loud on the same terms `_by_identifier` says it: a
             # caller who is not told cannot tell this answer apart from one where
             # the context simply had nothing to say.
+            #
+            # **Asked of the candidates that survive narrowing, not of everyone
+            # considered.** Computed over the whole set, the warning described a
+            # candidate the scope then removed: two people share a name, the
+            # winner's assignment is live and the rival's is cancelled, and the
+            # answer named the winner while telling the reader their evidence
+            # was stale. It was not, and the record that was is not on the
+            # answer to look at.
             warnings.append(ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT)
-        narrowed = _narrow_by_signals(by_entity, signals)
         was_narrowed = narrowed is not by_entity
         if was_narrowed:
             warnings.append(ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE)
@@ -543,6 +551,12 @@ class EntityResolutionService:
         if not resolves:
             return unresolved(ResolutionOutcome.AMBIGUOUS)
 
+        warnings.extend(_currency_warnings(only.status))
+        if only.status is not EntityStatus.ACTIVE:
+            if only.strongest_basis is ResolutionBasis.CANONICAL_NAME:
+                return unresolved(ResolutionOutcome.AMBIGUOUS)
+            return unresolved(ResolutionOutcome.HISTORICAL_MATCH)
+
         if corroborated and not was_narrowed and not names_itself:
             # The scope excluded no rival -- there was none -- but it is still
             # the entire reason this is a resolution rather than a refusal, and
@@ -552,13 +566,13 @@ class EntityResolutionService:
             # that carried no warning at all: a lone bare-name match lifted to
             # `RESOLVED_CONTEXTUAL` by the caller's own hint, reported as though
             # the reference had named the entity.
+            #
+            # **Appended after the currency branch above, not before it.** A
+            # non-current entity matched by canonical name returns `AMBIGUOUS`
+            # from that branch, and this warning was already on it -- claiming a
+            # scope had lifted an answer that was refused anyway, when both
+            # halves of its own definition were false.
             warnings.append(ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE)
-
-        warnings.extend(_currency_warnings(only.status))
-        if only.status is not EntityStatus.ACTIVE:
-            if only.strongest_basis is ResolutionBasis.CANONICAL_NAME:
-                return unresolved(ResolutionOutcome.AMBIGUOUS)
-            return unresolved(ResolutionOutcome.HISTORICAL_MATCH)
 
         # Contextual whenever the surrounding context did any of the deciding,
         # whether by excluding a rival or by being the only thing that lifted a

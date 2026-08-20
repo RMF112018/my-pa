@@ -2585,15 +2585,29 @@ class _Entities(EntitiesRepository):
             raise ValueError("a proposal belongs to the acting Principal")
         for index, held in enumerate(self._world.entity_proposals):
             if held.proposal_id == proposal.proposal_id and held.principal_id == principal_id:
+                # Mirrors the SQL `state = 'proposed'` predicate. Without it a
+                # unit test could assert the repository's one-time-decision rule
+                # against a fake that has no such rule and pass, which is the
+                # hazard `redirect_entity` names two methods above.
+                if held.state is not EntityProposalState.PROPOSED:
+                    raise UnknownScopeError("a decision names an open proposal in this scope")
                 self._world.entity_proposals[index] = proposal
                 return
-        raise UnknownScopeError("a decision names a proposal outside this scope")
+        raise UnknownScopeError("a decision names an open proposal in this scope")
 
     def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
         self._world.fail("entities.record_merge")
         if record.principal_id != principal_id:
             raise ValueError("a merge record belongs to the acting Principal")
         self._require_own(principal_id, record.retained_entity_id, record.merged_entity_id)
+        # Mirrors the SQL partition check on the cited proposal: a record naming
+        # another Principal's proposal presents their decision as this
+        # Principal's own.
+        if not any(
+            held.proposal_id == record.proposal_id and held.principal_id == principal_id
+            for held in self._world.entity_proposals
+        ):
+            raise UnknownScopeError("a merge record cites a proposal in this scope")
         if any(
             held.merged_entity_id == record.merged_entity_id for held in self._world.entity_merges
         ):
@@ -2633,6 +2647,9 @@ class _Entities(EntitiesRepository):
             for held in self._world.entities
         ):
             raise ValueError("an entity that others redirect to is not merged away")
+        merged = self.get(principal_id, merged_entity_id)
+        if merged is not None and merged.status is EntityStatus.MERGED_REDIRECT:
+            raise ValueError("an entity that is already merged away is not merged again")
         for index, held in enumerate(self._world.entities):
             if held.entity_id == merged_entity_id and held.principal_id == principal_id:
                 self._world.entities[index] = replace(

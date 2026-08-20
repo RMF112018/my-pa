@@ -5,6 +5,7 @@ from __future__ import annotations
 from my_pa.application.commands import (
     BeginIntelligenceCycle,
     CommitIntelligenceArtifact,
+    GetLatestIntelligenceArtifact,
     ReadIntelligenceArtifact,
     RecordIntelligenceRunState,
     ResolveIntelligenceSet,
@@ -545,6 +546,247 @@ def test_collector_rerun_stales_old_researchers(scene: Scene) -> None:
         )
     )
     assert historical["body_markdown"] == "from v1"
+
+
+def test_collector_rerun_stales_descendant_readiness_and_commits(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, "cycle-lineage")
+    reporter_id = _focus_branch(service, scene, cycle, FOCUS)
+    synthesizer = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            GetLatestIntelligenceArtifact(
+                cycle_run_id=cycle,
+                stage=IntelligenceStage.SYNTHESIZER,
+                focus_area_id=FOCUS,
+            ),
+        )
+    )
+    synth_id = synthesizer["report_id"]
+    assert isinstance(synth_id, str)
+    swarm = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(
+                cycle_run_id=cycle,
+                set_id=ResolverSetId.RESEARCH_SWARM,
+                focus_area_id=FOCUS,
+            ),
+        )
+    )
+    assert swarm["aggregate"] == "READY"
+    reporter_set = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(
+                cycle_run_id=cycle,
+                set_id=ResolverSetId.REPORTER_INPUT,
+                focus_area_id=FOCUS,
+            ),
+        )
+    )
+    assert reporter_set["aggregate"] == "READY"
+    commit(
+        service,
+        scene,
+        cycle_run_id=cycle,
+        stage=IntelligenceStage.COLLECTOR,
+        kind=ArtifactKind.COLLECTOR_CANDIDATES,
+        key="c-lineage-v2",
+        title="c2",
+        body="v2",
+        focus=FOCUS,
+    )
+    swarm_after = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(
+                cycle_run_id=cycle,
+                set_id=ResolverSetId.RESEARCH_SWARM,
+                focus_area_id=FOCUS,
+            ),
+        )
+    )
+    assert swarm_after["aggregate"] == "BLOCKED"
+    members = swarm_after["members"]
+    assert isinstance(members, list)
+    assert {member["readiness"] for member in members} == {"STALE"}
+    reporter_after = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(
+                cycle_run_id=cycle,
+                set_id=ResolverSetId.REPORTER_INPUT,
+                focus_area_id=FOCUS,
+            ),
+        )
+    )
+    assert reporter_after["aggregate"] != "READY"
+    reporter_members = reporter_after["members"]
+    assert isinstance(reporter_members, list)
+    assert reporter_members[0]["readiness"] == "STALE"
+    brief_inputs = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(cycle_run_id=cycle, set_id=ResolverSetId.MORNING_BRIEF_INPUTS),
+        )
+    )
+    assert brief_inputs["aggregate"] != "READY"
+    brief_members = brief_inputs["members"]
+    assert isinstance(brief_members, list)
+    communications = next(
+        member for member in brief_members if member["focus_area_id"] == FOCUS.value
+    )
+    assert communications["readiness"] == "STALE"
+    stale_reporter = run(
+        service,
+        scene,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.REPORTER,
+            artifact_kind=ArtifactKind.FOCUS_REPORT,
+            producer_task_id="stale-reporter",
+            producer_task_name="stale reporter",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="stale reporter",
+            body_markdown="no",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="stale-reporter",
+            focus_area_id=FOCUS,
+            dependency_report_ids=(synth_id,),
+        ),
+    )
+    assert stale_reporter.error is not None
+    assert stale_reporter.error.code is ErrorCode.CONFLICT
+    historical = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ReadIntelligenceArtifact(report_id=reporter_id),
+        )
+    )
+    assert historical["body_markdown"] == f"report {FOCUS.value}"
+
+
+def test_failed_researcher_lane_exposes_run_id_and_blocks_synthesizer(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, "cycle-blocked-lane")
+    collector = commit(
+        service,
+        scene,
+        cycle_run_id=cycle,
+        stage=IntelligenceStage.COLLECTOR,
+        kind=ArtifactKind.COLLECTOR_CANDIDATES,
+        key="block-c",
+        title="collector",
+        body="collector",
+        focus=FOCUS,
+    )
+    collector_id = collector["report_id"]
+    assert isinstance(collector_id, str)
+    live_ids: list[str] = []
+    failed_run_id = ""
+    for lane in EXPECTED_SOURCE_LANES:
+        if lane is SourceLaneId.TEAMS:
+            failed = payload(
+                run(
+                    service,
+                    scene,
+                    Purpose.REPORT_AUTHORING,
+                    RecordIntelligenceRunState(
+                        cycle_run_id=cycle,
+                        stage=IntelligenceStage.RESEARCHER,
+                        artifact_kind=ArtifactKind.RESEARCH_CONTEXT,
+                        producer_task_id="teams-fail",
+                        producer_task_name="Teams",
+                        automation_platform="abacus_chatllm",
+                        report_date="2026-08-20",
+                        state=ProducerRunState.FAILED,
+                        idempotency_key="block-teams-fail",
+                        focus_area_id=FOCUS,
+                        source_lane=lane,
+                        failure_code="source_unavailable",
+                    ),
+                )
+            )
+            run_id = failed["report_run_id"]
+            assert isinstance(run_id, str)
+            failed_run_id = run_id
+            continue
+        research = commit(
+            service,
+            scene,
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.RESEARCHER,
+            kind=ArtifactKind.RESEARCH_CONTEXT,
+            key=f"block-{lane.value}",
+            title=lane.value,
+            body=f"research {lane.value}",
+            focus=FOCUS,
+            lane=lane,
+            dependencies=(collector_id,),
+        )
+        report_id = research["report_id"]
+        assert isinstance(report_id, str)
+        live_ids.append(report_id)
+    resolved = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ResolveIntelligenceSet(
+                cycle_run_id=cycle,
+                set_id=ResolverSetId.SYNTHESIZER_INPUTS,
+                focus_area_id=FOCUS,
+            ),
+        )
+    )
+    assert resolved["aggregate"] == "BLOCKED"
+    resolved_members = resolved["members"]
+    assert isinstance(resolved_members, list)
+    teams = next(member for member in resolved_members if member["source_lane"] == "teams")
+    assert teams["readiness"] == "FAILED"
+    assert teams["producer_run_id"] == failed_run_id
+    assert teams["artifact_id"] is None
+    envelope = run(
+        service,
+        scene,
+        Purpose.REPORT_AUTHORING,
+        CommitIntelligenceArtifact(
+            cycle_run_id=cycle,
+            stage=IntelligenceStage.SYNTHESIZER,
+            artifact_kind=ArtifactKind.SYNTHESIS_PACKAGE,
+            producer_task_id="blocked-synth",
+            producer_task_name="blocked",
+            automation_platform="abacus_chatllm",
+            report_date="2026-08-20",
+            title="blocked",
+            body_markdown="no",
+            artifact_state=ArtifactState.FINAL,
+            schema_version="1",
+            idempotency_key="blocked-synth",
+            focus_area_id=FOCUS,
+            dependency_report_ids=tuple(live_ids),
+        ),
+    )
+    assert envelope.error is not None
+    assert envelope.error.code is ErrorCode.INVALID_REQUEST
 
 
 def test_search_and_resolve_are_principal_scoped(scene: Scene) -> None:

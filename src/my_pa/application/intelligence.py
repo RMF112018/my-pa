@@ -254,7 +254,6 @@ def begin_cycle(
             created_at=when,
             cycle_run_id=cycle_run_id,
         )
-        store.put_cycle(cycle)
         if not store.put_receipt(receipt):
             stored = store.get_receipt(principal_id, idempotency_key)
             if stored is None:
@@ -265,6 +264,7 @@ def begin_cycle(
             return MutationAdmission(
                 receipt=stored, created=False, replayed=True, cycle=stored_cycle
             )
+        store.put_cycle(cycle)
         return MutationAdmission(receipt=receipt, created=True, replayed=False, cycle=cycle)
     except Exception as error:
         _translate(error)
@@ -306,6 +306,84 @@ def _parse_provenance(
     if len(encoded) > MAX_STRUCTURED_CONTENT_BYTES:
         raise IntelligenceLimitError("provenance")
     return tuple(parsed)
+
+
+def _role_upstream(artifact: IntelligenceArtifact, role: str) -> str | None:
+    return next(
+        (
+            dependency.upstream_artifact_id
+            for dependency in artifact.dependencies
+            if dependency.dependency_role == role
+        ),
+        None,
+    )
+
+
+def _lineage_collector_id(
+    store: IntelligenceStore, principal_id: str, artifact: IntelligenceArtifact
+) -> str | None:
+    """The Collector this artifact's pipeline lineage is bound to, if unique."""
+    if artifact.stage is IntelligenceStage.COLLECTOR:
+        return artifact.artifact_id
+    if artifact.stage is IntelligenceStage.RESEARCHER:
+        return _role_upstream(artifact, "collector")
+    if artifact.stage is IntelligenceStage.SYNTHESIZER:
+        collectors: set[str] = set()
+        for dependency in artifact.dependencies:
+            if not dependency.dependency_role.startswith("researcher:"):
+                continue
+            researcher = store.get_artifact(principal_id, dependency.upstream_artifact_id)
+            if researcher is None:
+                return None
+            collector_id = _lineage_collector_id(store, principal_id, researcher)
+            if collector_id is None:
+                return None
+            collectors.add(collector_id)
+        if len(collectors) != 1:
+            return None
+        return next(iter(collectors))
+    if artifact.stage is IntelligenceStage.REPORTER:
+        synthesizer_id = _role_upstream(artifact, "synthesizer")
+        if synthesizer_id is None:
+            return None
+        synthesizer = store.get_artifact(principal_id, synthesizer_id)
+        if synthesizer is None:
+            return None
+        return _lineage_collector_id(store, principal_id, synthesizer)
+    return None
+
+
+def _require_current_collector_lineage(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    cycle_run_id: str,
+    focus_area_id: FocusAreaId,
+    artifact: IntelligenceArtifact,
+) -> None:
+    current = store.current_head(
+        principal_id, cycle_run_id, IntelligenceStage.COLLECTOR, focus_area_id, None
+    )
+    collector_id = _lineage_collector_id(store, principal_id, artifact)
+    if current is None or collector_id != current.artifact_id:
+        raise IntelligenceStaleReferenceError()
+
+
+def _member_lineage_is_stale(
+    store: IntelligenceStore,
+    *,
+    principal_id: str,
+    cycle_run_id: str,
+    focus_area_id: FocusAreaId | None,
+    artifact: IntelligenceArtifact,
+) -> bool:
+    if focus_area_id is None:
+        return True
+    current = store.current_head(
+        principal_id, cycle_run_id, IntelligenceStage.COLLECTOR, focus_area_id, None
+    )
+    collector_id = _lineage_collector_id(store, principal_id, artifact)
+    return current is None or collector_id != current.artifact_id
 
 
 def _validate_dependencies(
@@ -402,6 +480,15 @@ def _validate_dependencies(
         )
         if current is None or current.artifact_id != synthesizer.artifact_id:
             raise IntelligenceStaleReferenceError()
+        if focus_area_id is None:
+            raise IntelligenceDependencyError()
+        _require_current_collector_lineage(
+            store,
+            principal_id=principal_id,
+            cycle_run_id=cycle.cycle_run_id,
+            focus_area_id=focus_area_id,
+            artifact=synthesizer,
+        )
         deps.append(
             IntelligencePipelineDependency(
                 upstream_artifact_id=synthesizer.artifact_id,
@@ -430,6 +517,13 @@ def _validate_dependencies(
                 raise IntelligenceStaleReferenceError()
             if item.focus_area_id is None:
                 raise IntelligenceDependencyError()
+            _require_current_collector_lineage(
+                store,
+                principal_id=principal_id,
+                cycle_run_id=cycle.cycle_run_id,
+                focus_area_id=item.focus_area_id,
+                artifact=item,
+            )
             deps.append(
                 IntelligencePipelineDependency(
                     upstream_artifact_id=item.artifact_id,
@@ -633,10 +727,6 @@ def commit_artifact(
             content_sha256=digest,
             content_bytes=len(body),
         )
-        if current is not None:
-            store.mark_superseded(principal_id, current.artifact_id)
-        store.put_run(run)
-        store.put_artifact(artifact)
         if not store.put_receipt(receipt):
             stored = store.get_receipt(principal_id, idempotency_key)
             if stored is None or stored.fingerprint_sha256 != fingerprint:
@@ -658,6 +748,10 @@ def commit_artifact(
                 artifact=stored_artifact,
                 run=stored_run,
             )
+        if current is not None:
+            store.mark_superseded(principal_id, current.artifact_id)
+        store.put_run(run)
+        store.put_artifact(artifact)
         return MutationAdmission(
             receipt=receipt, created=True, replayed=False, artifact=artifact, run=run, cycle=cycle
         )
@@ -762,7 +856,6 @@ def record_run_state(
             cycle_run_id=cycle_run_id,
             producer_run_id=run_id,
         )
-        store.put_run(run)
         if not store.put_receipt(receipt):
             stored = store.get_receipt(principal_id, idempotency_key)
             if stored is None or stored.fingerprint_sha256 != fingerprint:
@@ -773,6 +866,7 @@ def record_run_state(
                 else store.get_run(principal_id, stored.producer_run_id)
             )
             return MutationAdmission(receipt=stored, created=False, replayed=True, run=stored_run)
+        store.put_run(run)
         return MutationAdmission(
             receipt=receipt, created=True, replayed=False, run=run, cycle=cycle
         )
@@ -921,24 +1015,29 @@ def _member_state(
         if collector is None or collector_dep != collector.artifact_id:
             return ReadinessMemberState.STALE, current, failed
     if set_id is ResolverSetId.REPORTER_INPUT:
-        synthesizer = store.current_head(
-            principal_id, cycle_run_id, IntelligenceStage.SYNTHESIZER, area, None
-        )
-        synth_dep = next(
-            (
-                dependency.upstream_artifact_id
-                for dependency in current.dependencies
-                if dependency.dependency_role == "synthesizer"
-            ),
-            None,
-        )
-        if synthesizer is None or synth_dep != synthesizer.artifact_id:
+        if current.stage is not IntelligenceStage.SYNTHESIZER:
+            return ReadinessMemberState.STALE, current, failed
+        if _member_lineage_is_stale(
+            store,
+            principal_id=principal_id,
+            cycle_run_id=cycle_run_id,
+            focus_area_id=area,
+            artifact=current,
+        ):
             return ReadinessMemberState.STALE, current, failed
     if set_id is ResolverSetId.MORNING_BRIEF_INPUTS:
         reporter = store.current_head(
             principal_id, cycle_run_id, IntelligenceStage.REPORTER, area, None
         )
         if reporter is None or reporter.artifact_id != current.artifact_id:
+            return ReadinessMemberState.STALE, current, failed
+        if _member_lineage_is_stale(
+            store,
+            principal_id=principal_id,
+            cycle_run_id=cycle_run_id,
+            focus_area_id=area,
+            artifact=current,
+        ):
             return ReadinessMemberState.STALE, current, failed
     return ReadinessMemberState.READY, current, failed
 
@@ -1000,11 +1099,11 @@ def resolve_set(
                 "readiness": state.value,
                 "required": required,
                 "artifact_id": None if artifact is None else artifact.artifact_id,
-                "producer_run_id": None
+                "producer_run_id": run.run_id
+                if run is not None
+                else None
                 if artifact is None
-                else artifact.producer_run_id
-                if run is None
-                else run.run_id,
+                else artifact.producer_run_id,
                 "content_sha256": None if artifact is None else artifact.content_sha256,
                 "committed_at": None if artifact is None else artifact.committed_at.isoformat(),
                 "readiness_reason": state.value.lower(),

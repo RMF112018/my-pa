@@ -349,6 +349,9 @@ _READ_ORDINALS = sorted(set(ORDINALS) - {"zeroth"}, key=len, reverse=True)
 
 _NUMBER = "|".join(re.escape(word) for word in _READ_CARDINALS + _READ_ORDINALS)
 
+#: Cardinals alone, for the rules where an ordinal is not a count.
+_READ_CARDINALS_PATTERN = "|".join(re.escape(word) for word in _READ_CARDINALS)
+
 #: Adjectives the corpus writes between the number and the noun.
 #:
 #: **Repeated, not single.** This admitted exactly one adjective until
@@ -739,6 +742,16 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "the two purposes this package adds, not the size of `Purpose`",
     ),
     (
+        "src/my_pa/domain/identity/purpose.py",
+        "two purposes",
+        "capture and managed-document planes each have two",
+        "the pair each of those two planes carries, not the size of `Purpose`. "
+        "Its own entry because the entry above used to excuse it too: one "
+        "`Purpose` enum holds both comments sixty lines apart, so a "
+        "block-wide match handed this claim a reason written about a different "
+        "sentence",
+    ),
+    (
         "tests/end_to_end/test_vertical_slice.py",
         "eight-capability",
         "eight-capability sweep over fakes",
@@ -774,6 +787,12 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "five capabilities",
         "All five capabilities share the single",
         "the five task-write names sharing one purpose, not the size of `Capability`",
+    ),
+    (
+        "tests/unit/test_policy.py",
+        "six capabilities",
+        "All six capabilities share the single",
+        "the six entity-plane read names sharing one purpose, not the size of `Capability`",
     ),
     # --- the two runbook lines this package corrected --------------------------
     #
@@ -1024,6 +1043,24 @@ class Claim:
         return f"{self.path.relative_to(ROOT)}:{self.line} '{self.phrase}'"
 
     def excused_by(self) -> tuple[str, str, str, str] | None:
+        """The entry that excuses this claim, matched against the claim's own sentence.
+
+        **`context` used to be matched against the whole block, and that is not
+        what the `EXCUSED` docstring says it does.** The tenth review found
+        `tests/unit/test_policy.py:259` — "All five capabilities" above *six*
+        enumerated pairs, the same defect this campaign had just corrected in
+        `README.md` — silently excused by the entry written for line 236. Both
+        sentences sat inside one `PERMITTED_PAIRS` assignment, so one block
+        contained both, and "a distinctive fragment of the block" distinguished
+        nothing.
+
+        Narrowing the match to the claim's own line was tried and is wrong: the
+        corpus wraps these comments freely, and nine legitimate entries name a
+        phrase spanning more prose than any small window holds. So the match
+        stays against the block, and the ambiguity is caught directly instead —
+        `test_no_excused_entry_excuses_more_than_one_claim` fails when one entry
+        covers two claims, which is the shape that hid the miscount.
+        """
         relative = str(self.path.relative_to(ROOT))
         collapsed = " ".join(self.phrase.split()).lower()
         for entry in EXCUSED:
@@ -1032,9 +1069,34 @@ class Claim:
                 continue
             if " ".join(phrase.split()).lower() != collapsed:
                 continue
-            if " ".join(context.split()) in " ".join(self.block.split()):
-                return entry
+            collapsed_context = " ".join(context.split())
+            if collapsed_context not in " ".join(self.block.split()):
+                continue
+            if not self._context_sits_beside_this_claim(collapsed_context):
+                continue
+            return entry
         return None
+
+    def _context_sits_beside_this_claim(self, collapsed_context: str) -> bool:
+        """Whether the excusing phrase is where this claim is, not merely in its block.
+
+        A block is as large as the declaration it belongs to, and
+        `src/my_pa/domain/identity/purpose.py` puts two different "two purposes"
+        comments sixty lines apart inside one `Purpose` enum. Matching on the
+        block alone means the first entry in `EXCUSED` claims both, so the
+        second claim is excused by a reason written about the first — and
+        `tests/unit/test_policy.py` was excused that way while carrying a live
+        miscount.
+
+        The phrase is located in the file by a four-line sliding window, which is
+        what the corpus's wrapping needs, and the claim has to fall inside it.
+        """
+        lines = self.path.read_text(encoding="utf-8").splitlines()
+        for start in range(len(lines)):
+            window = " ".join(" ".join(lines[start : start + 4]).split())
+            if collapsed_context in window and start <= self.line <= start + 4:
+                return True
+        return False
 
     def subset(self) -> str | None:
         """The named set this claim counts, when it is not the whole enum.
@@ -1429,8 +1491,11 @@ def test_the_classifier_separates_counts_from_articles_and_other_enums(
 #: sentence that states a number and then enumerates the members is checkable
 #: against *itself*. A miscount here is arithmetic, not a claim about the world.
 _COUNTED_LIST = re.compile(
-    rf"\b(?P<number>{_NUMBER}),\s+"
-    r"(?P<items>`[^`]+`(?:,\s+`[^`]+`)*(?:,?\s+and\s+`[^`]+`)?)",
+    # Cardinals only. Ordinals were admitted by `_NUMBER` and produced a false
+    # offence on ordinary prose — `First, \`a\` and \`b\` are read.` counts
+    # nothing and was reported as a miscount of two.
+    rf"\b(?P<number>{_READ_CARDINALS_PATTERN}),\s+"
+    r"(?P<items>`[^`]+`(?:,\s+`[^`]+`)+(?:,?\s+and\s+`[^`]+`)?)",
     re.IGNORECASE,
 )
 
@@ -1459,7 +1524,26 @@ COUNTED_LISTS = counted_lists()
 
 
 def test_the_sweep_found_a_counted_list_to_check() -> None:
-    """An anti-vacuity floor. A pattern that matches nothing reports nothing wrong."""
+    """An anti-vacuity floor, and an honest note about how far this rule reaches.
+
+    **It binds one sentence.** The tenth review measured the population across
+    787 swept files and found exactly one real claim — `README.md:30`, the
+    sentence it was written for — plus a spurious ordinal match that the pattern
+    now excludes. A rule with a population of one is worth having (it is the
+    shape `CLAIM` structurally cannot read, and the defect it caught was live)
+    and is not worth describing as a sweep.
+
+    The floor stays at one because one is the truth. If it ever reads zero, the
+    pattern has gone stale rather than the corpus having improved.
+
+    **What it does not read, stated rather than implied.** A comma between the
+    number and the list, and two or more items. Writing the same claim with a
+    colon or an em dash defeats it, and both were tried: admitting them turned
+    ordinary prose — "the plane's six capabilities — `entities.search` is the
+    browse surface" — into a reported miscount of one, because a number followed
+    by a dash and a single code span is not an enumeration. A rule that cries
+    wolf on prose gets deleted, so this one stays narrow and says so.
+    """
     assert COUNTED_LISTS, (
         "no `<number>, `a`, `b`` claim parsed from the swept corpus; the pattern "
         "has gone stale and this rule is deciding nothing"
@@ -1483,4 +1567,36 @@ def test_every_number_followed_by_its_list_matches_that_list() -> None:
     assert wrong == [], (
         f"{wrong}. A sentence that states a count and then enumerates the "
         "members has to agree with itself."
+    )
+
+
+def test_no_excused_entry_excuses_more_than_one_claim() -> None:
+    """An entry excuses one occurrence, which is what `EXCUSED` says it does.
+
+    It did not. `Claim.excused_by` matches `context` against the whole block a
+    claim sits in, and `tests/unit/test_policy.py`'s `PERMITTED_PAIRS` is a
+    single assignment holding several of these comments — so the entry written
+    for "All five capabilities" at line 236 also excused an identical phrase at
+    line 259, where it sat above **six** enumerated pairs. That is the same
+    defect this campaign corrected in `README.md` one commit earlier, hidden by
+    the mechanism built to keep the allowlist honest.
+
+    The phrases are distinct again, but distinctness was never enforced. This is
+    what enforces it: an entry covering two claims is ambiguous by construction,
+    because nothing decides which of the two the recorded reason describes.
+    """
+    covered: dict[tuple[str, str, str, str], list[str]] = {}
+    for claim in CLAIMS:
+        entry = claim.excused_by()
+        if entry is not None:
+            covered.setdefault(entry, []).append(claim.where)
+
+    ambiguous = sorted(
+        f"{entry[0]} {entry[1]!r} excuses {len(where)}: {', '.join(where)}"
+        for entry, where in covered.items()
+        if len(where) > 1
+    )
+    assert ambiguous == [], (
+        f"{ambiguous}. Give each occurrence its own entry with a `context` that "
+        "tells them apart, so the recorded reason belongs to one sentence."
     )

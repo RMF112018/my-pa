@@ -35,6 +35,9 @@ from tests.conftest import FakeUnitOfWork, World
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 OTHER: Final = "prn_ffff0009ffff0009ffff0009"
 ALICE: Final = "ent_aaaa0001aaaa0001"
+#: The other Principal's own entity. Distinct because `entity_id` is a global
+#: primary key and no two rows may share one, whoever holds them.
+THEIRS: Final = "ent_cccc0003cccc0003"
 
 MAILBOX: Final = "src_aaaa0001aaaa0001"
 CALENDAR: Final = "src_bbbb0002bbbb0002"
@@ -204,11 +207,19 @@ def test_a_card_exactly_at_the_ceiling_is_not_called_a_sample(
 def test_coverage_never_counts_another_principals_observation(
     world: World, carding: EntityContextService
 ) -> None:
-    """The partition, at the one place a count could leak it without naming it."""
+    """The partition, at the one place a count could leak it without naming it.
+
+    The other Principal's entity carries an identifier of its own. It shared
+    `ALICE`'s until the tenth review: `entity_id` is a *global* primary key, so
+    two Principals holding one is a world PostgreSQL refuses to represent, and
+    a test staged in it proves nothing about the server. The double models the
+    key now and this fixture had to change, which is the divergence being real
+    rather than theoretical.
+    """
     _entities(world).create(PRINCIPAL, _entity())
-    _entities(world).create(OTHER, _entity(principal_id=OTHER))
+    _entities(world).create(OTHER, _entity(entity_id=THEIRS, principal_id=OTHER))
     _observe(world, 1, source_id=MAILBOX)
-    _observe(world, 2, source_id=CALENDAR, principal_id=OTHER)
+    _observe(world, 2, source_id=CALENDAR, entity_id=THEIRS, principal_id=OTHER)
 
     card = carding.card(PRINCIPAL, ALICE, assembled_at=WHEN)
     assert card is not None

@@ -53,7 +53,7 @@ in this document supplies it.
 ## Proof tiers
 
 `UNIT`, `DATABASE`, `CONTRACT`, `INTEGRATION`, `SYNTHETIC_E2E`, `REMOTE_CANARY`,
-`LIVE_OPERATOR_PILOT`. Per the controlling plan, a criterion requiring remote or
+`LIVE_OPERATOR_PILOT`. Per the v0.3 spec, a criterion requiring remote or
 live evidence **may not** be marked satisfied by source inspection or unit tests.
 No `REMOTE_CANARY` or `LIVE_OPERATOR_PILOT` evidence exists for any row below,
 and none is claimed.
@@ -68,7 +68,7 @@ and none is claimed.
 | RI-AC-004 ambiguous references return AMBIGUOUS | MET | UNIT | `ResolutionOutcome.AMBIGUOUS` is structural; `resolved_entity_id` is derived and `None`. |
 | RI-AC-005 alternatives and explainable features | MET | UNIT | `ResolutionCandidate.evidence` / `ResolutionBasis`; see the ranking note below. |
 | RI-AC-006 historical evidence resolves without reading as current | MET | UNIT | `HISTORICAL_MATCH` plus currency warnings. |
-| RI-AC-007 scoped manual clarification persists | UNMET | — | No scoped resolution binding exists. The controlling plan names an `entity_resolution_bindings` table; nothing implements it. A local clarification would have to become a global alias, which the criterion forbids. |
+| RI-AC-007 scoped manual clarification persists | UNMET | — | No scoped resolution binding exists. The v0.3 spec names an `entity_resolution_bindings` table; nothing implements it. A local clarification would have to become a global alias, which the criterion forbids. |
 | RI-AC-008 employment changes preserve prior assignments | PARTIAL | UNIT, DATABASE | The temporal model preserves history. The governed update workflow that would exercise it does not exist. |
 | RI-AC-009 effective-dated assignments queryable | MET | UNIT, DATABASE | `entity_assignments` with effective dating. |
 | RI-AC-010 current role is a derived view | UNMET | — | No derived current-role/title projection. |

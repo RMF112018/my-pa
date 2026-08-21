@@ -256,7 +256,7 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.GOODNOTES_WORK, Purpose.GOODNOTES_WORK),
         (Capability.GOODNOTES_CONTENT, Purpose.GOODNOTES_CONTENT),
         (Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL),
-        # The entity plane. All five capabilities share the single `entity_read`
+        # The entity plane. All six capabilities share the single `entity_read`
         # purpose, exactly as the task-plane reads share `task_read`: the plane
         # is a read plane over the acting Principal's own entities, and there is
         # no write here for a wider purpose to reach.

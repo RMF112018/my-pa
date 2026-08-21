@@ -19,17 +19,31 @@ at the merge base and was found only by the same sweep.
 
 **What it detects.** The population is derived, not listed. Every command in
 `my_pa.application.commands` is read — a command being any module-level class
-carrying a `capability` `ClassVar` — and every one of its fields annotated
-exactly `str` is examined. If `__post_init__` dereferences that field
-(`self.<field>.strip()`, `self.<field>.lower()`, any attribute access at all),
-then an `isinstance(self.<field>, str)` check must appear *earlier in the
-statement order* of the same `__post_init__`. Presence is not enough: a check
-written below the dereference cannot prevent it.
+carrying a `capability` `ClassVar` — and every field whose value, when present,
+must be a `str` is examined: `str` and `str | None` alike. If `__post_init__`
+uses that field as a string, the field's type must be established *first*, by
+source position rather than by statement, so a check written to the right of the
+read in one expression does not count.
 
-Fields annotated `str | None`, `int`, a domain enum, or anything else are out of
-scope here — they are guarded by `_identifier`, `_positive`, `_moment` and their
-siblings, which type-check what they are handed. This module is about the fields
-those helpers never see, because the command reads them itself.
+"Uses it as a string" is two shapes. The obvious one is `self.<field>.strip()`.
+The other is `helper(self.<field>, …)` where the helper is not one measured to
+type-check — because extracting the read into a helper is how this module was
+first made to overlook a live defect, and `commands.py` already does exactly
+that five times over.
+
+**The exclusions this module used to carry were wrong, and it took a tenth
+review to measure it.** `str | None` was out of scope, justified by the claim
+that such fields "are guarded by `_identifier`, `_positive`, `_moment` and their
+siblings". `UpdateTask.title`, `TransitionTask.closure_evidence_ref` and
+`DecideReviewCase.corrected_value` are handed to no helper at all; each reads
+`self.<field>.strip()` behind an `is not None` test and each answered `500` over
+HTTP while this module reported the codebase compliant. An optional field is
+*more* prone to the shape, not less, because `if self.x is not None and not
+self.x.strip()` reads as a guarded access and is not one.
+
+Three further ways past it were planted and all three now redden: the helper
+extraction above, a check placed after the read inside one statement, and a
+local `def` shadowing the name of a helper measured at module scope.
 
 **Why the transport's terminal catch is not a substitute.** `adapters/http/app.py`
 now carries the `except Exception` the CLI and MCP transports always had, so a
@@ -88,21 +102,41 @@ def _guarding_helpers() -> frozenset[str]:
         if not parameters:
             continue
         arguments: list[Any] = [_NOT_A_STRING]
+        keywords: dict[str, Any] = {}
+        synthesised = True
         for parameter in parameters[1:]:
             if parameter.default is not inspect.Parameter.empty:
                 continue
             annotation = str(parameter.annotation)
+            # Enough shapes to reach every helper `commands.py` actually has.
+            # The first version stopped at two and silently skipped four --
+            # including `_goodnotes_id` and `_bounded_token`, which *do*
+            # type-check, so their callers were reported unguarded once the
+            # population widened. A helper this cannot synthesise is skipped and
+            # its callers stay in the population, which is the safe direction,
+            # but skipping one that guards is a false positive that trains a
+            # reader to ignore the module.
             if "SafeDetail" in annotation:
-                arguments.append(SafeDetail.QUERY)
+                value: Any = SafeDetail.QUERY
             elif "IdKind" in annotation:
-                arguments.append(None)
+                value = None
+            elif annotation.startswith("int"):
+                value = 1
+            elif annotation.startswith("str"):
+                value = "x"
+            elif "frozenset" in annotation or "set[" in annotation:
+                value = frozenset()
             else:
-                arguments = []
+                synthesised = False
                 break
-        if not arguments:
+            if parameter.kind is inspect.Parameter.KEYWORD_ONLY:
+                keywords[parameter.name] = value
+            else:
+                arguments.append(value)
+        if not synthesised:
             continue
         try:
-            helper(*arguments)
+            helper(*arguments, **keywords)
         except InvalidRequestError:
             # The refusal a caller is owed: this helper checks the type.
             guarding.add(name)
@@ -133,8 +167,24 @@ def _is_command(node: ast.ClassDef) -> bool:
     return False
 
 
-def _plain_string_fields(node: ast.ClassDef) -> tuple[str, ...]:
-    """Fields annotated exactly `str` — not `str | None`, not a `NewType`."""
+def _string_fields(node: ast.ClassDef) -> tuple[str, ...]:
+    """Fields whose value, when present, is a `str` — `str` and `str | None`.
+
+    **`str | None` was excluded, and the exclusion was justified by a claim that
+    is false.** The first version of this module said those fields "are guarded
+    by `_identifier`, `_positive`, `_moment` and their siblings, which
+    type-check what they are handed". The tenth review checked: `UpdateTask.title`,
+    `TransitionTask.closure_evidence_ref` and `DecideReviewCase.corrected_value`
+    are handed to no helper at all. Each reads `self.<field>.strip()` behind an
+    `is not None` test, which is precisely the construct this module exists to
+    forbid, and each answered `500` over HTTP while this module reported the
+    codebase compliant.
+
+    An optional field is *more* likely to carry this shape, not less, because
+    `if self.x is not None and not self.x.strip()` reads as a guarded access and
+    is not one. `None` is excluded from the union and everything else must be a
+    string, so the rule is the same rule.
+    """
     fields: list[str] = []
     for statement in node.body:
         if not isinstance(statement, ast.AnnAssign) or statement.annotation is None:
@@ -142,7 +192,8 @@ def _plain_string_fields(node: ast.ClassDef) -> tuple[str, ...]:
         target = statement.target
         if not isinstance(target, ast.Name):
             continue
-        if ast.unparse(statement.annotation).strip() != "str":
+        parts = {part.strip() for part in ast.unparse(statement.annotation).split("|")} - {"None"}
+        if parts != {"str"}:
             continue
         fields.append(target.id)
     return tuple(fields)
@@ -187,23 +238,86 @@ def _names_the_field(node: ast.expr, field: str) -> bool:
     )
 
 
-def _type_checks(node: ast.AST, field: str) -> bool:
-    """The type is established, either inline or by a helper measured to check it."""
-    for inner in ast.walk(node):
-        if not isinstance(inner, ast.Call):
+def _at(node: ast.AST) -> tuple[int, int]:
+    """Source position, so order is compared where it is actually decided.
+
+    The first version compared *top-level statement index*, so a check and a
+    read inside one statement always passed regardless of which came first —
+    while the docstring claimed "presence is not enough". The tenth review
+    planted `if not self.query.strip() or not isinstance(self.query, str):`,
+    which reads before it checks, and the module stayed green over a live
+    `AttributeError`.
+    """
+    return (getattr(node, "lineno", 0), getattr(node, "col_offset", 0))
+
+
+def _rebound_inside(body: ast.FunctionDef) -> frozenset[str]:
+    """Names assigned within `__post_init__`, which therefore are not the helper.
+
+    `_GUARDING` is a set of module-level function names measured by calling
+    them. Crediting a call by name assumes the name still resolves to what was
+    measured. A local `def _text(...)` or `_text = lambda ...` inside
+    `__post_init__` shadows it, and the tenth review used exactly that to keep
+    this module green over a field that was never type-checked.
+    """
+    rebound: set[str] = set()
+    for inner in ast.walk(body):
+        if isinstance(inner, ast.FunctionDef | ast.AsyncFunctionDef) and inner is not body:
+            rebound.add(inner.name)
+        elif isinstance(inner, ast.Assign):
+            rebound.update(target.id for target in inner.targets if isinstance(target, ast.Name))
+        elif isinstance(inner, ast.AnnAssign) and isinstance(inner.target, ast.Name):
+            rebound.add(inner.target.id)
+    return frozenset(rebound)
+
+
+def _reads(body: ast.FunctionDef, field: str, rebound: frozenset[str]) -> list[tuple[int, int]]:
+    """Every position at which the field's value is used as a string.
+
+    Two shapes, not one. A direct `self.<field>.<attr>` is the obvious one. The
+    other is `helper(self.<field>, …)` where the helper is **not** one measured
+    to type-check: the tenth review extracted the read into a module-level
+    `_squeeze(value, detail)` that calls `value.strip()`, which removed the
+    field from the population entirely — `commands.py` already does exactly that
+    five times over, so the shape is idiomatic rather than contrived.
+    """
+    positions: list[tuple[int, int]] = []
+    for inner in ast.walk(body):
+        if (
+            isinstance(inner, ast.Attribute)
+            and isinstance(inner.value, ast.Attribute)
+            and _names_the_field(inner.value, field)
+        ):
+            positions.append(_at(inner))
+        elif isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name):
+            named = inner.func.id
+            if named == "isinstance" or named in rebound:
+                continue
+            if named in _GUARDING:
+                continue
+            if any(_names_the_field(argument, field) for argument in inner.args):
+                positions.append(_at(inner))
+    return positions
+
+
+def _checks(body: ast.FunctionDef, field: str, rebound: frozenset[str]) -> list[tuple[int, int]]:
+    """Every position at which the field's type is established."""
+    positions: list[tuple[int, int]] = []
+    for inner in ast.walk(body):
+        if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Name):
             continue
-        if not isinstance(inner.func, ast.Name):
+        if inner.func.id in rebound:
             continue
         if inner.func.id == "isinstance":
             if len(inner.args) != 2:
                 continue
             subject, kind = inner.args
             if _names_the_field(subject, field) and "str" in ast.unparse(kind):
-                return True
+                positions.append(_at(inner))
             continue
         if inner.func.id in _GUARDING and inner.args and _names_the_field(inner.args[0], field):
-            return True
-    return False
+            positions.append(_at(inner))
+    return positions
 
 
 def _commands() -> tuple[ast.ClassDef, ...]:
@@ -213,27 +327,59 @@ def _commands() -> tuple[ast.ClassDef, ...]:
 
 
 def _unguarded() -> tuple[tuple[str, str], ...]:
-    """Every (command, field) that is read before its type is known."""
+    """Every (command, field) whose value is used as a string before its type is known."""
     offences: list[tuple[str, str]] = []
     for node in _commands():
         body = _post_init(node)
         if body is None:
             continue
-        for field in _plain_string_fields(node):
-            first_check: int | None = None
-            first_read: int | None = None
-            for index, statement in enumerate(body.body):
-                if not _self_attribute(statement, field):
-                    continue
-                if first_check is None and _type_checks(statement, field):
-                    first_check = index
-                if first_read is None and _dereferences(statement, field):
-                    first_read = index
-            if first_read is None:
+        rebound = _rebound_inside(body)
+        for field in _string_fields(node):
+            reads = _reads(body, field, rebound)
+            if not reads:
                 continue
-            if first_check is None or first_check > first_read:
+            checks = _checks(body, field, rebound)
+            if not checks or min(checks) > min(reads):
                 offences.append((node.name, field))
     return tuple(offences)
+
+
+#: Offending pairs that predate this branch, each with the capability it reaches.
+#:
+#: **A shrinking allowlist, not an exemption list.** Every entry is asserted
+#: below to still be an offence, so a fixed one reddens and has to be removed —
+#: the shape `ALLOWED` and `EXCUSED` use elsewhere in this tier. Nothing may be
+#: added to it without the same provenance check that put these here.
+#:
+#: Measured, not assumed: this module run against `git show main:…/commands.py`
+#: reports **fourteen** offending pairs, and every entry below is among them.
+#: This branch removed five (`CreateTask` twice, `CreateCommitment` twice,
+#: `CloseCommitment`) and introduced none. They are recorded rather than fixed
+#: because they reach `tasks.*`, `review.*`, `continuity.*`, `documents.*` and
+#: `context.prepare` — none of them the relationship-intelligence plane this
+#: branch delivers — and widening a 224-file pull request to carry them was
+#: declined deliberately rather than overlooked.
+#:
+#: What each costs today: the first three answer `500 internal_error` over HTTP
+#: for a non-string in the named field, because the field is dereferenced. The
+#: `idempotency_key` and `conversation_context` entries route through
+#: `_idempotency_key`, which tests truthiness and never the type, so a
+#: non-string is *accepted* and reaches a handler that assumes a string.
+CARRIED_FROM_THE_MERGE_BASE: tuple[tuple[str, str, str], ...] = (
+    ("UpdateTask", "title", "tasks.update"),
+    ("TransitionTask", "closure_evidence_ref", "tasks.transition"),
+    ("DecideReviewCase", "corrected_value", "review.decide"),
+    ("CreateProject", "idempotency_key", "continuity.projects.create"),
+    ("CreateSituation", "idempotency_key", "continuity.situations.create"),
+    ("RecordTask", "idempotency_key", "continuity.tasks.create"),
+    ("CreateManagedDocument", "idempotency_key", "documents.create"),
+    ("ReviseManagedDocument", "idempotency_key", "documents.revise"),
+    ("PrepareContext", "conversation_context", "context.prepare"),
+)
+
+_CARRIED: frozenset[tuple[str, str]] = frozenset(
+    (command, field) for command, field, _ in CARRIED_FROM_THE_MERGE_BASE
+)
 
 
 def test_the_population_this_module_reads_is_not_empty() -> None:
@@ -252,7 +398,7 @@ def test_the_population_this_module_reads_is_not_empty() -> None:
         (node.name, field)
         for node in found
         if _post_init(node) is not None
-        for field in _plain_string_fields(node)
+        for field in _string_fields(node)
         if _dereferences(_post_init(node), field)  # type: ignore[arg-type]
     ]
     assert len(read) >= 8, f"only {len(read)} dereferenced string fields parsed"
@@ -264,7 +410,9 @@ def test_the_population_this_module_reads_is_not_empty() -> None:
 )
 def test_every_command_checks_a_string_field_before_reading_it(command: str) -> None:
     """Per command, so a failure names the one that regressed."""
-    offending = [field for name, field in _unguarded() if name == command]
+    offending = [
+        field for name, field in _unguarded() if name == command and (name, field) not in _CARRIED
+    ]
     assert not offending, (
         f"{command}.__post_init__ reads {', '.join(offending)} before checking "
         f"it is a string. A caller sending a non-string reaches an "
@@ -281,4 +429,34 @@ def test_no_command_anywhere_reads_a_string_field_before_checking_it() -> None:
     output benefits from seeing the whole offending set at once rather than one
     parametrization at a time.
     """
-    assert _unguarded() == ()
+    assert sorted(pair for pair in _unguarded() if pair not in _CARRIED) == []
+
+
+def test_every_carried_entry_is_still_an_offence() -> None:
+    """The allowlist shrinks or reddens; it cannot rot into a list of excuses.
+
+    An entry that has been fixed fails here and has to be deleted. That is the
+    only direction this list is allowed to move without the provenance check
+    that built it.
+    """
+    live = set(_unguarded())
+    fixed = sorted(pair for pair in _CARRIED if pair not in live)
+    assert fixed == [], (
+        f"{fixed} no longer read a string field before checking it. Remove them "
+        f"from CARRIED_FROM_THE_MERGE_BASE rather than leaving the list to rot."
+    )
+
+
+def test_nothing_on_the_entity_plane_is_carried() -> None:
+    """This branch's own surface has to be clean, allowlist or no allowlist.
+
+    The allowlist exists to bound a pull request, not to let this branch carry
+    its own instance of the defect. A future `entities.*` command appearing here
+    means the exemption is being used for something it was not granted for.
+    """
+    theirs = sorted(
+        f"{command}.{field} ({capability})"
+        for command, field, capability in CARRIED_FROM_THE_MERGE_BASE
+        if capability.startswith("entities.")
+    )
+    assert theirs == []

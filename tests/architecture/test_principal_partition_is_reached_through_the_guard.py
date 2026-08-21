@@ -1251,6 +1251,49 @@ def test_every_entity_statement_reaches_the_partition_of_each_table_it_names() -
     partitioned = set(_partitioned_tables())
     tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
 
+    # **Every name the module can reach a table by, not just the declared one.**
+    # This walk matches the table as a bare name inside a function body, so a
+    # `Table.alias()` bound once at module scope reaches the table under a name
+    # no query statement spells -- and the tenth review used exactly that to
+    # delete a child-side partition with the whole architecture tier green. An
+    # in-function alias was already caught, because the assignment naming the
+    # table is itself a statement inside the function; a module-level one was
+    # not. Aliases are resolved to the table they wrap, so the guard call still
+    # has to name that table.
+    def _aliased_table(value: ast.expr | None) -> str | None:
+        """The table a module-level binding *is*, if it is one.
+
+        Narrow deliberately. A binding that merely selects columns --
+        `_ENTITY_COLUMNS = (entities.c.entity_id, ...)`, `_DIRECTIONS` holding
+        lambdas over `entity_relationships.c.*` -- names a table without being a
+        second way to query it, and treating those as aliases demanded a
+        partition predicate beside every use of a column tuple. Only the table
+        itself and `<table>.alias(...)` widen the reachable set.
+        """
+        if isinstance(value, ast.Name) and value.id in partitioned:
+            return value.id
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "alias"
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id in partitioned
+        ):
+            return value.func.value.id
+        return None
+
+    aliases: dict[str, str] = {}
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign | ast.AnnAssign):
+            continue
+        table = _aliased_table(statement.value)
+        if table is None:
+            continue
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        for target in targets:
+            if isinstance(target, ast.Name):
+                aliases[target.id] = table
+
     checked = 0
     offending: list[str] = []
     for function in ast.walk(tree):
@@ -1260,18 +1303,28 @@ def test_every_entity_statement_reaches_the_partition_of_each_table_it_names() -
             if not isinstance(statement, ast.stmt):
                 continue
             rendered = _own_source(statement)
-            named = [table for table in partitioned if _names_table(table).search(rendered)]
+            named = {table for table in partitioned if _names_table(table).search(rendered)}
+            named |= {
+                table
+                for alias, table in aliases.items()
+                if re.search(rf"\b{re.escape(alias)}\b", rendered)
+            }
             if not named:
                 continue
             checked += 1
-            for table in named:
-                guarded = re.search(rf"_(?:mine|bound)\(\s*{re.escape(table)}\s*,", rendered)
-                if guarded is None:
+            for table in sorted(named):
+                reachable = [table, *[a for a, t in aliases.items() if t == table]]
+                guarded = any(
+                    re.search(rf"_(?:mine|bound)\(\s*{re.escape(spelling)}\s*,", rendered)
+                    for spelling in reachable
+                )
+                if not guarded:
                     offending.append(f"{function.name}:{statement.lineno}:{table}")
 
-    assert checked >= 20, (
-        f"only {checked} statements naming a partitioned table were examined; "
-        "the walk is not reaching the entity plane's queries"
+    assert checked >= _MINIMUM_ENTITY_STATEMENTS, (
+        f"only {checked} statements naming a partitioned table were examined, "
+        f"against {_MINIMUM_ENTITY_STATEMENTS} expected; the walk is not "
+        "reaching the entity plane's queries"
     )
     assert sorted(set(offending)) == [], (
         f"{sorted(set(offending))} name a principal-partitioned table that the "

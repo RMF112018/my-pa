@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from collections import Counter
 from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
@@ -1146,7 +1147,7 @@ def test_the_declared_check_is_the_one_the_server_holds(two_principals: Engine) 
             )
         ).scalar_one()
 
-    def operands(expression: str) -> set[str]:
+    def operands(expression: str) -> list[str]:
         """The literals and column names the expression is built out of.
 
         `::type` casts are stripped first. PostgreSQL renders every literal in a
@@ -1154,23 +1155,51 @@ def test_the_declared_check_is_the_one_the_server_holds(two_principals: Engine) 
         does not, so leaving them in would compare a rendering convention rather
         than the rule and be "fixed" by deleting the assertion.
         """
-        without_casts = re.sub(r"::[a-z_ ]+", "", expression)
-        return {
+        # `BETWEEN a AND b` is stored as two comparisons, so the declaration is
+        # rewritten the same way before tokenizing. A rendering difference, not
+        # a drift -- unlike the operators below it, which are both.
+        expanded = re.sub(
+            r"(\S+)\s+BETWEEN\s+(\S+)\s+AND\s+(\S+)",
+            r"\1 >= \2 AND \1 <= \3",
+            expression,
+            flags=re.IGNORECASE,
+        )
+        without_casts = re.sub(r"::[a-z_ ]+", "", expanded)
+        return [
             token
-            for token in re.findall(r"'[^']*'|\b[a-z_]+\b|\b\d+\b", without_casts)
+            for token in re.findall(
+                # Operators too. Without them the comparison saw only column
+                # names, literals and numbers, and the tenth review measured
+                # what that costs: inverting both regex tests in the declaration
+                # -- `!~` to `~`, so a disclosed mention name would have to
+                # *begin and end* with whitespace -- passed, and so did turning
+                # `IS NULL` into `IS NOT NULL`. A `tables.py` reader would have
+                # taken an inverted rule on a person's disclosed name as
+                # verified against the server.
+                r"'[^']*'|!~\*?|~\*?|<=|>=|<>|!=|=|<|>|\bIS NOT NULL\b|\bIS NULL\b"
+                r"|\bNOT\b|\b[a-z_]+\b|\b\d+\b",
+                without_casts,
+            )
             if token.lower() not in {"and", "or", "check"}
-        }
+        ]
 
-    missing = operands(declared_text) - operands(live)
-    assert missing == set(), (
+    # **Counted, not merely present.** A set comparison ignores multiplicity, and
+    # this constraint applies `!~` twice and `~` once. Flipping one `!~` to `~`
+    # -- so a disclosed mention name may begin with whitespace -- leaves the set
+    # `{!~, ~}` unchanged and passed. Measured, after the operators were added
+    # and before the count was.
+    declared_operands = Counter(operands(declared_text))
+    live_operands = Counter(operands(live))
+    missing = declared_operands - live_operands
+    assert missing == Counter(), (
         f"`tables.py` declares operands the server's constraint does not hold: "
-        f"{sorted(missing)}. The declaration is not emitted, so only this test "
-        f"can notice.\ndeclared: {declared_text}\nlive:     {live}"
+        f"{sorted(missing.elements())}. The declaration is not emitted, so only "
+        f"this test can notice.\ndeclared: {declared_text}\nlive:     {live}"
     )
-    extra = operands(live) - operands(declared_text)
-    assert extra == set(), (
+    extra = live_operands - declared_operands
+    assert extra == Counter(), (
         f"the server holds operands `tables.py` does not declare: "
-        f"{sorted(extra)}.\ndeclared: {declared_text}\nlive:     {live}"
+        f"{sorted(extra.elements())}.\ndeclared: {declared_text}\nlive:     {live}"
     )
 
 

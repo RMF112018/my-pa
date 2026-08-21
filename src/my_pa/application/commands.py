@@ -32,12 +32,11 @@ inside the payload the caller controls.
 
 from __future__ import annotations
 
-import unicodedata
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import ClassVar, Final
+from typing import ClassVar
 
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
@@ -75,7 +74,7 @@ from my_pa.domain.goodnotes.models import (
 )
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.event import RelationshipEventType
-from my_pa.domain.search.query import MAX_QUERY_CHARACTERS
+from my_pa.domain.search.query import SearchQuery, SearchQueryError
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     CommitmentDirection,
@@ -164,28 +163,30 @@ class Representation(StrEnum):
     NORMALIZED_TEXT = "normalized_text"
 
 
-#: The categories `domain.search.query` refuses, for the reasons stated there:
-#: `Cc` control, `Cf` formatting, `Cs` surrogate, `Co` private-use, `Cn`
-#: unassigned. Spelled here rather than imported because that module keeps
-#: its set private, and a second name for one rule is checked by
-#: `tests/contract/test_entity_read_bounds.py` rather than assumed.
-_FORBIDDEN_QUERY_CATEGORIES: Final = frozenset({"Cc", "Cf", "Cs", "Co", "Cn"})
-
-
 def _bounded_query(value: str, detail: SafeDetail) -> str:
-    """A caller-supplied search string, bounded the way `domain.search.query` bounds one.
+    """A caller-supplied search string, bounded by the rule that already exists.
 
-    Length and character class only. The normalization `_normalize_query`
-    performs -- case folding, whitespace collapsing -- is deliberately not done
-    here, because this capability's matching rule is its own and rewriting the
-    string would change which entities match it. What is shared is the pair of
-    refusals that exist so a malformed request is answered as a malformed
-    request rather than as a fault of this service.
+    Delegated to `domain.search.query.SearchQuery` rather than restated, and the
+    first version of this function restated it. That version applied the
+    forbidden-category check to the raw string, while `_normalize_query`
+    collapses whitespace *first* and its module docstring says why: "Some `Cc`
+    characters *are* whitespace -- U+0085 NEL, the vertical tab, the form feed
+    ... refusing a query because it was pasted with a NEL in it would be
+    refusing a legitimate paste." So `entities.search` refused `"Alice\tChen"`
+    and `"Alice\nChen"` while `knowledge.search` accepted both and searched for
+    `Alice Chen`. A pasted two-line name was refused, which is a regression the
+    tenth review measured against the head before it.
+
+    Two spellings of one rule diverge; there is now one spelling. The normalized
+    value is deliberately discarded: this capability matches on the string the
+    caller sent, and rewriting it would change which entities match.
     """
-    if len(value) > MAX_QUERY_CHARACTERS:
-        raise InvalidRequestError(detail)
-    if any(unicodedata.category(character) in _FORBIDDEN_QUERY_CATEGORIES for character in value):
-        raise InvalidRequestError(detail)
+    try:
+        SearchQuery(value)
+    except SearchQueryError:
+        # Raised outside the handler so the original -- which carries the
+        # rejected query -- is not left in `__context__` for a traceback.
+        raise InvalidRequestError(detail) from None
     return value
 
 

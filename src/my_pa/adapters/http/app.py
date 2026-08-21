@@ -645,11 +645,20 @@ def create_http_app(
             return _problem_response(InvalidRequestError())
         except ApplicationError as refusal:
             return _problem_response(refusal)
-        return _envelope_response(
-            service.invoke(
+        except Exception:
+            # The same terminal catch `invoke` carries, on the same grounds. It
+            # reached `invoke` alone when it was added, while the claim made was
+            # about "the transport" -- so the rule went to the route a reviewer
+            # had pointed at and not to its sibling here, which is the shape
+            # this branch keeps paying for.
+            return _problem_response(InternalError())
+        try:
+            envelope = service.invoke(
                 metadata, command, principal=acting, transport=CaptureTransport.REMOTE_CLIENT
             )
-        )
+        except Exception:
+            return _problem_response(InternalError())
+        return _envelope_response(envelope)
 
     def apple_request(request: Request) -> Response:
         """Serve only the two credentialed, off-by-default Apple machine paths."""

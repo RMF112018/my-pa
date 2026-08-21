@@ -61,7 +61,14 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
 )
-from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
+from my_pa.domain.relationship.governance import (
+    EntityMergeRecord,
+    EntityObservation,
+    EntityProposal,
+    EntityProposalKind,
+    EntityProposalState,
+    ObservationKind,
+)
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
 from my_pa.domain.relationship.resolution import ResolutionOutcome
 
@@ -72,6 +79,9 @@ FOREIGN_ENTITY: Final = "ent_foreign0001foreig"
 #: foreign edge have somewhere to point.
 FOREIGN_SCOPE: Final = "ent_foreign0002foreig"
 OWN_ENTITY: Final = "ent_mine0002mine00002"
+#: A second entity of my own, so a write of mine that has to name two of them
+#: does not have to borrow one of theirs.
+OWN_SECOND: Final = "ent_mine0003mine00003"
 
 #: A display name that is also an instruction. If any of it reaches a tool
 #: description, a schema, or an unrelated payload, the entity plane is an
@@ -429,22 +439,18 @@ def test_resolving_a_value_only_another_principal_holds_finds_nothing(staged: Sc
 # --- a child row whose partition disagrees with its parent's ----------------
 
 
-def test_the_card_of_my_own_entity_carries_no_other_principals_rows(staged: Scene) -> None:
-    """The case the foreign-entity sweep above structurally cannot reach.
+def _stage_crossed_child_rows(staged: Scene) -> None:
+    """Child rows another Principal owns, hanging off an entity this one owns.
 
-    Asking a capability for *another* Principal's entity is refused on the
-    parent, so the enumerations hanging off it are never called — which is why
-    removing the partition from `aliases`, `external_identifiers`,
-    `assignments` or `relationships` leaves that sweep green. Those predicates
-    are real and they guard a different arrangement: a **child row owned by
-    someone else that points at an entity I own**. A foreign key is global, so
-    the database will accept one, and the second-side predicate on each
-    enumeration is the only thing that keeps it off my card.
+    A foreign key is global, so the database accepts such a row; the
+    second-side predicate on each enumeration is the only thing that keeps it
+    off my card and out of my resolutions. Staged straight into the world
+    rather than through the repository, because the repository is what
+    refuses to write one -- the row this guards against is the one that
+    arrived some other way.
 
-    Staged straight into the world rather than through the repository, because
-    the repository is what refuses to write such a row — the row this guards
-    against is the one that arrived some other way. That is the same reason
-    `tests/database/test_entity_repository.py` stages its equivalents with SQL.
+    Shared by the card test and the resolution test because they reach these
+    rows by different routes and each arms predicates the other does not.
     """
     theirs = "prn_ffff0009ffff0009ffff0009"
     world = staged.world
@@ -490,6 +496,26 @@ def test_the_card_of_my_own_entity_carries_no_other_principals_rows(staged: Scen
         )
     )
 
+
+def test_the_card_of_my_own_entity_carries_no_other_principals_rows(staged: Scene) -> None:
+    """The case the foreign-entity sweep above structurally cannot reach.
+
+    Asking a capability for *another* Principal's entity is refused on the
+    parent, so the enumerations hanging off it are never called — which is why
+    removing the partition from `aliases`, `external_identifiers`,
+    `assignments` or `relationships` leaves that sweep green. Those predicates
+    are real and they guard a different arrangement: a **child row owned by
+    someone else that points at an entity I own**. A foreign key is global, so
+    the database will accept one, and the second-side predicate on each
+    enumeration is the only thing that keeps it off my card.
+
+    Staged straight into the world rather than through the repository, because
+    the repository is what refuses to write such a row — the row this guards
+    against is the one that arrived some other way. That is the same reason
+    `tests/database/test_entity_repository.py` stages its equivalents with SQL.
+    """
+    _stage_crossed_child_rows(staged)
+
     answer = _answer(staged, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=OWN_ENTITY))
     rendered = repr(answer)
     for planted in ("Crossed Predecessor", "crossed@rival.test", "crossed role", "erel_crossed"):
@@ -500,37 +526,222 @@ def test_the_card_of_my_own_entity_carries_no_other_principals_rows(staged: Scen
     )
     assert "erel_crossed" not in repr(edges)
 
-    # `entities.resolve` reaches the crossed alias and the crossed identifier by
-    # a different route from the card, and until the ninth review nothing
-    # exercised it. Both `entities_by_alias` and `entities_by_identifier` carry
-    # two partition predicates -- one on the parent entity, one on the child row
-    # -- and the parent's is satisfied here, because the entity really is mine.
-    # The child-side predicate is the only thing refusing these two, and it was
-    # deletable with the whole fast tier green: two independent reviewers
-    # measured the double answering `resolved_exact` from another Principal's
-    # alias row. `test_resolving_a_value_only_another_principal_holds_finds_nothing`
-    # cannot reach it, because it stages its rows on the *foreign* entity, where
-    # the parent predicate refuses first and the child-side one never decides
-    # anything.
-    for reference, namespace in (
+
+# --- a write judged on the writer's own rows, at every collision read --------
+
+
+@pytest.mark.parametrize("kind", ["assignment", "relationship", "proposal"])
+def test_a_collision_read_judges_only_this_principals_rows(staged: Scene, kind: str) -> None:
+    """The siblings of the observation case, which nothing exercised.
+
+    The ninth review partitioned five collision reads in the double so each
+    judges the acting Principal's own rows, matching `SqlEntityRepository`. The
+    tenth measured what covered them: one test, over `record_observation`.
+    Deleting the predicate from `record_proposal`, `record_assignment` or
+    `record_relationship` left the entire fast tier green — the same vacuity
+    that commit was written to remove, in the commit that removed it.
+
+    The two records here share an identifier and differ in their values, which
+    is what separates the verdicts. Partitioned, the read finds nothing of mine
+    and the *global* primary key refuses the identifier as taken. Unpartitioned,
+    it finds theirs, compares it against mine, and tells me my own identifier is
+    bound to different values — a verdict computed from a row in a partition I
+    cannot look at, and so cannot act on.
+    """
+    mine = staged.principal.principal_id
+    theirs = "prn_ffff0009ffff0009ffff0009"
+    with FakeUnitOfWork(staged.world) as unit_of_work:
+        unit_of_work.entities.create(mine, _entity(OWN_SECOND, "Second Of Mine", mine))
+
+    if kind == "assignment":
+        identifier = "asn_shared001shared01"
+        staged.world.entity_assignments.append(
+            Assignment(
+                assignment_id=identifier,
+                entity_id=FOREIGN_ENTITY,
+                assignment_type=AssignmentType.EMPLOYMENT,
+                principal_id=theirs,
+                scope_entity_id=FOREIGN_SCOPE,
+                role="their role",
+            )
+        )
+        record: object = Assignment(
+            assignment_id=identifier,
+            entity_id=OWN_ENTITY,
+            assignment_type=AssignmentType.EMPLOYMENT,
+            principal_id=mine,
+            scope_entity_id=None,
+            role="my role",
+        )
+        write = "record_assignment"
+    elif kind == "proposal":
+        identifier = "eprp_shared01shared01"
+        common: dict[str, object] = {
+            "proposal_id": identifier,
+            "kind": EntityProposalKind.MERGE_ENTITIES,
+            "state": EntityProposalState.PROPOSED,
+            "payload": (),
+            "observation_ids": (),
+            "proposed_at": WHEN,
+        }
+        staged.world.entity_proposals.append(
+            EntityProposal(**common, principal_id=theirs, proposed_by="their operator")  # type: ignore[arg-type]
+        )
+        record = EntityProposal(**common, principal_id=mine, proposed_by="my operator")  # type: ignore[arg-type]
+        write = "record_proposal"
+    else:
+        identifier = "erel_shared01shared01"
+        staged.world.entity_relationships.append(
+            EntityRelationship(
+                relationship_id=identifier,
+                from_entity_id=FOREIGN_ENTITY,
+                relationship_type=EntityRelationshipType.WORKS_FOR,
+                to_entity_id=FOREIGN_SCOPE,
+                principal_id=theirs,
+            )
+        )
+        record = EntityRelationship(
+            relationship_id=identifier,
+            from_entity_id=OWN_ENTITY,
+            relationship_type=EntityRelationshipType.WORKS_FOR,
+            to_entity_id=OWN_SECOND,
+            principal_id=mine,
+        )
+        write = "record_relationship"
+
+    with FakeUnitOfWork(staged.world) as unit_of_work:
+        with pytest.raises(ValueError, match="already taken") as refusal:
+            getattr(unit_of_work.entities, write)(mine, record)
+        assert "rebound" not in str(refusal.value), (
+            f"{write} judged the collision against a row in another Principal's partition"
+        )
+
+        held_rows = {
+            "assignment": staged.world.entity_assignments,
+            "relationship": staged.world.entity_relationships,
+            "proposal": staged.world.entity_proposals,
+        }[kind]
+        still_theirs = [held for held in held_rows if getattr(held, f"{kind}_id") == identifier]
+        assert len(still_theirs) == 1
+        assert still_theirs[0].principal_id == theirs
+
+
+def test_an_entity_merged_away_once_is_merged_away_for_everyone(staged: Scene) -> None:
+    """`record_merge` is the one collision read the server does NOT partition.
+
+    Its rule is a *global* `UNIQUE` on `entity_merge_records.merged_entity_id`,
+    and `SqlEntityRepository.record_merge` performs no lookup on that column at
+    all. The ninth review's commit partitioned the double's check anyway, "for
+    parity" — narrowing a global constraint to a per-Principal one with nothing
+    global behind it, so the fake accepted a merge the database refuses. The
+    tenth review measured that as a regression against the head before it.
+
+    Stated here as the rule rather than as the absence of a predicate, so
+    restoring the narrowing reddens on the behaviour rather than on a diff.
+    """
+    theirs = "prn_ffff0009ffff0009ffff0009"
+    mine = staged.principal.principal_id
+    with FakeUnitOfWork(staged.world) as unit_of_work:
+        unit_of_work.entities.create(mine, _entity(OWN_SECOND, "Second Of Mine", mine))
+    # Staged straight into the world, because the repository is what refuses to
+    # write a record naming an entity its Principal does not hold. The row this
+    # guards against is the one that arrived some other way -- and the global
+    # constraint holds regardless of who wrote it.
+    merged_away = OWN_SECOND
+    staged.world.entity_proposals.append(
+        EntityProposal(
+            proposal_id="eprp_mine0001mine0001",
+            principal_id=mine,
+            kind=EntityProposalKind.MERGE_ENTITIES,
+            state=EntityProposalState.ACCEPTED,
+            payload=(),
+            observation_ids=(),
+            proposed_at=WHEN,
+            proposed_by="my operator",
+            decided_by="my operator",
+            decided_at=WHEN,
+            decision_reason="same person",
+        )
+    )
+    staged.world.entity_merges.append(
+        EntityMergeRecord(
+            merge_id="emrg_theirs01theirs01",
+            principal_id=theirs,
+            retained_entity_id=FOREIGN_ENTITY,
+            merged_entity_id=merged_away,
+            proposal_id="eprp_theirs01theirs01",
+            decided_by="their operator",
+            decided_at=WHEN,
+            reason="same person",
+        )
+    )
+    with (
+        FakeUnitOfWork(staged.world) as unit_of_work,
+        pytest.raises(ValueError, match="merged away once"),
+    ):
+        unit_of_work.entities.record_merge(
+            mine,
+            EntityMergeRecord(
+                merge_id="emrg_mine0001mine0001",
+                principal_id=mine,
+                retained_entity_id=OWN_ENTITY,
+                merged_entity_id=merged_away,
+                proposal_id="eprp_mine0001mine0001",
+                decided_by="my operator",
+                decided_at=WHEN,
+                reason="same person",
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    ("reference", "namespace"),
+    [
         ("Crossed Predecessor", None),
         ("crossed@rival.test", ExternalIdentifierNamespace.EMAIL.value),
-    ):
-        resolved = _answer(
-            staged,
-            Capability.ENTITIES_RESOLVE,
-            ResolveEntity(reference=reference, namespace=namespace),
-        )
-        result = resolved["result"]
-        assert isinstance(result, dict)
-        resolution = result["resolution"]
-        assert isinstance(resolution, dict)
-        assert resolution["outcome"] == ResolutionOutcome.NOT_FOUND.value, (
-            f"{reference!r} resolved through a row another Principal owns"
-        )
-        assert resolution["entity_id"] is None
-        assert resolution["candidates"] == []
-        assert OWN_ENTITY not in repr(result)
+    ],
+    ids=("alias", "identifier"),
+)
+def test_resolving_through_a_crossed_child_row_finds_nothing(
+    staged: Scene, reference: str, namespace: str | None
+) -> None:
+    """The child-side partition on the two resolution lookups, in its own test.
+
+    These assertions lived inside
+    `test_the_card_of_my_own_entity_carries_no_other_principals_rows` until the
+    tenth review pointed out what that costs: they are the only thing in the
+    fast tier arming either predicate, and they sat under a name about
+    `entities.context`, seventy lines from anything that mentions resolution.
+    Narrowing or renaming "the card" test would have retired them silently —
+    which is precisely the round-7 failure this campaign already paid for once.
+
+    `entities_by_alias` and `entities_by_identifier` each carry two partition
+    predicates: one on the parent entity, one on the child row. The parent's is
+    satisfied here, because the entity really is mine. The child-side predicate
+    is the only thing refusing a row *another Principal owns that points at an
+    entity I own*, and two independent reviewers measured it deletable with the
+    whole fast tier green — the double answering `resolved_exact` from their
+    alias. `test_resolving_a_value_only_another_principal_holds_finds_nothing`
+    structurally cannot reach it: it stages its rows on the *foreign* entity,
+    where the parent predicate refuses first and the child-side one never
+    decides anything.
+    """
+    _stage_crossed_child_rows(staged)
+    resolved = _answer(
+        staged,
+        Capability.ENTITIES_RESOLVE,
+        ResolveEntity(reference=reference, namespace=namespace),
+    )
+    result = resolved["result"]
+    assert isinstance(result, dict)
+    resolution = result["resolution"]
+    assert isinstance(resolution, dict)
+    assert resolution["outcome"] == ResolutionOutcome.NOT_FOUND.value, (
+        f"{reference!r} resolved through a row another Principal owns"
+    )
+    assert resolution["entity_id"] is None
+    assert resolution["candidates"] == []
+    assert OWN_ENTITY not in repr(result)
 
 
 # --- a cursor naming a record the caller may not read ------------------------

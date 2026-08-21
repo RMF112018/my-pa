@@ -369,3 +369,87 @@ def test_every_claimed_tool_corpus_size_matches_what_that_tool_reports(
         f"{PLAN.name}:{line} says `{tool}` is clean over {claimed} files; it "
         f"reports {measured}. Correct the plan rather than this test."
     )
+
+
+# --- the two tier figures no `-m "…"` claim reaches ---------------------------
+#
+# `TIER_CLAIM` matches a bolded pass count following a `pytest -m "…"` command.
+# Two figures in the same evidence table are stated another way and were bound
+# to nothing: the architecture tier, which is named by path rather than by
+# marker and sits as a *second* bolded figure inside a cell whose first one the
+# tier rule already claimed; and the evaluation tier, whose marker is written
+# without quotes. Both were correct when the tenth review measured them, and
+# nothing kept them so.
+
+_PATH_TIER_CLAIM: Final = re.compile(r"Architecture tier \*\*(?P<count>[\d,]+)\s+passed")
+_BARE_MARKER_CLAIM: Final = re.compile(
+    r"`pytest\s+-m\s+(?P<expr>[a-z_]+)`[^|]{0,120}?(?P<count>[\d,]+)\s+passed"
+)
+
+
+def _extra_tier_claims() -> list[tuple[str, str, int, int]]:
+    """`(kind, selector, claimed, line)` for the two the marker rule cannot see."""
+    text = PLAN.read_text(encoding="utf-8")
+    found: list[tuple[str, str, int, int]] = []
+    for match in _PATH_TIER_CLAIM.finditer(text):
+        line = text.count("\n", 0, match.start()) + 1
+        found.append(
+            ("path", "tests/architecture", int(match.group("count").replace(",", "")), line)
+        )
+    for match in _BARE_MARKER_CLAIM.finditer(text):
+        line = text.count("\n", 0, match.start()) + 1
+        found.append(
+            ("marker", match.group("expr"), int(match.group("count").replace(",", "")), line)
+        )
+    return found
+
+
+def test_the_plan_states_both_of_the_other_tier_figures() -> None:
+    """An anti-vacuity floor: two patterns, both of which must still match."""
+    kinds = {kind for kind, _, _, _ in _extra_tier_claims()}
+    assert kinds == {"path", "marker"}, (
+        f"expected an architecture figure and an evaluation figure, found {sorted(kinds)}"
+    )
+
+
+@pytest.mark.parametrize(("kind", "selector", "claimed", "line"), _extra_tier_claims())
+def test_every_other_claimed_tier_figure_matches_collection(
+    kind: str, selector: str, claimed: int, line: int
+) -> None:
+    """The same equality the marker rule applies, for the two it cannot reach."""
+    collected = _path_collected(selector) if kind == "path" else _tier_collected(selector)
+    assert claimed == collected, (
+        f"{PLAN.name}:{line} claims {claimed} passed for {selector!r}, which "
+        f"collects {collected}. Correct the plan rather than this test."
+    )
+
+
+_PATH_COLLECTED: dict[str, int] = {}
+
+
+def _path_collected(path: str) -> int:
+    if path not in _PATH_COLLECTED:
+        result = subprocess.run(  # noqa: S603
+            [
+                sys.executable,
+                "-m",
+                "pytest",
+                "--collect-only",
+                "-q",
+                "-p",
+                "no:cacheprovider",
+                path,
+            ],
+            capture_output=True,
+            text=True,
+            cwd=ROOT,
+            check=False,
+        )
+        found = re.search(r"(\d+)/\d+ tests collected", result.stdout) or re.search(
+            r"(\d+) tests? collected", result.stdout
+        )
+        assert found is not None, (
+            f"could not collect {path!r}:\n{result.stdout[-2000:]}\n{result.stderr[-2000:]}"
+        )
+        _PATH_COLLECTED[path] = int(found.group(1))
+    return _PATH_COLLECTED[path]

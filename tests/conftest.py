@@ -2513,6 +2513,14 @@ class _Entities(EntitiesRepository):
                 raise ValueError("an entity identifier cannot be rebound to different values")
             return held
         self._require_own(entity.principal_id, entity.superseded_by_entity_id)
+        _refuse_taken_identifier(
+            next(
+                (held for held in self._world.entities if held.entity_id == entity.entity_id),
+                None,
+            ),
+            entity.entity_id,
+            "an entity",
+        )
         self._world.entities.append(entity)
         return entity
 
@@ -2531,6 +2539,18 @@ class _Entities(EntitiesRepository):
         for held in self._world.entity_identifiers:
             if (held.entity_id, held.namespace, held.normalized_value) == natural_key:
                 return
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_identifiers
+                    if held.identifier_id == identifier.identifier_id
+                ),
+                None,
+            ),
+            identifier.identifier_id,
+            "an external identifier",
+        )
         self._world.entity_identifiers.append(identifier)
 
     def record_alias(self, principal_id: str, alias: EntityAlias) -> None:
@@ -2543,6 +2563,14 @@ class _Entities(EntitiesRepository):
         for held in self._world.entity_aliases:
             if (held.entity_id, held.alias_type, held.normalized_value) == natural_key:
                 return
+        _refuse_taken_identifier(
+            next(
+                (held for held in self._world.entity_aliases if held.alias_id == alias.alias_id),
+                None,
+            ),
+            alias.alias_id,
+            "an alias",
+        )
         self._world.entity_aliases.append(alias)
 
     # --- WP-RI-06 governance ----------------------------------------------
@@ -2721,19 +2749,28 @@ class _Entities(EntitiesRepository):
             for held in self._world.entity_proposals
         ):
             raise UnknownScopeError("a merge record cites a proposal in this scope")
-        # Partitioned, because `SqlEntityRepository` partitions it. Without the
-        # predicate the collision read finds another Principal's row and either
-        # tells this caller their own identifier is bound to different values --
-        # a verdict computed from a partition they cannot see -- or silently
-        # accepts their write as a duplicate of it. `tests/database/
-        # test_entity_governance.py` names that comparison as the defect the
-        # server was corrected away from, so a fake without it lets a unit test
-        # prove the opposite of what the server does.
+        # **Deliberately NOT partitioned, and it was for one commit.** Every
+        # other collision read on this plane mirrors a partitioned read in
+        # `SqlEntityRepository`; this one mirrors nothing, because the server
+        # performs no `merged_entity_id` lookup at all. The rule is carried by a
+        # *global* `UNIQUE` on `entity_merge_records.merged_entity_id`
+        # (`persistence/tables.py`, whose own comment reads "an entity is merged
+        # away once"). Adding a Principal predicate here narrowed a global
+        # constraint to a per-Principal one with nothing global left behind it,
+        # so the fake accepted a merge the database refuses -- measured by the
+        # tenth review as a regression against the commit before it.
         if any(
-            held.merged_entity_id == record.merged_entity_id and held.principal_id == principal_id
-            for held in self._world.entity_merges
+            held.merged_entity_id == record.merged_entity_id for held in self._world.entity_merges
         ):
             raise ValueError("an entity is merged away once")
+        _refuse_taken_identifier(
+            next(
+                (held for held in self._world.entity_merges if held.merge_id == record.merge_id),
+                None,
+            ),
+            record.merge_id,
+            "a merge record",
+        )
         self._world.entity_merges.append(record)
 
     def merges(self, principal_id: str, entity_id: str | None = None) -> list[EntityMergeRecord]:
@@ -2856,7 +2893,12 @@ def _refuse_taken_identifier(held: object, identifier: str, noun: str) -> None:
 
     Every table on this plane keys on a *global* primary key, so an identifier
     another Principal holds is unavailable to this one -- the server answers
-    `IntegrityError`. The collision reads above are partitioned, matching
+    `IntegrityError`. Applied at every write that introduces one: the tenth
+    review found it on four of nine while this docstring asserted it of all,
+    and measured the fake accepting duplicate `entity_id`, `identifier_id`,
+    `alias_id` and `merge_id` values the server refuses.
+
+    The collision reads above are partitioned, matching
     `SqlEntityRepository`, which is what decides *on whose evidence* a write is
     judged; this is the separate rule that decides whether the key is free at
     all. Without it, partitioning those reads would have made the fake accept a

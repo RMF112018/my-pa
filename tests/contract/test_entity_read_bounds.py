@@ -29,7 +29,6 @@ from typing import Final
 import pytest
 from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 
-from my_pa.application import commands
 from my_pa.application.commands import (
     GetEntityContext,
     GetEntityRelationships,
@@ -52,7 +51,6 @@ from my_pa.domain.relationship.entity import (
 )
 from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
 from my_pa.domain.relationship.normalization import normalize_name
-from my_pa.domain.search import query
 from my_pa.domain.search.query import MAX_QUERY_CHARACTERS
 
 HUB: Final = "ent_hub00001hub00001"
@@ -564,17 +562,6 @@ def test_a_search_cursor_the_caller_cannot_read_answers_the_same_way(hub: Scene)
 # --- what a browse query may contain ----------------------------------------
 
 
-def test_the_two_spellings_of_the_forbidden_category_set_agree() -> None:
-    """The claim `commands._FORBIDDEN_QUERY_CATEGORIES` makes about itself.
-
-    `domain.search.query` keeps `_FORBIDDEN_CATEGORIES` private, so the entity
-    command spells the set a second time. A second spelling of one rule is a
-    place two rules can grow, and the comment beside it says this test is what
-    stops that -- so this test has to exist for the comment to be true.
-    """
-    assert commands._FORBIDDEN_QUERY_CATEGORIES == query._FORBIDDEN_CATEGORIES
-
-
 @pytest.mark.parametrize(
     "query_value",
     [
@@ -600,6 +587,53 @@ def test_a_browse_query_is_bounded_like_every_other_search_query(query_value: st
     """
     with pytest.raises(InvalidRequestError):
         SearchEntities(query=query_value)
+
+
+@pytest.mark.parametrize(
+    "query_value",
+    [
+        "Alice\tChen",
+        "Alice\nChen",
+        "Alice\r\nChen",
+        "Alice\x0bChen",
+        "Alice\x0cChen",
+        "Alice\x85Chen",
+        "Alice\x1fChen",
+        "Alice\xa0Chen",
+    ],
+    ids=("tab", "lf", "crlf", "vertical-tab", "form-feed", "nel", "unit-separator", "nbsp"),
+)
+def test_a_browse_query_accepts_the_whitespace_every_other_search_query_accepts(
+    query_value: str,
+) -> None:
+    """The half the first version of this bound got wrong, in the wrong direction.
+
+    Several of these are category `Cc`, so a forbidden-category check applied to
+    the raw string refuses them -- which is what `_bounded_query` did when it
+    restated the rule instead of using it. `domain.search.query` collapses
+    whitespace *before* the category check, deliberately: its docstring says
+    "refusing a query because it was pasted with a NEL in it would be refusing a
+    legitimate paste."
+
+    So the tenth review measured `entities.search` refusing `"Alice\tChen"`
+    while `knowledge.search` accepted it and searched for `Alice Chen` -- a
+    two-line or tab-separated pasted name, refused. The bound delegates now, so
+    this test and the one above are the two directions of a single rule rather
+    than of two.
+    """
+    assert SearchEntities(query=query_value).query == query_value
+
+
+def test_a_browse_query_is_not_rewritten_by_being_bounded() -> None:
+    """The bound validates; it must not normalize.
+
+    `SearchQuery` casefolds and collapses. This capability matches on the string
+    the caller sent, so the normalized value is discarded and the field is left
+    exactly as it arrived. If that stopped being true, which entities match
+    would change without the matching rule being touched.
+    """
+    for original in ("Alice  Chen", "ALICE chen", "Alice\tChen", " Alice Chen "):
+        assert SearchEntities(query=original).query == original
 
 
 def test_a_browse_query_at_the_bound_is_accepted() -> None:

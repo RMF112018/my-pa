@@ -20,18 +20,15 @@ const DEFAULTS: Preferences = {
 
 export function useShellPreferences() {
   const [preferences, setPreferences] = useState(DEFAULTS);
+  const [hydrated, setHydrated] = useState(false);
 
   useEffect(() => {
-    let stored: string | null = null;
-    try {
-      stored = localStorage.getItem(KEY);
-    } catch {}
-    if (!stored) return;
-
     const initialHydration = window.setTimeout(() => {
       try {
-        setPreferences({ ...DEFAULTS, ...JSON.parse(stored) });
+        const stored = localStorage.getItem(KEY);
+        if (stored) setPreferences({ ...DEFAULTS, ...JSON.parse(stored) });
       } catch {}
+      setHydrated(true);
     }, 0);
     return () => window.clearTimeout(initialHydration);
   }, []);
@@ -39,10 +36,11 @@ export function useShellPreferences() {
   useEffect(() => {
     document.documentElement.dataset.theme = preferences.theme;
     document.documentElement.dataset.density = preferences.density;
+    if (!hydrated) return;
     try {
       localStorage.setItem(KEY, JSON.stringify(preferences));
     } catch {}
-  }, [preferences]);
+  }, [hydrated, preferences]);
 
   const update = useCallback(
     (patch: Partial<Preferences>) =>

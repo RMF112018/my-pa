@@ -115,7 +115,7 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     // is deterministically rendered without claiming a reconnect occurred.
     await page.evaluate(() => window.dispatchEvent(new Event("online")));
     await expect(page.getByTestId("offline-queue-status")).toBeVisible();
-    await page.getByRole("button", { name: "Close" }).click();
+    await page.getByRole("button", { name: "Close", exact: true }).click();
     expect(await scan(page), "dark held-note accessibility violations").toEqual([]);
   });
 });

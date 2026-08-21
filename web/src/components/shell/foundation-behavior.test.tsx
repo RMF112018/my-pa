@@ -57,7 +57,7 @@ function PreferenceHarness() {
 }
 
 describe("shell preferences", () => {
-  it("starts hydration-safe, then restores and persists nonsensitive preferences", async () => {
+  it("restores stored preferences before persistence can write hydration defaults", async () => {
     localStorage.setItem(
       "my-pa:shell-preferences:v1",
       JSON.stringify({ theme: "dark", density: "compact", navCollapsed: false }),
@@ -65,7 +65,10 @@ describe("shell preferences", () => {
     const user = userEvent.setup();
     render(<PreferenceHarness />);
 
-    expect(screen.getByTestId("preferences")).toHaveTextContent("light:comfortable:false");
+    expect(JSON.parse(localStorage.getItem("my-pa:shell-preferences:v1") ?? "{}")).toMatchObject({
+      theme: "dark",
+      density: "compact",
+    });
     await waitFor(() =>
       expect(screen.getByTestId("preferences")).toHaveTextContent("dark:compact:false"),
     );

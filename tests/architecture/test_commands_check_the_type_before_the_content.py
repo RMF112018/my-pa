@@ -366,36 +366,41 @@ def _unguarded() -> tuple[tuple[str, str], ...]:
 
 #: Offending pairs that predate this branch, each with the capability it reaches.
 #:
-#: **A shrinking allowlist, not an exemption list.** Every entry is asserted
-#: below to still be an offence, so a fixed one reddens and has to be removed —
-#: the shape `ALLOWED` and `EXCUSED` use elsewhere in this tier. Nothing may be
-#: added to it without the same provenance check that put these here.
+#: **Empty, and that is the whole point.** This was a shrinking allowlist: every
+#: entry was asserted below to still be an offence, so a fixed one reddened and
+#: had to be removed. It has now shrunk to nothing, and the assertions that made
+#: it shrink are what closed it — `test_the_allowlist_is_empty` below turns the
+#: end state into a gate, so re-admitting an entry is a deliberate edit to a
+#: test that says it must not happen rather than a quiet append to a tuple.
 #:
-#: Measured, not assumed: this module run against `git show main:…/commands.py`
-#: reports **fourteen** offending pairs, and every entry below is among them.
-#: This branch removed five (`CreateTask` twice, `CreateCommitment` twice,
-#: `CloseCommitment`) and introduced none. They are recorded rather than fixed
-#: because they reach `tasks.*`, `review.*`, `continuity.*`, `documents.*` and
-#: `context.prepare` — none of them the relationship-intelligence plane this
-#: branch delivers — and widening a 224-file pull request to carry them was
-#: declined deliberately rather than overlooked.
+#: What was here, and what it cost. Nine pairs, measured against
+#: `git show main:…/commands.py`, which this module reported as **fourteen**
+#: offending pairs in total — the entity-plane branch removed five of them and
+#: introduced none, and the remaining nine were recorded rather than fixed
+#: because none reached that branch's own plane and widening a 224-file pull
+#: request to carry them was declined deliberately.
 #:
-#: What each costs today: the first three answer `500 internal_error` over HTTP
-#: for a non-string in the named field, because the field is dereferenced. The
-#: `idempotency_key` and `conversation_context` entries route through
-#: `_idempotency_key`, which tests truthiness and never the type, so a
-#: non-string is *accepted* and reaches a handler that assumes a string.
-CARRIED_FROM_THE_MERGE_BASE: tuple[tuple[str, str, str], ...] = (
-    ("UpdateTask", "title", "tasks.update"),
-    ("TransitionTask", "closure_evidence_ref", "tasks.transition"),
-    ("DecideReviewCase", "corrected_value", "review.decide"),
-    ("CreateProject", "idempotency_key", "continuity.projects.create"),
-    ("CreateSituation", "idempotency_key", "continuity.situations.create"),
-    ("RecordTask", "idempotency_key", "continuity.tasks.create"),
-    ("CreateManagedDocument", "idempotency_key", "documents.create"),
-    ("ReviseManagedDocument", "idempotency_key", "documents.revise"),
-    ("PrepareContext", "conversation_context", "context.prepare"),
-)
+#: `UpdateTask.title`, `TransitionTask.closure_evidence_ref` and
+#: `DecideReviewCase.corrected_value` dereferenced an optional string behind an
+#: `is not None` test and answered `500 internal_error` over HTTP for a
+#: non-string. Each now routes through `_text` before `.strip()` is reached.
+#:
+#: Five `idempotency_key` entries routed through `_idempotency_key`, which
+#: tested truthiness and never the type, so a non-string was *accepted* into a
+#: handler that assumed a string. That helper now checks the type — and the ten
+#: further commands that spelled the same emptiness test inline, outside this
+#: module's stated rule and so never on this list, now call it instead of
+#: repeating it. The hole was ten commands wider than the list recorded.
+#:
+#: `PrepareContext.conversation_context` was never a defect. It validated
+#: through `validate_conversation_context`, which refuses a non-string, and
+#: converted the domain error inline — correct behaviour that this module could
+#: not see, because it measures type-checking by helper and the conversion was
+#: not in one. Extracting `_conversation_context`, the shape `_alias` already
+#: used for the same job, made the existing guarantee visible. A guard that
+#: cannot see a correct answer records it as an offence, and this one did for
+#: nine review rounds.
+CARRIED_FROM_THE_MERGE_BASE: tuple[tuple[str, str, str], ...] = ()
 
 _CARRIED: frozenset[tuple[str, str]] = frozenset(
     (command, field) for command, field, _ in CARRIED_FROM_THE_MERGE_BASE
@@ -482,6 +487,25 @@ def test_every_carried_entry_names_the_capability_it_actually_reaches() -> None:
         if getattr(commands_module, command).capability.value != capability
     )
     assert wrong == []
+
+
+def test_the_allowlist_is_empty() -> None:
+    """The list shrank to nothing, and this is what stops it growing back.
+
+    While entries existed, `test_every_carried_entry_is_still_an_offence` was
+    the only pressure on the list, and it only pushed one way: it removed what
+    had been fixed and said nothing about what was added. An empty tuple with
+    that test alone would pass just as happily with a new entry in it.
+
+    So the end state is asserted directly. Admitting a command here now means
+    editing a test whose name says the list is empty, in a change a reviewer
+    reads — rather than appending a tuple nobody diffs.
+    """
+    assert CARRIED_FROM_THE_MERGE_BASE == (), (
+        f"{[f'{c}.{f}' for c, f, _ in CARRIED_FROM_THE_MERGE_BASE]} were added to a "
+        f"closed allowlist. A command that reads a caller-supplied field before "
+        f"checking its type is a defect to fix, not an entry to record."
+    )
 
 
 def test_nothing_on_the_entity_plane_is_carried() -> None:

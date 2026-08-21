@@ -303,11 +303,13 @@ def test_every_claimed_tier_pass_count_accounts_for_what_that_selection_collects
 # here. Both are derived now.
 
 _TOOL_CLAIM: Final = re.compile(
-    # The tool is named inside a code span that carries its arguments too:
-    # `` `ruff check .` ``, not `` `ruff` ``. Anchoring on a bare closing
-    # backtick matched mypy and silently skipped ruff -- which is the half
-    # that was actually wrong.
-    r"`(?P<tool>ruff|mypy)[^`]*`[^|]{0,200}?clean over (?P<count>[\d,]+) files"
+    # `mypy` only. `ruff` was bound here too and should not have been: it walks
+    # the working directory rather than the index, so its corpus size is a
+    # property of what happens to be on disk. Measured locally as 925 and by CI
+    # as 927 at the same commit, which failed the run -- a guard that reddens on
+    # a correct tree because the tree is somewhere else. `mypy`'s figure is
+    # derived from configured targets and is the same everywhere.
+    r"`(?P<tool>mypy)[^`]*`[^|]{0,200}?clean over (?P<count>[\d,]+) files"
 )
 
 
@@ -321,29 +323,11 @@ def _tool_claims() -> list[tuple[str, int, int]]:
 
 
 def _measured(tool: str) -> int:
-    command = (
-        [sys.executable, "-m", "ruff", "format", "--check", "."]
-        if tool == "ruff"
-        else [sys.executable, "-m", "mypy"]
-    )
+    command = [sys.executable, "-m", "mypy"]
     result = subprocess.run(  # noqa: S603
         command, capture_output=True, text=True, cwd=ROOT, check=False
     )
-    if tool == "ruff":
-        # **The count is only a corpus size when the tool is clean.** A dirty
-        # tree prints "1 file would be reformatted, 924 files already
-        # formatted", and reading the second number off that reports a corpus
-        # one smaller than the tree -- inviting the plan to be "corrected" to a
-        # figure produced by an unformatted file. Measured, not reasoned: that
-        # is exactly what this function did on its first run.
-        assert "would be reformatted" not in result.stdout, (
-            "`ruff format --check .` is not clean, so it reports no corpus size:\n"
-            f"{result.stdout[-2000:]}"
-        )
-        pattern = r"(\d+) files? already formatted"
-    else:
-        pattern = r"in (\d+) source files?"
-    found = re.search(pattern, result.stdout)
+    found = re.search(r"in (\d+) source files?", result.stdout)
     assert found is not None, (
         f"could not read a corpus size out of {tool}:\n"
         f"{result.stdout[-2000:]}\n{result.stderr[-2000:]}"
@@ -351,11 +335,11 @@ def _measured(tool: str) -> int:
     return int(found.group(1))
 
 
-def test_the_plan_claims_a_corpus_size_for_both_tools() -> None:
+def test_the_plan_claims_a_corpus_size_for_mypy() -> None:
     """An anti-vacuity floor: a pattern that matches nothing checks nothing."""
     tools = {tool for tool, _, _ in _tool_claims()}
-    assert tools == {"ruff", "mypy"}, (
-        f"expected a `clean over N files` claim for both tools, found {sorted(tools)}"
+    assert tools == {"mypy"}, (
+        f"expected a `clean over N files` claim for `mypy`, found {sorted(tools)}"
     )
 
 

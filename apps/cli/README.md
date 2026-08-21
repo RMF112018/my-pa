@@ -46,7 +46,8 @@ python apps/cli/gsqs_b0.py execute \
   --model-identity routellm-goodnotes-b0-v1@sha256:<digest> \
   --prompt-config ops/goodnotes/gsqs/b0/incumbent-prompt-v1.txt \
   --repetitions 3 \
-  --evidence-dir <run-dir>
+  --evidence-dir <run-dir> \
+  --evaluator-corpus <local-private-evaluator-plane.json>
 ```
 
 See [`ops/goodnotes/gsqs/B0_RUNBOOK.md`](../../ops/goodnotes/gsqs/B0_RUNBOOK.md).

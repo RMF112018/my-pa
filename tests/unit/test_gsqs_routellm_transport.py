@@ -59,6 +59,22 @@ def test_post_is_single_attempt(monkeypatch: pytest.MonkeyPatch) -> None:
     assert transport.IMAGE_POST_RETRY_MAX == 0
 
 
+def test_post_transport_error_is_indeterminate(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler() -> _FakeResponse:
+        raise URLError("dns")
+
+    monkeypatch.setattr(transport, "_opener", lambda _tls: _CountingOpener(handler))
+    with pytest.raises(transport.RouteLLMTransportError) as raised:
+        transport.post_chat_completion(
+            origin="https://route.example",
+            api_key="k",
+            body={"model": "route-llm"},
+        )
+    assert raised.value.http_status is None
+    assert raised.value.disclosed is None
+    assert raised.value.error_class == "URL_ERROR"
+
+
 def test_probe_retries_transport_errors_only(monkeypatch: pytest.MonkeyPatch) -> None:
     sleeps: list[float] = []
     calls = {"n": 0}
@@ -78,6 +94,45 @@ def test_probe_retries_transport_errors_only(monkeypatch: pytest.MonkeyPatch) ->
     assert result.status == 200
     assert calls["n"] == 3
     assert sleeps == [0.5, 1.5]
+
+
+def test_probe_http_error_is_not_retried(monkeypatch: pytest.MonkeyPatch) -> None:
+    from email.message import Message
+    from io import BytesIO
+    from urllib.error import HTTPError
+
+    calls = {"n": 0}
+
+    def handler() -> _FakeResponse:
+        calls["n"] += 1
+        raise HTTPError("https://route.example/v1/models", 401, "no", Message(), BytesIO())
+
+    monkeypatch.setattr(transport, "_opener", lambda _tls: _CountingOpener(handler))
+    with pytest.raises(transport.RouteLLMTransportError) as raised:
+        transport.get_models_with_retry(
+            origin="https://route.example",
+            api_key="k",
+            sleep=lambda _delay: None,
+        )
+    assert calls["n"] == 1
+    assert raised.value.http_status == 401
+    assert raised.value.error_class == "HTTP_401"
+
+
+def test_post_timeout_is_indeterminate(monkeypatch: pytest.MonkeyPatch) -> None:
+    def handler() -> _FakeResponse:
+        raise TimeoutError("read")
+
+    monkeypatch.setattr(transport, "_opener", lambda _tls: _CountingOpener(handler))
+    with pytest.raises(transport.RouteLLMTransportError) as raised:
+        transport.post_chat_completion(
+            origin="https://route.example",
+            api_key="k",
+            body={"model": "route-llm"},
+        )
+    assert raised.value.http_status is None
+    assert raised.value.disclosed is None
+    assert raised.value.error_class == "TIMEOUT"
 
 
 def test_origin_mismatch_and_redirect(monkeypatch: pytest.MonkeyPatch) -> None:

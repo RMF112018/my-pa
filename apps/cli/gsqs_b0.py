@@ -6,20 +6,33 @@ import argparse
 import json
 import os
 import sys
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
 from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
-from my_pa.application.goodnotes_gsqs_b0_disclosure_journal import DisclosureJournal
-from my_pa.application.goodnotes_gsqs_corpus import CorpusManifest
+from my_pa.application.goodnotes_gsqs import MeasurementRecord
+from my_pa.application.goodnotes_gsqs_b0_disclosure_journal import (
+    EVENT_AUTH_PROBE_COMPLETED,
+    DisclosureJournal,
+    DisclosureState,
+)
+from my_pa.application.goodnotes_gsqs_corpus import (
+    CorpusCase,
+    CorpusManifest,
+    load_evaluator_plane_cases,
+)
 from my_pa.application.goodnotes_gsqs_hw_corpus import load_public_catalog
 from my_pa.application.goodnotes_gsqs_live_b0 import (
+    AnalyzerAdapter,
     AnalyzerCaseInput,
     B0Census,
+    B0RunState,
+    ExecutionAuthorization,
     FrozenAnalyzerConfig,
     PreflightReport,
+    RepositoryIdentity,
     UnboundIncumbentAdapter,
     catalog_path,
     execute_measured_b0,
@@ -31,10 +44,14 @@ from my_pa.application.goodnotes_gsqs_live_b0 import (
     prompt_config_identity,
     prompt_path,
     repo_root,
+    validate_evaluator_plane,
     validate_route_llm_execution_bindings,
     write_public_evidence,
 )
-from my_pa.application.goodnotes_gsqs_provider_model_mapping import load_provider_model_mapping
+from my_pa.application.goodnotes_gsqs_provider_model_mapping import (
+    ProviderModelMapping,
+    load_provider_model_mapping,
+)
 from my_pa.application.goodnotes_gsqs_routellm_candidate import (
     composite_model_identity,
     load_route_llm_candidate,
@@ -47,6 +64,8 @@ from my_pa.application.goodnotes_gsqs_routellm_envelope import (
 )
 from my_pa.infrastructure.gsqs_routellm_transport import (
     RouteLLMHttpResult,
+    RouteLLMPostResponseError,
+    get_models_with_retry,
     origins_equal,
     parse_https_origin,
     post_chat_completion,
@@ -83,17 +102,31 @@ class RouteLLMIncumbentAdapter:
         mime = detect_image_mime(image)
         body = build_chat_completions_body(case, config, image_bytes=image, mime=mime)
         result = self._poster(origin=self._origin, api_key=self._api_key, body=body)
-        semantic = parse_semantic_content(result.payload)
-        observed = result.payload.get("model")
-        return assemble_authoritative_interchange(
-            case,
-            config,
-            semantic,
-            provenance={
-                "http_status": result.status,
-                "selected_model": observed,
-            },
-        )
+        try:
+            semantic = parse_semantic_content(result.payload)
+        except ValueError as error:
+            raise RouteLLMPostResponseError(
+                "routellm request failed: malformed semantic payload",
+                http_status=result.status,
+                error_class="MALFORMED_SEMANTIC",
+            ) from error
+        try:
+            observed = result.payload.get("model")
+            return assemble_authoritative_interchange(
+                case,
+                config,
+                semantic,
+                provenance={
+                    "http_status": result.status,
+                    "selected_model": observed,
+                },
+            )
+        except ValueError as error:
+            raise RouteLLMPostResponseError(
+                "routellm request failed: malformed interchange envelope",
+                http_status=result.status,
+                error_class="MALFORMED_ENVELOPE",
+            ) from error
 
 
 def _preflight(args: argparse.Namespace) -> int:
@@ -146,13 +179,12 @@ def _execute(args: argparse.Namespace) -> int:
     runtime = parse_https_origin(os.environ[BASE_URL_ENV])
     if not origins_equal(origin, runtime):
         raise ValueError("RouteLLM origin mismatch")
-    evidence_dir = Path(args.evidence_dir).resolve()
-    journal = DisclosureJournal(evidence_dir, run_id=authorization.authorization_id or str(uuid4()))
-    journal.refuse_if_unresolved()
     catalog = load_public_catalog(catalog_path(root))
     census = partition_b_census(catalog)
-    config = frozen_incumbent_config(model_identity=identity, root=root)
-    adapter = RouteLLMIncumbentAdapter(origin=origin, api_key=os.environ[API_KEY_ENV])
+    if not args.evaluator_corpus:
+        raise ValueError("execute requires --evaluator-corpus")
+    evaluator_cases = load_evaluator_plane_cases(Path(args.evaluator_corpus))
+    validate_evaluator_plane(evaluator_cases, census)
     mapping = None
     if authorization.provider_model_mapping_evidence_id:
         if not args.provider_mapping:
@@ -161,28 +193,82 @@ def _execute(args: argparse.Namespace) -> int:
             Path(args.provider_mapping),
             expected_evidence_id=authorization.provider_model_mapping_evidence_id,
         )
-    records, state = execute_measured_b0(
+    config = frozen_incumbent_config(model_identity=identity, root=root)
+    adapter = RouteLLMIncumbentAdapter(origin=origin, api_key=os.environ[API_KEY_ENV])
+    return run_bound_execute(
         authorization=authorization,
+        report=report,
         census=census,
-        evaluator_cases=(),
+        evaluator_cases=evaluator_cases,
         manifest=_catalog_manifest(catalog, census),
-        adapter=adapter,
         config=config,
         repository=inspect_repository_identity(root),
+        adapter=adapter,
+        evidence_dir=Path(args.evidence_dir).resolve(),
+        identity=identity,
+        origin=origin,
+        api_key=os.environ[API_KEY_ENV],
         image_loader=lambda case_id: _load_raster(
             Path(os.environ[RASTER_ROOT_ENV]).resolve(), case_id
         ),
-        disclosure_journal=journal,
-        provider_mapping=mapping,
+        mapping=mapping,
     )
-    write_public_evidence(
-        evidence_dir,
-        report=report,
-        records=records,
-        journal=journal,
-        analyzer_config={"model_identity": identity, "run_state": state.value},
-    )
-    return EXIT_OK
+
+
+def run_bound_execute(
+    *,
+    authorization: ExecutionAuthorization,
+    report: PreflightReport,
+    census: B0Census,
+    evaluator_cases: Sequence[CorpusCase],
+    manifest: CorpusManifest,
+    config: FrozenAnalyzerConfig,
+    repository: RepositoryIdentity,
+    adapter: AnalyzerAdapter,
+    evidence_dir: Path,
+    identity: str,
+    origin: str,
+    api_key: str,
+    image_loader: Callable[[str], bytes],
+    mapping: ProviderModelMapping | None = None,
+    probe: Callable[..., RouteLLMHttpResult] = get_models_with_retry,
+) -> int:
+    validate_evaluator_plane(evaluator_cases, census)
+    journal = DisclosureJournal(evidence_dir, run_id=authorization.authorization_id or str(uuid4()))
+    records: tuple[MeasurementRecord, ...] = ()
+    run_state: B0RunState | None = None
+    try:
+        if journal.fold().unresolved_attempt_ids:
+            raise ValueError("unresolved disclosure attempt; refusing to resume")
+        probe(origin=origin, api_key=api_key)
+        journal.record_run_event(
+            EVENT_AUTH_PROBE_COMPLETED,
+            disclosure_state=DisclosureState.AUTHORIZED_NOT_YET_DISCLOSED,
+        )
+        records, run_state = execute_measured_b0(
+            authorization=authorization,
+            census=census,
+            evaluator_cases=evaluator_cases,
+            manifest=manifest,
+            adapter=adapter,
+            config=config,
+            repository=repository,
+            image_loader=image_loader,
+            disclosure_journal=journal,
+            provider_mapping=mapping,
+        )
+        return EXIT_OK
+    finally:
+        analyzer_config: dict[str, object] = {"model_identity": identity}
+        if run_state is not None:
+            analyzer_config["run_state"] = run_state.value
+        write_public_evidence(
+            evidence_dir,
+            report=report,
+            records=records or None,
+            journal=journal,
+            analyzer_config=analyzer_config,
+        )
 
 
 def _bindings_complete(args: argparse.Namespace, authorization: object, root: Path) -> bool:
@@ -257,6 +343,7 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--prompt-config", required=True)
     execute.add_argument("--repetitions", type=int, required=True)
     execute.add_argument("--provider-mapping", default="")
+    execute.add_argument("--evaluator-corpus", default=None)
     execute.set_defaults(handler=_execute)
     return parser
 

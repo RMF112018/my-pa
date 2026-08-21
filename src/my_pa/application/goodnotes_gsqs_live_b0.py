@@ -788,6 +788,8 @@ def write_public_evidence(
         target = directory / name
         target.write_text(body, encoding="utf-8")
         written[name] = sha256(body.encode()).hexdigest()
+    if journal is not None and journal.path.exists():
+        written["disclosure_journal.jsonl"] = sha256(journal.path.read_bytes()).hexdigest()
     index = {
         "MEASURED_B0": MEASURED_B0_NOT_YET_ESTABLISHED,
         "digests": written,
@@ -867,7 +869,7 @@ def _authorization_defects(
     return defects
 
 
-def _assert_evaluator_plane(cases: Sequence[CorpusCase], census: B0Census) -> None:
+def validate_evaluator_plane(cases: Sequence[CorpusCase], census: B0Census) -> None:
     selected = [case for case in cases if case.partition is CorpusPartition.B and case.scoreable]
     ids = [case.case_id for case in selected]
     if ids != [member.case_id for member in census.members]:
@@ -876,6 +878,10 @@ def _assert_evaluator_plane(cases: Sequence[CorpusCase], census: B0Census) -> No
     for member in census.members:
         if content[member.case_id] != member.raster_sha256:
             raise ValueError("evaluator raster binding mismatch")
+
+
+def _assert_evaluator_plane(cases: Sequence[CorpusCase], census: B0Census) -> None:
+    validate_evaluator_plane(cases, census)
 
 
 def _summary_dict(summary: B0Summary) -> dict[str, object]:

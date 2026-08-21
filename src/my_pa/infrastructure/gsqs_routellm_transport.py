@@ -41,6 +41,18 @@ class RouteLLMTransportError(ValueError):
         self.disclosed = disclosed
 
 
+class RouteLLMPostResponseError(RouteLLMTransportError):
+    """The POST returned HTTP evidence; later local parse/envelope failed."""
+
+    def __init__(self, message: str, *, http_status: int, error_class: str) -> None:
+        super().__init__(
+            message,
+            http_status=http_status,
+            error_class=error_class,
+            disclosed=True,
+        )
+
+
 class _RefuseRedirect(HTTPRedirectHandler):
     def redirect_request(
         self,
@@ -145,13 +157,13 @@ def _request(
         raise RouteLLMTransportError(
             "routellm request failed: timeout",
             error_class="TIMEOUT",
-            disclosed=method == "POST",
+            disclosed=None if method == "POST" else False,
         ) from error
     except URLError as error:
         raise RouteLLMTransportError(
             "routellm request failed: transport error",
             error_class="URL_ERROR",
-            disclosed=method == "POST",
+            disclosed=None if method == "POST" else False,
         ) from error
     if len(received) > _MAXIMUM_RESPONSE_BYTES:
         raise RouteLLMTransportError(

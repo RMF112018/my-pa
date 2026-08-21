@@ -132,8 +132,21 @@ python apps/cli/gsqs_b0.py execute \
   --model-identity routellm-goodnotes-b0-v1@sha256:<digest> \
   --prompt-config ops/goodnotes/gsqs/b0/incumbent-prompt-v1.txt \
   --repetitions 3 \
-  --evidence-dir ops/goodnotes/gsqs/b0/runs/<run_id>
+  --evidence-dir ops/goodnotes/gsqs/b0/runs/<run_id> \
+  --evaluator-corpus <local-private-evaluator-plane.json>
 ```
+
+`--evaluator-corpus` is an explicit local file of evaluator-plane cases
+using the existing `case_digest_payload` shape (`schema_version`:
+`gsqs-evaluator-plane-v1`). It is not hashed into the Class-1 candidate.
+The public catalog has no gold. Evaluator-plane exactness is checked
+before `GET /v1/models` and before any `OUTBOUND_ATTEMPT_STARTED`. Gold
+never enters the HTTP body, prompt, journal, or public evidence.
+
+After evaluator validation, execute probes `GET /v1/models` (image-free,
+max three attempts). Image POST remains a single attempt. Public
+`RUN_CONTROL.json` is rebuilt from the disclosure journal on success,
+failure, and unresolved restart.
 
 Missing secrets, origin, Path A/B, or evidence dir keeps the unbound
 refuse path. Image POST is single-attempt. A crash-safe journal at

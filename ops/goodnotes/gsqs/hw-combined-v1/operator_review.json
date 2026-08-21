@@ -1,0 +1,50 @@
+{
+  "AUTOMATIC_PROMOTION": "DISABLED",
+  "CONTROLLED_HANDWRITING_CORPUS": "APPROVED",
+  "EXTERNAL_MODEL_DISCLOSURE": "NONE",
+  "FIXED_LABELED_CORPUS_APPROVED": true,
+  "MEASURED_B0": "NOT_YET_ESTABLISHED",
+  "SELF_IMPROVEMENT_EVALUATION": "NOT_YET_ACTIVATED",
+  "b0_suitable": true,
+  "combined_identity": "c3eb81e3fedb9590e6c33a38154722c0d9b697c7059d995c513c355a3143e070",
+  "coordination_request_id": "REQ-MYPA-GOODNOTES-HW-OPERATOR-REBIND-20260821-001",
+  "corpus_version": "gsqs-hw-combined-v1",
+  "evaluator_code_identity": "3673a9dbf99214dc6d724822682c2b5547c7a0343d56c7024956734f1516fc7d",
+  "evaluator_implementation_sha256": "ca23ecebd5252c3924da0e29e7320f1fd301111290340a0105daeb8f3470b5e4",
+  "exhaustive_authorized_roots": true,
+  "geometry_quality": "INSPECTION_ESTIMATED",
+  "historical_moss_corpus_version": "gsqs-hw-moss-v1",
+  "historical_moss_manifest_digest": "3bed9cc9bfe4a7cb3d28383232e940268ab3435429312c0977eb82a326158f9d",
+  "label_provenance": "OPERATOR_ADJUDICATED",
+  "leakage_group_intersections_empty": true,
+  "manifest_digest": "636d671348cfba5b12b9e5032d5b3daee74f884aea101198ba69ed608ee40f22",
+  "operator_decision_drive_id": "1uaQ2lShnR6BY77CaOOD3grjmIotib3dJNMzjZaL5tIM",
+  "operator_review_disposition": "APPROVED_FOR_BOUNDED_B0",
+  "personal_page_bytes_in_git": false,
+  "pre_rebind_combined_identity": "bda6e66bbaf5ac068e5b2cf64a52f1e6c06975b5dd86294591de82fe8afdeb8b",
+  "pre_rebind_manifest_digest": "238c22aa5b51fee3993a8e72e0b2ce9d696fb9f7b164a2853d1ddc3f59eabaed",
+  "scoreable_page_count": 239,
+  "source_cohort_counts": {
+    "Altman": {
+      "admitted": 147,
+      "excluded": 1943,
+      "pages": 2090,
+      "scoreable": 147
+    },
+    "Kast": {
+      "admitted": 65,
+      "excluded": 39,
+      "pages": 104,
+      "scoreable": 65
+    },
+    "Moss": {
+      "admitted": 27,
+      "excluded": 13,
+      "pages": 40,
+      "scoreable": 27
+    }
+  },
+  "synthetic_corpus_version": "gsqs-v2",
+  "synthetic_manifest_digest": "e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd",
+  "unreadable_real_world_coverage": "NOT_OBSERVED"
+}

@@ -291,6 +291,56 @@ def test_malformed_v2_nested_fields_remain_fail_closed() -> None:
     assert error.safe_details == (SafeDetail.RANKED_CANDIDATES,)
 
 
+def test_ranked_candidate_and_nested_exact_key_schema_runtime_parity() -> None:
+    payload = _published_payload()
+    note = _variant(_v2_items(payload), "NOTE_UNIT")
+    ranked_items = note["properties"]["ranked_candidates"]["items"]
+    assert ranked_items["additionalProperties"] is False
+    assert set(ranked_items["required"]) == {"rank", "candidate"}
+    assert note["properties"]["geometry"]["additionalProperties"] is False
+    assert note["properties"]["confidence"]["additionalProperties"] is False
+    valid = _proposal_document(
+        NOTE_UNIT_SCHEMA_V2,
+        [_note_unit(ranked_candidates=[{"rank": 1, "candidate": "Project Alpha"}])],
+        suffix="ranked-exact",
+    )
+    assert _schema_admits(payload, valid)
+    assert _runtime_error(valid) is None
+    extra_ranked = _proposal_document(
+        NOTE_UNIT_SCHEMA_V2,
+        [
+            _note_unit(
+                ranked_candidates=[
+                    {"rank": 1, "candidate": "Project Alpha", "extra": "runtime rejects this"}
+                ]
+            )
+        ],
+        suffix="ranked-extra",
+    )
+    assert not _schema_admits(payload, extra_ranked)
+    extra_error = _runtime_error(extra_ranked)
+    assert extra_error is not None
+    assert extra_error.safe_details == (SafeDetail.RANKED_CANDIDATES,)
+    extra_geometry = _proposal_document(
+        NOTE_UNIT_SCHEMA_V2,
+        [_note_unit(geometry={**_GEOMETRY, "extra": 0})],
+        suffix="geometry-extra",
+    )
+    assert not _schema_admits(payload, extra_geometry)
+    geometry_error = _runtime_error(extra_geometry)
+    assert geometry_error is not None
+    assert geometry_error.safe_details == (SafeDetail.GEOMETRY,)
+    extra_confidence = _proposal_document(
+        NOTE_UNIT_SCHEMA_V2,
+        [_note_unit(confidence={"transcription": 0.9, "extra": 0.1})],
+        suffix="confidence-extra",
+    )
+    assert not _schema_admits(payload, extra_confidence)
+    confidence_error = _runtime_error(extra_confidence)
+    assert confidence_error is not None
+    assert confidence_error.safe_details == (SafeDetail.CONFIDENCE,)
+
+
 def test_remote_schema_keeps_discriminated_segments_and_hides_idempotency() -> None:
     remote = remote_tool_schema(PROPOSE_TOOL.input_schema)
     payload = _payload_schema(remote)

@@ -101,7 +101,10 @@ flags without their earlier prerequisites fail closed and unlock no live step.
    later exact authorization; GN-09 stays `GN-09_EXTERNAL_TASK_GATE_PENDING`.
 
 The Self-Improving optimizer is optional and outside this sequence. It does not
-advance a step.
+advance a step. Gate B repository infrastructure (`ops/goodnotes/gsqs/`) can
+score synthetic analyzer output without writing proposals; it does not
+activate the optimizer, establish `MEASURED_B0`, or enable automatic
+promotion.
 
 ## Dry-run helper
 
@@ -134,7 +137,12 @@ Automated coverage is FAST/unit only:
   tests/unit/test_goodnotes_orchestrator.py \
   tests/contract/test_goodnotes_durable_note_canary.py \
   tests/unit/test_goodnotes_tbr_preservation.py \
-  tests/unit/test_goodnotes_evaluation.py
+  tests/unit/test_goodnotes_evaluation.py \
+  tests/unit/test_goodnotes_gsqs.py \
+  tests/unit/test_goodnotes_gsqs_corpus.py \
+  tests/unit/test_goodnotes_gsqs_digest.py \
+  tests/unit/test_goodnotes_gsqs_harness.py \
+  tests/unit/test_goodnotes_gsqs_v2.py
 ```
 
 Those suites use synthetic fixtures such as `"synthetic note"`. They do not

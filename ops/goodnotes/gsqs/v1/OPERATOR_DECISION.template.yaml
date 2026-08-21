@@ -1,0 +1,22 @@
+# Operator decision for Gate B corpus gsqs-v1
+#
+# This corpus is REJECT_FOR_B0. Do not approve it as the production-relevant
+# Gate B baseline. The review target is gsqs-v2.
+#
+# coordination_request_id: REQ-MYPA-GOODNOTES-GATE-B-EVALUATION-20260820-001
+
+corpus_version: gsqs-v1
+manifest_digest: 3c2e0131fbf976a8294753b999c5c1d47572e9252d4fbc50b00732768e144728
+
+decision: reject
+operator_review_disposition: REJECT_FOR_B0
+
+operator: ""
+decided_at: ""
+case_ids: []
+notes: "Rejected for B0. Preserve as synthetic regression/canary only."
+
+FIXED_LABELED_CORPUS_APPROVED: false
+MEASURED_B0: NOT_YET_ESTABLISHED
+SELF_IMPROVEMENT_EVALUATION: NOT_YET_ACTIVATED
+AUTOMATIC_PROMOTION: DISABLED

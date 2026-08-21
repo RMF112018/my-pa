@@ -1,8 +1,11 @@
-"""Dormant GoodNotes evaluation instrumentation.
+"""Dormant GoodNotes database-integrity / safety-floor instrumentation.
 
-Two independent scores. A model-quality improvement may never trade away
-database integrity. Helpers score a labeled synthetic fixture; they do not
-call a model, grade the implementing worker, train, or run an optimizer.
+This module is not the GSQS evaluator. Semantic quality is scored separately
+in `goodnotes_gsqs` and must never compensate for integrity damage.
+`DATABASE_INTEGRITY_METRIC` remains an independent hard gate.
+
+Helpers score a labeled synthetic fixture; they do not call a model, grade the
+implementing worker, train, or run an optimizer.
 """
 
 from __future__ import annotations

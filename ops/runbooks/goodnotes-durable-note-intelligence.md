@@ -48,6 +48,10 @@ Related:
   remote MCP; default remote writes off.
 - [`../abacus/goodnotes-durable-note-intelligence.task.json`](../abacus/goodnotes-durable-note-intelligence.task.json)
   — frozen draft Task artifact marked `DRAFT_NOT_ACTIVATED`.
+- [`../goodnotes/gsqs/README.md`](../goodnotes/gsqs/README.md) — Gate B
+  GSQS corpus, independent evaluator, and B0 harness. Corpus is ready for
+  operator review. `MEASURED_B0` is not established; self-improvement and
+  automatic promotion stay off. The live Task is not run from that package.
 
 ## Proposed Task contract
 
@@ -125,6 +129,10 @@ production activation are out of scope here; see
 5. OAuth canary (`tools/list` against a registered client) — **operator-only**.
 6. Scheduled Task→remote MCP grant expiry and refresh proof — **operator-only**.
 7. Production activation — **operator-only**.
+8. Gate B B0 establishment against Corpus B — **operator-only**, and only
+   after corpus approval. The successor prompt is
+   [`../goodnotes/gsqs/SUCCESSOR-B0-PROMPT.md`](../goodnotes/gsqs/SUCCESSOR-B0-PROMPT.md).
+   This runbook does not authorize that run.
 
 ## Rollback
 

@@ -1,6 +1,6 @@
 # Controlled handwriting admission
 
-`CONTROLLED_HANDWRITING_CORPUS = READY_FOR_REVIEW`
+`CONTROLLED_HANDWRITING_CORPUS = APPROVED`
 
 Two complementary Gate B layers exist:
 
@@ -59,8 +59,10 @@ genuinely-unreadable.
 Operator review packages:
 
 - [`hw-combined-v1/OPERATOR_REVIEW.md`](hw-combined-v1/OPERATOR_REVIEW.md)
-  — current combined census; first-pass / agent labels `PENDING`;
-  not scoreable until operator adjudication of the bound digest
+  — current combined census; admitted labels `APPROVED` /
+  `OPERATOR_ADJUDICATED` after the 2026-08-21 operator decision bound to
+  the pre-rebind digest; B0 still requires a separate disclosure
+  authorization
 - [`hw-moss-v1/OPERATOR_REVIEW.md`](hw-moss-v1/OPERATOR_REVIEW.md) —
   historical Moss-only tranche (`INSUFFICIENT_EVIDENCE`, `PENDING`)
 

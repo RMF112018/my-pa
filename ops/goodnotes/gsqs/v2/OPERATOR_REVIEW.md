@@ -14,8 +14,8 @@ separate operator decision recorded in a filled
 
 `b0_suitable` is currently **false**. This version is a deterministic
 synthetic regression corpus. Controlled real handwriting is a separate
-layer (`gsqs-hw-combined-v1`) and is `READY_FOR_REVIEW` pending operator
-approval. Historical `gsqs-hw-moss-v1` remains `INSUFFICIENT_EVIDENCE`.
+layer (`gsqs-hw-combined-v1`) and is `APPROVED` after the 2026-08-21
+operator decision. Historical `gsqs-hw-moss-v1` remains `INSUFFICIENT_EVIDENCE`.
 
 Machine copy: [`operator_review.json`](operator_review.json). Per-case
 identity (no page bytes): [`case_index.json`](case_index.json).
@@ -67,7 +67,7 @@ Target was 60–100 pages and 100–150 NOTE_UNITs.
    **Not** a production-relevant handwriting transcription baseline.
 2. **Controlled handwriting validation.** Separate layer
    [`../hw-combined-v1/OPERATOR_REVIEW.md`](../hw-combined-v1/OPERATOR_REVIEW.md).
-   State: `CONTROLLED_HANDWRITING_CORPUS = READY_FOR_REVIEW`.
+   State: `CONTROLLED_HANDWRITING_CORPUS = APPROVED`.
    Historical Moss-only package:
    [`../hw-moss-v1/OPERATOR_REVIEW.md`](../hw-moss-v1/OPERATOR_REVIEW.md).
    This synthetic freeze still contains zero handwriting pages.

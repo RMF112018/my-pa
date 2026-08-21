@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 from my_pa.application.goodnotes_gsqs import (
+    CONTROLLED_HANDWRITING_APPROVED,
     CONTROLLED_HANDWRITING_INSUFFICIENT_EVIDENCE,
     CONTROLLED_HANDWRITING_READY_FOR_REVIEW,
     CorpusPartition,
@@ -29,6 +30,7 @@ from my_pa.application.goodnotes_gsqs_corpus import (
 
 HANDWRITING_CORPUS_VERSION_MOSS_V1 = "gsqs-hw-moss-v1"
 HANDWRITING_CORPUS_VERSION = "gsqs-hw-combined-v1"
+HISTORICAL_MOSS_MANIFEST_DIGEST = "3bed9cc9bfe4a7cb3d28383232e940268ab3435429312c0977eb82a326158f9d"
 AUTHORIZED_SOURCE_COHORTS = ("Moss", "Kast", "Altman")
 AUTHORIZED_SOURCE_ROOTS: Mapping[str, str] = {
     "Altman": "/volume1/Goodnotes-Inbox/GoodNotes/Altman/",
@@ -38,9 +40,30 @@ AUTHORIZED_SOURCE_ROOTS: Mapping[str, str] = {
 AUTHORIZED_SOURCE_ROOT = AUTHORIZED_SOURCE_ROOTS["Moss"]
 HANDWRITING_STATE = CONTROLLED_HANDWRITING_READY_FOR_REVIEW
 LABEL_PROVENANCE_FIRST_PASS = "FIRST_PASS_LOCAL_INSPECTION"  # noqa: S105
+APPROVE_FOR_BOUNDED_B0 = "approve_for_bounded_b0"
 UNREADABLE_REAL_WORLD_COVERAGE_NOT_OBSERVED = "NOT_OBSERVED"
 UNREADABLE_REAL_WORLD_COVERAGE_OBSERVED = "OBSERVED"
 _SOURCE_ID_PREFIX = {"Altman": "a", "Kast": "k", "Moss": "m"}
+_TRUTH_FIELDS = (
+    "source_id",
+    "page_index",
+    "file_sha256",
+    "raster_sha256",
+    "leakage_group_id",
+    "partition",
+    "fixture_classification",
+    "source_layer",
+    "scenario",
+    "style",
+    "primary_class",
+    "transcription_status",
+    "note_unit_count",
+    "excluded",
+    "exclusion_reason",
+    "candidate_tag_count",
+    "ranked_candidate_count",
+    "source_cohort",
+)
 
 
 def authorized_source_root() -> str:
@@ -88,6 +111,16 @@ class PageRasterRecord:
     raster_sha256: str
     byte_size: int
     exact_page_duplicate_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class OperatorHandwritingDecision:
+    decision: str
+    corpus_version: str
+    approved_pre_rebind_manifest_digest: str
+    approved_pre_rebind_combined_identity: str
+    decided_at: str
+    drive_artifact_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -311,12 +344,290 @@ def with_bound_digest(case: PublicHandwritingCase) -> PublicHandwritingCase:
     )
 
 
+def public_case_from_dict(payload: Mapping[str, Any]) -> PublicHandwritingCase:
+    return PublicHandwritingCase(
+        case_id=str(payload["case_id"]),
+        source_id=str(payload["source_id"]),
+        page_index=int(payload["page_index"]),
+        file_sha256=str(payload["file_sha256"]),
+        raster_sha256=str(payload["raster_sha256"]),
+        label_sha256=str(payload["label_sha256"]),
+        case_digest=str(payload.get("case_digest") or ""),
+        leakage_group_id=str(payload["leakage_group_id"]),
+        partition=CorpusPartition(str(payload["partition"])),
+        review_state=ReviewState(str(payload["review_state"])),
+        fixture_classification=str(payload["fixture_classification"]),
+        source_layer=SourceLayer(str(payload["source_layer"])),
+        scenario=str(payload["scenario"]),
+        style=str(payload["style"]),
+        primary_class=str(payload["primary_class"]) if payload.get("primary_class") else None,
+        transcription_status=(
+            str(payload["transcription_status"]) if payload.get("transcription_status") else None
+        ),
+        note_unit_count=int(payload["note_unit_count"]),
+        excluded=bool(payload["excluded"]),
+        exclusion_reason=(
+            str(payload["exclusion_reason"]) if payload.get("exclusion_reason") else None
+        ),
+        candidate_tag_count=int(payload["candidate_tag_count"]),
+        ranked_candidate_count=int(payload["ranked_candidate_count"]),
+        source_cohort=str(payload.get("source_cohort") or ""),
+        label_provenance=str(payload.get("label_provenance") or LABEL_PROVENANCE_FIRST_PASS),
+    )
+
+
+def apply_admitted_operator_adjudication(
+    case: PublicHandwritingCase, *, label_sha256: str
+) -> PublicHandwritingCase:
+    if case.excluded:
+        return case
+    rebound = PublicHandwritingCase(
+        case_id=case.case_id,
+        source_id=case.source_id,
+        page_index=case.page_index,
+        file_sha256=case.file_sha256,
+        raster_sha256=case.raster_sha256,
+        label_sha256=label_sha256,
+        case_digest="",
+        leakage_group_id=case.leakage_group_id,
+        partition=case.partition,
+        review_state=ReviewState.APPROVED,
+        fixture_classification=case.fixture_classification,
+        source_layer=case.source_layer,
+        scenario=case.scenario,
+        style=case.style,
+        primary_class=case.primary_class,
+        transcription_status=case.transcription_status,
+        note_unit_count=case.note_unit_count,
+        excluded=case.excluded,
+        exclusion_reason=case.exclusion_reason,
+        candidate_tag_count=case.candidate_tag_count,
+        ranked_candidate_count=case.ranked_candidate_count,
+        source_cohort=case.source_cohort,
+        label_provenance=LABEL_PROVENANCE_OPERATOR,
+    )
+    return with_bound_digest(rebound)
+
+
+def assert_provenance_only_rebind(
+    baseline: Sequence[PublicHandwritingCase],
+    rebound: Sequence[PublicHandwritingCase],
+) -> None:
+    if [case.case_id for case in baseline] != [case.case_id for case in rebound]:
+        raise ValueError("rebind changed case census")
+    for before, after in zip(baseline, rebound, strict=True):
+        for field in _TRUTH_FIELDS:
+            if getattr(before, field) != getattr(after, field):
+                raise ValueError(f"rebind changed {field}")
+        if before.excluded:
+            if after.review_state != before.review_state:
+                raise ValueError("excluded review_state changed")
+            if after.label_provenance != before.label_provenance:
+                raise ValueError("excluded label_provenance changed")
+            if after.label_sha256 != before.label_sha256:
+                raise ValueError("excluded label_sha256 changed")
+            continue
+        if after.review_state is not ReviewState.APPROVED:
+            raise ValueError("admitted case is not APPROVED")
+        if after.label_provenance != LABEL_PROVENANCE_OPERATOR:
+            raise ValueError("admitted case is not OPERATOR_ADJUDICATED")
+
+
+def _copy_json_object(value: Mapping[str, Any]) -> dict[str, Any]:
+    copied = json.loads(json.dumps(value))
+    if not isinstance(copied, dict):
+        raise ValueError("expected JSON object")
+    return copied
+
+
+def rebind_private_label(label: Mapping[str, Any]) -> dict[str, Any]:
+    rebound = _copy_json_object(label)
+    if rebound.get("excluded"):
+        return rebound
+    rebound["label_provenance"] = LABEL_PROVENANCE_OPERATOR
+    return rebound
+
+
+def rebind_private_gold_pages(
+    pages: Mapping[str, Mapping[str, Any]],
+    *,
+    admitted_case_ids: set[str],
+) -> dict[str, dict[str, Any]]:
+    rebound: dict[str, dict[str, Any]] = {}
+    for case_id, payload in pages.items():
+        label = payload["label"]
+        if not isinstance(label, Mapping):
+            raise ValueError("private gold page label is missing")
+        if case_id in admitted_case_ids:
+            label = rebind_private_label(label)
+            if label.get("excluded"):
+                raise ValueError("admitted case private label is excluded")
+        else:
+            label = _copy_json_object(label)
+        rebound[case_id] = {"label": label, "label_sha256": private_label_digest(label)}
+    return rebound
+
+
+def rebind_public_cases(
+    cases: Sequence[PublicHandwritingCase],
+    rebound_pages: Mapping[str, Mapping[str, Any]],
+) -> tuple[PublicHandwritingCase, ...]:
+    rebound: list[PublicHandwritingCase] = []
+    for case in cases:
+        page = rebound_pages[case.case_id]
+        digest = str(page["label_sha256"])
+        if case.excluded:
+            if digest != case.label_sha256:
+                raise ValueError("excluded label_sha256 changed")
+            rebound.append(with_bound_digest(case))
+            continue
+        rebound.append(apply_admitted_operator_adjudication(case, label_sha256=digest))
+    return tuple(rebound)
+
+
+def assemble_combined_catalog(
+    cases: Sequence[PublicHandwritingCase],
+    *,
+    operator_decision: OperatorHandwritingDecision,
+    pre_rebind_cases: Sequence[PublicHandwritingCase],
+    inventory: Mapping[str, Any],
+) -> dict[str, Any]:
+    manifest = freeze_public_manifest(
+        cases,
+        synthetic_manifest_digest=str(inventory["synthetic_manifest_digest"]),
+        exhaustive_authorized_roots=True,
+        operator_decision=operator_decision,
+        pre_rebind_cases=pre_rebind_cases,
+    )
+    catalog = {
+        **manifest,
+        "authorized_source_roots_declared": True,
+        "cases": [public_case_dict(case) for case in cases],
+        "historical_moss_corpus_version": "gsqs-hw-moss-v1",
+        "pdf_count": inventory["pdf_count"],
+        "sources": inventory["sources"],
+        "supersedes": list(inventory.get("supersedes") or ["gsqs-hw-moss-v1"]),
+        "synthetic_corpus_version": "gsqs-v2",
+        "synthetic_manifest_digest": inventory["synthetic_manifest_digest"],
+        "total_pages": inventory["total_pages"],
+        "unique_file_sha256_count": inventory["unique_file_sha256_count"],
+        "unreadable_pdf_count": inventory["unreadable_pdf_count"],
+    }
+    assert_repository_safe_public_payload(catalog)
+    return catalog
+
+
+def execute_operator_approval_rebind(
+    catalog: Mapping[str, Any],
+    gold: Mapping[str, Any],
+    *,
+    decision: OperatorHandwritingDecision,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, int]]:
+    pages = gold["pages"]
+    if not isinstance(pages, Mapping):
+        raise ValueError("private gold pages are missing")
+    cases = tuple(public_case_from_dict(item) for item in catalog["cases"])
+    admitted_ids = {case.case_id for case in cases if not case.excluded}
+    if set(pages) != {case.case_id for case in cases}:
+        raise ValueError("private gold census does not match public catalog")
+    for case in cases:
+        payload = pages[case.case_id]
+        label = payload["label"]
+        if private_label_digest(label) != case.label_sha256:
+            raise ValueError("private gold drifted from committed label_sha256")
+        if payload.get("label_sha256") != case.label_sha256:
+            raise ValueError("stored private label_sha256 drifted")
+    rebound_pages = rebind_private_gold_pages(pages, admitted_case_ids=admitted_ids)
+    rebound_cases = rebind_public_cases(cases, rebound_pages)
+    inventory = {
+        "pdf_count": catalog["pdf_count"],
+        "sources": catalog["sources"],
+        "supersedes": catalog.get("supersedes") or ["gsqs-hw-moss-v1"],
+        "synthetic_manifest_digest": catalog["synthetic_manifest_digest"],
+        "total_pages": catalog["total_pages"],
+        "unique_file_sha256_count": catalog["unique_file_sha256_count"],
+        "unreadable_pdf_count": catalog["unreadable_pdf_count"],
+    }
+    assembled = assemble_combined_catalog(
+        rebound_cases,
+        operator_decision=decision,
+        pre_rebind_cases=cases,
+        inventory=inventory,
+    )
+    rebound_gold = {
+        **{key: value for key, value in gold.items() if key != "pages"},
+        "label_provenance": LABEL_PROVENANCE_OPERATOR,
+        "pages": rebound_pages,
+    }
+    stats = {
+        "admitted": len(admitted_ids),
+        "excluded": sum(1 for case in rebound_cases if case.excluded),
+        "label_sha256_changed": sum(
+            1 for case in cases if rebound_pages[case.case_id]["label_sha256"] != case.label_sha256
+        ),
+        "public_case_digest_changed": sum(
+            1
+            for before, after in zip(cases, rebound_cases, strict=True)
+            if with_bound_digest(before).case_digest != after.case_digest
+        ),
+        "scoreable": int(assembled["scoreable_page_count"]),
+    }
+    return assembled, rebound_gold, stats
+
+
+def combined_operator_review_payload(
+    catalog: Mapping[str, Any],
+    *,
+    evaluator_code_identity: str,
+    evaluator_implementation_sha256: str,
+    coordination_request_id: str,
+    pre_rebind_manifest_digest: str,
+    pre_rebind_combined_identity: str,
+    operator_decision_drive_id: str,
+) -> dict[str, Any]:
+    payload = {
+        "AUTOMATIC_PROMOTION": "DISABLED",
+        "CONTROLLED_HANDWRITING_CORPUS": catalog["CONTROLLED_HANDWRITING_CORPUS"],
+        "EXTERNAL_MODEL_DISCLOSURE": "NONE",
+        "FIXED_LABELED_CORPUS_APPROVED": catalog["FIXED_LABELED_CORPUS_APPROVED"],
+        "MEASURED_B0": "NOT_YET_ESTABLISHED",
+        "SELF_IMPROVEMENT_EVALUATION": "NOT_YET_ACTIVATED",
+        "b0_suitable": catalog["b0_suitable"],
+        "combined_identity": catalog["combined_identity"],
+        "coordination_request_id": coordination_request_id,
+        "corpus_version": catalog["corpus_version"],
+        "evaluator_code_identity": evaluator_code_identity,
+        "evaluator_implementation_sha256": evaluator_implementation_sha256,
+        "exhaustive_authorized_roots": catalog["exhaustive_authorized_roots"],
+        "geometry_quality": "INSPECTION_ESTIMATED",
+        "historical_moss_corpus_version": catalog["historical_moss_corpus_version"],
+        "historical_moss_manifest_digest": HISTORICAL_MOSS_MANIFEST_DIGEST,
+        "label_provenance": LABEL_PROVENANCE_OPERATOR,
+        "leakage_group_intersections_empty": True,
+        "manifest_digest": catalog["manifest_digest"],
+        "operator_decision_drive_id": operator_decision_drive_id,
+        "operator_review_disposition": "APPROVED_FOR_BOUNDED_B0",
+        "personal_page_bytes_in_git": False,
+        "pre_rebind_combined_identity": pre_rebind_combined_identity,
+        "pre_rebind_manifest_digest": pre_rebind_manifest_digest,
+        "scoreable_page_count": catalog["scoreable_page_count"],
+        "source_cohort_counts": catalog["source_cohort_counts"],
+        "synthetic_corpus_version": catalog["synthetic_corpus_version"],
+        "synthetic_manifest_digest": catalog["synthetic_manifest_digest"],
+        "unreadable_real_world_coverage": catalog["unreadable_real_world_coverage"],
+    }
+    assert_repository_safe_public_payload(payload)
+    return payload
+
+
 def freeze_public_manifest(
     cases: Sequence[PublicHandwritingCase],
     *,
     corpus_version: str = HANDWRITING_CORPUS_VERSION,
     synthetic_manifest_digest: str | None = None,
     exhaustive_authorized_roots: bool = False,
+    operator_decision: OperatorHandwritingDecision | None = None,
+    pre_rebind_cases: Sequence[PublicHandwritingCase] | None = None,
 ) -> dict[str, Any]:
     bound = tuple(with_bound_digest(case) for case in cases)
     prevent_handwriting_partition_leakage(bound)
@@ -337,11 +648,40 @@ def freeze_public_manifest(
         bound,
         exhaustive_authorized_roots=exhaustive_authorized_roots,
     )
+    approved = False
     state = (
         CONTROLLED_HANDWRITING_READY_FOR_REVIEW
         if suitable or exhaustive_authorized_roots
         else CONTROLLED_HANDWRITING_INSUFFICIENT_EVIDENCE
     )
+    if operator_decision is not None:
+        if operator_decision.decision != APPROVE_FOR_BOUNDED_B0:
+            raise ValueError("unsupported operator decision")
+        if operator_decision.corpus_version != corpus_version:
+            raise ValueError("operator decision corpus_version mismatch")
+        if pre_rebind_cases is None:
+            raise ValueError("operator approval requires pre-rebind cases")
+        baseline = freeze_public_manifest(
+            pre_rebind_cases,
+            corpus_version=corpus_version,
+            synthetic_manifest_digest=synthetic_manifest_digest,
+            exhaustive_authorized_roots=exhaustive_authorized_roots,
+        )
+        if baseline["manifest_digest"] != operator_decision.approved_pre_rebind_manifest_digest:
+            raise ValueError("operator decision does not bind the pre-rebind manifest")
+        if (
+            synthetic_manifest_digest is not None
+            and baseline["combined_identity"]
+            != operator_decision.approved_pre_rebind_combined_identity
+        ):
+            raise ValueError("operator decision does not bind the pre-rebind combined identity")
+        assert_provenance_only_rebind(
+            tuple(with_bound_digest(case) for case in pre_rebind_cases), bound
+        )
+        if not suitable:
+            raise ValueError("operator approval requires b0_suitable corpus")
+        approved = True
+        state = CONTROLLED_HANDWRITING_APPROVED
     body = {
         "case_digests": case_digests,
         "corpus_version": corpus_version,
@@ -350,7 +690,7 @@ def freeze_public_manifest(
     manifest_digest = sha256(canonical_dumps(body).encode()).hexdigest()
     payload = {
         "CONTROLLED_HANDWRITING_CORPUS": state,
-        "FIXED_LABELED_CORPUS_APPROVED": False,
+        "FIXED_LABELED_CORPUS_APPROVED": approved,
         "NOTE_UNIT_count": sum(case.note_unit_count for case in admitted),
         "admitted_handwriting_pages": len(admitted),
         "b0_limitations": list(limitations),

@@ -20,7 +20,8 @@ it does not replace A-X.
   review target (`gsqs-v2`; still not handwriting-B0).
 - [`hw-combined-v1/OPERATOR_REVIEW.md`](hw-combined-v1/OPERATOR_REVIEW.md) —
   complete Moss + Kast + Altman handwriting census. State:
-  `READY_FOR_REVIEW`, `b0_suitable = false` until operator adjudication.
+  `APPROVED`, `b0_suitable = true` after operator adjudication of the
+  pre-rebind digest. B0 and external disclosure remain unauthorized.
   No private bytes in Git.
 - [`hw-moss-v1/OPERATOR_REVIEW.md`](hw-moss-v1/OPERATOR_REVIEW.md) —
   historical Moss-only tranche. State: `INSUFFICIENT_EVIDENCE`.
@@ -47,9 +48,9 @@ it does not replace A-X.
 2. **Controlled handwriting validation.** Digest-bound private gold from
    the operator-authorized Moss, Kast, and Altman roots. Repository-safe
    catalog: [`hw-combined-v1/`](hw-combined-v1/). State:
-   `CONTROLLED_HANDWRITING_CORPUS = READY_FOR_REVIEW` with
-   `b0_suitable = false` until per-label operator adjudication of that
-   digest. Historical Moss-only package: [`hw-moss-v1/`](hw-moss-v1/).
+   `CONTROLLED_HANDWRITING_CORPUS = APPROVED` with
+   `b0_suitable = true` after operator adjudication bound to the
+   pre-rebind digest. Historical Moss-only package: [`hw-moss-v1/`](hw-moss-v1/).
    No private image bytes or transcriptions are in Git.
 
 ## Partitioning (`gsqs-v2`)
@@ -75,7 +76,7 @@ replicas of one template can split.
 
 `B0_HARNESS = READY`
 
-`CONTROLLED_HANDWRITING_CORPUS = READY_FOR_REVIEW`
+`CONTROLLED_HANDWRITING_CORPUS = APPROVED`
 
 `GSQS_V1_B0_DISPOSITION = REJECT_FOR_B0`
 
@@ -85,10 +86,14 @@ replicas of one template can split.
 
 `AUTOMATIC_PROMOTION = DISABLED`
 
-`FIXED_LABELED_CORPUS_APPROVED` remains false until explicit operator
-approval of a digest. Changing a label or case after that approval requires
-a new corpus version. Synthetic-regression approval still does not
-establish `MEASURED_B0`. The handwriting layer is the complete eligible
-census from the three authorized roots; B0, if later authorized, measures
-that corpus only. The former 75–150 page quota is a limitation, not a
-rejection floor.
+`FIXED_LABELED_CORPUS_APPROVED` is true for handwriting corpus
+`gsqs-hw-combined-v1` after the 2026-08-21 operator decision bound to
+pre-rebind manifest
+`238c22aa5b51fee3993a8e72e0b2ce9d696fb9f7b164a2853d1ddc3f59eabaed`.
+The current catalog identity is the post-rebind digest. Changing a label
+or case after that approval requires a new corpus version. Synthetic
+regression remains separately unapproved for B0. Handwriting approval
+does not establish `MEASURED_B0`, disclose private pages, or authorize
+B0 execution. The handwriting layer is the complete eligible census from
+the three authorized roots; B0, if later authorized, measures that corpus
+only. The former 75–150 page quota is a limitation, not a rejection floor.

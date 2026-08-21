@@ -30,16 +30,19 @@ from my_pa.application.goodnotes_gsqs_handwriting import (
     admit_handwriting,
 )
 from my_pa.application.goodnotes_gsqs_hw_corpus import (
+    APPROVE_FOR_BOUNDED_B0,
     AUTHORIZED_SOURCE_ROOT,
     AUTHORIZED_SOURCE_ROOTS,
     HANDWRITING_CORPUS_VERSION,
     HANDWRITING_CORPUS_VERSION_MOSS_V1,
     LABEL_PROVENANCE_FIRST_PASS,
     UNREADABLE_REAL_WORLD_COVERAGE_NOT_OBSERVED,
+    OperatorHandwritingDecision,
     PageCounter,
     PublicHandwritingCase,
     authorized_source_root,
     authorized_source_roots,
+    execute_operator_approval_rebind,
     freeze_public_manifest,
     inventory_page_rasters,
     inventory_pdfs,
@@ -49,8 +52,10 @@ from my_pa.application.goodnotes_gsqs_hw_corpus import (
     prevent_admitted_raster_holdout_isolation,
     prevent_handwriting_partition_leakage,
     private_label_digest,
+    public_case_dict,
     public_case_digest,
     public_source_record,
+    rebind_private_label,
     unreadable_real_world_coverage,
     with_bound_digest,
 )
@@ -420,6 +425,7 @@ def test_limited_population_b0_does_not_require_quota_or_unreadable() -> None:
     )
     assert manifest["b0_suitable"] is True
     assert manifest["CONTROLLED_HANDWRITING_CORPUS"] == CONTROLLED_HANDWRITING_READY_FOR_REVIEW
+    assert manifest["FIXED_LABELED_CORPUS_APPROVED"] is False
     assert manifest["unreadable_real_world_coverage"] == UNREADABLE_REAL_WORLD_COVERAGE_NOT_OBSERVED
     assert manifest["scoreable_page_count"] == 3
     assert any("former 75-150" in item for item in manifest["b0_limitations"])
@@ -439,7 +445,7 @@ def test_limited_population_b0_does_not_require_quota_or_unreadable() -> None:
     )
 
 
-def test_committed_combined_catalog_is_repository_safe_and_not_scoreable() -> None:
+def test_committed_combined_catalog_is_repository_safe_and_operator_approved() -> None:
     catalog = load_public_catalog(COMBINED_CATALOG)
     blob = COMBINED_CATALOG.read_text().lower()
     assert 'transcription":' not in blob
@@ -447,39 +453,51 @@ def test_committed_combined_catalog_is_repository_safe_and_not_scoreable() -> No
     assert "/volume1/" not in blob
     assert catalog["corpus_version"] == HANDWRITING_CORPUS_VERSION
     assert catalog["historical_moss_corpus_version"] == HANDWRITING_CORPUS_VERSION_MOSS_V1
-    assert catalog["b0_suitable"] is False
-    assert catalog["CONTROLLED_HANDWRITING_CORPUS"] == CONTROLLED_HANDWRITING_READY_FOR_REVIEW
+    assert catalog["CONTROLLED_HANDWRITING_CORPUS"] == "APPROVED"
     assert catalog["unreadable_real_world_coverage"] == (
         UNREADABLE_REAL_WORLD_COVERAGE_NOT_OBSERVED
     )
-    assert catalog["scoreable_page_count"] == 0
+    assert catalog["scoreable_page_count"] == 239
     assert catalog["admitted_handwriting_pages"] == 239
     assert catalog["excluded_page_count"] == 1995
     assert catalog["case_count"] == 2234
     assert catalog["pdf_count"] == 86
     assert catalog["total_pages"] == 2234
     assert catalog["unreadable_pdf_count"] == 0
-    assert catalog["label_review_counts"]["PENDING"] == 239
-    assert catalog["label_review_counts"]["APPROVED"] == 0
-    assert catalog["partition_counts"]["B"] > 0
-    assert catalog["partition_counts"]["C"] > 0
+    assert catalog["label_review_counts"]["PENDING"] == 0
+    assert catalog["label_review_counts"]["APPROVED"] == 239
+    assert catalog["label_review_counts"]["REJECTED"] == 1995
+    assert catalog["partition_counts"]["A"] == 101
+    assert catalog["partition_counts"]["B"] == 73
+    assert catalog["partition_counts"]["C"] == 65
+    assert catalog["b0_suitable"] is True
+    assert catalog["FIXED_LABELED_CORPUS_APPROVED"] is True
     assert catalog["synthetic_manifest_digest"] == SYNTHETIC_DIGEST
     rasters: dict[str, tuple[str, str]] = {}
     admitted = [case for case in catalog["cases"] if not case["excluded"]]
+    excluded_cases = [case for case in catalog["cases"] if case["excluded"]]
+    assert len(excluded_cases) == 1995
+    for case in excluded_cases:
+        assert case["review_state"] == "REJECTED"
+        assert case["label_provenance"] == LABEL_PROVENANCE_FIRST_PASS
+        assert case["excluded"] is True
     buckets: dict[str, set[str]] = {"A": set(), "B": set(), "C": set()}
+    scoreable_parts = {"A": 0, "B": 0, "C": 0}
     for case in admitted:
         buckets[case["partition"]].add(case["leakage_group_id"])
-        assert case["review_state"] == "PENDING"
-        assert case["label_provenance"] == LABEL_PROVENANCE_FIRST_PASS
+        assert case["review_state"] == "APPROVED"
+        assert case["label_provenance"] == LABEL_PROVENANCE_OPERATOR
         assert case["transcription_status"] != "UNREADABLE"
         assert (
             case["fixture_classification"] == FIXTURE_PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING
         )
+        scoreable_parts[case["partition"]] += 1
         prior = rasters.get(case["raster_sha256"])
         identity = (case["leakage_group_id"], case["partition"])
         if prior is not None:
             assert prior == identity
         rasters[case["raster_sha256"]] = identity
+    assert scoreable_parts == {"A": 101, "B": 73, "C": 65}
     assert buckets["A"] and buckets["B"] and buckets["C"]
     assert not (buckets["A"] & buckets["B"])
     assert not (buckets["A"] & buckets["C"])
@@ -492,9 +510,20 @@ def test_committed_combined_catalog_is_repository_safe_and_not_scoreable() -> No
     assert freeze_v2
     review = json.loads((COMBINED_CATALOG.parent / "operator_review.json").read_text())
     assert review["manifest_digest"] == catalog["manifest_digest"]
-    assert review["CONTROLLED_HANDWRITING_CORPUS"] == "READY_FOR_REVIEW"
-    assert review["b0_suitable"] is False
-    assert review["label_provenance"] == LABEL_PROVENANCE_FIRST_PASS
+    assert review["CONTROLLED_HANDWRITING_CORPUS"] == "APPROVED"
+    assert review["b0_suitable"] is True
+    assert review["FIXED_LABELED_CORPUS_APPROVED"] is True
+    assert review["label_provenance"] == LABEL_PROVENANCE_OPERATOR
+    assert review["MEASURED_B0"] == "NOT_YET_ESTABLISHED"
+    assert review["EXTERNAL_MODEL_DISCLOSURE"] == "NONE"
+    assert review["pre_rebind_manifest_digest"] == (
+        "238c22aa5b51fee3993a8e72e0b2ce9d696fb9f7b164a2853d1ddc3f59eabaed"
+    )
+    assert review["pre_rebind_combined_identity"] == (
+        "bda6e66bbaf5ac068e5b2cf64a52f1e6c06975b5dd86294591de82fe8afdeb8b"
+    )
+    assert catalog["manifest_digest"] != review["pre_rebind_manifest_digest"]
+    assert catalog["combined_identity"] != review["pre_rebind_combined_identity"]
     assert len(evaluator_code_identity()) == 64
 
 
@@ -541,3 +570,221 @@ def test_admitted_raster_cannot_span_groups_or_partitions() -> None:
     prevent_admitted_raster_holdout_isolation(
         (with_bound_digest(_case(raster_sha256="cd" * 32)), excluded)
     )
+
+
+def _private_label(*, excluded: bool = False, text: str = "alpha") -> dict[str, object]:
+    return {
+        "excluded": excluded,
+        "exclusion_reason": "blank-template" if excluded else None,
+        "geometry_quality": "INSPECTION_ESTIMATED",
+        "label_provenance": LABEL_PROVENANCE_FIRST_PASS,
+        "regions": (
+            []
+            if excluded
+            else [
+                {
+                    "candidate_tags": ["note"],
+                    "kind": "NOTE_UNIT",
+                    "ranked_candidates": [],
+                    "transcription": text,
+                }
+            ]
+        ),
+    }
+
+
+def _limited_pending_cases() -> tuple[PublicHandwritingCase, ...]:
+    cases = []
+    for index, (cohort, part, group) in enumerate(
+        (
+            ("Moss", CorpusPartition.A, "lg-a"),
+            ("Kast", CorpusPartition.C, "lg-c"),
+            ("Altman", CorpusPartition.B, "lg-b"),
+        ),
+        start=1,
+    ):
+        label = _private_label(text=f"note-{cohort}")
+        cases.append(
+            with_bound_digest(
+                _case(
+                    case_id=f"hw-{cohort.lower()}",
+                    source_id=f"s-{index:03d}",
+                    page_index=1,
+                    leakage_group_id=group,
+                    partition=part,
+                    review_state=ReviewState.PENDING,
+                    label_provenance=LABEL_PROVENANCE_FIRST_PASS,
+                    source_cohort=cohort,
+                    label_sha256=private_label_digest(label),
+                )
+            )
+        )
+    excluded_label = _private_label(excluded=True)
+    cases.append(
+        with_bound_digest(
+            _case(
+                case_id="hw-excluded",
+                source_id="s-004",
+                page_index=2,
+                leakage_group_id="lg-x",
+                partition=CorpusPartition.A,
+                source_cohort="Moss",
+                excluded=True,
+                exclusion_reason="blank-template",
+                review_state=ReviewState.REJECTED,
+                note_unit_count=0,
+                transcription_status=None,
+                primary_class=None,
+                candidate_tag_count=0,
+                ranked_candidate_count=0,
+                label_sha256=private_label_digest(excluded_label),
+            )
+        )
+    )
+    return tuple(cases)
+
+
+def _decision(manifest_digest: str, combined_identity: str) -> OperatorHandwritingDecision:
+    return OperatorHandwritingDecision(
+        decision=APPROVE_FOR_BOUNDED_B0,
+        corpus_version=HANDWRITING_CORPUS_VERSION,
+        approved_pre_rebind_manifest_digest=manifest_digest,
+        approved_pre_rebind_combined_identity=combined_identity,
+        decided_at="2026-08-21T02:31:00-04:00",
+        drive_artifact_id="1uaQ2lShnR6BY77CaOOD3grjmIotib3dJNMzjZaL5tIM",
+    )
+
+
+def test_review_and_provenance_change_private_and_public_digests() -> None:
+    pending_label = _private_label()
+    approved_label = rebind_private_label(pending_label)
+    assert pending_label["regions"] == approved_label["regions"]
+    assert pending_label["label_provenance"] == LABEL_PROVENANCE_FIRST_PASS
+    assert approved_label["label_provenance"] == LABEL_PROVENANCE_OPERATOR
+    assert private_label_digest(pending_label) != private_label_digest(approved_label)
+    pending = with_bound_digest(_case(label_sha256=private_label_digest(pending_label)))
+    approved = with_bound_digest(
+        _case(
+            review_state=ReviewState.APPROVED,
+            label_provenance=LABEL_PROVENANCE_OPERATOR,
+            label_sha256=private_label_digest(approved_label),
+        )
+    )
+    assert public_case_digest(pending) != public_case_digest(approved)
+    excluded_pending = _private_label(excluded=True)
+    assert rebind_private_label(excluded_pending) == excluded_pending
+    assert private_label_digest(rebind_private_label(excluded_pending)) == private_label_digest(
+        excluded_pending
+    )
+
+
+def test_operator_decision_is_required_and_must_bind_pre_rebind_identity() -> None:
+    cases = _limited_pending_cases()
+    baseline = freeze_public_manifest(
+        cases,
+        synthetic_manifest_digest=SYNTHETIC_DIGEST,
+        exhaustive_authorized_roots=True,
+    )
+    assert baseline["scoreable_page_count"] == 0
+    assert baseline["FIXED_LABELED_CORPUS_APPROVED"] is False
+    gold = {
+        "classification": FIXTURE_PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING,
+        "corpus_version": HANDWRITING_CORPUS_VERSION,
+        "geometry_quality": "INSPECTION_ESTIMATED",
+        "label_provenance": LABEL_PROVENANCE_FIRST_PASS,
+        "pages": {
+            "hw-moss": {
+                "label": _private_label(text="note-Moss"),
+                "label_sha256": private_label_digest(_private_label(text="note-Moss")),
+            },
+            "hw-kast": {
+                "label": _private_label(text="note-Kast"),
+                "label_sha256": private_label_digest(_private_label(text="note-Kast")),
+            },
+            "hw-altman": {
+                "label": _private_label(text="note-Altman"),
+                "label_sha256": private_label_digest(_private_label(text="note-Altman")),
+            },
+            "hw-excluded": {
+                "label": _private_label(excluded=True),
+                "label_sha256": private_label_digest(_private_label(excluded=True)),
+            },
+        },
+    }
+    catalog = {
+        **baseline,
+        "authorized_source_roots_declared": True,
+        "cases": [public_case_dict(case) for case in cases],
+        "historical_moss_corpus_version": HANDWRITING_CORPUS_VERSION_MOSS_V1,
+        "pdf_count": 3,
+        "sources": [],
+        "supersedes": ["gsqs-hw-moss-v1"],
+        "synthetic_corpus_version": "gsqs-v2",
+        "synthetic_manifest_digest": SYNTHETIC_DIGEST,
+        "total_pages": 4,
+        "unique_file_sha256_count": 3,
+        "unreadable_pdf_count": 0,
+    }
+    wrong = _decision("00" * 32, baseline["combined_identity"])
+    with pytest.raises(ValueError, match="does not bind the pre-rebind manifest"):
+        execute_operator_approval_rebind(catalog, gold, decision=wrong)
+    decision = _decision(baseline["manifest_digest"], baseline["combined_identity"])
+    rebound, rebound_gold, stats = execute_operator_approval_rebind(
+        catalog, gold, decision=decision
+    )
+    assert rebound["FIXED_LABELED_CORPUS_APPROVED"] is True
+    assert rebound["CONTROLLED_HANDWRITING_CORPUS"] == "APPROVED"
+    assert rebound["b0_suitable"] is True
+    assert rebound["scoreable_page_count"] == 3
+    assert rebound["admitted_handwriting_pages"] == 3
+    assert rebound["excluded_page_count"] == 1
+    assert rebound["partition_counts"] == {"A": 1, "B": 1, "C": 1}
+    assert rebound["manifest_digest"] != baseline["manifest_digest"]
+    assert rebound["combined_identity"] != baseline["combined_identity"]
+    assert rebound["corpus_version"] == HANDWRITING_CORPUS_VERSION
+    assert stats["label_sha256_changed"] == 3
+    assert stats["public_case_digest_changed"] == 3
+    admitted = [case for case in rebound["cases"] if not case["excluded"]]
+    excluded = [case for case in rebound["cases"] if case["excluded"]]
+    assert {case["review_state"] for case in admitted} == {"APPROVED"}
+    assert {case["label_provenance"] for case in admitted} == {LABEL_PROVENANCE_OPERATOR}
+    assert excluded[0]["review_state"] == "REJECTED"
+    assert excluded[0]["label_provenance"] == LABEL_PROVENANCE_FIRST_PASS
+    assert excluded[0]["label_sha256"] == gold["pages"]["hw-excluded"]["label_sha256"]
+    assert (
+        rebound_gold["pages"]["hw-excluded"]["label"]["regions"]
+        == gold["pages"]["hw-excluded"]["label"]["regions"]
+    )
+    assert (
+        rebound_gold["pages"]["hw-moss"]["label"]["regions"]
+        == gold["pages"]["hw-moss"]["label"]["regions"]
+    )
+    freeze_without_decision = freeze_public_manifest(
+        tuple(
+            with_bound_digest(
+                _case(
+                    case_id=case["case_id"],
+                    source_id=case["source_id"],
+                    page_index=case["page_index"],
+                    leakage_group_id=case["leakage_group_id"],
+                    partition=CorpusPartition(case["partition"]),
+                    review_state=ReviewState(case["review_state"]),
+                    label_provenance=case["label_provenance"],
+                    source_cohort=case["source_cohort"],
+                    label_sha256=case["label_sha256"],
+                    excluded=case["excluded"],
+                    exclusion_reason=case["exclusion_reason"],
+                    note_unit_count=case["note_unit_count"],
+                    transcription_status=case["transcription_status"],
+                    primary_class=case["primary_class"],
+                    candidate_tag_count=case["candidate_tag_count"],
+                    ranked_candidate_count=case["ranked_candidate_count"],
+                )
+            )
+            for case in rebound["cases"]
+        ),
+        synthetic_manifest_digest=SYNTHETIC_DIGEST,
+        exhaustive_authorized_roots=True,
+    )
+    assert freeze_without_decision["FIXED_LABELED_CORPUS_APPROVED"] is False
+    assert freeze_without_decision["b0_suitable"] is True

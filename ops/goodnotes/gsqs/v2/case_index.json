@@ -1,0 +1,2920 @@
+{
+  "approval_status": "READY_FOR_OPERATOR_REVIEW",
+  "cases": [
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-meeting-clear-block",
+      "content_sha256": "47103e2d65564a028a54820d4907dc7818caae86c9582389c48406e3f242417d",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-meeting-clear-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-meeting-uncertain-block",
+      "content_sha256": "b3e04e2b851a2cc13c72cd1a45bdb3fa2548fee8620cd3f4d1a3927958d6695a",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-meeting-uncertain-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-meeting-obscured-block",
+      "content_sha256": "61ad47e269f24b2006cf6c3a7da1d6303555d03e212d4c17b4cf02fc72d332b4",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-meeting-obscured-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-project-clear-block",
+      "content_sha256": "6eda2e5f66ef96cd410e6268d8e1543a33c7ddbb027c3b36fdec050a0852e3fe",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-project-clear-block",
+      "partition": "B",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-project-uncertain-block",
+      "content_sha256": "e255d3bd2dffb04e3b94674c8708cb899a2a97e92b3900b65a3a2b993fb5b1ff",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-project-uncertain-block",
+      "partition": "B",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-project-obscured-block",
+      "content_sha256": "f42287fe33d51cfe412722e94264b627611b34a723bbe111d629a827740f367a",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-project-obscured-block",
+      "partition": "B",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-relationship-clear-block",
+      "content_sha256": "3347aa0e1ee20ed324910a0c18f77e81900831273594cf74fd9981c6c180831f",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-relationship-clear-block",
+      "partition": "B",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-relationship-uncertain-block",
+      "content_sha256": "9d2506b70b6631a8daeeda1dc1db4e9797b8c89050c5e4801322c9ab1474a624",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-relationship-uncertain-block",
+      "partition": "B",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-relationship-obscured-block",
+      "content_sha256": "c93101bb51e08bc3b5fb30e17913ce9e8773f8b4cacba9e941074b0f93bc1d78",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-relationship-obscured-block",
+      "partition": "B",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-general-clear-block",
+      "content_sha256": "dfdba1aa9e7b6da4682f2526480bc661523299e5e164b9eae3a4ee4b1f571019",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-general-clear-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-general-uncertain-block",
+      "content_sha256": "9900812a6511fa137ed46d7231c35d6179f076df29ede579dbdbb08786ad6a81",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-general-uncertain-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-general-obscured-block",
+      "content_sha256": "7103cc853201bf5b2887d1279a792234dd97109cf952050146076c71ff4ca2e2",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-general-obscured-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-meeting-clear-margin",
+      "content_sha256": "0aefd7eaf5c9745d60bb58de6dd9e68bb1a2a9b1c5ddd6cc2de8d18ce80d2f9d",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-meeting-clear-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-meeting-uncertain-margin",
+      "content_sha256": "c23b2ed5c89b7953a2f5e7e9db4de8eaceccdd24685ba60036cdd59fe230ef49",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-meeting-uncertain-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-meeting-obscured-margin",
+      "content_sha256": "1b5f4191974dca4658153de0882113ab7f088b1a1f482f319aa8105524e6128a",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-meeting-obscured-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-project-clear-margin",
+      "content_sha256": "f5fdbad4f7355fbef9d2183e520e0a5bc2d17de4d2b6152461052454506a2a39",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-project-clear-margin",
+      "partition": "C",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-project-uncertain-margin",
+      "content_sha256": "8a8d4a32afdd3547b1d2db310a9e49d67f6ed1da410c4ad1881654e6d17ac7a5",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-project-uncertain-margin",
+      "partition": "C",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-project-obscured-margin",
+      "content_sha256": "39cc2d66ba55d74af20ea1240655e875ad312abfc07b5d866ececa53facbabbd",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-project-obscured-margin",
+      "partition": "C",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-relationship-clear-margin",
+      "content_sha256": "bbb9b16a6a798bb93cea2006db83fcff1d22e1f4d925039e111f506f0c0d258d",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-relationship-clear-margin",
+      "partition": "C",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-relationship-uncertain-margin",
+      "content_sha256": "d5568559ede86e4ce329e5d0523ae7123a32d6bfd741c0f3a3288f780ceea4c8",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-relationship-uncertain-margin",
+      "partition": "C",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-relationship-obscured-margin",
+      "content_sha256": "ca7cf51a6fd60f8d527482ff11d68feb083f12f8030d703cea6b1999dc3ac13f",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-relationship-obscured-margin",
+      "partition": "C",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-general-clear-margin",
+      "content_sha256": "cbfe3057ec9b0f79323349f81e31efb18472fee8dbd8572bc3d26bb3eeb1a0c9",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-general-clear-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-general-uncertain-margin",
+      "content_sha256": "a917e8637a4c5fb5ccef77f47ace811ae6b8c3f279fdef9f6259d07bd0f91530",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-general-uncertain-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-general-obscured-margin",
+      "content_sha256": "65632a0809a6a0f878d675da0628ec71f0615a0f6b762870fdff5b736de526db",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-general-obscured-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-meeting-clear-stacked",
+      "content_sha256": "f8fbffa3d5765c06eda08d0390b97852624200e4e6adbae3c8dfa8b194158074",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-meeting-clear-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-meeting-uncertain-stacked",
+      "content_sha256": "13189d8c7494545c771460af8cbd66609ba5bb4efa422ecb364983037209c179",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-meeting-uncertain-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-meeting-obscured-stacked",
+      "content_sha256": "8d976ffcf9d3deb7cfaa0f5809c4089830ae691f0e0e6a4b92d0eb2524f199fc",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-meeting-obscured-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-project-clear-stacked",
+      "content_sha256": "8191607a5181be9c5eb37815aabe0b5d3fa9f0b0c2a97d35d9cee8cdc5c9ec62",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-project-clear-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-project-uncertain-stacked",
+      "content_sha256": "72bf105f2ae9f872fc6789b24fce1a08a2568901a8144816458c30ae1230688c",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-project-uncertain-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-project-obscured-stacked",
+      "content_sha256": "8e6b8098d99b45f37d2611989cd083b4d7a52bb2fd292ec76fc9896951340e9f",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-project-obscured-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-relationship-clear-stacked",
+      "content_sha256": "40315f8d423c7b291c0eafba5d38da262b2d74006a93f2c3570008434ddd0166",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-relationship-clear-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-relationship-uncertain-stacked",
+      "content_sha256": "485b63ca066660ff743a035538d849fa4dcf201ffc3d9b9ae01de6e7490a2f77",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-relationship-uncertain-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-relationship-obscured-stacked",
+      "content_sha256": "d577fb52c481a50b370d7afb7ec8a5dc606b672e6e63fe73345c936516511b4b",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-relationship-obscured-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-general-clear-stacked",
+      "content_sha256": "b67de627bc4cd7f0141ccb170e62d0945341cccb8a89c00f7f8c293c9a1b8694",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-general-clear-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-general-uncertain-stacked",
+      "content_sha256": "a012001a5b422e392c2d1fbaa4f95f8dda3f4408eabe2b333affea0a956ba11c",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-general-uncertain-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-single-general-obscured-stacked",
+      "content_sha256": "64f14545ef4fba38c57a8e628285c66de93ded2ac98e781ab2856aa814f7a177",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-single-general-obscured-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "single-note",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v2-multi-2-block",
+      "content_sha256": "2db5a40a69e935797b882055c9d5d380ca7b10a05353f346d25764f1e8b5831d",
+      "difficulty": [
+        "grouping"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-2-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 3,
+      "adversarial": false,
+      "case_id": "v2-multi-3-block",
+      "content_sha256": "35e2c08f6b2718d2ad90d0dd32c447ee7c561644705b1cc98c14e4e7e4d94185",
+      "difficulty": [
+        "grouping"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-3-block",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v2-multi-2-margin",
+      "content_sha256": "b74347896cb3ff9ad749805f01277a4ae94d2a2312bcf634548b08077cdd7a21",
+      "difficulty": [
+        "grouping"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-2-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 3,
+      "adversarial": false,
+      "case_id": "v2-multi-3-margin",
+      "content_sha256": "20714fb57c3bc1d394b4ddff797436f056ace6f06eecc948993ce53b2ad20e66",
+      "difficulty": [
+        "grouping"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-3-margin",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v2-multi-2-stacked",
+      "content_sha256": "968c49ef5ecf045a4e0e881b8a6e06384aed84ad0045793797ec4b596e196d55",
+      "difficulty": [
+        "grouping"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-2-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 3,
+      "adversarial": false,
+      "case_id": "v2-multi-3-stacked",
+      "content_sha256": "fed9093246e1cdde815a890ae8d38cf294d10effc3026c0fa43bc277442d8e27",
+      "difficulty": [
+        "grouping"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-3-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multiple-notes",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 0,
+      "adversarial": false,
+      "case_id": "v2-context-only-block",
+      "content_sha256": "eaf54ae5929e6b7ae80ce5fdd111e85a93963709fb22325f680169ec8b86ff48",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-context-only-block",
+      "partition": "B",
+      "primary_classes": [],
+      "review_state": "APPROVED",
+      "scenario": "context-only",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": []
+    },
+    {
+      "NOTE_UNIT_count": 0,
+      "adversarial": false,
+      "case_id": "v2-context-only-margin",
+      "content_sha256": "b951643bc80bfb2f4ee2d5c327e00e71ee488579ab74dfcd0b73e6e5d7227cde",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-context-only-margin",
+      "partition": "C",
+      "primary_classes": [],
+      "review_state": "APPROVED",
+      "scenario": "context-only",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": []
+    },
+    {
+      "NOTE_UNIT_count": 0,
+      "adversarial": false,
+      "case_id": "v2-context-only-stacked",
+      "content_sha256": "5f8211b2718d11b866025a025508be6d0b58bbd043ede835c1a62fbea03c4670",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-context-only-stacked",
+      "partition": "A",
+      "primary_classes": [],
+      "review_state": "APPROVED",
+      "scenario": "context-only",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": []
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-no-tag-block",
+      "content_sha256": "d559f64838601d8ed6c4e8652c83e5f52ebc00fd9706008b57eab5f89cee42a1",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-no-tag-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-tag",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-follow-up-block",
+      "content_sha256": "f068809b975f0b72546c559be9aa72f1d4eeb709e167cd63302a0ac7344f45dd",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-follow-up-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "follow-up",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-multi-tag-block",
+      "content_sha256": "200ec1a7cf16f5b86673db433df420ef728b0a68772a0fd1a733e7bc0a4c9cef",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-tag-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-tag",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-one-candidate-block",
+      "content_sha256": "c2477ab3c3ba62f304a5962bac2065e8ca224c65352ed486ad820c729c45e9e4",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-one-candidate-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "one-candidate",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-multi-candidate-block",
+      "content_sha256": "6329debf19da4ffe51419f5f63316b13519304fed6cbc7bf7483449a9b33770b",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-candidate-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-candidate",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-no-candidate-block",
+      "content_sha256": "76d4fd41080c6869410c6b46e29729ee93699eba4d388fb29ab7141bbe8d43f1",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-no-candidate-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-candidate",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-no-tag-margin",
+      "content_sha256": "0066ef07960255f32d5f5dc96108667a3e41e8620f69cdc671b2626209e29a4e",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-no-tag-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-tag",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-follow-up-margin",
+      "content_sha256": "a553eae250909873de4120289f278a8c508afac90afbe76d25006299cec62f75",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-follow-up-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "follow-up",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-multi-tag-margin",
+      "content_sha256": "40d155a9c75e2108da96f064e3bf74b1a07fc513578ce240e297b2fa897f591a",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-tag-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-tag",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-one-candidate-margin",
+      "content_sha256": "8c89d92443893285f037f4c7d759451ee204869d950d65f3a2c001d252485101",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-one-candidate-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "one-candidate",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-multi-candidate-margin",
+      "content_sha256": "1ccb4da375769f01d81c0ed400ffa7183ee6b5bc85ebd56aeb92a32126d78d94",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-candidate-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-candidate",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-no-candidate-margin",
+      "content_sha256": "e81646160c4146cd33451d1b422e60fd639382174f73dc4a26c6386a3631f6f3",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-no-candidate-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-candidate",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-no-tag-stacked",
+      "content_sha256": "a9bc5166127851b747bf9e3eb8eec391c484535e474dd51b4ad1fac0164c6fdb",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-no-tag-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-tag",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-follow-up-stacked",
+      "content_sha256": "a558c73f0eff6628627b83befede0da1d662a38b52a01bde727892b0ebc869b9",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-follow-up-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "follow-up",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-multi-tag-stacked",
+      "content_sha256": "23d4fd04b743959c385d5b3fa33783776188b400dc2c0a5ef5c9edc710ed69a1",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-tag-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-tag",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-one-candidate-stacked",
+      "content_sha256": "e3cc77ec47a30f288245b9711ec0721bd4b9a1833c789cbd321ff6bac9cfb72c",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-one-candidate-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "one-candidate",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-multi-candidate-stacked",
+      "content_sha256": "a190ef1f2072dc67a4d4c04cf5df55cf6ca375e0465f7186144db3cc6af39cbb",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-multi-candidate-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "multi-candidate",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-no-candidate-stacked",
+      "content_sha256": "568224067c22b030851205a9db533c74afde26b64621367c6e8e891d7f22f399",
+      "difficulty": [
+        "nominal"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-no-candidate-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "no-candidate",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v2-close-notes-block",
+      "content_sha256": "e870e978c1f24d689db13aa3f7dbcb2afec09bde108b97f2661fd819b5b7a4fa",
+      "difficulty": [
+        "visually-close"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-visually-close-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "visually-close",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 4,
+      "adversarial": false,
+      "case_id": "v2-dense-block",
+      "content_sha256": "a4f69cb7def2356ca2a0dfd740d2d0b3ecee2941ca4ceaea759d616968e3587a",
+      "difficulty": [
+        "dense"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-dense-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP",
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "dense",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-near-typed-block",
+      "content_sha256": "60abda0c3745596042a0778f4d1c8da421586191de7b1c2d184a5bde5e462832",
+      "difficulty": [
+        "near-typed"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-near-typed-block",
+      "partition": "B",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "near-typed",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-arrow-block",
+      "content_sha256": "7ed62bba4f08cb7a76de85d56ba480a48f43f8cd6be8d2b7666ccedcb213157e",
+      "difficulty": [
+        "leader-line"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-arrow-leader-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "arrow-leader",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-crossed-block",
+      "content_sha256": "4a2cb9dfc9e9461a0c4c58320bf9d4e8b6e6fcd5159d1d80f85e4f893954a72b",
+      "difficulty": [
+        "superseded"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-crossed-out-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "crossed-out",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-agenda-table-block",
+      "content_sha256": "1b75f0e9b10bf2808d2ba63e24f51a1508ba9b04aee75b538d3d148042d579e3",
+      "difficulty": [
+        "table"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-agenda-table-block",
+      "partition": "B",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "agenda-table",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-italic-style-block",
+      "content_sha256": "b651b1e6bfcc9ebddc4706a86d18864d3f8bc6b71f6dcbd973372a752b330211",
+      "difficulty": [
+        "style-variation"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-italic-style-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "italic-style",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-low-contrast-block",
+      "content_sha256": "5c24f83fd00014a7d805201527aad43c3f032e4f78f386b2545e44ebbf6881f6",
+      "difficulty": [
+        "low-contrast"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-low-contrast-block",
+      "partition": "B",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "low-contrast",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v2-close-notes-margin",
+      "content_sha256": "8c536899f964dd4a665dd1dcab7a06b00a6460ac5f20579ddfd20a2d1ef2f9f9",
+      "difficulty": [
+        "visually-close"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-visually-close-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "visually-close",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 4,
+      "adversarial": false,
+      "case_id": "v2-dense-margin",
+      "content_sha256": "dbf65178ca19e4db81ac88f4c8287cce06e30ed158bff22d8f3558de6542a1f1",
+      "difficulty": [
+        "dense"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-dense-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP",
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "dense",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-near-typed-margin",
+      "content_sha256": "50e77308c91bebdd8c89ba0de6231d8bed2acdd83e173f7c25189347746edf50",
+      "difficulty": [
+        "near-typed"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-near-typed-margin",
+      "partition": "C",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "near-typed",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-arrow-margin",
+      "content_sha256": "1a3852af726723b780ca294ca50ae1ab710de1052b7c6eaa051a62449169e84b",
+      "difficulty": [
+        "leader-line"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-arrow-leader-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "arrow-leader",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-crossed-margin",
+      "content_sha256": "0f6e13bd7b3dd17a158da802ed4e727aaac79fecba6bd3dd7bdd893a6f3d6ebc",
+      "difficulty": [
+        "superseded"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-crossed-out-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "crossed-out",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-agenda-table-margin",
+      "content_sha256": "a1705f0461e2023aaf648b80d64b1733b36509a3ed5d224bb023e1617a92d58e",
+      "difficulty": [
+        "table"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-agenda-table-margin",
+      "partition": "C",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "agenda-table",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-italic-style-margin",
+      "content_sha256": "fbae729eb80e989e931b1cf47514ee0dab499e7e86adae49efa730e0095014c2",
+      "difficulty": [
+        "style-variation"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-italic-style-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "italic-style",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-low-contrast-margin",
+      "content_sha256": "04665bb551f89b0ea2cbb28871d3212822e9d5ec1c2160db1faf0a77a6b7edce",
+      "difficulty": [
+        "low-contrast"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-low-contrast-margin",
+      "partition": "C",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "low-contrast",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 2,
+      "adversarial": false,
+      "case_id": "v2-close-notes-stacked",
+      "content_sha256": "258acdb927e2157e020b139e586fe9d23ef24fcaa35adc95745cf4de747cb3f0",
+      "difficulty": [
+        "visually-close"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-visually-close-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "visually-close",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 4,
+      "adversarial": false,
+      "case_id": "v2-dense-stacked",
+      "content_sha256": "a9ab187a1796d44e3de065678b5c05438bbf390b17ff80538ac523d42e7e09bc",
+      "difficulty": [
+        "dense"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-dense-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING",
+        "PROJECT",
+        "RELATIONSHIP",
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "dense",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR",
+        "CLEAR",
+        "CLEAR",
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-near-typed-stacked",
+      "content_sha256": "e4e6a1c4d3ca859dfc0302acdf9ce595ab7df37742c7c5e1d57337eec7507fec",
+      "difficulty": [
+        "near-typed"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-near-typed-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "RELATIONSHIP"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "near-typed",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-arrow-stacked",
+      "content_sha256": "24fc05e7ade35173625a8e04d5a1e61fe4c629823315429e444c5cdd00f70be9",
+      "difficulty": [
+        "leader-line"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-arrow-leader-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "arrow-leader",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-crossed-stacked",
+      "content_sha256": "a46a9e70d1802e88d0079d0831be71993692f6fa6100ae04a5f38cad991e5e2c",
+      "difficulty": [
+        "superseded"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-crossed-out-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "crossed-out",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-agenda-table-stacked",
+      "content_sha256": "2227d2bedad221a5d4423fb637ff93c945fe260ff0a4ac002a75313a0b3db9b8",
+      "difficulty": [
+        "table"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-agenda-table-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "PROJECT"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "agenda-table",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-italic-style-stacked",
+      "content_sha256": "3ddb8ed80cffc77c6a94a5f1cd1dc3bf6481a43afb091cd7bbdb05121fde4c47",
+      "difficulty": [
+        "style-variation"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-italic-style-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "italic-style",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-low-contrast-stacked",
+      "content_sha256": "1eff5f37f3adad7a0bb5c9ce279b4f702813695469c586f5fffd4184eeb25fbe",
+      "difficulty": [
+        "low-contrast"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-low-contrast-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "low-contrast",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v2-injection-block",
+      "content_sha256": "520044412b5bec0b1749ecbfe9207af1f9b46273dca2b121146ee29673dd8597",
+      "difficulty": [
+        "injection"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-prompt-injection-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "prompt-injection",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v2-scribble-trap-block",
+      "content_sha256": "75e35a04133cd7c23ac5d112675f94e70dd7f58a42edb0333dc2f1f63ee1cba0",
+      "difficulty": [
+        "obscured"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-obscured-trap-block",
+      "partition": "B",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "obscured-trap",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v2-injection-margin",
+      "content_sha256": "18fd05acbe79e63ebacb5025dc3ed4d7d0fa0b6bb8d943e3c27391709c0f6f9d",
+      "difficulty": [
+        "injection"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-prompt-injection-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "prompt-injection",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v2-scribble-trap-margin",
+      "content_sha256": "028132c2b5f65f624ad01ba6d2193cf3d463403937055f77948078538b46ebc2",
+      "difficulty": [
+        "obscured"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-obscured-trap-margin",
+      "partition": "C",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "obscured-trap",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v2-injection-stacked",
+      "content_sha256": "9de5394ec8e50e5940a0d60be97949727c95c5fc5512849ea30119820dd6e33d",
+      "difficulty": [
+        "injection"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-prompt-injection-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "prompt-injection",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "CLEAR"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": true,
+      "case_id": "v2-scribble-trap-stacked",
+      "content_sha256": "0969a4bad4144fe4fe7ced6403ef95f4bc0c133fce74d5bbb1397a6efe4c64e7",
+      "difficulty": [
+        "obscured"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-obscured-trap-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "GENERAL"
+      ],
+      "review_state": "APPROVED",
+      "scenario": "obscured-trap",
+      "scoreable": true,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNREADABLE"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-ambiguous-grouping-block",
+      "content_sha256": "44d17c869a78312665faed9692df9923484f0f0636af2a4ded7bf504b139849b",
+      "difficulty": [
+        "ambiguous"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-ambiguous-grouping-block",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "AMBIGUOUS_EXCLUDE",
+      "scenario": "ambiguous-grouping",
+      "scoreable": false,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-ambiguous-grouping-margin",
+      "content_sha256": "3c7b82c0f55a78767ac75d239b37354f700feb1df02cfffb0ae7d945674f508f",
+      "difficulty": [
+        "ambiguous"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-ambiguous-grouping-margin",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "AMBIGUOUS_EXCLUDE",
+      "scenario": "ambiguous-grouping",
+      "scoreable": false,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    },
+    {
+      "NOTE_UNIT_count": 1,
+      "adversarial": false,
+      "case_id": "v2-ambiguous-grouping-stacked",
+      "content_sha256": "22e31f4bb5f43c6578b149c052ad4ce4fe4684501f368763de0d63d9001d1d12",
+      "difficulty": [
+        "ambiguous"
+      ],
+      "fixture_classification": "SYNTHETIC_NON_PERSONAL",
+      "label_provenance": "SYNTHETIC_DETERMINISTIC",
+      "leakage_group_id": "lg-ambiguous-grouping-stacked",
+      "partition": "A",
+      "primary_classes": [
+        "MEETING"
+      ],
+      "review_state": "AMBIGUOUS_EXCLUDE",
+      "scenario": "ambiguous-grouping",
+      "scoreable": false,
+      "source_layer": "SYNTHETIC_REGRESSION",
+      "transcription_statuses": [
+        "UNCERTAIN"
+      ]
+    }
+  ],
+  "corpus_version": "gsqs-v2",
+  "generator_version": "gsqs-v2-generator-1",
+  "leakage_groups": {
+    "lg-agenda-table-block": {
+      "case_ids": [
+        "v2-agenda-table-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-agenda-table-margin": {
+      "case_ids": [
+        "v2-agenda-table-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-agenda-table-stacked": {
+      "case_ids": [
+        "v2-agenda-table-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-ambiguous-grouping-block": {
+      "case_ids": [
+        "v2-ambiguous-grouping-block"
+      ],
+      "partition": "A",
+      "scoreable": false
+    },
+    "lg-ambiguous-grouping-margin": {
+      "case_ids": [
+        "v2-ambiguous-grouping-margin"
+      ],
+      "partition": "A",
+      "scoreable": false
+    },
+    "lg-ambiguous-grouping-stacked": {
+      "case_ids": [
+        "v2-ambiguous-grouping-stacked"
+      ],
+      "partition": "A",
+      "scoreable": false
+    },
+    "lg-arrow-leader-block": {
+      "case_ids": [
+        "v2-arrow-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-arrow-leader-margin": {
+      "case_ids": [
+        "v2-arrow-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-arrow-leader-stacked": {
+      "case_ids": [
+        "v2-arrow-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-context-only-block": {
+      "case_ids": [
+        "v2-context-only-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-context-only-margin": {
+      "case_ids": [
+        "v2-context-only-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-context-only-stacked": {
+      "case_ids": [
+        "v2-context-only-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-crossed-out-block": {
+      "case_ids": [
+        "v2-crossed-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-crossed-out-margin": {
+      "case_ids": [
+        "v2-crossed-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-crossed-out-stacked": {
+      "case_ids": [
+        "v2-crossed-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-dense-block": {
+      "case_ids": [
+        "v2-dense-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-dense-margin": {
+      "case_ids": [
+        "v2-dense-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-dense-stacked": {
+      "case_ids": [
+        "v2-dense-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-follow-up-block": {
+      "case_ids": [
+        "v2-follow-up-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-follow-up-margin": {
+      "case_ids": [
+        "v2-follow-up-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-follow-up-stacked": {
+      "case_ids": [
+        "v2-follow-up-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-italic-style-block": {
+      "case_ids": [
+        "v2-italic-style-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-italic-style-margin": {
+      "case_ids": [
+        "v2-italic-style-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-italic-style-stacked": {
+      "case_ids": [
+        "v2-italic-style-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-low-contrast-block": {
+      "case_ids": [
+        "v2-low-contrast-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-low-contrast-margin": {
+      "case_ids": [
+        "v2-low-contrast-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-low-contrast-stacked": {
+      "case_ids": [
+        "v2-low-contrast-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-multi-2-block": {
+      "case_ids": [
+        "v2-multi-2-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-multi-2-margin": {
+      "case_ids": [
+        "v2-multi-2-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-multi-2-stacked": {
+      "case_ids": [
+        "v2-multi-2-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-multi-3-block": {
+      "case_ids": [
+        "v2-multi-3-block"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-multi-3-margin": {
+      "case_ids": [
+        "v2-multi-3-margin"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-multi-3-stacked": {
+      "case_ids": [
+        "v2-multi-3-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-multi-candidate-block": {
+      "case_ids": [
+        "v2-multi-candidate-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-multi-candidate-margin": {
+      "case_ids": [
+        "v2-multi-candidate-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-multi-candidate-stacked": {
+      "case_ids": [
+        "v2-multi-candidate-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-multi-tag-block": {
+      "case_ids": [
+        "v2-multi-tag-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-multi-tag-margin": {
+      "case_ids": [
+        "v2-multi-tag-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-multi-tag-stacked": {
+      "case_ids": [
+        "v2-multi-tag-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-near-typed-block": {
+      "case_ids": [
+        "v2-near-typed-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-near-typed-margin": {
+      "case_ids": [
+        "v2-near-typed-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-near-typed-stacked": {
+      "case_ids": [
+        "v2-near-typed-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-no-candidate-block": {
+      "case_ids": [
+        "v2-no-candidate-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-no-candidate-margin": {
+      "case_ids": [
+        "v2-no-candidate-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-no-candidate-stacked": {
+      "case_ids": [
+        "v2-no-candidate-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-no-tag-block": {
+      "case_ids": [
+        "v2-no-tag-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-no-tag-margin": {
+      "case_ids": [
+        "v2-no-tag-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-no-tag-stacked": {
+      "case_ids": [
+        "v2-no-tag-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-obscured-trap-block": {
+      "case_ids": [
+        "v2-scribble-trap-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-obscured-trap-margin": {
+      "case_ids": [
+        "v2-scribble-trap-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-obscured-trap-stacked": {
+      "case_ids": [
+        "v2-scribble-trap-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-one-candidate-block": {
+      "case_ids": [
+        "v2-one-candidate-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-one-candidate-margin": {
+      "case_ids": [
+        "v2-one-candidate-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-one-candidate-stacked": {
+      "case_ids": [
+        "v2-one-candidate-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-prompt-injection-block": {
+      "case_ids": [
+        "v2-injection-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-prompt-injection-margin": {
+      "case_ids": [
+        "v2-injection-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-prompt-injection-stacked": {
+      "case_ids": [
+        "v2-injection-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-general-clear-block": {
+      "case_ids": [
+        "v2-single-general-clear-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-general-clear-margin": {
+      "case_ids": [
+        "v2-single-general-clear-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-general-clear-stacked": {
+      "case_ids": [
+        "v2-single-general-clear-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-general-obscured-block": {
+      "case_ids": [
+        "v2-single-general-obscured-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-general-obscured-margin": {
+      "case_ids": [
+        "v2-single-general-obscured-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-general-obscured-stacked": {
+      "case_ids": [
+        "v2-single-general-obscured-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-general-uncertain-block": {
+      "case_ids": [
+        "v2-single-general-uncertain-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-general-uncertain-margin": {
+      "case_ids": [
+        "v2-single-general-uncertain-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-general-uncertain-stacked": {
+      "case_ids": [
+        "v2-single-general-uncertain-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-meeting-clear-block": {
+      "case_ids": [
+        "v2-single-meeting-clear-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-meeting-clear-margin": {
+      "case_ids": [
+        "v2-single-meeting-clear-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-meeting-clear-stacked": {
+      "case_ids": [
+        "v2-single-meeting-clear-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-meeting-obscured-block": {
+      "case_ids": [
+        "v2-single-meeting-obscured-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-meeting-obscured-margin": {
+      "case_ids": [
+        "v2-single-meeting-obscured-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-meeting-obscured-stacked": {
+      "case_ids": [
+        "v2-single-meeting-obscured-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-meeting-uncertain-block": {
+      "case_ids": [
+        "v2-single-meeting-uncertain-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-meeting-uncertain-margin": {
+      "case_ids": [
+        "v2-single-meeting-uncertain-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-meeting-uncertain-stacked": {
+      "case_ids": [
+        "v2-single-meeting-uncertain-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-project-clear-block": {
+      "case_ids": [
+        "v2-single-project-clear-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-project-clear-margin": {
+      "case_ids": [
+        "v2-single-project-clear-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-project-clear-stacked": {
+      "case_ids": [
+        "v2-single-project-clear-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-project-obscured-block": {
+      "case_ids": [
+        "v2-single-project-obscured-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-project-obscured-margin": {
+      "case_ids": [
+        "v2-single-project-obscured-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-project-obscured-stacked": {
+      "case_ids": [
+        "v2-single-project-obscured-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-project-uncertain-block": {
+      "case_ids": [
+        "v2-single-project-uncertain-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-project-uncertain-margin": {
+      "case_ids": [
+        "v2-single-project-uncertain-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-project-uncertain-stacked": {
+      "case_ids": [
+        "v2-single-project-uncertain-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-relationship-clear-block": {
+      "case_ids": [
+        "v2-single-relationship-clear-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-relationship-clear-margin": {
+      "case_ids": [
+        "v2-single-relationship-clear-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-relationship-clear-stacked": {
+      "case_ids": [
+        "v2-single-relationship-clear-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-relationship-obscured-block": {
+      "case_ids": [
+        "v2-single-relationship-obscured-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-relationship-obscured-margin": {
+      "case_ids": [
+        "v2-single-relationship-obscured-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-relationship-obscured-stacked": {
+      "case_ids": [
+        "v2-single-relationship-obscured-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-single-relationship-uncertain-block": {
+      "case_ids": [
+        "v2-single-relationship-uncertain-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-single-relationship-uncertain-margin": {
+      "case_ids": [
+        "v2-single-relationship-uncertain-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-single-relationship-uncertain-stacked": {
+      "case_ids": [
+        "v2-single-relationship-uncertain-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    },
+    "lg-visually-close-block": {
+      "case_ids": [
+        "v2-close-notes-block"
+      ],
+      "partition": "B",
+      "scoreable": true
+    },
+    "lg-visually-close-margin": {
+      "case_ids": [
+        "v2-close-notes-margin"
+      ],
+      "partition": "C",
+      "scoreable": true
+    },
+    "lg-visually-close-stacked": {
+      "case_ids": [
+        "v2-close-notes-stacked"
+      ],
+      "partition": "A",
+      "scoreable": true
+    }
+  },
+  "manifest_digest": "e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd"
+}

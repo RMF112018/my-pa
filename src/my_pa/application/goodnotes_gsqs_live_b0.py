@@ -29,6 +29,12 @@ from my_pa.application.goodnotes_gsqs import (
     MeasurementRecord,
     evaluator_code_identity,
 )
+from my_pa.application.goodnotes_gsqs_b0_disclosure_journal import (
+    EVENT_RUN_COMPLETE,
+    EVENT_RUN_INVALID,
+    DisclosureJournal,
+    DisclosureState,
+)
 from my_pa.application.goodnotes_gsqs_corpus import (
     LABEL_PROVENANCE_OPERATOR,
     CorpusCase,
@@ -50,13 +56,24 @@ from my_pa.application.goodnotes_gsqs_hw_corpus import (
     HANDWRITING_CORPUS_VERSION,
     load_public_catalog,
 )
+from my_pa.application.goodnotes_gsqs_provider_model_mapping import (
+    ProviderModelMapping,
+    SelectedModelMappingState,
+    classify_selected_model,
+)
 
 EXECUTE_MEASURED_B0 = "EXECUTE_MEASURED_B0"
 APPROVED_MANIFEST_DIGEST = "636d671348cfba5b12b9e5032d5b3daee74f884aea101198ba69ed608ee40f22"
 APPROVED_COMBINED_IDENTITY = "c3eb81e3fedb9590e6c33a38154722c0d9b697c7059d995c513c355a3143e070"
 EXPECTED_SCOREABLE_B = 73
 PROMPT_RELATIVE_PATH = Path("ops/goodnotes/gsqs/b0/incumbent-prompt-v1.txt")
+ROUTE_LLM_CANDIDATE_RELATIVE_PATH = Path("ops/goodnotes/gsqs/b0/routellm-goodnotes-b0-v1.json")
 CATALOG_RELATIVE_PATH = Path("ops/goodnotes/gsqs/hw-combined-v1/public_catalog.json")
+ROUTE_LLM_BINDING_PLATFORM_ATTESTED = "PLATFORM_ATTESTED"
+ROUTE_LLM_BINDING_OPERATOR_DYNAMIC = "OPERATOR_DYNAMIC_SERVICE_AUTHORIZED"
+ROUTE_LLM_BINDING_MODES = frozenset(
+    {ROUTE_LLM_BINDING_PLATFORM_ATTESTED, ROUTE_LLM_BINDING_OPERATOR_DYNAMIC}
+)
 _FORBIDDEN_ANALYZER_KEYS = frozenset(
     {
         "transcription_gold",
@@ -147,6 +164,10 @@ class ExecutionAuthorization:
     prohibit_self_improvement: bool
     prohibit_automatic_promotion: bool
     prohibit_deployment: bool
+    route_llm_endpoint_origin: str = ""
+    route_llm_server_side_binding_mode: str = ""
+    route_llm_server_side_evidence_id: str = ""
+    provider_model_mapping_evidence_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -205,6 +226,8 @@ class AnalyzerAdapter(Protocol):
 class UnboundIncumbentAdapter:
     """Production-shaped adapter that cannot disclose until a transport is bound."""
 
+    requires_durable_disclosure_journal = False
+
     def analyze(self, case: AnalyzerCaseInput, config: FrozenAnalyzerConfig) -> dict[str, object]:
         del case, config
         raise ValueError("incumbent transport is not bound; refusing disclosure")
@@ -212,6 +235,8 @@ class UnboundIncumbentAdapter:
 
 class RecordingFakeAdapter:
     """Test/local adapter. Never performs an external call."""
+
+    requires_durable_disclosure_journal = False
 
     def __init__(self, documents: Mapping[str, Mapping[str, object]] | None = None) -> None:
         self.seen: list[AnalyzerCaseInput] = []
@@ -286,6 +311,16 @@ def authorization_from_mapping(payload: Mapping[str, object]) -> ExecutionAuthor
         prohibit_self_improvement=_required_true(payload, "prohibit_self_improvement"),
         prohibit_automatic_promotion=_required_true(payload, "prohibit_automatic_promotion"),
         prohibit_deployment=_required_true(payload, "prohibit_deployment"),
+        route_llm_endpoint_origin=_optional_token(payload, "route_llm_endpoint_origin"),
+        route_llm_server_side_binding_mode=_optional_token(
+            payload, "route_llm_server_side_binding_mode"
+        ),
+        route_llm_server_side_evidence_id=_optional_token(
+            payload, "route_llm_server_side_evidence_id"
+        ),
+        provider_model_mapping_evidence_id=_optional_token(
+            payload, "provider_model_mapping_evidence_id"
+        ),
     )
 
 
@@ -428,6 +463,15 @@ def validate_authorization(
         raise ValueError(defects[0])
 
 
+def validate_route_llm_execution_bindings(authorization: ExecutionAuthorization) -> None:
+    if not authorization.route_llm_endpoint_origin:
+        raise ValueError("authorization missing route_llm_endpoint_origin")
+    if authorization.route_llm_server_side_binding_mode not in ROUTE_LLM_BINDING_MODES:
+        raise ValueError("authorization missing route_llm_server_side_binding_mode")
+    if not authorization.route_llm_server_side_evidence_id:
+        raise ValueError("authorization missing route_llm_server_side_evidence_id")
+
+
 def admit_repetition_outputs(
     documents: Sequence[Mapping[str, object]],
     *,
@@ -493,6 +537,8 @@ def execute_measured_b0(
     repository: RepositoryIdentity,
     image_loader: Callable[[str], bytes] | None = None,
     measured_at: datetime | None = None,
+    disclosure_journal: DisclosureJournal | None = None,
+    provider_mapping: ProviderModelMapping | None = None,
 ) -> tuple[tuple[MeasurementRecord, ...], B0RunState]:
     if repository.dirty:
         raise ValueError("repository worktree is dirty")
@@ -505,6 +551,12 @@ def execute_measured_b0(
     )
     if isinstance(adapter, UnboundIncumbentAdapter):
         raise ValueError("incumbent transport is not bound; refusing disclosure")
+    durable = bool(getattr(adapter, "requires_durable_disclosure_journal", False))
+    if durable:
+        if disclosure_journal is None:
+            raise ValueError("disclosure journal is required before incumbent analyze")
+        disclosure_journal.refuse_if_unresolved()
+        validate_route_llm_execution_bindings(authorization)
     _assert_evaluator_plane(evaluator_cases, census)
     records: list[MeasurementRecord] = []
     stamp = measured_at or datetime.now(UTC)
@@ -512,6 +564,8 @@ def execute_measured_b0(
         documents: list[dict[str, object]] = []
         for member in census.members:
             image = None if image_loader is None else image_loader(member.case_id)
+            if durable and image is not None and sha256(image).hexdigest() != member.raster_sha256:
+                raise ValueError("raster digest mismatch")
             request = AnalyzerCaseInput(
                 case_id=member.case_id,
                 corpus_version=census.corpus_version,
@@ -519,8 +573,55 @@ def execute_measured_b0(
                 interchange_schema_version=INTERCHANGE_SCHEMA_VERSION,
                 image_bytes=image,
             )
-            raw = adapter.analyze(request, config)
-            documents.append(dict(raw))
+            attempt_id = None
+            if disclosure_journal is not None and (durable or image is not None):
+                attempt_id = disclosure_journal.record_started(
+                    repetition=repetition,
+                    case_id=member.case_id,
+                    raster_sha256=member.raster_sha256,
+                )
+            try:
+                raw = adapter.analyze(request, config)
+            except Exception as error:
+                if attempt_id is not None and disclosure_journal is not None:
+                    status = getattr(error, "http_status", None)
+                    disclosed = getattr(error, "disclosed", None)
+                    state = DisclosureState.MAY_HAVE_OCCURRED
+                    if isinstance(status, int) or disclosed is True:
+                        state = DisclosureState.CONFIRMED_DISCLOSED
+                    disclosure_journal.record_reconciled(
+                        request_attempt_id=attempt_id,
+                        repetition=repetition,
+                        case_id=member.case_id,
+                        raster_sha256=member.raster_sha256,
+                        disclosure_state=state,
+                        http_status=status if isinstance(status, int) else None,
+                        error_class=str(getattr(error, "error_class", type(error).__name__)),
+                    )
+                raise
+            document = dict(raw)
+            mapping_state, _display = classify_selected_model(
+                document.get("selected_model"), provider_mapping
+            )
+            document["selected_model_class"] = mapping_state.value
+            if attempt_id is not None and disclosure_journal is not None:
+                disclosure_journal.record_reconciled(
+                    request_attempt_id=attempt_id,
+                    repetition=repetition,
+                    case_id=member.case_id,
+                    raster_sha256=member.raster_sha256,
+                    disclosure_state=DisclosureState.CONFIRMED_DISCLOSED,
+                    http_status=_http_status(document.get("http_status")),
+                    selected_model_observation=_observation(document.get("selected_model")),
+                    selected_model_class=mapping_state.value,
+                )
+            if mapping_state is SelectedModelMappingState.MAPPED_OUT_OF_POOL:
+                if disclosure_journal is not None:
+                    disclosure_journal.record_run_event(
+                        EVENT_RUN_INVALID, disclosure_state=DisclosureState.INVALID
+                    )
+                raise ValueError("selected model mapped out of pool")
+            documents.append(document)
         try:
             outputs = admit_repetition_outputs(documents, census=census, config=config)
             _result, record = score_partition(
@@ -538,8 +639,16 @@ def execute_measured_b0(
                 repository_tree=repository.tree,
             )
         except ValueError as error:
+            if disclosure_journal is not None:
+                disclosure_journal.record_run_event(
+                    EVENT_RUN_INVALID, disclosure_state=DisclosureState.INVALID
+                )
             raise ValueError(f"repetition {repetition} invalid: {error}") from error
         records.append(record)
+    if disclosure_journal is not None:
+        disclosure_journal.record_run_event(
+            EVENT_RUN_COMPLETE, disclosure_state=DisclosureState.COMPLETE
+        )
     return tuple(records), B0RunState.COMPLETE
 
 
@@ -622,17 +731,26 @@ def write_public_evidence(
     report: PreflightReport,
     records: Sequence[MeasurementRecord] | None = None,
     summary: B0Summary | None = None,
+    journal: DisclosureJournal | None = None,
+    analyzer_config: Mapping[str, object] | None = None,
 ) -> dict[str, str]:
     directory.mkdir(parents=True, exist_ok=True)
+    disclosure = "NONE"
+    disclosure_would_occur = False
+    extra_control: dict[str, object] = {}
+    if journal is not None:
+        extra_control = journal.public_control_fields()
+        disclosure = str(extra_control["EXTERNAL_MODEL_DISCLOSURE"])
+        disclosure_would_occur = bool(extra_control["disclosure_would_occur"])
     control = {
         "AUTOMATIC_PROMOTION": AUTOMATIC_PROMOTION_DISABLED,
-        "EXTERNAL_MODEL_DISCLOSURE": "NONE",
+        "EXTERNAL_MODEL_DISCLOSURE": disclosure,
         "MEASURED_B0": MEASURED_B0_NOT_YET_ESTABLISHED,
         "SELF_IMPROVEMENT_EVALUATION": SELF_IMPROVEMENT_NOT_YET_ACTIVATED,
         "census_digest": report.census_digest,
         "combined_identity": report.combined_identity,
         "corpus_version": report.corpus_version,
-        "disclosure_would_occur": False,
+        "disclosure_would_occur": disclosure_would_occur,
         "evaluator_behavior_identity": report.evaluator_behavior_identity,
         "manifest_digest": report.manifest_digest,
         "prompt_config_identity": report.prompt_config_identity,
@@ -641,18 +759,21 @@ def write_public_evidence(
         "scoreable_b": report.scoreable_b,
         "state": report.state.value,
     }
+    if journal is not None:
+        control["confirmed_disclosed_count"] = extra_control["confirmed_disclosed_count"]
+        control["indeterminate_request_count"] = extra_control["indeterminate_request_count"]
+        control["started_request_count"] = extra_control["started_request_count"]
+    analyzer: dict[str, object] = {
+        "analyzer_name": report.analyzer_name,
+        "analyzer_version": report.analyzer_version,
+        "prompt_config_identity": report.prompt_config_identity,
+    }
+    if analyzer_config:
+        for key, value in analyzer_config.items():
+            analyzer[key] = value
     members = {
         "RUN_CONTROL.json": json.dumps(control, indent=2, sort_keys=True) + "\n",
-        "ANALYZER_CONFIG.json": json.dumps(
-            {
-                "analyzer_name": report.analyzer_name,
-                "analyzer_version": report.analyzer_version,
-                "prompt_config_identity": report.prompt_config_identity,
-            },
-            indent=2,
-            sort_keys=True,
-        )
-        + "\n",
+        "ANALYZER_CONFIG.json": json.dumps(analyzer, indent=2, sort_keys=True) + "\n",
     }
     if records:
         for record in records:
@@ -791,6 +912,27 @@ def _required_token(payload: Mapping[str, object], key: str) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError(f"authorization missing {key}")
     return value
+
+
+def _optional_token(payload: Mapping[str, object], key: str) -> str:
+    value = payload.get(key, "")
+    if value is None:
+        return ""
+    if not isinstance(value, str):
+        raise ValueError(f"authorization malformed {key}")
+    return value.strip()
+
+
+def _observation(value: object) -> str | None:
+    if isinstance(value, str) and value:
+        return value
+    return None
+
+
+def _http_status(value: object) -> int:
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    return 200
 
 
 def _required_int(payload: Mapping[str, object], key: str) -> int:

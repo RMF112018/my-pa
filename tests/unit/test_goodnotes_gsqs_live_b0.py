@@ -19,6 +19,10 @@ from my_pa.application.goodnotes_gsqs import (
     CorpusPartition,
     evaluator_code_identity,
 )
+from my_pa.application.goodnotes_gsqs_b0_disclosure_journal import (
+    DisclosureJournal,
+    DisclosureState,
+)
 from my_pa.application.goodnotes_gsqs_corpus import CorpusCase, CorpusManifest
 from my_pa.application.goodnotes_gsqs_harness import (
     INCUMBENT_ANALYZER_NAME,
@@ -536,3 +540,107 @@ def test_census_rejects_wrong_b_count() -> None:
             break
     with pytest.raises(ValueError, match="not 73"):
         partition_b_census(catalog)
+
+
+class _DurableFake(RecordingFakeAdapter):
+    requires_durable_disclosure_journal = True
+
+
+def _route_auth(
+    census: B0Census, manifest: CorpusManifest, config: FrozenAnalyzerConfig
+) -> ExecutionAuthorization:
+    return replace(
+        _fixture_auth(census, manifest, config),
+        route_llm_endpoint_origin="https://route.example",
+        route_llm_server_side_binding_mode="OPERATOR_DYNAMIC_SERVICE_AUTHORIZED",
+        route_llm_server_side_evidence_id="synthetic-path-b",
+    )
+
+
+def test_journal_wraps_durable_analyze_and_evidence_is_derived(tmp_path: Path) -> None:
+    cases, manifest, census, config = _build_fixture()
+    documents = {
+        case.case_id: _document(case, prompt=config.prompt_config_identity) for case in cases
+    }
+    journal = DisclosureJournal(tmp_path, run_id="synthetic-run")
+    records, state = execute_measured_b0(
+        authorization=_route_auth(census, manifest, config),
+        census=census,
+        evaluator_cases=cases,
+        manifest=manifest,
+        adapter=_DurableFake(documents),
+        config=config,
+        repository=_clean_repo(),
+        measured_at=datetime(2026, 8, 21, tzinfo=UTC),
+        disclosure_journal=journal,
+    )
+    assert state is B0RunState.COMPLETE
+    assert len(records) == 3
+    fold = journal.fold()
+    assert fold.started_count == len(census.members) * 3
+    assert fold.external_model_disclosure is DisclosureState.COMPLETE
+    report = preflight(catalog=_catalog(), repository=_clean_repo())
+    write_public_evidence(tmp_path, report=report, records=records, journal=journal)
+    control = json.loads((tmp_path / "RUN_CONTROL.json").read_text())
+    assert control["EXTERNAL_MODEL_DISCLOSURE"] == "COMPLETE"
+    assert control["disclosure_would_occur"] is True
+    assert control["MEASURED_B0"] == MEASURED_B0_NOT_YET_ESTABLISHED
+
+
+def test_durable_adapter_requires_journal_and_path_bindings() -> None:
+    cases, manifest, census, config = _build_fixture()
+    documents = {
+        case.case_id: _document(case, prompt=config.prompt_config_identity) for case in cases
+    }
+    with pytest.raises(ValueError, match="disclosure journal is required"):
+        execute_measured_b0(
+            authorization=_fixture_auth(census, manifest, config),
+            census=census,
+            evaluator_cases=cases,
+            manifest=manifest,
+            adapter=_DurableFake(documents),
+            config=config,
+            repository=_clean_repo(),
+        )
+
+
+def test_mapped_out_of_pool_invalidates_after_disclosure(tmp_path: Path) -> None:
+    from my_pa.application.goodnotes_gsqs_provider_model_mapping import mapping_from_payload
+
+    cases, manifest, census, config = _build_fixture()
+    documents = {
+        case.case_id: _document(case, prompt=config.prompt_config_identity) for case in cases
+    }
+    first_id = census.members[0].case_id
+    documents[first_id]["selected_model"] = "mystery-out"
+    mapping = mapping_from_payload(
+        {
+            "evidence_id": "map-1",
+            "mapping_schema_version": "gsqs-b0-provider-model-mapping-v1",
+            "entries": [
+                {
+                    "display_name": "mystery-out",
+                    "pool_membership": "OUT_OF_POOL",
+                    "provider_model_id": "mystery-out",
+                }
+            ],
+        },
+        expected_evidence_id="map-1",
+    )
+    journal = DisclosureJournal(tmp_path, run_id="synthetic-run")
+    with pytest.raises(ValueError, match="mapped out of pool"):
+        execute_measured_b0(
+            authorization=_route_auth(census, manifest, config),
+            census=census,
+            evaluator_cases=cases,
+            manifest=manifest,
+            adapter=_DurableFake(documents),
+            config=config,
+            repository=_clean_repo(),
+            disclosure_journal=journal,
+            provider_mapping=mapping,
+        )
+    fold = journal.fold()
+    assert fold.started_count >= 1
+    assert fold.confirmed_disclosed_count >= 1
+    assert fold.external_model_disclosure is DisclosureState.INVALID

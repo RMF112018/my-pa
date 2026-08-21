@@ -39,7 +39,7 @@ Drive mirrors are review surfaces rather than a competing ledger.
 | Database container | `my-pa-postgres`, `postgres:17.10`, healthy | `docker ps` |
 | Database binding | `127.0.0.1:5433 -> 5432`, loopback only | `docker ps` port map |
 | Logical database | `my_pa` | `select current_database()` |
-| Alembic head | `f3a8c1d7e592` in the repository, sixty-four revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
+| Alembic head | `e9b2c4d7a150` in the repository, sixty-five revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
 | Extensions | `pg_trgm`, `unaccent`, `plpgsql` | `select extname from pg_extension` |
 
 ## 2. Verified corpus claim
@@ -65,12 +65,12 @@ is not a defect.
 
 ## 3. What is implemented
 
-Two hundred and fifty-three Python modules under `src/my_pa` and three hundred and eleven test modules —
+Two hundred and fifty-nine Python modules under `src/my_pa` and three hundred and thirteen test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
 true at WP-4B3 `main@6660dbb`, and each was carried through the packages that
-followed. (The audit basis `main@e773e6f` was forty-eight and twenty-seven; the
+followed. (The audit basis `main@e773e6f` was fifty-six and twenty-seven; the
 pair recorded against it here was the revalidation's, one basis out.) **"Nothing checks them" was the
 diagnosis and it is now wrong**:
 `../../tests/architecture/test_spelled_counts_match_the_sets_they_name.py` runs
@@ -89,11 +89,11 @@ section disagrees with the tree.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, GoodNotes notebook lineage, GoodNotes NOTE_UNIT occurrence persistence, GoodNotes semantic work/proposal receipts, GoodNotes entity associations with NEW-only delivery receipts, and additive GoodNotes exact visual render digests, additive `goodnotes.content` vocabulary, additive durable-note stage ledger and Principal-bound page rasters, additive GoodNotes server-grounded NOTE_UNIT crop identity with immutable revision provenance, additive GoodNotes Meeting/Agenda association kinds, and an additive dormant GoodNotes delivery-attempt ledger, and the relationship-intelligence entity plane — `entities`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, the additive `entity_aliases` table, and the `entities.*` capability family with the `entity_read` purpose, and the entity observation, proposal, and merge-lineage tables | Implemented, sixty-four revisions, head `f3a8c1d7e592` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, GoodNotes notebook lineage, GoodNotes NOTE_UNIT occurrence persistence, GoodNotes semantic work/proposal receipts, GoodNotes entity associations with NEW-only delivery receipts, and additive GoodNotes exact visual render digests, additive `goodnotes.content` vocabulary, additive durable-note stage ledger and Principal-bound page rasters, additive GoodNotes server-grounded NOTE_UNIT crop identity with immutable revision provenance, additive GoodNotes Meeting/Agenda association kinds, and an additive dormant GoodNotes delivery-attempt ledger, and the relationship-intelligence entity plane — `entities`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, the additive `entity_aliases` table, and the `entities.*` capability family with the `entity_read` purpose, and the entity observation, proposal, and merge-lineage tables, and the Intelligence Artifact report plane — cycle runs, producer runs, immutable artifacts, commit receipts, pipeline dependencies, and external provenance, with the eight `reports.*` capabilities and the `report_authoring`/`report_read` purposes | Implemented, sixty-five revisions, head `e9b2c4d7a150` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
-All fifty-four capability names, their operator-only flags, and their permitted
-purposes exist in `domain/identity/operation.py`, alongside twenty-three purposes. The v1 request,
+All sixty-two capability names, their operator-only flags, and their permitted
+purposes exist in `domain/identity/operation.py`, alongside twenty-five purposes. The v1 request,
 response, disclosure, and error shapes already exist and are contract-tested.
 
 ## 4. What is not implemented

@@ -11,6 +11,7 @@
 | [ADR-007](ADR-007-principal-partitioned-relationship-and-project-continuity.md) | Principal-partitioned relationship and project continuity — owner-derived `principal_id` on the relationship graph, situations, frames, traces, projects, relationship events, and pulse items; principal-scoped situation/project/timeline reads; and accepted-only continuity surfaces | Accepted |
 | [ADR-008](ADR-008-nas-runtime-topology.md) | NAS-hosted PostgreSQL/application filesystem and containers; Mac-only Apple TCC transport; one private allowlisted ingress | Accepted; staged NAS-01 through NAS-10 |
 | [ADR-009](ADR-009-oauth-refresh-token-families.md) | Rotating opaque refresh-token families for remote MCP, with 1-hour access tokens and per-client refresh disabled by default | Accepted |
+| [ADR-010](ADR-010-intelligence-artifact-report-plane.md) | Product-owned Intelligence Artifact / Report plane: immutable artifacts, cycle-run identity, and staged pipeline lineage in PostgreSQL | Accepted |
 
 Later ADRs must identify repository identity, context, decision, consequences, supersession rules, and implementation status.
 

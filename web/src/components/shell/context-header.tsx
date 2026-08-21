@@ -15,18 +15,17 @@ export function ContextHeader({ principal }: { principal: PrincipalSession }) {
   }
 
   return (
-    <header className="flex items-center justify-between gap-3 border-b border-border bg-surface px-4 py-2">
-      <div className="flex items-center gap-2">
-        <span className="text-lg font-semibold text-moss-green">my-pa</span>
-        <span className="hidden text-xs text-muted sm:inline">MossAIc personal assistant</span>
+    <header className="flex flex-col gap-2 border-b border-border bg-surface px-4 py-2 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+      <div className="flex shrink-0 items-center gap-2">
+        <span className="text-lg font-semibold text-interactive">my-pa</span>
       </div>
-      <div className="flex items-center gap-3">
+      <div className="grid min-w-0 grid-cols-[auto_minmax(0,1fr)_auto] items-center gap-2 sm:flex sm:gap-3">
         {principal.synthetic ? <Badge tone="synthetic">Synthetic identity</Badge> : null}
-        <div className="text-right">
-          <div className="text-sm font-medium text-moss-slate" data-testid="principal-name">
+        <div className="min-w-0 text-right">
+          <div className="truncate text-sm font-medium text-moss-slate" data-testid="principal-name">
             {principal.displayName}
           </div>
-          <div className="text-xs text-muted" data-testid="principal-upn">
+          <div className="truncate text-xs text-muted" data-testid="principal-upn">
             {principal.upn}
           </div>
         </div>

@@ -103,7 +103,7 @@ None of these steps turns production on by existing in this document. Marked
 steps require a separate operator decision.
 
 1. Merge the reviewed pull request.
-2. Migrate a **disposable** database to head `f3a8c1d7e592`. A production-shaped
+2. Migrate a **disposable** database to head `e9b2c4d7a150`. A production-shaped
    database migrate is **operator-only**.
 3. Deploy with `context.prepare` / `context.feedback` **not** granted remotely.
    Image cutover is **operator-only**.

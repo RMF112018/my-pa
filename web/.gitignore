@@ -47,6 +47,7 @@ next-env.d.ts
 # Playwright retains on a failure, and the HTML report are all products of a
 # local run; none of them is source and a trace can carry rendered page content.
 /test-results
+/storybook-static
 /playwright-report
 /blob-report
 /.e2e-gateway.log

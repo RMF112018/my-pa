@@ -162,6 +162,21 @@ class SafeDetail(StrEnum):
     CANDIDATE_TAGS = "candidate_tags"
     RANKED_CANDIDATES = "ranked_candidates"
     CONFIDENCE = "confidence"
+    #: Intelligence Artifact / Report plane. Each names a field and never its
+    #: value. Markdown bodies and source URLs are data and are never echoed.
+    CYCLE_RUN_ID = "cycle_run_id"
+    ARTIFACT_ID = "artifact_id"
+    FOCUS_AREA_ID = "focus_area_id"
+    STAGE = "stage"
+    ARTIFACT_KIND = "artifact_kind"
+    SOURCE_LANE = "source_lane"
+    REPORT_DATE = "report_date"
+    SET_ID = "set_id"
+    DEPENDENCY_REPORT_IDS = "dependency_report_ids"
+    PROVENANCE = "provenance"
+    STRUCTURED_CONTENT = "structured_content"
+    BODY_MARKDOWN = "body_markdown"
+    ADVISORY_DIGEST = "advisory_digest"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

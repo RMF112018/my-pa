@@ -365,6 +365,11 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
     }
     for label, path in documents.items():
         text = path.read_text(encoding="utf-8")
+        assert "sixty-two capabilit" in text.lower().replace(" public ", " "), (
+            f"{label} lost the current capability count"
+        )
+        assert "fifty" in text, f"{label} lost the current revision count"
+        assert _alembic_identity()[1] in text, f"{label} lost the current Alembic head"
         assert f"{spelled} capabilit" in text.lower().replace(" public ", " "), (
             f"{label} lost the current capability count"
         )
@@ -422,6 +427,7 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
     assert routed <= documented, (
         f"web README omits routed capabilities {sorted(routed - documented)}"
     )
+    assert "sixty-two capability names" in lowered
     # Derived, not spelled out here: see the note on
     # `test_current_state_docs_name_the_current_capability_and_migration_counts`.
     # A literal in this guard is the same claim, with the same shelf life, as the

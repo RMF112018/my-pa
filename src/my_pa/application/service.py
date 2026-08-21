@@ -109,7 +109,7 @@ import json
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from itertools import islice
 from types import MappingProxyType
 from typing import Any, Final, assert_never
@@ -119,10 +119,12 @@ from my_pa.application.capabilities import build_capability_manifest, build_read
 from my_pa.application.commands import (
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
+    BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
     Command,
+    CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
     CreateManagedDocument,
@@ -140,12 +142,14 @@ from my_pa.application.commands import (
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetLatestIntelligenceArtifact,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListManagedDocumentsCommand,
     ListProjects,
@@ -157,14 +161,17 @@ from my_pa.application.commands import (
     PrepareContext,
     ReadCapture,
     ReadCommitment,
+    ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
     ReadManagedDocumentCommand,
     ReadTask,
     RecordContextFeedback,
+    RecordIntelligenceRunState,
     RecordTask,
     Representation,
     ResolveEntity,
+    ResolveIntelligenceSet,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
     RevealSubject,
@@ -173,6 +180,7 @@ from my_pa.application.commands import (
     ReviseManagedDocumentCommand,
     SearchCaptures,
     SearchEntities,
+    SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -218,6 +226,16 @@ from my_pa.application.goodnotes_semantics import (
     proposal_payload,
     submit_proposal,
     work_payload,
+)
+from my_pa.application.intelligence import (
+    begin_cycle,
+    commit_artifact,
+    latest_artifact,
+    list_artifacts,
+    read_artifact,
+    record_run_state,
+    resolve_set,
+    search_artifacts,
 )
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.model_gate import BoundedModelGate
@@ -4311,6 +4329,322 @@ class ApplicationService:
             raise InternalError()
         return request
 
+    def _intelligence_store(self, unit_of_work: UnitOfWork, authorization: Authorization) -> object:
+        return unit_of_work.intelligence_for(authorization.principal.principal_id)
+
+    def _reports_begin_cycle(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: BeginIntelligenceCycle,
+    ) -> _Result:
+        admission = begin_cycle(
+            self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+            principal_id=authorization.principal.principal_id,
+            cycle_id=command.cycle_id,
+            business_date=date.fromisoformat(command.business_date),
+            idempotency_key=command.idempotency_key,
+            at=authorization.at,
+            automation_platform=command.automation_platform,
+            external_orchestration_id=command.external_orchestration_id,
+        )
+        cycle = admission.cycle
+        if cycle is None:
+            raise InternalError()
+        return _Result(
+            payload={
+                "receipt_id": admission.receipt.receipt_id,
+                "cycle_run_id": cycle.cycle_run_id,
+                "cycle_id": cycle.cycle_id,
+                "business_date": cycle.business_date.isoformat(),
+                "state": cycle.state.value,
+                "created": admission.created,
+                "replayed": admission.replayed,
+                "created_at": format_rfc3339(cycle.created_at),
+            },
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _reports_commit(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CommitIntelligenceArtifact,
+    ) -> _Result:
+        admission = commit_artifact(
+            self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+            principal_id=authorization.principal.principal_id,
+            cycle_run_id=command.cycle_run_id,
+            stage=command.stage,
+            artifact_kind=command.artifact_kind,
+            focus_area_id=command.focus_area_id,
+            source_lane=command.source_lane,
+            producer_task_id=command.producer_task_id,
+            producer_task_name=command.producer_task_name,
+            automation_platform=command.automation_platform,
+            automation_run_id=command.automation_run_id,
+            report_date=date.fromisoformat(command.report_date),
+            title=command.title,
+            body_markdown=command.body_markdown,
+            artifact_state=command.artifact_state,
+            schema_version=command.schema_version,
+            idempotency_key=command.idempotency_key,
+            at=authorization.at,
+            coverage_start=command.coverage_start,
+            coverage_end=command.coverage_end,
+            producer_prompt_version=command.producer_prompt_version,
+            structured_content=command.structured_content,
+            dependency_report_ids=command.dependency_report_ids,
+            provenance=command.provenance,
+            supersedes_artifact_id=command.supersedes_artifact_id,
+            advisory_digest=command.advisory_digest,
+            completeness=command.completeness,
+        )
+        artifact = admission.artifact
+        if artifact is None:
+            raise InternalError()
+        return _Result(
+            payload={
+                "receipt_id": admission.receipt.receipt_id,
+                "report_id": artifact.artifact_id,
+                "report_run_id": artifact.producer_run_id,
+                "cycle_run_id": artifact.cycle_run_id,
+                "focus_area_id": None
+                if artifact.focus_area_id is None
+                else artifact.focus_area_id.value,
+                "stage": artifact.stage.value,
+                "artifact_kind": artifact.artifact_kind.value,
+                "source_lane": None if artifact.source_lane is None else artifact.source_lane.value,
+                "report_date": artifact.report_date.isoformat(),
+                "artifact_state": artifact.artifact_state.value,
+                "content_sha256": artifact.content_sha256,
+                "content_bytes": artifact.content_bytes,
+                "committed_at": format_rfc3339(artifact.committed_at),
+                "version": artifact.version,
+                "supersedes_report_id": artifact.supersedes_artifact_id,
+                "created": admission.created,
+                "replayed": admission.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _reports_record_run_state(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RecordIntelligenceRunState,
+    ) -> _Result:
+        admission = record_run_state(
+            self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+            principal_id=authorization.principal.principal_id,
+            cycle_run_id=command.cycle_run_id,
+            stage=command.stage,
+            artifact_kind=command.artifact_kind,
+            focus_area_id=command.focus_area_id,
+            source_lane=command.source_lane,
+            producer_task_id=command.producer_task_id,
+            producer_task_name=command.producer_task_name,
+            automation_platform=command.automation_platform,
+            automation_run_id=command.automation_run_id,
+            report_date=date.fromisoformat(command.report_date),
+            state=command.state,
+            idempotency_key=command.idempotency_key,
+            at=authorization.at,
+            expected_version=command.expected_version,
+            failure_code=command.failure_code,
+            failure_summary=command.failure_summary,
+        )
+        run = admission.run
+        if run is None:
+            raise InternalError()
+        return _Result(
+            payload={
+                "receipt_id": admission.receipt.receipt_id,
+                "report_run_id": run.run_id,
+                "cycle_run_id": run.cycle_run_id,
+                "state": run.state.value,
+                "version": run.version,
+                "created": admission.created,
+                "replayed": admission.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _reports_read(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReadIntelligenceArtifact,
+    ) -> _Result:
+        artifact = read_artifact(
+            self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+            principal_id=authorization.principal.principal_id,
+            artifact_id=command.report_id,
+        )
+        payload: dict[str, Any] = {
+            "report_id": artifact.artifact_id,
+            "report_run_id": artifact.producer_run_id,
+            "cycle_run_id": artifact.cycle_run_id,
+            "focus_area_id": None
+            if artifact.focus_area_id is None
+            else artifact.focus_area_id.value,
+            "stage": artifact.stage.value,
+            "artifact_kind": artifact.artifact_kind.value,
+            "source_lane": None if artifact.source_lane is None else artifact.source_lane.value,
+            "report_date": artifact.report_date.isoformat(),
+            "title": artifact.title,
+            "artifact_state": artifact.artifact_state.value,
+            "content_sha256": artifact.content_sha256,
+            "content_bytes": artifact.content_bytes,
+            "committed_at": format_rfc3339(artifact.committed_at),
+            "version": artifact.version,
+            "supersedes_report_id": artifact.supersedes_artifact_id,
+            "dependency_report_ids": [
+                dependency.upstream_artifact_id for dependency in artifact.dependencies
+            ],
+            "provenance": [
+                {
+                    "source_system": ref.source_system,
+                    "source_ref": ref.source_ref,
+                    "relation": ref.relation.value,
+                    "source_url": ref.source_url,
+                }
+                for ref in artifact.provenance
+            ],
+        }
+        if command.include_body:
+            payload["body_markdown"] = artifact.body_markdown
+        return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
+
+    def _reports_latest(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetLatestIntelligenceArtifact,
+    ) -> _Result:
+        artifact = latest_artifact(
+            self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+            principal_id=authorization.principal.principal_id,
+            cycle_run_id=command.cycle_run_id,
+            stage=command.stage,
+            artifact_kind=command.artifact_kind,
+            focus_area_id=command.focus_area_id,
+            source_lane=command.source_lane,
+            report_date=None
+            if command.report_date is None
+            else date.fromisoformat(command.report_date),
+        )
+        return _Result(
+            payload={
+                "report_id": artifact.artifact_id,
+                "cycle_run_id": artifact.cycle_run_id,
+                "stage": artifact.stage.value,
+                "artifact_kind": artifact.artifact_kind.value,
+                "focus_area_id": None
+                if artifact.focus_area_id is None
+                else artifact.focus_area_id.value,
+                "source_lane": None if artifact.source_lane is None else artifact.source_lane.value,
+                "content_sha256": artifact.content_sha256,
+                "artifact_state": artifact.artifact_state.value,
+            },
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _reports_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListIntelligenceArtifacts,
+    ) -> _Result:
+        page_size = self._page_size(command.page_size)
+        found = list_artifacts(
+            self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+            principal_id=authorization.principal.principal_id,
+            cycle_run_id=command.cycle_run_id,
+            stage=command.stage,
+            artifact_kind=command.artifact_kind,
+            focus_area_id=command.focus_area_id,
+            source_lane=command.source_lane,
+            report_date=None
+            if command.report_date is None
+            else date.fromisoformat(command.report_date),
+            include_superseded=command.include_superseded,
+            page_size=page_size,
+        )
+        return _Result(
+            payload={
+                "items": [
+                    {
+                        "report_id": artifact.artifact_id,
+                        "cycle_run_id": artifact.cycle_run_id,
+                        "stage": artifact.stage.value,
+                        "artifact_kind": artifact.artifact_kind.value,
+                        "focus_area_id": None
+                        if artifact.focus_area_id is None
+                        else artifact.focus_area_id.value,
+                        "source_lane": None
+                        if artifact.source_lane is None
+                        else artifact.source_lane.value,
+                        "title": artifact.title,
+                        "content_sha256": artifact.content_sha256,
+                        "artifact_state": artifact.artifact_state.value,
+                    }
+                    for artifact in found
+                ]
+            },
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _reports_search(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SearchIntelligenceArtifacts,
+    ) -> _Result:
+        page_size = self._page_size(command.page_size)
+        found = search_artifacts(
+            self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+            principal_id=authorization.principal.principal_id,
+            query=command.query,
+            cycle_run_id=command.cycle_run_id,
+            stage=command.stage,
+            artifact_kind=command.artifact_kind,
+            focus_area_id=command.focus_area_id,
+            source_lane=command.source_lane,
+            page_size=page_size,
+        )
+        return _Result(
+            payload={
+                "items": [
+                    {
+                        "report_id": artifact.artifact_id,
+                        "title": artifact.title,
+                        "snippet": snippet,
+                        "cycle_run_id": artifact.cycle_run_id,
+                        "stage": artifact.stage.value,
+                        "artifact_kind": artifact.artifact_kind.value,
+                    }
+                    for artifact, snippet in found
+                ]
+            },
+            disclosure=unenrolled_disclosure(authorization.at),
+        )
+
+    def _reports_resolve_set(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ResolveIntelligenceSet,
+    ) -> _Result:
+        payload = resolve_set(
+            self._intelligence_store(unit_of_work, authorization),  # type: ignore[arg-type]
+            principal_id=authorization.principal.principal_id,
+            cycle_run_id=command.cycle_run_id,
+            set_id=command.set_id,
+            focus_area_id=command.focus_area_id,
+        )
+        return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
+
 
 #: The wiring. `capabilities.get` reports availability from these keys, so a
 #: capability is available exactly when something here can execute it, and there
@@ -4365,6 +4699,14 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.GOODNOTES_WORK: ApplicationService._goodnotes_work,
         Capability.GOODNOTES_CONTENT: ApplicationService._goodnotes_content,
         Capability.GOODNOTES_PROPOSE: ApplicationService._goodnotes_propose,
+        Capability.REPORTS_BEGIN_CYCLE: ApplicationService._reports_begin_cycle,
+        Capability.REPORTS_COMMIT: ApplicationService._reports_commit,
+        Capability.REPORTS_RECORD_RUN_STATE: ApplicationService._reports_record_run_state,
+        Capability.REPORTS_READ: ApplicationService._reports_read,
+        Capability.REPORTS_LATEST: ApplicationService._reports_latest,
+        Capability.REPORTS_LIST: ApplicationService._reports_list,
+        Capability.REPORTS_SEARCH: ApplicationService._reports_search,
+        Capability.REPORTS_RESOLVE_SET: ApplicationService._reports_resolve_set,
         Capability.ENTITIES_SEARCH: ApplicationService._entities_search,
         Capability.ENTITIES_GET: ApplicationService._entities_get,
         Capability.ENTITIES_RESOLVE: ApplicationService._entities_resolve,

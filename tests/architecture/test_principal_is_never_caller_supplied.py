@@ -198,6 +198,19 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # Remote grant staging compares the NAS-issued contract Principal with the
     # store's authenticated Principal partition before persisting any bounds.
     "infrastructure/persistence/native_sources.py": (("grant", "principal_id"),),
+    "application/intelligence.py": (
+        ("artifact", "principal_id"),
+        ("artifact", "principal_id"),
+        ("artifact", "principal_id"),
+        ("cycle", "principal_id"),
+        ("cycle", "principal_id"),
+        ("receipt", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+        ("run", "principal_id"),
+    ),
     # The entity plane reads the `principal_id` carried on the domain record it
     # was handed, and reads it *in order to refuse a mismatch* against the
     # `principal_id` argument the application resolved: `create` scopes its

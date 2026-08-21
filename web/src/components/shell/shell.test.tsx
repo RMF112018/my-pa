@@ -1,13 +1,15 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { cleanup, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { AppShell } from "@/components/shell/app-shell";
 import { DESTINATIONS } from "@/components/shell/destinations";
 import type { PrincipalSession } from "@/contracts/identity";
 
+const navigation = vi.hoisted(() => ({ push: vi.fn() }));
+
 vi.mock("next/navigation", () => ({
   usePathname: () => "/today",
-  useRouter: () => ({ push: vi.fn(), refresh: vi.fn() }),
+  useRouter: () => ({ push: navigation.push, refresh: vi.fn() }),
 }));
 
 const PRINCIPAL: PrincipalSession = {
@@ -26,13 +28,24 @@ afterEach(() => {
 });
 
 describe("app shell", () => {
-  it("renders all five destinations in the navigation", () => {
+  it("renders the six primary destinations in successor order and System as utility", () => {
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
-    expect(DESTINATIONS).toHaveLength(5);
-    for (const d of DESTINATIONS) {
-      // Desktop rail + mobile nav each render the label once.
-      expect(screen.getAllByRole("link", { name: d.label }).length).toBeGreaterThanOrEqual(2);
+    expect(DESTINATIONS.map(({ label }) => label)).toEqual([
+      "Today",
+      "Work",
+      "Intelligence",
+      "People",
+      "Knowledge",
+      "Review",
+    ]);
+    for (const [index, destination] of DESTINATIONS.entries()) {
+      // The first four appear in both desktop and mobile primary navigation;
+      // Knowledge and Review move under mobile More.
+      expect(screen.getAllByRole("link", { name: destination.label })).toHaveLength(
+        index < 4 ? 2 : 1,
+      );
     }
+    expect(screen.getAllByRole("link", { name: "System" }).length).toBeGreaterThanOrEqual(1);
   });
 
   it("shows the signed-in principal and the synthetic badge", () => {
@@ -46,6 +59,18 @@ describe("app shell", () => {
     render(<AppShell principal={PRINCIPAL}>content</AppShell>);
     const todayLinks = screen.getAllByRole("link", { name: "Today" });
     expect(todayLinks.some((l) => l.getAttribute("aria-current") === "page")).toBe(true);
+  });
+
+  it("opens the command menu from the keyboard and navigates only to supported routes", async () => {
+    const user = userEvent.setup();
+    render(<AppShell principal={PRINCIPAL}>content</AppShell>);
+
+    fireEvent.keyDown(window, { key: "k", metaKey: true });
+    expect(await screen.findByRole("dialog", { name: "Command menu" })).toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: "Knowledge" }));
+
+    expect(navigation.push).toHaveBeenCalledWith("/knowledge");
+    expect(screen.queryByRole("dialog", { name: "Command menu" })).toBeNull();
   });
 
   it("opens Capture, focuses the field, and sends one attempt-keyed submission", async () => {

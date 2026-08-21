@@ -24,6 +24,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "f4c1a8e6b205"
 PRIOR: Final = "d9c4e1a7b628"
+INTELLIGENCE_REVISION: Final = "e9b2c4d7a150"
 #: Where `upgrade head` lands, which the database tier reads back out of
 #: `alembic_version`. That is a position in the chain rather than a property of
 #: this revision, so it moves whenever a revision is added; the chain test below
@@ -34,7 +35,8 @@ CAPABILITY_REVISION: Final = "c1a7e4b93d58"
 GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 #: The unresolved-mention capability admission, between governance and head.
 QUEUE_REVISION: Final = "e4d7b2f9a316"
-HEAD_REVISION: Final = "f3a8c1d7e592"
+MENTION_REVISION: Final = "f3a8c1d7e592"
+HEAD_REVISION: Final = INTELLIGENCE_REVISION
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_f4c1a8e6b205_add_goodnotes_delivery_attempt_ledger.py"
@@ -120,10 +122,11 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(CAPABILITY_REVISION).down_revision == ALIAS_REVISION
     assert script.get_revision(GOVERNANCE_REVISION).down_revision == CAPABILITY_REVISION
     assert script.get_revision(QUEUE_REVISION).down_revision == GOVERNANCE_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == QUEUE_REVISION
+    assert script.get_revision(MENTION_REVISION).down_revision == QUEUE_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == MENTION_REVISION
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(PRIOR).down_revision == GROUNDING_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 64
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 65
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

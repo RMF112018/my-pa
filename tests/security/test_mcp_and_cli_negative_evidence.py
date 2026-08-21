@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route fifty-four capability names and none of them mutates a source, and every
+  surface route sixty-two capability names and none of them mutates a source, and every
   capability driven over both transports is shown to have called only the three
   read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -331,6 +331,14 @@ SCOPED_CAPABILITIES = [
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.REPORTS_READ,
+        Capability.REPORTS_LATEST,
+        Capability.REPORTS_LIST,
+        Capability.REPORTS_SEARCH,
+        Capability.REPORTS_RESOLVE_SET,
         # The relationship-intelligence entity plane (WP-RI-05) is scopeless for
         # the reason the two planes above are: an entity belongs to no `src_…`
         # and no `enr_…`, so there is no scope for a request to name and none to

@@ -1,0 +1,8 @@
+import { AlertTriangle, BadgeCheck, CheckCircle2, CircleDashed, CloudOff, FileText, GitCompareArrows, History, Pencil, Sparkles, TimerReset, UserCheck, type LucideIcon } from "lucide-react";
+import { Icon } from "@/components/ui/icon";
+
+export type EpistemicRole = "source" | "ai-derived" | "user-confirmed" | "canonical" | "proposed" | "needs-review" | "ambiguous" | "conflicted" | "stale" | "superseded" | "unavailable" | "pipeline-incomplete";
+const META: Record<EpistemicRole, { label: string; icon: LucideIcon }> = {
+  source: { label: "Source", icon: FileText }, "ai-derived": { label: "AI derived", icon: Sparkles }, "user-confirmed": { label: "User confirmed", icon: UserCheck }, canonical: { label: "Canonical", icon: BadgeCheck }, proposed: { label: "Proposed", icon: Pencil }, "needs-review": { label: "Needs review", icon: CheckCircle2 }, ambiguous: { label: "Ambiguous", icon: GitCompareArrows }, conflicted: { label: "Conflicted", icon: AlertTriangle }, stale: { label: "Stale", icon: TimerReset }, superseded: { label: "Superseded", icon: History }, unavailable: { label: "Source unavailable", icon: CloudOff }, "pipeline-incomplete": { label: "Incomplete", icon: CircleDashed },
+};
+export function EpistemicLabel({ role, detail }: { role: EpistemicRole; detail?: string }) { const meta = META[role]; return <span data-epistemic-role={role} className="inline-flex items-center gap-1.5 rounded-full border px-2 py-1 text-xs font-medium" style={{ color: `var(--ep-${role}-fg)`, background: `var(--ep-${role}-bg)`, borderColor: `var(--ep-${role}-border)` }}><Icon icon={meta.icon} size={14} />{meta.label}{detail ? <span className="font-normal">· {detail}</span> : null}</span>; }

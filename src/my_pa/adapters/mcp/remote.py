@@ -53,6 +53,7 @@ _WRITE_PURPOSES: Final = frozenset(
         Purpose.COMMITMENT_AUTHORING,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
+        Purpose.REPORT_AUTHORING,
     }
 )
 

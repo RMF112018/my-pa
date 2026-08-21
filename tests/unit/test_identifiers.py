@@ -105,6 +105,10 @@ def test_contract_prefixes_are_stable() -> None:
         "bulk",
         "ctxm",
         "cpref",
+        "micr",
+        "rrun",
+        "rpt",
+        "rrc",
         # WP-RI-01: the relationship-intelligence entity plane. Four prefixes,
         # one per table the migration creates. The plane's later records
         # (observations, proposals, context packets, merge lineage) get their

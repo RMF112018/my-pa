@@ -185,6 +185,18 @@ class IdKind(StrEnum):
     #: names a prepared package or a preference that ranked one, and `ctxm`
     #: already names the assembled packet.
     CONTEXT_PREFERENCE_EVENT = "cpref"
+    #: The Intelligence Artifact / Report plane. Four prefixes rather than a
+    #: reuse of capture `rcpt`/`cap`, managed `mdoc`, or context `ctxm`, on the
+    #: same argument `CAPTURE_VERSION` makes against reusing `VERSION`: a stored
+    #: reference, a receipt, and an audit row have to say which plane they name.
+    #: `micr` is a cycle execution, not a producer attempt; `rrun` is one
+    #: producer run, including a failure with no body; `rpt` is one immutable
+    #: committed artifact; `rrc` is the admission receipt for a cycle begin,
+    #: artifact commit, or run-state write.
+    INTELLIGENCE_CYCLE_RUN = "micr"
+    INTELLIGENCE_RUN = "rrun"
+    INTELLIGENCE_ARTIFACT = "rpt"
+    INTELLIGENCE_RECEIPT = "rrc"
     #: WP-RI-01: the relationship-intelligence entity plane. Each surface is its
     #: own prefix on the same argument the existing relationship-plane prefixes
     #: make — a stored reference or an audit row has to say which record it

@@ -25,6 +25,11 @@ import { LIVE_URL, DEAD_GATEWAY_URL } from "../playwright.config";
 const ROUTES = [
   "/sign-in",
   "/today",
+  "/work",
+  "/intelligence",
+  "/people",
+  "/knowledge",
+  "/knowledge?q=warm",
   "/library",
   "/library?q=warm",
   "/situations",

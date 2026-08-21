@@ -256,6 +256,14 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.GOODNOTES_WORK, Purpose.GOODNOTES_WORK),
         (Capability.GOODNOTES_CONTENT, Purpose.GOODNOTES_CONTENT),
         (Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL),
+        (Capability.REPORTS_BEGIN_CYCLE, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_COMMIT, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_RECORD_RUN_STATE, Purpose.REPORT_AUTHORING),
+        (Capability.REPORTS_READ, Purpose.REPORT_READ),
+        (Capability.REPORTS_LATEST, Purpose.REPORT_READ),
+        (Capability.REPORTS_LIST, Purpose.REPORT_READ),
+        (Capability.REPORTS_SEARCH, Purpose.REPORT_READ),
+        (Capability.REPORTS_RESOLVE_SET, Purpose.REPORT_READ),
         # The entity plane. All six capabilities share the single `entity_read`
         # purpose, exactly as the task-plane reads share `task_read`: the plane
         # is a read plane over the acting Principal's own entities, and there is
@@ -294,10 +302,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # 2 purposes; goodnotes.work/propose added 2 capabilities and 2 purposes;
     # goodnotes.content added 1 capability and 1 purpose; the entity plane added
     # 5 capabilities and 1 purpose, and its unresolved-mention queue one
-    # more capability under the purpose the other five already use.
-    # Unioned: 54 capabilities, 23 purposes, 56 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 56
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 56 == 1186
+    # more capability under the purpose the other five already use; the
+    # Intelligence Artifact plane added 8 capabilities and 2 purposes.
+    # Unioned: 62 capabilities, 25 purposes, 64 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 64
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 64 == 1486
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

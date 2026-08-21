@@ -1,4 +1,4 @@
-"""The ports the fifty-four capability use cases call, and nothing else.
+"""The ports the sixty-two capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -1788,6 +1788,14 @@ class UnitOfWork(ABC):
         parameter on every method and is the authenticated caller's partition,
         never a caller-supplied field.
         """
+
+    def intelligence_for(self, principal_id: str) -> object:
+        """Intelligence Artifact store for the authenticated Principal.
+
+        Optional on older test doubles. Production and the FAST world implement
+        it. `principal_id` is the authenticated partition, never a payload field.
+        """
+        raise NotImplementedError
 
     @property
     @abstractmethod

@@ -57,10 +57,12 @@ from typing import Any, Final
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
     Command,
+    CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
     CreateManagedDocument,
@@ -77,12 +79,14 @@ from my_pa.application.commands import (
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetLatestIntelligenceArtifact,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
     ListReviewCases,
@@ -93,19 +97,23 @@ from my_pa.application.commands import (
     PrepareContext,
     ReadCapture,
     ReadCommitment,
+    ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
     ReadTask,
     RecordContextFeedback,
+    RecordIntelligenceRunState,
     RecordTask,
     Representation,
     ResolveEntity,
+    ResolveIntelligenceSet,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
     SearchEntities,
+    SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -120,6 +128,15 @@ from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.context import ContextPlane
 from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
+from my_pa.domain.intelligence.catalog import (
+    ArtifactKind,
+    ArtifactState,
+    FocusAreaId,
+    IntelligenceStage,
+    ProducerRunState,
+    ResolverSetId,
+    SourceLaneId,
+)
 from my_pa.domain.situation.continuity import CommitmentDirection, CommitmentState
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
@@ -624,6 +641,156 @@ def _get_goodnotes_content(payload: Mapping[str, Any]) -> Command:
     return GetGoodNotesContent(**payload)
 
 
+def _enum_or_invalid[T](value: object, enum: type[T], detail: SafeDetail) -> T:
+    if isinstance(value, enum):
+        return value
+    if not isinstance(value, str):
+        raise InvalidRequestError(detail)
+    try:
+        return enum(value)  # type: ignore[call-arg]
+    except ValueError:
+        raise InvalidRequestError(detail) from None
+
+
+def _begin_intelligence_cycle(payload: Mapping[str, Any]) -> Command:
+    return BeginIntelligenceCycle(**payload)
+
+
+def _commit_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    converted["stage"] = _enum_or_invalid(
+        converted.get("stage"), IntelligenceStage, SafeDetail.STAGE
+    )
+    converted["artifact_kind"] = _enum_or_invalid(
+        converted.get("artifact_kind"), ArtifactKind, SafeDetail.ARTIFACT_KIND
+    )
+    converted["artifact_state"] = _enum_or_invalid(
+        converted.get("artifact_state"), ArtifactState, SafeDetail.SELECTOR
+    )
+    if converted.get("focus_area_id") is not None:
+        converted["focus_area_id"] = _enum_or_invalid(
+            converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
+        )
+    if converted.get("source_lane") is not None:
+        converted["source_lane"] = _enum_or_invalid(
+            converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
+        )
+    if "dependency_report_ids" in converted:
+        named = converted["dependency_report_ids"]
+        if not isinstance(named, list):
+            raise InvalidRequestError(SafeDetail.DEPENDENCY_REPORT_IDS)
+        converted["dependency_report_ids"] = tuple(named)
+    if "provenance" in converted:
+        named = converted["provenance"]
+        if not isinstance(named, list):
+            raise InvalidRequestError(SafeDetail.PROVENANCE)
+        converted["provenance"] = tuple(named)
+    _task_moment(converted, "coverage_start", SafeDetail.SCHEDULED_AT)
+    _task_moment(converted, "coverage_end", SafeDetail.DEFERRED_UNTIL)
+    return CommitIntelligenceArtifact(**converted)
+
+
+def _record_intelligence_run_state(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    converted["stage"] = _enum_or_invalid(
+        converted.get("stage"), IntelligenceStage, SafeDetail.STAGE
+    )
+    converted["artifact_kind"] = _enum_or_invalid(
+        converted.get("artifact_kind"), ArtifactKind, SafeDetail.ARTIFACT_KIND
+    )
+    converted["state"] = _enum_or_invalid(
+        converted.get("state"), ProducerRunState, SafeDetail.SELECTOR
+    )
+    if converted.get("focus_area_id") is not None:
+        converted["focus_area_id"] = _enum_or_invalid(
+            converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
+        )
+    if converted.get("source_lane") is not None:
+        converted["source_lane"] = _enum_or_invalid(
+            converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
+        )
+    return RecordIntelligenceRunState(**converted)
+
+
+def _read_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
+    return ReadIntelligenceArtifact(**payload)
+
+
+def _latest_intelligence_artifact(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if converted.get("stage") is not None:
+        converted["stage"] = _enum_or_invalid(
+            converted["stage"], IntelligenceStage, SafeDetail.STAGE
+        )
+    if converted.get("artifact_kind") is not None:
+        converted["artifact_kind"] = _enum_or_invalid(
+            converted["artifact_kind"], ArtifactKind, SafeDetail.ARTIFACT_KIND
+        )
+    if converted.get("focus_area_id") is not None:
+        converted["focus_area_id"] = _enum_or_invalid(
+            converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
+        )
+    if converted.get("source_lane") is not None:
+        converted["source_lane"] = _enum_or_invalid(
+            converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
+        )
+    return GetLatestIntelligenceArtifact(**converted)
+
+
+def _list_intelligence_artifacts(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if converted.get("stage") is not None:
+        converted["stage"] = _enum_or_invalid(
+            converted["stage"], IntelligenceStage, SafeDetail.STAGE
+        )
+    if converted.get("artifact_kind") is not None:
+        converted["artifact_kind"] = _enum_or_invalid(
+            converted["artifact_kind"], ArtifactKind, SafeDetail.ARTIFACT_KIND
+        )
+    if converted.get("focus_area_id") is not None:
+        converted["focus_area_id"] = _enum_or_invalid(
+            converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
+        )
+    if converted.get("source_lane") is not None:
+        converted["source_lane"] = _enum_or_invalid(
+            converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
+        )
+    return ListIntelligenceArtifacts(**converted)
+
+
+def _search_intelligence_artifacts(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if converted.get("stage") is not None:
+        converted["stage"] = _enum_or_invalid(
+            converted["stage"], IntelligenceStage, SafeDetail.STAGE
+        )
+    if converted.get("artifact_kind") is not None:
+        converted["artifact_kind"] = _enum_or_invalid(
+            converted["artifact_kind"], ArtifactKind, SafeDetail.ARTIFACT_KIND
+        )
+    if converted.get("focus_area_id") is not None:
+        converted["focus_area_id"] = _enum_or_invalid(
+            converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
+        )
+    if converted.get("source_lane") is not None:
+        converted["source_lane"] = _enum_or_invalid(
+            converted["source_lane"], SourceLaneId, SafeDetail.SOURCE_LANE
+        )
+    return SearchIntelligenceArtifacts(**converted)
+
+
+def _resolve_intelligence_set(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    converted["set_id"] = _enum_or_invalid(
+        converted.get("set_id"), ResolverSetId, SafeDetail.SET_ID
+    )
+    if converted.get("focus_area_id") is not None:
+        converted["focus_area_id"] = _enum_or_invalid(
+            converted["focus_area_id"], FocusAreaId, SafeDetail.FOCUS_AREA_ID
+        )
+    return ResolveIntelligenceSet(**converted)
+
+
 def _submit_goodnotes_proposal(payload: Mapping[str, Any]) -> Command:
     """`goodnotes.propose`, with JSON arrays converted to the tuples the command holds."""
     converted = dict(payload)
@@ -766,6 +933,14 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.GOODNOTES_WORK: _get_goodnotes_work,
         Capability.GOODNOTES_CONTENT: _get_goodnotes_content,
         Capability.GOODNOTES_PROPOSE: _submit_goodnotes_proposal,
+        Capability.REPORTS_BEGIN_CYCLE: _begin_intelligence_cycle,
+        Capability.REPORTS_COMMIT: _commit_intelligence_artifact,
+        Capability.REPORTS_RECORD_RUN_STATE: _record_intelligence_run_state,
+        Capability.REPORTS_READ: _read_intelligence_artifact,
+        Capability.REPORTS_LATEST: _latest_intelligence_artifact,
+        Capability.REPORTS_LIST: _list_intelligence_artifacts,
+        Capability.REPORTS_SEARCH: _search_intelligence_artifacts,
+        Capability.REPORTS_RESOLVE_SET: _resolve_intelligence_set,
         Capability.ENTITIES_SEARCH: _search_entities,
         Capability.ENTITIES_GET: _get_entity,
         Capability.ENTITIES_RESOLVE: _resolve_entity,
@@ -781,7 +956,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the fifty-four names nothing.
+    not one of the sixty-two names nothing.
     """
     try:
         return Capability(capability)

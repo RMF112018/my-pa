@@ -253,6 +253,17 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_PROPOSE,
         Capability.GOODNOTES_CONTENT,
+        # Intelligence artifacts name a Principal partition and a cycle run, not
+        # a configured source. Requiring an enrollment would make the plane
+        # unusable; naming one would be naming a grant this plane cannot hold.
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.REPORTS_READ,
+        Capability.REPORTS_LATEST,
+        Capability.REPORTS_LIST,
+        Capability.REPORTS_SEARCH,
+        Capability.REPORTS_RESOLVE_SET,
         # The entity plane's partition, not a source. An entity carries no
         # `enrollment_id` and no grant a requested scope could be compared
         # against -- it is the Principal's own record of a person, not an

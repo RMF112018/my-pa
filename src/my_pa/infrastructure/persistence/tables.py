@@ -165,6 +165,15 @@ from my_pa.domain.extraction.quarantine import QuarantineReason, QuarantineRevie
 from my_pa.domain.extraction.text import SUPPORTED_MEDIA_TYPES, ExtractionStatus
 from my_pa.domain.identity.operation import Capability, NativeSourceCapability
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.intelligence.catalog import (
+    MAX_ARTIFACT_BODY_BYTES,
+    ArtifactKind,
+    ArtifactState,
+    CycleState,
+    IntelligenceStage,
+    ProducerRunState,
+    ProvenanceRelation,
+)
 from my_pa.domain.native_sources import (
     LiveActivationGateState,
     NativeRunKind,
@@ -6600,4 +6609,174 @@ context_preference_current = Table(
         [f"{SCHEMA}.context_preference_events.event_id"],
         name="context_preference_current_cites_an_event",
     ),
+)
+
+intelligence_cycle_runs = Table(
+    "intelligence_cycle_runs",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("cycle_run_id", Text, nullable=False),
+    Column("cycle_id", Text, nullable=False),
+    Column("business_date", Date, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("automation_platform", Text),
+    Column("external_root_run_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint("principal_id", "cycle_run_id", name="intelligence_cycle_runs_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("cycle_run_id", IdKind.INTELLIGENCE_CYCLE_RUN),
+    _one_of("state", CycleState, name="intelligence_cycle_state_is_known"),
+)
+
+intelligence_producer_runs = Table(
+    "intelligence_producer_runs",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("run_id", Text, nullable=False),
+    Column("cycle_run_id", Text, nullable=False),
+    Column("focus_area_id", Text),
+    Column("stage", Text, nullable=False),
+    Column("artifact_kind", Text, nullable=False),
+    Column("source_lane", Text),
+    Column("producer_task_id", Text, nullable=False),
+    Column("producer_task_name", Text, nullable=False),
+    Column("automation_platform", Text, nullable=False),
+    Column("automation_run_id", Text),
+    Column("report_date", Date, nullable=False),
+    Column("coverage_start", DateTime(timezone=True)),
+    Column("coverage_end", DateTime(timezone=True)),
+    Column("state", Text, nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("failure_code", Text),
+    Column("failure_summary", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("started_at", DateTime(timezone=True)),
+    Column("finished_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint("principal_id", "run_id", name="intelligence_producer_runs_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("run_id", IdKind.INTELLIGENCE_RUN),
+    _is_identifier("cycle_run_id", IdKind.INTELLIGENCE_CYCLE_RUN),
+    _one_of("stage", IntelligenceStage, name="intelligence_run_stage_is_known"),
+    _one_of("artifact_kind", ArtifactKind, name="intelligence_run_kind_is_known"),
+    _one_of("state", ProducerRunState, name="intelligence_run_state_is_known"),
+)
+
+intelligence_artifacts = Table(
+    "intelligence_artifacts",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("artifact_id", Text, nullable=False),
+    Column("cycle_run_id", Text, nullable=False),
+    Column("producer_run_id", Text, nullable=False),
+    Column("focus_area_id", Text),
+    Column("stage", Text, nullable=False),
+    Column("artifact_kind", Text, nullable=False),
+    Column("source_lane", Text),
+    Column("report_date", Date, nullable=False),
+    Column("title", Text, nullable=False),
+    Column("body_markdown", Text, nullable=False),
+    # Bare `JSONB`, like every other JSONB column in this file, and not
+    # `JSONB(none_as_null=True)`. `JSONB.__init__` is untyped in SQLAlchemy's
+    # stubs at the declared floor (`2.0.20`) and typed later, so the call form is
+    # green on every local gate and fails `no-untyped-call` in `dependency-floor`
+    # alone — the same trap `capture_search._searchable_and_stored` documents,
+    # and `# type: ignore[no-untyped-call]` is no way out of it, because
+    # `strict = true` enables `warn_unused_ignores` and the ignore is itself an
+    # error at the installed version.
+    #
+    # Equivalent here, not merely close: `none_as_null` decides how a Python
+    # `None` is persisted, and nothing ever hands this column one.
+    # `SqlIntelligenceRepository._artifact_payload` writes the key only when
+    # `structured_content is not None`, so an absent value omits the column and
+    # the server writes SQL NULL — which is what `none_as_null=True` was asking
+    # for. The keyword was doing nothing, and paying for it in one CI job.
+    Column("structured_content", JSONB),
+    Column("content_sha256", Text, nullable=False),
+    Column("content_bytes", Integer, nullable=False),
+    Column("artifact_state", Text, nullable=False),
+    Column("completeness", Text),
+    Column("schema_version", Text, nullable=False),
+    Column("producer_prompt_version", Text),
+    Column("generated_at", DateTime(timezone=True), nullable=False),
+    Column("committed_at", DateTime(timezone=True), nullable=False),
+    Column("version", Integer, nullable=False),
+    Column("is_current", Boolean, nullable=False),
+    Column("supersedes_artifact_id", Text),
+    Column("evaluation_metric_id", Text),
+    Column("evaluation_metric_version", Text),
+    Column("evaluation_score", Text),
+    Column("evaluation_state", Text),
+    PrimaryKeyConstraint("principal_id", "artifact_id", name="intelligence_artifacts_pkey"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("artifact_id", IdKind.INTELLIGENCE_ARTIFACT),
+    CheckConstraint(
+        f"content_bytes >= 0 AND content_bytes <= {MAX_ARTIFACT_BODY_BYTES}",
+        name="intelligence_artifact_body_is_bounded",
+    ),
+    CheckConstraint(
+        "structured_content IS NULL OR jsonb_typeof(structured_content) = 'object'",
+        name="intelligence_artifacts_structured_content_check",
+    ),
+    _one_of("artifact_state", ArtifactState, name="intelligence_artifact_state_is_known"),
+)
+
+intelligence_commit_receipts = Table(
+    "intelligence_commit_receipts",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("receipt_id", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("mutation_kind", Text, nullable=False),
+    Column("fingerprint_sha256", Text, nullable=False),
+    Column("cycle_run_id", Text, nullable=False),
+    Column("producer_run_id", Text),
+    Column("artifact_id", Text),
+    Column("content_sha256", Text),
+    Column("content_bytes", Integer),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint("principal_id", "receipt_id", name="intelligence_commit_receipts_pkey"),
+    UniqueConstraint("principal_id", "idempotency_key", name="one_intelligence_key_per_principal"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("receipt_id", IdKind.INTELLIGENCE_RECEIPT),
+)
+
+intelligence_pipeline_dependencies = Table(
+    "intelligence_pipeline_dependencies",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("downstream_artifact_id", Text, nullable=False),
+    Column("upstream_artifact_id", Text, nullable=False),
+    Column("dependency_role", Text, nullable=False),
+    Column("required", Boolean, nullable=False),
+    Column("expected_stage", Text),
+    Column("expected_focus_area_id", Text),
+    Column("expected_source_lane", Text),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "downstream_artifact_id",
+        "upstream_artifact_id",
+        name="intelligence_pipeline_dependencies_pkey",
+    ),
+)
+
+intelligence_provenance_refs = Table(
+    "intelligence_provenance_refs",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("artifact_id", Text, nullable=False),
+    Column("position", Integer, nullable=False),
+    Column("source_system", Text, nullable=False),
+    Column("source_ref", Text, nullable=False),
+    Column("relation", Text, nullable=False),
+    Column("source_url", Text),
+    Column("observed_at", DateTime(timezone=True)),
+    Column("retrieved_at", DateTime(timezone=True)),
+    Column("evidence_subject_id", Text),
+    PrimaryKeyConstraint(
+        "principal_id", "artifact_id", "position", name="intelligence_provenance_refs_pkey"
+    ),
+    _one_of("relation", ProvenanceRelation, name="intelligence_provenance_relation_is_known"),
 )

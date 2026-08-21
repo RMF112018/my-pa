@@ -40,6 +40,7 @@ EXACT_RENDER_REVISION: Final = "c3e9a7f1b204"
 CONTENT_REVISION: Final = "a4d9c2e7b815"
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
 ENTITY_KIND_REVISION: Final = "d9c4e1a7b628"
+INTELLIGENCE_REVISION: Final = "e9b2c4d7a150"
 ATTEMPT_REVISION: Final = "f4c1a8e6b205"
 ENTITY_REVISION: Final = "9def3c2e63bb"
 #: Where `upgrade head` lands, which the database tier reads back out of
@@ -51,7 +52,8 @@ CAPABILITY_REVISION: Final = "c1a7e4b93d58"
 GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 #: The unresolved-mention capability admission, between governance and head.
 QUEUE_REVISION: Final = "e4d7b2f9a316"
-HEAD_REVISION: Final = "f3a8c1d7e592"
+MENTION_REVISION: Final = "f3a8c1d7e592"
+HEAD_REVISION: Final = INTELLIGENCE_REVISION
 PREVIOUS: Final = "c9e2b6a4d813"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_d7e1a4c8b926_admit_goodnotes_work_and_propose.py"
@@ -169,14 +171,16 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(CONTENT_REVISION).down_revision == EXACT_RENDER_REVISION
     assert script.get_revision(GROUNDING_REVISION).down_revision == CONTENT_REVISION
     assert script.get_revision(ENTITY_KIND_REVISION).down_revision == GROUNDING_REVISION
+    assert script.get_revision("f4c1a8e6b205").down_revision == ENTITY_KIND_REVISION
     assert script.get_revision(ATTEMPT_REVISION).down_revision == ENTITY_KIND_REVISION
     assert script.get_revision(ENTITY_REVISION).down_revision == ATTEMPT_REVISION
     assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
     assert script.get_revision(CAPABILITY_REVISION).down_revision == ALIAS_REVISION
     assert script.get_revision(GOVERNANCE_REVISION).down_revision == CAPABILITY_REVISION
     assert script.get_revision(QUEUE_REVISION).down_revision == GOVERNANCE_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == QUEUE_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 64
+    assert script.get_revision(MENTION_REVISION).down_revision == QUEUE_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == MENTION_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 65
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

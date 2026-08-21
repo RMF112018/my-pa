@@ -50,10 +50,12 @@ from datetime import datetime
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
     Command,
+    CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
     CreateManagedDocument,
@@ -70,12 +72,14 @@ from my_pa.application.commands import (
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetLatestIntelligenceArtifact,
     GetPulse,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
     ListReviewCases,
@@ -86,18 +90,22 @@ from my_pa.application.commands import (
     PrepareContext,
     ReadCapture,
     ReadCommitment,
+    ReadIntelligenceArtifact,
     ReadKnowledge,
     ReadManagedDocument,
     ReadTask,
     RecordContextFeedback,
+    RecordIntelligenceRunState,
     RecordTask,
     ResolveEntity,
+    ResolveIntelligenceSet,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
     SearchEntities,
+    SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -270,6 +278,14 @@ def _requested_scope(
             | GetGoodNotesWork()
             | GetGoodNotesContent()
             | SubmitGoodNotesProposal()
+            | BeginIntelligenceCycle()
+            | CommitIntelligenceArtifact()
+            | RecordIntelligenceRunState()
+            | ReadIntelligenceArtifact()
+            | GetLatestIntelligenceArtifact()
+            | ListIntelligenceArtifacts()
+            | SearchIntelligenceArtifacts()
+            | ResolveIntelligenceSet()
             # The entity plane names a person, not a source, for the reason
             # `domain.policy.decision._SCOPELESS` states beside the same five.
             | SearchEntities()

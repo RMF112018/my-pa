@@ -33,7 +33,7 @@ inside the payload the caller controls.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from types import MappingProxyType
 from typing import ClassVar
@@ -73,6 +73,16 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesTranscriptionStatus,
 )
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.intelligence.catalog import (
+    MAX_IDEMPOTENCY_KEY_LENGTH,
+    ArtifactKind,
+    ArtifactState,
+    FocusAreaId,
+    IntelligenceStage,
+    ProducerRunState,
+    ResolverSetId,
+    SourceLaneId,
+)
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.search.query import SearchQuery, SearchQueryError
 from my_pa.domain.situation.continuity import (
@@ -87,11 +97,13 @@ __all__ = [
     "AddProjectCommand",
     "ArchiveManagedDocument",
     "ArchiveManagedDocumentCommand",
+    "BeginIntelligenceCycle",
     "BulkConfirmTasks",
     "BulkPreviewTasks",
     "CloseCommitment",
     "CloseSituationCommand",
     "Command",
+    "CommitIntelligenceArtifact",
     "CreateCapture",
     "CreateCommitment",
     "CreateManagedDocument",
@@ -107,6 +119,7 @@ __all__ = [
     "GetCorpusCoverage",
     "GetGoodNotesContent",
     "GetGoodNotesWork",
+    "GetLatestIntelligenceArtifact",
     "GetPulse",
     "GetSourceMetadata",
     "GetSourceStatus",
@@ -114,6 +127,7 @@ __all__ = [
     "LinkSituationToProjectCommand",
     "ListCaptures",
     "ListCommitments",
+    "ListIntelligenceArtifacts",
     "ListManagedDocuments",
     "ListManagedDocumentsCommand",
     "ListProjects",
@@ -125,14 +139,17 @@ __all__ = [
     "PrepareContext",
     "ReadCapture",
     "ReadCommitment",
+    "ReadIntelligenceArtifact",
     "ReadKnowledge",
     "ReadManagedDocument",
     "ReadManagedDocumentCommand",
     "ReadTask",
     "RecordContextFeedback",
+    "RecordIntelligenceRunState",
     "RecordRelationshipEventCommand",
     "RecordTask",
     "Representation",
+    "ResolveIntelligenceSet",
     "RestoreManagedDocument",
     "RestoreManagedDocumentCommand",
     "RevealSubject",
@@ -140,6 +157,7 @@ __all__ = [
     "ReviseManagedDocument",
     "ReviseManagedDocumentCommand",
     "SearchCaptures",
+    "SearchIntelligenceArtifacts",
     "SearchKnowledge",
     "SearchTasks",
     "SubmitGoodNotesProposal",
@@ -278,9 +296,29 @@ def _idempotency_key(value: object) -> str:
     the `isinstance` unreachable to a type checker and the check reads as dead
     code to delete. The annotation describes what actually arrives from a
     transport, which is anything the caller sent.
+
+    The length bound arrived on the report-pipeline branch and is kept: an
+    unbounded key is a caller-chosen string that reaches storage.
     """
     if not isinstance(value, str) or not value:
         raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+    if len(value) > MAX_IDEMPOTENCY_KEY_LENGTH:
+        raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+    return value
+
+
+def _iso_date(value: str, detail: SafeDetail) -> str:
+    """A calendar date as YYYY-MM-DD. The value never reaches a message."""
+    if not isinstance(value, str):
+        raise InvalidRequestError(detail)
+    accepted = False
+    try:
+        date.fromisoformat(value)
+        accepted = True
+    except ValueError:
+        pass
+    if not accepted or len(value) != 10:
+        raise InvalidRequestError(detail)
     return value
 
 
@@ -2301,6 +2339,289 @@ SubmitGoodNotesProposal.mcp_payload_properties = MappingProxyType(  # type: igno
 )
 
 
+@dataclass(frozen=True, slots=True)
+class BeginIntelligenceCycle:
+    """`reports.begin_cycle`: create or replay one Morning Intelligence cycle run.
+
+    A business date alone is not identity. Retrying with the same idempotency
+    key returns the original cycle_run_id. A new attempt on the same date uses
+    a new key. The principal is not here; authority comes from authenticated
+    context.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_BEGIN_CYCLE
+
+    cycle_id: str
+    business_date: str
+    idempotency_key: str
+    automation_platform: str | None = None
+    external_orchestration_id: str | None = None
+
+    def __post_init__(self) -> None:
+        _text(self.cycle_id, SafeDetail.SELECTOR)
+        if not self.cycle_id.strip():
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _iso_date(self.business_date, SafeDetail.REPORT_DATE)
+        _idempotency_key(self.idempotency_key)
+        if self.automation_platform is not None and not isinstance(self.automation_platform, str):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.external_orchestration_id is not None and not isinstance(
+            self.external_orchestration_id, str
+        ):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class CommitIntelligenceArtifact:
+    """`reports.commit`: atomically record a producer run and immutable artifact.
+
+    Markdown is stored as inert UTF-8 text. Principal is server-derived.
+    Pipeline dependencies are exact upstream artifact IDs, not filenames.
+    """
+
+    capability: ClassVar[Capability] = Capability.REPORTS_COMMIT
+
+    cycle_run_id: str
+    stage: IntelligenceStage
+    artifact_kind: ArtifactKind
+    producer_task_id: str
+    producer_task_name: str
+    automation_platform: str
+    report_date: str
+    title: str
+    body_markdown: str = field(repr=False)
+    artifact_state: ArtifactState
+    schema_version: str
+    idempotency_key: str
+    focus_area_id: FocusAreaId | None = None
+    source_lane: SourceLaneId | None = None
+    automation_run_id: str | None = None
+    coverage_start: datetime | None = None
+    coverage_end: datetime | None = None
+    producer_prompt_version: str | None = None
+    structured_content: dict[str, object] | None = None
+    dependency_report_ids: tuple[str, ...] = ()
+    provenance: tuple[dict[str, object], ...] = ()
+    supersedes_artifact_id: str | None = None
+    advisory_digest: str | None = None
+    completeness: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
+        if not isinstance(self.stage, IntelligenceStage):
+            raise InvalidRequestError(SafeDetail.STAGE)
+        if not isinstance(self.artifact_kind, ArtifactKind):
+            raise InvalidRequestError(SafeDetail.ARTIFACT_KIND)
+        if self.focus_area_id is not None and not isinstance(self.focus_area_id, FocusAreaId):
+            raise InvalidRequestError(SafeDetail.FOCUS_AREA_ID)
+        if self.source_lane is not None and not isinstance(self.source_lane, SourceLaneId):
+            raise InvalidRequestError(SafeDetail.SOURCE_LANE)
+        if not isinstance(self.artifact_state, ArtifactState):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _iso_date(self.report_date, SafeDetail.REPORT_DATE)
+        _text(self.title, SafeDetail.TITLE)
+        if not self.title.strip():
+            raise InvalidRequestError(SafeDetail.TITLE)
+        _text(self.body_markdown, SafeDetail.BODY_MARKDOWN)
+        _text(self.producer_task_id, SafeDetail.SELECTOR)
+        _text(self.producer_task_name, SafeDetail.NAME)
+        _text(self.automation_platform, SafeDetail.SELECTOR)
+        _text(self.schema_version, SafeDetail.SCHEMA_VERSION)
+        _idempotency_key(self.idempotency_key)
+        _moment(self.coverage_start, SafeDetail.SCHEDULED_AT)
+        _moment(self.coverage_end, SafeDetail.DEFERRED_UNTIL)
+        if not isinstance(self.dependency_report_ids, tuple):
+            raise InvalidRequestError(SafeDetail.DEPENDENCY_REPORT_IDS)
+        seen: set[str] = set()
+        for artifact_id in self.dependency_report_ids:
+            _identifier(artifact_id, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.DEPENDENCY_REPORT_IDS)
+            if artifact_id in seen:
+                raise InvalidRequestError(SafeDetail.DEPENDENCY_REPORT_IDS)
+            seen.add(artifact_id)
+        if not isinstance(self.provenance, tuple):
+            raise InvalidRequestError(SafeDetail.PROVENANCE)
+        if self.supersedes_artifact_id is not None:
+            _identifier(
+                self.supersedes_artifact_id, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.ARTIFACT_ID
+            )
+        if self.advisory_digest is not None:
+            # The same rule `_sha256_digest` states, and now the same code: this
+            # spelled the length and alphabet check inline and never the type, so
+            # a non-string reached `len()` before anything established it was one.
+            _sha256_digest(self.advisory_digest, SafeDetail.ADVISORY_DIGEST)
+        if self.structured_content is not None and not isinstance(self.structured_content, dict):
+            raise InvalidRequestError(SafeDetail.STRUCTURED_CONTENT)
+
+
+CommitIntelligenceArtifact.mcp_payload_properties = MappingProxyType(  # type: ignore[attr-defined]
+    {
+        "structured_content": {"type": "object"},
+        "provenance": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "source_system": {"type": "string"},
+                    "source_ref": {"type": "string"},
+                    "relation": {
+                        "type": "string",
+                        "enum": ["supports", "contradicts", "context", "derived_from"],
+                    },
+                    "source_href": {"type": "string"},
+                    "observed_at": {"type": "string", "format": "date-time"},
+                    "retrieved_at": {"type": "string", "format": "date-time"},
+                    "evidence_subject_id": {"type": "string"},
+                },
+                "required": ["source_system", "source_ref", "relation"],
+                "additionalProperties": False,
+            },
+        },
+    }
+)
+
+
+@dataclass(frozen=True, slots=True)
+class RecordIntelligenceRunState:
+    """`reports.record_run_state`: persist a producer attempt without a body."""
+
+    capability: ClassVar[Capability] = Capability.REPORTS_RECORD_RUN_STATE
+
+    cycle_run_id: str
+    stage: IntelligenceStage
+    artifact_kind: ArtifactKind
+    producer_task_id: str
+    producer_task_name: str
+    automation_platform: str
+    report_date: str
+    state: ProducerRunState
+    idempotency_key: str
+    focus_area_id: FocusAreaId | None = None
+    source_lane: SourceLaneId | None = None
+    automation_run_id: str | None = None
+    expected_version: int | None = None
+    failure_code: str | None = None
+    failure_summary: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
+        if not isinstance(self.stage, IntelligenceStage):
+            raise InvalidRequestError(SafeDetail.STAGE)
+        if not isinstance(self.artifact_kind, ArtifactKind):
+            raise InvalidRequestError(SafeDetail.ARTIFACT_KIND)
+        if not isinstance(self.state, ProducerRunState):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _iso_date(self.report_date, SafeDetail.REPORT_DATE)
+        _idempotency_key(self.idempotency_key)
+        if self.focus_area_id is not None and not isinstance(self.focus_area_id, FocusAreaId):
+            raise InvalidRequestError(SafeDetail.FOCUS_AREA_ID)
+        if self.source_lane is not None and not isinstance(self.source_lane, SourceLaneId):
+            raise InvalidRequestError(SafeDetail.SOURCE_LANE)
+        if self.expected_version is not None and (
+            type(self.expected_version) is not int or self.expected_version < 1
+        ):
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+
+
+@dataclass(frozen=True, slots=True)
+class ReadIntelligenceArtifact:
+    """`reports.read`: exact immutable artifact by ID, Principal-scoped."""
+
+    capability: ClassVar[Capability] = Capability.REPORTS_READ
+
+    report_id: str
+    include_body: bool = True
+
+    def __post_init__(self) -> None:
+        _identifier(self.report_id, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.ARTIFACT_ID)
+        if not isinstance(self.include_body, bool):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class GetLatestIntelligenceArtifact:
+    """`reports.latest`: current-head selection. Never crosses cycle_run_id."""
+
+    capability: ClassVar[Capability] = Capability.REPORTS_LATEST
+
+    cycle_run_id: str
+    stage: IntelligenceStage | None = None
+    artifact_kind: ArtifactKind | None = None
+    focus_area_id: FocusAreaId | None = None
+    source_lane: SourceLaneId | None = None
+    report_date: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
+        if self.report_date is not None:
+            _iso_date(self.report_date, SafeDetail.REPORT_DATE)
+
+
+@dataclass(frozen=True, slots=True)
+class ListIntelligenceArtifacts:
+    """`reports.list`: bounded, deterministic, Principal-scoped pages."""
+
+    capability: ClassVar[Capability] = Capability.REPORTS_LIST
+
+    cycle_run_id: str | None = None
+    stage: IntelligenceStage | None = None
+    artifact_kind: ArtifactKind | None = None
+    focus_area_id: FocusAreaId | None = None
+    source_lane: SourceLaneId | None = None
+    report_date: str | None = None
+    page_size: int | None = None
+    cursor: str | None = None
+    include_superseded: bool = False
+
+    def __post_init__(self) -> None:
+        if self.cycle_run_id is not None:
+            _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
+        if self.report_date is not None:
+            _iso_date(self.report_date, SafeDetail.REPORT_DATE)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.cursor is not None and not isinstance(self.cursor, str):
+            raise InvalidRequestError(SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchIntelligenceArtifacts:
+    """`reports.search`: PostgreSQL lexical search, title weighted above body."""
+
+    capability: ClassVar[Capability] = Capability.REPORTS_SEARCH
+
+    query: str = field(repr=False)
+    cycle_run_id: str | None = None
+    stage: IntelligenceStage | None = None
+    artifact_kind: ArtifactKind | None = None
+    focus_area_id: FocusAreaId | None = None
+    source_lane: SourceLaneId | None = None
+    page_size: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str):
+            raise InvalidRequestError(SafeDetail.QUERY)
+        if self.cycle_run_id is not None:
+            _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveIntelligenceSet:
+    """`reports.resolve_set`: stage-aware, cycle-bound expected-member resolution."""
+
+    capability: ClassVar[Capability] = Capability.REPORTS_RESOLVE_SET
+
+    cycle_run_id: str
+    set_id: ResolverSetId
+    focus_area_id: FocusAreaId | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.cycle_run_id, IdKind.INTELLIGENCE_CYCLE_RUN, SafeDetail.CYCLE_RUN_ID)
+        if not isinstance(self.set_id, ResolverSetId):
+            raise InvalidRequestError(SafeDetail.SET_ID)
+        if self.focus_area_id is not None and not isinstance(self.focus_area_id, FocusAreaId):
+            raise InvalidRequestError(SafeDetail.FOCUS_AREA_ID)
+
+
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
 type Command = (
@@ -2352,6 +2673,14 @@ type Command = (
     | GetGoodNotesWork
     | SubmitGoodNotesProposal
     | GetGoodNotesContent
+    | BeginIntelligenceCycle
+    | CommitIntelligenceArtifact
+    | RecordIntelligenceRunState
+    | ReadIntelligenceArtifact
+    | GetLatestIntelligenceArtifact
+    | ListIntelligenceArtifacts
+    | SearchIntelligenceArtifacts
+    | ResolveIntelligenceSet
     | SearchEntities
     | GetEntity
     | ResolveEntity

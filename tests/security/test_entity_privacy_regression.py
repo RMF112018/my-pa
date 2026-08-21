@@ -366,7 +366,7 @@ def test_no_entity_answer_carries_a_judgement_about_a_person(staged: Scene) -> N
         # The *result* payload, not the whole envelope. Every capability in this
         # build carries `disclosure.trust_basis`, which names what an answer
         # rests on rather than judging the person it is about — scanning the
-        # envelope would flag that on all fifty-four and prove nothing here.
+        # envelope would flag that on all sixty-two and prove nothing here.
         body = str(_answer(staged, capability, command)["result"]).lower()
         present = [word for word in denied_words if word in body]
         assert present == [], f"{capability.value} answered with {present}"

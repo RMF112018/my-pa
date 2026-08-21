@@ -71,18 +71,18 @@ hash.
 
 
 The repository is an executable local candidate, not a documentation scaffold.
-The `my_pa` application defines and wires fifty-four capabilities through HTTP,
+The `my_pa` application defines and wires sixty-two capabilities through HTTP,
 MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
-planes. **A default composition exposes forty-two of them.** The six
+planes. **A default composition exposes fifty of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT` and the six
 `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`; neither has
 a default, so an unconfigured process withholds both families from
 `capabilities.get` and from the MCP tool list, refuses them `unsupported` over
 HTTP, and reports readiness `degraded`. Corrected 2026-08-19: this sentence read
-"exposes fifty-four capabilities" under a heading claiming authenticated
+"exposes sixty-two capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns sixty-four revisions at head `f3a8c1d7e592`, including the merge of
+Alembic owns sixty-five revisions at head `e9b2c4d7a150`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
 semantic-retrieval gate remains `SEMANTIC_GATE_FAIL` and production semantic

@@ -244,6 +244,23 @@ def test_the_entity_revision_runs_empty_to_head_and_head_to_empty(
         engine.dispose()
 
 
+#: Tables created by revisions *above* this plane. Downgrading to the revision
+#: below this one unwinds them too — that is what a linear chain means — so a
+#: downgrade started from `head` drops them as well. Named rather than absorbed
+#: into a subset assertion, so a table outside both sets going missing is still
+#: the finding this test exists for.
+STACKED_ABOVE: Final[frozenset[str]] = frozenset(
+    {
+        "intelligence_cycle_runs",
+        "intelligence_producer_runs",
+        "intelligence_artifacts",
+        "intelligence_commit_receipts",
+        "intelligence_pipeline_dependencies",
+        "intelligence_provenance_refs",
+    }
+)
+
+
 @pytest.mark.database
 def test_downgrading_to_before_this_revision_drops_only_the_entity_plane(
     migrated_engine: Engine,
@@ -257,6 +274,11 @@ def test_downgrading_to_before_this_revision_drops_only_the_entity_plane(
     would fail the moment the plane grew, which is bookkeeping rather than a
     finding. What it still catches is the thing worth catching: a table outside
     the plane removed by one of those downgrades, or a plane table left behind.
+
+    Since `e9b2c4d7a150` the chain also stacks the Intelligence Artifact plane
+    above this one, and a downgrade from `head` unwinds that too. `STACKED_ABOVE`
+    names it. The alternative — weakening this to a subset assertion — would
+    stop catching the case the equality is here for.
     """
     before = _tables(migrated_engine)
     assert {"relationship_people", "relationship_organizations"} <= before
@@ -264,7 +286,7 @@ def test_downgrading_to_before_this_revision_drops_only_the_entity_plane(
     command.downgrade(_config(), PREVIOUS_REVISION)
     after = _tables(migrated_engine)
 
-    assert before - after == PLANE_TABLES
+    assert before - after == PLANE_TABLES | STACKED_ABOVE
     assert {"relationship_people", "relationship_organizations"} <= after
 
 

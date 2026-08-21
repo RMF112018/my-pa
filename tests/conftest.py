@@ -46,6 +46,7 @@ import pytest
 
 from my_pa.application.commands import CreateManagedDocumentCommand
 from my_pa.application.commitments import CommitmentManagementService
+from my_pa.application.intelligence import InMemoryIntelligenceStore
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.service import ApplicationService
 from my_pa.application.tasks import TaskManagementService
@@ -406,6 +407,7 @@ class World:
         default_factory=dict
     )
     goodnotes_rasters: dict[tuple[str, str], GoodNotesPageRaster] = field(default_factory=dict)
+    intelligence: InMemoryIntelligenceStore = field(default_factory=InMemoryIntelligenceStore)
     #: The relationship-intelligence entity plane. Flat lists for the reason
     #: every other plane on `World` is one: the fake's whole job is the
     #: partition predicate, and a list a filter runs over is the clearest place
@@ -3044,6 +3046,9 @@ class FakeUnitOfWork(UnitOfWork):
     def goodnotes_semantics(self) -> GoodNotesSemanticRepository:
         """Immutable page-version work and semantic proposal receipts over this `World`."""
         return _GoodNotesSemantics(self._world)
+
+    def intelligence_for(self, principal_id: str) -> InMemoryIntelligenceStore:
+        return self._world.intelligence
 
     @property
     def entities(self) -> EntitiesRepository:

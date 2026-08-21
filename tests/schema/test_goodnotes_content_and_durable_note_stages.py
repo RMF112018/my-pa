@@ -21,6 +21,7 @@ from my_pa.domain.identity.purpose import Purpose
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "a4d9c2e7b815"
 PRIOR: Final = "c3e9a7f1b204"
+INTELLIGENCE_REVISION: Final = "e9b2c4d7a150"
 ATTEMPT_REVISION: Final = "f4c1a8e6b205"
 ENTITY_REVISION: Final = "9def3c2e63bb"
 ENTITY_KIND_REVISION: Final = "d9c4e1a7b628"
@@ -34,7 +35,8 @@ CAPABILITY_REVISION: Final = "c1a7e4b93d58"
 GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 #: The unresolved-mention capability admission, between governance and head.
 QUEUE_REVISION: Final = "e4d7b2f9a316"
-HEAD_REVISION: Final = "f3a8c1d7e592"
+MENTION_REVISION: Final = "f3a8c1d7e592"
+HEAD_REVISION: Final = INTELLIGENCE_REVISION
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_a4d9c2e7b815_admit_goodnotes_content_and_durable_note_stages.py"
 )
@@ -133,14 +135,16 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(GROUNDING_REVISION).down_revision == REVISION
     assert script.get_revision(ENTITY_KIND_REVISION).down_revision == GROUNDING_REVISION
+    assert script.get_revision("f4c1a8e6b205").down_revision == ENTITY_KIND_REVISION
     assert script.get_revision(ATTEMPT_REVISION).down_revision == ENTITY_KIND_REVISION
     assert script.get_revision(ENTITY_REVISION).down_revision == ATTEMPT_REVISION
     assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
     assert script.get_revision(CAPABILITY_REVISION).down_revision == ALIAS_REVISION
     assert script.get_revision(GOVERNANCE_REVISION).down_revision == CAPABILITY_REVISION
     assert script.get_revision(QUEUE_REVISION).down_revision == GOVERNANCE_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == QUEUE_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 64
+    assert script.get_revision(MENTION_REVISION).down_revision == QUEUE_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == MENTION_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 65
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -216,6 +220,30 @@ def test_the_frozen_literals_are_the_domain_at_head() -> None:
     declared = {member.value for member in Capability} | {
         member.value for member in NativeSourceCapability
     }
+    assert admitted <= declared
+    # This module's own revision, kept separate from the head's. `admitted` is
+    # the *latest* admitting revision's vocabulary; subtracting this revision's
+    # predecessor from it would compare two different revisions' sets and call
+    # the difference this one's delta.
+    this_purposes = _frozen_literals("_PURPOSES_AT_THIS_REVISION")
+    assert this_purposes <= {member.value for member in Purpose}
+    assert (
+        _frozen_literals("_CAPABILITIES_AT_THIS_REVISION")
+        - _frozen_literals("_CAPABILITIES_BEFORE_THIS_REVISION")
+        == CAPABILITIES_ADDED
+    )
+    assert this_purposes - _frozen_literals("_PURPOSES_BEFORE_THIS_REVISION") == PURPOSES_ADDED
+    source = MIGRATION.read_text(encoding="utf-8")
+    for constant in (
+        "_CAPABILITIES_AT_THIS_REVISION",
+        "_CAPABILITIES_BEFORE_THIS_REVISION",
+        "_PURPOSES_AT_THIS_REVISION",
+        "_PURPOSES_BEFORE_THIS_REVISION",
+    ):
+        start = source.index(f"{constant}: Final = (")
+        end = source.index("\n)", start)
+        names = re.findall(r"'([^']+)'", source[start:end])
+        assert names == sorted(names), f"{constant} is not in sorted order"
     assert admitted == declared, (
         f"the last admitting revision {admitting.name} freezes a capability vocabulary "
         f"that is not the domain; the difference is {sorted(admitted ^ declared)}"

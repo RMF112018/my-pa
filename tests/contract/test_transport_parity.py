@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-fifty-four capabilities. There are two ways to prove that and only one of them stays
+sixty-two capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -26,7 +26,7 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over all fifty-four capabilities and ten refusals.** Each
+**And the answers, over all sixty-two capabilities and ten refusals.** Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
 `sources.enroll` alone would make the second and third callers idempotent
@@ -51,6 +51,7 @@ from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import fields as dataclass_fields
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +79,7 @@ import my_pa.adapters.http.app as http_module
 import my_pa.adapters.mcp.server as mcp_module
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import Command
+from my_pa.application.intelligence import begin_cycle, commit_artifact
 from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.errors import ErrorCode
@@ -90,6 +92,13 @@ from my_pa.domain.common.identifiers import (
 )
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.intelligence.catalog import (
+    CYCLE_MORNING_INTELLIGENCE,
+    ArtifactKind,
+    ArtifactState,
+    FocusAreaId,
+    IntelligenceStage,
+)
 from my_pa.domain.relationship.entity import (
     Entity,
     EntityRelationship,
@@ -246,6 +255,41 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    at = datetime(2026, 8, 2, 11, tzinfo=UTC)
+    cycle_admission = begin_cycle(
+        scene.world.intelligence,
+        principal_id=scene.principal.principal_id,
+        cycle_id=CYCLE_MORNING_INTELLIGENCE,
+        business_date=date(2026, 8, 20),
+        idempotency_key="parity-cycle-setup",
+        at=at,
+        automation_platform=None,
+        external_orchestration_id=None,
+    )
+    assert cycle_admission.cycle is not None
+    cycle_run_id = cycle_admission.cycle.cycle_run_id
+    collector_admission = commit_artifact(
+        scene.world.intelligence,
+        principal_id=scene.principal.principal_id,
+        cycle_run_id=cycle_run_id,
+        stage=IntelligenceStage.COLLECTOR,
+        artifact_kind=ArtifactKind.COLLECTOR_CANDIDATES,
+        focus_area_id=FocusAreaId.COMMUNICATIONS,
+        source_lane=None,
+        producer_task_id="parity-setup-collector",
+        producer_task_name="Parity setup collector",
+        automation_platform="abacus_chatllm",
+        automation_run_id=None,
+        report_date=date(2026, 8, 20),
+        title="Parity setup collector",
+        body_markdown="synthetic collector",
+        artifact_state=ArtifactState.FINAL,
+        schema_version="1",
+        idempotency_key="parity-setup-collector",
+        at=at,
+    )
+    assert collector_admission.artifact is not None
+    report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(scene)
     return {
         Capability.CAPABILITIES_GET: {},
@@ -451,6 +495,56 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 }
             ],
         },
+        Capability.REPORTS_BEGIN_CYCLE: {
+            "cycle_id": CYCLE_MORNING_INTELLIGENCE,
+            "business_date": "2026-08-20",
+            "idempotency_key": "parity-cycle-0001",
+        },
+        Capability.REPORTS_COMMIT: {
+            "cycle_run_id": cycle_run_id,
+            "stage": "collector",
+            "artifact_kind": "collector_candidates",
+            "focus_area_id": "communications",
+            "producer_task_id": "parity-collector",
+            "producer_task_name": "Parity Collector",
+            "automation_platform": "abacus_chatllm",
+            "report_date": "2026-08-20",
+            "title": "Parity collector",
+            "body_markdown": "synthetic collector",
+            "artifact_state": "final",
+            "schema_version": "1",
+            "idempotency_key": "parity-report-commit-0001",
+        },
+        Capability.REPORTS_RECORD_RUN_STATE: {
+            "cycle_run_id": cycle_run_id,
+            "stage": "researcher",
+            "artifact_kind": "research_context",
+            "focus_area_id": "communications",
+            "source_lane": "teams",
+            "producer_task_id": "parity-researcher",
+            "producer_task_name": "Parity Researcher",
+            "automation_platform": "abacus_chatllm",
+            "report_date": "2026-08-20",
+            "state": "failed",
+            "idempotency_key": "parity-run-state-0001",
+            "failure_code": "source_unavailable",
+        },
+        Capability.REPORTS_READ: {"report_id": report_id, "include_body": True},
+        Capability.REPORTS_LATEST: {
+            "cycle_run_id": cycle_run_id,
+            "stage": "collector",
+            "focus_area_id": "communications",
+        },
+        Capability.REPORTS_LIST: {"cycle_run_id": cycle_run_id, "page_size": 10},
+        Capability.REPORTS_SEARCH: {
+            "query": "synthetic",
+            "cycle_run_id": cycle_run_id,
+            "page_size": 10,
+        },
+        Capability.REPORTS_RESOLVE_SET: {
+            "cycle_run_id": cycle_run_id,
+            "set_id": "collectors",
+        },
         # The relationship-intelligence entity plane (WP-RI-05). `person` and
         # `organization` are staged before the world is copied per transport, so
         # all three read the same rows and a read is the same read everywhere.
@@ -606,7 +700,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 55, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 63, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -1284,7 +1378,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: fifty-four capabilities answered from an empty world prove little."""
+    """Guard the matrix: sixty-two capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

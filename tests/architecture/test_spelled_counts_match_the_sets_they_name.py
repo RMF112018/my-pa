@@ -294,6 +294,24 @@ _ORDINAL_UNITS = (
     "fifty-seventh",
     "fifty-eighth",
     "fifty-ninth",
+    "sixtieth",
+    # The sixties, added when the Intelligence Artifact plane admitted eight
+    # `reports.*` capabilities and the public set reached sixty-two, so `a
+    # sixty-third capability` became the ordinal a correct claim would use. It
+    # announced itself the same way the three boundaries above did: the prose was
+    # corrected to `sixty-third`, this tuple could not read it, and the claim was
+    # reported as saying *three* — a false finding rather than a false pass, which
+    # is what the density of this tuple is for.
+    "sixty-first",
+    "sixty-second",
+    "sixty-third",
+    "sixty-fourth",
+    "sixty-fifth",
+    "sixty-sixth",
+    "sixty-seventh",
+    "sixty-eighth",
+    "sixty-ninth",
+    "seventieth",
 )
 
 
@@ -806,25 +824,61 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
     # records what deriving it would cost.
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**forty-two**",
+        "**fifty**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
-        "`documents.` and five `entities.` names it withholds — not the size of "
-        "`Capability`, which the same block states correctly as fifty-four",
+        "`documents.` and six `entities.` names it withholds — not the size of "
+        "`Capability`, which the same block states correctly as sixty-two",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**forty-two**",
+        "**fifty**",
         "none beginning `documents.`",
         "the same default-publication count, in the line naming the test that measures it",
     ),
     (
         "README.md",
-        "forty-two tools",
-        "a default process publishes forty-two tools",
+        "fifty tools",
+        "a default process publishes fifty tools",
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
-        "from `Capability`, which the same bullet states correctly as fifty-four",
+        "from `Capability`, which the same bullet states correctly as sixty-two",
+    ),
+    # --- the Intelligence Artifact plane, newly swept --------------------------
+    #
+    # Each of these counts what one work package added, or quotes what a line
+    # used to say. None is a claim about the size of `Capability` or `Purpose`,
+    # and rewording any of them reddens `test_every_excused_claim_is_still_there`
+    # rather than passing quietly.
+    (
+        "docs/decisions/ADR-010-intelligence-artifact-report-plane.md",
+        "Eight public capabilities",
+        "join the audited vocabulary",
+        "the size of the `reports.*` family this ADR admits, not the size of "
+        "`Capability` -- the consequence section of an ADR is about what the "
+        "decision adds",
+    ),
+    (
+        "docs/decisions/ADR-010-intelligence-artifact-report-plane.md",
+        "two purposes",
+        "join the audited vocabulary",
+        "the two purposes this ADR admits, named in the same sentence, not the size of `Purpose`",
+    ),
+    (
+        "src/my_pa/domain/identity/purpose.py",
+        "Two purposes",
+        "Intelligence Artifact / Report plane",
+        "how many purposes this plane declares and why it is two rather than a "
+        "reuse of an existing grant; the sentence is a `D-91` argument, not a "
+        "count of the enum it sits in",
+    ),
+    (
+        "ops/runbooks/gateway-operations.md",
+        "fifty-four public capabilities",
+        'this line read "serves the',
+        "a quotation of what this line said before the 2026-08-19 correction, "
+        "preserved so the correction can be read; quoting a superseded figure is "
+        "not restating it",
     ),
     # --- the Relationship Intelligence plan, newly swept -----------------------
     #

@@ -257,6 +257,16 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "b7f2c9e4a618": frozenset(),
     "d9c4e1a7b628": frozenset(),
     "f4c1a8e6b205": frozenset({"goodnotes_delivery_attempts"}),
+    "e9b2c4d7a150": frozenset(
+        {
+            "intelligence_cycle_runs",
+            "intelligence_producer_runs",
+            "intelligence_artifacts",
+            "intelligence_commit_receipts",
+            "intelligence_pipeline_dependencies",
+            "intelligence_provenance_refs",
+        }
+    ),
     # WP-RI-01's relationship-intelligence entity plane: the entity itself, the
     # external identifiers it is known by, its assignments, and the relationships
     # between entities.

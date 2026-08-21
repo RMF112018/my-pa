@@ -1,6 +1,6 @@
 """Every "N tests" claim the plan makes about a suite, checked against collection.
 
-The spelled-count sweep next door reads *words* — "fifty-four capabilities" —
+The spelled-count sweep next door reads *words* — "sixty-two capabilities" —
 and is blind to digits. The implementation plan's evidence table is written in
 digits, so the figures most likely to drift were bound to nothing at all.
 

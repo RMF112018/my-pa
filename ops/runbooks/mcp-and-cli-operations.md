@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all fifty-four capabilities.
+`tests/contract/test_transport_parity.py` holds it over all sixty-two capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -163,9 +163,9 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build implements fifty-four, one per
-capability name. A default process publishes **forty-two**. That is the
-fifty-four, less the six `documents.` and six `entities.` names a default
+same as the tools this build implements. The build implements sixty-two, one per
+capability name. A default process publishes **fifty**. That is the
+sixty-two, less the six `documents.` and six `entities.` names a default
 composition withholds.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
@@ -173,10 +173,10 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes those six, reaching forty-eight of the fifty-four. The
+same child publishes those six, reaching forty-eight of the sixty-two. The
 remaining six are the `entities.` names, which `D-RI-20` gates behind
 `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms; a child
-publishing all fifty-four has both variables set. An operator who expects `documents.create`
+publishing all sixty-two has both variables set. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -185,9 +185,9 @@ the same gating and the plane's limits.)
 Measured at this head against a real child process — `.venv/bin/python
 apps/gateway.py mcp` — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
-(unset: **forty-two**, none beginning `documents.`) and
+(unset: **fifty**, none beginning `documents.`) and
 `::test_a_child_with_a_managed_root_publishes_every_capability` (set:
-fifty-four).
+sixty-two).
 
 **Corrected 2026-08-19: both figures above read `twenty` and neither had been
 measured.** The test named here derives what it asserts from `Capability` minus
@@ -236,8 +236,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-12):** the tool list is derived from all
-**fifty-four** current capabilities, and the schema has **sixty-four** revisions
-at head `f3a8c1d7e592`. `capabilities.get` also reports content-free
+**sixty-two** current capabilities, and the schema has **sixty-five** revisions
+at head `e9b2c4d7a150`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its
 stated head.
 

@@ -1,0 +1,23 @@
+{
+  "authorization_id": "",
+  "combined_identity": "c3eb81e3fedb9590e6c33a38154722c0d9b697c7059d995c513c355a3143e070",
+  "corpus_manifest_digest": "636d671348cfba5b12b9e5032d5b3daee74f884aea101198ba69ed608ee40f22",
+  "corpus_version": "gsqs-hw-combined-v1",
+  "decided_at": "",
+  "evaluator_behavior_identity": "3673a9dbf99214dc6d724822682c2b5547c7a0343d56c7024956734f1516fc7d",
+  "expected_case_count": 73,
+  "analyzer_name": "chatllm-goodnotes-semantic",
+  "analyzer_version": "sit-1.0",
+  "model_identity": "",
+  "operation": "EXECUTE_MEASURED_B0",
+  "operator_evidence_id": "",
+  "partition": "B",
+  "prohibit_automatic_promotion": true,
+  "prohibit_corpus_c": true,
+  "prohibit_deployment": true,
+  "prohibit_self_improvement": true,
+  "prompt_config_identity": "",
+  "repetitions": 3,
+  "repository_commit": "",
+  "repository_tree": ""
+}

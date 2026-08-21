@@ -19,8 +19,11 @@ Current handwriting identities after operator ratification rebind:
 - synthetic layer: `gsqs-v2` / `e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd`
 
 `b0_suitable = true`. Admitted labels are `APPROVED` /
-`OPERATOR_ADJUDICATED`. B0 is **still not executable** until a separate
-private-data disclosure authorization names the post-rebind digest.
+`OPERATOR_ADJUDICATED`. The governed live-B0 **runner** now exists
+(`apps/cli/gsqs_b0.py`, `B0_RUNBOOK.md`). B0 is **still not executable**
+until a separate private-data disclosure authorization names the
+post-rebind digest **and** the exact reviewed implementation commit/tree.
+See [`B0_RUNBOOK.md`](B0_RUNBOOK.md).
 
 Cite the exact repository head/tree of the PR that carries this file
 when that later phase is authorized. A later commit invalidates this

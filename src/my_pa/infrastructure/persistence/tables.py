@@ -6678,7 +6678,22 @@ intelligence_artifacts = Table(
     Column("report_date", Date, nullable=False),
     Column("title", Text, nullable=False),
     Column("body_markdown", Text, nullable=False),
-    Column("structured_content", JSONB(none_as_null=True)),
+    # Bare `JSONB`, like every other JSONB column in this file, and not
+    # `JSONB(none_as_null=True)`. `JSONB.__init__` is untyped in SQLAlchemy's
+    # stubs at the declared floor (`2.0.20`) and typed later, so the call form is
+    # green on every local gate and fails `no-untyped-call` in `dependency-floor`
+    # alone — the same trap `capture_search._searchable_and_stored` documents,
+    # and `# type: ignore[no-untyped-call]` is no way out of it, because
+    # `strict = true` enables `warn_unused_ignores` and the ignore is itself an
+    # error at the installed version.
+    #
+    # Equivalent here, not merely close: `none_as_null` decides how a Python
+    # `None` is persisted, and nothing ever hands this column one.
+    # `SqlIntelligenceRepository._artifact_payload` writes the key only when
+    # `structured_content is not None`, so an absent value omits the column and
+    # the server writes SQL NULL — which is what `none_as_null=True` was asking
+    # for. The keyword was doing nothing, and paying for it in one CI job.
+    Column("structured_content", JSONB),
     Column("content_sha256", Text, nullable=False),
     Column("content_bytes", Integer, nullable=False),
     Column("artifact_state", Text, nullable=False),

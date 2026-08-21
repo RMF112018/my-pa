@@ -629,7 +629,7 @@ Every figure below was produced by running the command named, on this branch.
 
 | Claim | Evidence |
 |---|---|
-| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **8445 passed, 0 failed, 989 deselected**, measured in two chunks — `tests/architecture` (3,814) and the rest of the selection (4,631), which sum to 8,445 and partition it exactly — because the single-command run is killed in this environment for the same reason the database tier is chunked. Architecture tier **3814 passed**. Both figures were stale at the head that corrected the database-tier row below: that commit added three architecture tests and refreshed neither, which is the same defect it was written to fix, one row up. **It then happened again**, at the very next head: this cell said 8080 for a tier collecting 8082, stale by exactly the two tests the same commit added — because the guard beside it was an upper bound and admitted every understatement. It is an equality now, and a claim that must sit below collection states its own skip count |
+| FAST tier green | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **8471 passed, 0 failed, 989 deselected**, measured in two chunks — `tests/architecture` (3,833) and the rest of the selection (4,638), which sum to 8,471 and partition it exactly — because the single-command run is killed in this environment for the same reason the database tier is chunked. Architecture tier **3833 passed**. Both figures were stale at the head that corrected the database-tier row below: that commit added three architecture tests and refreshed neither, which is the same defect it was written to fix, one row up. **It then happened again**, at the very next head: this cell said 8080 for a tier collecting 8082, stale by exactly the two tests the same commit added — because the guard beside it was an upper bound and admitted every understatement. It is an equality now, and a claim that must sit below collection states its own skip count |
 | Lint and format | `ruff check .` — "All checks passed!"; `ruff format --check .` — clean, no file would be reformatted. **No file count is stated, and one was until CI disproved it.** This cell said "clean over 925 files", measured locally; CI reported 927 at the same commit and the run failed on the guard binding the figure. `ruff` walks the working directory, not the index — 683 Python files are tracked and it formats 950 here — so the number is a property of whatever happens to be on disk and differs between a developer checkout and a runner. Cleanliness is the repository fact; the corpus size is not one. `mypy`'s count below stays bound because it is derived from configured targets rather than from a directory walk |
 | Types | `mypy` (configured targets: `src`, `migrations`, `apps`, `ops`) — clean over 352 files |
 | Full database tier green | `pytest -m "database or recovery or e2e"` against a live PostgreSQL 17 — **979 passed, 0 failed**, in five disjoint chunks: `tests/schema` in two halves (134 and 204), the three entity suites in `tests/database` (112), the rest of `tests/database` (129) and the remainder (400). The marker selection collects **979**, and 134 + 204 + 112 + 129 + 400 is 979, so the chunks partition it exactly. Five rather than the four before it, four rather than three, three rather than two — each larger arrangement was killed partway through, six times now. The chunk list is written as what was run rather than as what was planned, because a partial run is not evidence and a chunking that was not used is not a measurement. Chunked because the single-command run is killed in this environment — twice at 84% and 53%, once more at 63% — and a partial run is not evidence. **Corrected 2026-08-20, and the correction is the point.** This cell previously claimed **1,926 passed** across four chunks. That number was real in the sense that those commands ran and those tests passed, and false as written: the chunks were whole directories run with **no `-m` filter**, so they were a different and larger selection than the one the cell named, and no partition of a 951-test selection can sum to 1,926. An independent reviewer caught it by running `--collect-only` on the selection the sentence named — which is all it took, and which nothing in the repository does for a bare number. The four schema-suite failures adversarial review surfaced (accumulation sets in the audit, enrollment, capture and entity migration tests) are fixed, not deselected. A fifth, of the same kind, was surfaced by running the tier: `entities.unresolved_mentions` had its forward `ALTER` and head admitted it, but `CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION` did not list it, so the one test that can catch a capability added *without* an `ALTER` reddened on a capability that had one |
@@ -891,28 +891,44 @@ section 4a above.
   both become an `internal_error` envelope — so this is a fidelity note rather
   than a behavioural gap, and it is written down because the tenth review had
   to measure it to find that out.
-* **Carried, and NOT this branch's — nine commands read a caller-supplied
-  string field before checking its type.** `tasks.update`, `tasks.transition`
-  and `review.decide` answer `500 internal_error` over HTTP for a non-string in
-  the named field; `continuity.projects.create`, `continuity.situations.create`,
-  `continuity.tasks.create`, `documents.create`, `documents.revise` and
-  `context.prepare` *accept* a non-string `idempotency_key` or
-  `conversation_context` into a handler that assumes a string. **Nineteen
-  (command, field) pairs behave that way, not six** — the eleventh review swept
-  620 combinations through `adapters.normalization._command` and found thirteen
-  more, all spelling their check inline (`if not self.idempotency_key:`) rather
-  than routing through `_idempotency_key`. They are outside the guard's stated
-  rule, which is about *reading* a field as a string before checking its type,
-  and an inline truthiness test does not read it — so this is a count in the
-  record that was wrong, not a hole in the guard. All nineteen are present at
-  the merge base. All nine are
-  present at the merge base — this branch removed five offenders of the same
-  class and introduced none — and all nine are listed in
-  `CARRIED_FROM_THE_MERGE_BASE` in
-  [`tests/architecture/test_commands_check_the_type_before_the_content.py`](../../tests/architecture/test_commands_check_the_type_before_the_content.py),
-  which asserts each is still an offence, so the list shrinks or reddens.
-  Recorded rather than fixed because none is on this plane and widening a
-  224-file pull request to carry them was a deliberate decision.
+* **Closed 2026-08-21 — a command checks the type of every string field it
+  reads, and `CARRIED_FROM_THE_MERGE_BASE` is empty.** The entry this replaces
+  recorded 9 offending pairs and a wider class of 19. Both counts were built by
+  sweeping, and measuring the class directly before fixing it found the record
+  wrong in two directions at once.
+  `UpdateTask.title`, `TransitionTask.closure_evidence_ref` and
+  `DecideReviewCase.corrected_value` did dereference an optional string behind
+  an `is not None` test and did answer `500 internal_error` over HTTP; each now
+  routes through `_text` before `.strip()` is reached, and
+  `tests/unit/test_command_input_types.py` states that as behaviour.
+  `_idempotency_key` did test truthiness and never the type, so a non-string key
+  was *accepted* into a handler that assumes a string; it now checks the type,
+  and its parameter is annotated `object` rather than `str` so the check is not
+  dead code to a type checker — the shape `_bounded_token` already used.
+  **The hole was wider than the allowlist, not narrower.** 5 commands called
+  that helper; 10 more spelled the same emptiness test inline, outside the
+  guard's stated rule and so never on the list. Fixing the helper would have
+  reached 5 of 15. All 10 now call it, and
+  `tests/architecture/test_every_write_validates_its_idempotency_key.py` derives
+  the population from the dataclass fields and requires it, so a command added
+  tomorrow is covered without anyone remembering to add it.
+  **And one entry was never a defect.** `PrepareContext.conversation_context`
+  validated through `validate_conversation_context`, which refuses a non-string,
+  and converted the domain error inline — correct behaviour that the guard could
+  not see, because it measures type-checking by helper and the conversion was
+  not in one. Extracting `_conversation_context`, the shape `_alias` already
+  used for the same job, made the existing guarantee visible. A guard that
+  cannot see a correct answer records it as an offence, and this one did for 9
+  review rounds: the allowlist was 8 real defects and 1 false positive, and
+  nothing distinguished them.
+  Not touched: `CreateManagedDocumentCommand` and `ReviseManagedDocumentCommand`
+  raise `ValueError` on an empty key, carry no `capability`, and are internal
+  service objects rather than caller-facing commands — a programming-error
+  assertion, not a transport refusal. Also not touched: `client_context`,
+  `description`, `namespace` and `entity_type`, which no `__post_init__` reads
+  at all. Whether a handler downstream assumes a string of them is a separate
+  question this change did not answer.
+
 * **Carried, and NOT this branch's — the Apple machine routes answer a bare
   `500`.** `adapters/http/app.py`'s `apple_request` catches
   `AppleMachineCredentialError`, `AdmissionDeniedError`, `ValueError` and

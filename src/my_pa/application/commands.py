@@ -264,9 +264,22 @@ def _positive(value: int | None, detail: SafeDetail) -> int | None:
     return value
 
 
-def _idempotency_key(value: str) -> str:
-    """A write carries a non-empty idempotency key, and the key never reaches a message."""
-    if not value:
+def _idempotency_key(value: object) -> str:
+    """A write carries a non-empty idempotency key, and the key never reaches a message.
+
+    The type is checked, not assumed. `if not value` alone accepts every truthy
+    non-string — `123`, a list, a `datetime` — into a handler that goes on to
+    use the key as a string, so the refusal has to name the type as well as the
+    emptiness. Ten commands spelled that emptiness test inline rather than
+    calling this, which is why the hole was ten commands wide and not one.
+
+    `value` is `object` and not `str` for the reason `_bounded_token` states:
+    every caller's field *is* annotated `str`, so annotating it here too makes
+    the `isinstance` unreachable to a type checker and the check reads as dead
+    code to delete. The annotation describes what actually arrives from a
+    transport, which is anything the caller sent.
+    """
+    if not isinstance(value, str) or not value:
         raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
     return value
 
@@ -751,10 +764,7 @@ class EnrollSource:
         _identifier(self.source_id, IdKind.SOURCE, SafeDetail.SOURCE_ID)
         if not self.media_types:
             raise InvalidRequestError(SafeDetail.MEDIA_TYPES)
-        if not isinstance(self.idempotency_key, str):
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
         if bool(self.object_ids) == (self.root_object_id is not None):
             raise InvalidRequestError(SafeDetail.SELECTOR)
         for object_id in self.object_ids:
@@ -880,10 +890,7 @@ class CreateCapture:
 
     def __post_init__(self) -> None:
         _text(self.text, SafeDetail.TEXT)
-        if not isinstance(self.idempotency_key, str):
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
         if not isinstance(self.capture_kind, CaptureKind):
             raise InvalidRequestError(SafeDetail.CAPTURE_KIND)
         if (self.context_source_object_id is None) is not (self.context_source_version_id is None):
@@ -931,10 +938,7 @@ class ReviseCapture:
     def __post_init__(self) -> None:
         _identifier(self.capture_id, IdKind.CAPTURE, SafeDetail.CAPTURE_ID)
         _text(self.text, SafeDetail.TEXT)
-        if not isinstance(self.idempotency_key, str):
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
         _moment(self.client_created_at, SafeDetail.CLIENT_CREATED_AT)
         _moment(self.occurred_at, SafeDetail.OCCURRED_AT)
 
@@ -1048,11 +1052,13 @@ class DecideReviewCase:
         corrected = self.disposition is Disposition.CORRECT_AND_ACCEPT
         if corrected is not (self.corrected_value is not None):
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
-        if self.corrected_value is not None and (
-            not self.corrected_value.strip()
-            or len(self.corrected_value) > MAX_NORMALIZED_VALUE_CHARACTERS
-        ):
-            raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+        if self.corrected_value is not None:
+            _text(self.corrected_value, SafeDetail.CORRECTED_VALUE)
+            if (
+                not self.corrected_value.strip()
+                or len(self.corrected_value) > MAX_NORMALIZED_VALUE_CHARACTERS
+            ):
+                raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1197,15 +1203,7 @@ class PrepareContext:
     def __post_init__(self) -> None:
         if not isinstance(self.query, str):
             raise InvalidRequestError(SafeDetail.QUERY)
-        if self.conversation_context is not None:
-            accepted = False
-            try:
-                validate_conversation_context(self.conversation_context)
-                accepted = True
-            except ConversationContextError:
-                pass
-            if not accepted:
-                raise InvalidRequestError(SafeDetail.CONVERSATION_CONTEXT)
+        _conversation_context(self.conversation_context)
         if not isinstance(self.subject_hints, tuple):
             raise InvalidRequestError(SafeDetail.SUBJECT_HINTS)
         if len(self.subject_hints) > MAX_SUBJECT_HINTS:
@@ -1568,8 +1566,7 @@ class CreateTask:
             raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.origin_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
         if self.priority is not None and not isinstance(self.priority, TaskPriority):
             raise InvalidRequestError(SafeDetail.PRIORITY)
         if self.due_at is not None:
@@ -1630,10 +1627,11 @@ class UpdateTask:
         _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
         if type(self.expected_version) is not int or self.expected_version < 1:
             raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-        if self.title is not None and not self.title.strip():
-            raise InvalidRequestError(SafeDetail.TITLE)
+        _idempotency_key(self.idempotency_key)
+        if self.title is not None:
+            _text(self.title, SafeDetail.TITLE)
+            if not self.title.strip():
+                raise InvalidRequestError(SafeDetail.TITLE)
         if self.priority is not None and not isinstance(self.priority, TaskPriority):
             raise InvalidRequestError(SafeDetail.PRIORITY)
         if self.due_at is not None:
@@ -1682,10 +1680,11 @@ class TransitionTask:
             raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE)
         if type(self.expected_version) is not int or self.expected_version < 1:
             raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-        if self.closure_evidence_ref is not None and not self.closure_evidence_ref.strip():
-            raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
+        _idempotency_key(self.idempotency_key)
+        if self.closure_evidence_ref is not None:
+            _text(self.closure_evidence_ref, SafeDetail.CLOSURE_EVIDENCE_REF)
+            if not self.closure_evidence_ref.strip():
+                raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1713,8 +1712,7 @@ class BulkPreviewTasks:
     def __post_init__(self) -> None:
         if not self.mutations:
             raise InvalidRequestError(SafeDetail.MUTATIONS)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1739,8 +1737,7 @@ class BulkConfirmTasks:
 
     def __post_init__(self) -> None:
         _identifier(self.bulk_operation_id, IdKind.BULK_OPERATION, SafeDetail.BULK_OPERATION_ID)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1848,8 +1845,7 @@ class CreateCommitment:
         _text(self.origin_evidence_ref, SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.origin_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
         if self.due_at is not None:
             _moment(self.due_at, SafeDetail.DUE_AT)
         if self.project_id is not None:
@@ -1888,8 +1884,7 @@ class CloseCommitment:
         _text(self.closure_evidence_ref, SafeDetail.CLOSURE_EVIDENCE_REF)
         if not self.closure_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
 
 
 #: Continuity and relationship identities a pin can resolve to. Shape is checked
@@ -1906,6 +1901,30 @@ _PIN_KINDS: frozenset[IdKind] = frozenset(
         IdKind.TASK,
     }
 )
+
+
+def _conversation_context(value: str | None) -> str | None:
+    """Validate optional conversation text without echoing it.
+
+    The domain validator refuses a non-string, and its message renders the
+    rejected value, so it is converted here rather than chained — the same
+    conversion `_alias` performs for `validate_context_alias`. It lived inline
+    in `PrepareContext.__post_init__` until this change: correct, but invisible
+    to any reader — and to `test_commands_check_the_type_before_the_content`,
+    which measures type-checking by helper and so carried this command on its
+    allowlist of real defects for nine review rounds without it being one.
+    """
+    if value is None:
+        return None
+    accepted = False
+    try:
+        validate_conversation_context(value)
+        accepted = True
+    except ConversationContextError:
+        pass
+    if not accepted:
+        raise InvalidRequestError(SafeDetail.CONVERSATION_CONTEXT)
+    return value
 
 
 def _alias(value: str | None) -> str | None:
@@ -1937,8 +1956,6 @@ class RecordContextFeedback:
         if not isinstance(self.action, ContextPreferenceAction):
             raise InvalidRequestError(SafeDetail.ACTION)
         _identifier(self.target_id, None, SafeDetail.TARGET_ID)
-        if not isinstance(self.idempotency_key, str):
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
         _idempotency_key(self.idempotency_key)
         _alias(self.alias)
         if self.source_id is not None:
@@ -2248,8 +2265,6 @@ class SubmitGoodNotesProposal:
         _bounded_token(
             self.analyzer_version, SafeDetail.ANALYZER_VERSION, maximum=_MAX_GOODNOTES_ANALYZER
         )
-        if not isinstance(self.idempotency_key, str):
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
         _idempotency_key(self.idempotency_key)
         _bounded_token(
             self.idempotency_key, SafeDetail.IDEMPOTENCY_KEY, maximum=_MAX_GOODNOTES_IDEMPOTENCY

@@ -17,7 +17,11 @@
   "prohibit_deployment": true,
   "prohibit_self_improvement": true,
   "prompt_config_identity": "",
+  "provider_model_mapping_evidence_id": "",
   "repetitions": 3,
   "repository_commit": "",
-  "repository_tree": ""
+  "repository_tree": "",
+  "route_llm_endpoint_origin": "",
+  "route_llm_server_side_binding_mode": "",
+  "route_llm_server_side_evidence_id": ""
 }

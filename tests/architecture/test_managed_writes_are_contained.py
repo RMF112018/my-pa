@@ -150,6 +150,11 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "records without gold) into an explicit caller-supplied evidence directory; "
         "it never writes private transcriptions or managed-document bytes."
     ),
+    "src/my_pa/application/goodnotes_gsqs_b0_disclosure_journal.py": (
+        "writes only append-only disclosure journal JSONL into an explicit "
+        "caller-supplied evidence directory; it never writes private transcriptions, "
+        "image bytes, gold, or managed-document bytes."
+    ),
 }
 
 #: Attribute names that are a filesystem write whatever they are called on,

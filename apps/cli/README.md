@@ -34,16 +34,20 @@ covers running it.
 
 ## `gsqs_b0.py` — governed GSQS live-B0 control plane
 
-Preflight never discloses. Execute refuses until a later exact-head review
-binds a live transport and a fresh `EXECUTE_MEASURED_B0` authorization.
+Preflight never discloses. The RouteLLM incumbent transport is bound, but
+execute still requires a later exact-head review and a fresh
+`EXECUTE_MEASURED_B0` authorization. Missing env/config/evidence dir keeps
+the unbound refuse path. `MEASURED_B0` remains `NOT_YET_ESTABLISHED`.
 
 ```text
 python apps/cli/gsqs_b0.py preflight
 python apps/cli/gsqs_b0.py execute \
   --authorization <artifact> \
-  --model-identity <exact> \
+  --model-identity routellm-goodnotes-b0-v1@sha256:<digest> \
   --prompt-config ops/goodnotes/gsqs/b0/incumbent-prompt-v1.txt \
-  --repetitions 3
+  --repetitions 3 \
+  --evidence-dir <run-dir> \
+  --evaluator-corpus <local-private-evaluator-plane.json>
 ```
 
 See [`ops/goodnotes/gsqs/B0_RUNBOOK.md`](../../ops/goodnotes/gsqs/B0_RUNBOOK.md).

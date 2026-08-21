@@ -7,6 +7,7 @@ from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from hashlib import sha256
+from pathlib import Path
 from typing import Any
 
 from my_pa.application.goodnotes_gsqs import (
@@ -25,7 +26,11 @@ from my_pa.application.goodnotes_gsqs import (
     RankedCandidate,
     evaluator_code_identity,
 )
-from my_pa.domain.goodnotes.models import GoodNotesSegmentKind
+from my_pa.domain.goodnotes.models import (
+    GoodNotesNoteClass,
+    GoodNotesSegmentKind,
+    GoodNotesTranscriptionStatus,
+)
 
 CORPUS_VERSION_V1 = "gsqs-v1"
 CORPUS_VERSION_V2 = "gsqs-v2"
@@ -225,6 +230,169 @@ def case_digest_payload(case: CorpusCase) -> dict[str, object]:
 
 def case_digest(case: CorpusCase) -> str:
     return sha256(canonical_dumps(case_digest_payload(case)).encode()).hexdigest()
+
+
+EVALUATOR_PLANE_SCHEMA = "gsqs-evaluator-plane-v1"
+
+
+def gold_region_from_payload(payload: Mapping[str, object]) -> GoldRegion:
+    geometry_raw = payload.get("geometry")
+    if not isinstance(geometry_raw, Mapping):
+        raise ValueError("gold region geometry missing")
+    ranked_raw = payload.get("ranked_candidates")
+    if not isinstance(ranked_raw, list):
+        raise ValueError("gold region ranked_candidates missing")
+    tags_raw = payload.get("candidate_tags")
+    if not isinstance(tags_raw, list):
+        raise ValueError("gold region candidate_tags missing")
+    confidence_raw = payload.get("reference_confidence")
+    confidence = None
+    if isinstance(confidence_raw, Mapping):
+        confidence = Confidence(
+            classification=_optional_float(confidence_raw.get("classification")),
+            linking=_optional_float(confidence_raw.get("linking")),
+            segmentation=_optional_float(confidence_raw.get("segmentation")),
+            transcription=_optional_float(confidence_raw.get("transcription")),
+            uncertainty=_optional_str(confidence_raw.get("uncertainty")),
+        )
+    ranked: list[RankedCandidate] = []
+    for item in ranked_raw:
+        if not isinstance(item, Mapping):
+            raise ValueError("gold region ranked_candidates missing")
+        ranked.append(
+            RankedCandidate(
+                rank=_required_int(item, "rank"), candidate=_required_str(item, "candidate")
+            )
+        )
+    status_raw = payload.get("transcription_status")
+    class_raw = payload.get("primary_class")
+    return GoldRegion(
+        region_id=_required_str(payload, "region_id"),
+        kind=GoodNotesSegmentKind(_required_str(payload, "kind")),
+        geometry=Geometry(
+            x_min=_required_float(geometry_raw, "x_min"),
+            y_min=_required_float(geometry_raw, "y_min"),
+            width=_required_float(geometry_raw, "width"),
+            height=_required_float(geometry_raw, "height"),
+        ),
+        transcription=_required_str(payload, "transcription"),
+        transcription_status=(
+            None if status_raw is None else GoodNotesTranscriptionStatus(str(status_raw))
+        ),
+        primary_class=None if class_raw is None else GoodNotesNoteClass(str(class_raw)),
+        candidate_tags=tuple(str(item) for item in tags_raw),
+        ranked_candidates=tuple(ranked),
+        no_association_correct=payload.get("no_association_correct") is True,
+        reference_confidence=confidence,
+        contains_embedded_instructions=payload.get("contains_embedded_instructions") is True,
+    )
+
+
+def corpus_case_from_digest_payload(payload: Mapping[str, object]) -> CorpusCase:
+    regions_raw = payload.get("regions")
+    if not isinstance(regions_raw, list):
+        raise ValueError("evaluator case regions missing")
+    if any(not isinstance(item, Mapping) for item in regions_raw):
+        raise ValueError("evaluator case regions missing")
+    difficulty_raw = payload.get("difficulty")
+    if not isinstance(difficulty_raw, list):
+        raise ValueError("evaluator case difficulty missing")
+    return CorpusCase(
+        case_id=_required_str(payload, "case_id"),
+        corpus_version=_required_str(payload, "corpus_version"),
+        content_sha256=_required_str(payload, "content_sha256"),
+        renderer_name=_required_str(payload, "renderer_name"),
+        renderer_version=_required_str(payload, "renderer_version"),
+        render_profile_version=_required_str(payload, "render_profile_version"),
+        fixture_classification=_required_str(payload, "fixture_classification"),
+        provenance=_required_str(payload, "provenance"),
+        regions=tuple(
+            gold_region_from_payload(item) for item in regions_raw if isinstance(item, Mapping)
+        ),
+        difficulty=tuple(str(item) for item in difficulty_raw),
+        scenario=_required_str(payload, "scenario"),
+        adversarial=payload.get("adversarial") is True,
+        label_provenance=LabelProvenance(_required_str(payload, "label_provenance")),
+        review_state=ReviewState(_required_str(payload, "review_state")),
+        partition=CorpusPartition(_required_str(payload, "partition")),
+        page_bytes=b"",
+        leakage_group_id=_required_str(payload, "leakage_group_id"),
+        source_layer=SourceLayer(_required_str(payload, "source_layer")),
+    )
+
+
+def dump_evaluator_plane_cases(cases: Sequence[CorpusCase]) -> dict[str, object]:
+    versions = {item.corpus_version for item in cases}
+    if len(versions) > 1:
+        raise ValueError("mixed evaluator corpus_version")
+    return {
+        "cases": [case_digest_payload(item) for item in cases],
+        "corpus_version": next(iter(versions)) if versions else "",
+        "schema_version": EVALUATOR_PLANE_SCHEMA,
+    }
+
+
+def load_evaluator_plane_cases(path: Path) -> tuple[CorpusCase, ...]:
+    if path.is_symlink() or not path.is_file():
+        raise ValueError("evaluator corpus is missing")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("evaluator corpus must be a JSON object")
+    if payload.get("schema_version") != EVALUATOR_PLANE_SCHEMA:
+        raise ValueError("wrong evaluator corpus schema")
+    raw_cases = payload.get("cases")
+    if not isinstance(raw_cases, list):
+        raise ValueError("evaluator corpus cases missing")
+    cases = tuple(
+        corpus_case_from_digest_payload(item) for item in raw_cases if isinstance(item, Mapping)
+    )
+    if len(cases) != len(raw_cases):
+        raise ValueError("evaluator corpus case is not an object")
+    corpus_version = payload.get("corpus_version")
+    if (
+        isinstance(corpus_version, str)
+        and corpus_version
+        and any(item.corpus_version != corpus_version for item in cases)
+    ):
+        raise ValueError("wrong corpus version")
+    return cases
+
+
+def _required_str(payload: Mapping[str, object], key: str) -> str:
+    value = payload.get(key)
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"evaluator corpus missing {key}")
+    return value
+
+
+def _required_int(payload: Mapping[str, object], key: str) -> int:
+    value = payload.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise ValueError(f"evaluator corpus missing {key}")
+    return value
+
+
+def _required_float(payload: Mapping[str, object], key: str) -> float:
+    value = payload.get(key)
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"evaluator corpus missing {key}")
+    return float(value)
+
+
+def _optional_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError("evaluator corpus confidence malformed")
+    return float(value)
+
+
+def _optional_str(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError("evaluator corpus confidence malformed")
+    return value
 
 
 def case_signature(regions: Sequence[GoldRegion], scenario: str) -> str:

@@ -19,7 +19,11 @@ from my_pa.application.goodnotes_gsqs import (
     CorpusPartition,
     evaluator_code_identity,
 )
-from my_pa.application.goodnotes_gsqs_corpus import CorpusCase, CorpusManifest
+from my_pa.application.goodnotes_gsqs_b0_disclosure_journal import (
+    DisclosureJournal,
+    DisclosureState,
+)
+from my_pa.application.goodnotes_gsqs_corpus import CorpusCase, CorpusManifest, case_digest
 from my_pa.application.goodnotes_gsqs_harness import (
     INCUMBENT_ANALYZER_NAME,
     INCUMBENT_ANALYZER_VERSION,
@@ -120,7 +124,7 @@ def _build_fixture() -> tuple[
         B0CensusMember(
             case_id=item.case_id,
             raster_sha256=item.content_sha256,
-            case_digest="cd" + item.case_id[-8:].ljust(8, "0"),
+            case_digest=case_digest(item),
             file_sha256=item.content_sha256,
         )
         for item in selected
@@ -246,6 +250,20 @@ def test_execute_requires_authorization_and_cannot_enable_c() -> None:
         )
         == 1
     )
+    parsed = cli.build_parser().parse_args(
+        [
+            "execute",
+            "--model-identity",
+            MODEL,
+            "--prompt-config",
+            "x",
+            "--repetitions",
+            "3",
+            "--evaluator-corpus",
+            "synthetic-evaluator.json",
+        ]
+    )
+    assert parsed.evaluator_corpus == "synthetic-evaluator.json"
     auth = _auth(partition="C")
     report = preflight(catalog=_catalog(), repository=_clean_repo(), authorization=auth)
     assert report.go is False
@@ -536,3 +554,182 @@ def test_census_rejects_wrong_b_count() -> None:
             break
     with pytest.raises(ValueError, match="not 73"):
         partition_b_census(catalog)
+
+
+class _DurableFake(RecordingFakeAdapter):
+    requires_durable_disclosure_journal = True
+
+
+def _route_auth(
+    census: B0Census, manifest: CorpusManifest, config: FrozenAnalyzerConfig
+) -> ExecutionAuthorization:
+    return replace(
+        _fixture_auth(census, manifest, config),
+        route_llm_endpoint_origin="https://route.example",
+        route_llm_server_side_binding_mode="OPERATOR_DYNAMIC_SERVICE_AUTHORIZED",
+        route_llm_server_side_evidence_id="synthetic-path-b",
+    )
+
+
+def test_journal_wraps_durable_analyze_and_evidence_is_derived(tmp_path: Path) -> None:
+    cases, manifest, census, config = _build_fixture()
+    documents = {
+        case.case_id: _document(case, prompt=config.prompt_config_identity) for case in cases
+    }
+    journal = DisclosureJournal(tmp_path, run_id="synthetic-run")
+    records, state = execute_measured_b0(
+        authorization=_route_auth(census, manifest, config),
+        census=census,
+        evaluator_cases=cases,
+        manifest=manifest,
+        adapter=_DurableFake(documents),
+        config=config,
+        repository=_clean_repo(),
+        measured_at=datetime(2026, 8, 21, tzinfo=UTC),
+        disclosure_journal=journal,
+    )
+    assert state is B0RunState.COMPLETE
+    assert len(records) == 3
+    fold = journal.fold()
+    assert fold.started_count == len(census.members) * 3
+    assert fold.external_model_disclosure is DisclosureState.COMPLETE
+    report = preflight(catalog=_catalog(), repository=_clean_repo())
+    write_public_evidence(tmp_path, report=report, records=records, journal=journal)
+    control = json.loads((tmp_path / "RUN_CONTROL.json").read_text())
+    assert control["EXTERNAL_MODEL_DISCLOSURE"] == "COMPLETE"
+    assert control["disclosure_would_occur"] is True
+    assert control["MEASURED_B0"] == MEASURED_B0_NOT_YET_ESTABLISHED
+
+
+def test_durable_adapter_requires_journal_and_path_bindings() -> None:
+    cases, manifest, census, config = _build_fixture()
+    documents = {
+        case.case_id: _document(case, prompt=config.prompt_config_identity) for case in cases
+    }
+    with pytest.raises(ValueError, match="disclosure journal is required"):
+        execute_measured_b0(
+            authorization=_fixture_auth(census, manifest, config),
+            census=census,
+            evaluator_cases=cases,
+            manifest=manifest,
+            adapter=_DurableFake(documents),
+            config=config,
+            repository=_clean_repo(),
+        )
+
+
+def test_mapped_out_of_pool_invalidates_after_disclosure(tmp_path: Path) -> None:
+    from my_pa.application.goodnotes_gsqs_provider_model_mapping import mapping_from_payload
+
+    cases, manifest, census, config = _build_fixture()
+    documents = {
+        case.case_id: _document(case, prompt=config.prompt_config_identity) for case in cases
+    }
+    first_id = census.members[0].case_id
+    documents[first_id]["selected_model"] = "mystery-out"
+    mapping = mapping_from_payload(
+        {
+            "evidence_id": "map-1",
+            "mapping_schema_version": "gsqs-b0-provider-model-mapping-v1",
+            "entries": [
+                {
+                    "display_name": "mystery-out",
+                    "pool_membership": "OUT_OF_POOL",
+                    "provider_model_id": "mystery-out",
+                }
+            ],
+        },
+        expected_evidence_id="map-1",
+    )
+    journal = DisclosureJournal(tmp_path, run_id="synthetic-run")
+    with pytest.raises(ValueError, match="mapped out of pool"):
+        execute_measured_b0(
+            authorization=_route_auth(census, manifest, config),
+            census=census,
+            evaluator_cases=cases,
+            manifest=manifest,
+            adapter=_DurableFake(documents),
+            config=config,
+            repository=_clean_repo(),
+            disclosure_journal=journal,
+            provider_mapping=mapping,
+        )
+    fold = journal.fold()
+    assert fold.started_count >= 1
+    assert fold.confirmed_disclosed_count >= 1
+    assert fold.external_model_disclosure is DisclosureState.INVALID
+
+
+class _RaisingDurable:
+    requires_durable_disclosure_journal = True
+
+    def __init__(self, error: Exception) -> None:
+        self.error = error
+        self.calls = 0
+
+    def analyze(self, case: AnalyzerCaseInput, config: FrozenAnalyzerConfig) -> dict[str, object]:
+        del case, config
+        self.calls += 1
+        raise self.error
+
+
+def _run_failing(tmp_path: Path, error: Exception) -> tuple[DisclosureJournal, int]:
+    from my_pa.infrastructure.gsqs_routellm_transport import IMAGE_POST_RETRY_MAX
+
+    cases, manifest, census, config = _build_fixture()
+    journal = DisclosureJournal(tmp_path, run_id="synthetic-run")
+    adapter = _RaisingDurable(error)
+    with pytest.raises(ValueError):
+        execute_measured_b0(
+            authorization=_route_auth(census, manifest, config),
+            census=census,
+            evaluator_cases=cases,
+            manifest=manifest,
+            adapter=adapter,
+            config=config,
+            repository=_clean_repo(),
+            disclosure_journal=journal,
+        )
+    assert adapter.calls == 1
+    assert IMAGE_POST_RETRY_MAX == 0
+    return journal, adapter.calls
+
+
+def test_no_http_response_is_may_have_occurred(tmp_path: Path) -> None:
+    from my_pa.infrastructure.gsqs_routellm_transport import RouteLLMTransportError
+
+    for error in (
+        RouteLLMTransportError("dns", error_class="URL_ERROR", disclosed=None),
+        RouteLLMTransportError("timeout", error_class="TIMEOUT", disclosed=None),
+    ):
+        journal, _calls = _run_failing(tmp_path / error.error_class, error)
+        assert journal.fold().external_model_disclosure is DisclosureState.MAY_HAVE_OCCURRED
+        assert journal.fold().unresolved_attempt_ids == ()
+
+
+def test_http_evidence_is_confirmed_disclosed(tmp_path: Path) -> None:
+    from my_pa.infrastructure.gsqs_routellm_transport import (
+        RouteLLMPostResponseError,
+        RouteLLMTransportError,
+    )
+
+    cases = (
+        RouteLLMTransportError("429", http_status=429, error_class="HTTP_429", disclosed=True),
+        RouteLLMTransportError("500", http_status=500, error_class="HTTP_500", disclosed=True),
+        RouteLLMTransportError("redirect refused", error_class="REDIRECT", disclosed=True),
+        RouteLLMPostResponseError(
+            "malformed semantic payload", http_status=200, error_class="MALFORMED_SEMANTIC"
+        ),
+        RouteLLMPostResponseError(
+            "malformed interchange envelope", http_status=200, error_class="MALFORMED_ENVELOPE"
+        ),
+        RouteLLMTransportError(
+            "malformed JSON", http_status=200, error_class="MALFORMED_JSON", disclosed=True
+        ),
+    )
+    for error in cases:
+        journal, _calls = _run_failing(tmp_path / error.error_class, error)
+        fold = journal.fold()
+        assert fold.confirmed_disclosed_count >= 1
+        assert fold.external_model_disclosure is DisclosureState.CONFIRMED_DISCLOSED
+        assert fold.unresolved_attempt_ids == ()

@@ -44,7 +44,6 @@ export default function SignInPage() {
       <main id="main" className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 p-6">
         <div className="text-center">
           <h1 className="text-2xl font-semibold text-moss-green">my-pa</h1>
-          <p className="mt-1 text-sm text-muted">MossAIc personal assistant</p>
         </div>
         <Card>
           <div className="flex items-center justify-between">
@@ -66,7 +65,6 @@ export default function SignInPage() {
       <main id="main" className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 p-6">
         <div className="text-center">
           <h1 className="text-2xl font-semibold text-moss-green">my-pa</h1>
-          <p className="mt-1 text-sm text-muted">MossAIc personal assistant</p>
         </div>
         <Card>
           <div className="flex items-center justify-between">
@@ -87,7 +85,6 @@ export default function SignInPage() {
     <main id="main" className="mx-auto flex min-h-screen max-w-md flex-col justify-center gap-4 p-6">
       <div className="text-center">
         <h1 className="text-2xl font-semibold text-moss-green">my-pa</h1>
-        <p className="mt-1 text-sm text-muted">MossAIc personal assistant</p>
       </div>
       <Card>
         <div className="flex items-center justify-between">

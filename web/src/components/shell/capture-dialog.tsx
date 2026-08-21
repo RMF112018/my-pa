@@ -130,9 +130,11 @@ export function CaptureDialog({
 
   useEffect(() => {
     if (open) {
-      setOutcome({ kind: "idle" });
-      // Move focus into the single capture field once the dialog is open.
-      const t = setTimeout(() => fieldRef.current?.focus(), 0);
+      const t = setTimeout(() => {
+        setOutcome({ kind: "idle" });
+        // Move focus into the single capture field once the dialog is open.
+        fieldRef.current?.focus();
+      }, 0);
       return () => clearTimeout(t);
     }
   }, [open]);

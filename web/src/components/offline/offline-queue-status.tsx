@@ -73,10 +73,13 @@ export function OfflineQueueStatus({ principalId }: { principalId: string }) {
   );
 
   useEffect(() => {
-    void drain();
+    const initialDrain = window.setTimeout(() => void drain(), 0);
     const onOnline = () => void drain();
     window.addEventListener("online", onOnline);
-    return () => window.removeEventListener("online", onOnline);
+    return () => {
+      window.clearTimeout(initialDrain);
+      window.removeEventListener("online", onOnline);
+    };
   }, [drain]);
 
   if (failure) {

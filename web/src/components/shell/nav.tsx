@@ -1,60 +1,6 @@
 "use client";
-
-import Link from "next/link";
-import { usePathname } from "next/navigation";
-import { DESTINATIONS } from "@/components/shell/destinations";
-
-function linkClasses(active: boolean): string {
-  return active
-    ? "bg-moss-green text-white"
-    : "text-moss-slate hover:bg-moss-sand";
-}
-
-/** Desktop navigation rail — hidden on small screens. */
-export function NavRail() {
-  const pathname = usePathname();
-  return (
-    <nav aria-label="Primary" className="hidden w-48 shrink-0 flex-col gap-1 p-3 md:flex">
-      {DESTINATIONS.map((d) => {
-        const active = pathname === d.href || pathname.startsWith(`${d.href}/`);
-        return (
-          <Link
-            key={d.href}
-            href={d.href}
-            aria-current={active ? "page" : undefined}
-            className={`rounded-md px-3 py-2 text-sm font-medium ${linkClasses(active)}`}
-          >
-            {d.label}
-          </Link>
-        );
-      })}
-    </nav>
-  );
-}
-
-/** Mobile bottom navigation — hidden on medium and larger screens. */
-export function MobileNav() {
-  const pathname = usePathname();
-  return (
-    <nav
-      aria-label="Primary"
-      className="fixed inset-x-0 bottom-0 z-10 flex border-t border-border bg-surface md:hidden"
-    >
-      {DESTINATIONS.map((d) => {
-        const active = pathname === d.href || pathname.startsWith(`${d.href}/`);
-        return (
-          <Link
-            key={d.href}
-            href={d.href}
-            aria-current={active ? "page" : undefined}
-            className={`flex min-h-12 flex-1 items-center justify-center text-xs font-medium ${
-              active ? "text-moss-green" : "text-muted"
-            }`}
-          >
-            {d.label}
-          </Link>
-        );
-      })}
-    </nav>
-  );
-}
+import { useState } from "react"; import Link from "next/link"; import { usePathname } from "next/navigation"; import { Menu, PanelLeftClose, PanelLeftOpen } from "lucide-react"; import { DESTINATIONS, UTILITY_DESTINATIONS, type Destination } from "@/components/shell/destinations"; import { Icon } from "@/components/ui/icon"; import { IconButton } from "@/components/ui/icon-button"; import { Sheet } from "@/components/ui/sheet";
+function activeFor(pathname: string, href: string) { return pathname === href || pathname.startsWith(`${href}/`) || (href === "/work" && pathname.startsWith("/situations")) || (href === "/knowledge" && pathname.startsWith("/library")); }
+function NavLink({ item, pathname, collapsed = false, onNavigate }: { item: Destination; pathname: string; collapsed?: boolean; onNavigate?: () => void }) { const active = activeFor(pathname, item.href); return <Link href={item.href} onClick={onNavigate} aria-current={active ? "page" : undefined} title={collapsed ? item.label : undefined} className={`flex min-h-11 items-center gap-3 rounded-[var(--radius-md)] px-3 text-sm font-medium ${active ? "bg-interactive text-white" : "text-text-secondary hover:bg-surface-subtle hover:text-text-primary"}`}><Icon icon={item.icon} size={19} /><span className={collapsed ? "sr-only" : ""}>{item.label}</span></Link>; }
+export function NavRail({ collapsed, onCollapsedChange }: { collapsed: boolean; onCollapsedChange: (value: boolean) => void }) { const pathname = usePathname(); return <nav aria-label="Primary" className={`hidden shrink-0 flex-col border-r bg-surface p-2 md:flex ${collapsed ? "w-16" : "w-[232px]"}`}><div className="mb-2 flex justify-end"><IconButton label={collapsed ? "Expand navigation" : "Collapse navigation"} onClick={() => onCollapsedChange(!collapsed)}>{collapsed ? <PanelLeftOpen size={18} /> : <PanelLeftClose size={18} />}</IconButton></div><div className="space-y-1">{DESTINATIONS.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} />)}</div><div className="mt-auto border-t pt-2">{UTILITY_DESTINATIONS.map((item) => <NavLink key={item.href} item={item} pathname={pathname} collapsed={collapsed} />)}</div></nav>; }
+export function MobileNav() { const pathname = usePathname(); const [moreOpen, setMoreOpen] = useState(false); const primary = DESTINATIONS.slice(0, 4); const more = [...DESTINATIONS.slice(4), ...UTILITY_DESTINATIONS]; return <><nav aria-label="Primary" className="fixed inset-x-0 bottom-0 z-30 flex border-t bg-surface md:hidden">{primary.map((item) => { const active = activeFor(pathname, item.href); return <Link key={item.href} href={item.href} aria-current={active ? "page" : undefined} className={`flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] ${active ? "text-interactive" : "text-text-muted"}`}><Icon icon={item.icon} size={19} />{item.label}</Link>; })}<button className="flex min-h-14 flex-1 flex-col items-center justify-center gap-1 text-[11px] text-text-muted" aria-haspopup="dialog" onClick={() => setMoreOpen(true)}><Menu size={19} />More</button></nav><Sheet open={moreOpen} onOpenChange={setMoreOpen} title="More destinations">{more.map((item) => <NavLink key={item.href} item={item} pathname={pathname} onNavigate={() => setMoreOpen(false)} />)}</Sheet></>; }

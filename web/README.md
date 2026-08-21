@@ -1,4 +1,4 @@
-# MossAIc web application
+# my-pa web application
 
 `web/` is the Next.js App Router PWA for the current local candidate. It is a
 browser-facing shell and backend-for-frontend (BFF) over the Python capability
@@ -32,10 +32,12 @@ All application pages require a verified session. `/sign-in` is public;
 | UI or BFF route | Backend capability | Current behavior |
 |---|---|---|
 | `/today`, `GET /api/pulse` | `continuity.pulse` | Ranked accepted commitments, tasks, decisions, and current obligations |
-| `/situations`, `GET /api/situations` | `continuity.situations` | Principal-scoped Situation list and relationship events |
+| `/work` (`/situations` predecessor), `GET /api/situations` | `continuity.situations` | Principal-scoped Situation list and relationship events |
 | `GET /api/projects` | `continuity.projects` | Principal-scoped Project list used by the Situation surface |
 | `/relationships/:personId`, `GET /api/relationships/:personId/timeline` | `continuity.situations` | Filters the accepted relationship events returned by the continuity read model for that person |
-| `/library`, `GET /api/library` | `knowledge.read`, `knowledge.search`, `capture.search`, or `capture.list` | Chooses one capability from the request shape; no synthetic Library fixture is invented |
+| `/knowledge` (`/library` predecessor), `GET /api/library` | `knowledge.read`, `knowledge.search`, `capture.search`, or `capture.list` | Chooses one capability from the request shape; no synthetic Knowledge fixture is invented |
+| `/intelligence` | none admitted on current main | Explicitly unavailable; does not rely on the concurrent report-pipeline PR |
+| `/people` | relationship-intelligence reads, without an admitted web BFF | Explicitly partial; no browser-to-gateway bypass is introduced |
 | `POST /api/reveal` | `knowledge.reveal` | Preserves `evidence`, `no_evidence`, and `unavailable` as distinct answers |
 | `/review`, `GET /api/review` | `review.list` | Lists the acting Principal's review cases |
 | `POST /api/review/:id/decide` | `review.decide` | Applies an optimistic-concurrency review decision |
@@ -149,11 +151,13 @@ npm test
 npm run lint
 npm run typecheck
 npm run build
+npm run build-storybook
 ```
 
 The browser suite uses a disposable PostgreSQL database, a loopback Python
 gateway in `local_operator` mode, and Next.js servers for both healthy and
-unreachable-gateway cases. It runs desktop Chrome and a Pixel 7 viewport:
+unreachable-gateway cases. It runs desktop, tablet, and Pixel 7 viewports,
+including deterministic visual baselines:
 
 ```sh
 npm run e2e

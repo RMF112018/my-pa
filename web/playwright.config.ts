@@ -104,6 +104,10 @@ export default defineConfig({
       use: { ...devices["Desktop Chrome"], viewport: { width: 1280, height: 800 } },
     },
     {
+      name: "tablet",
+      use: { ...devices["Desktop Chrome"], viewport: { width: 768, height: 1024 } },
+    },
+    {
       name: "mobile",
       // A real mobile emulation profile: 390x844, touch, and a mobile UA.
       use: { ...devices["Pixel 7"] },
@@ -116,7 +120,11 @@ export default defineConfig({
       reuseExistingServer: !process.env.CI,
       timeout: 120_000,
       stderr: "pipe",
-      env: { ...baseEnv, MYPA_GATEWAY_URL: GATEWAY_URL },
+      env: {
+        ...baseEnv,
+        MYPA_GATEWAY_URL: GATEWAY_URL,
+        MYPA_NEXT_DIST_DIR: ".next/e2e-live",
+      },
     },
     {
       command: `npx next dev --turbopack --port ${DEAD_GATEWAY_PORT}`,
@@ -126,7 +134,11 @@ export default defineConfig({
       stderr: "pipe",
       // Port 1 on loopback. Nothing listens there, so every gateway call takes
       // the genuine connect-refused path through the real transport.
-      env: { ...baseEnv, MYPA_GATEWAY_URL: "http://127.0.0.1:1" },
+      env: {
+        ...baseEnv,
+        MYPA_GATEWAY_URL: "http://127.0.0.1:1",
+        MYPA_NEXT_DIST_DIR: ".next/e2e-dead",
+      },
     },
   ],
 });

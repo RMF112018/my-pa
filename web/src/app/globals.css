@@ -1,102 +1,22 @@
 @import "tailwindcss";
-
-/* Moss brand tokens (MossAIc brand guidelines). */
-:root {
-  --moss-green: #046a38;
-  --moss-gold: #866d4b;
-  --moss-everglade: #204227;
-  --moss-sand: #f6f3ef;
-  --moss-coral: #d06951;
-  --moss-slate: #1f3038;
-  --moss-lime: #67a64a;
-
-  /*
-   * Two brand tones darkened for *text*, and the reason they exist.
-   *
-   * `--moss-coral` measures 3.61:1 against white and 3.26:1 against the sand
-   * background, and `--moss-gold` measures 4.41:1 against sand. WCAG 2.2 AA
-   * requires 4.5:1 for body text, so every failure message, every held-note
-   * warning, and every gold badge label was below the line — and those are
-   * precisely the sentences a person must be able to read, because they are the
-   * ones that say a note was not saved.
-   *
-   * The brand tones are unchanged and still carry every fill, border and rule,
-   * where the 3:1 non-text threshold applies and both clear it. These two are
-   * the same hues taken darker until the text ratio passes:
-   *
-   *   --moss-coral-strong  5.76:1 on white, 5.21:1 on sand
-   *   --moss-gold-strong   6.26:1 on white, 5.66:1 on sand
-   *
-   * Both are darker than the smallest value that clears 4.5:1 on a plain
-   * background, and deliberately so: these two tones are also the *badge* text,
-   * where the background is the same hue at 10% or 15% over the surface. On that
-   * tint the margin is what disappears first — the first attempt at this cleared
-   * 4.5 on white and measured **4.37** inside a gold badge, which axe caught in
-   * the browser. The values below clear 4.5 against every background they are
-   * used on, tinted or not: worst case 4.73:1 (gold on a 15% gold tint over
-   * sand).
-   *
-   * Colour is never the only carrier in any case — every state also has a word,
-   * a distinct heading, and a `data-state` attribute — but a state whose text
-   * cannot be read is not saved by being labelled.
-   */
-  --moss-coral-strong: #ab462e;
-  --moss-gold-strong: #725d40;
-
-  --background: var(--moss-sand);
-  --foreground: var(--moss-slate);
-  --surface: #ffffff;
-  --border: #e2ddd4;
-  --muted: #5c6b73;
-}
+@import "../styles/tokens.css";
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --color-surface: var(--surface);
-  --color-border: var(--border);
-  --color-muted: var(--muted);
-  --color-moss-green: var(--moss-green);
-  --color-moss-gold: var(--moss-gold);
-  --color-moss-everglade: var(--moss-everglade);
-  --color-moss-sand: var(--moss-sand);
-  --color-moss-coral: var(--moss-coral);
-  --color-moss-slate: var(--moss-slate);
-  --color-moss-lime: var(--moss-lime);
-  --color-moss-coral-strong: var(--moss-coral-strong);
-  --color-moss-gold-strong: var(--moss-gold-strong);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-canvas: var(--canvas); --color-surface: var(--surface); --color-surface-subtle: var(--surface-subtle); --color-surface-elevated: var(--surface-elevated);
+  --color-border-subtle: var(--border-subtle); --color-border-strong: var(--border-strong); --color-text-primary: var(--text-primary); --color-text-secondary: var(--text-secondary); --color-text-muted: var(--text-muted);
+  --color-interactive: var(--interactive); --color-interactive-hover: var(--interactive-hover); --color-interactive-subtle: var(--interactive-subtle); --color-focus: var(--focus); --color-success: var(--success); --color-warning: var(--warning); --color-destructive: var(--destructive); --color-information: var(--information);
+  --color-background: var(--canvas); --color-foreground: var(--text-primary); --color-border: var(--border-subtle); --color-muted: var(--text-secondary);
+  --color-moss-green: var(--interactive); --color-moss-gold: var(--warning); --color-moss-everglade: var(--interactive-hover); --color-moss-sand: var(--canvas); --color-moss-coral: var(--destructive); --color-moss-slate: var(--text-primary); --color-moss-lime: var(--success); --color-moss-coral-strong: var(--destructive); --color-moss-gold-strong: var(--warning);
+  --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, "SFMono-Regular", Consolas, "Liberation Mono", monospace;
 }
 
-body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: var(--font-sans), system-ui, sans-serif;
-}
+html { background: var(--canvas); }
+body { margin: 0; background: var(--canvas); color: var(--text-primary); font-family: var(--font-sans); }
+* { border-color: var(--border-subtle); }
+:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; }
+::selection { background: var(--interactive-subtle); color: var(--text-primary); }
 
-/* Visible focus is non-negotiable. */
-:focus-visible {
-  outline: 2px solid var(--moss-green);
-  outline-offset: 2px;
-}
-
-/*
- * Motion is honoured as a preference, not overridden as a style.
- *
- * The chrome here uses transitions rather than animation, so this is short — but
- * "we do not animate much" is not the same promise as "we respect the setting",
- * and the second is the one WCAG 2.3.3 asks for. Transitions are reduced to a
- * duration a vestibular disorder cannot be triggered by rather than removed
- * outright, so a state change is still perceptible as a change.
- */
 @media (prefers-reduced-motion: reduce) {
-  *,
-  *::before,
-  *::after {
-    animation-duration: 0.01ms !important;
-    animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
-    scroll-behavior: auto !important;
-  }
+  *, *::before, *::after { animation-duration: .01ms !important; animation-iteration-count: 1 !important; transition-duration: .01ms !important; scroll-behavior: auto !important; }
 }

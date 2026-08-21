@@ -1016,6 +1016,35 @@ def test_a_fault_below_normalization_is_still_answered_in_the_envelope(
     assert "strip" not in reply.rendered()
 
 
+def test_a_fault_reading_the_body_is_still_answered_in_the_envelope(
+    scene: Scene, wire: Wire, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The body-read block's terminal catch, which shipped unarmed.
+
+    `read_document` classifies `ClientDisconnect`, `TimeoutError` and every
+    `ApplicationError`. Anything else escaped, and this route answered a bare
+    `500` while the remote-capture route -- whose equivalent block had gained a
+    terminal catch one commit earlier -- answered an envelope. The asymmetry a
+    commit claimed to have closed had been inverted rather than closed, and
+    nothing caught that because neither block's catch had a test.
+
+    `_document` is the seam: its own docstring describes it raising for a
+    composition-invariant violation, which is exactly the class that is not an
+    `ApplicationError`.
+    """
+
+    def erupt(received: bytes) -> Any:  # noqa: ANN401 - stand-in
+        raise RuntimeError("a fault reading the body")
+
+    monkeypatch.setattr("my_pa.adapters.http.app._document", erupt)
+    document = document_for(Capability.CAPABILITIES_GET, scene, {})
+    reply = wire.send("capabilities.get", document)
+    assert reply.status == 500, reply.body
+    assert reply.document()["code"] == ErrorCode.INTERNAL_ERROR.value
+    assert reply.document()["correlation_id"]
+    assert "fault reading" not in reply.rendered()
+
+
 def test_an_unknown_path_is_404_and_a_wrong_method_is_405(scene: Scene, wire: Wire) -> None:
     """HTTP's own answers about a URL, in this repository's error vocabulary."""
     document = document_for(Capability.CAPABILITIES_GET, scene, {})

@@ -744,6 +744,116 @@ def test_resolving_through_a_crossed_child_row_finds_nothing(
     assert OWN_ENTITY not in repr(result)
 
 
+@pytest.mark.parametrize("kind", ["entity", "identifier", "alias", "merge"])
+def test_an_identifier_another_principal_holds_is_unavailable(staged: Scene, kind: str) -> None:
+    """The four global primary keys, which had the rule and no test.
+
+    `ebecec4` extended `_refuse_taken_identifier` from four writes to eight so
+    the double would model every global key the schema declares. The eleventh
+    review measured the four new ones: blanking `create`'s, `bind_identifier`'s,
+    `record_alias`'s and `record_merge`'s together left the **entire** fast tier
+    green — 8,189 passed. The rule a reviewer named was armed; the four shipped
+    beside it were not, which is the shape the commit adding them was written to
+    end.
+
+    Every one of these keys is global (`tables.py` declares each as a primary
+    key; `entity_merge_records.merged_entity_id` additionally carries a global
+    `UNIQUE`). An identifier another Principal holds is unavailable to this one
+    whatever the partition says, and the server answers `IntegrityError`.
+    """
+    mine = staged.principal.principal_id
+    with FakeUnitOfWork(staged.world) as unit_of_work:
+        entities = unit_of_work.entities
+        if kind == "entity":
+            taken, noun = FOREIGN_ENTITY, "an entity"
+
+            def attempt() -> None:
+                entities.create(mine, _entity(taken, "Mine Now", mine))
+        elif kind == "identifier":
+            taken, noun = "xid_foreign01foreign1", "an external identifier"
+
+            def attempt() -> None:
+                entities.bind_identifier(
+                    mine,
+                    OWN_ENTITY,
+                    ExternalIdentifier(
+                        identifier_id=taken,
+                        entity_id=OWN_ENTITY,
+                        namespace=ExternalIdentifierNamespace.EMAIL,
+                        display_value="mine@own.test",
+                        normalized_value=normalize_identifier(
+                            ExternalIdentifierNamespace.EMAIL, "mine@own.test"
+                        ),
+                        principal_id=mine,
+                    ),
+                )
+        elif kind == "alias":
+            taken, noun = "eals_foreign1foreign1", "an alias"
+
+            def attempt() -> None:
+                entities.record_alias(
+                    mine,
+                    EntityAlias(
+                        alias_id=taken,
+                        entity_id=OWN_ENTITY,
+                        alias_type=AliasType.FORMER_NAME,
+                        display_value="Mine Formerly",
+                        normalized_value=normalize_name("Mine Formerly"),
+                        principal_id=mine,
+                    ),
+                )
+        else:
+            taken, noun = "emrg_theirs01theirs01", "a merge record"
+            entities.create(mine, _entity(OWN_SECOND, "Second Of Mine", mine))
+            staged.world.entity_proposals.append(
+                EntityProposal(
+                    proposal_id="eprp_mine0002mine0002",
+                    principal_id=mine,
+                    kind=EntityProposalKind.MERGE_ENTITIES,
+                    state=EntityProposalState.ACCEPTED,
+                    payload=(),
+                    observation_ids=(),
+                    proposed_at=WHEN,
+                    proposed_by="my operator",
+                    decided_by="my operator",
+                    decided_at=WHEN,
+                    decision_reason="same person",
+                )
+            )
+            staged.world.entity_merges.append(
+                EntityMergeRecord(
+                    merge_id=taken,
+                    principal_id="prn_ffff0009ffff0009ffff0009",
+                    retained_entity_id=FOREIGN_ENTITY,
+                    merged_entity_id=FOREIGN_SCOPE,
+                    proposal_id="eprp_theirs01theirs01",
+                    decided_by="their operator",
+                    decided_at=WHEN,
+                    reason="same person",
+                )
+            )
+
+            def attempt() -> None:
+                entities.record_merge(
+                    mine,
+                    EntityMergeRecord(
+                        merge_id=taken,
+                        principal_id=mine,
+                        retained_entity_id=OWN_ENTITY,
+                        merged_entity_id=OWN_SECOND,
+                        proposal_id="eprp_mine0002mine0002",
+                        decided_by="my operator",
+                        decided_at=WHEN,
+                        reason="same person",
+                    ),
+                )
+
+        with pytest.raises(ValueError, match="already taken") as refusal:
+            attempt()
+        assert noun in str(refusal.value)
+        assert taken in str(refusal.value)
+
+
 # --- a cursor naming a record the caller may not read ------------------------
 
 

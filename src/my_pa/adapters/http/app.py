@@ -559,6 +559,14 @@ def create_http_app(
             return _problem_response(InvalidRequestError())
         except ApplicationError as refusal:
             return _problem_response(refusal)
+        except Exception:
+            # The body-read block's own terminal catch. It was missing here
+            # while `submit`'s equivalent block had one, so the asymmetry a
+            # previous commit claimed to have closed was merely inverted: this
+            # route answered a bare `500` for a fault in `read_document` while
+            # the other answered an envelope. The rule is per route, so it is
+            # applied to every block of both.
+            return _problem_response(InternalError())
 
         if authenticate is None:
             # `D-30`: no header is read at all, because none is required.
@@ -646,11 +654,13 @@ def create_http_app(
         except ApplicationError as refusal:
             return _problem_response(refusal)
         except Exception:
-            # The same terminal catch `invoke` carries, on the same grounds. It
+            # The terminal catch `invoke` carries, on the same grounds. It
             # reached `invoke` alone when it was added, while the claim made was
             # about "the transport" -- so the rule went to the route a reviewer
             # had pointed at and not to its sibling here, which is the shape
-            # this branch keeps paying for.
+            # this branch keeps paying for. Then it reached this block and not
+            # `invoke`'s body-read block, which inverted the asymmetry rather
+            # than closing it; both now carry it.
             return _problem_response(InternalError())
         try:
             envelope = service.invoke(

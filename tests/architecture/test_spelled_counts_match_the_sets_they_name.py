@@ -1538,11 +1538,19 @@ def test_the_sweep_found_a_counted_list_to_check() -> None:
 
     **What it does not read, stated rather than implied.** A comma between the
     number and the list, and two or more items. Writing the same claim with a
-    colon or an em dash defeats it, and both were tried: admitting them turned
-    ordinary prose — "the plane's six capabilities — `entities.search` is the
-    browse surface" — into a reported miscount of one, because a number followed
-    by a dash and a single code span is not an enumeration. A rule that cries
-    wolf on prose gets deleted, so this one stays narrow and says so.
+    colon or an em dash defeats it.
+
+    Admitting them was tried and withdrawn. The separators were widened together
+    (`[,:—-]`) with a one-or-more item pattern, and four false findings followed;
+    the withdrawal note then blamed the em dash and quoted an em-dash example.
+    The eleventh review isolated them and that attribution is wrong: with the
+    shipped two-or-more-item pattern, admitting the em dash alone produces no
+    false finding, and it is the **colon** that produces one —
+    `tests/architecture/test_principal_is_never_caller_supplied.py:684`, where
+    "two: `first = metadata`, `second = first`, `second.principal_id`" counts
+    three spans against a stated two and is not a miscount of anything. Corrected
+    here rather than left, because a withdrawal note that misnames its own reason
+    is the shape this module exists to catch.
     """
     assert COUNTED_LISTS, (
         "no `<number>, `a`, `b`` claim parsed from the swept corpus; the pattern "

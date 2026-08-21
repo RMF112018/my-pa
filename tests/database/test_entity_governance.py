@@ -1127,8 +1127,23 @@ def test_the_declared_check_is_the_one_the_server_holds(two_principals: Engine) 
     Compared as normalized text rather than byte-for-byte: PostgreSQL rewrites
     `BETWEEN` into two comparisons, parenthesizes to its own taste, and requotes
     the regex literals, so an exact match would fail on formatting and be
-    "fixed" by deleting the assertion. What is compared is the set of operands
-    the two expressions mention, which is what a drift would change.
+    "fixed" by deleting the assertion.
+
+    Three comparisons, each added because the one before it was measured to miss
+    a real drift. The **multiset of operands** catches a changed literal or a
+    dropped clause; a plain set did not, because inverting one of two `!~` left
+    the set unchanged. The **connectives** are in that multiset because filtering
+    `AND` and `OR` out by name let `AND` become `OR` invisibly -- turning "must
+    not begin *and* must not end with whitespace" into a rule every non-empty
+    name satisfies. And each **operator is paired with its operand**, because a
+    multiset has no notion of which bound belongs to which comparison, so the
+    unsatisfiable `BETWEEN 200 AND 1` produced exactly the multiset of the
+    correct `BETWEEN 1 AND 200`.
+
+    What it still permits, deliberately: reordering whole clauses, which is
+    semantically identical. What it does not permit, and arguably should: a
+    redundant clause that changes nothing. That direction is over-strict and
+    left that way, since a declaration is supposed to mirror the constraint.
     `tests/schema/test_wp12_slice_c_admission.py` does the same comparison for
     `capability_is_known`; this is the entity plane's.
     """
@@ -1168,20 +1183,37 @@ def test_the_declared_check_is_the_one_the_server_holds(two_principals: Engine) 
         return [
             token
             for token in re.findall(
-                # Operators too. Without them the comparison saw only column
-                # names, literals and numbers, and the tenth review measured
-                # what that costs: inverting both regex tests in the declaration
-                # -- `!~` to `~`, so a disclosed mention name would have to
-                # *begin and end* with whitespace -- passed, and so did turning
-                # `IS NULL` into `IS NOT NULL`. A `tables.py` reader would have
-                # taken an inverted rule on a person's disclosed name as
-                # verified against the server.
+                # Operators and connectives too. Without the operators the
+                # comparison saw only column names, literals and numbers, and
+                # the tenth review measured what that costs. Without the
+                # connectives it still did: the eleventh review turned the `AND`
+                # between the two `!~` clauses into `OR` -- "must not begin
+                # *or* must not end with whitespace", which every non-empty name
+                # satisfies -- and the multiset was unchanged, because `AND` and
+                # `OR` were filtered out by name.
                 r"'[^']*'|!~\*?|~\*?|<=|>=|<>|!=|=|<|>|\bIS NOT NULL\b|\bIS NULL\b"
-                r"|\bNOT\b|\b[a-z_]+\b|\b\d+\b",
+                r"|\bAND\b|\bOR\b|\bNOT\b|\b[a-z_]+\b|\b\d+\b",
                 without_casts,
             )
-            if token.lower() not in {"and", "or", "check"}
+            if token.lower() != "check"
         ]
+
+    def bindings(tokens: list[str]) -> Counter[tuple[str, str]]:
+        """Each operator paired with the operand it applies to.
+
+        A multiset of tokens has no notion of which operand belongs to which
+        operator, so `BETWEEN 200 AND 1` -- an unsatisfiable bound, expanded to
+        `>= 200 AND <= 1` -- produced exactly the multiset of the correct
+        `>= 1 AND <= 200` and passed. The eleventh review measured that. Pairing
+        each operator with the token after it distinguishes them while leaving
+        a reordering of whole clauses, which is semantically identical, alone.
+        """
+        operators = {"!~", "!~*", "~", "~*", "<=", ">=", "<>", "!=", "=", "<", ">"}
+        return Counter(
+            (token, tokens[index + 1])
+            for index, token in enumerate(tokens)
+            if token in operators and index + 1 < len(tokens)
+        )
 
     # **Counted, not merely present.** A set comparison ignores multiplicity, and
     # this constraint applies `!~` twice and `~` once. Flipping one `!~` to `~`
@@ -1200,6 +1232,15 @@ def test_the_declared_check_is_the_one_the_server_holds(two_principals: Engine) 
     assert extra == Counter(), (
         f"the server holds operands `tables.py` does not declare: "
         f"{sorted(extra.elements())}.\ndeclared: {declared_text}\nlive:     {live}"
+    )
+
+    declared_pairs = bindings(operands(declared_text))
+    live_pairs = bindings(operands(live))
+    assert declared_pairs == live_pairs, (
+        "`tables.py` binds an operator to a different operand than the server "
+        f"does: declared {sorted(declared_pairs - live_pairs)}, live "
+        f"{sorted(live_pairs - declared_pairs)}.\ndeclared: {declared_text}\n"
+        f"live:     {live}"
     )
 
 

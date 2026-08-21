@@ -486,3 +486,47 @@ def test_the_ingress_composes_with_either_authentication_mode(
             remote_client=stub_client(remote_principal),
         )
     assert WHEN is not None
+
+
+# ---- the terminal catches, which shipped unarmed ------------------------------
+
+
+@pytest.mark.parametrize("stage", ["build", "invoke"])
+def test_a_fault_on_this_route_is_answered_in_the_envelope(
+    enabled: Wire,
+    remote_principal: Principal,
+    monkeypatch: pytest.MonkeyPatch,
+    stage: str,
+) -> None:
+    """The two `except Exception` clauses on `submit`, which had no test at all.
+
+    A previous commit added the terminal catch to the `invoke` route *and* a
+    test arming it, then added the same catch here and no test. The eleventh
+    review measured the result: deleting either clause left the whole fast tier
+    and the database tier green. Two independent lenses reported it, which is
+    what a rule shipped without its guard looks like.
+
+    Both stages are exercised because they are separate `try` blocks and each
+    can be removed on its own. `build` covers the body read, the caller-identity
+    strip and `normalize`; `invoke` covers the application call.
+    """
+    if stage == "build":
+
+        def explode(capability: str, arguments: object) -> object:
+            raise AttributeError("'int' object has no attribute 'strip'")
+
+        monkeypatch.setattr("my_pa.adapters.http.app.normalize", explode)
+    else:
+
+        def erupt(*args: object, **kwargs: object) -> object:
+            raise RuntimeError("a fault below the transport")
+
+        monkeypatch.setattr(ApplicationService, "invoke", erupt)
+
+    reply = post(enabled, submission(), credential=CREDENTIAL)
+    assert reply.status == 500, reply.body
+    body = reply.document()
+    assert body["code"] == ErrorCode.INTERNAL_ERROR.value
+    assert body["correlation_id"]
+    assert "strip" not in reply.rendered()
+    assert "fault below" not in reply.rendered()

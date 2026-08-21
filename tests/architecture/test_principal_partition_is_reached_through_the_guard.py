@@ -785,17 +785,20 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
     )
 
 
-#: A floor under the anti-vacuity floor. The widened walk reaches **thirty-two**
+#: A floor under the anti-vacuity floor. The widened walk reaches **thirty-four**
 #: statements touching a partitioned table at this head; thirty leaves room for
 #: one or two to be removed without reddening the suite, while a walk that
 #: silently stopped reaching the module fails loudly.
 #:
-#: Both numbers here have been wrong before. The floor was 9 against 31, which
-#: would have let two thirds of the module go blind; then 28 against a comment
-#: claiming 31 when the true count was 32. A floor is only anti-vacuity if it
-#: sits just under the real figure, and the figure is derived by running the
-#: walk rather than by counting queries by eye.
-_MINIMUM_ENTITY_STATEMENTS: Final = 30
+#: Both numbers here have been wrong before, three times. The floor was 9
+#: against 31, which would have let two thirds of the module go blind; then 28
+#: against a comment claiming 31 when the true count was 32; then 30 against a
+#: comment still claiming thirty-two when the walk had grown to 35, so five
+#: statements could have been hidden without reddening. A floor is only
+#: anti-vacuity if it sits just under the real figure, and the figure is derived
+#: by running the walk rather than by counting queries by eye -- which is how
+#: each of the three was found, and never by reading the comment.
+_MINIMUM_ENTITY_STATEMENTS: Final = 34
 
 
 #: Each partitioned table matched as a whole word, so `select(entities)` counts
@@ -1282,17 +1285,53 @@ def test_every_entity_statement_reaches_the_partition_of_each_table_it_names() -
             return value.func.value.id
         return None
 
+    def _columns_of(value: ast.expr | None) -> str | None:
+        """The table a module-level binding selects columns from, if it does.
+
+        **This was excluded, and the exclusion's stated reason was false.** The
+        comment read "a binding that merely selects columns ... is not a second
+        way to query it". It is: `select(*_ENTITY_COLUMNS)` compiles to
+        `SELECT knowledge.entities.entity_id, ... FROM knowledge.entities` --
+        SQLAlchemy derives the `FROM` from the columns selected -- and that is
+        this module's *dominant* query idiom, used at three call sites. The
+        eleventh review measured the cost: a new whole-plane read written as
+        `select(*_ENTITY_COLUMNS)` with no partition predicate at all passed the
+        walk 252/252, because the statement never spells `entities`.
+
+        Kept separate from `_aliased_table` because the requirement differs: a
+        column tuple only reaches the table when it is handed to a query
+        constructor, so demanding a predicate beside every mention of one would
+        redden ordinary indexing and slicing.
+        """
+        if value is None:
+            return None
+        for inner in ast.walk(value):
+            if (
+                isinstance(inner, ast.Attribute)
+                and isinstance(inner.value, ast.Attribute)
+                and inner.value.attr == "c"
+                and isinstance(inner.value.value, ast.Name)
+                and inner.value.value.id in partitioned
+            ):
+                return inner.value.value.id
+        return None
+
     aliases: dict[str, str] = {}
+    column_tuples: dict[str, str] = {}
     for statement in tree.body:
         if not isinstance(statement, ast.Assign | ast.AnnAssign):
             continue
-        table = _aliased_table(statement.value)
-        if table is None:
-            continue
         targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
-        for target in targets:
-            if isinstance(target, ast.Name):
-                aliases[target.id] = table
+        names = [target.id for target in targets if isinstance(target, ast.Name)]
+        table = _aliased_table(statement.value)
+        if table is not None:
+            for name in names:
+                aliases[name] = table
+            continue
+        columns = _columns_of(statement.value)
+        if columns is not None:
+            for name in names:
+                column_tuples[name] = columns
 
     checked = 0
     offending: list[str] = []
@@ -1309,6 +1348,12 @@ def test_every_entity_statement_reaches_the_partition_of_each_table_it_names() -
                 for alias, table in aliases.items()
                 if re.search(rf"\b{re.escape(alias)}\b", rendered)
             }
+            if re.search(r"\b(?:select|insert|update|delete)\(", rendered):
+                named |= {
+                    table
+                    for binding, table in column_tuples.items()
+                    if re.search(rf"\b{re.escape(binding)}\b", rendered)
+                }
             if not named:
                 continue
             checked += 1

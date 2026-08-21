@@ -164,7 +164,7 @@ class Representation(StrEnum):
 
 
 def _bounded_query(value: str, detail: SafeDetail) -> str:
-    """A caller-supplied search string, bounded by the rule that already exists.
+    r"""A caller-supplied search string, bounded by the rule that already exists.
 
     Delegated to `domain.search.query.SearchQuery` rather than restated, and the
     first version of this function restated it. That version applied the
@@ -184,10 +184,18 @@ def _bounded_query(value: str, detail: SafeDetail) -> str:
     try:
         SearchQuery(value)
     except SearchQueryError:
-        # Raised outside the handler so the original -- which carries the
-        # rejected query -- is not left in `__context__` for a traceback.
-        raise InvalidRequestError(detail) from None
-    return value
+        pass
+    else:
+        return value
+    # Raised outside the handler, as everywhere else in this repository. The
+    # first version wrote `raise ... from None` inside the handler and said that
+    # kept the original out of `__context__`. It does not: `from None` sets
+    # `__suppress_context__`, which suppresses *display*, and `__context__` still
+    # holds the `SearchQueryError` -- measured. `adapters.normalization._metadata`
+    # states the difference in as many words ("leaving the handler first is what
+    # actually clears `__context__`") and `_identifier` below does it correctly,
+    # so this was a deviation from a convention it invoked by name.
+    raise InvalidRequestError(detail)
 
 
 def _identifier(value: str, kind: IdKind | None, detail: SafeDetail) -> str:

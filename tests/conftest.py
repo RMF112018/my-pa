@@ -2893,10 +2893,15 @@ def _refuse_taken_identifier(held: object, identifier: str, noun: str) -> None:
 
     Every table on this plane keys on a *global* primary key, so an identifier
     another Principal holds is unavailable to this one -- the server answers
-    `IntegrityError`. Applied at every write that introduces one: the tenth
-    review found it on four of nine while this docstring asserted it of all,
-    and measured the fake accepting duplicate `entity_id`, `identifier_id`,
-    `alias_id` and `merge_id` values the server refuses.
+    `IntegrityError`.
+
+    **Eight writes introduce an identifier and all eight carry this.** The tenth
+    review found it on four of them while this docstring asserted it of all, and
+    measured the fake accepting duplicate `entity_id`, `identifier_id`,
+    `alias_id` and `merge_id` values the server refuses. The correction then said
+    "four of nine", which the eleventh review measured as wrong by one -- a
+    miscount inside the sentence recording a miscount. The plane has eight
+    tables and this helper has eight call sites.
 
     The collision reads above are partitioned, matching
     `SqlEntityRepository`, which is what decides *on whose evidence* a write is

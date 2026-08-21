@@ -271,6 +271,28 @@ def _rebound_inside(body: ast.FunctionDef) -> frozenset[str]:
     return frozenset(rebound)
 
 
+def _bound_locals(body: ast.FunctionDef, field: str) -> frozenset[str]:
+    """Locals that hold the field's value, so a read through one still counts.
+
+    `value = self.query` followed by `value.strip()` dereferences the field
+    under another name. The eleventh review planted exactly that and the module
+    stayed green over a live `AttributeError`. Tracked in both directions: a
+    check written against the local (`isinstance(value, str)`) counts too, so
+    the rule does not fire on code that is genuinely safe.
+    """
+    held: set[str] = set()
+    for inner in ast.walk(body):
+        if not isinstance(inner, ast.Assign) or not _names_the_field(inner.value, field):
+            continue
+        held.update(target.id for target in inner.targets if isinstance(target, ast.Name))
+    return frozenset(held)
+
+
+def _names_it(node: ast.expr, field: str, locals_: frozenset[str]) -> bool:
+    """`self.<field>`, or a local holding it."""
+    return _names_the_field(node, field) or (isinstance(node, ast.Name) and node.id in locals_)
+
+
 def _reads(body: ast.FunctionDef, field: str, rebound: frozenset[str]) -> list[tuple[int, int]]:
     """Every position at which the field's value is used as a string.
 
@@ -281,13 +303,10 @@ def _reads(body: ast.FunctionDef, field: str, rebound: frozenset[str]) -> list[t
     field from the population entirely — `commands.py` already does exactly that
     five times over, so the shape is idiomatic rather than contrived.
     """
+    locals_ = _bound_locals(body, field)
     positions: list[tuple[int, int]] = []
     for inner in ast.walk(body):
-        if (
-            isinstance(inner, ast.Attribute)
-            and isinstance(inner.value, ast.Attribute)
-            and _names_the_field(inner.value, field)
-        ):
+        if isinstance(inner, ast.Attribute) and _names_it(inner.value, field, locals_):
             positions.append(_at(inner))
         elif isinstance(inner, ast.Call) and isinstance(inner.func, ast.Name):
             named = inner.func.id
@@ -295,13 +314,14 @@ def _reads(body: ast.FunctionDef, field: str, rebound: frozenset[str]) -> list[t
                 continue
             if named in _GUARDING:
                 continue
-            if any(_names_the_field(argument, field) for argument in inner.args):
+            if any(_names_it(argument, field, locals_) for argument in inner.args):
                 positions.append(_at(inner))
     return positions
 
 
 def _checks(body: ast.FunctionDef, field: str, rebound: frozenset[str]) -> list[tuple[int, int]]:
     """Every position at which the field's type is established."""
+    locals_ = _bound_locals(body, field)
     positions: list[tuple[int, int]] = []
     for inner in ast.walk(body):
         if not isinstance(inner, ast.Call) or not isinstance(inner.func, ast.Name):
@@ -312,10 +332,10 @@ def _checks(body: ast.FunctionDef, field: str, rebound: frozenset[str]) -> list[
             if len(inner.args) != 2:
                 continue
             subject, kind = inner.args
-            if _names_the_field(subject, field) and "str" in ast.unparse(kind):
+            if _names_it(subject, field, locals_) and "str" in ast.unparse(kind):
                 positions.append(_at(inner))
             continue
-        if inner.func.id in _GUARDING and inner.args and _names_the_field(inner.args[0], field):
+        if inner.func.id in _GUARDING and inner.args and _names_it(inner.args[0], field, locals_):
             positions.append(_at(inner))
     return positions
 
@@ -447,16 +467,37 @@ def test_every_carried_entry_is_still_an_offence() -> None:
     )
 
 
+def test_every_carried_entry_names_the_capability_it_actually_reaches() -> None:
+    """The third column is derived, not taken on trust.
+
+    It was read straight out of the tuple, so the test below could be switched
+    off by mistyping one string. The eleventh review did exactly that: adding a
+    fabricated entity-plane entry labelled `"tasks.update"` passed, and the same
+    entry labelled honestly reddened. A label nobody checks is not a label.
+    """
+    wrong = sorted(
+        f"{command} says {capability!r}, declares "
+        f"{getattr(commands_module, command).capability.value!r}"
+        for command, _, capability in CARRIED_FROM_THE_MERGE_BASE
+        if getattr(commands_module, command).capability.value != capability
+    )
+    assert wrong == []
+
+
 def test_nothing_on_the_entity_plane_is_carried() -> None:
     """This branch's own surface has to be clean, allowlist or no allowlist.
 
     The allowlist exists to bound a pull request, not to let this branch carry
     its own instance of the defect. A future `entities.*` command appearing here
     means the exemption is being used for something it was not granted for.
+
+    Read from the command's own `capability` `ClassVar` rather than from the
+    tuple's third column, so this cannot be turned off by writing a different
+    string; the column is checked against the same source above.
     """
     theirs = sorted(
-        f"{command}.{field} ({capability})"
-        for command, field, capability in CARRIED_FROM_THE_MERGE_BASE
-        if capability.startswith("entities.")
+        f"{command}.{field}"
+        for command, field, _ in CARRIED_FROM_THE_MERGE_BASE
+        if getattr(commands_module, command).capability.value.startswith("entities.")
     )
     assert theirs == []

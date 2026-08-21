@@ -110,21 +110,26 @@ def test_both_spelled_counts_match_the_rows_the_document_carries() -> None:
     recorded = len(_recorded())
     text = _text()
 
-    so_far = _ROUNDS_SO_FAR.search(text)
-    assert so_far is not None, (
-        "section 4c no longer states how many rounds it records; the claim this "
-        "module exists to check has been deleted rather than corrected"
+    # **Every occurrence, not the first.** Both patterns used `search`, so a
+    # third sentence stating a different number anywhere else in the document
+    # was unbound -- and "two sentences in one document disagreeing" is the
+    # entire defect this module exists for. The eleventh review planted "For the
+    # avoidance of doubt, thirteen rounds have now run" and it passed.
+    stated: list[tuple[str, str]] = [
+        ("section 4c ('rounds so far')", match.group(1)) for match in _ROUNDS_SO_FAR.finditer(text)
+    ] + [
+        ("section 4a ('rounds have now run')", match.group(1))
+        for match in _ROUNDS_HAVE_RUN.finditer(text)
+    ]
+    assert len(stated) >= 2, (
+        f"only {len(stated)} round-count sentences found; the claims this module "
+        "exists to check have been deleted or reworded rather than corrected"
     )
-    claimed_in_table = _SPELLED.get(so_far.group(1).lower())
-    assert claimed_in_table == recorded, (
-        f"section 4c says {so_far.group(1)!r} rounds so far and carries {recorded} rows"
+    wrong = sorted(
+        f"{where} says {word!r}" for where, word in stated if _SPELLED.get(word.lower()) != recorded
     )
-
-    have_run = _ROUNDS_HAVE_RUN.search(text)
-    assert have_run is not None, "section 4a no longer states how many rounds have run; see above"
-    claimed_in_prose = _SPELLED.get(have_run.group(1).lower())
-    assert claimed_in_prose == recorded, (
-        f"section 4a says {have_run.group(1)!r} rounds have now run while "
-        f"section 4c carries {recorded} rows. These two sentences are "
-        "seventy-six lines apart and disagreed for two rounds"
+    assert wrong == [], (
+        f"{wrong}, while the table carries {recorded} rows. Every sentence in "
+        "this document that states how many review rounds have run has to state "
+        "the same number as the rows, wherever it sits."
     )

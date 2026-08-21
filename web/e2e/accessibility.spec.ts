@@ -20,7 +20,7 @@
  */
 import { test, expect, type Page } from "@playwright/test";
 import AxeBuilder from "@axe-core/playwright";
-import { signIn } from "./fixtures";
+import { signIn, syntheticNote } from "./fixtures";
 
 const WCAG = ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"];
 
@@ -63,6 +63,11 @@ async function scan(page: Page): Promise<string[]> {
   );
 }
 
+async function useDarkTheme(page: Page): Promise<void> {
+  await page.getByRole("button", { name: "Use dark theme" }).click();
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+}
+
 test.describe("axe-core, in Chromium, against the rendered page", () => {
   test("the sign-in screen has no detectable violation", async ({ page }) => {
     await page.goto("/sign-in");
@@ -82,6 +87,36 @@ test.describe("axe-core, in Chromium, against the rendered page", () => {
     await page.getByTestId("capture-button").click();
     await expect(page.getByTestId("capture-field")).toBeFocused();
     expect(await scan(page), "capture dialog accessibility violations").toEqual([]);
+  });
+
+  test("dark Work and interactive surfaces have no detectable violation", async ({ page }) => {
+    await signIn(page);
+    await useDarkTheme(page);
+
+    for (const path of ["/work", "/knowledge"] as const) {
+      await page.goto(path);
+      await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
+      expect(await scan(page), `${path} dark-theme accessibility violations`).toEqual([]);
+    }
+  });
+
+  test("the dark held-note surface has no detectable violation", async ({ page, context }) => {
+    await signIn(page);
+    await useDarkTheme(page);
+    await context.setOffline(true);
+
+    await page.getByTestId("capture-button").click();
+    await page.getByTestId("capture-field").fill(syntheticNote("dark-accessibility"));
+    await page.getByRole("button", { name: "Save" }).click();
+    await expect(page.getByTestId("capture-queued")).toBeVisible({ timeout: 30_000 });
+
+    // The status normally drains on mount or the browser's online event. Fire
+    // that event while transport remains offline so the retained-note surface
+    // is deterministically rendered without claiming a reconnect occurred.
+    await page.evaluate(() => window.dispatchEvent(new Event("online")));
+    await expect(page.getByTestId("offline-queue-status")).toBeVisible();
+    await page.getByRole("button", { name: "Close" }).click();
+    expect(await scan(page), "dark held-note accessibility violations").toEqual([]);
   });
 });
 

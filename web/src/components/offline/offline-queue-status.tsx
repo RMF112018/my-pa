@@ -97,7 +97,7 @@ export function OfflineQueueStatus({ principalId }: { principalId: string }) {
     <div
       role="status"
       data-testid="offline-queue-status"
-      className="fixed bottom-2 left-2 z-20 max-w-xs rounded border border-moss-coral bg-white p-2 text-xs shadow"
+      className="fixed bottom-2 left-2 z-20 max-w-xs rounded border border-moss-coral bg-surface p-2 text-xs shadow"
     >
       <p data-testid="offline-queue-held">
         <strong>{held}</strong> note{held === 1 ? "" : "s"} held on this device only — not saved on

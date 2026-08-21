@@ -77,7 +77,7 @@ function ContinuityWorkspace({ data }: { data: PythonContinuityWorkspace }) {
   return (
     <section aria-label="Continuity workspace" className="mt-8 grid gap-4 sm:grid-cols-2">
       {groups.map(([label, items, describe]) => (
-        <article key={label} className="rounded-xl border border-moss-slate/10 bg-white p-4">
+        <article key={label} className="rounded-xl border border-moss-slate/10 bg-surface p-4">
           <h2 className="font-semibold text-moss-slate">{label}</h2>
           {items.length === 0 ? (
             <p className="mt-2 text-sm text-muted">No accepted {label.toLowerCase()}.</p>

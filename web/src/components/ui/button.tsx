@@ -5,11 +5,11 @@ type Size = "sm" | "md" | "lg";
 
 const VARIANT_CLASSES: Record<Variant, string> = {
   primary:
-    "bg-moss-green text-white hover:bg-moss-everglade disabled:bg-moss-green/50",
+    "bg-moss-green text-on-interactive hover:bg-moss-everglade disabled:bg-moss-green/50",
   secondary:
     "border border-moss-green text-moss-green bg-surface hover:bg-moss-sand disabled:opacity-50",
   ghost: "text-moss-slate hover:bg-moss-sand disabled:opacity-50",
-  danger: "bg-moss-coral-strong text-white hover:opacity-90 disabled:opacity-50",
+  danger: "bg-moss-coral-strong text-on-destructive hover:opacity-90 disabled:opacity-50",
 };
 
 export interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {

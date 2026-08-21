@@ -4,7 +4,7 @@
 @theme inline {
   --color-canvas: var(--canvas); --color-surface: var(--surface); --color-surface-subtle: var(--surface-subtle); --color-surface-elevated: var(--surface-elevated);
   --color-border-subtle: var(--border-subtle); --color-border-strong: var(--border-strong); --color-text-primary: var(--text-primary); --color-text-secondary: var(--text-secondary); --color-text-muted: var(--text-muted);
-  --color-interactive: var(--interactive); --color-interactive-hover: var(--interactive-hover); --color-interactive-subtle: var(--interactive-subtle); --color-focus: var(--focus); --color-success: var(--success); --color-warning: var(--warning); --color-destructive: var(--destructive); --color-information: var(--information);
+  --color-interactive: var(--interactive); --color-interactive-hover: var(--interactive-hover); --color-interactive-subtle: var(--interactive-subtle); --color-on-interactive: var(--on-interactive); --color-focus: var(--focus); --color-success: var(--success); --color-warning: var(--warning); --color-destructive: var(--destructive); --color-on-destructive: var(--on-destructive); --color-information: var(--information);
   --color-background: var(--canvas); --color-foreground: var(--text-primary); --color-border: var(--border-subtle); --color-muted: var(--text-secondary);
   --color-moss-green: var(--interactive); --color-moss-gold: var(--warning); --color-moss-everglade: var(--interactive-hover); --color-moss-sand: var(--canvas); --color-moss-coral: var(--destructive); --color-moss-slate: var(--text-primary); --color-moss-lime: var(--success); --color-moss-coral-strong: var(--destructive); --color-moss-gold-strong: var(--warning);
   --font-sans: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;

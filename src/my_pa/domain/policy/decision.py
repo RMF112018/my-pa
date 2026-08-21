@@ -253,6 +253,18 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_PROPOSE,
         Capability.GOODNOTES_CONTENT,
+        # The entity plane's partition, not a source. An entity carries no
+        # `enrollment_id` and no grant a requested scope could be compared
+        # against -- it is the Principal's own record of a person, not an
+        # extraction from an enrolled source. Requiring a scope would make every
+        # one of them permanently unusable, which is how an unlisted capability
+        # fails: silently, with `scope_not_authorized`, on every request.
+        Capability.ENTITIES_SEARCH,
+        Capability.ENTITIES_GET,
+        Capability.ENTITIES_RESOLVE,
+        Capability.ENTITIES_CONTEXT,
+        Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
     }
 )
 

@@ -154,14 +154,39 @@ what it produced. `P00-OD-006` is **open**.
 
 Evidence: `src/my_pa/infrastructure/extraction/`, `pyproject.toml`.
 
-## 6. Listings stop at the page size and issue no continuation cursor
+## 6. Listings stop at the page size, and four issue a continuation cursor
 
 Truncation is disclosed rather than hidden — `truncation.is_truncated` with a
-reason — but `next_cursor` is always `null` and there is no way to ask for the
-next page. A caller that needs the whole of a large scope cannot get it.
+reason. `knowledge.search`, `entities.relationships`, `entities.search` and
+`entities.unresolved_mentions` issue a `next_cursor` a caller can page with.
+**Every other listing does not**, so a caller that needs the whole of a large
+scope still cannot get it.
+
+Corrected 2026-08-20, a third time. It then said *two*, naming
+`knowledge.search` and `entities.relationships`, while `entities.search` and
+`entities.unresolved_mentions` had both shipped keyset cursors in the same
+campaign — the count was restated by hand each time a cursor shipped and was
+wrong each time. The paragraph below already says the build derives this; the
+derived text names all four. `test_limitations_cite_evidence.py` checks that
+cited paths exist and deliberately not that the sentence is true, so nothing
+caught any of the three.
+
+Corrected 2026-08-19, twice over. This section read "`next_cursor` is **always**
+`null`" after `entities.relationships` shipped a keyset cursor; correcting it to
+name that one capability was still wrong, because `knowledge.search` has paged
+via a field called `cursor` since long before this plane existed. The published
+readiness text had the same hole, for the same reason — it derived
+continuability from the field name `after` and did not know the other spelling.
 
 This one the build states about itself: it is derived into every
-`capabilities.get` envelope rather than written here.
+`capabilities.get` envelope rather than written here — from which commands
+accept `after`, intersected with what the build actually serves, so a process
+that withholds `entities.relationships` does not advertise its cursor.
+
+Corrected 2026-08-19. This section read "`next_cursor` is **always** `null`"
+after that cursor shipped, while the sentence above claimed the build derives
+this rather than writing it down here — a section contradicting the derived text
+it points at.
 
 Evidence: `src/my_pa/application/capabilities.py`,
 `tests/contract/test_capabilities_and_readiness.py`.
@@ -329,6 +354,28 @@ and source-backed profile and timeline reads. It does so only through the
 fixture personal-source provider and an internal application/read-model path;
 it adds no public capability and has not been exercised against live contacts,
 email, or calendar data.
+
+**That describes WP-9, and is no longer true of the plane.** Corrected
+2026-08-19: the Relationship Intelligence entity plane adds **six** public read
+capabilities — `entities.search`, `entities.get`, `entities.resolve`,
+`entities.context`, `entities.relationships`, `entities.unresolved_mentions` —
+and this document, whose job is
+stating what the build does not do, said nothing about them. What remains true,
+and is the limitation:
+
+* **They are off by default.** A process that has not set
+  `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the six and
+  refuses each with `unsupported` on every transport.
+* **Nothing writes.** The plane has no write capability.
+  `src/my_pa/application/entity_governance.py` and
+  `src/my_pa/application/entity_reenrichment.py` — which hold every mutation,
+  including merge — are composed by no bootstrap, capability, script or worker,
+  so the review queue can be *read* and cannot be *worked*. An operator with a
+  proposal to decide has no supported action.
+* **No live personal data has reached it.** Every figure and every test is
+  synthetic, and no connector writes an observation.
+* **Split does not exist**, so the "reversible merge/split" above overstates what
+  the plane supports: a merge is recorded and redirects, and cannot be undone.
 
 Profiles disclose coverage, unavailable domains, freshness, calculation basis,
 and time windows. They do not claim completeness. There is no automatic identity

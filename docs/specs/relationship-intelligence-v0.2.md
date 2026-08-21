@@ -27,6 +27,23 @@ deployment\_authority: false
 risk\_acceptance\_authority: false  
 \---
 
+> **This is the requirements source (restated 2026-08-20).**
+>
+> `relationship-intelligence-v0.3.md` sits beside this file and is **demoted**:
+> the operator has stated they do not know where it came from, it carries no
+> publisher receipt, and it was written into the repository by an agent acting
+> outside instruction. It governs nothing. See the notice at its head.
+>
+> This document therefore remains what it has been throughout: the requirements
+> source the Relationship Intelligence campaign is built against. Its authority
+> is the operator's 2026-08-01 scope reprioritization recorded in `AGENTS.md`,
+> not this file's own front matter — it carries `implementation_authority:
+> false` and describes itself as a proposal.
+>
+> An earlier version of this notice declared this document superseded. It was
+> not, and the declaration asserted an operator decision that had not been
+> made.
+
 \# Relationship Intelligence
 
 \#\# Comprehensive Product Description and Feature Specification

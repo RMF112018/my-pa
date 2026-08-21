@@ -256,6 +256,16 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.GOODNOTES_WORK, Purpose.GOODNOTES_WORK),
         (Capability.GOODNOTES_CONTENT, Purpose.GOODNOTES_CONTENT),
         (Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL),
+        # The entity plane. All six capabilities share the single `entity_read`
+        # purpose, exactly as the task-plane reads share `task_read`: the plane
+        # is a read plane over the acting Principal's own entities, and there is
+        # no write here for a wider purpose to reach.
+        (Capability.ENTITIES_SEARCH, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_GET, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_RESOLVE, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_CONTEXT, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_RELATIONSHIPS, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_UNRESOLVED_MENTIONS, Purpose.ENTITY_READ),
     }
 )
 
@@ -282,10 +292,12 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # WP-TM-03 added 4 capabilities and 1 purpose; WP-TM-04 added 5 and 1;
     # WP-TM-05 added 5 and 2; context.prepare/feedback added 2 capabilities and
     # 2 purposes; goodnotes.work/propose added 2 capabilities and 2 purposes;
-    # goodnotes.content added 1 capability and 1 purpose.
-    # Unioned: 48 capabilities, 22 purposes, 50 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 50
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 50 == 1006
+    # goodnotes.content added 1 capability and 1 purpose; the entity plane added
+    # 5 capabilities and 1 purpose, and its unresolved-mention queue one
+    # more capability under the purpose the other five already use.
+    # Unioned: 54 capabilities, 23 purposes, 56 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 56
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 56 == 1186
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

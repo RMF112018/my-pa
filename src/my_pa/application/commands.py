@@ -74,6 +74,7 @@ from my_pa.domain.goodnotes.models import (
 )
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.event import RelationshipEventType
+from my_pa.domain.search.query import SearchQuery, SearchQueryError
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     CommitmentDirection,
@@ -160,6 +161,41 @@ class Representation(StrEnum):
 
     RAW_BYTES = "raw_bytes"
     NORMALIZED_TEXT = "normalized_text"
+
+
+def _bounded_query(value: str, detail: SafeDetail) -> str:
+    r"""A caller-supplied search string, bounded by the rule that already exists.
+
+    Delegated to `domain.search.query.SearchQuery` rather than restated, and the
+    first version of this function restated it. That version applied the
+    forbidden-category check to the raw string, while `_normalize_query`
+    collapses whitespace *first* and its module docstring says why: "Some `Cc`
+    characters *are* whitespace -- U+0085 NEL, the vertical tab, the form feed
+    ... refusing a query because it was pasted with a NEL in it would be
+    refusing a legitimate paste." So `entities.search` refused `"Alice\tChen"`
+    and `"Alice\nChen"` while `knowledge.search` accepted both and searched for
+    `Alice Chen`. A pasted two-line name was refused, which is a regression the
+    tenth review measured against the head before it.
+
+    Two spellings of one rule diverge; there is now one spelling. The normalized
+    value is deliberately discarded: this capability matches on the string the
+    caller sent, and rewriting it would change which entities match.
+    """
+    try:
+        SearchQuery(value)
+    except SearchQueryError:
+        pass
+    else:
+        return value
+    # Raised outside the handler, as everywhere else in this repository. The
+    # first version wrote `raise ... from None` inside the handler and said that
+    # kept the original out of `__context__`. It does not: `from None` sets
+    # `__suppress_context__`, which suppresses *display*, and `__context__` still
+    # holds the `SearchQueryError` -- measured. `adapters.normalization._metadata`
+    # states the difference in as many words ("leaving the handler first is what
+    # actually clears `__context__`") and `_identifier` below does it correctly,
+    # so this was a deviation from a convention it invoked by name.
+    raise InvalidRequestError(detail)
 
 
 def _identifier(value: str, kind: IdKind | None, detail: SafeDetail) -> str:
@@ -1524,8 +1560,12 @@ class CreateTask:
     client_context: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.title, str):
+            raise InvalidRequestError(SafeDetail.TITLE)
         if not self.title.strip():
             raise InvalidRequestError(SafeDetail.TITLE)
+        if not isinstance(self.origin_evidence_ref, str):
+            raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.origin_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.idempotency_key:
@@ -1802,8 +1842,10 @@ class CreateCommitment:
         _identifier(self.counterparty_person_id, IdKind.PERSON, SafeDetail.COUNTERPARTY_PERSON_ID)
         if not isinstance(self.direction, CommitmentDirection):
             raise InvalidRequestError(SafeDetail.SELECTOR)
+        _text(self.summary, SafeDetail.TITLE)
         if not self.summary.strip():
             raise InvalidRequestError(SafeDetail.TITLE)
+        _text(self.origin_evidence_ref, SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.origin_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.idempotency_key:
@@ -1843,6 +1885,7 @@ class CloseCommitment:
         _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
         if type(self.expected_version) is not int or self.expected_version < 1:
             raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _text(self.closure_evidence_ref, SafeDetail.CLOSURE_EVIDENCE_REF)
         if not self.closure_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
         if not self.idempotency_key:
@@ -1981,6 +2024,185 @@ class GetGoodNotesContent:
         _sha256_digest(self.content_sha256, SafeDetail.CONTENT_SHA256)
 
 
+@dataclass(frozen=True, slots=True)
+class SearchEntities:
+    """`entities.search`: one bounded page of entities whose name matches a query.
+
+    `page_size` and `after` bound and continue the page. This was the last read
+    on the plane without a continuation cursor -- the browse surface a person
+    actually scrolls could be truncated and not paged.
+
+    A case-insensitive substring match over the canonical and display names of
+    the acting Principal's own entities. This is the *browse* surface, and it is
+    deliberately not the resolution surface: it answers "who is like this", and
+    a substring match is evidence of nothing about identity. `entities.resolve`
+    answers "who is this", and refuses far more.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_SEARCH
+
+    query: str = field(repr=False)
+    entity_type: str | None = None
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str):
+            raise InvalidRequestError(SafeDetail.QUERY)
+        if not self.query.strip():
+            raise InvalidRequestError(SafeDetail.QUERY)
+        # The bound every other search capability applies, applied here too.
+        # `knowledge.search` and `capture.search` route their query through
+        # `domain.search.query`, which refuses a query over
+        # `MAX_QUERY_CHARACTERS` and refuses control, formatting, surrogate and
+        # private-use characters -- the second for the reason that module's own
+        # comment gives: a NUL byte reaches psycopg as a `DataError` raised from
+        # inside a statement, which is not a `PortError`, so the caller is told
+        # `internal_error` about a request only they can correct. This read is
+        # an `ILIKE` parameter on the same driver and had neither bound.
+        _bounded_query(self.query, SafeDetail.QUERY)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            # Validated as an entity identifier for the reason
+            # `GetEntityRelationships.after` is: the repository looks the cursor
+            # up to find its place in the sort order, and an arbitrary string
+            # would silently locate nowhere and quietly restart the walk.
+            _identifier(self.after, IdKind.ENTITY, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntity:
+    """`entities.get`: one entity of the acting Principal's, by its identifier.
+
+    An entity another Principal holds is answered exactly as an absent one.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_GET
+
+    entity_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveEntity:
+    """`entities.resolve`: which entity a reference names, or why none.
+
+    **The answer may be that it could not be decided, and that is a success.**
+    An ambiguous reference returns the candidates it could not choose between
+    rather than the nearest one, because a wrong identity contaminates every
+    record joined to it afterwards. Callers must read `outcome` before
+    `entity_id`; there is no `entity_id` at all on an unresolved answer.
+
+    `namespace` is stated rather than sniffed. A reference containing an `@` is
+    probably an address, and resolving on "probably" is how a person whose
+    recorded name contains one gets matched as a mailbox.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_RESOLVE
+
+    reference: str = field(repr=False)
+    namespace: str | None = None
+    entity_type: str | None = None
+    scope_entity_id: str | None = None
+    as_of: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reference, str):
+            raise InvalidRequestError(SafeDetail.SUBJECT)
+        if not self.reference.strip():
+            raise InvalidRequestError(SafeDetail.SUBJECT)
+        if self.scope_entity_id is not None:
+            _identifier(self.scope_entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        _moment(self.as_of, SafeDetail.OCCURRED_AT)
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntityContext:
+    """`entities.context`: the bounded context card for one entity.
+
+    Aliases, external identifiers, assignments, and typed edges, each bounded,
+    with every bound that bit named in `limitations`. A card that ran out of room
+    says so rather than reading as complete.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_CONTEXT
+
+    entity_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListUnresolvedMentions:
+    """`entities.unresolved_mentions`: references nothing has placed yet.
+
+    The queue is a first-class state rather than a gap in the data
+    (`RI-AC-006`): these are the mentions the system knows it has not resolved,
+    and being able to list them is what makes "unresolved" something a person
+    can look at instead of an absence they have to infer.
+
+    **Read-only, and the queue cannot be worked from here.** Deciding what an
+    unresolved mention refers to is a governed write, and this plane publishes no
+    write capability at all (`D-RI-21`). A surface built on this must show the
+    queue and must not offer to resolve it.
+
+    Bounded and continuable like every other listing here. Unbounded is
+    especially wrong for this one: observations are the collection that grows
+    with every source record that ever mentioned anyone.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_UNRESOLVED_MENTIONS
+
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_OBSERVATION, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntityRelationships:
+    """`entities.relationships`: one bounded page of an entity's typed edges, to depth one.
+
+    Adjacent edges only. There is no recursive walk and no traversal depth to
+    raise: a graph walk over people is the shape that turns a bounded read into
+    an unbounded one, and depth one is the bound on *shape*.
+
+    `page_size` and `after` are the bound on *count*, and they are separate
+    because depth one never was one. An entity every person on a programme is
+    related to has an edge per person, so "one hop" says nothing about how many
+    rows come back; this capability returned all of them. `after` names the last
+    `erel_…` of the previous page, which is the `next_cursor` the disclosure
+    issued and which the caller already holds -- every edge in the payload
+    carries its own `relationship_id`.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_RELATIONSHIPS
+
+    entity_id: str
+    direction: str | None = None
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        if self.direction is not None and self.direction not in ("any", "outgoing", "incoming"):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            # Validated as a relationship identifier rather than accepted as an
+            # opaque string, because the repository compares it against
+            # `relationship_id` directly: an arbitrary string would silently
+            # order somewhere in the middle of the key space and skip edges
+            # rather than continue past them.
+            _identifier(self.after, IdKind.ENTITY_RELATIONSHIP, SafeDetail.CURSOR)
+
+
 GetGoodNotesContent.__doc__ = (
     "`goodnotes.content`: return the bounded PNG bytes of the pinned visual "
     "raster used for one page-version identity. Call this after `goodnotes.work` "
@@ -2115,6 +2337,12 @@ type Command = (
     | GetGoodNotesWork
     | SubmitGoodNotesProposal
     | GetGoodNotesContent
+    | SearchEntities
+    | GetEntity
+    | ResolveEntity
+    | GetEntityContext
+    | GetEntityRelationships
+    | ListUnresolvedMentions
 )
 
 

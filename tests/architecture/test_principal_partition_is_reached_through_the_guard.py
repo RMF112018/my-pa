@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import ast
 import re
+from functools import cache
 from pathlib import Path
 from typing import Final
 
@@ -109,6 +110,11 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         "infrastructure/persistence/apple_bridge_credentials.py",
         "infrastructure/persistence/capture_search.py",
         "infrastructure/persistence/continuity_read.py",
+        # The generalized entity plane. Every statement it builds — four reads,
+        # four writes, and the entity-reference guard the writes call first —
+        # goes through `partition_criterion` or `principal_bound_values`, so it
+        # is registered statement-level below rather than per-module.
+        "infrastructure/persistence/entity.py",
         "infrastructure/persistence/goodnotes.py",
         "infrastructure/persistence/goodnotes_semantics.py",
         "infrastructure/persistence/goodnotes_delivery.py",
@@ -248,6 +254,7 @@ QUARANTINED: Final = {
 #: for every statement it builds over a partitioned table.
 STATEMENT_LEVEL: Final = frozenset(
     {
+        "infrastructure/persistence/entity.py",
         "infrastructure/persistence/jobs.py",
         "infrastructure/persistence/knowledge.py",
         "infrastructure/persistence/managed_documents.py",
@@ -753,7 +760,7 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
         if not isinstance(function, ast.FunctionDef):
             continue
         for statement in ast.walk(function):
-            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
                 continue
             rendered = ast.unparse(statement)
             if not any(
@@ -775,6 +782,127 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
         "table without reaching the partition through `principal_scope`. Every "
         "read and update predicate goes through `_mine`; every insert goes "
         "through `_bound`"
+    )
+
+
+#: A floor under the anti-vacuity floor. The widened walk reaches **thirty-four**
+#: statements touching a partitioned table at this head; thirty leaves room for
+#: one or two to be removed without reddening the suite, while a walk that
+#: silently stopped reaching the module fails loudly.
+#:
+#: Both numbers here have been wrong before, three times. The floor was 9
+#: against 31, which would have let two thirds of the module go blind; then 28
+#: against a comment claiming 31 when the true count was 32; then 30 against a
+#: comment still claiming thirty-two when the walk had grown to 35, so five
+#: statements could have been hidden without reddening. A floor is only
+#: anti-vacuity if it sits just under the real figure, and the figure is derived
+#: by running the walk rather than by counting queries by eye -- which is how
+#: each of the three was found, and never by reading the comment.
+_MINIMUM_ENTITY_STATEMENTS: Final = 34
+
+
+#: Each partitioned table matched as a whole word, so `select(entities)` counts
+#: as naming `entities` while `entity_aliases` does not match `entities`.
+#: Cached, because the walk asks per statement per table.
+@cache
+def _names_table(table: str) -> re.Pattern[str]:
+    return re.compile(rf"\b{re.escape(table)}\b")
+
+
+#: The source a statement contributes *itself*, excluding any body it encloses.
+#:
+#: Walking every `ast.stmt` and unparsing it whole is wrong in the other
+#: direction: a `FunctionDef` unparses to its entire body, so every function
+#: containing a query matches, and so does its docstring. What the guard wants
+#: is the part of each statement that can carry a query — the value of an
+#: assignment, the iterable of a `for`, the test of an `if`, the subject of a
+#: `with` — so a query hidden in any of those is read exactly once, and an
+#: enclosing block is not read at all.
+def _own_source(statement: ast.stmt) -> str:
+    carried: list[ast.expr] = []
+    if isinstance(statement, ast.Expr) and isinstance(statement.value, ast.Constant):
+        # A docstring is an `Expr` over a string constant. It carries no query,
+        # and prose about `entities.resolve` is not a read of `entities`.
+        return ""
+    if (
+        (isinstance(statement, ast.Expr | ast.Return) and statement.value is not None)
+        or isinstance(statement, ast.Assign | ast.AugAssign)
+        or (isinstance(statement, ast.AnnAssign) and statement.value is not None)
+    ):
+        carried.append(statement.value)
+    elif isinstance(statement, ast.For | ast.AsyncFor):
+        carried.append(statement.iter)
+    elif isinstance(statement, ast.If | ast.While):
+        carried.append(statement.test)
+    elif isinstance(statement, ast.With | ast.AsyncWith):
+        carried.extend(item.context_expr for item in statement.items)
+    elif isinstance(statement, ast.Raise) and statement.exc is not None:
+        carried.append(statement.exc)
+    elif isinstance(statement, ast.Assert):
+        carried.append(statement.test)
+    return " ".join(ast.unparse(expression) for expression in carried)
+
+
+def test_every_entity_statement_reaches_the_partition() -> None:
+    """The generalized entity plane, statement by statement.
+
+    The same claim `test_every_relationship_statement_reaches_the_partition`
+    makes about the WP-9 substrate, made about the plane that generalizes it,
+    and made the same way: a statement naming a partitioned declaration must
+    also name `_mine` (the read predicate) or `_bound` (the insert stamp).
+
+    This module has no `text()` block and no registered exception, so the
+    offending list is expected to be empty outright rather than empty against a
+    registry -- which is the state a new plane should be in, since every
+    exception the older modules carry was earned by code that predated the
+    guard.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "entity.py"
+    partitioned = set(_partitioned_tables())
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    checked = 0
+    offending: list[str] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        for statement in ast.walk(function):
+            # **Every statement kind, and the table named any way at all.**
+            # This walk used to admit four kinds and to recognise a table only
+            # as `entities.c` or `(entities,`. Both halves let real reads
+            # through: `for row in conn.execute(select(entities.c.x)).all():`
+            # is a `For`, `if conn.execute(...).first():` is an `If`, and
+            # `conn.execute(select(entities)).all()` — a whole-table read of
+            # every Principal's rows, in the idiom this very module uses for
+            # `assignments`, `relationships` and `observations` — matches
+            # neither spelling. That last one was planted into `get` and the
+            # entire architecture tier passed.
+            #
+            # A guard whose job is to catch the statement nobody wrote a test
+            # for cannot afford a shape it does not read, so it reads them all
+            # and matches the table as a bare name.
+            if not isinstance(statement, ast.stmt):
+                continue
+            rendered = _own_source(statement)
+            if not any(_names_table(table).search(rendered) for table in partitioned):
+                continue
+            checked += 1
+            if "_mine(" not in rendered and "_bound(" not in rendered:
+                offending.append(f"{function.name}:{statement.lineno}")
+
+    # The floor tracks the real count rather than sitting far beneath it. At 9,
+    # against the statements actually present, a refactor could hide two-thirds
+    # of the module's queries from this walk and still clear it — an
+    # anti-vacuity floor that cannot detect the vacuity it exists for.
+    assert checked >= _MINIMUM_ENTITY_STATEMENTS, (
+        f"only {checked} entity statements were examined, against at least "
+        f"{_MINIMUM_ENTITY_STATEMENTS} present; the walk is not reaching the "
+        "module's queries"
+    )
+    assert offending == [], (
+        f"{offending} build a statement over a principal-partitioned entity "
+        "table without reaching the partition through `principal_scope`. Every "
+        "read predicate goes through `_mine`; every insert goes through `_bound`"
     )
 
 
@@ -837,7 +965,7 @@ def test_every_reveal_statement_reaches_the_partition() -> None:
         if not isinstance(function, ast.FunctionDef):
             continue
         for statement in ast.walk(function):
-            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
                 continue
             rendered = ast.unparse(statement)
             if not any(f"{table}.c" in rendered for table in partitioned):
@@ -1093,6 +1221,164 @@ def unpartitioned_references(
     return checked, offending
 
 
+def test_every_entity_statement_reaches_the_partition_of_each_table_it_names() -> None:
+    """The entity plane, per *table* rather than per statement.
+
+    `test_every_entity_statement_reaches_the_partition` above asks whether a
+    statement naming a partitioned table also names `_mine` or `_bound`
+    somewhere. The ninth review measured the gap that leaves, and two reviewers
+    found it independently: `entities_by_identifier` and `entities_by_alias`
+    each join two partitioned tables in one statement and carry two `_mine(...)`
+    calls to match — one for the parent entity, one for the child row. Delete
+    either and the statement still contains a `_mine(`, so the older claim stays
+    green while a partition is gone.
+
+    The child-side predicate is the one that matters most. It is the only thing
+    standing between a caller and *a row another Principal owns hanging off an
+    entity the caller owns* — the arrangement `tests/security/
+    test_entity_privacy_regression.py` names as the threat. With it removed,
+    `entities.resolve` answers `resolved_exact` from another Principal's alias
+    row.
+
+    `_mine` and `_bound` both take the table as their first argument, so the
+    stronger claim needs no new vocabulary: for each partitioned table a
+    statement names, that same statement must guard *that* table. One `_mine`
+    can no longer stand in for a second table's missing one.
+
+    The statement-level test is kept rather than replaced. This one is strictly
+    stronger, but the two are read together: a reader who sees only this one
+    would not learn that the weaker claim was ever insufficient, which is the
+    fact the campaign keeps paying to rediscover.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "entity.py"
+    partitioned = set(_partitioned_tables())
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    # **Every name the module can reach a table by, not just the declared one.**
+    # This walk matches the table as a bare name inside a function body, so a
+    # `Table.alias()` bound once at module scope reaches the table under a name
+    # no query statement spells -- and the tenth review used exactly that to
+    # delete a child-side partition with the whole architecture tier green. An
+    # in-function alias was already caught, because the assignment naming the
+    # table is itself a statement inside the function; a module-level one was
+    # not. Aliases are resolved to the table they wrap, so the guard call still
+    # has to name that table.
+    def _aliased_table(value: ast.expr | None) -> str | None:
+        """The table a module-level binding *is*, if it is one.
+
+        Narrow deliberately. A binding that merely selects columns --
+        `_ENTITY_COLUMNS = (entities.c.entity_id, ...)`, `_DIRECTIONS` holding
+        lambdas over `entity_relationships.c.*` -- names a table without being a
+        second way to query it, and treating those as aliases demanded a
+        partition predicate beside every use of a column tuple. Only the table
+        itself and `<table>.alias(...)` widen the reachable set.
+        """
+        if isinstance(value, ast.Name) and value.id in partitioned:
+            return value.id
+        if (
+            isinstance(value, ast.Call)
+            and isinstance(value.func, ast.Attribute)
+            and value.func.attr == "alias"
+            and isinstance(value.func.value, ast.Name)
+            and value.func.value.id in partitioned
+        ):
+            return value.func.value.id
+        return None
+
+    def _columns_of(value: ast.expr | None) -> str | None:
+        """The table a module-level binding selects columns from, if it does.
+
+        **This was excluded, and the exclusion's stated reason was false.** The
+        comment read "a binding that merely selects columns ... is not a second
+        way to query it". It is: `select(*_ENTITY_COLUMNS)` compiles to
+        `SELECT knowledge.entities.entity_id, ... FROM knowledge.entities` --
+        SQLAlchemy derives the `FROM` from the columns selected -- and that is
+        this module's *dominant* query idiom, used at three call sites. The
+        eleventh review measured the cost: a new whole-plane read written as
+        `select(*_ENTITY_COLUMNS)` with no partition predicate at all passed the
+        walk 252/252, because the statement never spells `entities`.
+
+        Kept separate from `_aliased_table` because the requirement differs: a
+        column tuple only reaches the table when it is handed to a query
+        constructor, so demanding a predicate beside every mention of one would
+        redden ordinary indexing and slicing.
+        """
+        if value is None:
+            return None
+        for inner in ast.walk(value):
+            if (
+                isinstance(inner, ast.Attribute)
+                and isinstance(inner.value, ast.Attribute)
+                and inner.value.attr == "c"
+                and isinstance(inner.value.value, ast.Name)
+                and inner.value.value.id in partitioned
+            ):
+                return inner.value.value.id
+        return None
+
+    aliases: dict[str, str] = {}
+    column_tuples: dict[str, str] = {}
+    for statement in tree.body:
+        if not isinstance(statement, ast.Assign | ast.AnnAssign):
+            continue
+        targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+        names = [target.id for target in targets if isinstance(target, ast.Name)]
+        table = _aliased_table(statement.value)
+        if table is not None:
+            for name in names:
+                aliases[name] = table
+            continue
+        columns = _columns_of(statement.value)
+        if columns is not None:
+            for name in names:
+                column_tuples[name] = columns
+
+    checked = 0
+    offending: list[str] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+            continue
+        for statement in ast.walk(function):
+            if not isinstance(statement, ast.stmt):
+                continue
+            rendered = _own_source(statement)
+            named = {table for table in partitioned if _names_table(table).search(rendered)}
+            named |= {
+                table
+                for alias, table in aliases.items()
+                if re.search(rf"\b{re.escape(alias)}\b", rendered)
+            }
+            if re.search(r"\b(?:select|insert|update|delete)\(", rendered):
+                named |= {
+                    table
+                    for binding, table in column_tuples.items()
+                    if re.search(rf"\b{re.escape(binding)}\b", rendered)
+                }
+            if not named:
+                continue
+            checked += 1
+            for table in sorted(named):
+                reachable = [table, *[a for a, t in aliases.items() if t == table]]
+                guarded = any(
+                    re.search(rf"_(?:mine|bound)\(\s*{re.escape(spelling)}\s*,", rendered)
+                    for spelling in reachable
+                )
+                if not guarded:
+                    offending.append(f"{function.name}:{statement.lineno}:{table}")
+
+    assert checked >= _MINIMUM_ENTITY_STATEMENTS, (
+        f"only {checked} statements naming a partitioned table were examined, "
+        f"against {_MINIMUM_ENTITY_STATEMENTS} expected; the walk is not "
+        "reaching the entity plane's queries"
+    )
+    assert sorted(set(offending)) == [], (
+        f"{sorted(set(offending))} name a principal-partitioned table that the "
+        "same statement does not guard. A join whose parent side is partitioned "
+        "and whose child side is not answers from another Principal's row under "
+        "this Principal's name"
+    )
+
+
 def test_every_corpus_coverage_statement_reaches_the_partition() -> None:
     """WP-23's corpus read, one mention of the partitioned table at a time.
 
@@ -1107,7 +1393,7 @@ def test_every_corpus_coverage_statement_reaches_the_partition() -> None:
 
     **The unit is the reference and not the statement, and the difference is the
     whole of this rule's history.** As first written it inspected
-    `ast.Expr | ast.Assign | ast.Return` — the three statement kinds the queries
+    `ast.Expr | ast.Assign | ast.AnnAssign | ast.Return` — the four statement kinds the queries
     in this module happened to be written as — and a review planted three
     unpartitioned reads of `enrollments` in the shapes that list omits: an
     annotated assignment, a select over `enrollments.alias()`, and a `select`
@@ -1516,6 +1802,7 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
                 "infrastructure/persistence/managed_documents.py",
                 "infrastructure/persistence/relationships.py",
                 "infrastructure/persistence/reveal.py",
+                "infrastructure/persistence/entity.py",
             }
         )
         == STATEMENT_LEVEL
@@ -1524,9 +1811,10 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
         "`test_every_relationship_statement_reaches_the_partition`, "
         "`test_every_job_statement_reaches_the_partition_or_is_registered`, "
         "`test_every_reveal_statement_reaches_the_partition`, "
-        "`test_every_corpus_coverage_statement_reaches_the_partition` and "
+        "`test_every_corpus_coverage_statement_reaches_the_partition`, "
         "`test_every_managed_document_statement_reaches_the_partition_or_is_registered` "
-        "are the five that exist"
+        "and `test_every_entity_statement_reaches_the_partition` are the six "
+        "that exist"
     )
 
 
@@ -1602,7 +1890,7 @@ def test_every_managed_document_statement_reaches_the_partition_or_is_registered
         if not isinstance(function, ast.FunctionDef):
             continue
         for statement in ast.walk(function):
-            if not isinstance(statement, ast.Expr | ast.Assign | ast.Return):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
                 continue
             rendered = ast.unparse(statement)
             if not any(f"{table}.c" in rendered or f"({table}," in rendered for table in managed):

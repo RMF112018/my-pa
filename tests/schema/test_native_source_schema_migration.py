@@ -53,7 +53,7 @@ from my_pa.infrastructure.persistence.tables import (
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "8c4d1e7a2b90"
 PRIOR_REVISION = "7f2a9d6c4e18"
-HEAD_REVISION = "f4c1a8e6b205"
+STAGES_REVISION = "a4d9c2e7b815"
 WP12E_PRIOR_REVISION = "9d5e2f7b4c61"
 DATABASE = "my_pa_native_sources_test"
 WHEN = datetime(2026, 8, 4, 12, tzinfo=UTC)
@@ -152,9 +152,18 @@ def _migration_path() -> Path:
     return next((ROOT / "migrations" / "versions").glob(f"*_{REVISION}_*.py"))
 
 
-def test_revision_remains_frozen_below_the_single_wp12c_head() -> None:
+def test_revision_remains_frozen_below_the_single_head() -> None:
+    """One unbranched head, and this revision frozen on the chain below it.
+
+    Renamed from "below the single wp12c head": the head named was a particular
+    later revision's, so the assertion had to be re-pinned by every work package
+    that added one and rotted again at `9def3c2e63bb`. Which revision is last
+    was never what "frozen below the head" needed — an unbranched chain that
+    reaches this revision, on the predecessor it names, is.
+    """
     script = ScriptDirectory.from_config(_config())
-    assert script.get_heads() == [HEAD_REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     revision = script.get_revision(REVISION)
     assert revision.down_revision == PRIOR_REVISION
 
@@ -1137,7 +1146,7 @@ def test_revision_round_trips_from_prior_head(native_engine: Engine) -> None:
 @pytest.mark.database
 def test_native_partition_upgrades_an_empty_prior_head(native_engine: Engine) -> None:
     command.downgrade(_config(), "b4e8d2c7a613")
-    command.upgrade(_config(), HEAD_REVISION)
+    command.upgrade(_config(), STAGES_REVISION)
     columns = inspect(native_engine).get_columns("native_bridges", schema="knowledge")
     principal = next(column for column in columns if column["name"] == "principal_id")
     assert principal["nullable"] is False
@@ -1158,7 +1167,7 @@ def test_native_partition_refuses_populated_prior_without_partial_ddl(
             {"at": WHEN},
         )
     with pytest.raises(DBAPIError, match="cannot infer Principal"):
-        command.upgrade(_config(), HEAD_REVISION)
+        command.upgrade(_config(), STAGES_REVISION)
     assert "principal_id" not in {
         column["name"]
         for column in inspect(native_engine).get_columns("native_bridges", schema="knowledge")

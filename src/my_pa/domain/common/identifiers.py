@@ -185,6 +185,44 @@ class IdKind(StrEnum):
     #: names a prepared package or a preference that ranked one, and `ctxm`
     #: already names the assembled packet.
     CONTEXT_PREFERENCE_EVENT = "cpref"
+    #: WP-RI-01: the relationship-intelligence entity plane. Each surface is its
+    #: own prefix on the same argument the existing relationship-plane prefixes
+    #: make — a stored reference or an audit row has to say which record it
+    #: names. `ENTITY` names the generalized entity row (which may be a person,
+    #: organization, program, project, work package, team, or location).
+    #: `EXTERNAL_IDENTIFIER` names an entity's identity in an external namespace.
+    #: `ASSIGNMENT` names a typed assignment of an entity to a scope entity —
+    #: the spec's "role and affiliation" (section 12.5) and "project
+    #: association" (section 12.6) under one record. `ENTITY_RELATIONSHIP`
+    #: names a directed, typed relationship between two entities.
+    #:
+    #: `ENTITY_ALIAS` names one recorded alias of an entity, added by WP-RI-03
+    #: because resolution matches on aliases (specification section 15.1) and a
+    #: match has to be able to say which alias it matched.
+    #:
+    #: Three prefixes are *not* declared here, and their absence is the point:
+    #: an observation, a proposal, and a context packet each belong to a later
+    #: work package that has a table for them. A prefix is a contract this
+    #: module promises is stable, and promising one before anything issues it is
+    #: a promise about a record that does not exist.
+    ENTITY = "ent"
+    EXTERNAL_IDENTIFIER = "xid"
+    ASSIGNMENT = "asn"
+    ENTITY_RELATIONSHIP = "erel"
+    ENTITY_ALIAS = "eals"
+    #: WP-RI-06: the evidence and governance records. `ENTITY_OBSERVATION` names
+    #: one source-bound observation that may refer to an entity and does not
+    #: become one (specification section 12.2). `ENTITY_PROPOSAL` names a
+    #: proposed mutation awaiting a decision. `ENTITY_MERGE` names the lineage
+    #: record an accepted merge leaves behind, which is what makes a merge
+    #: reversible rather than destructive (section 15.3).
+    #:
+    #: These three were deliberately absent until now: a prefix is a contract
+    #: this module promises is stable, and until this work package there was no
+    #: table for any of them to name.
+    ENTITY_OBSERVATION = "eobs"
+    ENTITY_PROPOSAL = "eprp"
+    ENTITY_MERGE = "emrg"
 
 
 class InvalidIdentifierError(ValueError):

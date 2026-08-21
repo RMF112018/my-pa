@@ -1,4 +1,4 @@
-"""The ports the forty-eight capability use cases call, and nothing else.
+"""The ports the fifty-four capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -84,7 +84,23 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSemanticProposal,
 )
 from my_pa.domain.policy.decision import validate_policy_version
+from my_pa.domain.relationship.entity import (
+    Assignment,
+    Entity,
+    EntityAlias,
+    EntityRelationship,
+    EntityStatus,
+    EntityType,
+    ExternalIdentifier,
+    ExternalIdentifierNamespace,
+)
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
+from my_pa.domain.relationship.governance import (
+    EntityMergeRecord,
+    EntityObservation,
+    EntityProposal,
+    EntityProposalState,
+)
 from my_pa.domain.relationship.identity import (
     IdentityCandidateSet,
     IdentityObservation,
@@ -143,6 +159,8 @@ __all__ = [
     "ContinuityReadRepository",
     "ContinuityRepository",
     "EnrollmentRepository",
+    "EntitiesRepository",
+    "EntitySummary",
     "EvidenceUnavailableError",
     "FrameRepository",
     "KnowledgeRecord",
@@ -256,6 +274,408 @@ class RelationshipRepository(ABC):
         observation_ids: tuple[str, ...] = (),
     ) -> str:
         """Attach exactly one resolved or unresolved target and exact support."""
+
+
+# --- WP-RI-02: Entity repository port ----------------------------------------
+#
+# `EntitiesRepository` is the port for the generalized entity model introduced
+# in WP-RI-01.  It is *additive*: it does not modify or replace
+# `RelationshipRepository`, which remains the governed identity writer and
+# deterministic profile reader for the person-and-organization plane.
+#
+# Every method takes `principal_id` from the caller and it is the authenticated
+# caller's partition, exactly as `RelationshipRepository` and
+# `TaskManagementRepository` state: an entity belonging to another Principal is
+# answered as an absent one, and a write stamped with another Principal is
+# refused before it is written.
+#
+# `EntitySummary` is a lightweight search result — the fields a list or search
+# response needs without the full domain model's validation overhead.
+
+
+@dataclass(frozen=True, slots=True)
+class EntitySummary:
+    """A lightweight entity summary for search and list results.
+
+    Carries only the fields a caller needs to identify and display an entity
+    without loading the full domain model.  `entity_id` and `entity_type`
+    are the minimum required; all other fields are optional display hints.
+    """
+
+    entity_id: str
+    entity_type: EntityType
+    canonical_name: str
+    display_name: str
+    status: EntityStatus
+
+
+class EntitiesRepository(ABC):
+    """The generalized entity read/write port for relationship intelligence v0.3.
+
+    **Additive alongside `RelationshipRepository`.** This port serves the
+    `Entity`/`ExternalIdentifier`/`Assignment`/`EntityRelationship` model
+    introduced in WP-RI-01.  The existing `RelationshipRepository` serves the
+    person-and-organization-only WP-9 substrate and is not modified.
+
+    **`principal_id` is a parameter on every method**, and it is the
+    authenticated caller's partition, never a caller-supplied field: the
+    concrete repository stamps every write with it and filters every read by
+    it, so an entity belonging to another Principal is unreachable through
+    this port.
+
+    **Authorization is checked centrally in `authorization.py`**, not in the
+    repository.  This port performs only data access; it does not decide
+    whether the caller may access it.
+    """
+
+    @abstractmethod
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        entity_type: EntityType | None = None,
+        limit: int = 50,
+        *,
+        after_entity_id: str | None = None,
+    ) -> list[EntitySummary]:
+        """One bounded page of entities whose canonical or display name matches `query`.
+
+        `after_entity_id` continues a previous page: it names the last entity of
+        that page, and the rows after it in this read's own `(canonical_name,
+        entity_id)` order come back. It was the last read on this plane without a
+        continuation — every other listing could be paged and this one, the
+        browse surface a person actually scrolls, could only be truncated.
+
+        A case-insensitive substring match over `canonical_name` and
+        `display_name`, scoped by `principal_id` and optionally by
+        `entity_type`. Aliases are *not* searched, and that is now a decision
+        rather than a gap: `entity_aliases` has existed since `b7f4d1a92c36`,
+        and this method still reads only the two name columns.
+
+        Searching aliases would put a nickname, a maiden name and a former
+        legal name into a browse result that nobody asked a question about --
+        the disclosure `entities.resolve` makes deliberately, made incidentally
+        here. A caller who wants alias matching asks the question that means
+        it: `entities.resolve` matches aliases and says so in its evidence.
+        """
+
+    @abstractmethod
+    def get(self, principal_id: str, entity_id: str) -> Entity | None:
+        """One entity in this Principal's partition, or `None`.
+
+        `principal_id` is part of the lookup key, not a filter applied after
+        the fact: an entity belonging to another Principal is answered as an
+        absent one, never as a filtered-out one.
+        """
+
+    @abstractmethod
+    def create(self, principal_id: str, entity: Entity) -> Entity:
+        """Insert one entity row, or return the identical existing one.
+
+        `principal_id` is a parameter here for the reason it is on every other
+        write: without it this method took its partition from a field on the
+        object handed to it, compared against nothing — so the one method that
+        brings a person into existence was the one method that could not refuse
+        a foreign Principal, while the port's own preamble said none could.
+
+        Idempotent against the entity's own identifier: a repeat carrying the
+        same values returns the stored row, and a repeat carrying different
+        values under an identifier already issued is refused rather than
+        silently dropped or silently applied.
+        """
+
+    @abstractmethod
+    def record_alias(self, principal_id: str, alias: EntityAlias) -> None:
+        """Idempotently record one alias of an entity.
+
+        Idempotent against the natural key `(entity_id, alias_type,
+        normalized_value)`.  Note what that key does *not* say: two different
+        entities may hold the same alias, because two real people share a name,
+        and a schema that refused it would force one of them into the other.
+        """
+
+    @abstractmethod
+    def aliases(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityAlias]:
+        """Aliases recorded for an entity in this Principal's partition.
+
+        `limit` caps how many rows come back as a `LIMIT` on the query rather
+        than a slice of the result, for the reason `observations` states: a
+        caller that fetched every alias and kept twenty-five has already paid
+        for the ones it discarded, and an entity accumulates an alias for every
+        spelling any source ever used for it.
+
+        `None` is genuinely unbounded and is the default, because every existing
+        caller reads this collection whole and changing that silently would turn
+        a complete answer into a partial one nobody was told about. A caller
+        that passes a limit is expected to disclose in its own answer that it
+        did -- `EntityContextService` fetches one row past its ceiling and
+        reports `MORE_ALIASES_THAN_THIS_CARD_CARRIES` from the overflow.
+        """
+
+    @abstractmethod
+    def entities_by_identifier(
+        self,
+        principal_id: str,
+        namespace: ExternalIdentifierNamespace,
+        normalized_value: str,
+    ) -> list[tuple[Entity, ExternalIdentifier]]:
+        """Every entity holding this external identity, with the record that says so.
+
+        Returns the identifier row alongside the entity rather than the entity
+        alone, because resolution has to report *why* a candidate is a candidate
+        and whether the evidence was verified and effective (`RI-AC-011`).
+
+        More than one result is not an error here -- it is the
+        `CONFLICTED_IDENTIFIER` case the caller must be able to see. Deciding
+        what to do about it is the resolution service's job, not this port's.
+        """
+
+    @abstractmethod
+    def entities_by_alias(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityAlias]]:
+        """Every entity carrying this normalized alias, with the alias that matched."""
+
+    @abstractmethod
+    def entities_by_canonical_name(self, principal_id: str, normalized_value: str) -> list[Entity]:
+        """Every entity whose canonical name is exactly this normalized value.
+
+        An equality match, not a substring one: `search` is the substring
+        surface, and resolution asks a different question -- who *is* this --
+        for which a partial match is evidence of nothing.
+        """
+
+    # --- WP-RI-06: observation, proposal, and merge lineage -----------------
+    #
+    # These are the governed half of the plane. They are on this port rather
+    # than a second one because they read and write the same partition through
+    # the same transaction, and a second port over the same rows would be a
+    # second place the partition has to be remembered.
+
+    @abstractmethod
+    def record_observation(self, principal_id: str, observation: EntityObservation) -> None:
+        """Record one source-bound observation. Idempotent on its identifier.
+
+        Recording an observation never creates or modifies an entity.  Section
+        12.2 is explicit that a source row "does not become the canonical person
+        by itself", and this method is where that is true rather than intended.
+
+        **`normalized_value` is matched against and is never disclosed;
+        `mention_display_name` is disclosed and is never matched against.**
+        That separation is the whole reason the second column exists, and it
+        replaced a sentence here that asked callers to keep raw text out of the
+        first. The sentence could not be enforced: `normalize_name` casefolds
+        and replaces punctuation and removes no content, so
+        `normalize_name("A. Chen <a.chen@northwind.test>")` is
+        `"a chen a chen northwind test"` — local part and domain intact, and
+        `is_normalized_name`-true — which means no check over the stored string
+        distinguishes it from a long legitimate name.
+
+        So put whatever matching needs in `normalized_value`, and put in
+        `mention_display_name` only what an operator should see on the review
+        queue. Leaving it `None` is a safe default and the right one when the
+        source span is not a name a person would recognise: the mention is still
+        queued with its source pointers, carrying no text.
+        """
+
+    @abstractmethod
+    def observations(
+        self,
+        principal_id: str,
+        entity_id: str | None = None,
+        *,
+        unresolved_only: bool = False,
+        limit: int | None = None,
+        after_observation_id: str | None = None,
+    ) -> list[EntityObservation]:
+        """Observations in this Principal's partition.
+
+        `entity_id` selects those linked to one entity. `unresolved_only`
+        selects those linked to none, which is the unresolved-mention queue and
+        the reason `entity_id` is nullable at all.
+
+        `limit` caps how many rows come back, as a `LIMIT` on the query rather
+        than a slice of the result -- this is the one table on the plane that
+        grows with every source record that ever mentioned anyone, so an
+        implementation that fetched everything and truncated would have already
+        paid the cost the cap exists to avoid.
+
+        `None` is genuinely unbounded, and is right only where a short answer
+        would be a misleading one: the unresolved-mention queue, where a caller
+        shown a truncated list with nothing saying so would believe they had
+        reached the end. Everywhere else a caller passes a limit -- and is
+        expected to disclose in its own answer that it did.
+        """
+
+    @abstractmethod
+    def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
+        """Link one observation to an entity.
+
+        Separate from recording it, because the two happen at different times
+        for different reasons: a source produces the observation, and a
+        resolution or a review decides what it refers to.
+        """
+
+    @abstractmethod
+    def record_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        """Record one proposed mutation. Idempotent on its identifier.
+
+        Recording a proposal applies nothing.  A proposal is a request, and the
+        decision that grants it is `decide_proposal`.
+        """
+
+    @abstractmethod
+    def proposal(self, principal_id: str, proposal_id: str) -> EntityProposal | None:
+        """One proposal in this Principal's partition, or `None`."""
+
+    @abstractmethod
+    def proposals(
+        self, principal_id: str, state: EntityProposalState | None = None
+    ) -> list[EntityProposal]:
+        """Proposals in this Principal's partition, optionally by state."""
+
+    @abstractmethod
+    def decide_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        """Replace one proposal with its decided form.
+
+        Takes the whole record rather than the fields, so the decided proposal
+        has been through `EntityProposal.__post_init__` -- which is what refuses
+        a decision with no actor, or an actor on an undecided proposal.
+        """
+
+    @abstractmethod
+    def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
+        """Record the lineage of one accepted merge."""
+
+    @abstractmethod
+    def merges(self, principal_id: str, entity_id: str | None = None) -> list[EntityMergeRecord]:
+        """Merge lineage in this Principal's partition, optionally touching one entity."""
+
+    @abstractmethod
+    def redirect_entity(
+        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+    ) -> None:
+        """Point one entity at the entity it was merged into.
+
+        Sets `status` to `merged_redirect` and `superseded_by_entity_id` to the
+        survivor.  The merged entity is not deleted: section 15.3 asks a merge to
+        preserve prior identifiers as lineage, and a row that still resolves as a
+        `HISTORICAL_MATCH` is how that is done.
+        """
+
+    @abstractmethod
+    def bind_identifier(
+        self, principal_id: str, entity_id: str, identifier: ExternalIdentifier
+    ) -> None:
+        """Idempotently bind one external identifier to an entity.
+
+        The identifier's `entity_id` must match `entity_id` and its
+        `principal_id` must match the acting Principal.  Idempotent against the
+        natural key: a repeat of the same `(entity_id, namespace,
+        normalized_value)` is a no-op whatever identifier the caller minted for
+        it, because that triple is what "the same external identity" means.
+        """
+
+    @abstractmethod
+    def external_identifiers(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[ExternalIdentifier]:
+        """External identifiers bound to an entity in this Principal's partition.
+
+        `limit` is a query-time `LIMIT` on the same terms as `aliases`, and
+        defaults to `None` for the same reason: resolution reads this collection
+        whole to decide whether an identifier is conflicted, and a bound applied
+        without its knowledge would let a conflict fall off the end of a page
+        and read as a clean match.
+        """
+
+    @abstractmethod
+    def record_assignment(self, principal_id: str, assignment: Assignment) -> None:
+        """Record one assignment.
+
+        The assignment's `entity_id`, `scope_entity_id` and `principal_id` are
+        verified against the acting Principal before the row is written --
+        including the scope, because the schema's foreign key spans every
+        Principal and would otherwise admit a cross-partition join.
+
+        Idempotent against the assignment's own identifier, on the same terms
+        as `create`.  It is *not* yet idempotent against a natural key: a retry
+        that mints a fresh `assignment_id` writes a second row.  Closing that
+        needs an idempotency key on a write path, and no work package has one
+        yet.
+        """
+
+    @abstractmethod
+    def assignments(
+        self,
+        principal_id: str,
+        entity_id: str,
+        active_only: bool = True,
+        *,
+        limit: int | None = None,
+    ) -> list[Assignment]:
+        """Assignments involving an entity, scoped by `principal_id`.
+
+        When `active_only` is true, returns only assignments with status
+        `'active'`.
+
+        `limit` is a query-time `LIMIT` on the same terms as `aliases`. It
+        matters more here than the name suggests: `active_only=False` is the
+        *historical* read, and `WP-RI-12`'s own fixture minimum asks for fifty
+        deliberate historical assignment changes on a single programme, so the
+        one collection guaranteed to grow without bound in a synthetic corpus is
+        this one read with the filter off.
+        """
+
+    @abstractmethod
+    def record_relationship(self, principal_id: str, rel: EntityRelationship) -> None:
+        """Record one entity relationship.
+
+        The relationship's `from_entity_id`, `to_entity_id`, `scope_entity_id`
+        and `principal_id` are verified against the acting Principal before the
+        row is written, for the reason `record_assignment` states.
+
+        Idempotent against the relationship's own identifier, and not yet
+        against a natural key, on the same terms as `record_assignment`.
+        """
+
+    @abstractmethod
+    def relationships(
+        self,
+        principal_id: str,
+        entity_id: str,
+        direction: str = "any",
+        *,
+        limit: int | None = None,
+        after_relationship_id: str | None = None,
+    ) -> list[EntityRelationship]:
+        """Entity relationships involving an entity, scoped by `principal_id`.
+
+        `direction` is `'any'` (default), `'outgoing'` (from_entity_id matches),
+        or `'incoming'` (to_entity_id matches).
+
+        **Depth one was the only bound this read had.** Adjacency is what stops
+        a graph walk; it is not what stops a hub. A programme every person on it
+        is assigned to has an edge per person, so "one hop from this entity" and
+        "a bounded number of rows" are different claims, and only the first was
+        being made. `limit` makes the second, as a `LIMIT` on the query rather
+        than a slice of the result -- the cost the cap exists to avoid is paid
+        the moment the rows leave the server.
+
+        `after_relationship_id` continues a previous page: rows are ordered by
+        `relationship_id` and this excludes every identifier at or before the
+        one named. A keyset rather than an offset, because `relationship_id` is
+        unique and the order is total, so a row inserted between two requests
+        cannot shift a later page backwards and hide an edge -- which is exactly
+        the failure an `OFFSET` has on a table that is still being written to.
+
+        Both default to today's behaviour -- every edge, from the beginning --
+        because resolution and re-enrichment read this collection whole, and a
+        bound introduced beneath them would answer "no such relationship" for an
+        edge that is recorded.
+        """
 
 
 class PortError(Exception):
@@ -1317,6 +1737,20 @@ class UnitOfWork(ABC):
         capability seats for read and write, so it is reached through
         `ApplicationService.invoke`, behind `authorize`, inside the one
         transaction a request owns.
+
+        `principal_id` remains a parameter on every method of the port and is
+        the authenticated caller's partition, never a caller-supplied field.
+        """
+
+    @property
+    @abstractmethod
+    def entities(self) -> EntitiesRepository:
+        """The generalized entity rows, inside this transaction (WP-RI-02).
+
+        Placed here for the same reason every other plane with capability seats
+        is: WP-RI-02 gives the relationship-intelligence plane read and write
+        seats, so it is reached through `ApplicationService.invoke`, behind
+        `authorize`, inside the one transaction a request owns.
 
         `principal_id` remains a parameter on every method of the port and is
         the authenticated caller's partition, never a caller-supplied field.

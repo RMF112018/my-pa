@@ -334,6 +334,14 @@ class Settings(StrictModel):
     goodnotes_canonical_semantic_writes_enabled: bool = False
     goodnotes_user_facing_summary_delivery_enabled: bool = False
     goodnotes_tbr_bridge_enabled: bool = False
+    #: Process-local gate for the relationship-intelligence entity plane
+    #: (WP-RI-05). Default off. True publishes six read capabilities over the
+    #: acting Principal's own entities; it enables no write, no observation, and
+    #: no source traversal, because none exists. Off by default because the
+    #: remote MCP profile is derived from the capability set with no
+    #: per-capability exclusion list, so "available" and "remotely reachable"
+    #: are one decision and this is where it is made.
+    relationship_intelligence_enabled: bool = False
     goodnotes_self_improving_optimizer_enabled: bool = False
     goodnotes_rollout_stage: GoodNotesRolloutStage = GoodNotesRolloutStage.OBSERVE_ONLY
     remote_mcp_public_host: str = ""

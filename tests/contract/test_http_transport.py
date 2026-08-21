@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the forty-eight capabilities is addressable over HTTP
+**Reachability.** Every one of the fifty-four capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a forty-ninth capability added to the domain arrives as a failing row instead
+here, so a fifty-fifth capability added to the domain arrives as a failing row instead
 of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
@@ -56,6 +56,7 @@ from tests.conftest import (
     staged_search,
     staged_task,
 )
+from tests.contract.test_transport_parity import ENTITY_EMAIL, staged_entities
 from tests.wire import Wire, serve
 
 from my_pa.adapters.http import create_http_app
@@ -78,6 +79,9 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetEntity,
+    GetEntityContext,
+    GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
     GetPulse,
@@ -92,6 +96,7 @@ from my_pa.application.commands import (
     ListSituations,
     ListSources,
     ListTasks,
+    ListUnresolvedMentions,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -101,11 +106,13 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordTask,
     Representation,
+    ResolveEntity,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchEntities,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
@@ -182,6 +189,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    person, _organization = staged_entities(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -367,6 +375,25 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 }
             ],
         },
+        # The relationship-intelligence entity plane (WP-RI-05). `person` and
+        # `organization` are staged once per scene, so the payload table and the
+        # command table below name the same two entities rather than each
+        # staging a pair of its own.
+        Capability.ENTITIES_SEARCH: {"query": "parity"},
+        Capability.ENTITIES_GET: {"entity_id": person.entity_id},
+        # The reference is the address bound to `person`, stated in its own
+        # namespace rather than sniffed, so this answers a resolution rather
+        # than the `not_found` outcome an unknown reference answers with — a
+        # `200` either way, and the weaker of the two to be reachable by.
+        Capability.ENTITIES_RESOLVE: {"reference": ENTITY_EMAIL, "namespace": "email"},
+        Capability.ENTITIES_CONTEXT: {"entity_id": person.entity_id},
+        Capability.ENTITIES_RELATIONSHIPS: {
+            "entity_id": person.entity_id,
+            "direction": "any",
+        },
+        # No arguments: the queue is every unplaced mention in the Principal's
+        # own partition, so there is nothing to name.
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
     }
 
 
@@ -395,6 +422,7 @@ def commands_for(
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    person, _organization = staged_entities(scene)
     return {
         Capability.CAPABILITIES_GET: GetCapabilities(),
         Capability.SOURCES_LIST: ListSources(source_id=scene.source.source_id),
@@ -565,6 +593,18 @@ def commands_for(
                 },
             ),
         ),
+        # The entity plane. `person` is the same staged entity the payload table
+        # names, because `staged_entities` answers with the pair already in the
+        # world: two tables each staging their own would be comparing two
+        # different requests.
+        Capability.ENTITIES_SEARCH: SearchEntities(query="parity"),
+        Capability.ENTITIES_GET: GetEntity(entity_id=person.entity_id),
+        Capability.ENTITIES_RESOLVE: ResolveEntity(reference=ENTITY_EMAIL, namespace="email"),
+        Capability.ENTITIES_CONTEXT: GetEntityContext(entity_id=person.entity_id),
+        Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(
+            entity_id=person.entity_id, direction="any"
+        ),
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
     }
 
 
@@ -601,6 +641,15 @@ class RecordingService(ApplicationService):
             managed_store=world.managed_store,
             task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
             commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
+            # Composed, for the same reason the managed store above is: this
+            # suite quantifies over every `Capability` and asserts each is
+            # reachable, so a service composed *without* the relationship plane
+            # would have it asserting reachability for the `entities.` family
+            # its own build withholds. It did exactly that until `_entity_plane`
+            # gave that family the floor `documents.` already had -- each member
+            # answered `200` here while `capabilities.get` on the same process
+            # reported it `not_implemented`, and this suite asserted the `200`.
+            relationship_intelligence_enabled=True,
         )
         self.envelopes: list[ResponseEnvelope] = []
 
@@ -896,6 +945,104 @@ def test_a_malformed_identifier_is_refused_with_the_field_it_names(
     assert reply.document()["code"] == ErrorCode.INVALID_REQUEST.value
     assert reply.document()["safe_details"] == ["source_id"]
     assert "/etc/passwd" not in reply.rendered()
+
+
+@pytest.mark.parametrize(
+    ("capability", "field", "detail"),
+    [
+        (Capability.ENTITIES_SEARCH, "query", "query"),
+        (Capability.ENTITIES_RESOLVE, "reference", "subject"),
+        (Capability.TASKS_CREATE, "title", "title"),
+    ],
+    ids=lambda value: value.value if isinstance(value, Capability) else str(value),
+)
+def test_a_field_of_the_wrong_type_is_refused_rather_than_crashing(
+    staged: tuple[Scene, KnowledgeRecord],
+    wire: Wire,
+    capability: Capability,
+    field: str,
+    detail: str,
+) -> None:
+    """The ninth review's blocking finding, pinned at the wire.
+
+    `{"query": 123}` used to raise `AttributeError` inside the command, which
+    `normalization._command` did not convert (it catches `TypeError`) and this
+    transport did not render (it caught `ApplicationError`). The caller received
+    a bare `500 Internal Server Error` with no envelope, no typed code and no
+    correlation identifier — on a build with the entity plane switched off, too,
+    because the command is built before the handler's floor is reached.
+
+    Asserted at 400 rather than merely "not 500": the terminal catch added to
+    `invoke` would satisfy the weaker claim with an `internal_error` envelope,
+    and `internal_error` tells a caller their correction cannot help. The rule
+    across the whole command set is
+    `tests/architecture/test_commands_check_the_type_before_the_content.py`;
+    this is the transport half, and `tasks.create` is here because it carried
+    the same defect at the merge base.
+    """
+    scene, record = staged
+    payload = dict(payloads_for(scene, record)[capability])
+    payload[field] = 123
+    document = document_for(capability, scene, payload)
+    reply = wire.send(capability.value, document)
+    assert reply.status == 400, reply.body
+    assert reply.document()["code"] == ErrorCode.INVALID_REQUEST.value
+    assert reply.document()["safe_details"] == [detail]
+
+
+def test_a_fault_below_normalization_is_still_answered_in_the_envelope(
+    scene: Scene, wire: Wire, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The floor under the rule above, measured rather than asserted.
+
+    A command that reads a field before checking its type is one way to raise
+    something that is not an `ApplicationError`; it is not the only way. The CLI
+    and MCP transports have always carried a terminal `except Exception` and
+    this one did not, which is why HTTP was the transport that answered a bare
+    `500`. Here `normalize` is replaced with one that raises the same
+    `AttributeError` the missing type check used to raise, and the answer is
+    required to be this repository's own vocabulary.
+    """
+
+    def explode(capability: str, arguments: Any) -> Any:  # noqa: ANN401 - stand-in
+        raise AttributeError("'int' object has no attribute 'strip'")
+
+    monkeypatch.setattr("my_pa.adapters.http.app.normalize", explode)
+    document = document_for(Capability.CAPABILITIES_GET, scene, {})
+    reply = wire.send("capabilities.get", document)
+    assert reply.status == 500, reply.body
+    assert reply.document()["code"] == ErrorCode.INTERNAL_ERROR.value
+    assert reply.document()["correlation_id"]
+    assert "strip" not in reply.rendered()
+
+
+def test_a_fault_reading_the_body_is_still_answered_in_the_envelope(
+    scene: Scene, wire: Wire, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The body-read block's terminal catch, which shipped unarmed.
+
+    `read_document` classifies `ClientDisconnect`, `TimeoutError` and every
+    `ApplicationError`. Anything else escaped, and this route answered a bare
+    `500` while the remote-capture route -- whose equivalent block had gained a
+    terminal catch one commit earlier -- answered an envelope. The asymmetry a
+    commit claimed to have closed had been inverted rather than closed, and
+    nothing caught that because neither block's catch had a test.
+
+    `_document` is the seam: its own docstring describes it raising for a
+    composition-invariant violation, which is exactly the class that is not an
+    `ApplicationError`.
+    """
+
+    def erupt(received: bytes) -> Any:  # noqa: ANN401 - stand-in
+        raise RuntimeError("a fault reading the body")
+
+    monkeypatch.setattr("my_pa.adapters.http.app._document", erupt)
+    document = document_for(Capability.CAPABILITIES_GET, scene, {})
+    reply = wire.send("capabilities.get", document)
+    assert reply.status == 500, reply.body
+    assert reply.document()["code"] == ErrorCode.INTERNAL_ERROR.value
+    assert reply.document()["correlation_id"]
+    assert "fault reading" not in reply.rendered()
 
 
 def test_an_unknown_path_is_404_and_a_wrong_method_is_405(scene: Scene, wire: Wire) -> None:

@@ -6,7 +6,9 @@ Owning index for versioned behavioral contracts in `RMF112018/my-pa`. Repository
 |---|---|
 | [`mcv-read-only-vertical-slice.md`](mcv-read-only-vertical-slice.md) | Present — proposed for repository review; amended 2026-08-02 for the promoted scope |
 | [`canonical-product-definition/`](canonical-product-definition/00_README.md) | Mirror — **ratified** canonical product definition, version 2.3 after the 2026-08-04 Apple Mail, Calendar & Contacts revision; implementation not authorized |
-| [`relationship-intelligence-v0.2.md`](relationship-intelligence-v0.2.md) | Mirror — proposed product specification, implementation not authorized |
+| [`relationship-intelligence-v0.2.md`](relationship-intelligence-v0.2.md) | Mirror — **the current requirements source** for Relationship Intelligence; see the successor notice at the top of the file; implementation not authorized |
+| [`relationship-intelligence-v0.3.md`](relationship-intelligence-v0.3.md) | **DEMOTED 2026-08-20 — governs nothing.** Provenance unestablished: the operator does not know its origin, it has no publisher receipt, and an agent wrote it in outside instruction. Retained as an artifact only. |
+| [`relationship-intelligence-v0.3-acceptance.md`](relationship-intelligence-v0.3-acceptance.md) | Disposition against the demoted v0.3. **Not a compliance ledger** — it scores a document that governs nothing. Section 3 of the implementation plan is the campaign's own ledger, against v0.2. |
 | [`quick-capture/`](quick-capture/00_README.md) | Mirror — proposed product specification, implementation not authorized |
 
 The MCV abbreviation follows [`AGENTS.md`](/AGENTS.md): Minimum Viable Candidate. The specification's own prose predates that wording and is preserved as authored.
@@ -163,6 +165,7 @@ Both were admitted to scope by operator reprioritization on 2026-08-01 and are m
 | Artifact | Drive identity | Representation | Verification |
 |---|---|---|---|
 | `relationship-intelligence-v0.2.md` | `1Ew5wVddlpcN1OFKkh5ox45zK5gVrDziz7KwTwQ7Jlfo`, parent `1MDaLiEjNN3Fdondxs4NJpK5SfwdXjzl0` | native Google Doc, exported to Markdown via `rclone backend copyid --drive-export-formats md` | **Identity only.** A native Doc does not preserve the bytes it was converted from, so no export can reproduce a declared source hash. File ID, title, parent, owner, and MIME type were verified. Export SHA-256 `3f50c0197d76824111e1596de5c6a47a12150f4e7d0571f7ebf8b74a920fbaec`. This is the same weaker check recorded as `D-01` for the completion plan. |
+| `relationship-intelligence-v0.3.md` | none recorded — the document carries no Drive file ID and no publisher receipt | transcribed, not retrieved: `/tmp/ri-v03/FEATURE-v0.3.md`, SHA-256 `4aa380e094596cc8471d9f3ef16860741a03924dab15fd14b082d9cc2fc1b71c` over 49,720 UTF-8 bytes, with the Google Docs export shape normalized into ordinary Markdown | **Weakest of the three, and the document says so itself** — see its own "Provenance and how strongly this mirror can be trusted" section. There is no receipt to check against and no Drive identity to verify, so the only durable claim is the source hash it records. This is a demoted proposal, not a current requirements source; see the status table at the top of this file. |
 | `quick-capture/` | package folder `1KEdp_BbeJhVFNwCCTEDN7f3zqh83Z9cN` | `stored_raw_bytes` with per-file SHA-256 in `PUBLICATION-RECEIPT-MYPA-QUICK-CAPTURE-FEATURE-PACKAGE-20260801-005.json` | **Byte-exact.** All 25 mirrored artifacts were re-hashed against that receipt after being written here: 25 verified, zero mismatches. |
 
 The receipt lists 27 artifacts. The two not mirrored are the coordination request and response — governance correspondence rather than specification — and they remain in Drive.

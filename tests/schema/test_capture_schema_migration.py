@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with forty-eight capabilities and twenty-two
+emits what it emitted on the day it merged, with fifty-four capabilities and twenty-three
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -237,6 +237,16 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "goodnotes.work",
         # RWP-02. `a4d9c2e7b815` is the forward `ALTER` that admits it.
         "goodnotes.content",
+        # WP-RI-05. `c1a7e4b93d58` is the forward `ALTER` that admits the five.
+        "entities.search",
+        "entities.get",
+        "entities.resolve",
+        "entities.context",
+        "entities.relationships",
+        # The People landing this plane serves needs the queue of references
+        # nothing has placed. `e4d7b2f9a316` is the forward `ALTER` that admits
+        # it, and this line is why a further one cannot arrive without it.
+        "entities.unresolved_mentions",
     }
 )
 

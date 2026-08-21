@@ -24,7 +24,17 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "f4c1a8e6b205"
 PRIOR: Final = "d9c4e1a7b628"
-HEAD_REVISION: Final = "f4c1a8e6b205"
+#: Where `upgrade head` lands, which the database tier reads back out of
+#: `alembic_version`. That is a position in the chain rather than a property of
+#: this revision, so it moves whenever a revision is added; the chain test below
+#: is written not to depend on it.
+ENTITY_REVISION: Final = "9def3c2e63bb"
+ALIAS_REVISION: Final = "b7f4d1a92c36"
+CAPABILITY_REVISION: Final = "c1a7e4b93d58"
+GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
+#: The unresolved-mention capability admission, between governance and head.
+QUEUE_REVISION: Final = "e4d7b2f9a316"
+HEAD_REVISION: Final = "f3a8c1d7e592"
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_f4c1a8e6b205_add_goodnotes_delivery_attempt_ledger.py"
@@ -95,12 +105,25 @@ def disposable_database() -> Iterator[str]:
         maintenance.dispose()
 
 
-def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
+    """One unbranched head, and this revision on the chain below it.
+
+    Asserts a single head and this revision's place on the chain rather than
+    which revision happens to be last: the head it named was another revision's,
+    so it had to be re-pinned by every work package that added one.
+    """
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [HEAD_REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
+    assert script.get_revision(ENTITY_REVISION).down_revision == REVISION
+    assert script.get_revision(ALIAS_REVISION).down_revision == ENTITY_REVISION
+    assert script.get_revision(CAPABILITY_REVISION).down_revision == ALIAS_REVISION
+    assert script.get_revision(GOVERNANCE_REVISION).down_revision == CAPABILITY_REVISION
+    assert script.get_revision(QUEUE_REVISION).down_revision == GOVERNANCE_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == QUEUE_REVISION
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(PRIOR).down_revision == GROUNDING_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 58
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 64
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

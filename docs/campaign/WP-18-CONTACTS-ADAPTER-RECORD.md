@@ -483,7 +483,7 @@ which is red at the base head for `web/node_modules` and is not this package's.
 numbers.** No existing assertion changed its expectation. Three existing files
 changed for reasons named here and nowhere else: two exemption sets widened by one
 directory (§H), and `docs/plans/mcv-completion-plan.md` §3 moved from one hundred
-and sixty-one to one hundred and sixty-two test modules, which is what
+and sixty-one to one hundred and sixty-three test modules, which is what
 `test_spelled_counts_match_the_sets_they_name.py` requires of the tree it counts.
 
 **A total for the full suite is not reported.** The full run exceeds this

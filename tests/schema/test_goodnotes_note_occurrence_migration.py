@@ -23,7 +23,16 @@ from my_pa.infrastructure.database.engine import create_database_engine
 
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "c9e2b6a4d813"
-HEAD_REVISION: Final = "f4c1a8e6b205"
+#: Where `upgrade head` lands, which the database tier reads back out of
+#: `alembic_version`. That is a position in the chain rather than a property of
+#: this revision, so it moves whenever a revision is added; the chain test below
+#: is written not to depend on it.
+ALIAS_REVISION: Final = "b7f4d1a92c36"
+CAPABILITY_REVISION: Final = "c1a7e4b93d58"
+GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
+#: The unresolved-mention capability admission, between governance and head.
+QUEUE_REVISION: Final = "e4d7b2f9a316"
+HEAD_REVISION: Final = "f3a8c1d7e592"
 PRIOR: Final = "f8c3a1e6b247"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_c9e2b6a4d813_add_goodnotes_note_unit_occurrence_.py"
@@ -110,7 +119,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 58
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 64
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

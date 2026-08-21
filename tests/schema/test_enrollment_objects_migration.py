@@ -193,6 +193,16 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "goodnotes_delivery_attempts",
         "goodnotes_ingestion_run_stages",
         "goodnotes_page_rasters",
+        # The Relationship Intelligence entity plane: `9def3c2e63bb` (four),
+        # `b7f4d1a92c36` (aliases), `d2b8f5c04e71` (governance).
+        "entities",
+        "entity_external_identifiers",
+        "entity_assignments",
+        "entity_relationships",
+        "entity_aliases",
+        "entity_observations",
+        "entity_proposals",
+        "entity_merge_records",
     }
 )
 

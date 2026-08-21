@@ -1,0 +1,53 @@
+# Operator decision for Gate B handwriting corpus gsqs-hw-combined-v1
+#
+# Copied from OPERATOR_DECISION.template.yaml. Do not attach PDFs, page
+# renders, transcriptions, private paths, or private gold to this file.
+#
+# coordination_request_id: REQ-MYPA-GOODNOTES-HW-OPERATOR-REBIND-20260821-001
+# operator_decision_drive_id: 1uaQ2lShnR6BY77CaOOD3grjmIotib3dJNMzjZaL5tIM
+
+corpus_version: gsqs-hw-combined-v1
+historical_moss_corpus_version: gsqs-hw-moss-v1
+historical_moss_manifest_digest: 3bed9cc9bfe4a7cb3d28383232e940268ab3435429312c0977eb82a326158f9d
+
+# Approved PRE-rebind identities (operator authority basis)
+manifest_digest: 238c22aa5b51fee3993a8e72e0b2ce9d696fb9f7b164a2853d1ddc3f59eabaed
+combined_identity: bda6e66bbaf5ac068e5b2cf64a52f1e6c06975b5dd86294591de82fe8afdeb8b
+
+# One of: approve_for_bounded_b0 | correct_labels | reject
+# approve_for_bounded_b0 is corpus-level intent only. It is not B0
+# authorization and does not disclose private pages to an external model.
+decision: approve_for_bounded_b0
+
+operator: operator
+decided_at: 2026-08-21T02:31:00-04:00
+notes: |
+  Verbatim operator authorization recorded on Drive artifact
+  OPERATOR-DECISION-GSQS-HW-COMBINED-V1-20260821-001
+  (1uaQ2lShnR6BY77CaOOD3grjmIotib3dJNMzjZaL5tIM):
+
+  I approve gsqs-hw-combined-v1 for bounded B0 at manifest
+  238c22aa5b51fee3993a8e72e0b2ce9d696fb9f7b164a2853d1ddc3f59eabaed and
+  combined identity
+  bda6e66bbaf5ac068e5b2cf64a52f1e6c06975b5dd86294591de82fe8afdeb8b. I
+  ratify the current bound private-gold label set for rebind to
+  OPERATOR_ADJUDICATED / APPROVED. This does not authorize B0 execution,
+  external-model disclosure, self-improvement, promotion, or deployment.
+
+FIXED_LABELED_CORPUS_APPROVED: true
+CONTROLLED_HANDWRITING_CORPUS: APPROVED
+b0_suitable: true
+label_provenance: OPERATOR_ADJUDICATED
+
+MEASURED_B0: NOT_YET_ESTABLISHED
+SELF_IMPROVEMENT_EVALUATION: NOT_YET_ACTIVATED
+AUTOMATIC_PROMOTION: DISABLED
+EXTERNAL_MODEL_DISCLOSURE: NONE
+
+# POST-rebind identities produced by canonical repository generation.
+# These are rebind results, not a second operator decision.
+post_rebind_manifest_digest: 636d671348cfba5b12b9e5032d5b3daee74f884aea101198ba69ed608ee40f22
+post_rebind_combined_identity: c3eb81e3fedb9590e6c33a38154722c0d9b697c7059d995c513c355a3143e070
+scoreable_page_count: 239
+admitted_handwriting_pages: 239
+excluded_page_count: 1995

@@ -6,18 +6,21 @@ authorization to run now.
 Failed reviewed head (invalidated by this remediation):
 `16ea8949f7c740733105342d4ee89e53fa617ac4`
 
-Current handwriting identities after GSQS-B-138 remediation:
+Current handwriting identities after operator ratification rebind:
 
 - corpus: `gsqs-hw-combined-v1`
-- manifest digest: `238c22aa5b51fee3993a8e72e0b2ce9d696fb9f7b164a2853d1ddc3f59eabaed`
-- combined Gate B identity: `bda6e66bbaf5ac068e5b2cf64a52f1e6c06975b5dd86294591de82fe8afdeb8b`
+- approved PRE-rebind manifest digest: `238c22aa5b51fee3993a8e72e0b2ce9d696fb9f7b164a2853d1ddc3f59eabaed`
+- approved PRE-rebind combined identity: `bda6e66bbaf5ac068e5b2cf64a52f1e6c06975b5dd86294591de82fe8afdeb8b`
+- POST-rebind manifest digest: `636d671348cfba5b12b9e5032d5b3daee74f884aea101198ba69ed608ee40f22`
+- POST-rebind combined identity: `c3eb81e3fedb9590e6c33a38154722c0d9b697c7059d995c513c355a3143e070`
 - evaluator: `goodnotes-gsqs-independent` `1.1`
 - evaluator code identity: `3673a9dbf99214dc6d724822682c2b5547c7a0343d56c7024956734f1516fc7d`
 - evaluator implementation digest: `ca23ecebd5252c3924da0e29e7320f1fd301111290340a0105daeb8f3470b5e4`
 - synthetic layer: `gsqs-v2` / `e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd`
 
-`b0_suitable = false`. Admitted labels are `PENDING` /
-`FIRST_PASS_LOCAL_INSPECTION`. B0 is **not** immediately executable.
+`b0_suitable = true`. Admitted labels are `APPROVED` /
+`OPERATOR_ADJUDICATED`. B0 is **still not executable** until a separate
+private-data disclosure authorization names the post-rebind digest.
 
 Cite the exact repository head/tree of the PR that carries this file
 when that later phase is authorized. A later commit invalidates this
@@ -47,11 +50,13 @@ The later B0 handwriting layer, if authorized, is only the
 digest-bound `PRIVATE_OPERATOR_AUTHORIZED_REAL_HANDWRITING` corpus
 `gsqs-hw-combined-v1` after:
 
-1. operator adjudication that rebinds those labels to
-   `OPERATOR_ADJUDICATED` + `APPROVED` for this exact manifest;
+1. operator adjudication that rebound those labels to
+   `OPERATOR_ADJUDICATED` + `APPROVED` from the pre-rebind digest above
+   (completed 2026-08-21; current catalog uses the post-rebind digest);
 2. `FIXED_LABELED_CORPUS_APPROVED = true` for that digest;
 3. `b0_suitable = true` with nonempty scoreable B and C;
-4. a separate private-data / external-model disclosure authorization.
+4. a separate private-data / external-model disclosure authorization
+   that names the **post-rebind** digest.
 
 Ordinary production GoodNotes ingest remains prohibited.
 
@@ -60,9 +65,10 @@ Ordinary production GoodNotes ingest remains prohibited.
 1. Operator has reviewed corpus `gsqs-v2` at manifest digest
    `e5f7222b0d1ba4a624e94060a9a2386fa68c716025464287ca80d0eecb23e7dd`.
    Synthetic-regression approval is not by itself B0 readiness.
-2. Operator has adjudicated `gsqs-hw-combined-v1` at the digest above
-   (historical `gsqs-hw-moss-v1` remains evidence, not an independent
-   B0 floor). `UNREADABLE_REAL_WORLD_COVERAGE = NOT_OBSERVED` is a
+2. Operator has adjudicated `gsqs-hw-combined-v1` at the pre-rebind
+   digest above; current measurement identity is the post-rebind digest.
+   Historical `gsqs-hw-moss-v1` remains evidence, not an independent
+   B0 floor. `UNREADABLE_REAL_WORLD_COVERAGE = NOT_OBSERVED` is a
    documented limitation; `gsqs-v2` still covers fabricated-unreadable
    traps. The former 75–150 page quota is not a rejection floor.
 3. Freeze Corpus B (scoreable partition B only) to the **approved**

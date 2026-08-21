@@ -17,7 +17,7 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -153,6 +153,14 @@ jobs:
           npm run build
 
   dependency-floor:
+    # **Twenty minutes, not ten.** Both this job and `validate` run the whole
+    # FAST tier, which has grown to 8,419 collected tests. At ten minutes
+    # `validate` was finishing in 8m24s and this job was cancelled at 10m16s --
+    # a budget set when the suite was smaller, failing a tree that was green.
+    # `database-tier` carries 40 for the same reason: a tier's budget is sized
+    # to the tier. Guard cost was cut in the same change that raised this, so
+    # the headroom is real rather than spent on arrival.
+    #
     # `pyproject.toml` declares a lower bound for every runtime dependency, but
     # an ordinary install resolves the newest release, so the bound is an
     # assertion nothing checks. This job installs the declared minimum and runs
@@ -164,7 +172,7 @@ jobs:
     # green. `src/my_pa/contracts/v1/envelope.py` avoids that form for this
     # reason, and this job is what keeps that reason true.
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 20
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

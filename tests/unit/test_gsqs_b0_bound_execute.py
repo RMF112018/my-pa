@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from hashlib import sha256
 from pathlib import Path
 
@@ -120,6 +121,94 @@ def test_wrong_evaluator_cases_do_not_probe(tmp_path: Path) -> None:
             probe=probe,
         )
     assert probes == []
+    journal = tmp_path / "disclosure_journal.jsonl"
+    assert not journal.exists() or EVENT_STARTED not in journal.read_text()
+
+
+def test_gold_mutation_does_not_probe_or_post(tmp_path: Path) -> None:
+    cases, manifest, census, config = _build_fixture()
+    region = cases[0].regions[0]
+    mutated = (
+        replace(
+            cases[0],
+            regions=(
+                replace(region, transcription=f"{region.transcription}-mutated"),
+                *cases[0].regions[1:],
+            ),
+        ),
+        *cases[1:],
+    )
+    probes: list[int] = []
+    posts: list[int] = []
+    documents = {
+        case.case_id: _document(case, prompt=config.prompt_config_identity) for case in cases
+    }
+
+    def probe(**_kwargs: object) -> RouteLLMHttpResult:
+        probes.append(1)
+        return RouteLLMHttpResult(status=200, payload={"data": []})
+
+    with pytest.raises(ValueError, match="evaluator case digest mismatch"):
+        run_bound_execute(
+            authorization=_route_auth(census, manifest, config),
+            report=_report(census, config),
+            census=census,
+            evaluator_cases=mutated,
+            manifest=manifest,
+            config=config,
+            repository=_clean_repo(),
+            adapter=_CountingAdapter(documents, posts),
+            evidence_dir=tmp_path,
+            identity=MODEL,
+            origin="https://route.example",
+            api_key="k",
+            image_loader=_pages(cases),
+            probe=probe,
+        )
+    assert probes == []
+    assert posts == []
+    journal = tmp_path / "disclosure_journal.jsonl"
+    assert not journal.exists() or EVENT_STARTED not in journal.read_text()
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [{}, {"data": "not-a-list"}, {"data": None}, {"data": {}}],
+)
+def test_malformed_probe_payload_does_not_post(tmp_path: Path, payload: dict[str, object]) -> None:
+    cases, manifest, census, config = _build_fixture()
+    probes: list[int] = []
+    posts: list[int] = []
+    documents = {
+        case.case_id: _document(case, prompt=config.prompt_config_identity) for case in cases
+    }
+
+    def probe(**_kwargs: object) -> RouteLLMHttpResult:
+        probes.append(1)
+        return RouteLLMHttpResult(status=200, payload=payload)
+
+    with pytest.raises(ValueError, match="malformed payload"):
+        run_bound_execute(
+            authorization=_route_auth(census, manifest, config),
+            report=_report(census, config),
+            census=census,
+            evaluator_cases=cases,
+            manifest=manifest,
+            config=config,
+            repository=_clean_repo(),
+            adapter=_CountingAdapter(documents, posts),
+            evidence_dir=tmp_path,
+            identity=MODEL,
+            origin="https://route.example",
+            api_key="k",
+            image_loader=_pages(cases),
+            probe=probe,
+        )
+    assert probes == [1]
+    assert posts == []
+    control = json.loads((tmp_path / "RUN_CONTROL.json").read_text())
+    assert control["EXTERNAL_MODEL_DISCLOSURE"] == "NONE"
+    assert control["started_request_count"] == 0
     journal = tmp_path / "disclosure_journal.jsonl"
     assert not journal.exists() or EVENT_STARTED not in journal.read_text()
 

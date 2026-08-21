@@ -69,6 +69,7 @@ from my_pa.infrastructure.gsqs_routellm_transport import (
     origins_equal,
     parse_https_origin,
     post_chat_completion,
+    validate_route_llm_models_probe,
 )
 
 EXIT_OK = 0
@@ -240,7 +241,8 @@ def run_bound_execute(
     try:
         if journal.fold().unresolved_attempt_ids:
             raise ValueError("unresolved disclosure attempt; refusing to resume")
-        probe(origin=origin, api_key=api_key)
+        probe_result = probe(origin=origin, api_key=api_key)
+        validate_route_llm_models_probe(probe_result)
         journal.record_run_event(
             EVENT_AUTH_PROBE_COMPLETED,
             disclosure_state=DisclosureState.AUTHORIZED_NOT_YET_DISCLOSED,

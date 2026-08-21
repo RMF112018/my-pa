@@ -139,12 +139,18 @@ python apps/cli/gsqs_b0.py execute \
 `--evaluator-corpus` is an explicit local file of evaluator-plane cases
 using the existing `case_digest_payload` shape (`schema_version`:
 `gsqs-evaluator-plane-v1`). It is not hashed into the Class-1 candidate.
-The public catalog has no gold. Evaluator-plane exactness is checked
-before `GET /v1/models` and before any `OUTBOUND_ATTEMPT_STARTED`. Gold
-never enters the HTTP body, prompt, journal, or public evidence.
+The public catalog has no gold. The artifact must contain exactly the
+frozen scoreable Partition-B cases. Validation checks ordered case IDs,
+raster/content SHA, corpus version, scoreable-B eligibility, and
+`case_digest` against the public census before `GET /v1/models` and
+before any `OUTBOUND_ATTEMPT_STARTED`. Extra A/C/unscoreable cases are
+rejected, not filtered. Gold never enters the HTTP body, prompt, journal,
+or public evidence.
 
 After evaluator validation, execute probes `GET /v1/models` (image-free,
-max three attempts). Image POST remains a single attempt. Public
+max three attempts). A successful response must contain a `data` list,
+which may be empty. The probe is not used to infer provider mappings or
+mutate `model_identity`. Image POST remains a single attempt. Public
 `RUN_CONTROL.json` is rebuilt from the disclosure journal on success,
 failure, and unresolved restart.
 

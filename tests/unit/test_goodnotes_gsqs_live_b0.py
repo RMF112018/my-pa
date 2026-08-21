@@ -23,7 +23,7 @@ from my_pa.application.goodnotes_gsqs_b0_disclosure_journal import (
     DisclosureJournal,
     DisclosureState,
 )
-from my_pa.application.goodnotes_gsqs_corpus import CorpusCase, CorpusManifest
+from my_pa.application.goodnotes_gsqs_corpus import CorpusCase, CorpusManifest, case_digest
 from my_pa.application.goodnotes_gsqs_harness import (
     INCUMBENT_ANALYZER_NAME,
     INCUMBENT_ANALYZER_VERSION,
@@ -124,7 +124,7 @@ def _build_fixture() -> tuple[
         B0CensusMember(
             case_id=item.case_id,
             raster_sha256=item.content_sha256,
-            case_digest="cd" + item.case_id[-8:].ljust(8, "0"),
+            case_digest=case_digest(item),
             file_sha256=item.content_sha256,
         )
         for item in selected

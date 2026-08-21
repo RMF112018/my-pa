@@ -251,3 +251,8 @@ def get_models_with_retry(
         error_class="URL_ERROR",
         disclosed=False,
     )
+
+
+def validate_route_llm_models_probe(result: RouteLLMHttpResult) -> None:
+    if not isinstance(result.payload.get("data"), list):
+        raise ValueError("RouteLLM models probe returned malformed payload")

@@ -135,6 +135,20 @@ def test_post_timeout_is_indeterminate(monkeypatch: pytest.MonkeyPatch) -> None:
     assert raised.value.error_class == "TIMEOUT"
 
 
+def test_models_probe_requires_data_list() -> None:
+    transport.validate_route_llm_models_probe(
+        transport.RouteLLMHttpResult(status=200, payload={"data": []})
+    )
+    with pytest.raises(ValueError, match="malformed payload"):
+        transport.validate_route_llm_models_probe(
+            transport.RouteLLMHttpResult(status=200, payload={})
+        )
+    with pytest.raises(ValueError, match="malformed payload"):
+        transport.validate_route_llm_models_probe(
+            transport.RouteLLMHttpResult(status=200, payload={"data": "not-a-list"})
+        )
+
+
 def test_origin_mismatch_and_redirect(monkeypatch: pytest.MonkeyPatch) -> None:
     with pytest.raises(ValueError, match="exact credential-free HTTPS origin"):
         transport.parse_https_origin("http://route.example")

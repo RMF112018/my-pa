@@ -41,6 +41,7 @@ from my_pa.application.goodnotes_gsqs_corpus import (
     CorpusManifest,
     ReviewState,
     canonical_dumps,
+    case_digest,
 )
 from my_pa.application.goodnotes_gsqs_harness import (
     B0_MIN_REPETITIONS,
@@ -870,14 +871,19 @@ def _authorization_defects(
 
 
 def validate_evaluator_plane(cases: Sequence[CorpusCase], census: B0Census) -> None:
-    selected = [case for case in cases if case.partition is CorpusPartition.B and case.scoreable]
-    ids = [case.case_id for case in selected]
-    if ids != [member.case_id for member in census.members]:
+    if len(cases) != len(census.members):
         raise ValueError("evaluator cases do not match Partition B census")
-    content = {case.case_id: case.content_sha256 for case in selected}
-    for member in census.members:
-        if content[member.case_id] != member.raster_sha256:
+    if [case.case_id for case in cases] != [member.case_id for member in census.members]:
+        raise ValueError("evaluator cases do not match Partition B census")
+    for case, member in zip(cases, census.members, strict=True):
+        if case.partition is not CorpusPartition.B or not case.scoreable:
+            raise ValueError("evaluator case is not scoreable Partition B")
+        if case.corpus_version != census.corpus_version:
+            raise ValueError("wrong corpus version")
+        if case.content_sha256 != member.raster_sha256:
             raise ValueError("evaluator raster binding mismatch")
+        if case_digest(case) != member.case_digest:
+            raise ValueError("evaluator case digest mismatch")
 
 
 def _assert_evaluator_plane(cases: Sequence[CorpusCase], census: B0Census) -> None:

@@ -1,14 +1,14 @@
 {
   "id": "/",
-  "name": "my-pa — MossAIc personal assistant",
+  "name": "my-pa",
   "short_name": "my-pa",
-  "description": "Evidence-first, principal-scoped personal assistant for Moss.",
+  "description": "Evidence-first, principal-scoped personal assistant.",
   "start_url": "/today",
   "scope": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#F6F3EF",
-  "theme_color": "#046A38",
+  "background_color": "#F7F6F2",
+  "theme_color": "#1D6B4F",
   "icons": [
     {
       "src": "/icons/icon-192.png",

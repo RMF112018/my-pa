@@ -12,7 +12,17 @@ import { signIn, syntheticNote, expectState } from "./fixtures";
 
 test.describe("an unauthenticated visitor reaches no destination", () => {
   test("every app route redirects to sign-in", async ({ page }) => {
-    for (const path of ["/today", "/library", "/situations", "/review", "/system"]) {
+    for (const path of [
+      "/today",
+      "/work",
+      "/intelligence",
+      "/people",
+      "/knowledge",
+      "/review",
+      "/system",
+      "/situations",
+      "/library",
+    ]) {
       await page.goto(path);
       await expect(page).toHaveURL(/\/sign-in$/);
     }
@@ -49,9 +59,9 @@ test.describe("the signed-in surfaces", () => {
     await expect(page.getByTestId("today-unavailable")).toHaveCount(0);
   });
 
-  test("Library reads the record and says which state it is in", async ({ page }) => {
-    await page.goto("/library");
-    await expect(page.getByRole("heading", { name: "Library", level: 1 })).toBeVisible();
+  test("Knowledge reads the record and says which state it is in", async ({ page }) => {
+    await page.goto("/knowledge");
+    await expect(page.getByRole("heading", { name: "Knowledge", level: 1 })).toBeVisible();
     // The search field is a real, labelled control, not a placeholder.
     await expect(page.getByRole("searchbox", { name: "Search your captures" })).toBeVisible();
     // Whatever else is true, the page must not be the old static card.
@@ -59,10 +69,67 @@ test.describe("the signed-in surfaces", () => {
     await expect(page.getByText("Not yet connected")).toHaveCount(0);
   });
 
-  test("Situations renders a truthful state", async ({ page }) => {
-    await page.goto("/situations");
-    await expect(page.getByRole("heading", { name: "Situations", level: 1 })).toBeVisible();
+  test("Work renders a truthful state", async ({ page }) => {
+    await page.goto("/work");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
     await expect(page.getByTestId("situations-unavailable")).toHaveCount(0);
+  });
+
+  test("new capability routes state their admitted availability without inventing data", async ({ page }) => {
+    await page.goto("/intelligence");
+    await expect(page.getByRole("heading", { name: "Intelligence", level: 1 })).toBeVisible();
+    await expect(page.locator('[data-state="unavailable"]')).toContainText(
+      /not admitted to current main/i,
+    );
+
+    await page.goto("/people");
+    await expect(page.getByRole("heading", { name: "People", level: 1 })).toBeVisible();
+    await expect(page.locator('[data-state="degraded"]')).toContainText(
+      /no admitted same-origin BFF exposure/i,
+    );
+  });
+
+  test("predecessor deep links preserve the successor content and active destination", async ({ page }, testInfo) => {
+    await page.goto("/situations");
+    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await expect(page.getByRole("link", { name: "Work" }).first()).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+
+    await page.goto("/library?q=synthetic");
+    await expect(page.getByRole("heading", { name: "Knowledge", level: 1 })).toBeVisible();
+    await expect(page.getByRole("searchbox", { name: "Search your captures" })).toHaveValue(
+      "synthetic",
+    );
+    if (testInfo.project.name === "mobile") {
+      await page.getByRole("button", { name: "More" }).click();
+    }
+    await expect(page.getByRole("link", { name: "Knowledge" }).first()).toHaveAttribute(
+      "aria-current",
+      "page",
+    );
+  });
+
+  test("command menu and Inspector expose only the bounded shell behavior", async ({ page }, testInfo) => {
+    await page.keyboard.press("Control+K");
+    const commands = page.getByRole("dialog", { name: "Command menu" });
+    await expect(commands).toBeVisible();
+    await expect(commands).toContainText(/cross-feature search is not available/i);
+    await commands.getByRole("button", { name: "Knowledge" }).click();
+    await page.waitForURL("**/knowledge");
+
+    await page.getByRole("button", { name: "Open Inspector" }).click();
+    if (testInfo.project.name === "mobile") {
+      await expect(page.getByRole("dialog", { name: "Inspector" })).toBeVisible();
+      await page.getByRole("button", { name: "Close panel" }).click();
+      await expect(page.getByRole("dialog", { name: "Inspector" })).toHaveCount(0);
+    } else {
+      const utility = page.getByRole("complementary", { name: "Utility region" });
+      await expect(utility.getByRole("slider", { name: "Inspector width" })).toBeVisible();
+      await utility.getByRole("button", { name: "Pin Inspector" }).click();
+      await expect(utility.getByRole("button", { name: "Unpin Inspector" })).toBeVisible();
+    }
   });
 
   test("Review renders a truthful state and never fabricates a proposal", async ({ page }) => {
@@ -121,7 +188,7 @@ test.describe("the signed-in surfaces", () => {
 
     // And the row is readable back through a different capability, which is the
     // part a receipt alone cannot prove.
-    await page.goto("/library");
+    await page.goto("/knowledge");
     await expect(page.getByTestId("library-listing")).toBeVisible();
     await expect(page.getByTestId("library-capture").first()).toContainText(/cap_[A-Za-z0-9]+/);
   });
@@ -171,7 +238,7 @@ test.describe("the signed-in surfaces", () => {
 });
 
 test.describe("keyboard-only navigation", () => {
-  test("a keyboard reaches skip link, navigation, and capture", async ({ page }) => {
+  test("a keyboard reaches skip link, navigation, and capture", async ({ page }, testInfo) => {
     await signIn(page);
 
     // **The bypass link must be the first thing the application offers a
@@ -220,10 +287,14 @@ test.describe("keyboard-only navigation", () => {
     await expect(page).toHaveURL(/#main$/);
 
     // Every destination in the rail is reachable and activatable by keyboard.
-    await page.getByRole("link", { name: "Library" }).first().focus();
+    if (testInfo.project.name === "mobile") {
+      await page.getByRole("button", { name: "More" }).focus();
+      await page.keyboard.press("Enter");
+    }
+    await page.getByRole("link", { name: "Knowledge" }).first().focus();
     await page.keyboard.press("Enter");
-    await page.waitForURL("**/library");
-    await expect(page.getByRole("heading", { name: "Library", level: 1 })).toBeVisible();
+    await page.waitForURL("**/knowledge");
+    await expect(page.getByRole("heading", { name: "Knowledge", level: 1 })).toBeVisible();
 
     // And the capture dialog opens, takes focus, and closes on Escape.
     await page.getByTestId("capture-button").focus();
@@ -262,7 +333,17 @@ test.describe("keyboard-only navigation", () => {
 test.describe("the page body reflows rather than scrolling sideways", () => {
   test("no horizontal overflow at this viewport", async ({ page }, testInfo) => {
     await signIn(page);
-    for (const path of ["/today", "/library", "/situations", "/review", "/system"]) {
+    for (const path of [
+      "/today",
+      "/work",
+      "/intelligence",
+      "/people",
+      "/knowledge",
+      "/review",
+      "/system",
+      "/situations",
+      "/library",
+    ]) {
       await page.goto(path);
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,

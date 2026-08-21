@@ -1,13 +1,6 @@
-/** The five MossAIc destinations. Order is the navigation order. */
-export interface Destination {
-  readonly href: string;
-  readonly label: string;
-}
-
+import { BookOpen, Brain, ClipboardCheck, Home, Settings, Users, Workflow, type LucideIcon } from "lucide-react";
+export interface Destination { readonly href: string; readonly label: string; readonly icon: LucideIcon; readonly utility?: boolean; }
 export const DESTINATIONS: readonly Destination[] = [
-  { href: "/today", label: "Today" },
-  { href: "/situations", label: "Situations" },
-  { href: "/review", label: "Review" },
-  { href: "/library", label: "Library" },
-  { href: "/system", label: "System" },
+  { href: "/today", label: "Today", icon: Home }, { href: "/work", label: "Work", icon: Workflow }, { href: "/intelligence", label: "Intelligence", icon: Brain }, { href: "/people", label: "People", icon: Users }, { href: "/knowledge", label: "Knowledge", icon: BookOpen }, { href: "/review", label: "Review", icon: ClipboardCheck },
 ] as const;
+export const UTILITY_DESTINATIONS: readonly Destination[] = [{ href: "/system", label: "System", icon: Settings, utility: true }] as const;

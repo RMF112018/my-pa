@@ -180,6 +180,32 @@ describe("one field is the whole precondition", () => {
     expect(screen.getByRole("button", { name: "Save" })).toBeEnabled();
   });
 
+  it("resets a prior outcome only when a newly opened dialog is scheduled", async () => {
+    respond(
+      {
+        error: {
+          errorClass: "conflict",
+          code: "conflict",
+          message: "synthetic refusal",
+        },
+      },
+      409,
+    );
+    const user = userEvent.setup();
+    const { rerender } = render(
+      <CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />,
+    );
+    await user.type(screen.getByTestId("capture-field"), NOTE);
+    await user.click(screen.getByRole("button", { name: "Save" }));
+    expect(await screen.findByTestId("capture-refused")).toBeInTheDocument();
+
+    rerender(<CaptureDialog open={false} onClose={() => {}} principalId={PRINCIPAL_ID} />);
+    rerender(<CaptureDialog open onClose={() => {}} principalId={PRINCIPAL_ID} />);
+
+    await waitFor(() => expect(screen.queryByTestId("capture-refused")).toBeNull());
+    expect(screen.getByTestId("capture-field")).toHaveFocus();
+  });
+
   it("offers the kind as a default rather than a step, and sends the selected one", async () => {
     const spy = respond({
       shape: "backend",

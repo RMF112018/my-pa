@@ -25,10 +25,10 @@ test.beforeEach(async ({ page }) => {
 });
 
 const SURFACES = [
-  { path: "/library", testId: "library-unavailable", heading: "Library" },
+  { path: "/knowledge", testId: "library-unavailable", heading: "Knowledge" },
   { path: "/today", testId: "today-unavailable", heading: "Today" },
   { path: "/review", testId: "review-queue-unavailable", heading: "Review" },
-  { path: "/situations", testId: "situations-unavailable", heading: "Situations" },
+  { path: "/work", testId: "situations-unavailable", heading: "Work" },
 ] as const;
 
 for (const surface of SURFACES) {

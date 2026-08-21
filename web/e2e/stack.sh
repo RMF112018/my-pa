@@ -26,7 +26,7 @@ set -euo pipefail
 
 WEB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_DIR="$(cd "${WEB_DIR}/.." && pwd)"
-PYTHON="${REPO_DIR}/.venv/bin/python"
+PYTHON="${MYPA_E2E_PYTHON:-${REPO_DIR}/.venv/bin/python}"
 
 DATABASE_NAME="${MYPA_E2E_DATABASE:-my_pa_wp13_e2e}"
 ADMIN_URL="${MYPA_E2E_ADMIN_URL:-postgresql+psycopg://my_pa@localhost:5433/postgres}"

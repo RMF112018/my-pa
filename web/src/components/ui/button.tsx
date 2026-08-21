@@ -28,7 +28,7 @@ export const Button = forwardRef<HTMLButtonElement, ButtonProps>(function Button
       type={type}
       disabled={disabled || pending}
       aria-busy={pending || undefined}
-      className={`inline-flex min-h-[var(--control-height)] items-center justify-center gap-2 rounded-[var(--radius-md)] text-sm font-medium transition-colors disabled:cursor-not-allowed ${size === "sm" ? "px-3" : size === "lg" ? "px-5 text-base" : "px-4"} ${VARIANT_CLASSES[variant]} ${className}`}
+      className={`inline-flex min-h-[var(--control-height)] items-center justify-center gap-2 rounded-[var(--radius-md)] text-sm font-medium disabled:cursor-not-allowed ${size === "sm" ? "px-3" : size === "lg" ? "px-5 text-base" : "px-4"} ${VARIANT_CLASSES[variant]} ${className}`}
       {...props}
     >
       {pending ? <span aria-hidden="true">•••</span> : null}

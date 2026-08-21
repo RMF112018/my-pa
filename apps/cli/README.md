@@ -32,6 +32,23 @@ correlation input the application does not trust, exactly as it is over HTTP.
 [`ops/runbooks/mcp-and-cli-operations.md`](/ops/runbooks/mcp-and-cli-operations.md)
 covers running it.
 
+## `gsqs_b0.py` — governed GSQS live-B0 control plane
+
+Preflight never discloses. Execute refuses until a later exact-head review
+binds a live transport and a fresh `EXECUTE_MEASURED_B0` authorization.
+
+```text
+python apps/cli/gsqs_b0.py preflight
+python apps/cli/gsqs_b0.py execute \
+  --authorization <artifact> \
+  --model-identity <exact> \
+  --prompt-config ops/goodnotes/gsqs/b0/incumbent-prompt-v1.txt \
+  --repetitions 3
+```
+
+See [`ops/goodnotes/gsqs/B0_RUNBOOK.md`](../../ops/goodnotes/gsqs/B0_RUNBOOK.md).
+Do not run execute as part of ordinary development.
+
 ## `goodnotes.py` — operator reconciliation trigger
 
 ```text

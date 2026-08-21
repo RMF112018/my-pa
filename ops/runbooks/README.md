@@ -18,7 +18,7 @@ Operational procedures for running `my-pa` locally.
 | [`goodnotes-durable-note-intelligence.md`](goodnotes-durable-note-intelligence.md) | Dormant Abacus Task contract for GoodNotes Durable Note Intelligence. Synthetic canary only; live Task create/edit/enable remains unauthorized. |
 | [`goodnotes-durable-note-rollout.md`](goodnotes-durable-note-rollout.md) | WP-15 dormant rollout gates and operator-gated activation sequence. Production and pilot remain off; dry-run helper does not ingest, write, deliver, or call Abacus. |
 | [`goodnotes-tbr-preservation.md`](goodnotes-tbr-preservation.md) | GN-09 TBR Staff Meeting regression freeze and dormant optional-bridge design. Existing TBR Task must not change; live bridge remains unauthorized. |
-| [`../goodnotes/gsqs/README.md`](../goodnotes/gsqs/README.md) | Gate B GSQS labeled corpus, independent evaluator, and unused B0 harness. Operator review pending; `MEASURED_B0` not established. |
+| [`../goodnotes/gsqs/README.md`](../goodnotes/gsqs/README.md) | Gate B GSQS labeled corpus, independent evaluator, and governed live-B0 runner. Preflight is non-disclosing; `MEASURED_B0` is not established. |
 | [`context-personal-knowledge-pilot.md`](context-personal-knowledge-pilot.md) | Operator-authorized personal-knowledge pilot checklist. Does not access live personal data; queries and evidence must not be committed. |
 
 Related, outside this directory:

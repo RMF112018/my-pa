@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with fifty-six capabilities and twenty-four
+emits what it emitted on the day it merged, with sixty-two capabilities and twenty-five
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -245,6 +245,16 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "reports.record_run_state",
         "reports.resolve_set",
         "reports.search",
+        # WP-RI-05. `c1a7e4b93d58` is the forward `ALTER` that admits the five.
+        "entities.search",
+        "entities.get",
+        "entities.resolve",
+        "entities.context",
+        "entities.relationships",
+        # The People landing this plane serves needs the queue of references
+        # nothing has placed. `e4d7b2f9a316` is the forward `ALTER` that admits
+        # it, and this line is why a further one cannot arrive without it.
+        "entities.unresolved_mentions",
     }
 )
 
@@ -971,6 +981,13 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             *NATIVE_SOURCE_TRIGGERS,
             *MANAGED_DOCUMENT_TRIGGERS,
             *CONTEXT_TRIGGERS,
+            # The Intelligence Artifact plane's own append-only and body-protection
+            # triggers, which this inventory must name for the equality to stay an
+            # equality rather than quietly becoming a subset.
+            "intelligence_artifacts_protect_body",
+            "intelligence_commit_receipts_are_append_only",
+            "intelligence_pipeline_dependencies_are_append_only",
+            "intelligence_provenance_refs_are_append_only",
             "goodnotes_page_versions_are_immutable",
             "goodnotes_region_proposals_are_immutable",
             "goodnotes_source_snapshots_are_immutable",

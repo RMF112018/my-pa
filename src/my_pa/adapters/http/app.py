@@ -150,6 +150,7 @@ from my_pa.application.apple_machine import (
 from my_pa.application.errors import (
     ApplicationError,
     DeniedError,
+    InternalError,
     InvalidRequestError,
     UnsupportedError,
     problem_detail,
@@ -558,6 +559,14 @@ def create_http_app(
             return _problem_response(InvalidRequestError())
         except ApplicationError as refusal:
             return _problem_response(refusal)
+        except Exception:
+            # The body-read block's own terminal catch. It was missing here
+            # while `submit`'s equivalent block had one, so the asymmetry a
+            # previous commit claimed to have closed was merely inverted: this
+            # route answered a bare `500` for a fault in `read_document` while
+            # the other answered an envelope. The rule is per route, so it is
+            # applied to every block of both.
+            return _problem_response(InternalError())
 
         if authenticate is None:
             # `D-30`: no header is read at all, because none is required.
@@ -574,7 +583,24 @@ def create_http_app(
             metadata, command = normalize(request.path_params["capability"], document)
         except ApplicationError as refusal:
             return _problem_response(refusal)
-        return _envelope_response(service.invoke(metadata, command, principal=acting))
+        except Exception:
+            # The terminal catch the CLI and MCP transports both carry, and this
+            # one did not. `normalize` promises `InvalidRequestError` and nothing
+            # else, but a command that reads a caller-supplied field without
+            # first checking its type raises `AttributeError` instead, which is
+            # not an `ApplicationError` and so escaped to Starlette as a bare
+            # `500` with no envelope and no correlation identifier. Catching the
+            # class here means a single command's missing type check can no
+            # longer decide whether this transport answers in its own vocabulary.
+            return _problem_response(InternalError())
+        try:
+            envelope = service.invoke(metadata, command, principal=acting)
+        except Exception:
+            # `invoke` has its own terminal catch, so reaching this is a fault in
+            # the mapping between them rather than in a handler. Answered the
+            # same way for the same reason: the envelope is the contract.
+            return _problem_response(InternalError())
+        return _envelope_response(envelope)
 
     def submit(request: Request) -> Response:
         """One remote capture: refuse unless everything about it is right.
@@ -627,11 +653,22 @@ def create_http_app(
             return _problem_response(InvalidRequestError())
         except ApplicationError as refusal:
             return _problem_response(refusal)
-        return _envelope_response(
-            service.invoke(
+        except Exception:
+            # The terminal catch `invoke` carries, on the same grounds. It
+            # reached `invoke` alone when it was added, while the claim made was
+            # about "the transport" -- so the rule went to the route a reviewer
+            # had pointed at and not to its sibling here, which is the shape
+            # this branch keeps paying for. Then it reached this block and not
+            # `invoke`'s body-read block, which inverted the asymmetry rather
+            # than closing it; both now carry it.
+            return _problem_response(InternalError())
+        try:
+            envelope = service.invoke(
                 metadata, command, principal=acting, transport=CaptureTransport.REMOTE_CLIENT
             )
-        )
+        except Exception:
+            return _problem_response(InternalError())
+        return _envelope_response(envelope)
 
     def apple_request(request: Request) -> Response:
         """Serve only the two credentialed, off-by-default Apple machine paths."""

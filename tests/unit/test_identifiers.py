@@ -109,6 +109,19 @@ def test_contract_prefixes_are_stable() -> None:
         "rrun",
         "rpt",
         "rrc",
+        # WP-RI-01: the relationship-intelligence entity plane. Four prefixes,
+        # one per table the migration creates. The plane's later records
+        # (observations, proposals, context packets, merge lineage) get their
+        # prefixes in the work packages that create their tables, so this set
+        # never promises a prefix nothing issues.
+        "ent",
+        "xid",
+        "asn",
+        "erel",
+        "eals",
+        "eobs",
+        "eprp",
+        "emrg",
     }
 
 

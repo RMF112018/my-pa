@@ -30,6 +30,10 @@ bounds its depth by, so the published maximum cannot drift from the enforced one
 
 from __future__ import annotations
 
+from dataclasses import fields, is_dataclass
+from typing import Final
+
+from my_pa.application import commands as _commands
 from my_pa.contracts.v1.capabilities import (
     Availability,
     CapabilityManifest,
@@ -132,15 +136,85 @@ def _limitations(
     # failure this module's docstring describes for the manifest. Removed rather
     # than restated: the audit is durable, and a readiness limitation exists to
     # tell a caller what this build cannot do.
-    limitations.append(
-        "Listings stop at the page size and issue no continuation cursor; truncation is disclosed."
+    # Derived rather than written down, for the reason the note above gives about
+    # the audit-store line: this sentence had already outlived its condition
+    # once. It still read "issue no continuation cursor" after
+    # `entities.relationships` began issuing a keyset one, so every process
+    # published a limitation its own build no longer had -- the same failure, one
+    # statement below the note describing it.
+    #
+    # A command that accepts `after` is one whose listing can be continued. That
+    # is the property this sentence is about, so it is the property it is computed
+    # from, and a capability that gains or loses pagination rewrites this line
+    # without anyone remembering to.
+    # Intersected with what this build actually serves, not just what the
+    # contract defines. Deriving from the command dataclasses alone fixed the
+    # sentence's staleness and introduced a different falsehood: a default build
+    # reports `entities.relationships` as `not_implemented` in the same envelope
+    # that promised it issued a continuation cursor. A limitation is a statement
+    # about *this* build, so it is computed from this build's manifest.
+    served = {
+        status.name
+        for status in manifest.capabilities
+        if status.availability is not Availability.NOT_IMPLEMENTED
+    }
+    continuable = sorted(
+        capability.value
+        for capability in _CAPABILITIES_ACCEPTING_A_CONTINUATION
+        if capability in served
     )
+    if continuable:
+        limitations.append(
+            "Listings stop at the page size; truncation is disclosed. "
+            f"These issue a continuation cursor: {', '.join(continuable)}. "
+            "Every other listing does not, so a caller cannot ask for the next page."
+        )
+    else:
+        limitations.append(
+            "Listings stop at the page size and issue no continuation cursor; "
+            "truncation is disclosed."
+        )
     if model_route is ModelRoutePolicy.DISABLED:
         limitations.append(
             "Model proposals and semantic retrieval are disabled; deterministic lexical "
             "retrieval remains active."
         )
     return tuple(limitations)
+
+
+#: The capabilities whose listing accepts a continuation cursor, derived from the
+#: command contract rather than listed here: a command carrying `after` is one a
+#: caller can page past the first page of. Computed at import, so the readiness
+#: limitation cannot disagree with the schema a caller actually reads.
+#: The field names a command uses to carry a continuation token.
+#:
+#: Two spellings, because the contract has two: `entities.relationships` takes
+#: `after` and `knowledge.search` takes `cursor`. Deriving from `after` alone
+#: read one of them and published "every other listing" cannot be continued —
+#: false in every build, since `knowledge.search` is served unconditionally and
+#: was emitting a `next_cursor` the same envelope said could not exist.
+#:
+#: `tests/contract/test_capabilities_and_readiness.py` asserts that no command
+#: carries a continuation-shaped field outside this set, so a third spelling
+#: fails rather than going quietly unread.
+CONTINUATION_FIELD_NAMES: Final[frozenset[str]] = frozenset({"after", "cursor"})
+
+
+def _accepts_a_continuation(member: object) -> Capability | None:
+    """The capability of a command whose listing can be continued, or `None`."""
+    capability = getattr(member, "capability", None)
+    if not isinstance(capability, Capability) or not is_dataclass(member):
+        return None
+    if not ({field.name for field in fields(member)} & CONTINUATION_FIELD_NAMES):
+        return None
+    return capability
+
+
+_CAPABILITIES_ACCEPTING_A_CONTINUATION: Final[frozenset[Capability]] = frozenset(
+    capability
+    for capability in (_accepts_a_continuation(member) for member in vars(_commands).values())
+    if capability is not None
+)
 
 
 def build_readiness_report(

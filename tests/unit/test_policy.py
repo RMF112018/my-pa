@@ -264,6 +264,16 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.REPORTS_LIST, Purpose.REPORT_READ),
         (Capability.REPORTS_SEARCH, Purpose.REPORT_READ),
         (Capability.REPORTS_RESOLVE_SET, Purpose.REPORT_READ),
+        # The entity plane. All six capabilities share the single `entity_read`
+        # purpose, exactly as the task-plane reads share `task_read`: the plane
+        # is a read plane over the acting Principal's own entities, and there is
+        # no write here for a wider purpose to reach.
+        (Capability.ENTITIES_SEARCH, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_GET, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_RESOLVE, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_CONTEXT, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_RELATIONSHIPS, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_UNRESOLVED_MENTIONS, Purpose.ENTITY_READ),
     }
 )
 
@@ -290,10 +300,13 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # WP-TM-03 added 4 capabilities and 1 purpose; WP-TM-04 added 5 and 1;
     # WP-TM-05 added 5 and 2; context.prepare/feedback added 2 capabilities and
     # 2 purposes; goodnotes.work/propose added 2 capabilities and 2 purposes;
-    # goodnotes.content added 1 capability and 1 purpose.
-    # Unioned: 56 capabilities, 24 purposes, 58 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 58
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 58 == 1286
+    # goodnotes.content added 1 capability and 1 purpose; the entity plane added
+    # 5 capabilities and 1 purpose, and its unresolved-mention queue one
+    # more capability under the purpose the other five already use; the
+    # Intelligence Artifact plane added 8 capabilities and 2 purposes.
+    # Unioned: 62 capabilities, 25 purposes, 64 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 64
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 64 == 1486
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

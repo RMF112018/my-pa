@@ -69,6 +69,9 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetEntity,
+    GetEntityContext,
+    GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
     GetLatestIntelligenceArtifact,
@@ -85,6 +88,7 @@ from my_pa.application.commands import (
     ListSituations,
     ListSources,
     ListTasks,
+    ListUnresolvedMentions,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -95,12 +99,14 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordTask,
+    ResolveEntity,
     ResolveIntelligenceSet,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
@@ -380,6 +386,18 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             cycle_run_id=issue_identifier(IdKind.INTELLIGENCE_CYCLE_RUN),
             set_id=ResolverSetId.COLLECTORS,
         ),
+        # The entity plane. Every identifier is minted rather than staged, for
+        # the reason this table exists: a denial test must fail on the authority
+        # and on nothing else, and an entity that existed would let a
+        # `not_found` stand in for a `denied`.
+        Capability.ENTITIES_SEARCH: SearchEntities(query="synthetic"),
+        Capability.ENTITIES_GET: GetEntity(entity_id=issue_identifier(IdKind.ENTITY)),
+        Capability.ENTITIES_RESOLVE: ResolveEntity(reference="synthetic"),
+        Capability.ENTITIES_CONTEXT: GetEntityContext(entity_id=issue_identifier(IdKind.ENTITY)),
+        Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(
+            entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
     }
 
 
@@ -605,6 +623,17 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_LIST,
         Capability.REPORTS_SEARCH,
         Capability.REPORTS_RESOLVE_SET,
+        # The entity plane is a read plane over the acting Principal's own
+        # entities. An entity carries no enrollment a requested scope could be
+        # compared against — it is the Principal's own record of a person, not
+        # an extraction from a configured source — so there is no scope for a
+        # request to name (WP-RI-05).
+        Capability.ENTITIES_SEARCH,
+        Capability.ENTITIES_GET,
+        Capability.ENTITIES_RESOLVE,
+        Capability.ENTITIES_CONTEXT,
+        Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
     }
 ]
 
@@ -710,6 +739,12 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.REPORTS_LIST,
         Capability.REPORTS_SEARCH,
         Capability.REPORTS_RESOLVE_SET,
+        Capability.ENTITIES_SEARCH,
+        Capability.ENTITIES_GET,
+        Capability.ENTITIES_RESOLVE,
+        Capability.ENTITIES_CONTEXT,
+        Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

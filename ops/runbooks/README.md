@@ -7,7 +7,7 @@ Operational procedures for running `my-pa` locally.
 | [`end-to-end-operations.md`](end-to-end-operations.md) | **Start here.** The ordered sequence: probe the database, migrate, register, enroll, run the worker, search and read, and stop both processes — and the limitation that sequence walked into. |
 | [`postgres-operations.md`](postgres-operations.md) | The canonical `my_pa` PostgreSQL database: start, stop, health check, connect, back up, restore. |
 | [`worker-operations.md`](worker-operations.md) | The worker process: running it bounded or until signalled, stopping it cleanly, and how a crashed worker's job is recovered. |
-| [`gateway-operations.md`](gateway-operations.md) | The HTTP gateway process: running it on loopback, calling the fifty-six capabilities, the status each error code takes, its two connection pools, and stopping it. |
+| [`gateway-operations.md`](gateway-operations.md) | The HTTP gateway process: running it on loopback, calling the capabilities a composed build serves, the status each error code takes, its two connection pools, and stopping it. |
 | [`managed-document-operations.md`](managed-document-operations.md) | The managed-document write plane: configuring its root, checking that its rows and its bytes agree, the metadata/bytes failure window and what it can leave behind, and backing the plane up and restoring it. |
 | [`mcp-and-cli-operations.md`](mcp-and-cli-operations.md) | The other two transports: the MCP server on stdio and the operator CLI. What is identical to HTTP and why, the handshake and derived tool list, the CLI's options and exit status, and what a bad command line does. |
 | [`remote-mcp-cloudflare.md`](remote-mcp-cloudflare.md) | Separately enabled remote MCP on the NAS: private-origin Compose, outbound-only Cloudflare Tunnel, client checks, rollback, and loopback fallback. |
@@ -18,6 +18,9 @@ Operational procedures for running `my-pa` locally.
 | [`goodnotes-durable-note-intelligence.md`](goodnotes-durable-note-intelligence.md) | Dormant Abacus Task contract for GoodNotes Durable Note Intelligence. Synthetic canary only; live Task create/edit/enable remains unauthorized. |
 | [`goodnotes-durable-note-rollout.md`](goodnotes-durable-note-rollout.md) | WP-15 dormant rollout gates and operator-gated activation sequence. Production and pilot remain off; dry-run helper does not ingest, write, deliver, or call Abacus. |
 | [`goodnotes-tbr-preservation.md`](goodnotes-tbr-preservation.md) | GN-09 TBR Staff Meeting regression freeze and dormant optional-bridge design. Existing TBR Task must not change; live bridge remains unauthorized. |
+| [`relationship-intelligence.md`](relationship-intelligence.md) | The entity plane: what its six read capabilities answer, how to read the unresolved-mention and proposal queues, how to read a resolution outcome — and that the review queue **cannot be worked** in this build, because the governance service is composed by nothing. |
+| [`goodnotes-and-model-operations.md`](goodnotes-and-model-operations.md) | GoodNotes ingestion and model-route operations. |
+| [`../goodnotes/gsqs/README.md`](../goodnotes/gsqs/README.md) | Gate B GSQS labeled corpus, independent evaluator, and governed live-B0 runner. Preflight is non-disclosing; `MEASURED_B0` is not established. |
 | [`context-personal-knowledge-pilot.md`](context-personal-knowledge-pilot.md) | Operator-authorized personal-knowledge pilot checklist. Does not access live personal data; queries and evidence must not be committed. |
 
 Related, outside this directory:

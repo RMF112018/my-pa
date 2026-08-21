@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes fifty-six capability names and none of them mutates a source,
+  ends: the transport routes sixty-two capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -64,6 +64,7 @@ from tests.conftest import (
     staged_search,
     staged_task,
 )
+from tests.contract.test_transport_parity import ENTITY_EMAIL, staged_entities
 from tests.wire import Reply, Wire, serve
 
 from my_pa.adapters.http import (
@@ -266,6 +267,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     )
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
+    person, organization = staged_entities(marked)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -505,6 +507,23 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "cycle_run_id": cycle_run_id,
             "set_id": "collectors",
         },
+        # The relationship-intelligence entity plane (WP-RI-05), and its payloads
+        # carry no marker, deliberately. Every one of the five is a read whose
+        # input is an identifier or a name the *request* supplies and the answer
+        # comes from stored rows; there is no content field to plant one in, and
+        # a marker in a query would be asserting the redaction of something the
+        # caller asked for. What the scans below check on this plane is the
+        # answer, which carries entity names, addresses, and typed edges.
+        Capability.ENTITIES_SEARCH: {"query": "parity"},
+        Capability.ENTITIES_GET: {"entity_id": person.entity_id},
+        Capability.ENTITIES_RESOLVE: {
+            "reference": ENTITY_EMAIL,
+            "namespace": "email",
+            "scope_entity_id": organization.entity_id,
+        },
+        Capability.ENTITIES_CONTEXT: {"entity_id": person.entity_id},
+        Capability.ENTITIES_RELATIONSHIPS: {"entity_id": person.entity_id, "direction": "any"},
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
     }
 
 
@@ -684,6 +703,17 @@ SCOPED_CAPABILITIES = [
         Capability.REPORTS_LIST,
         Capability.REPORTS_SEARCH,
         Capability.REPORTS_RESOLVE_SET,
+        # The relationship-intelligence entity plane (WP-RI-05) is scopeless for
+        # the reason the two planes above are: an entity belongs to no `src_…`
+        # and no `enr_…`, so there is no scope for a request to name and none to
+        # withhold. `tests/policy` re-derives this partition from `evaluate`
+        # rather than from a list.
+        Capability.ENTITIES_SEARCH,
+        Capability.ENTITIES_GET,
+        Capability.ENTITIES_RESOLVE,
+        Capability.ENTITIES_CONTEXT,
+        Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
     }
 ]
 

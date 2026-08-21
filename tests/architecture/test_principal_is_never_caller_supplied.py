@@ -211,6 +211,35 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("run", "principal_id"),
         ("run", "principal_id"),
     ),
+    # The entity plane reads the `principal_id` carried on the domain record it
+    # was handed, and reads it *in order to refuse a mismatch* against the
+    # `principal_id` argument the application resolved: `create` scopes its
+    # collision read and its insert by `entity.principal_id`, and
+    # `bind_identifier`, `record_assignment` and `record_relationship` each
+    # compare the record's own field against the acting Principal and raise
+    # before writing when the two differ. The value is never trusted; it is
+    # checked, which is what this registry is for.
+    "infrastructure/persistence/entity.py": (
+        ("alias", "principal_id"),
+        ("assignment", "principal_id"),
+        ("entity", "principal_id"),
+        ("entity", "principal_id"),
+        ("entity", "principal_id"),
+        ("entity", "principal_id"),
+        ("identifier", "principal_id"),
+        ("observation", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("record", "principal_id"),
+        ("rel", "principal_id"),
+    ),
+    # WP-RI-06's governance service carries the `principal_id` of the proposal
+    # it just loaded onto the decided copy of that proposal. The value is not
+    # caller input: `proposal(principal_id, ...)` is partition-scoped, so a
+    # proposal held by anyone else was already answered as absent, and the read
+    # is of a row this Principal owns. `decide_proposal` then refuses a mismatch
+    # again at the write, which is where the registry's own rule wants it.
+    "application/entity_governance.py": (("held", "principal_id"),),
     "application/goodnotes.py": (
         ("page", "principal_id"),
         ("page", "principal_id"),

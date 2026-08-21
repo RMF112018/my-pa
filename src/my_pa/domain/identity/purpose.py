@@ -162,3 +162,19 @@ class Purpose(StrEnum):
     # enough to cover both is a purpose that grants both.
     REPORT_AUTHORING = "report_authoring"
     REPORT_READ = "report_read"
+    # The relationship-intelligence entity plane's read purpose, and only one of
+    # it. A purpose of its own rather than a reuse, on the `TASK_READ` argument:
+    # `knowledge_read` is one enrollment's extraction plane, `capture_review` is
+    # the review queue, `task_read` is a Principal's tasks, and none of them
+    # reaches `knowledge.entities` or its aliases, identifiers, assignments and
+    # edges. A grant issued to search extracted text has no occasion to also
+    # return who a person is.
+    #
+    # One rather than two, on the `capture.search` argument (`D-91`): every
+    # `entities.*` capability reads the same rows under the same authority, so
+    # a second read purpose would map to exactly one capability and separate
+    # nothing while costing another frozen-constraint `ALTER`. The *write*
+    # purpose is deliberately absent rather than declared unused — this plane
+    # has no write capability, and a purpose no capability permits is denied for
+    # everything and reads as a mistake rather than as a decision.
+    ENTITY_READ = "entity_read"

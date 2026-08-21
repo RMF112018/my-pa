@@ -1,4 +1,4 @@
-"""The operator CLI transport: the same fifty-six capabilities, from a shell."""
+"""The operator CLI transport: the same sixty-two capabilities, from a shell."""
 
 from __future__ import annotations
 

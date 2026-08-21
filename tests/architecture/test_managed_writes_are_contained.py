@@ -145,6 +145,11 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "writes only an unsigned acceptance candidate to an explicit new output path; "
         "the artifact contains repository/runtime digests and no personal or managed bytes."
     ),
+    "src/my_pa/application/goodnotes_gsqs_live_b0.py": (
+        "writes only public GSQS B0 control JSON (identities, digests, measurement "
+        "records without gold) into an explicit caller-supplied evidence directory; "
+        "it never writes private transcriptions or managed-document bytes."
+    ),
 }
 
 #: Attribute names that are a filesystem write whatever they are called on,

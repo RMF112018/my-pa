@@ -32,6 +32,23 @@ correlation input the application does not trust, exactly as it is over HTTP.
 [`ops/runbooks/mcp-and-cli-operations.md`](/ops/runbooks/mcp-and-cli-operations.md)
 covers running it.
 
+## `gsqs_b0.py` — governed GSQS live-B0 control plane
+
+Preflight never discloses. Execute refuses until a later exact-head review
+binds a live transport and a fresh `EXECUTE_MEASURED_B0` authorization.
+
+```text
+python apps/cli/gsqs_b0.py preflight
+python apps/cli/gsqs_b0.py execute \
+  --authorization <artifact> \
+  --model-identity <exact> \
+  --prompt-config ops/goodnotes/gsqs/b0/incumbent-prompt-v1.txt \
+  --repetitions 3
+```
+
+See [`ops/goodnotes/gsqs/B0_RUNBOOK.md`](../../ops/goodnotes/gsqs/B0_RUNBOOK.md).
+Do not run execute as part of ordinary development.
+
 ## `goodnotes.py` — operator reconciliation trigger
 
 ```text
@@ -80,7 +97,7 @@ the defect and never the value.
 nobody to read anything: every read still requires an enrollment, which requires
 the operator-only `sources.enroll`, which is authorized and audited. This program
 builds no application service and no principal, and it writes no audit event —
-`audit_events.capability` is closed to the fifty-six capabilities, and a further
+`audit_events.capability` is closed to the sixty-two capabilities, and a further
 member for source registration is exactly what an operator command must not
 become. (It read "the eight" before WP-6; WP-6 through WP-9 moved the count,
 the argument did not.)

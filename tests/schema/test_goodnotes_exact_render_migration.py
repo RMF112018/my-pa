@@ -24,7 +24,18 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 REVISION: Final = "c3e9a7f1b204"
 PRIOR: Final = "e8c1b5a7d204"
-HEAD_REVISION: Final = "e9b2c4d7a150"
+INTELLIGENCE_REVISION: Final = "e9b2c4d7a150"
+#: Where `upgrade head` lands, which the database tier reads back out of
+#: `alembic_version`. That is a position in the chain rather than a property of
+#: this revision, so it moves whenever a revision is added; the chain test below
+#: is written not to depend on it.
+ALIAS_REVISION: Final = "b7f4d1a92c36"
+CAPABILITY_REVISION: Final = "c1a7e4b93d58"
+GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
+#: The unresolved-mention capability admission, between governance and head.
+QUEUE_REVISION: Final = "e4d7b2f9a316"
+MENTION_REVISION: Final = "f3a8c1d7e592"
+HEAD_REVISION: Final = INTELLIGENCE_REVISION
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_c3e9a7f1b204_add_goodnotes_exact_render_digest.py"
 )
@@ -78,11 +89,20 @@ def disposable_database() -> Iterator[str]:
         maintenance.dispose()
 
 
-def test_the_chain_has_one_head_and_this_revision_is_the_head() -> None:
+def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
+    """Renamed from "is the head", because that was never the claim needed here.
+
+    This revision stopped being the head one revision after it landed, and the
+    pin then rotted again at `9def3c2e63bb`. What the tests below actually
+    depend on is a single unbranched chain that reaches this revision on the
+    predecessor it names, with the successor that was written against it still
+    naming it — none of which the identity of the last revision affects.
+    """
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [HEAD_REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 59
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 65
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

@@ -69,6 +69,7 @@ from my_pa.contracts.ports import (
     ContinuityAuthoringRepository,
     ContinuityReadRepository,
     EnrollmentRepository,
+    EntitiesRepository,
     EvidenceUnavailableError,
     GoodNotesSemanticRepository,
     KnowledgeRecord,
@@ -123,6 +124,7 @@ from my_pa.infrastructure.persistence.enrollment import (
     enrollments_for_principal,
     record_scope,
 )
+from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.extraction import coverage_for
 from my_pa.infrastructure.persistence.goodnotes import (
     decide_goodnotes_review,
@@ -750,6 +752,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def intelligence_for(self, principal_id: str) -> SqlIntelligenceStore:
         """Intelligence Artifact store, on this transaction's connection."""
         return SqlIntelligenceStore(self._open, principal_id)
+
+    @property
+    def entities(self) -> EntitiesRepository:
+        """The generalized entity rows, on this transaction's connection."""
+        return SqlEntityRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

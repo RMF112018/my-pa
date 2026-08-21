@@ -38,9 +38,18 @@ NATIVE_OWNED_TABLES: Final = frozenset(
 )
 
 
-def test_partition_revision_is_the_single_forward_head() -> None:
+def test_partition_revision_is_on_the_single_forward_chain() -> None:
+    """One unbranched head, and this revision on the chain below it.
+
+    Renamed from "is the single forward head": the head it named was another
+    revision's, so the assertion had to be re-pinned by every work package that
+    added one and rotted again at `9def3c2e63bb`. What the tests below need is
+    that the chain has not branched and that this revision is on it, revising
+    the one it names.
+    """
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_heads() == [HEAD_REVISION]
+    assert len(list(script.get_heads())) == 1
+    assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
 
 

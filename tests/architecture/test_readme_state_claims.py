@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
+from typing import Final
 
 import pytest
 
@@ -205,61 +206,71 @@ def _alembic_identity() -> tuple[int, str]:
     return len(list(script.walk_revisions())), heads[0]
 
 
+#: Spelled revision counts, so a guard states the count the chain actually has
+#: rather than a literal that goes stale in step with the prose it guards.
+SPELLED_COUNTS: Final[dict[int, str]] = {
+    12: "Twelve",
+    13: "Thirteen",
+    14: "Fourteen",
+    15: "Fifteen",
+    16: "Sixteen",
+    17: "Seventeen",
+    18: "Eighteen",
+    19: "Nineteen",
+    20: "Twenty",
+    21: "Twenty-one",
+    22: "Twenty-two",
+    23: "Twenty-three",
+    24: "Twenty-four",
+    25: "Twenty-five",
+    26: "Twenty-six",
+    27: "Twenty-seven",
+    28: "Twenty-eight",
+    29: "Twenty-nine",
+    30: "Thirty",
+    31: "Thirty-one",
+    32: "Thirty-two",
+    33: "Thirty-three",
+    34: "Thirty-four",
+    35: "Thirty-five",
+    36: "Thirty-six",
+    37: "Thirty-seven",
+    38: "Thirty-eight",
+    39: "Thirty-nine",
+    40: "Forty",
+    41: "Forty-one",
+    42: "Forty-two",
+    43: "Forty-three",
+    44: "Forty-four",
+    45: "Forty-five",
+    46: "Forty-six",
+    47: "Forty-seven",
+    48: "Forty-eight",
+    49: "Forty-nine",
+    50: "Fifty",
+    51: "Fifty-one",
+    52: "Fifty-two",
+    53: "Fifty-three",
+    54: "Fifty-four",
+    55: "Fifty-five",
+    56: "Fifty-six",
+    57: "Fifty-seven",
+    58: "Fifty-eight",
+    59: "Fifty-nine",
+    60: "Sixty",
+    61: "Sixty-one",
+    62: "Sixty-two",
+    63: "Sixty-three",
+    64: "Sixty-four",
+    65: "Sixty-five",
+}
+
+
 def test_readme_derives_the_current_alembic_count_and_head() -> None:
-    words = {
-        12: "Twelve",
-        13: "Thirteen",
-        14: "Fourteen",
-        15: "Fifteen",
-        16: "Sixteen",
-        17: "Seventeen",
-        18: "Eighteen",
-        19: "Nineteen",
-        20: "Twenty",
-        21: "Twenty-one",
-        22: "Twenty-two",
-        23: "Twenty-three",
-        24: "Twenty-four",
-        25: "Twenty-five",
-        26: "Twenty-six",
-        27: "Twenty-seven",
-        28: "Twenty-eight",
-        29: "Thirty",
-        30: "Thirty",
-        31: "Thirty-one",
-        32: "Thirty-two",
-        33: "Thirty-three",
-        34: "Thirty-four",
-        35: "Thirty-five",
-        36: "Thirty-six",
-        37: "Thirty-seven",
-        38: "Thirty-eight",
-        39: "Thirty-nine",
-        40: "Forty",
-        41: "Forty-one",
-        42: "Forty-two",
-        43: "Forty-three",
-        44: "Forty-four",
-        45: "Forty-five",
-        46: "Forty-six",
-        47: "Forty-seven",
-        48: "Forty-eight",
-        49: "Forty-nine",
-        50: "Fifty",
-        51: "Fifty-one",
-        52: "Fifty-two",
-        53: "Fifty-three",
-        54: "Fifty-four",
-        55: "Fifty-five",
-        56: "Fifty-six",
-        57: "Fifty-seven",
-        58: "Fifty-eight",
-        59: "Fifty-nine",
-    }
     count, head = _alembic_identity()
-    assert count in words, "extend the readable README count vocabulary"
+    assert count in SPELLED_COUNTS, "extend the readable README count vocabulary"
     readme = README.read_text(encoding="utf-8")
-    assert f"{words[count]} Alembic revisions" in readme
+    assert f"{SPELLED_COUNTS[count]} Alembic revisions" in readme
     assert f"head `{head}`" in readme
 
 
@@ -329,7 +340,24 @@ def test_readme_declares_the_current_remediation_lineage_and_preserves_history()
 
 
 def test_current_state_docs_name_the_current_capability_and_migration_counts() -> None:
-    """Protect the two exact-state figures that repeatedly went stale."""
+    """Protect the two exact-state figures that repeatedly went stale.
+
+    The head is derived rather than written down here. It was a literal until
+    `9def3c2e63bb` moved it, and a literal in the guard is the same claim with
+    the same shelf life as the literal in the document it is guarding — so the
+    guard went stale in step with the prose instead of catching it.
+
+    The capability figure is now derived for the same reason and by the same
+    argument. It was a spelled literal until `d2b8f5c04e71` admitted the
+    `entities.*` names, and on that day the guard and all three documents were
+    wrong together — the guard asserting the stale spelling was present, which is
+    the one thing that cannot detect a stale spelling. `Capability` is what the
+    application dispatches on, so it is what the prose has to agree with.
+    """
+    _count, head = _alembic_identity()
+    capabilities = len(list(Capability))
+    assert capabilities in SPELLED_COUNTS, "extend the readable count vocabulary"
+    spelled = SPELLED_COUNTS[capabilities].lower()
     documents = {
         "system context": ROOT / "docs" / "architecture" / "system-context.md",
         "gateway runbook": ROOT / "ops" / "runbooks" / "gateway-operations.md",
@@ -337,11 +365,18 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
     }
     for label, path in documents.items():
         text = path.read_text(encoding="utf-8")
-        assert "fifty-six capabilit" in text.lower().replace(" public ", " "), (
+        assert "sixty-two capabilit" in text.lower().replace(" public ", " "), (
             f"{label} lost the current capability count"
         )
         assert "fifty" in text, f"{label} lost the current revision count"
         assert _alembic_identity()[1] in text, f"{label} lost the current Alembic head"
+        assert f"{spelled} capabilit" in text.lower().replace(" public ", " "), (
+            f"{label} lost the current capability count"
+        )
+        assert SPELLED_COUNTS[_count].lower() in text.lower(), (
+            f"{label} lost the current revision count"
+        )
+        assert head in text, f"{label} lost the current Alembic head"
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:
@@ -392,7 +427,13 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
     assert routed <= documented, (
         f"web README omits routed capabilities {sorted(routed - documented)}"
     )
-    assert "fifty-six capability names" in lowered
+    assert "sixty-two capability names" in lowered
+    # Derived, not spelled out here: see the note on
+    # `test_current_state_docs_name_the_current_capability_and_migration_counts`.
+    # A literal in this guard is the same claim, with the same shelf life, as the
+    # literal in the document it is guarding.
+    assert len(capability_values) in SPELLED_COUNTS, "extend the readable count vocabulary"
+    assert f"{SPELLED_COUNTS[len(capability_values)].lower()} capability names" in lowered
     assert "worker_planes" in text and "capture" in text and "enrollment" in text
     assert "managed-document lifecycle" in lowered
 

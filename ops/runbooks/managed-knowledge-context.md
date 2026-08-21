@@ -22,7 +22,7 @@ Related:
 
 | Item | Value |
 | --- | --- |
-| Alembic head | `f4c1a8e6b205` (context.feedback remains `c6f1a8d3e204`) |
+| Alembic head | `f3a8c1d7e592` (context.feedback remains `c6f1a8d3e204`) |
 | Ranking version | `lexical_structured.v1` |
 | Retrieval mode | `lexical_structured` |
 | Semantic gate | `SEMANTIC_GATE_FAIL` (`SemanticRetrievalGate.enabled` is false) |

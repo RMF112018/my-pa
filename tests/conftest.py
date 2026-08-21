@@ -68,6 +68,8 @@ from my_pa.contracts.ports import (
     ContextRunRepository,
     ContinuityAuthoringRepository,
     EnrollmentRepository,
+    EntitiesRepository,
+    EntitySummary,
     GoodNotesProposalAdmission,
     GoodNotesProposalConflictError,
     GoodNotesSemanticRepository,
@@ -131,7 +133,7 @@ from my_pa.domain.capture.submission import CaptureReceipt
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
-from my_pa.domain.common.identifiers import IdKind, parse_identifier
+from my_pa.domain.common.identifiers import IdKind, parse_identifier, validate_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.context.preference import (
@@ -164,6 +166,26 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
+from my_pa.domain.relationship.entity import (
+    Assignment,
+    Entity,
+    EntityAlias,
+    EntityRelationship,
+    EntityStatus,
+    EntityType,
+    ExternalIdentifier,
+    ExternalIdentifierNamespace,
+)
+from my_pa.domain.relationship.governance import (
+    EntityMergeRecord,
+    EntityObservation,
+    EntityProposal,
+    EntityProposalState,
+)
+from my_pa.domain.relationship.normalization import (
+    is_normalized_identifier,
+    is_normalized_name,
+)
 from my_pa.domain.search.query import RankCategory, SearchMatch, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -386,6 +408,26 @@ class World:
     )
     goodnotes_rasters: dict[tuple[str, str], GoodNotesPageRaster] = field(default_factory=dict)
     intelligence: InMemoryIntelligenceStore = field(default_factory=InMemoryIntelligenceStore)
+    #: The relationship-intelligence entity plane. Flat lists for the reason
+    #: every other plane on `World` is one: the fake's whole job is the
+    #: partition predicate, and a list a filter runs over is the clearest place
+    #: to see one missing.
+    #:
+    #: **What this fake cannot prove.** There is no CHECK constraint on a
+    #: Python list, so the closed-set, effective-dating, and redirect
+    #: invariants are proved by the domain dataclasses here and by the server
+    #: in `tests/database` — never by this class. What it can prove is that a
+    #: read filters by Principal first and that a write refuses an entity
+    #: reference the acting Principal does not hold, which is the cross-
+    #: partition false join the plane exists to avoid.
+    entities: list[Entity] = field(default_factory=list)
+    entity_identifiers: list[ExternalIdentifier] = field(default_factory=list)
+    entity_aliases: list[EntityAlias] = field(default_factory=list)
+    entity_observations: list[EntityObservation] = field(default_factory=list)
+    entity_proposals: list[EntityProposal] = field(default_factory=list)
+    entity_merges: list[EntityMergeRecord] = field(default_factory=list)
+    entity_assignments: list[Assignment] = field(default_factory=list)
+    entity_relationships: list[EntityRelationship] = field(default_factory=list)
     commits: int = 0
     rollbacks: int = 0
     #: Port failures a test wants raised, keyed by the method that should raise.
@@ -2208,6 +2250,706 @@ class _Pulse(PulseRepository):
         )
 
 
+class _Entities(EntitiesRepository):
+    """The entity plane over `World`, partition-first.
+
+    Every method takes `principal_id` and applies it before anything else, so
+    an entity belonging to another Principal is answered exactly as an absent
+    one. The write methods repeat the SQL repository's entity-reference guard
+    rather than trusting the caller: in the real schema those columns are
+    foreign keys that span every Principal, so "the row exists" and "the row is
+    mine" are different questions, and only the second one is safe.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    # --- guards ----------------------------------------------------------
+
+    def _mine(self, principal_id: str, entity_id: str) -> Entity | None:
+        return next(
+            (
+                entity
+                for entity in self._world.entities
+                if entity.entity_id == entity_id and entity.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def _require_own(self, principal_id: str, *entity_ids: str | None) -> None:
+        for entity_id in entity_ids:
+            if entity_id is not None and self._mine(principal_id, entity_id) is None:
+                raise UnknownScopeError("an entity operation names an entity outside this scope")
+
+    # --- reads -----------------------------------------------------------
+
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        entity_type: EntityType | None = None,
+        limit: int = 50,
+        *,
+        after_entity_id: str | None = None,
+    ) -> list[EntitySummary]:
+        self._world.fail("entities.search")
+        # Parity with `SqlEntityRepository.search`, which calls
+        # `_require_row_limit`. This clamped a non-positive limit to fifty while
+        # the double's five other bounded reads refused one — so the single read
+        # that guard's own docstring is written about was the one place the fake
+        # and the server disagreed about what a caller may ask for.
+        _refuse_empty_limit(limit)
+        for entity in self._world.entities:
+            if entity.principal_id == principal_id:
+                # The rule `SqlEntityRepository._row_to_summary` enforces:
+                # refuse to serve a stored name the resolver's equality
+                # predicate could never match. The fake holds real `Entity`
+                # records, so this can only fire on one assembled around the
+                # constructor -- which is exactly what an adversarial test does.
+                #
+                # **Deliberately stricter than the server, and this said
+                # "parity" until the ninth review measured it.** The server
+                # reaches its mapper only for the rows a page actually returns,
+                # so an unnormalized row outside the page does not stop a search
+                # there; here the sweep is over the whole partition, so one
+                # unnormalized row anywhere refuses every search. Stricter is
+                # the safe direction for a fake -- it cannot hide a defect --
+                # but a test asserting "search refuses while any unnormalized
+                # row exists" would pass here and be false of production.
+                # Carried in the plan's section 5 rather than narrowed, because
+                # narrowing it would weaken the one place this rule is cheap to
+                # enforce.
+                _refuse_unnormalized_name(entity.canonical_name)
+        needle = query.casefold()
+        matched = [
+            entity
+            for entity in self._world.entities
+            if entity.principal_id == principal_id
+            and (entity_type is None or entity.entity_type is entity_type)
+            and (
+                needle in entity.canonical_name.casefold()
+                or needle in entity.display_name.casefold()
+            )
+        ]
+        matched.sort(key=lambda entity: (entity.canonical_name, entity.entity_id))
+        # Mirrors `SqlEntityRepository.search`'s keyset: the cursor names the
+        # last entity of the previous page, and its position in *this* read's
+        # `(canonical_name, entity_id)` order is what the rows come after. Held
+        # here as well, because a fake that paged differently would let a unit
+        # test assert a walk the server does not perform.
+        if after_entity_id is not None:
+            position = next(
+                (
+                    (entity.canonical_name, entity.entity_id)
+                    for entity in self._world.entities
+                    if entity.principal_id == principal_id and entity.entity_id == after_entity_id
+                ),
+                None,
+            )
+            if position is None:
+                raise UnknownScopeError("a search cursor names an entity in this scope")
+            matched = [
+                entity for entity in matched if (entity.canonical_name, entity.entity_id) > position
+            ]
+        return [
+            EntitySummary(
+                entity_id=entity.entity_id,
+                entity_type=entity.entity_type,
+                canonical_name=entity.canonical_name,
+                display_name=entity.display_name,
+                status=entity.status,
+            )
+            for entity in matched[:limit]
+        ]
+
+    def get(self, principal_id: str, entity_id: str) -> Entity | None:
+        self._world.fail("entities.get")
+        return self._mine(principal_id, entity_id)
+
+    def external_identifiers(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[ExternalIdentifier]:
+        self._world.fail("entities.external_identifiers")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                identifier
+                for identifier in self._world.entity_identifiers
+                if identifier.principal_id == principal_id and identifier.entity_id == entity_id
+            ),
+            key=lambda identifier: identifier.identifier_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def aliases(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityAlias]:
+        self._world.fail("entities.aliases")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                alias
+                for alias in self._world.entity_aliases
+                if alias.principal_id == principal_id and alias.entity_id == entity_id
+            ),
+            key=lambda alias: alias.alias_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def entities_by_identifier(
+        self,
+        principal_id: str,
+        namespace: ExternalIdentifierNamespace,
+        normalized_value: str,
+    ) -> list[tuple[Entity, ExternalIdentifier]]:
+        self._world.fail("entities.entities_by_identifier")
+        matched = [
+            (entity, identifier)
+            for identifier in self._world.entity_identifiers
+            if identifier.principal_id == principal_id
+            and identifier.namespace is namespace
+            and identifier.normalized_value == normalized_value
+            and (entity := self._mine(principal_id, identifier.entity_id)) is not None
+        ]
+        return sorted(matched, key=lambda pair: pair[0].entity_id)
+
+    def entities_by_alias(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityAlias]]:
+        self._world.fail("entities.entities_by_alias")
+        matched = [
+            (entity, alias)
+            for alias in self._world.entity_aliases
+            if alias.principal_id == principal_id
+            and alias.normalized_value == normalized_value
+            and (entity := self._mine(principal_id, alias.entity_id)) is not None
+        ]
+        return sorted(matched, key=lambda pair: (pair[0].entity_id, pair[1].alias_id))
+
+    def entities_by_canonical_name(self, principal_id: str, normalized_value: str) -> list[Entity]:
+        self._world.fail("entities.entities_by_canonical_name")
+        return sorted(
+            (
+                entity
+                for entity in self._world.entities
+                if entity.principal_id == principal_id and entity.canonical_name == normalized_value
+            ),
+            key=lambda entity: entity.entity_id,
+        )
+
+    def assignments(
+        self,
+        principal_id: str,
+        entity_id: str,
+        active_only: bool = True,
+        *,
+        limit: int | None = None,
+    ) -> list[Assignment]:
+        self._world.fail("entities.assignments")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                assignment
+                for assignment in self._world.entity_assignments
+                if assignment.principal_id == principal_id
+                and assignment.entity_id == entity_id
+                and (not active_only or assignment.status == "active")
+            ),
+            key=lambda assignment: assignment.assignment_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def relationships(
+        self,
+        principal_id: str,
+        entity_id: str,
+        direction: str = "any",
+        *,
+        limit: int | None = None,
+        after_relationship_id: str | None = None,
+    ) -> list[EntityRelationship]:
+        self._world.fail("entities.relationships")
+        if direction not in ("any", "outgoing", "incoming"):
+            raise ValueError("an entity relationship direction is any, outgoing, or incoming")
+        _refuse_empty_limit(limit)
+        if after_relationship_id is not None:
+            validate_identifier(after_relationship_id, IdKind.ENTITY_RELATIONSHIP)
+            # Refused here too, because the server refuses it. A fake that
+            # emptied the page instead would let a unit test assert a
+            # continuation the database does not perform.
+            if not any(
+                relationship.principal_id == principal_id
+                and relationship.relationship_id == after_relationship_id
+                for relationship in self._world.entity_relationships
+            ):
+                raise UnknownScopeError("a relationship cursor names an edge in this scope")
+        found = sorted(
+            (
+                relationship
+                for relationship in self._world.entity_relationships
+                if relationship.principal_id == principal_id
+                and _touches(relationship, entity_id, direction)
+                # Strictly after, matching the SQL keyset exactly. `>=` here
+                # would re-serve the last edge of the previous page, and a test
+                # written against this fake would then prove a continuation
+                # semantics the database does not implement.
+                and (
+                    after_relationship_id is None
+                    or relationship.relationship_id > after_relationship_id
+                )
+            ),
+            key=lambda relationship: relationship.relationship_id,
+        )
+        return found if limit is None else found[:limit]
+
+    # --- writes ----------------------------------------------------------
+
+    def create(self, principal_id: str, entity: Entity) -> Entity:
+        self._world.fail("entities.create")
+        if entity.principal_id != principal_id:
+            raise ValueError("an entity belongs to the acting Principal")
+        _refuse_unnormalized_name(entity.canonical_name)
+        held = self._mine(entity.principal_id, entity.entity_id)
+        if held is not None:
+            if held != entity:
+                raise ValueError("an entity identifier cannot be rebound to different values")
+            return held
+        self._require_own(entity.principal_id, entity.superseded_by_entity_id)
+        _refuse_taken_identifier(
+            next(
+                (held for held in self._world.entities if held.entity_id == entity.entity_id),
+                None,
+            ),
+            entity.entity_id,
+            "an entity",
+        )
+        self._world.entities.append(entity)
+        return entity
+
+    def bind_identifier(
+        self, principal_id: str, entity_id: str, identifier: ExternalIdentifier
+    ) -> None:
+        self._world.fail("entities.bind_identifier")
+        if identifier.entity_id != entity_id:
+            raise ValueError("an external identifier binds to the entity it names")
+        if identifier.principal_id != principal_id:
+            raise ValueError("an external identifier belongs to the acting Principal")
+        if not is_normalized_identifier(identifier.namespace, identifier.normalized_value):
+            raise ValueError("an external identifier is stored in the form resolution compares in")
+        self._require_own(principal_id, entity_id)
+        natural_key = (identifier.entity_id, identifier.namespace, identifier.normalized_value)
+        for held in self._world.entity_identifiers:
+            if (held.entity_id, held.namespace, held.normalized_value) == natural_key:
+                return
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_identifiers
+                    if held.identifier_id == identifier.identifier_id
+                ),
+                None,
+            ),
+            identifier.identifier_id,
+            "an external identifier",
+        )
+        self._world.entity_identifiers.append(identifier)
+
+    def record_alias(self, principal_id: str, alias: EntityAlias) -> None:
+        self._world.fail("entities.record_alias")
+        if alias.principal_id != principal_id:
+            raise ValueError("an alias belongs to the acting Principal")
+        _refuse_unnormalized_name(alias.normalized_value)
+        self._require_own(principal_id, alias.entity_id)
+        natural_key = (alias.entity_id, alias.alias_type, alias.normalized_value)
+        for held in self._world.entity_aliases:
+            if (held.entity_id, held.alias_type, held.normalized_value) == natural_key:
+                return
+        _refuse_taken_identifier(
+            next(
+                (held for held in self._world.entity_aliases if held.alias_id == alias.alias_id),
+                None,
+            ),
+            alias.alias_id,
+            "an alias",
+        )
+        self._world.entity_aliases.append(alias)
+
+    # --- WP-RI-06 governance ----------------------------------------------
+
+    def record_observation(self, principal_id: str, observation: EntityObservation) -> None:
+        # Parity with `SqlEntityRepository.record_observation`, which refuses an
+        # unnormalized value. Without this the fake accepted what the database
+        # rejects, so a unit test could store a raw mail envelope here and be
+        # cited as evidence that the queue serves such a row.
+        _refuse_unnormalized_name(observation.normalized_value)
+        self._world.fail("entities.record_observation")
+        if observation.principal_id != principal_id:
+            raise ValueError("an observation belongs to the acting Principal")
+        if observation.entity_id is not None:
+            self._require_own(principal_id, observation.entity_id)
+        # Partitioned, because `SqlEntityRepository` partitions it. Without the
+        # predicate the collision read finds another Principal's row and either
+        # tells this caller their own identifier is bound to different values --
+        # a verdict computed from a partition they cannot see -- or silently
+        # accepts their write as a duplicate of it. `tests/database/
+        # test_entity_governance.py` names that comparison as the defect the
+        # server was corrected away from, so a fake without it lets a unit test
+        # prove the opposite of what the server does.
+        for held in self._world.entity_observations:
+            if (
+                held.observation_id == observation.observation_id
+                and held.principal_id == principal_id
+            ):
+                if held != observation:
+                    raise ValueError(
+                        "an observation identifier cannot be rebound to different values"
+                    )
+                return
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_observations
+                    if held.observation_id == observation.observation_id
+                ),
+                None,
+            ),
+            observation.observation_id,
+            "an observation",
+        )
+        self._world.entity_observations.append(observation)
+
+    def observations(
+        self,
+        principal_id: str,
+        entity_id: str | None = None,
+        *,
+        unresolved_only: bool = False,
+        limit: int | None = None,
+        after_observation_id: str | None = None,
+    ) -> list[EntityObservation]:
+        self._world.fail("entities.observations")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                observation
+                for observation in self._world.entity_observations
+                if observation.principal_id == principal_id
+                and (entity_id is None or observation.entity_id == entity_id)
+                and (not unresolved_only or observation.entity_id is None)
+            ),
+            key=lambda observation: observation.observation_id,
+        )
+        # Mirrors the SQL keyset: the cursor is the primary key the order is
+        # taken on, so a fake that paged differently would let a unit test
+        # assert a walk the server does not perform.
+        if after_observation_id is not None:
+            if not any(
+                observation.principal_id == principal_id
+                and observation.observation_id == after_observation_id
+                for observation in self._world.entity_observations
+            ):
+                raise UnknownScopeError("an observation cursor names an observation in this scope")
+            found = [
+                observation
+                for observation in found
+                if observation.observation_id > after_observation_id
+            ]
+        return found if limit is None else found[:limit]
+
+    def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
+        self._world.fail("entities.link_observation")
+        self._require_own(principal_id, entity_id)
+        for index, held in enumerate(self._world.entity_observations):
+            if held.observation_id == observation_id and held.principal_id == principal_id:
+                self._world.entity_observations[index] = replace(held, entity_id=entity_id)
+                return
+        raise UnknownScopeError("an observation link names an observation outside this scope")
+
+    def record_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        self._world.fail("entities.record_proposal")
+        if proposal.principal_id != principal_id:
+            raise ValueError("a proposal belongs to the acting Principal")
+        # Partitioned, because `SqlEntityRepository` partitions it. Without the
+        # predicate the collision read finds another Principal's row and either
+        # tells this caller their own identifier is bound to different values --
+        # a verdict computed from a partition they cannot see -- or silently
+        # accepts their write as a duplicate of it. `tests/database/
+        # test_entity_governance.py` names that comparison as the defect the
+        # server was corrected away from, so a fake without it lets a unit test
+        # prove the opposite of what the server does.
+        for held in self._world.entity_proposals:
+            if held.proposal_id == proposal.proposal_id and held.principal_id == principal_id:
+                if held != proposal:
+                    raise ValueError("a proposal identifier cannot be rebound to different values")
+                return
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_proposals
+                    if held.proposal_id == proposal.proposal_id
+                ),
+                None,
+            ),
+            proposal.proposal_id,
+            "a proposal",
+        )
+        self._world.entity_proposals.append(proposal)
+
+    def proposal(self, principal_id: str, proposal_id: str) -> EntityProposal | None:
+        self._world.fail("entities.proposal")
+        return next(
+            (
+                held
+                for held in self._world.entity_proposals
+                if held.proposal_id == proposal_id and held.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def proposals(
+        self, principal_id: str, state: EntityProposalState | None = None
+    ) -> list[EntityProposal]:
+        self._world.fail("entities.proposals")
+        return sorted(
+            (
+                held
+                for held in self._world.entity_proposals
+                if held.principal_id == principal_id and (state is None or held.state is state)
+            ),
+            key=lambda held: held.proposal_id,
+        )
+
+    def decide_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
+        self._world.fail("entities.decide_proposal")
+        if proposal.principal_id != principal_id:
+            raise ValueError("a proposal belongs to the acting Principal")
+        for index, held in enumerate(self._world.entity_proposals):
+            if held.proposal_id == proposal.proposal_id and held.principal_id == principal_id:
+                # Mirrors the SQL `state = 'proposed'` predicate. Without it a
+                # unit test could assert the repository's one-time-decision rule
+                # against a fake that has no such rule and pass, which is the
+                # hazard `redirect_entity` names two methods above.
+                if held.state is not EntityProposalState.PROPOSED:
+                    raise UnknownScopeError("a decision names an open proposal in this scope")
+                self._world.entity_proposals[index] = proposal
+                return
+        raise UnknownScopeError("a decision names an open proposal in this scope")
+
+    def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
+        self._world.fail("entities.record_merge")
+        if record.principal_id != principal_id:
+            raise ValueError("a merge record belongs to the acting Principal")
+        self._require_own(principal_id, record.retained_entity_id, record.merged_entity_id)
+        # Mirrors the SQL partition check on the cited proposal: a record naming
+        # another Principal's proposal presents their decision as this
+        # Principal's own.
+        if not any(
+            held.proposal_id == record.proposal_id and held.principal_id == principal_id
+            for held in self._world.entity_proposals
+        ):
+            raise UnknownScopeError("a merge record cites a proposal in this scope")
+        # **Deliberately NOT partitioned, and it was for one commit.** Every
+        # other collision read on this plane mirrors a partitioned read in
+        # `SqlEntityRepository`; this one mirrors nothing, because the server
+        # performs no `merged_entity_id` lookup at all. The rule is carried by a
+        # *global* `UNIQUE` on `entity_merge_records.merged_entity_id`
+        # (`persistence/tables.py`, whose own comment reads "an entity is merged
+        # away once"). Adding a Principal predicate here narrowed a global
+        # constraint to a per-Principal one with nothing global left behind it,
+        # so the fake accepted a merge the database refuses -- measured by the
+        # tenth review as a regression against the commit before it.
+        if any(
+            held.merged_entity_id == record.merged_entity_id for held in self._world.entity_merges
+        ):
+            raise ValueError("an entity is merged away once")
+        _refuse_taken_identifier(
+            next(
+                (held for held in self._world.entity_merges if held.merge_id == record.merge_id),
+                None,
+            ),
+            record.merge_id,
+            "a merge record",
+        )
+        self._world.entity_merges.append(record)
+
+    def merges(self, principal_id: str, entity_id: str | None = None) -> list[EntityMergeRecord]:
+        self._world.fail("entities.merges")
+        return sorted(
+            (
+                held
+                for held in self._world.entity_merges
+                if held.principal_id == principal_id
+                and (
+                    entity_id is None
+                    or entity_id in (held.retained_entity_id, held.merged_entity_id)
+                )
+            ),
+            key=lambda held: held.merge_id,
+        )
+
+    def redirect_entity(
+        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+    ) -> None:
+        self._world.fail("entities.redirect_entity")
+        self._require_own(principal_id, merged_entity_id, retained_entity_id)
+        if merged_entity_id == retained_entity_id:
+            raise ValueError("an entity cannot be merged into itself")
+        # Mirrors `SqlEntityRepository.redirect_entity`. Held here as well
+        # because a fake that permitted the cycle would let a unit test assert
+        # the refusal and pass without one.
+        survivor = self.get(principal_id, retained_entity_id)
+        if survivor is None or survivor.status is EntityStatus.MERGED_REDIRECT:
+            raise ValueError("an entity is merged into one that is still current")
+        if any(
+            held.principal_id == principal_id and held.superseded_by_entity_id == merged_entity_id
+            for held in self._world.entities
+        ):
+            raise ValueError("an entity that others redirect to is not merged away")
+        merged = self.get(principal_id, merged_entity_id)
+        if merged is not None and merged.status is EntityStatus.MERGED_REDIRECT:
+            raise ValueError("an entity that is already merged away is not merged again")
+        for index, held in enumerate(self._world.entities):
+            if held.entity_id == merged_entity_id and held.principal_id == principal_id:
+                self._world.entities[index] = replace(
+                    held,
+                    status=EntityStatus.MERGED_REDIRECT,
+                    superseded_by_entity_id=retained_entity_id,
+                )
+                return
+        raise UnknownScopeError("a redirect names an entity outside this scope")
+
+    def record_assignment(self, principal_id: str, assignment: Assignment) -> None:
+        self._world.fail("entities.record_assignment")
+        if assignment.principal_id != principal_id:
+            raise ValueError("an assignment belongs to the acting Principal")
+        self._require_own(principal_id, assignment.entity_id, assignment.scope_entity_id)
+        # Partitioned, because `SqlEntityRepository` partitions it. Without the
+        # predicate the collision read finds another Principal's row and either
+        # tells this caller their own identifier is bound to different values --
+        # a verdict computed from a partition they cannot see -- or silently
+        # accepts their write as a duplicate of it. `tests/database/
+        # test_entity_governance.py` names that comparison as the defect the
+        # server was corrected away from, so a fake without it lets a unit test
+        # prove the opposite of what the server does.
+        for held in self._world.entity_assignments:
+            if held.assignment_id == assignment.assignment_id and held.principal_id == principal_id:
+                if held != assignment:
+                    raise ValueError(
+                        "an assignment identifier cannot be rebound to different values"
+                    )
+                return
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_assignments
+                    if held.assignment_id == assignment.assignment_id
+                ),
+                None,
+            ),
+            assignment.assignment_id,
+            "an assignment",
+        )
+        self._world.entity_assignments.append(assignment)
+
+    def record_relationship(self, principal_id: str, rel: EntityRelationship) -> None:
+        self._world.fail("entities.record_relationship")
+        if rel.principal_id != principal_id:
+            raise ValueError("an entity relationship belongs to the acting Principal")
+        self._require_own(principal_id, rel.from_entity_id, rel.to_entity_id, rel.scope_entity_id)
+        # Partitioned, because `SqlEntityRepository` partitions it. Without the
+        # predicate the collision read finds another Principal's row and either
+        # tells this caller their own identifier is bound to different values --
+        # a verdict computed from a partition they cannot see -- or silently
+        # accepts their write as a duplicate of it. `tests/database/
+        # test_entity_governance.py` names that comparison as the defect the
+        # server was corrected away from, so a fake without it lets a unit test
+        # prove the opposite of what the server does.
+        for held in self._world.entity_relationships:
+            if held.relationship_id == rel.relationship_id and held.principal_id == principal_id:
+                if held != rel:
+                    raise ValueError(
+                        "an entity relationship identifier cannot be rebound to different values"
+                    )
+                return
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_relationships
+                    if held.relationship_id == rel.relationship_id
+                ),
+                None,
+            ),
+            rel.relationship_id,
+            "an entity relationship",
+        )
+        self._world.entity_relationships.append(rel)
+
+
+def _refuse_taken_identifier(held: object, identifier: str, noun: str) -> None:
+    """Refuse an identifier some other partition already holds, as the server does.
+
+    Every table on this plane keys on a *global* primary key, so an identifier
+    another Principal holds is unavailable to this one -- the server answers
+    `IntegrityError`.
+
+    **Eight writes introduce an identifier and all eight carry this.** The tenth
+    review found it on four of them while this docstring asserted it of all, and
+    measured the fake accepting duplicate `entity_id`, `identifier_id`,
+    `alias_id` and `merge_id` values the server refuses. The correction then said
+    "four of nine", which the eleventh review measured as wrong by one -- a
+    miscount inside the sentence recording a miscount. The plane has eight
+    tables and this helper has eight call sites.
+
+    The collision reads above are partitioned, matching
+    `SqlEntityRepository`, which is what decides *on whose evidence* a write is
+    judged; this is the separate rule that decides whether the key is free at
+    all. Without it, partitioning those reads would have made the fake accept a
+    duplicate key the database refuses, and a unit test could then prove two
+    Principals may hold one observation identifier.
+    """
+    if held is not None:
+        raise ValueError(f"{noun} identifier is already taken: {identifier}")
+
+
+def _refuse_unnormalized_name(value: str) -> None:
+    """Refuse a name not in the form resolution compares in, as `persistence.entity` does.
+
+    The SQL repository checks this at its own write boundary rather than
+    trusting the record it was handed (`RI-PR135-MAJOR-002`), so a fake that
+    accepted what the database refuses would let a unit test prove that a
+    backfill can store a row the resolver cannot match.
+    """
+    if not is_normalized_name(value):
+        raise ValueError("an entity name is stored in the form resolution compares in")
+
+
+def _refuse_empty_limit(limit: int | None) -> None:
+    """Refuse a row limit that asks for nothing, as `persistence.entity` does.
+
+    Parity with the SQL repository is the whole point of this fake, and a limit
+    it accepted where the database refuses would let a unit test prove that an
+    empty page is a legitimate answer to a bounded read. It is not: an empty
+    page reads as "nothing is recorded", which is the one thing a bound must
+    never say by accident.
+    """
+    if limit is not None and limit < 1:
+        raise ValueError("an entity row limit asks for at least one row")
+
+
+def _touches(relationship: EntityRelationship, entity_id: str, direction: str) -> bool:
+    """Whether one edge answers a directed enumeration for `entity_id`."""
+    if direction == "outgoing":
+        return relationship.from_entity_id == entity_id
+    if direction == "incoming":
+        return relationship.to_entity_id == entity_id
+    return entity_id in (relationship.from_entity_id, relationship.to_entity_id)
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -2307,6 +3049,11 @@ class FakeUnitOfWork(UnitOfWork):
 
     def intelligence_for(self, principal_id: str) -> InMemoryIntelligenceStore:
         return self._world.intelligence
+
+    @property
+    def entities(self) -> EntitiesRepository:
+        """The relationship-intelligence entity plane over this `World`."""
+        return _Entities(self._world)
 
     @property
     def audit(self) -> AuditSink:
@@ -2445,6 +3192,7 @@ def build_service(
     providers: FakeProviders,
     limits: EffectiveLimits = DEFAULT_LIMITS,
     managed_store: ManagedByteStore | None = None,
+    relationship_intelligence_enabled: bool = True,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -2471,6 +3219,13 @@ def build_service(
         # names its own service refuses.
         task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
         commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
+        # Enabled by the same default reasoning: the six `entities.` names are
+        # withheld from a build that has not turned the plane on, and a suite
+        # that quantifies over `Capability` would be quantifying over names its
+        # own service refuses. A test about the *withheld* build passes `False`
+        # explicitly and says so — `tests/contract/test_mcp_transport` is the one
+        # that does, against a real child process.
+        relationship_intelligence_enabled=relationship_intelligence_enabled,
     )
 
 

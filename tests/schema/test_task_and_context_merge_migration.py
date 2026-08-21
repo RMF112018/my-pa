@@ -3,6 +3,10 @@
 Note: This revision is no longer the head. Current head `e9b2c4d7a150` revises
 `d9c4e1a7b628`. The test remains to verify the merge revision's structure and
 frozen literals.
+Note: This revision is no longer the head. Current head `9def3c2e63bb` revises
+`f4c1a8e6b205`. The test remains to verify the merge revision's structure and
+frozen literals; it asserts a single unbranched head and this revision's place
+on the chain rather than which revision happens to be last.
 """
 
 from __future__ import annotations
@@ -38,7 +42,7 @@ def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PARENTS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 59
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 65
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

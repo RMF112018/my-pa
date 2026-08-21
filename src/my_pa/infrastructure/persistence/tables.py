@@ -182,7 +182,22 @@ from my_pa.domain.native_sources import (
     WatcherSimulationState,
 )
 from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
+from my_pa.domain.relationship.entity import (
+    AliasType,
+    AssignmentType,
+    EntityRelationshipType,
+    EntityStatus,
+    ExternalIdentifierNamespace,
+)
+from my_pa.domain.relationship.entity import (
+    EntityType as RelationshipEntityType,
+)
 from my_pa.domain.relationship.event import RelationshipEventType
+from my_pa.domain.relationship.governance import (
+    EntityProposalKind,
+    EntityProposalState,
+    ObservationKind,
+)
 from my_pa.domain.relationship.identity import ResolutionAction
 from my_pa.domain.relationship.profile import EvidenceAuthority
 from my_pa.domain.situation.continuity import (
@@ -2758,6 +2773,403 @@ relationship_events = Table(
     Index("relationship_events_by_principal", "principal_id"),
     Index("relationship_events_by_principal_person", "principal_id", "person_id"),
     Index("relationship_events_by_principal_accepted", "principal_id", "accepted"),
+)
+
+#: WP-RI-01: generalized entity table.  An entity is any identifiable thing in
+#: the relationship-intelligence model: Person, Organization, Program, Project,
+#: Work Package, Team-or-Group, or Location.  `principal_id` is NOT NULL and
+#: carries an `_is_identifier` CHECK, so every entity is owned by exactly one
+#: Principal.  `superseded_by_entity_id` is non-null only when `status` is
+#: `merged_redirect`, and it FK-references `entities.entity_id` so a redirect
+#: always resolves.  Additive: does not modify or replace `relationship_people`
+#: or `relationship_organizations`.
+entities = Table(
+    "entities",
+    METADATA,
+    Column("entity_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("entity_type", Text, nullable=False),
+    Column("canonical_name", Text, nullable=False),
+    Column("display_name", Text, nullable=False),
+    Column("status", Text, nullable=False, server_default=text("'active'")),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column(
+        "superseded_by_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id"),
+    ),
+    _is_identifier("entity_id", IdKind.ENTITY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("entity_type", RelationshipEntityType, name="an_entity_type_is_known"),
+    _one_of("status", EntityStatus, name="an_entity_status_is_known"),
+    CheckConstraint("version >= 1", name="an_entity_version_is_positive"),
+    CheckConstraint(
+        "(status = 'merged_redirect') = (superseded_by_entity_id IS NOT NULL)",
+        name="an_entity_redirects_exactly_when_it_is_merged_away",
+    ),
+    CheckConstraint(
+        "superseded_by_entity_id IS NULL OR superseded_by_entity_id <> entity_id",
+        name="an_entity_does_not_supersede_itself",
+    ),
+    CheckConstraint(
+        "length(trim(canonical_name)) > 0",
+        name="an_entity_canonical_name_is_not_blank",
+    ),
+    CheckConstraint(
+        "length(trim(display_name)) > 0",
+        name="an_entity_display_name_is_not_blank",
+    ),
+    Index("entities_by_principal", "principal_id"),
+    Index("entities_by_entity_type", "entity_type"),
+    Index("entities_by_status", "status"),
+)
+
+#: WP-RI-01: an entity's identity in an external namespace.  The unique
+#: constraint on (entity_id, namespace, normalized_value) ensures the same
+#: external identity cannot be recorded twice for the same entity in the same
+#: namespace.
+entity_external_identifiers = Table(
+    "entity_external_identifiers",
+    METADATA,
+    Column("identifier_id", Text, primary_key=True),
+    Column(
+        "entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("namespace", Text, nullable=False),
+    Column("normalized_value", Text, nullable=False),
+    Column("display_value", Text, nullable=False),
+    Column("verified", Boolean, nullable=False, server_default=text("false")),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("identifier_id", IdKind.EXTERNAL_IDENTIFIER),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of(
+        "namespace",
+        ExternalIdentifierNamespace,
+        name="an_external_identifier_namespace_is_known",
+    ),
+    CheckConstraint(
+        "length(trim(normalized_value)) > 0",
+        name="an_external_identifier_normalized_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "length(trim(display_value)) > 0",
+        name="an_external_identifier_display_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="an_external_identifier_ends_after_it_starts",
+    ),
+    UniqueConstraint(
+        "entity_id",
+        "namespace",
+        "normalized_value",
+        name="an_external_identifier_is_recorded_once_per_namespace",
+    ),
+    Index("entity_external_identifiers_by_principal", "principal_id"),
+    Index(
+        "entity_external_identifiers_by_namespace_value",
+        "namespace",
+        "normalized_value",
+    ),
+)
+
+#: WP-RI-03: one recorded name form of an entity.  Resolution matches on
+#: aliases as well as on canonical names (specification section 15.1), so the
+#: index is on `(normalized_value)` rather than on the entity: the lookup goes
+#: from a name to the entities that carry it, not the other way round.  The
+#: unique constraint is per `(entity_id, alias_type, normalized_value)` so the
+#: same name may be held by two *different* entities -- two real people do share
+#: a name, and a schema that made that a conflict would force the false join
+#: this plane exists to avoid.
+entity_aliases = Table(
+    "entity_aliases",
+    METADATA,
+    Column("alias_id", Text, primary_key=True),
+    Column(
+        "entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("alias_type", Text, nullable=False),
+    Column("normalized_value", Text, nullable=False),
+    Column("display_value", Text, nullable=False),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("alias_id", IdKind.ENTITY_ALIAS),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("alias_type", AliasType, name="an_alias_type_is_known"),
+    CheckConstraint(
+        "length(trim(normalized_value)) > 0",
+        name="an_alias_normalized_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "length(trim(display_value)) > 0",
+        name="an_alias_display_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="an_alias_ends_after_it_starts",
+    ),
+    UniqueConstraint(
+        "entity_id",
+        "alias_type",
+        "normalized_value",
+        name="an_alias_is_recorded_once_per_entity_and_type",
+    ),
+    Index("entity_aliases_by_principal", "principal_id"),
+    Index("entity_aliases_by_normalized_value", "normalized_value"),
+)
+
+#: WP-RI-01: a typed assignment of an entity to a scope entity.  Employment,
+#: membership, project assignment, work package assignment, and team membership
+#: are the closed assignment types.  `scope_entity_id` is nullable because some
+#: assignments may not yet have a resolved scope entity.
+entity_assignments = Table(
+    "entity_assignments",
+    METADATA,
+    Column("assignment_id", Text, primary_key=True),
+    Column(
+        "entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "scope_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="SET NULL"),
+    ),
+    Column("assignment_type", Text, nullable=False),
+    Column("role", Text),
+    Column("discipline", Text),
+    Column("responsibility_class", Text),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("status", Text, nullable=False, server_default=text("'active'")),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("assignment_id", IdKind.ASSIGNMENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("assignment_type", AssignmentType, name="an_assignment_type_is_known"),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="an_assignment_ends_after_it_starts",
+    ),
+    Index("entity_assignments_by_principal", "principal_id"),
+    Index("entity_assignments_by_entity_id", "entity_id"),
+    Index("entity_assignments_by_scope_entity_id", "scope_entity_id"),
+)
+
+#: WP-RI-01: a directed, typed relationship between two entities, optionally
+#: scoped by a third.  `from_entity_id` and `to_entity_id` are required and
+#: distinct, and the CHECK says so here as well as in the domain: PostgreSQL is
+#: the canonical store, and a self-edge written by anything that did not come
+#: through the domain model would be a false join the database accepted.  The
+#: constraint refuses only `from = to`; the same *pair* may still appear in both
+#: directions, and under different relationship types, which is what a directed
+#: model is for.
+entity_relationships = Table(
+    "entity_relationships",
+    METADATA,
+    Column("relationship_id", Text, primary_key=True),
+    Column(
+        "from_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "to_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("relationship_type", Text, nullable=False),
+    Column(
+        "scope_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="SET NULL"),
+    ),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("principal_id", Text, nullable=False),
+    _is_identifier("relationship_id", IdKind.ENTITY_RELATIONSHIP),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of(
+        "relationship_type",
+        EntityRelationshipType,
+        name="an_entity_relationship_type_is_known",
+    ),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="an_entity_relationship_ends_after_it_starts",
+    ),
+    CheckConstraint(
+        "from_entity_id <> to_entity_id",
+        name="an_entity_relationship_connects_two_distinct_entities",
+    ),
+    CheckConstraint("version >= 1", name="an_entity_relationship_version_is_positive"),
+    Index("entity_relationships_by_principal", "principal_id"),
+    Index("entity_relationships_by_from_entity", "from_entity_id"),
+    Index("entity_relationships_by_to_entity", "to_entity_id"),
+)
+
+#: WP-RI-06: one source-bound observation that may refer to an entity.
+#: `entity_id` is nullable and that is the point -- an observation nothing has
+#: linked is an unresolved mention (specification section 13.1), not a failed
+#: write. `observed_value` and `normalized_value` hold a name or an address, so
+#: nothing here is indexed by them across Principals: the lookup index is
+#: `(principal_id, normalized_value)`.
+entity_observations = Table(
+    "entity_observations",
+    METADATA,
+    Column("observation_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("observed_value", Text, nullable=False),
+    Column("normalized_value", Text, nullable=False),
+    # The only column `entities.unresolved_mentions` discloses. Nullable and
+    # defaulting to NULL so that a writer which does nothing deliberate
+    # discloses nothing: `normalized_value` is the form matching compares
+    # against and is *not* a redaction of `observed_value`, because
+    # `normalize_name` removes no content. `f3a8c1d7e592` explains the whole
+    # argument.
+    Column("mention_display_name", Text),
+    Column("source_id", Text, nullable=False),
+    Column("source_object_id", Text, nullable=False),
+    Column("source_version_id", Text, nullable=False),
+    Column("observed_at", DateTime(timezone=True), nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column(
+        "entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="SET NULL"),
+    ),
+    _is_identifier("observation_id", IdKind.ENTITY_OBSERVATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("kind", ObservationKind, name="an_observation_kind_is_known"),
+    CheckConstraint(
+        "length(trim(observed_value)) > 0",
+        name="an_observation_records_what_was_observed",
+    ),
+    CheckConstraint(
+        "length(trim(normalized_value)) > 0",
+        name="an_observation_records_the_form_it_is_matched_by",
+    ),
+    CheckConstraint(
+        "recorded_at >= observed_at",
+        name="an_observation_is_not_recorded_before_it_was_observed",
+    ),
+    CheckConstraint(
+        "mention_display_name IS NULL OR ("
+        r"mention_display_name !~ '^[ \t\n\r\v\f]' "
+        r"AND mention_display_name !~ '[ \t\n\r\v\f]$' "
+        r"AND mention_display_name ~ '[^ \t\n\r\v\f]' "
+        "AND length(mention_display_name) BETWEEN 1 AND 200)",
+        name="a_disclosed_mention_name_is_bounded",
+    ),
+    Index("entity_observations_by_principal", "principal_id"),
+    Index("entity_observations_by_normalized_value", "principal_id", "normalized_value"),
+    Index("entity_observations_by_entity", "entity_id"),
+)
+
+#: WP-RI-06: one proposed mutation of the entity plane.
+#: `decided_by`/`decided_at` are NULL exactly while the proposal is open, and a
+#: CHECK says so: "nothing has decided this" is then a shape rather than a
+#: convention. `payload` is JSONB because a proposal is a request to call one of
+#: six repository writes and their argument shapes differ; the service that
+#: applies one is where the shape is checked.
+entity_proposals = Table(
+    "entity_proposals",
+    METADATA,
+    Column("proposal_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("kind", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'proposed'")),
+    Column("payload", JSONB, nullable=False),
+    Column("observation_ids", JSONB, nullable=False),
+    Column("proposed_at", DateTime(timezone=True), nullable=False),
+    Column("proposed_by", Text, nullable=False),
+    Column("decided_by", Text),
+    Column("decided_at", DateTime(timezone=True)),
+    Column("decision_reason", Text),
+    _is_identifier("proposal_id", IdKind.ENTITY_PROPOSAL),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("kind", EntityProposalKind, name="a_proposal_kind_is_known"),
+    _one_of("state", EntityProposalState, name="a_proposal_state_is_known"),
+    CheckConstraint(
+        "length(trim(proposed_by)) > 0",
+        name="a_proposal_names_what_proposed_it",
+    ),
+    CheckConstraint(
+        "(state IN ('accepted', 'rejected')) = (decided_by IS NOT NULL)",
+        name="a_proposal_is_decided_exactly_when_something_decided_it",
+    ),
+    CheckConstraint(
+        "(decided_by IS NULL) = (decided_at IS NULL)",
+        name="a_proposal_decision_has_both_an_actor_and_a_moment",
+    ),
+    CheckConstraint(
+        "decided_at IS NULL OR decided_at >= proposed_at",
+        name="a_proposal_is_not_decided_before_it_was_proposed",
+    ),
+    Index("entity_proposals_by_principal", "principal_id"),
+    Index("entity_proposals_by_state", "principal_id", "state"),
+)
+
+#: WP-RI-06: the lineage one accepted merge left behind (section 15.3).
+#: `merged_entity_id` is UNIQUE because an entity is merged away once -- a
+#: second merge of the same entity would mean it had two successors, and a
+#: redirect with two targets resolves to neither. `retained_entity_id` is *not*
+#: unique: many entities may be merged into one survivor, which is the ordinary
+#: shape of a duplicate cleanup.
+entity_merge_records = Table(
+    "entity_merge_records",
+    METADATA,
+    Column("merge_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column(
+        "retained_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "merged_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column(
+        "proposal_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_proposals.proposal_id"),
+        nullable=False,
+    ),
+    Column("decided_by", Text, nullable=False),
+    Column("reason", Text, nullable=False),
+    Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("merge_id", IdKind.ENTITY_MERGE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "retained_entity_id <> merged_entity_id",
+        name="a_merge_joins_two_distinct_entities",
+    ),
+    CheckConstraint("length(trim(decided_by)) > 0", name="a_merge_names_who_decided_it"),
+    CheckConstraint("length(trim(reason)) > 0", name="a_merge_records_why_it_was_accepted"),
+    Index("entity_merge_records_by_principal", "principal_id"),
+    Index("entity_merge_records_by_retained", "retained_entity_id"),
 )
 
 #: `pulse_items`: derived attention recommendations with a reason, a

@@ -382,6 +382,43 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
+    # The relationship-intelligence entity plane (WP-RI-05). Six read
+    # capabilities over `knowledge.entities` and the tables around it.
+    # Alembic revision `c1a7e4b93d58` admits the first five and the
+    # `entity_read` purpose; the freeze is written before the members, because a
+    # member with no `ALTER` leaves every test green and is refused by the
+    # stored constraint on the first audited operation in the field.
+    #
+    # `D-91`'s test, applied once for the family: would reuse widen the grant?
+    # Yes, in both directions. `knowledge.search` is the extraction plane and
+    # would have to return who a person is; `entities.search` would have to
+    # return extracted document text. They are different custody planes over
+    # different tables.
+    #
+    # Six rather than one, because they answer different questions and a caller
+    # granted one has no occasion to hold the others. `search` is a name-shaped
+    # lookup over a Principal's own entities. `get` is one entity by identifier.
+    # `resolve` answers "who is this reference", and is the one whose answer can
+    # be *ambiguous on purpose*. `context` assembles a bounded card. `relationships`
+    # walks one entity's typed edges to depth one. `unresolved_mentions` lists the
+    # references nothing has placed, admitted later by `e4d7b2f9a316`. None of them
+    # writes: this plane has no write capability at all, which is why
+    # `_PERMITTED_PURPOSES` maps all six to a single read purpose.
+    #
+    # Not operator-only: each reads the acting Principal's own partition and
+    # grants no authority. Withholding from a process that has not enabled the
+    # plane is `_ENTITY_CAPABILITIES` in `application.service`, not this flag —
+    # operator-only is about who may call a capability, and composition gating is
+    # about whether this build serves it at all.
+    ENTITIES_SEARCH = "entities.search"
+    ENTITIES_GET = "entities.get"
+    ENTITIES_RESOLVE = "entities.resolve"
+    ENTITIES_CONTEXT = "entities.context"
+    ENTITIES_RELATIONSHIPS = "entities.relationships"
+    #: The queue of references nothing has placed. Named for exactly what it
+    #: returns: `entities.mentions` would read as every mention, and this answers
+    #: only the unresolved ones, which is the whole of its use.
+    ENTITIES_UNRESOLVED_MENTIONS = "entities.unresolved_mentions"
 
 
 class NativeSourceCapability(StrEnum):
@@ -627,6 +664,12 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.REPORTS_LIST: frozenset({Purpose.REPORT_READ}),
         Capability.REPORTS_SEARCH: frozenset({Purpose.REPORT_READ}),
         Capability.REPORTS_RESOLVE_SET: frozenset({Purpose.REPORT_READ}),
+        Capability.ENTITIES_SEARCH: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_GET: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_RESOLVE: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_CONTEXT: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_RELATIONSHIPS: frozenset({Purpose.ENTITY_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

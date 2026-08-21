@@ -38,6 +38,7 @@ from enum import StrEnum
 from types import MappingProxyType
 from typing import ClassVar
 
+from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
 from my_pa.domain.capture.review import Disposition
@@ -67,7 +68,6 @@ from my_pa.domain.documents.managed import (
 )
 from my_pa.domain.goodnotes.models import (
     NOTE_UNIT_SCHEMA_V1,
-    NOTE_UNIT_SCHEMA_V2,
     GoodNotesNoteClass,
     GoodNotesSegmentKind,
     GoodNotesTranscriptionStatus,
@@ -84,6 +84,7 @@ from my_pa.domain.intelligence.catalog import (
     SourceLaneId,
 )
 from my_pa.domain.relationship.event import RelationshipEventType
+from my_pa.domain.search.query import SearchQuery, SearchQueryError
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     CommitmentDirection,
@@ -180,6 +181,41 @@ class Representation(StrEnum):
     NORMALIZED_TEXT = "normalized_text"
 
 
+def _bounded_query(value: str, detail: SafeDetail) -> str:
+    r"""A caller-supplied search string, bounded by the rule that already exists.
+
+    Delegated to `domain.search.query.SearchQuery` rather than restated, and the
+    first version of this function restated it. That version applied the
+    forbidden-category check to the raw string, while `_normalize_query`
+    collapses whitespace *first* and its module docstring says why: "Some `Cc`
+    characters *are* whitespace -- U+0085 NEL, the vertical tab, the form feed
+    ... refusing a query because it was pasted with a NEL in it would be
+    refusing a legitimate paste." So `entities.search` refused `"Alice\tChen"`
+    and `"Alice\nChen"` while `knowledge.search` accepted both and searched for
+    `Alice Chen`. A pasted two-line name was refused, which is a regression the
+    tenth review measured against the head before it.
+
+    Two spellings of one rule diverge; there is now one spelling. The normalized
+    value is deliberately discarded: this capability matches on the string the
+    caller sent, and rewriting it would change which entities match.
+    """
+    try:
+        SearchQuery(value)
+    except SearchQueryError:
+        pass
+    else:
+        return value
+    # Raised outside the handler, as everywhere else in this repository. The
+    # first version wrote `raise ... from None` inside the handler and said that
+    # kept the original out of `__context__`. It does not: `from None` sets
+    # `__suppress_context__`, which suppresses *display*, and `__context__` still
+    # holds the `SearchQueryError` -- measured. `adapters.normalization._metadata`
+    # states the difference in as many words ("leaving the handler first is what
+    # actually clears `__context__`") and `_identifier` below does it correctly,
+    # so this was a deviation from a convention it invoked by name.
+    raise InvalidRequestError(detail)
+
+
 def _identifier(value: str, kind: IdKind | None, detail: SafeDetail) -> str:
     """Validate one identifier, reporting the field rather than the value.
 
@@ -246,9 +282,25 @@ def _positive(value: int | None, detail: SafeDetail) -> int | None:
     return value
 
 
-def _idempotency_key(value: str) -> str:
-    """A write carries a non-empty idempotency key, and the key never reaches a message."""
-    if not value or not isinstance(value, str):
+def _idempotency_key(value: object) -> str:
+    """A write carries a non-empty idempotency key, and the key never reaches a message.
+
+    The type is checked, not assumed. `if not value` alone accepts every truthy
+    non-string — `123`, a list, a `datetime` — into a handler that goes on to
+    use the key as a string, so the refusal has to name the type as well as the
+    emptiness. Ten commands spelled that emptiness test inline rather than
+    calling this, which is why the hole was ten commands wide and not one.
+
+    `value` is `object` and not `str` for the reason `_bounded_token` states:
+    every caller's field *is* annotated `str`, so annotating it here too makes
+    the `isinstance` unreachable to a type checker and the check reads as dead
+    code to delete. The annotation describes what actually arrives from a
+    transport, which is anything the caller sent.
+
+    The length bound arrived on the report-pipeline branch and is kept: an
+    unbounded key is a caller-chosen string that reaches storage.
+    """
+    if not isinstance(value, str) or not value:
         raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
     if len(value) > MAX_IDEMPOTENCY_KEY_LENGTH:
         raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
@@ -270,58 +322,29 @@ def _iso_date(value: str, detail: SafeDetail) -> str:
     return value
 
 
-_SHA256 = frozenset("0123456789abcdef")
-_MAX_GOODNOTES_SEGMENTS = 50
-_MAX_GOODNOTES_TAGS = 32
-_MAX_GOODNOTES_CANDIDATES = 32
-_MAX_GOODNOTES_TRANSCRIPTION = 20_000
-_MAX_GOODNOTES_TAG = 80
-_MAX_GOODNOTES_CANDIDATE = 200
-_MAX_GOODNOTES_ANALYZER = 100
-_MAX_GOODNOTES_SCHEMA = 40
+_MAX_GOODNOTES_SEGMENTS = _note_unit.MAX_GOODNOTES_SEGMENTS
+_MAX_GOODNOTES_TAGS = _note_unit.MAX_GOODNOTES_TAGS
+_MAX_GOODNOTES_CANDIDATES = _note_unit.MAX_GOODNOTES_CANDIDATES
+_MAX_GOODNOTES_TRANSCRIPTION = _note_unit.MAX_GOODNOTES_TRANSCRIPTION
+_MAX_GOODNOTES_TAG = _note_unit.MAX_GOODNOTES_TAG
+_MAX_GOODNOTES_CANDIDATE = _note_unit.MAX_GOODNOTES_CANDIDATE
+_MAX_GOODNOTES_ANALYZER = _note_unit.MAX_GOODNOTES_ANALYZER
+_MAX_GOODNOTES_SCHEMA = _note_unit.MAX_GOODNOTES_SCHEMA
 _MAX_GOODNOTES_IDEMPOTENCY = 128
-_FORBIDDEN_SEGMENT_KEYS = frozenset(
-    {
-        "change_state",
-        "changestate",
-        "disposition",
-        "note_id",
-        "occurrence_id",
-        "principal_id",
-        "canonical_state",
-        "state",
-    }
-)
-_V1_SEGMENT_KEYS = frozenset(
-    {
-        "kind",
-        "geometry",
-        "crop_sha256",
-        "transcription",
-        "primary_class",
-    }
-)
-_V2_NOTE_UNIT_KEYS = _V1_SEGMENT_KEYS | {
-    "ranked_candidates",
-    "candidate_tags",
-    "confidence",
-    "transcription_status",
-}
-_NOTE_UNIT_SCHEMAS = frozenset({NOTE_UNIT_SCHEMA_V1, NOTE_UNIT_SCHEMA_V2})
+_FORBIDDEN_SEGMENT_KEYS = _note_unit.FORBIDDEN_SEGMENT_KEYS
+_V1_SEGMENT_KEYS = _note_unit.V1_SEGMENT_KEYS
+_V2_NOTE_UNIT_KEYS = _note_unit.V2_NOTE_UNIT_KEYS
+_NOTE_UNIT_SCHEMAS = _note_unit.NOTE_UNIT_SCHEMAS
+_SEGMENT_KEY_ORDER = _note_unit.SEGMENT_KEY_ORDER
+_SHA256 = _note_unit.SHA256_HEX
+_candidate_tags = _note_unit.candidate_tags
+_confidence = _note_unit.confidence
+_ranked_candidates = _note_unit.ranked_candidates
+_segments = _note_unit.segments
+_sha256_digest = _note_unit.sha256_digest
 #: Publication order for shared segment fragments. The set of names is the
 #: runtime v2 NOTE_UNIT vocabulary; tests pin that equality so this tuple cannot
 #: silently grow a field `_segments` does not admit.
-_SEGMENT_KEY_ORDER = (
-    "kind",
-    "geometry",
-    "crop_sha256",
-    "transcription",
-    "primary_class",
-    "candidate_tags",
-    "ranked_candidates",
-    "confidence",
-    "transcription_status",
-)
 
 
 def _kind_const(kind: GoodNotesSegmentKind) -> dict[str, object]:
@@ -382,6 +405,7 @@ def _goodnotes_propose_payload_properties() -> dict[str, object]:
         ),
         "items": {
             "type": "object",
+            "additionalProperties": False,
             "required": ["rank", "candidate"],
             "properties": {
                 "rank": {"type": "integer", "minimum": 1},
@@ -593,174 +617,9 @@ def _goodnotes_id(value: object, prefix: str, detail: SafeDetail) -> str:
     return value
 
 
-def _sha256_digest(value: object, detail: SafeDetail) -> str:
-    if not isinstance(value, str) or len(value) != 64 or any(ch not in _SHA256 for ch in value):
-        raise InvalidRequestError(detail)
-    return value
-
-
 def _bounded_token(value: object, detail: SafeDetail, *, maximum: int) -> str:
     if not isinstance(value, str) or not 1 <= len(value) <= maximum or "\x00" in value:
         raise InvalidRequestError(detail)
-    return value
-
-
-def _geometry(box: object) -> None:
-    if not isinstance(box, dict):
-        raise InvalidRequestError(SafeDetail.GEOMETRY)
-    required = ("x_min", "y_min", "width", "height")
-    if set(box) != set(required):
-        raise InvalidRequestError(SafeDetail.GEOMETRY)
-    values: list[float] = []
-    for name in required:
-        raw = box[name]
-        if isinstance(raw, bool) or not isinstance(raw, int | float):
-            raise InvalidRequestError(SafeDetail.GEOMETRY)
-        values.append(float(raw))
-    x_min, y_min, width, height = values
-    if min(x_min, y_min) < 0 or width <= 0 or height <= 0:
-        raise InvalidRequestError(SafeDetail.GEOMETRY)
-    if x_min + width > 1 or y_min + height > 1 or x_min > 1 or y_min > 1:
-        raise InvalidRequestError(SafeDetail.GEOMETRY)
-
-
-def _segments(value: object, *, schema_version: str) -> tuple[dict[str, object], ...]:
-    if not isinstance(value, tuple) or not 1 <= len(value) <= _MAX_GOODNOTES_SEGMENTS:
-        raise InvalidRequestError(SafeDetail.SEGMENTS)
-    cleaned: list[dict[str, object]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise InvalidRequestError(SafeDetail.SEGMENTS)
-        keys = {str(key).casefold() for key in item}
-        if keys & _FORBIDDEN_SEGMENT_KEYS:
-            raise InvalidRequestError(SafeDetail.SEGMENTS)
-        kind = item.get("kind")
-        if not isinstance(kind, str):
-            raise InvalidRequestError(SafeDetail.SEGMENTS)
-        try:
-            parsed_kind = GoodNotesSegmentKind(kind)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.SEGMENTS) from None
-        allowed = _V1_SEGMENT_KEYS
-        if schema_version == NOTE_UNIT_SCHEMA_V2 and parsed_kind is GoodNotesSegmentKind.NOTE_UNIT:
-            allowed = _V2_NOTE_UNIT_KEYS
-        if set(item) - allowed:
-            raise InvalidRequestError(SafeDetail.SEGMENTS)
-        _geometry(item.get("geometry"))
-        crop = item.get("crop_sha256")
-        if crop is not None:
-            _sha256_digest(crop, SafeDetail.SEGMENTS)
-        transcription = item.get("transcription")
-        if transcription is not None and (
-            not isinstance(transcription, str)
-            or len(transcription) > _MAX_GOODNOTES_TRANSCRIPTION
-            or "\x00" in transcription
-        ):
-            raise InvalidRequestError(SafeDetail.TRANSCRIPTION)
-        primary = item.get("primary_class")
-        if primary is not None:
-            if not isinstance(primary, str):
-                raise InvalidRequestError(SafeDetail.SEGMENTS)
-            try:
-                GoodNotesNoteClass(primary)
-            except ValueError:
-                raise InvalidRequestError(SafeDetail.SEGMENTS) from None
-        admitted = dict(item)
-        if "candidate_tags" in admitted:
-            tags = admitted["candidate_tags"]
-            if isinstance(tags, list):
-                tags = tuple(tags)
-            admitted["candidate_tags"] = _candidate_tags(tags)
-        if "ranked_candidates" in admitted:
-            ranked = admitted["ranked_candidates"]
-            if isinstance(ranked, list):
-                ranked = tuple(ranked)
-            admitted["ranked_candidates"] = _ranked_candidates(ranked)
-        if "confidence" in admitted:
-            admitted["confidence"] = _confidence(admitted["confidence"])
-        status = admitted.get("transcription_status")
-        if status is not None:
-            if not isinstance(status, str):
-                raise InvalidRequestError(SafeDetail.SEGMENTS)
-            try:
-                parsed_status = GoodNotesTranscriptionStatus(status)
-            except ValueError:
-                raise InvalidRequestError(SafeDetail.SEGMENTS) from None
-            if parsed_status is GoodNotesTranscriptionStatus.CLEAR and (
-                not isinstance(transcription, str) or not transcription
-            ):
-                raise InvalidRequestError(SafeDetail.TRANSCRIPTION)
-        cleaned.append(admitted)
-    return tuple(cleaned)
-
-
-def _candidate_tags(value: object) -> tuple[str, ...]:
-    if not isinstance(value, tuple):
-        raise InvalidRequestError(SafeDetail.CANDIDATE_TAGS)
-    if len(value) > _MAX_GOODNOTES_TAGS:
-        raise InvalidRequestError(SafeDetail.CANDIDATE_TAGS)
-    tags: list[str] = []
-    seen: set[str] = set()
-    for item in value:
-        if not isinstance(item, str) or not 1 <= len(item) <= _MAX_GOODNOTES_TAG or "\x00" in item:
-            raise InvalidRequestError(SafeDetail.CANDIDATE_TAGS)
-        if item in seen:
-            raise InvalidRequestError(SafeDetail.CANDIDATE_TAGS)
-        seen.add(item)
-        tags.append(item)
-    return tuple(tags)
-
-
-def _ranked_candidates(value: object) -> tuple[dict[str, object], ...]:
-    if not isinstance(value, tuple):
-        raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
-    if len(value) > _MAX_GOODNOTES_CANDIDATES:
-        raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
-    ranks: set[int] = set()
-    cleaned: list[dict[str, object]] = []
-    for item in value:
-        if not isinstance(item, dict):
-            raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
-        rank = item.get("rank")
-        candidate = item.get("candidate")
-        if type(rank) is not int or rank < 1 or rank in ranks:
-            raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
-        if (
-            not isinstance(candidate, str)
-            or not 1 <= len(candidate) <= _MAX_GOODNOTES_CANDIDATE
-            or "\x00" in candidate
-        ):
-            raise InvalidRequestError(SafeDetail.RANKED_CANDIDATES)
-        ranks.add(rank)
-        cleaned.append(item)
-    return tuple(cleaned)
-
-
-def _confidence(value: object) -> dict[str, object] | None:
-    if value is None:
-        return None
-    if not isinstance(value, dict):
-        raise InvalidRequestError(SafeDetail.CONFIDENCE)
-    allowed = {
-        "transcription",
-        "segmentation",
-        "classification",
-        "linking",
-        "uncertainty",
-    }
-    if set(value) - allowed:
-        raise InvalidRequestError(SafeDetail.CONFIDENCE)
-    for name in ("transcription", "segmentation", "classification", "linking"):
-        raw = value.get(name)
-        if raw is None:
-            continue
-        if isinstance(raw, bool) or not isinstance(raw, int | float):
-            raise InvalidRequestError(SafeDetail.CONFIDENCE)
-        if not 0 <= float(raw) <= 1:
-            raise InvalidRequestError(SafeDetail.CONFIDENCE)
-    note = value.get("uncertainty")
-    if note is not None and (not isinstance(note, str) or len(note) > 500 or "\x00" in note):
-        raise InvalidRequestError(SafeDetail.CONFIDENCE)
     return value
 
 
@@ -943,10 +802,7 @@ class EnrollSource:
         _identifier(self.source_id, IdKind.SOURCE, SafeDetail.SOURCE_ID)
         if not self.media_types:
             raise InvalidRequestError(SafeDetail.MEDIA_TYPES)
-        if not isinstance(self.idempotency_key, str):
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
         if bool(self.object_ids) == (self.root_object_id is not None):
             raise InvalidRequestError(SafeDetail.SELECTOR)
         for object_id in self.object_ids:
@@ -1072,10 +928,7 @@ class CreateCapture:
 
     def __post_init__(self) -> None:
         _text(self.text, SafeDetail.TEXT)
-        if not isinstance(self.idempotency_key, str):
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
         if not isinstance(self.capture_kind, CaptureKind):
             raise InvalidRequestError(SafeDetail.CAPTURE_KIND)
         if (self.context_source_object_id is None) is not (self.context_source_version_id is None):
@@ -1123,10 +976,7 @@ class ReviseCapture:
     def __post_init__(self) -> None:
         _identifier(self.capture_id, IdKind.CAPTURE, SafeDetail.CAPTURE_ID)
         _text(self.text, SafeDetail.TEXT)
-        if not isinstance(self.idempotency_key, str):
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
         _moment(self.client_created_at, SafeDetail.CLIENT_CREATED_AT)
         _moment(self.occurred_at, SafeDetail.OCCURRED_AT)
 
@@ -1240,11 +1090,13 @@ class DecideReviewCase:
         corrected = self.disposition is Disposition.CORRECT_AND_ACCEPT
         if corrected is not (self.corrected_value is not None):
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
-        if self.corrected_value is not None and (
-            not self.corrected_value.strip()
-            or len(self.corrected_value) > MAX_NORMALIZED_VALUE_CHARACTERS
-        ):
-            raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+        if self.corrected_value is not None:
+            _text(self.corrected_value, SafeDetail.CORRECTED_VALUE)
+            if (
+                not self.corrected_value.strip()
+                or len(self.corrected_value) > MAX_NORMALIZED_VALUE_CHARACTERS
+            ):
+                raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1389,15 +1241,7 @@ class PrepareContext:
     def __post_init__(self) -> None:
         if not isinstance(self.query, str):
             raise InvalidRequestError(SafeDetail.QUERY)
-        if self.conversation_context is not None:
-            accepted = False
-            try:
-                validate_conversation_context(self.conversation_context)
-                accepted = True
-            except ConversationContextError:
-                pass
-            if not accepted:
-                raise InvalidRequestError(SafeDetail.CONVERSATION_CONTEXT)
+        _conversation_context(self.conversation_context)
         if not isinstance(self.subject_hints, tuple):
             raise InvalidRequestError(SafeDetail.SUBJECT_HINTS)
         if len(self.subject_hints) > MAX_SUBJECT_HINTS:
@@ -1752,12 +1596,15 @@ class CreateTask:
     client_context: str | None = None
 
     def __post_init__(self) -> None:
+        if not isinstance(self.title, str):
+            raise InvalidRequestError(SafeDetail.TITLE)
         if not self.title.strip():
             raise InvalidRequestError(SafeDetail.TITLE)
+        if not isinstance(self.origin_evidence_ref, str):
+            raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.origin_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
         if self.priority is not None and not isinstance(self.priority, TaskPriority):
             raise InvalidRequestError(SafeDetail.PRIORITY)
         if self.due_at is not None:
@@ -1818,10 +1665,11 @@ class UpdateTask:
         _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
         if type(self.expected_version) is not int or self.expected_version < 1:
             raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-        if self.title is not None and not self.title.strip():
-            raise InvalidRequestError(SafeDetail.TITLE)
+        _idempotency_key(self.idempotency_key)
+        if self.title is not None:
+            _text(self.title, SafeDetail.TITLE)
+            if not self.title.strip():
+                raise InvalidRequestError(SafeDetail.TITLE)
         if self.priority is not None and not isinstance(self.priority, TaskPriority):
             raise InvalidRequestError(SafeDetail.PRIORITY)
         if self.due_at is not None:
@@ -1870,10 +1718,11 @@ class TransitionTask:
             raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE)
         if type(self.expected_version) is not int or self.expected_version < 1:
             raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
-        if self.closure_evidence_ref is not None and not self.closure_evidence_ref.strip():
-            raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
+        _idempotency_key(self.idempotency_key)
+        if self.closure_evidence_ref is not None:
+            _text(self.closure_evidence_ref, SafeDetail.CLOSURE_EVIDENCE_REF)
+            if not self.closure_evidence_ref.strip():
+                raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1901,8 +1750,7 @@ class BulkPreviewTasks:
     def __post_init__(self) -> None:
         if not self.mutations:
             raise InvalidRequestError(SafeDetail.MUTATIONS)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1927,8 +1775,7 @@ class BulkConfirmTasks:
 
     def __post_init__(self) -> None:
         _identifier(self.bulk_operation_id, IdKind.BULK_OPERATION, SafeDetail.BULK_OPERATION_ID)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -2030,12 +1877,13 @@ class CreateCommitment:
         _identifier(self.counterparty_person_id, IdKind.PERSON, SafeDetail.COUNTERPARTY_PERSON_ID)
         if not isinstance(self.direction, CommitmentDirection):
             raise InvalidRequestError(SafeDetail.SELECTOR)
+        _text(self.summary, SafeDetail.TITLE)
         if not self.summary.strip():
             raise InvalidRequestError(SafeDetail.TITLE)
+        _text(self.origin_evidence_ref, SafeDetail.ORIGIN_EVIDENCE_REF)
         if not self.origin_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.ORIGIN_EVIDENCE_REF)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
         if self.due_at is not None:
             _moment(self.due_at, SafeDetail.DUE_AT)
         if self.project_id is not None:
@@ -2071,10 +1919,10 @@ class CloseCommitment:
         _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
         if type(self.expected_version) is not int or self.expected_version < 1:
             raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _text(self.closure_evidence_ref, SafeDetail.CLOSURE_EVIDENCE_REF)
         if not self.closure_evidence_ref.strip():
             raise InvalidRequestError(SafeDetail.CLOSURE_EVIDENCE_REF)
-        if not self.idempotency_key:
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
+        _idempotency_key(self.idempotency_key)
 
 
 #: Continuity and relationship identities a pin can resolve to. Shape is checked
@@ -2091,6 +1939,30 @@ _PIN_KINDS: frozenset[IdKind] = frozenset(
         IdKind.TASK,
     }
 )
+
+
+def _conversation_context(value: str | None) -> str | None:
+    """Validate optional conversation text without echoing it.
+
+    The domain validator refuses a non-string, and its message renders the
+    rejected value, so it is converted here rather than chained — the same
+    conversion `_alias` performs for `validate_context_alias`. It lived inline
+    in `PrepareContext.__post_init__` until this change: correct, but invisible
+    to any reader — and to `test_commands_check_the_type_before_the_content`,
+    which measures type-checking by helper and so carried this command on its
+    allowlist of real defects for nine review rounds without it being one.
+    """
+    if value is None:
+        return None
+    accepted = False
+    try:
+        validate_conversation_context(value)
+        accepted = True
+    except ConversationContextError:
+        pass
+    if not accepted:
+        raise InvalidRequestError(SafeDetail.CONVERSATION_CONTEXT)
+    return value
 
 
 def _alias(value: str | None) -> str | None:
@@ -2122,8 +1994,6 @@ class RecordContextFeedback:
         if not isinstance(self.action, ContextPreferenceAction):
             raise InvalidRequestError(SafeDetail.ACTION)
         _identifier(self.target_id, None, SafeDetail.TARGET_ID)
-        if not isinstance(self.idempotency_key, str):
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
         _idempotency_key(self.idempotency_key)
         _alias(self.alias)
         if self.source_id is not None:
@@ -2209,6 +2079,185 @@ class GetGoodNotesContent:
         _sha256_digest(self.content_sha256, SafeDetail.CONTENT_SHA256)
 
 
+@dataclass(frozen=True, slots=True)
+class SearchEntities:
+    """`entities.search`: one bounded page of entities whose name matches a query.
+
+    `page_size` and `after` bound and continue the page. This was the last read
+    on the plane without a continuation cursor -- the browse surface a person
+    actually scrolls could be truncated and not paged.
+
+    A case-insensitive substring match over the canonical and display names of
+    the acting Principal's own entities. This is the *browse* surface, and it is
+    deliberately not the resolution surface: it answers "who is like this", and
+    a substring match is evidence of nothing about identity. `entities.resolve`
+    answers "who is this", and refuses far more.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_SEARCH
+
+    query: str = field(repr=False)
+    entity_type: str | None = None
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str):
+            raise InvalidRequestError(SafeDetail.QUERY)
+        if not self.query.strip():
+            raise InvalidRequestError(SafeDetail.QUERY)
+        # The bound every other search capability applies, applied here too.
+        # `knowledge.search` and `capture.search` route their query through
+        # `domain.search.query`, which refuses a query over
+        # `MAX_QUERY_CHARACTERS` and refuses control, formatting, surrogate and
+        # private-use characters -- the second for the reason that module's own
+        # comment gives: a NUL byte reaches psycopg as a `DataError` raised from
+        # inside a statement, which is not a `PortError`, so the caller is told
+        # `internal_error` about a request only they can correct. This read is
+        # an `ILIKE` parameter on the same driver and had neither bound.
+        _bounded_query(self.query, SafeDetail.QUERY)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            # Validated as an entity identifier for the reason
+            # `GetEntityRelationships.after` is: the repository looks the cursor
+            # up to find its place in the sort order, and an arbitrary string
+            # would silently locate nowhere and quietly restart the walk.
+            _identifier(self.after, IdKind.ENTITY, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntity:
+    """`entities.get`: one entity of the acting Principal's, by its identifier.
+
+    An entity another Principal holds is answered exactly as an absent one.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_GET
+
+    entity_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveEntity:
+    """`entities.resolve`: which entity a reference names, or why none.
+
+    **The answer may be that it could not be decided, and that is a success.**
+    An ambiguous reference returns the candidates it could not choose between
+    rather than the nearest one, because a wrong identity contaminates every
+    record joined to it afterwards. Callers must read `outcome` before
+    `entity_id`; there is no `entity_id` at all on an unresolved answer.
+
+    `namespace` is stated rather than sniffed. A reference containing an `@` is
+    probably an address, and resolving on "probably" is how a person whose
+    recorded name contains one gets matched as a mailbox.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_RESOLVE
+
+    reference: str = field(repr=False)
+    namespace: str | None = None
+    entity_type: str | None = None
+    scope_entity_id: str | None = None
+    as_of: datetime | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.reference, str):
+            raise InvalidRequestError(SafeDetail.SUBJECT)
+        if not self.reference.strip():
+            raise InvalidRequestError(SafeDetail.SUBJECT)
+        if self.scope_entity_id is not None:
+            _identifier(self.scope_entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        _moment(self.as_of, SafeDetail.OCCURRED_AT)
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntityContext:
+    """`entities.context`: the bounded context card for one entity.
+
+    Aliases, external identifiers, assignments, and typed edges, each bounded,
+    with every bound that bit named in `limitations`. A card that ran out of room
+    says so rather than reading as complete.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_CONTEXT
+
+    entity_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListUnresolvedMentions:
+    """`entities.unresolved_mentions`: references nothing has placed yet.
+
+    The queue is a first-class state rather than a gap in the data
+    (`RI-AC-006`): these are the mentions the system knows it has not resolved,
+    and being able to list them is what makes "unresolved" something a person
+    can look at instead of an absence they have to infer.
+
+    **Read-only, and the queue cannot be worked from here.** Deciding what an
+    unresolved mention refers to is a governed write, and this plane publishes no
+    write capability at all (`D-RI-21`). A surface built on this must show the
+    queue and must not offer to resolve it.
+
+    Bounded and continuable like every other listing here. Unbounded is
+    especially wrong for this one: observations are the collection that grows
+    with every source record that ever mentioned anyone.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_UNRESOLVED_MENTIONS
+
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_OBSERVATION, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntityRelationships:
+    """`entities.relationships`: one bounded page of an entity's typed edges, to depth one.
+
+    Adjacent edges only. There is no recursive walk and no traversal depth to
+    raise: a graph walk over people is the shape that turns a bounded read into
+    an unbounded one, and depth one is the bound on *shape*.
+
+    `page_size` and `after` are the bound on *count*, and they are separate
+    because depth one never was one. An entity every person on a programme is
+    related to has an edge per person, so "one hop" says nothing about how many
+    rows come back; this capability returned all of them. `after` names the last
+    `erel_…` of the previous page, which is the `next_cursor` the disclosure
+    issued and which the caller already holds -- every edge in the payload
+    carries its own `relationship_id`.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_RELATIONSHIPS
+
+    entity_id: str
+    direction: str | None = None
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        if self.direction is not None and self.direction not in ("any", "outgoing", "incoming"):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            # Validated as a relationship identifier rather than accepted as an
+            # opaque string, because the repository compares it against
+            # `relationship_id` directly: an arbitrary string would silently
+            # order somewhere in the middle of the key space and skip edges
+            # rather than continue past them.
+            _identifier(self.after, IdKind.ENTITY_RELATIONSHIP, SafeDetail.CURSOR)
+
+
 GetGoodNotesContent.__doc__ = (
     "`goodnotes.content`: return the bounded PNG bytes of the pinned visual "
     "raster used for one page-version identity. Call this after `goodnotes.work` "
@@ -2254,8 +2303,6 @@ class SubmitGoodNotesProposal:
         _bounded_token(
             self.analyzer_version, SafeDetail.ANALYZER_VERSION, maximum=_MAX_GOODNOTES_ANALYZER
         )
-        if not isinstance(self.idempotency_key, str):
-            raise InvalidRequestError(SafeDetail.IDEMPOTENCY_KEY)
         _idempotency_key(self.idempotency_key)
         _bounded_token(
             self.idempotency_key, SafeDetail.IDEMPOTENCY_KEY, maximum=_MAX_GOODNOTES_IDEMPOTENCY
@@ -2397,11 +2444,11 @@ class CommitIntelligenceArtifact:
             _identifier(
                 self.supersedes_artifact_id, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.ARTIFACT_ID
             )
-        if self.advisory_digest is not None and (
-            len(self.advisory_digest) != 64
-            or any(character not in _SHA256 for character in self.advisory_digest)
-        ):
-            raise InvalidRequestError(SafeDetail.ADVISORY_DIGEST)
+        if self.advisory_digest is not None:
+            # The same rule `_sha256_digest` states, and now the same code: this
+            # spelled the length and alphabet check inline and never the type, so
+            # a non-string reached `len()` before anything established it was one.
+            _sha256_digest(self.advisory_digest, SafeDetail.ADVISORY_DIGEST)
         if self.structured_content is not None and not isinstance(self.structured_content, dict):
             raise InvalidRequestError(SafeDetail.STRUCTURED_CONTENT)
 
@@ -2634,6 +2681,12 @@ type Command = (
     | ListIntelligenceArtifacts
     | SearchIntelligenceArtifacts
     | ResolveIntelligenceSet
+    | SearchEntities
+    | GetEntity
+    | ResolveEntity
+    | GetEntityContext
+    | GetEntityRelationships
+    | ListUnresolvedMentions
 )
 
 

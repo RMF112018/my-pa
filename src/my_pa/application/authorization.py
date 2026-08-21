@@ -67,6 +67,9 @@ from my_pa.application.commands import (
     FetchSource,
     GetCapabilities,
     GetCorpusCoverage,
+    GetEntity,
+    GetEntityContext,
+    GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
     GetLatestIntelligenceArtifact,
@@ -83,6 +86,7 @@ from my_pa.application.commands import (
     ListSituations,
     ListSources,
     ListTasks,
+    ListUnresolvedMentions,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -93,12 +97,14 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     RecordIntelligenceRunState,
     RecordTask,
+    ResolveEntity,
     ResolveIntelligenceSet,
     RestoreManagedDocument,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
@@ -280,6 +286,14 @@ def _requested_scope(
             | ListIntelligenceArtifacts()
             | SearchIntelligenceArtifacts()
             | ResolveIntelligenceSet()
+            # The entity plane names a person, not a source, for the reason
+            # `domain.policy.decision._SCOPELESS` states beside the same five.
+            | SearchEntities()
+            | GetEntity()
+            | ResolveEntity()
+            | GetEntityContext()
+            | GetEntityRelationships()
+            | ListUnresolvedMentions()
         ):
             return frozenset()
         case CreateCapture():

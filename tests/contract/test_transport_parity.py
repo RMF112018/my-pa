@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-fifty-six capabilities. There are two ways to prove that and only one of them stays
+sixty-two capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -26,7 +26,7 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over all fifty-six capabilities and ten refusals.** Each
+**And the answers, over all sixty-two capabilities and ten refusals.** Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
 `sources.enroll` alone would make the second and third callers idempotent
@@ -57,7 +57,9 @@ from typing import Any
 
 import pytest
 from tests.conftest import (
+    WHEN,
     FakeProviders,
+    FakeUnitOfWork,
     Scene,
     build_service,
     staged_capture,
@@ -96,6 +98,15 @@ from my_pa.domain.intelligence.catalog import (
     ArtifactState,
     FocusAreaId,
     IntelligenceStage,
+)
+from my_pa.domain.relationship.entity import (
+    Entity,
+    EntityRelationship,
+    EntityRelationshipType,
+    EntityStatus,
+    EntityType,
+    ExternalIdentifier,
+    ExternalIdentifierNamespace,
 )
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.source.registry import issue_identifier
@@ -151,6 +162,84 @@ def document(
     }
 
 
+#: The address the staged person is recorded at, so `entities.resolve` answers
+#: `resolved_exact` rather than `not_found`. Synthetic, in a reserved domain: no
+#: live address reaches a test.
+ENTITY_EMAIL = "parity.person@example.invalid"
+
+
+def staged_entities(scene: Scene) -> tuple[Entity, Entity]:
+    """One person, one organization, and the edge between them.
+
+    Written through the entity repository rather than pushed into `World`
+    directly, for the reason `staged_capture` is: the rows are then ones a
+    writer can actually reach. One pair per Principal per scene, like
+    `staged_task`: a payload table that staged a fresh pair on every call would
+    name a different entity each time it was read, and every comparison below
+    would be measuring the staging rather than the request.
+
+    Shared with `tests/contract/test_http_transport.py` and
+    `tests/security/test_http_negative_evidence.py` rather than repeated in
+    each: those files stage their own `KnowledgeRecord` because theirs carries
+    their own marker text, and an entity carries none — three copies of one
+    staging would only be three things to keep in step.
+    """
+    principal_id = scene.principal.principal_id
+    held = {
+        entity.entity_type: entity
+        for entity in scene.world.entities
+        if entity.principal_id == principal_id
+    }
+    if EntityType.PERSON in held and EntityType.ORGANIZATION in held:
+        return held[EntityType.PERSON], held[EntityType.ORGANIZATION]
+    entities = FakeUnitOfWork(scene.world).entities
+    person = entities.create(
+        principal_id, _entity(principal_id, EntityType.PERSON, "Parity Person")
+    )
+    organization = entities.create(
+        principal_id, _entity(principal_id, EntityType.ORGANIZATION, "Parity Works")
+    )
+    entities.bind_identifier(
+        principal_id,
+        person.entity_id,
+        ExternalIdentifier(
+            identifier_id=issue_identifier(IdKind.EXTERNAL_IDENTIFIER),
+            entity_id=person.entity_id,
+            namespace=ExternalIdentifierNamespace.EMAIL,
+            normalized_value=ENTITY_EMAIL,
+            display_value=ENTITY_EMAIL,
+            principal_id=principal_id,
+            verified=True,
+        ),
+    )
+    entities.record_relationship(
+        principal_id,
+        EntityRelationship(
+            relationship_id=issue_identifier(IdKind.ENTITY_RELATIONSHIP),
+            from_entity_id=person.entity_id,
+            relationship_type=EntityRelationshipType.WORKS_FOR,
+            to_entity_id=organization.entity_id,
+            principal_id=principal_id,
+        ),
+    )
+    return person, organization
+
+
+def _entity(principal_id: str, entity_type: EntityType, display_name: str) -> Entity:
+    """One active entity, its canonical name in the form resolution compares."""
+    return Entity(
+        entity_id=issue_identifier(IdKind.ENTITY),
+        principal_id=principal_id,
+        entity_type=entity_type,
+        canonical_name=display_name.casefold(),
+        display_name=display_name,
+        status=EntityStatus.ACTIVE,
+        created_at=WHEN,
+        updated_at=WHEN,
+        version=1,
+    )
+
+
 def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict[str, Any]]:
     """A payload per capability that the application can actually answer.
 
@@ -201,6 +290,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     )
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
+    person, organization = staged_entities(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -455,6 +545,38 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "cycle_run_id": cycle_run_id,
             "set_id": "collectors",
         },
+        # The relationship-intelligence entity plane (WP-RI-05). `person` and
+        # `organization` are staged before the world is copied per transport, so
+        # all three read the same rows and a read is the same read everywhere.
+        # Every optional field is supplied for the reason this docstring gives:
+        # a transport that dropped `entity_type`, `namespace`, `as_of`, or
+        # `direction` would answer identically to one that did not if the
+        # request never carried them.
+        Capability.ENTITIES_SEARCH: {
+            "query": "parity",
+            "entity_type": "person",
+            "page_size": 10,
+        },
+        Capability.ENTITIES_GET: {"entity_id": person.entity_id},
+        # The reference is the address bound to `person`, stated in its own
+        # namespace rather than sniffed, so this resolves rather than answering
+        # the `not_found` outcome an unknown reference answers with — which is a
+        # `200` either way, and the weaker of the two things to compare.
+        Capability.ENTITIES_RESOLVE: {
+            "reference": ENTITY_EMAIL,
+            "namespace": "email",
+            "entity_type": "person",
+            "scope_entity_id": organization.entity_id,
+            "as_of": "2026-08-02T12:00:00Z",
+        },
+        Capability.ENTITIES_CONTEXT: {"entity_id": person.entity_id},
+        Capability.ENTITIES_RELATIONSHIPS: {
+            "entity_id": person.entity_id,
+            "direction": "any",
+        },
+        # No arguments: the queue is every unplaced mention in the Principal's
+        # own partition, so there is nothing to name.
+        Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
     }
 
 
@@ -578,7 +700,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 57, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 63, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -1256,7 +1378,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: fifty-six capabilities answered from an empty world prove little."""
+    """Guard the matrix: sixty-two capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

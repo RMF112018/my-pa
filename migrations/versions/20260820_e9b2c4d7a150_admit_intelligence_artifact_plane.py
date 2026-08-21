@@ -1,7 +1,7 @@
 """Admit reports.* capabilities and create the Intelligence Artifact plane.
 
 Revision ID: e9b2c4d7a150
-Revises: f4c1a8e6b205
+Revises: f3a8c1d7e592
 Create Date: 2026-08-20
 
 WP-RPT-00 through WP-RPT-04. Forward ALTER admits eight `reports.*` capabilities
@@ -21,7 +21,7 @@ from typing import Final
 from alembic import op
 
 revision: str = "e9b2c4d7a150"
-down_revision: str | tuple[str, ...] | None = "f4c1a8e6b205"
+down_revision: str | tuple[str, ...] | None = "f3a8c1d7e592"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 
@@ -36,7 +36,9 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'continuity.situations', 'continuity.situations.create', "
     "'continuity.tasks.create', 'documents.archive', 'documents.create', "
     "'documents.list', 'documents.read', 'documents.restore', "
-    "'documents.revise', 'goodnotes.content', 'goodnotes.propose', "
+    "'documents.revise', 'entities.context', 'entities.get', "
+    "'entities.relationships', 'entities.resolve', 'entities.search', "
+    "'entities.unresolved_mentions', 'goodnotes.content', 'goodnotes.propose', "
     "'goodnotes.work', 'knowledge.coverage', 'knowledge.read', "
     "'knowledge.reveal', 'knowledge.search', 'native_sources.backfill', "
     "'native_sources.configure', 'native_sources.disable', "
@@ -46,13 +48,12 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'native_sources.sync', 'reports.begin_cycle', 'reports.commit', "
     "'reports.latest', 'reports.list', 'reports.read', "
     "'reports.record_run_state', 'reports.resolve_set', 'reports.search', "
-    "'review.decide', 'review.list', 'sources.enroll', "
-    "'sources.fetch', 'sources.list', 'sources.metadata', 'sources.status', "
+    "'review.decide', 'review.list', 'sources.enroll', 'sources.fetch', "
+    "'sources.list', 'sources.metadata', 'sources.status', "
     "'tasks.bulk_confirm', 'tasks.bulk_preview', 'tasks.create', "
     "'tasks.history', 'tasks.list', 'tasks.read', 'tasks.search', "
     "'tasks.transition', 'tasks.update')"
 )
-
 _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "capability IN ('capabilities.get', 'capture.create', 'capture.list', "
     "'capture.read', 'capture.revise', 'capture.search', 'commitments.close', "
@@ -62,7 +63,9 @@ _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "'continuity.situations', 'continuity.situations.create', "
     "'continuity.tasks.create', 'documents.archive', 'documents.create', "
     "'documents.list', 'documents.read', 'documents.restore', "
-    "'documents.revise', 'goodnotes.content', 'goodnotes.propose', "
+    "'documents.revise', 'entities.context', 'entities.get', "
+    "'entities.relationships', 'entities.resolve', 'entities.search', "
+    "'entities.unresolved_mentions', 'goodnotes.content', 'goodnotes.propose', "
     "'goodnotes.work', 'knowledge.coverage', 'knowledge.read', "
     "'knowledge.reveal', 'knowledge.search', 'native_sources.backfill', "
     "'native_sources.configure', 'native_sources.disable', "
@@ -75,23 +78,21 @@ _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "'tasks.history', 'tasks.list', 'tasks.read', 'tasks.search', "
     "'tasks.transition', 'tasks.update')"
 )
-
 _PURPOSES_AT_THIS_REVISION: Final = (
     "purpose IN ('bounded_enrollment', 'capture_authoring', 'capture_review', "
     "'commitment_authoring', 'commitment_read', 'content_extraction', "
     "'context_preference', 'context_preparation', 'continuity_authoring', "
-    "'document_authoring', 'document_read', 'goodnotes_content', "
+    "'document_authoring', 'document_read', 'entity_read', 'goodnotes_content', "
     "'goodnotes_proposal', 'goodnotes_work', 'knowledge_read', "
     "'knowledge_search', 'report_authoring', 'report_read', "
-    "'review_disposition', 'security_validation', "
-    "'source_inspection', 'status_observation', 'task_authoring', 'task_read')"
+    "'review_disposition', 'security_validation', 'source_inspection', "
+    "'status_observation', 'task_authoring', 'task_read')"
 )
-
 _PURPOSES_BEFORE_THIS_REVISION: Final = (
     "purpose IN ('bounded_enrollment', 'capture_authoring', 'capture_review', "
     "'commitment_authoring', 'commitment_read', 'content_extraction', "
     "'context_preference', 'context_preparation', 'continuity_authoring', "
-    "'document_authoring', 'document_read', 'goodnotes_content', "
+    "'document_authoring', 'document_read', 'entity_read', 'goodnotes_content', "
     "'goodnotes_proposal', 'goodnotes_work', 'knowledge_read', "
     "'knowledge_search', 'review_disposition', 'security_validation', "
     "'source_inspection', 'status_observation', 'task_authoring', 'task_read')"

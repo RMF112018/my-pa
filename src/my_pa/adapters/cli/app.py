@@ -12,10 +12,10 @@ over a socket: nothing in this file knows which capabilities those are.
 
 **Why the envelope is options and the payload is JSON.** The two halves of a
 request have two owners. The envelope is one fixed shape — `RequestMetadata`'s
-fields, the same for all fifty-six capabilities — so it is presented as options,
+fields, the same for all sixty-two capabilities — so it is presented as options,
 which is what a CLI is for. The payload is capability-specific, so fifteen sets of
 hand-written options would be fifteen statements of what `application.commands`
-already says, and a fifty-seventh capability would arrive with none. `--payload` is
+already says, and a sixty-third capability would arrive with none. `--payload` is
 JSON for the same reason `adapters/mcp/tools.py` derives its schemas: a second
 copy of a shape is a second thing to keep true.
 

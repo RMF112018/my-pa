@@ -20,7 +20,7 @@ Operational procedures for running `my-pa` locally.
 | [`goodnotes-tbr-preservation.md`](goodnotes-tbr-preservation.md) | GN-09 TBR Staff Meeting regression freeze and dormant optional-bridge design. Existing TBR Task must not change; live bridge remains unauthorized. |
 | [`relationship-intelligence.md`](relationship-intelligence.md) | The entity plane: what its six read capabilities answer, how to read the unresolved-mention and proposal queues, how to read a resolution outcome — and that the review queue **cannot be worked** in this build, because the governance service is composed by nothing. |
 | [`goodnotes-and-model-operations.md`](goodnotes-and-model-operations.md) | GoodNotes ingestion and model-route operations. |
-| [`../goodnotes/gsqs/README.md`](../goodnotes/gsqs/README.md) | Gate B GSQS labeled corpus, independent evaluator, and unused B0 harness. Operator review pending; `MEASURED_B0` not established. |
+| [`../goodnotes/gsqs/README.md`](../goodnotes/gsqs/README.md) | Gate B GSQS labeled corpus, independent evaluator, and governed live-B0 runner. Preflight is non-disclosing; `MEASURED_B0` is not established. |
 | [`context-personal-knowledge-pilot.md`](context-personal-knowledge-pilot.md) | Operator-authorized personal-knowledge pilot checklist. Does not access live personal data; queries and evidence must not be committed. |
 
 Related, outside this directory:

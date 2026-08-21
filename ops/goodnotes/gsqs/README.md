@@ -37,8 +37,11 @@ it does not replace A-X.
   `REJECT_FOR_B0`; kept as a synthetic regression/canary.
 - [`EVALUATOR.md`](EVALUATOR.md) — GSQS formulas, thresholds, and critical
   errors.
-- [`SUCCESSOR-B0-PROMPT.md`](SUCCESSOR-B0-PROMPT.md) — next operator-authorized
-  phase. ChatLLM must not grade itself.
+- [`B0_RUNBOOK.md`](B0_RUNBOOK.md) — governed live-B0 preflight/execute
+  contract. `b0_suitable` is not disclosure permission. `MEASURED_B0`
+  remains `NOT_YET_ESTABLISHED`.
+- [`SUCCESSOR-B0-PROMPT.md`](SUCCESSOR-B0-PROMPT.md) — later operator-authorized
+  execution phase after exact-head review. ChatLLM must not grade itself.
 
 ## Corpus layers
 

@@ -41,9 +41,16 @@ from sqlalchemy.engine import make_url
 
 from my_pa.application.tasks import TaskManagementService, TaskVersionConflictError
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.situation.continuity import ContinuityAcceptanceKind
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.history import TaskMutationActor, TaskMutationOutcome
 from my_pa.infrastructure.database.engine import create_database_engine
-from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
+from my_pa.infrastructure.persistence.continuity_authoring import SqlContinuityAuthoringRepository
+from my_pa.infrastructure.persistence.task_management import (
+    SqlAlchemyTaskManagementUnitOfWork,
+    SqlTaskManagementRepository,
+)
 
 pytestmark = pytest.mark.database
 
@@ -248,3 +255,32 @@ def test_a_rejected_attempt_leaves_no_row_beyond_its_own_rejected_history_entry(
 
     history = _history_rows(migrated_engine, task_id)
     assert [row["outcome"] for row in history] == ["applied", "rejected"]
+
+
+def test_list_and_get_hydrate_a_direct_principal_accepted_task(migrated_engine: Engine) -> None:
+    """Continuity-authored tasks are accepted without a review decision.
+
+    `tasks.list`/`tasks.read` hydrate through `domain.task.task.Task`, which
+    previously required every accepted row to name a review decision. Direct
+    Principal authoring stores `acceptance_kind = direct_principal` and a NULL
+    review-decision id, which is what ChatLLM then hit as `internal_error`.
+    """
+
+    task_id = issue_identifier(IdKind.TASK)
+    with migrated_engine.begin() as connection:
+        SqlContinuityAuthoringRepository(connection).author_task(
+            principal_id=PRINCIPAL_A,
+            task_id=task_id,
+            title="Verify ChatLLM write behavior on pulse",
+            origin_evidence_ref=ORIGIN,
+        )
+    with migrated_engine.connect() as connection:
+        repository = SqlTaskManagementRepository(connection)
+        listed = repository.list_tasks(PRINCIPAL_A, limit=10)
+        read = repository.get(PRINCIPAL_A, task_id)
+    assert [task.task_id for task in listed] == [task_id]
+    assert listed[0].acceptance_kind is ContinuityAcceptanceKind.DIRECT_PRINCIPAL
+    assert listed[0].accepted_by_review_decision_id is None
+    assert read is not None
+    assert read.task_id == task_id
+    assert read.title == "Verify ChatLLM write behavior on pulse"

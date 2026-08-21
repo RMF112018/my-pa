@@ -12,7 +12,7 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from my_pa.domain.common.identifiers import InvalidIdentifierError
-from my_pa.domain.situation.continuity import ContinuityEvidenceState
+from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.task.history import (
     MAX_CLIENT_CONTEXT_CHARACTERS,
     TaskHistoryEntry,
@@ -372,6 +372,22 @@ class TestTask:
             accepted_by_review_decision_id=REVIEW_DECISION_ID,
         )
         assert task.accepted_by_review_decision_id == REVIEW_DECISION_ID
+
+    def test_a_direct_principal_accepted_task_constructs_without_a_review_decision(self) -> None:
+        task = self._task(
+            evidence_state=ContinuityEvidenceState.ACCEPTED,
+            acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
+        )
+        assert task.acceptance_kind is ContinuityAcceptanceKind.DIRECT_PRINCIPAL
+        assert task.accepted_by_review_decision_id is None
+
+    def test_a_direct_principal_task_rejects_a_review_decision(self) -> None:
+        with pytest.raises(ValueError, match="does not cite a review decision"):
+            self._task(
+                evidence_state=ContinuityEvidenceState.ACCEPTED,
+                acceptance_kind=ContinuityAcceptanceKind.DIRECT_PRINCIPAL,
+                accepted_by_review_decision_id=REVIEW_DECISION_ID,
+            )
 
     def test_invalid_recurrence_id_is_rejected(self) -> None:
         with pytest.raises(InvalidIdentifierError):

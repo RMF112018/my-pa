@@ -29,7 +29,7 @@ from my_pa.application.tasks import (
 )
 from my_pa.contracts.ports import TaskManagementRepository, TaskManagementUnitOfWork
 from my_pa.domain.common.identifiers import IdKind
-from my_pa.domain.situation.continuity import ContinuityEvidenceState
+from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.history import TaskHistoryEntry, TaskMutationActor, TaskMutationOutcome
 from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
@@ -186,6 +186,7 @@ def test_create_task_with_a_review_decision_produces_an_accepted_task() -> None:
     )
     assert receipt.task.evidence_state is ContinuityEvidenceState.ACCEPTED
     assert receipt.task.accepted_by_review_decision_id == decision_id
+    assert receipt.task.acceptance_kind is ContinuityAcceptanceKind.REVIEW
 
 
 # --- update_title --------------------------------------------------------------

@@ -43,12 +43,26 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.CONTINUITY_PROJECTS_CREATE.value not in first
     assert Capability.SOURCES_ENROLL.value not in first
     assert Capability.DOCUMENTS_CREATE.value not in first
+    assert Capability.TASKS_READ.value in first
+    assert Capability.TASKS_LIST.value in first
+    assert Capability.TASKS_SEARCH.value in first
+    assert Capability.TASKS_HISTORY.value in first
+    assert Capability.TASKS_CREATE.value not in first
+    assert Capability.TASKS_UPDATE.value not in first
+    assert Capability.TASKS_TRANSITION.value not in first
+    assert Capability.TASKS_BULK_PREVIEW.value not in first
+    assert Capability.TASKS_BULK_CONFIRM.value not in first
     enabled = remote_tool_names(service, writes_enabled=True)
     assert Capability.CAPTURE_CREATE.value in enabled
     assert Capability.CONTEXT_FEEDBACK.value in enabled
     assert Capability.CONTINUITY_PROJECTS_CREATE.value in enabled
     assert Capability.CONTINUITY_SITUATIONS_CREATE.value in enabled
     assert Capability.CONTINUITY_TASKS_CREATE.value in enabled
+    assert Capability.TASKS_CREATE.value in enabled
+    assert Capability.TASKS_UPDATE.value in enabled
+    assert Capability.TASKS_TRANSITION.value in enabled
+    assert Capability.TASKS_BULK_PREVIEW.value in enabled
+    assert Capability.TASKS_BULK_CONFIRM.value in enabled
     assert Capability.SOURCES_ENROLL.value not in enabled
 
 
@@ -443,6 +457,76 @@ async def test_remote_project_create_is_visible_on_continuity_projects(scene: Sc
 
 
 @pytest.mark.anyio
+async def test_remote_task_create_is_visible_on_tasks_list(scene: Scene) -> None:
+    create = Capability.TASKS_CREATE
+    listing = Capability.TASKS_LIST
+    reading = Capability.TASKS_READ
+    app = create_remote_mcp_app(
+        build_service(scene.world, scene.providers),
+        resolve_access=lambda _authorization: RemoteAccessContext(
+            scene.principal,
+            allowed_capabilities=frozenset({create.value, listing.value, reading.value}),
+            capability_purposes=frozenset(
+                {
+                    (create, Purpose.TASK_AUTHORING),
+                    (listing, Purpose.TASK_READ),
+                    (reading, Purpose.TASK_READ),
+                }
+            ),
+        ),
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=True,
+        resource="https://mcp.example.invalid",
+        authorization_servers=("https://issuer.example.invalid",),
+        scopes=frozenset({"my-pa.read"}),
+    )
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        names = {tool.name for tool in (await session.list_tools()).tools}
+        created = await session.call_tool(
+            create.value,
+            remote_arguments(
+                {
+                    "title": "MCP task write acceptance",
+                    "origin_evidence_ref": "cap_origin0001origin0001",
+                }
+            ),
+        )
+        listed = await session.call_tool(listing.value, remote_arguments({"page_size": 20}))
+        forged = await session.call_tool(
+            create.value,
+            {
+                **remote_arguments(
+                    {
+                        "title": "Should not land",
+                        "origin_evidence_ref": "cap_origin0001origin0001",
+                    }
+                ),
+                "principal_id": "prn_00000000000000000000000000000000",
+            },
+        )
+    assert {create.value, listing.value, reading.value} <= names
+    assert created.is_error is False
+    body = json.loads(created.content[0].text)
+    title = body["result"]["task"]["title"]
+    assert title == "MCP task write acceptance"
+    listed_body = json.loads(listed.content[0].text)
+    assert title in [row["title"] for row in listed_body["result"]["tasks"]]
+    assert forged.is_error is True
+    assert json.loads(forged.content[0].text)["code"] == "invalid_request"
+
+
+@pytest.mark.anyio
 async def test_remote_dependency_failures_and_reconnect_are_safe(scene: Scene) -> None:
     service = build_service(scene.world, scene.providers)
 
@@ -519,6 +603,10 @@ async def test_remote_read_only_reference_client_matrix(scene: Scene) -> None:
         Capability.CONTINUITY_PROJECTS,
         Capability.DOCUMENTS_READ,
         Capability.DOCUMENTS_LIST,
+        Capability.TASKS_READ,
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
     )
     app = create_remote_mcp_app(
         build_service(scene.world, scene.providers),

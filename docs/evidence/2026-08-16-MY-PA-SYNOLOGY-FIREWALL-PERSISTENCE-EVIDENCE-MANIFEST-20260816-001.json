@@ -1,0 +1,78 @@
+{
+  "investigation_id": "MY-PA-SYNOLOGY-FIREWALL-PERSISTENCE-INVESTIGATION-20260816-001",
+  "coordination_request_id": "BFM-MYPA-FIREWALL-PERSISTENCE-20260816-001",
+  "mode": "INVESTIGATION_AND_DESIGN_ONLY",
+  "implementation_authority": "NOT_GRANTED",
+  "risk_acceptance": "NOT_GRANTED",
+  "production_changes_performed": "NONE",
+  "coordination_roundtrip": {
+    "requested_artifacts": [
+      "COORDINATION-REQUEST-BFM-MYPA-FIREWALL-PERSISTENCE-20260816-001.md",
+      "COORDINATION-RESPONSE-BFM-MYPA-FIREWALL-PERSISTENCE-20260816-001.md",
+      "COORDINATION-ROUNDTRIP-RECEIPT-BFM-MYPA-FIREWALL-PERSISTENCE-20260816-001.json"
+    ],
+    "target": "Google Drive governed infrastructure/my-pa/incident collection",
+    "status": "PUBLICATION_INCOMPLETE",
+    "reason": "EVIDENCE_UNAVAILABLE - no Google Drive integration or Software Delivery Control Center index is available in this environment/toolset; substituted with repository-native publication under docs/findings and docs/evidence."
+  },
+  "runtime_identity": {
+    "host": "TheLakeHouseNAS",
+    "dsm_version": "7.3.2-86009 update 4",
+    "kernel": "4.4.302+ #86009 SMP x86_64 synology_r1000_923+",
+    "container_manager_docker_version": "24.0.2 (package 24.0.2-1606, toolkit 81158)",
+    "uptime_at_investigation": "20 days, 3h47m",
+    "active_firewall_profile": "default (status true)"
+  },
+  "verified_runtime_rules": [
+    {"line": 6, "target": "RETURN", "source": "172.22.0.0/16", "purpose": "data-plane: my-pa app <-> PostgreSQL", "pkts": 7, "bytes": 420},
+    {"line": 7, "target": "RETURN", "source": "172.25.0.0/16", "purpose": "mcp-origin: cloudflared <-> my-pa MCP origin", "pkts": 7, "bytes": 420},
+    {"line": 8, "target": "RETURN", "source": "172.26.0.0/16", "purpose": "cloudflare-egress: cloudflared DNS/edge", "pkts": 81, "bytes": 35159}
+  ],
+  "drop_rule": {"line": 9, "pkts": 809, "bytes": 61983, "note": "flat since recovery, matches recovery evidence, no continued drops"},
+  "docker_networks_reverified": {
+    "my-pa-nas-contract_data-plane": {"subnet": "172.22.0.0/16", "internal": true, "bridge": "docker-d4d93b25"},
+    "my-pa-remote-mcp_mcp-origin": {"subnet": "172.25.0.0/16", "internal": true, "bridge": "docker-4b5aa893"},
+    "my-pa-remote-mcp_cloudflare-egress": {"subnet": "172.26.0.0/16", "internal": false, "bridge": "docker-eb6f144d"},
+    "drift_from_recovery_report": "none observed"
+  },
+  "packet_flow_proof": {
+    "forward_chain": ["-A FORWARD -j FORWARD_FIREWALL"],
+    "docker_user_references_from_forward": 0,
+    "conclusion": "DOCKER-USER and DOCKER-ISOLATION-STAGE-* are unreachable for forwarded traffic on this host; FORWARD_FIREWALL is the sole gate"
+  },
+  "firewall_ownership_evidence": {
+    "config_files": [
+      "/usr/syno/etc/firewall.d/firewall_settings.json",
+      "/usr/syno/etc/firewall.d/1.json",
+      "/usr/syno/etc/firewall.d/2.json"
+    ],
+    "owning_binary": "/usr/syno/bin/synofirewall",
+    "supported_actions": ["--enable", "--disable", "--reload", "--update", "--profile-set", "--import", "--export", "--enum"],
+    "evidence_1json_expresses_custom_subnet_rules": true,
+    "note": "Pre-existing custom rules for 10.0.0.0/24 and 100.64.0.0/10 are represented in 1.json as ordinary UI-generated rule objects, proving the DSM Firewall UI/API can express the same shape of rule as the three temporary recovery rules"
+  },
+  "candidate_classification": {
+    "A_native_dsm_firewall_rule": {"vendor_support": "SYNOLOGY_OFFICIALLY_SUPPORTED", "disposition": "RECOMMENDED"},
+    "B_package_firewall_declaration": {"vendor_support": "NOT_SUPPORTED", "disposition": "NOT_RECOMMENDED"},
+    "C_task_scheduler_boot_script": {"vendor_support": "SYNOLOGY_OFFICIALLY_SUPPORTED_facility_unsupported_use", "disposition": "ACCEPTABLE_FALLBACK"},
+    "D_reconciliation_watchdog": {"vendor_support": "COMMON_UNSUPPORTED_PATTERN_but_conservative_design", "disposition": "ACCEPTABLE_FALLBACK"},
+    "E_docker_user_chain": {"vendor_support": "NOT_SUPPORTED_on_this_host_proven_unreachable", "disposition": "REJECTED"},
+    "F_disable_bridge_nf_call_iptables": {"vendor_support": "NOT_SUPPORTED_for_this_task", "disposition": "REJECTED"},
+    "G_host_networking_migration": {"vendor_support": "COMMON_UNSUPPORTED_PATTERN_proven_worse_in_this_environment", "disposition": "NOT_RECOMMENDED"},
+    "H_direct_json_file_edit": {"vendor_support": "UNDOCUMENTED_INTERNAL_MECHANISM", "disposition": "NOT_RECOMMENDED"}
+  },
+  "evidence_unavailable": [
+    "Visual/UI confirmation of DSM Firewall rule editor exact capabilities for FORWARD-only scoping",
+    "Whether Compose pins explicit static subnets for the three networks in scope",
+    "Empirical behavior of synofirewall --reload / DSM update / NAS reboot with the new rules present (not tested per stop conditions)",
+    "Contents/purpose of the secondary, inactive firewall.d/2.json profile"
+  ],
+  "stop_conditions_triggered": "NONE",
+  "final_disposition": "FIREWALL_PERSISTENCE_DESIGN_READY_WITH_PROOFS_REQUIRED",
+  "publication": {
+    "architecture_document": "docs/findings/2026-08-16-MY-PA-SYNOLOGY-FIREWALL-PERSISTENCE-ARCHITECTURE-20260816-001.md",
+    "evidence_manifest": "docs/evidence/2026-08-16-MY-PA-SYNOLOGY-FIREWALL-PERSISTENCE-EVIDENCE-MANIFEST-20260816-001.json",
+    "google_drive_artifacts": "PUBLICATION_INCOMPLETE - not available in this toolset",
+    "sha256_and_drive_ids": "EVIDENCE_UNAVAILABLE"
+  }
+}

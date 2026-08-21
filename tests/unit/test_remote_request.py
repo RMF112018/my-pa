@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 from datetime import UTC, datetime
 from typing import get_args
 
@@ -10,6 +11,7 @@ import pytest
 from my_pa.adapters.mcp.remote import _WRITE_PURPOSES
 from my_pa.adapters.mcp.tools import input_schema_for
 from my_pa.adapters.remote_request import (
+    _IDEMPOTENT_REMOTE_CAPABILITIES,
     CANONICAL_REMOTE_PURPOSES,
     REMOTE_OWNED_PAYLOAD_FIELDS,
     SERVER_OWNED_REMOTE_FIELDS,
@@ -216,3 +218,64 @@ def test_compose_stamps_content_addressed_idempotency_key() -> None:
     )
     assert replay["payload"]["idempotency_key"] == key
     assert composed["purpose"] == Purpose.CONTINUITY_AUTHORING.value
+
+
+def test_every_write_purpose_is_classified_as_a_remote_write() -> None:
+    assert (
+        frozenset(
+            {
+                Purpose.BOUNDED_ENROLLMENT,
+                Purpose.CAPTURE_AUTHORING,
+                Purpose.REVIEW_DISPOSITION,
+                Purpose.DOCUMENT_AUTHORING,
+                Purpose.CONTINUITY_AUTHORING,
+                Purpose.TASK_AUTHORING,
+                Purpose.COMMITMENT_AUTHORING,
+                Purpose.CONTEXT_PREFERENCE,
+            }
+        )
+        == _WRITE_PURPOSES
+    )
+
+
+def test_every_command_that_requires_idempotency_is_stamped_remotely() -> None:
+    commands = {member.capability: member for member in get_args(Command.__value__)}
+    required = frozenset(
+        capability
+        for capability, command in commands.items()
+        if any(field.name == "idempotency_key" for field in dataclasses.fields(command))
+    )
+    assert required == _IDEMPOTENT_REMOTE_CAPABILITIES
+
+
+def test_compose_stamps_idempotency_for_task_create() -> None:
+    composed = compose_remote_arguments(
+        capability_name=Capability.TASKS_CREATE.value,
+        arguments={
+            "payload": {
+                "title": "Follow up with the architect",
+                "origin_evidence_ref": "cap_origin0001origin0001",
+            }
+        },
+        principal=PRINCIPAL,
+        grants=frozenset({(Capability.TASKS_CREATE, Purpose.TASK_AUTHORING)}),
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    key = composed["payload"]["idempotency_key"]
+    assert key.startswith("idk_")
+    assert composed["purpose"] == Purpose.TASK_AUTHORING.value
+    replay = compose_remote_arguments(
+        capability_name=Capability.TASKS_CREATE.value,
+        arguments={
+            "payload": {
+                "title": "Follow up with the architect",
+                "origin_evidence_ref": "cap_origin0001origin0001",
+            }
+        },
+        principal=PRINCIPAL,
+        grants=frozenset({(Capability.TASKS_CREATE, Purpose.TASK_AUTHORING)}),
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert replay["payload"]["idempotency_key"] == key

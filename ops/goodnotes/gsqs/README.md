@@ -45,7 +45,10 @@ it does not replace A-X.
   dormant. Live NAS MCP
   (`https://my-pa-mcp.bobby-fetting.me`) is not a B0 image source.
   `b0_suitable` is still not disclosure permission. `MEASURED_B0`
-  remains `NOT_YET_ESTABLISHED`.
+  remains `NOT_YET_ESTABLISHED`. Handwriting admit-and-score uses
+  `gsqs-evaluator-plane-v2` so public census identity and private
+  evaluator-case identity stay separate; synthetic
+  `gsqs-evaluator-plane-v1` is unchanged.
 - [`SUCCESSOR-B0-PROMPT.md`](SUCCESSOR-B0-PROMPT.md) — later operator-authorized
   execution phase after exact-head review. ChatLLM must not grade itself.
 

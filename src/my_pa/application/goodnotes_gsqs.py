@@ -357,6 +357,7 @@ def evaluator_implementation_files() -> tuple[Path, ...]:
         here,
         application / "goodnotes_gsqs_harness.py",
         application / "goodnotes_gsqs_corpus.py",
+        application / "goodnotes_gsqs_evaluator_binding.py",
         application / "goodnotes_evaluation.py",
         application / "goodnotes_note_unit_contract.py",
         domain_models,

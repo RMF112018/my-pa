@@ -29,10 +29,10 @@ from my_pa.application.goodnotes_gsqs_b0_mcp import (
     stage_evaluation_pages,
     validate_mcp_evaluation_bindings,
 )
-from my_pa.application.goodnotes_gsqs_corpus import (
-    CorpusCase,
-    CorpusManifest,
-    load_evaluator_plane_cases,
+from my_pa.application.goodnotes_gsqs_corpus import CorpusCase, CorpusManifest
+from my_pa.application.goodnotes_gsqs_evaluator_binding import (
+    AdmittedEvaluatorPlane,
+    load_and_admit_evaluator_plane,
 )
 from my_pa.application.goodnotes_gsqs_hw_corpus import load_public_catalog
 from my_pa.application.goodnotes_gsqs_live_b0 import (
@@ -46,6 +46,7 @@ from my_pa.application.goodnotes_gsqs_live_b0 import (
     RepositoryIdentity,
     UnboundIncumbentAdapter,
     aggregate_b0_measurements,
+    assert_evaluator_plane,
     catalog_path,
     execute_measured_b0,
     frozen_incumbent_config,
@@ -56,7 +57,6 @@ from my_pa.application.goodnotes_gsqs_live_b0 import (
     prompt_config_identity,
     prompt_path,
     repo_root,
-    validate_evaluator_plane,
     validate_route_llm_execution_bindings,
     write_evaluation_handles,
     write_public_evidence,
@@ -203,8 +203,9 @@ def _execute(args: argparse.Namespace) -> int:
     census = partition_b_census(catalog)
     if not args.evaluator_corpus:
         raise ValueError("execute requires --evaluator-corpus")
-    evaluator_cases = load_evaluator_plane_cases(Path(args.evaluator_corpus))
-    validate_evaluator_plane(evaluator_cases, census)
+    evaluator_plane = load_and_admit_evaluator_plane(
+        Path(args.evaluator_corpus), census=census, catalog=catalog
+    )
     mapping = None
     if authorization.provider_model_mapping_evidence_id:
         if not args.provider_mapping:
@@ -219,7 +220,7 @@ def _execute(args: argparse.Namespace) -> int:
         authorization=authorization,
         report=report,
         census=census,
-        evaluator_cases=evaluator_cases,
+        evaluator_cases=evaluator_plane,
         manifest=_catalog_manifest(catalog, census),
         config=config,
         repository=inspect_repository_identity(root),
@@ -232,6 +233,7 @@ def _execute(args: argparse.Namespace) -> int:
             Path(os.environ[RASTER_ROOT_ENV]).resolve(), case_id
         ),
         mapping=mapping,
+        catalog=catalog,
     )
 
 
@@ -265,8 +267,9 @@ def _score(args: argparse.Namespace) -> int:
         return EXIT_REFUSED
     catalog = load_public_catalog(catalog_path(root))
     census = partition_b_census(catalog)
-    evaluator_cases = load_evaluator_plane_cases(Path(args.evaluator_corpus))
-    validate_evaluator_plane(evaluator_cases, census)
+    evaluator_plane = load_and_admit_evaluator_plane(
+        Path(args.evaluator_corpus), census=census, catalog=catalog
+    )
     config = frozen_incumbent_config(model_identity=authorization.model_identity, root=root)
     captures = load_captured_repetitions(Path(args.analyzer_output_dir), census)
     adapter = CapturedAnalyzerAdapter(captures)
@@ -274,12 +277,13 @@ def _score(args: argparse.Namespace) -> int:
     records, run_state = execute_measured_b0(
         authorization=authorization,
         census=census,
-        evaluator_cases=evaluator_cases,
+        evaluator_cases=evaluator_plane,
         manifest=_catalog_manifest(catalog, census),
         adapter=adapter,
         config=config,
         repository=inspect_repository_identity(root),
         image_loader=None,
+        catalog=catalog,
     )
     summary = aggregate_b0_measurements(records)
     write_public_evidence(
@@ -371,7 +375,7 @@ def run_bound_execute(
     authorization: ExecutionAuthorization,
     report: PreflightReport,
     census: B0Census,
-    evaluator_cases: Sequence[CorpusCase],
+    evaluator_cases: Sequence[CorpusCase] | AdmittedEvaluatorPlane,
     manifest: CorpusManifest,
     config: FrozenAnalyzerConfig,
     repository: RepositoryIdentity,
@@ -383,8 +387,9 @@ def run_bound_execute(
     image_loader: Callable[[str], bytes],
     mapping: ProviderModelMapping | None = None,
     probe: Callable[..., RouteLLMHttpResult] = get_models_with_retry,
+    catalog: Mapping[str, object] | None = None,
 ) -> int:
-    validate_evaluator_plane(evaluator_cases, census)
+    assert_evaluator_plane(evaluator_cases, census, catalog)
     journal = DisclosureJournal(evidence_dir, run_id=authorization.authorization_id or str(uuid4()))
     records: tuple[MeasurementRecord, ...] = ()
     run_state: B0RunState | None = None
@@ -408,6 +413,7 @@ def run_bound_execute(
             image_loader=image_loader,
             disclosure_journal=journal,
             provider_mapping=mapping,
+            catalog=catalog,
         )
         return EXIT_OK
     finally:

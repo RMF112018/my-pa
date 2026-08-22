@@ -43,6 +43,10 @@ from my_pa.application.goodnotes_gsqs_corpus import (
     canonical_dumps,
     case_digest,
 )
+from my_pa.application.goodnotes_gsqs_evaluator_binding import (
+    AdmittedEvaluatorPlane,
+    revalidate_admitted_evaluator_plane,
+)
 from my_pa.application.goodnotes_gsqs_harness import (
     B0_MIN_REPETITIONS,
     INCUMBENT_ANALYZER_NAME,
@@ -537,7 +541,7 @@ def execute_measured_b0(
     *,
     authorization: ExecutionAuthorization,
     census: B0Census,
-    evaluator_cases: Sequence[CorpusCase],
+    evaluator_cases: Sequence[CorpusCase] | AdmittedEvaluatorPlane,
     manifest: CorpusManifest,
     adapter: AnalyzerAdapter,
     config: FrozenAnalyzerConfig,
@@ -546,6 +550,7 @@ def execute_measured_b0(
     measured_at: datetime | None = None,
     disclosure_journal: DisclosureJournal | None = None,
     provider_mapping: ProviderModelMapping | None = None,
+    catalog: Mapping[str, object] | None = None,
 ) -> tuple[tuple[MeasurementRecord, ...], B0RunState]:
     if repository.dirty:
         raise ValueError("repository worktree is dirty")
@@ -573,7 +578,7 @@ def execute_measured_b0(
             validate_route_llm_execution_bindings(authorization)
         else:
             raise ValueError("authorization missing evaluation binding")
-    _assert_evaluator_plane(evaluator_cases, census)
+    scored_cases = _assert_evaluator_plane(evaluator_cases, census, catalog)
     records: list[MeasurementRecord] = []
     stamp = measured_at or datetime.now(UTC)
     for repetition in range(1, authorization.repetitions + 1):
@@ -641,7 +646,7 @@ def execute_measured_b0(
         try:
             outputs = admit_repetition_outputs(documents, census=census, config=config)
             _result, record = score_partition(
-                evaluator_cases,
+                scored_cases,
                 outputs,
                 partition=CorpusPartition.B,
                 manifest=manifest,
@@ -904,6 +909,8 @@ def _authorization_defects(
 
 
 def validate_evaluator_plane(cases: Sequence[CorpusCase], census: B0Census) -> None:
+    if census.corpus_version == HANDWRITING_CORPUS_VERSION:
+        raise ValueError("handwriting census requires gsqs-evaluator-plane-v2 binding")
     if len(cases) != len(census.members):
         raise ValueError("evaluator cases do not match Partition B census")
     if [case.case_id for case in cases] != [member.case_id for member in census.members]:
@@ -919,8 +926,25 @@ def validate_evaluator_plane(cases: Sequence[CorpusCase], census: B0Census) -> N
             raise ValueError("evaluator case digest mismatch")
 
 
-def _assert_evaluator_plane(cases: Sequence[CorpusCase], census: B0Census) -> None:
-    validate_evaluator_plane(cases, census)
+def _assert_evaluator_plane(
+    plane: Sequence[CorpusCase] | AdmittedEvaluatorPlane,
+    census: B0Census,
+    catalog: Mapping[str, object] | None,
+) -> tuple[CorpusCase, ...]:
+    if isinstance(plane, AdmittedEvaluatorPlane):
+        return revalidate_admitted_evaluator_plane(plane, census=census, catalog=catalog).cases
+    if census.corpus_version == HANDWRITING_CORPUS_VERSION:
+        raise ValueError("handwriting census requires gsqs-evaluator-plane-v2 binding")
+    validate_evaluator_plane(plane, census)
+    return tuple(plane)
+
+
+def assert_evaluator_plane(
+    plane: Sequence[CorpusCase] | AdmittedEvaluatorPlane,
+    census: B0Census,
+    catalog: Mapping[str, object] | None = None,
+) -> tuple[CorpusCase, ...]:
+    return _assert_evaluator_plane(plane, census, catalog)
 
 
 def _summary_dict(summary: B0Summary) -> dict[str, object]:

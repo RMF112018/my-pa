@@ -70,6 +70,11 @@ test("the shell reflows at 200 percent without horizontal loss", async ({ page }
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
+  // `visibility` preserves inline width: normalize the 141.125px runtime text
+  // to the fixed 134.03125px one-digit-hour form behind the reviewed anchor.
+  await page.locator('[data-visual-dynamic="freshness"]').evaluate((node) => {
+    node.textContent = "8/22/2026, 9:00:00 AM";
+  });
   await page.addStyleTag({
     content: '[data-visual-dynamic="freshness"] { visibility: hidden !important; }',
   });

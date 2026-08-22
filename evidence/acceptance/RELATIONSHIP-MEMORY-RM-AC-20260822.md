@@ -16,10 +16,14 @@
 Every row names that test. A row that cannot be held by a test — because it is a
 claim about process, or about the absence of code nobody wrote — is marked
 `NOT_APPLICABLE` with the reason, rather than marked `PASS` on the strength of
-being true. A criterion whose subject is presentation rather
-than data is marked `BACKEND_ONLY` — the backend supplies the data and
-semantics the criterion needs, and the presentation it describes belongs to the
-deferred frontend. Nothing here is marked `PASS` on the strength of a docstring.
+being true. A criterion whose subject is presentation rather than data is marked
+`BACKEND_ONLY` — the backend supplies the data and semantics the criterion
+needs, and the presentation it describes belongs to the deferred frontend.
+
+Nothing here is marked `PASS` on the strength of a docstring, and three rows
+that were have been corrected: an independent reviewer deleted the constraints
+two of them cited and watched the suite stay green, and found that the test the
+third named did not exist.
 
 Test module abbreviations:
 
@@ -47,8 +51,8 @@ Test module abbreviations:
 | RM-AC-007 narrative immutable per version; correction appends and retains history | PASS | append-only trigger on `relationship_memory_versions`; `REPO` (raw UPDATE refused, prior text still readable) |
 | RM-AC-008 optional observed/effective times without fabricating unknown dates | PASS | nullable moments, no defaulting anywhere; `DOM`, `CAP` |
 | RM-AC-009 important_date partial values, never infers year or age | PASS | precision rules refuse a year on `month_day`; no age field exists; `DOM` |
-| RM-AC-010 follow_up_context does not silently become a Task/Commitment | PASS | no Task or Commitment write exists on any memory path; `CAP` |
-| RM-AC-011 no automatic task, reminder, calendar or communication action | PASS | `CAP` asserts a memory write leaves the task and commitment planes untouched. Stated as a bounded claim rather than a containment guard: no test forbids a *future* writer from reaching another plane from here |
+| RM-AC-010 follow_up_context does not silently become a Task/Commitment | PASS | `REPO` records a `follow_up_context` memory and asserts the task, commitment and capture tables hold exactly the rows they held before |
+| RM-AC-011 no automatic task, reminder, calendar or communication action | PASS | `REPO` counts the task, commitment and capture planes before and after a memory write and asserts they are unchanged. Stated as a bounded claim rather than a containment guard: it proves this write reaches no other plane, not that a future writer could not |
 | RM-AC-012 context-scoped memory not presented as globally applicable | PASS | context links bound to the *version*; `relationship_memory.list` exposes `context_entity_id` filtering; `REPO`, `CAP` |
 | RM-AC-013 restricted memory excluded from broad search/export/cloud by default | PASS | SQL predicate excludes `restricted_local` from search; cloud eligibility CHECKed false; `PRIV` |
 | RM-AC-014 no restricted-existence disclosure via counts or term probing | PASS | exclusion is a predicate, so no count, cursor or truncation flag can carry one; `PRIV` (probing a restricted-only term returns nothing, zero withheld, no truncation) |
@@ -59,7 +63,7 @@ Test module abbreviations:
 | RM-AC-019 Overview can surface current eligible preferences, dates, interests, concerns, pinned context and sensitivities with authority distinction | BACKEND_ONLY | `relationship_memory.list` returns all of them with `kind`, `authority`, `classification` and `pinned`, pinned first; `entities.context` carries the bounded summary. The Overview surface itself is `MYPA-RM-04`, out of scope |
 | RM-AC-020 bounded, paginated, history-aware retrieval for one Entity | PASS | `relationship_memory.list` + `.history`, keyset paginated over the whole sort key; `REPO`, `CAP` |
 | RM-AC-021 editing exposes prior versions according to policy | PASS | `relationship_memory.history`; `REPO`, `CAP` |
-| RM-AC-022 Quick Capture can be evidence without becoming the memory | PASS | `REV` promotes a capture-span-backed proposal and asserts the span is carried onto the accepted version while the capture row is untouched; the exclusive-target CHECK is exercised in `REPO` |
+| RM-AC-022 Quick Capture can be evidence without becoming the memory | PASS | `REV` promotes a proposal whose only evidence is capture spans and asserts they land in `capture_span_id` on the accepted version — not in the observation column, which would make a capture indistinguishable from a source observation. The exclusive-target CHECK is asked of the server directly in both `REPO` and `REV`, in the naming-two and naming-none directions |
 | RM-AC-023 direct note entry requires no hidden Capture | PASS | `relationship_memory.create` writes no capture row; `CAP` |
 | RM-AC-024 `EntityObservation` not overloaded as the memory store | PASS | separate tables and separate domain module; `SCHEMA` |
 | RM-AC-025 legacy `RelationshipEvent(OBSERVATION)` remains projection, not canonical store | NOT_APPLICABLE | this branch adds no projection and writes nothing to `relationship_events`. The criterion is satisfied by absence, which no test can assert without asserting a negative over the whole tree |

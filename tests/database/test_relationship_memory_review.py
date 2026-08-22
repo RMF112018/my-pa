@@ -44,6 +44,7 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy import Connection, Engine, Row, insert, select, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import ReviewDecisionRequest
@@ -204,11 +205,21 @@ def _open_proposal(
     kind: MemoryKind = MemoryKind.WORKING_PREFERENCE,
     statement: str = PROPOSED_NOTE,
     evidence: int = 1,
+    capture_spans: int = 0,
     classification: Classification | None = None,
-) -> tuple[str, str, tuple[str, ...]]:
-    """One routed proposal, its review case, and the evidence identifiers it rests on."""
+) -> tuple[str, str, tuple[str, ...], tuple[str, ...]]:
+    """One routed proposal, its review case, and the evidence it rests on.
+
+    Two evidence families rather than one, because they are the two the contract
+    names and they are not interchangeable: an entity observation is a source the
+    resolution plane already holds, and a capture span is the user's own words at
+    an exact offset in an immutable Quick Capture version. `RM-AC-022` is about
+    the second — a capture can be *evidence* for a memory without becoming the
+    memory — and no test exercised it until one asked for a span.
+    """
     memory_proposal_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
     review_case_id = issue_identifier(IdKind.REVIEW_CASE)
+    spans: list[str] = []
     connection.execute(
         insert(relationship_memory_proposals).values(
             memory_proposal_id=memory_proposal_id,
@@ -247,7 +258,22 @@ def _open_proposal(
                 created_at=WHEN,
             )
         )
-    return memory_proposal_id, review_case_id, tuple(observations)
+    for _ in range(capture_spans):
+        span_id = issue_identifier(IdKind.SPAN)
+        spans.append(span_id)
+        connection.execute(
+            insert(relationship_memory_proposal_evidence).values(
+                proposal_evidence_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE),
+                memory_proposal_id=memory_proposal_id,
+                principal_id=principal_id,
+                role=EvidenceLinkRole.DIRECT.value,
+                entity_observation_id=None,
+                capture_span_id=span_id,
+                knowledge_id=None,
+                created_at=WHEN,
+            )
+        )
+    return memory_proposal_id, review_case_id, tuple(observations), tuple(spans)
 
 
 def _decision(
@@ -361,12 +387,112 @@ def test_a_review_case_carries_no_statement_text_for_a_reviewer_to_leak(
 # --- acceptance promotes ------------------------------------------------------
 
 
+def test_a_capture_span_backed_proposal_carries_its_span_onto_the_memory(
+    two_principals: Engine,
+) -> None:
+    """`RM-AC-022`: a Quick Capture is evidence for a memory, never the memory.
+
+    The promoted record is a memory in `relationship_memories` with its own
+    immutable version; what it keeps of the capture is a span reference, so the
+    basis stays checkable against the exact offsets in the immutable capture
+    version. Two things are asserted because either alone would pass a wrong
+    implementation: that the span reached the accepted version's evidence, and
+    that the promotion wrote the span into the `capture_span_id` column rather
+    than smuggling it into the observation column, which would make a capture
+    indistinguishable from a source observation on every later read.
+
+    The matrix claimed this row was already exercised and it was not — the whole
+    memory corpus mentioned `capture_span_id` once, as `None`.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, spans = _open_proposal(
+            connection, evidence=0, capture_spans=2
+        )
+
+    with two_principals.begin() as connection:
+        decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.ACCEPT))
+
+    with two_principals.connect() as connection:
+        stamped = _proposal_row(connection, proposal_id)
+        carried = connection.execute(
+            text(
+                f"SELECT capture_span_id, entity_observation_id, knowledge_id FROM "  # noqa: S608
+                f"{SCHEMA}.relationship_memory_evidence_links "
+                "WHERE memory_version_id = :version_id ORDER BY capture_span_id"
+            ),
+            {"version_id": stamped.accepted_memory_version_id},
+        ).all()
+    assert [row.capture_span_id for row in carried] == sorted(spans)
+    assert all(row.entity_observation_id is None for row in carried)
+    assert all(row.knowledge_id is None for row in carried)
+
+
+def test_the_server_refuses_proposal_evidence_naming_two_records(
+    two_principals: Engine,
+) -> None:
+    """The exclusive-target CHECK, asked of the server rather than of the writer.
+
+    A row naming both an observation and a capture span is a basis nobody can
+    read: the two are different families with different re-validation rules, and
+    a reader would have to guess which one the assertion rests on. The
+    constraint says so, and until this test nothing did — deleting it from
+    `tables.py` failed nothing, and because the migration copies the live table
+    objects rather than restating them, that deletion would silently change what
+    an already-merged revision builds on a fresh database.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, _, _, _ = _open_proposal(connection, evidence=0)
+
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            insert(relationship_memory_proposal_evidence).values(
+                proposal_evidence_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE),
+                memory_proposal_id=proposal_id,
+                principal_id=PRINCIPAL_A,
+                role=EvidenceLinkRole.DIRECT.value,
+                entity_observation_id=issue_identifier(IdKind.ENTITY_OBSERVATION),
+                capture_span_id=issue_identifier(IdKind.SPAN),
+                knowledge_id=None,
+                created_at=WHEN,
+            )
+        )
+    assert "memory_proposal_evidence_names_exactly_one_record" in str(refused.value)
+
+
+def test_the_server_refuses_proposal_evidence_naming_no_record(
+    two_principals: Engine,
+) -> None:
+    """The other half of exactly-one, so the constraint is not merely at-most-one.
+
+    An evidence row naming nothing is evidence of nothing, and a promotion that
+    wrote one would satisfy "the accepted memory has evidence links" while
+    resting on air.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, _, _, _ = _open_proposal(connection, evidence=0)
+
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            insert(relationship_memory_proposal_evidence).values(
+                proposal_evidence_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE),
+                memory_proposal_id=proposal_id,
+                principal_id=PRINCIPAL_A,
+                role=EvidenceLinkRole.DIRECT.value,
+                entity_observation_id=None,
+                capture_span_id=None,
+                knowledge_id=None,
+                created_at=WHEN,
+            )
+        )
+    assert "memory_proposal_evidence_names_exactly_one_record" in str(refused.value)
+
+
 def test_accepting_an_evidence_backed_proposal_writes_a_source_backed_memory(
     two_principals: Engine,
 ) -> None:
     """`RM-AC-015`/`RM-AC-016`: the memory, its v1 and the exact copied basis."""
     with two_principals.begin() as connection:
-        proposal_id, review_case_id, observations = _open_proposal(connection, evidence=2)
+        proposal_id, review_case_id, observations, _ = _open_proposal(connection, evidence=2)
 
     with two_principals.begin() as connection:
         decision = decide_relationship_memory_review(
@@ -411,7 +537,7 @@ def test_the_promoted_memory_is_then_an_ordinary_readable_memory(
 ) -> None:
     """Promotion joins the current set; it does not create a second, parallel one."""
     with two_principals.begin() as connection:
-        _, review_case_id, _ = _open_proposal(connection)
+        _, review_case_id, _, _ = _open_proposal(connection)
     with two_principals.begin() as connection:
         decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.ACCEPT))
 
@@ -438,7 +564,7 @@ def test_a_corrected_acceptance_is_user_confirmed_and_commits_the_reviewers_word
 ) -> None:
     """A correction is the reviewer saying the proposal was wrong, so no source backs it."""
     with two_principals.begin() as connection:
-        proposal_id, review_case_id, _ = _open_proposal(connection)
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
 
     with two_principals.begin() as connection:
         decide_relationship_memory_review(
@@ -474,7 +600,7 @@ def test_an_acceptance_with_no_evidence_is_confirmed_rather_than_source_backed(
 ) -> None:
     """There is nothing to be backed by, so the honest authority is the weaker one."""
     with two_principals.begin() as connection:
-        proposal_id, review_case_id, _ = _open_proposal(connection, evidence=0)
+        proposal_id, review_case_id, _, _ = _open_proposal(connection, evidence=0)
     with two_principals.begin() as connection:
         decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.ACCEPT))
 
@@ -490,7 +616,7 @@ def test_a_sensitivity_promotion_keeps_the_classification_the_kind_requires(
 ) -> None:
     """The floor is a floor on the promoted version too, and the read plane honours it."""
     with two_principals.begin() as connection:
-        proposal_id, review_case_id, _ = _open_proposal(
+        proposal_id, review_case_id, _, _ = _open_proposal(
             connection,
             kind=MemoryKind.SENSITIVITY,
             statement="Synthetic subject: do not raise the synthetic dispute.",
@@ -521,7 +647,7 @@ def test_a_non_accepting_disposition_leaves_no_memory(
 ) -> None:
     """Only the decision row is written; the three memory tables are untouched."""
     with two_principals.begin() as connection:
-        proposal_id, review_case_id, _ = _open_proposal(connection)
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
         before = _counts(connection)
 
     with two_principals.begin() as connection:
@@ -557,7 +683,7 @@ def test_mark_unresolved_leaves_the_stored_state_alone_and_says_so_on_the_case(
     the case's state from the latest disposition.
     """
     with two_principals.begin() as connection:
-        proposal_id, review_case_id, _ = _open_proposal(connection)
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
     with two_principals.begin() as connection:
         decide_relationship_memory_review(
             connection, _decision(review_case_id, Disposition.MARK_UNRESOLVED)
@@ -580,7 +706,7 @@ def test_a_disposition_with_no_route_is_unsupported(
     two_principals: Engine, disposition: Disposition
 ) -> None:
     with two_principals.begin() as connection:
-        _, review_case_id, _ = _open_proposal(connection)
+        _, review_case_id, _, _ = _open_proposal(connection)
         before = _counts(connection)
 
     with two_principals.begin() as connection, pytest.raises(ReviewUnsupportedError):
@@ -598,7 +724,7 @@ def test_a_second_acceptance_is_refused_and_creates_no_second_memory(
 ) -> None:
     """Terminal, and asserted as a row count as well as as a raised conflict."""
     with two_principals.begin() as connection:
-        _, review_case_id, _ = _open_proposal(connection)
+        _, review_case_id, _, _ = _open_proposal(connection)
     with two_principals.begin() as connection:
         decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.ACCEPT))
     with two_principals.connect() as connection:
@@ -617,7 +743,7 @@ def test_a_second_acceptance_is_refused_and_creates_no_second_memory(
 def test_a_stale_expected_review_version_is_refused(two_principals: Engine) -> None:
     """One decision stands; a writer holding the version before it writes nothing."""
     with two_principals.begin() as connection:
-        _, review_case_id, _ = _open_proposal(connection)
+        _, review_case_id, _, _ = _open_proposal(connection)
     with two_principals.begin() as connection:
         decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.DEFER))
     with two_principals.connect() as connection:
@@ -637,7 +763,7 @@ def test_a_merged_away_subject_is_refused_rather_than_promoted_onto_its_successo
 ) -> None:
     """Following the redirect would bind a reviewed candidate to a different person."""
     with two_principals.begin() as connection:
-        _, review_case_id, _ = _open_proposal(connection, subject_entity_id=OLD_DANA)
+        _, review_case_id, _, _ = _open_proposal(connection, subject_entity_id=OLD_DANA)
         before = _counts(connection)
 
     with two_principals.begin() as connection, pytest.raises(ReviewConflictError):
@@ -673,7 +799,7 @@ def test_a_person_only_kind_is_refused_for_a_subject_that_is_not_a_person(
                 version=1,
             ),
         )
-        _, review_case_id, _ = _open_proposal(
+        _, review_case_id, _, _ = _open_proposal(
             connection,
             subject_entity_id=project,
             kind=MemoryKind.INTEREST,
@@ -696,7 +822,7 @@ def test_another_principals_proposal_is_invisible_and_undecidable(
 ) -> None:
     """The same answer an absent identifier gets, asserted as an equality."""
     with two_principals.begin() as connection:
-        _, foreign_case, _ = _open_proposal(
+        _, foreign_case, _, _ = _open_proposal(
             connection, principal_id=PRINCIPAL_B, subject_entity_id=FOREIGN_PERSON
         )
     absent_case = issue_identifier(IdKind.REVIEW_CASE)

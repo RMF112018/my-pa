@@ -654,6 +654,101 @@ def test_archive_and_restore_are_reversible_and_write_no_version(
 # --- the partition ------------------------------------------------------------
 
 
+def test_the_server_refuses_memory_evidence_naming_two_records(
+    two_principals: Engine,
+) -> None:
+    """`memory_evidence_names_exactly_one_record`, asked of the server.
+
+    The sibling of the proposal-side constraint, and unbound for the same
+    reason: no application path writes an evidence link today — promotion does,
+    and it writes one target — so nothing exercised the row shape the CHECK
+    refuses. A basis naming two families is one a reader cannot resolve, and
+    deleting the constraint failed no test until this one.
+    """
+    created = _created(two_principals)
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.relationship_memory_evidence_links ("
+                "evidence_link_id, memory_version_id, principal_id, role, "
+                "entity_observation_id, capture_span_id, knowledge_id, created_at) "
+                "VALUES (:link_id, :version_id, :principal_id, 'direct', "
+                ":observation_id, :span_id, NULL, now())"
+            ),
+            {
+                "link_id": issue_identifier(IdKind.RELATIONSHIP_MEMORY_EVIDENCE_LINK),
+                "version_id": created.memory_version_id,
+                "principal_id": PRINCIPAL_A,
+                "observation_id": issue_identifier(IdKind.ENTITY_OBSERVATION),
+                "span_id": issue_identifier(IdKind.SPAN),
+            },
+        )
+    assert "memory_evidence_names_exactly_one_record" in str(refused.value)
+
+
+def test_the_server_refuses_memory_evidence_naming_no_record(
+    two_principals: Engine,
+) -> None:
+    """The exactly-one half the previous test does not reach."""
+    created = _created(two_principals)
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.relationship_memory_evidence_links ("
+                "evidence_link_id, memory_version_id, principal_id, role, "
+                "entity_observation_id, capture_span_id, knowledge_id, created_at) "
+                "VALUES (:link_id, :version_id, :principal_id, 'direct', "
+                "NULL, NULL, NULL, now())"
+            ),
+            {
+                "link_id": issue_identifier(IdKind.RELATIONSHIP_MEMORY_EVIDENCE_LINK),
+                "version_id": created.memory_version_id,
+                "principal_id": PRINCIPAL_A,
+            },
+        )
+    assert "memory_evidence_names_exactly_one_record" in str(refused.value)
+
+
+def test_recording_a_memory_writes_into_no_other_plane(two_principals: Engine) -> None:
+    """`RM-AC-010`/`RM-AC-011`: a note creates no obligation and no reminder.
+
+    `follow_up_context` is the kind that most invites one — "ask about the
+    graduation next time" reads like a to-do — so it is the kind used here. The
+    assertion is over the tables an automatic action would have to land in, and
+    the counts are taken before and after rather than asserted as zero, because
+    an emptiness check over a table the fixture never populates asserts nothing.
+    """
+    planes = ("continuity_tasks", "continuity_commitments", "captures")
+    with two_principals.connect() as connection:
+        before = {plane: _row_count(connection, plane) for plane in planes}
+
+    _created(
+        two_principals,
+        kind=MemoryKind.FOLLOW_UP_CONTEXT,
+        statement="Ask about the graduation next time.",
+        idempotency_key="synthetic-follow-up-0001",
+    )
+
+    with two_principals.connect() as connection:
+        after = {plane: _row_count(connection, plane) for plane in planes}
+    assert after == before
+
+
+def _row_count(connection: Connection, table: str) -> int:
+    """How many rows one `knowledge` table holds, or `-1` if this build has none.
+
+    `-1` rather than a skip: a table that does not exist cannot have been written
+    to, and the comparison above still holds. Returning zero would make an absent
+    table indistinguishable from an empty one.
+    """
+    try:
+        return int(
+            connection.execute(text(f"SELECT count(*) FROM knowledge.{table}")).scalar_one()  # noqa: S608
+        )
+    except DBAPIError:
+        return -1
+
+
 def test_a_foreign_search_term_reads_exactly_as_an_absent_one(
     two_principals: Engine,
 ) -> None:

@@ -48,7 +48,9 @@ it does not replace A-X.
   remains `NOT_YET_ESTABLISHED`. Handwriting admit-and-score uses
   `gsqs-evaluator-plane-v2` so public census identity and private
   evaluator-case identity stay separate; synthetic
-  `gsqs-evaluator-plane-v1` is unchanged.
+  `gsqs-evaluator-plane-v1` is unchanged. Page-level `primary_class`
+  and `transcription_status` are independent public descriptors; GSQS
+  scores per region; v2 admission checks NOTE_UNIT counts only.
 - [`SUCCESSOR-B0-PROMPT.md`](SUCCESSOR-B0-PROMPT.md) — later operator-authorized
   execution phase after exact-head review. ChatLLM must not grade itself.
 

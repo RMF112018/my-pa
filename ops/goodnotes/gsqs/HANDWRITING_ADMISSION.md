@@ -71,6 +71,9 @@ Rules for the combined layer:
 - source PDFs are read-only evidence
 - gold transcriptions stay in the private store
 - each case digest binds raster digest + private label digest
+- page-level `primary_class` and `transcription_status` are independent
+  public descriptors, not unique region aggregates; GSQS scores per
+  region; v2 admission checks NOTE_UNIT counts only
 - A/B/C partitioning is group-level; no leakage group may split
 - scoreable cases require `review_state = APPROVED` and
   `label_provenance = OPERATOR_ADJUDICATED`

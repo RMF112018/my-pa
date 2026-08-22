@@ -90,25 +90,17 @@ class AdmittedEvaluatorPlane:
     records: tuple[HandwritingBindingRecord, ...]
 
 
-def derived_public_summary(regions: Sequence[GoldRegion]) -> dict[str, object]:
+def derived_public_counts(regions: Sequence[GoldRegion]) -> dict[str, int]:
+    """Page-level counts that the public catalog freeze derived from NOTE_UNITs.
+
+    Page-level ``primary_class`` and ``transcription_status`` are independent
+    public descriptors. They are not aggregated from region labels here.
+    """
     note_units = [region for region in regions if region.kind is GoodNotesSegmentKind.NOTE_UNIT]
-    classes = {
-        None if item.primary_class is None else item.primary_class.value for item in note_units
-    }
-    statuses = {
-        None if item.transcription_status is None else item.transcription_status.value
-        for item in note_units
-    }
-    if len(classes) > 1:
-        raise ValueError("derived public summary mismatch")
-    if len(statuses) > 1:
-        raise ValueError("derived public summary mismatch")
     return {
-        "candidate_tag_count": sum(len(region.candidate_tags) for region in regions),
+        "candidate_tag_count": sum(len(region.candidate_tags) for region in note_units),
         "note_unit_count": len(note_units),
-        "primary_class": next(iter(classes)) if classes else None,
-        "ranked_candidate_count": sum(len(region.ranked_candidates) for region in regions),
-        "transcription_status": next(iter(statuses)) if statuses else None,
+        "ranked_candidate_count": sum(len(region.ranked_candidates) for region in note_units),
     }
 
 
@@ -235,13 +227,11 @@ def admit_handwriting_evaluator_plane(
         ):
             raise ValueError("malformed evaluator-plane binding")
         regions = tuple(gold_region_from_payload(item) for item in regions_raw)
-        summary = derived_public_summary(regions)
+        counts = derived_public_counts(regions)
         if (
-            summary["note_unit_count"] != public.note_unit_count
-            or summary["candidate_tag_count"] != public.candidate_tag_count
-            or summary["ranked_candidate_count"] != public.ranked_candidate_count
-            or summary["primary_class"] != public.primary_class
-            or summary["transcription_status"] != public.transcription_status
+            counts["note_unit_count"] != public.note_unit_count
+            or counts["candidate_tag_count"] != public.candidate_tag_count
+            or counts["ranked_candidate_count"] != public.ranked_candidate_count
         ):
             raise ValueError("derived public summary mismatch")
         case = _corpus_case_from_handwriting(public, regions)

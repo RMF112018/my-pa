@@ -71,6 +71,9 @@ Evidence plane:
 - `model_identity`: `routellm-goodnotes-b0-v1@sha256:<canonical-inference-config-digest>`
 - evaluator: `goodnotes-gsqs-independent` `1.1`
 - live evaluator behavior identity (this HEAD):
+  `d2bd088a098f99d31637069fd339a67d665b80eb7aa97b403367cce1011a3fb7`
+- historical identity at the evaluator-plane public/private bind
+  (`e638c8a` / PR #149):
   `7dfe81005e931c073fc1e06264e20dedffc8dae530cb50822cac81baed10931f`
 - historical identity at the GSQS B0 MCP evaluation merge (`1a48e99` /
   tree `2080e457…`):
@@ -79,10 +82,11 @@ Evidence plane:
   (`5c52cc7` / tree `dda58686…`):
   `3673a9dbf99214dc6d724822682c2b5547c7a0343d56c7024956734f1516fc7d`
   Those earlier decisions are not reusable as `EXECUTE_MEASURED_B0` for
-  this HEAD. Scoring formulas did not change; this HEAD adds
-  `goodnotes_gsqs_evaluator_binding.py` to the hashed evaluator-plane
-  set so handwriting admission cannot compare public and private case
-  digests as if they were the same payload.
+  this HEAD. Scoring formulas did not change. Page-level `primary_class`
+  and `transcription_status` are independent public descriptors; GSQS
+  scores per region. Handwriting admission still checks NOTE_UNIT
+  `note_unit_count`, `candidate_tag_count`, and `ranked_candidate_count`
+  and does not require a unique region class or status.
 
 Exact git commit/tree are supplied by the later authorization. Dirty
 worktrees fail closed. `latest` and branch names are not identities.

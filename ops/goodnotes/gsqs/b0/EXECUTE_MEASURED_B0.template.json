@@ -4,7 +4,7 @@
   "corpus_manifest_digest": "636d671348cfba5b12b9e5032d5b3daee74f884aea101198ba69ed608ee40f22",
   "corpus_version": "gsqs-hw-combined-v1",
   "decided_at": "",
-  "evaluator_behavior_identity": "7dfe81005e931c073fc1e06264e20dedffc8dae530cb50822cac81baed10931f",
+  "evaluator_behavior_identity": "d2bd088a098f99d31637069fd339a67d665b80eb7aa97b403367cce1011a3fb7",
   "expected_case_count": 73,
   "analyzer_name": "chatllm-goodnotes-semantic",
   "analyzer_version": "sit-1.0",

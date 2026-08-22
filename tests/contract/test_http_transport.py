@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the sixty-two capabilities is addressable over HTTP
-and answers. Parametrised over `Capability` rather than over a list written
-here, so a sixty-third capability added to the domain arrives as a failing row instead
-of as an untested one.
+**Reachability.** Every one of the sixty-five fully composed capabilities is
+addressable over HTTP and answers. Parametrised over `Capability` rather than
+over a list written here, so a sixty-sixth capability added to the domain
+arrives as a failing row instead of as an untested one.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
 itself to — asserted as byte equality against the envelope the application
@@ -30,8 +30,9 @@ from __future__ import annotations
 
 import json
 from base64 import b64encode
-from collections.abc import Iterator
-from datetime import UTC, date, datetime
+from collections.abc import Callable, Iterator
+from dataclasses import replace
+from datetime import UTC, date, datetime, timedelta
 from typing import Any
 
 import pytest
@@ -80,6 +81,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCommitmentHistory,
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
@@ -119,18 +121,20 @@ from my_pa.application.commands import (
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchCommitments,
     SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
     TransitionTask,
+    UpdateCommitment,
     UpdateTask,
     WaitingOn,
 )
 from my_pa.application.intelligence import begin_cycle, commit_artifact
 from my_pa.application.service import ApplicationService
-from my_pa.contracts.ports import KnowledgeRecord
+from my_pa.contracts.ports import KnowledgeRecord, WorkCursorError
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.review import Disposition
@@ -156,15 +160,7 @@ from my_pa.domain.task.lifecycle import TaskLifecycleState
 
 ALL_CAPABILITIES = list(Capability)
 
-#: `tasks.bulk_preview` and `tasks.bulk_confirm` are wired all the way through
-#: `normalize`, but `ApplicationService._tasks_bulk_preview`/`_tasks_bulk_confirm`
-#: are documented placeholders that answer `unsupported` unconditionally — the
-#: mutation-simulation and atomic-apply logic they would need is its own work
-#: package, not a transport concern. Reachability for these two means exactly
-#: that: a well-formed `501 unsupported` envelope, never a silent success.
-_UNIMPLEMENTED_CAPABILITIES = frozenset(
-    {Capability.TASKS_BULK_PREVIEW, Capability.TASKS_BULK_CONFIRM}
-)
+_UNIMPLEMENTED_CAPABILITIES: frozenset[Capability] = frozenset()
 
 
 def a_permitted_purpose(capability: Capability) -> Purpose:
@@ -363,11 +359,11 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.TASKS_BULK_PREVIEW: {
             "mutations": [
                 {
-                    "capability": "tasks.update",
+                    "kind": "update",
                     "task_id": task.task_id,
                     "expected_version": task.version,
-                    "idempotency_key": "http-task-bulk-preview-0001",
-                    "title": "HTTP task-plane task, bulk-previewed",
+                    "values": {"title": "HTTP task-plane task, bulk-previewed"},
+                    "clear_fields": [],
                 }
             ],
             "idempotency_key": "http-task-bulk-preview-op-0001",
@@ -375,9 +371,20 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.TASKS_BULK_CONFIRM: {
             "bulk_operation_id": issue_identifier(IdKind.BULK_OPERATION),
             "idempotency_key": "http-task-bulk-confirm-0001",
+            "mutations": [
+                {
+                    "kind": "update",
+                    "task_id": task.task_id,
+                    "expected_version": task.version,
+                    "values": {"title": "HTTP task-plane task, bulk-previewed"},
+                    "clear_fields": [],
+                }
+            ],
         },
         Capability.COMMITMENTS_READ: {"commitment_id": commitment.commitment_id},
         Capability.COMMITMENTS_LIST: {},
+        Capability.COMMITMENTS_SEARCH: {"query": "synthetic"},
+        Capability.COMMITMENTS_HISTORY: {"commitment_id": commitment.commitment_id},
         Capability.COMMITMENTS_WAITING_ON: {},
         Capability.COMMITMENTS_CREATE: {
             "counterparty_person_id": issue_identifier(IdKind.PERSON),
@@ -391,6 +398,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "expected_version": commitment.version,
             "closure_evidence_ref": "cap_origin0001origin0001",
             "idempotency_key": "http-commitment-close-0001",
+        },
+        Capability.COMMITMENTS_UPDATE: {
+            "commitment_id": commitment.commitment_id,
+            "expected_version": commitment.version,
+            "idempotency_key": "http-commitment-update-0001",
+            "summary": "HTTP commitment-plane commitment, revised",
         },
         Capability.CONTEXT_PREPARE: {"query": "revenue"},
         Capability.CONTEXT_FEEDBACK: {
@@ -666,11 +679,11 @@ def commands_for(
         Capability.TASKS_BULK_PREVIEW: BulkPreviewTasks(
             mutations=(
                 {
-                    "capability": "tasks.update",
+                    "kind": "update",
                     "task_id": task.task_id,
                     "expected_version": task.version,
-                    "idempotency_key": "http-task-bulk-preview-0001",
-                    "title": "HTTP task-plane task, bulk-previewed",
+                    "values": {"title": "HTTP task-plane task, bulk-previewed"},
+                    "clear_fields": [],
                 },
             ),
             idempotency_key="http-task-bulk-preview-op-0001",
@@ -678,9 +691,22 @@ def commands_for(
         Capability.TASKS_BULK_CONFIRM: BulkConfirmTasks(
             bulk_operation_id=bulk_operation_id,
             idempotency_key="http-task-bulk-confirm-0001",
+            mutations=(
+                {
+                    "kind": "update",
+                    "task_id": task.task_id,
+                    "expected_version": task.version,
+                    "values": {"title": "HTTP task-plane task, bulk-previewed"},
+                    "clear_fields": [],
+                },
+            ),
         ),
         Capability.COMMITMENTS_READ: ReadCommitment(commitment_id=commitment.commitment_id),
         Capability.COMMITMENTS_LIST: ListCommitments(),
+        Capability.COMMITMENTS_SEARCH: SearchCommitments(query="synthetic"),
+        Capability.COMMITMENTS_HISTORY: GetCommitmentHistory(
+            commitment_id=commitment.commitment_id
+        ),
         Capability.COMMITMENTS_WAITING_ON: WaitingOn(),
         Capability.COMMITMENTS_CREATE: CreateCommitment(
             counterparty_person_id=counterparty_person_id,
@@ -694,6 +720,12 @@ def commands_for(
             expected_version=commitment.version,
             closure_evidence_ref="cap_origin0001origin0001",
             idempotency_key="http-commitment-close-0001",
+        ),
+        Capability.COMMITMENTS_UPDATE: UpdateCommitment(
+            commitment_id=commitment.commitment_id,
+            expected_version=commitment.version,
+            idempotency_key="http-commitment-update-0001",
+            summary="HTTP commitment-plane commitment, revised",
         ),
         Capability.CONTEXT_PREPARE: PrepareContext(query="revenue"),
         Capability.CONTEXT_FEEDBACK: RecordContextFeedback(
@@ -882,6 +914,10 @@ def test_every_capability_is_reachable_over_http(
     payload = payloads_for(scene, record)[capability]
     reply = wire.send(capability.value, document_for(capability, scene, payload))
     envelope = reply.document()
+    if capability is Capability.TASKS_BULK_CONFIRM:
+        assert reply.status == 404, reply.body
+        assert envelope["error"]["code"] == "not_found"
+        return
     if capability in _UNIMPLEMENTED_CAPABILITIES:
         assert reply.status == 501, reply.body
         assert envelope["error"]["code"] == "unsupported"
@@ -893,6 +929,505 @@ def test_every_capability_is_reachable_over_http(
     assert envelope["disclosure"] is not None
     assert envelope["request_id"] == f"req-{capability.value}"
     assert envelope["contract_version"] == "v1"
+
+
+@pytest.mark.parametrize("reference", ["cap_unknown001unknown001", "asrt_unknown01unknown01"])
+def test_work_writes_refuse_unknown_or_unaccepted_evidence(
+    reference: str, staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, _ = staged
+    reply = wire.send(
+        Capability.TASKS_CREATE.value,
+        document_for(
+            Capability.TASKS_CREATE,
+            scene,
+            {
+                "title": "Synthetic refused task",
+                "origin_evidence_ref": reference,
+                "idempotency_key": "evidence-refusal-0001",
+            },
+        ),
+    )
+    assert reply.status == 400
+    assert reply.document()["error"]["safe_details"] == ["invalid_evidence_reference"]
+
+
+def test_work_writes_collapse_foreign_evidence_to_the_same_refusal(
+    staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, _ = staged
+    reference = "cap_foreign001foreign001"
+    scene.world.work_evidence_refs.add(("prn_foreign001foreign001", reference))
+    reply = wire.send(
+        Capability.TASKS_CREATE.value,
+        document_for(
+            Capability.TASKS_CREATE,
+            scene,
+            {
+                "title": "Synthetic refused task",
+                "origin_evidence_ref": reference,
+                "idempotency_key": "foreign-refusal-0001",
+            },
+        ),
+    )
+    assert reply.status == 400
+    assert reply.document()["error"]["safe_details"] == ["invalid_evidence_reference"]
+
+
+@pytest.mark.parametrize(
+    ("capability", "payload_factory"),
+    [
+        (
+            Capability.TASKS_CREATE,
+            lambda scene, reference: {
+                "title": "Replay survives superseded evidence",
+                "origin_evidence_ref": reference,
+                "idempotency_key": "task-create-superseded-0001",
+            },
+        ),
+        (
+            Capability.TASKS_TRANSITION,
+            lambda scene, reference: {
+                "task_id": staged_task(scene).task_id,
+                "to_state": "completed",
+                "expected_version": staged_task(scene).version,
+                "closure_evidence_ref": reference,
+                "idempotency_key": "task-close-superseded-0001",
+            },
+        ),
+        (
+            Capability.COMMITMENTS_CREATE,
+            lambda scene, reference: {
+                "counterparty_person_id": issue_identifier(IdKind.PERSON),
+                "direction": "owed_by_principal",
+                "summary": "Replay survives superseded evidence",
+                "origin_evidence_ref": reference,
+                "idempotency_key": "commitment-create-superseded-0001",
+            },
+        ),
+        (
+            Capability.COMMITMENTS_CLOSE,
+            lambda scene, reference: {
+                "commitment_id": staged_commitment(scene).commitment_id,
+                "expected_version": staged_commitment(scene).version,
+                "closure_evidence_ref": reference,
+                "idempotency_key": "commitment-close-superseded-0001",
+            },
+        ),
+    ],
+    ids=lambda value: value.value if isinstance(value, Capability) else None,
+)
+def test_exact_work_replay_precedes_mutable_evidence_eligibility(
+    capability: Capability,
+    payload_factory: Callable[[Scene, str], dict[str, object]],
+    staged: tuple[Scene, KnowledgeRecord],
+    wire: Wire,
+) -> None:
+    scene, _ = staged
+    reference = issue_identifier(IdKind.ASSERTION)
+    scene.world.work_evidence_refs.add((scene.principal.principal_id, reference))
+    payload = payload_factory(scene, reference)
+
+    first = wire.send(capability.value, document_for(capability, scene, payload))
+    assert first.status == 200, first.body
+    scene.world.work_evidence_refs.remove((scene.principal.principal_id, reference))
+
+    replay = wire.send(capability.value, document_for(capability, scene, payload))
+    assert replay.status == 200, replay.body
+    assert replay.document()["result"]["replayed"] is True
+
+
+def test_work_digest_mismatch_conflicts_before_superseded_evidence_lookup(
+    staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, _ = staged
+    reference = issue_identifier(IdKind.ASSERTION)
+    scene.world.work_evidence_refs.add((scene.principal.principal_id, reference))
+    payload = {
+        "title": "Original request",
+        "origin_evidence_ref": reference,
+        "idempotency_key": "task-create-mismatch-before-evidence-0001",
+    }
+    assert (
+        wire.send(
+            Capability.TASKS_CREATE.value,
+            document_for(Capability.TASKS_CREATE, scene, payload),
+        ).status
+        == 200
+    )
+    scene.world.work_evidence_refs.remove((scene.principal.principal_id, reference))
+    payload["title"] = "Different normalized request"
+
+    mismatch = wire.send(
+        Capability.TASKS_CREATE.value,
+        document_for(Capability.TASKS_CREATE, scene, payload),
+    )
+    assert mismatch.status == 409
+    assert mismatch.document()["error"]["safe_details"] == ["idempotency_key"]
+
+
+@pytest.mark.parametrize(
+    "capability",
+    [
+        Capability.TASKS_LIST,
+        Capability.TASKS_SEARCH,
+        Capability.TASKS_HISTORY,
+        Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_SEARCH,
+        Capability.COMMITMENTS_HISTORY,
+        Capability.COMMITMENTS_WAITING_ON,
+    ],
+)
+def test_absent_work_cursor_is_one_safe_typed_conflict(
+    capability: Capability, staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, _ = staged
+    task = staged_task(scene)
+    commitment = staged_commitment(scene)
+    cursor = (
+        issue_identifier(IdKind.TASK_HISTORY)
+        if capability is Capability.TASKS_HISTORY
+        else issue_identifier(IdKind.COMMITMENT_HISTORY)
+        if capability is Capability.COMMITMENTS_HISTORY
+        else issue_identifier(IdKind.TASK)
+        if capability in {Capability.TASKS_LIST, Capability.TASKS_SEARCH}
+        else issue_identifier(IdKind.COMMITMENT)
+    )
+    payload: dict[str, object] = {"after": cursor}
+    if capability is Capability.TASKS_SEARCH:
+        payload["query"] = "synthetic"
+    elif capability is Capability.TASKS_HISTORY:
+        payload["task_id"] = task.task_id
+    elif capability is Capability.COMMITMENTS_SEARCH:
+        payload["query"] = "synthetic"
+    elif capability is Capability.COMMITMENTS_HISTORY:
+        payload["commitment_id"] = commitment.commitment_id
+
+    reply = wire.send(capability.value, document_for(capability, scene, payload))
+    assert reply.status == 409
+    assert reply.document()["error"]["safe_details"] == ["cursor"]
+
+
+def test_fake_work_repositories_refuse_foreign_cursor_anchors(
+    staged: tuple[Scene, KnowledgeRecord],
+) -> None:
+    scene, _ = staged
+    task = staged_task(scene)
+    commitment = staged_commitment(scene)
+    foreign_principal = "prn_foreign001foreign001"
+    foreign_task = replace(
+        task, task_id=issue_identifier(IdKind.TASK), principal_id=foreign_principal
+    )
+    foreign_task_history = replace(
+        scene.world.task_history_v2[0],
+        history_id=issue_identifier(IdKind.TASK_HISTORY),
+        task_id=foreign_task.task_id,
+        principal_id=foreign_principal,
+    )
+    foreign_commitment = replace(
+        commitment,
+        commitment_id=issue_identifier(IdKind.COMMITMENT),
+        principal_id=foreign_principal,
+    )
+    foreign_commitment_history = replace(
+        scene.world.commitment_history_v2[0],
+        history_id=issue_identifier(IdKind.COMMITMENT_HISTORY),
+        commitment_id=foreign_commitment.commitment_id,
+        principal_id=foreign_principal,
+    )
+    scene.world.tasks_v2.append(foreign_task)
+    scene.world.task_history_v2.append(foreign_task_history)
+    scene.world.commitments_v2.append(foreign_commitment)
+    scene.world.commitment_history_v2.append(foreign_commitment_history)
+    unit_of_work = FakeUnitOfWork(scene.world)
+
+    with pytest.raises(WorkCursorError):
+        unit_of_work.tasks.list_tasks(
+            scene.principal.principal_id, after=foreign_task.task_id, limit=10
+        )
+    with pytest.raises(WorkCursorError):
+        unit_of_work.tasks.search(
+            scene.principal.principal_id, "synthetic", 10, after=foreign_task.task_id
+        )
+    with pytest.raises(WorkCursorError):
+        unit_of_work.tasks.list_history(
+            scene.principal.principal_id,
+            task.task_id,
+            10,
+            after=foreign_task_history.history_id,
+        )
+    with pytest.raises(WorkCursorError):
+        unit_of_work.commitments.list_commitments(
+            scene.principal.principal_id,
+            after=foreign_commitment.commitment_id,
+            limit=10,
+        )
+    with pytest.raises(WorkCursorError):
+        unit_of_work.commitments.search(
+            scene.principal.principal_id,
+            "synthetic",
+            10,
+            after=foreign_commitment.commitment_id,
+        )
+    with pytest.raises(WorkCursorError):
+        unit_of_work.commitments.list_history(
+            scene.principal.principal_id,
+            commitment.commitment_id,
+            10,
+            after=foreign_commitment_history.history_id,
+        )
+
+
+def test_bulk_preview_and_confirm_replay_the_original_receipts(
+    staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, record = staged
+    task = staged_task(scene)
+    mutations = [
+        {
+            "kind": "update",
+            "task_id": task.task_id,
+            "expected_version": task.version,
+            "values": {"priority": "p1"},
+            "clear_fields": [],
+        }
+    ]
+    preview_payload = {"mutations": mutations, "idempotency_key": "bulk-replay-preview-0001"}
+    first = wire.send(
+        Capability.TASKS_BULK_PREVIEW.value,
+        document_for(Capability.TASKS_BULK_PREVIEW, scene, preview_payload),
+    ).document()["result"]
+    replay = wire.send(
+        Capability.TASKS_BULK_PREVIEW.value,
+        document_for(Capability.TASKS_BULK_PREVIEW, scene, preview_payload),
+    ).document()["result"]
+    assert replay == {**first, "replayed": True}
+    confirm_payload = {
+        "bulk_operation_id": first["bulk_operation_id"],
+        "idempotency_key": "bulk-replay-confirm-0001",
+        "mutations": mutations,
+    }
+    confirmed = wire.send(
+        Capability.TASKS_BULK_CONFIRM.value,
+        document_for(Capability.TASKS_BULK_CONFIRM, scene, confirm_payload),
+    ).document()["result"]
+    confirmed_replay = wire.send(
+        Capability.TASKS_BULK_CONFIRM.value,
+        document_for(Capability.TASKS_BULK_CONFIRM, scene, confirm_payload),
+    ).document()["result"]
+    assert confirmed_replay == {**confirmed, "replayed": True}
+    assert confirmed["affected"] == 1
+    assert len(confirmed["history_ids"]) == 1
+    del record
+
+
+def test_bulk_confirm_key_is_unique_per_principal_across_operations(
+    staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, _ = staged
+    first_task = staged_task(scene)
+    second_task = replace(
+        first_task,
+        task_id=issue_identifier(IdKind.TASK),
+        title="a second synthetic task",
+    )
+    scene.world.tasks_v2.append(second_task)
+
+    previews: list[tuple[dict[str, object], dict[str, object]]] = []
+    for index, (task, priority) in enumerate(((first_task, "p1"), (second_task, "p2")), 1):
+        mutation = {
+            "kind": "update",
+            "task_id": task.task_id,
+            "expected_version": task.version,
+            "values": {"priority": priority},
+            "clear_fields": [],
+        }
+        preview = wire.send(
+            Capability.TASKS_BULK_PREVIEW.value,
+            document_for(
+                Capability.TASKS_BULK_PREVIEW,
+                scene,
+                {
+                    "mutations": [mutation],
+                    "idempotency_key": f"bulk-global-preview-{index:04d}",
+                },
+            ),
+        ).document()["result"]
+        previews.append((preview, mutation))
+
+    shared_key = "bulk-global-confirm-0001"
+    first_preview, first_mutation = previews[0]
+    assert (
+        wire.send(
+            Capability.TASKS_BULK_CONFIRM.value,
+            document_for(
+                Capability.TASKS_BULK_CONFIRM,
+                scene,
+                {
+                    "bulk_operation_id": first_preview["bulk_operation_id"],
+                    "idempotency_key": shared_key,
+                    "mutations": [first_mutation],
+                },
+            ),
+        ).status
+        == 200
+    )
+    second_preview, second_mutation = previews[1]
+    before = tuple(scene.world.tasks_v2)
+    refused = wire.send(
+        Capability.TASKS_BULK_CONFIRM.value,
+        document_for(
+            Capability.TASKS_BULK_CONFIRM,
+            scene,
+            {
+                "bulk_operation_id": second_preview["bulk_operation_id"],
+                "idempotency_key": shared_key,
+                "mutations": [second_mutation],
+            },
+        ),
+    )
+    assert refused.status == 409
+    assert refused.document()["error"]["safe_details"] == ["idempotency_key"]
+    assert tuple(scene.world.tasks_v2) == before
+
+
+def test_follow_up_role_without_a_commitment_is_typed_validation(
+    staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, _ = staged
+    scene.world.work_evidence_refs.add((scene.principal.principal_id, "cap_origin0001origin0001"))
+    reply = wire.send(
+        Capability.TASKS_CREATE.value,
+        document_for(
+            Capability.TASKS_CREATE,
+            scene,
+            {
+                "title": "synthetic unlinked follow-up",
+                "origin_evidence_ref": "cap_origin0001origin0001",
+                "role": "follow_up",
+                "idempotency_key": "unlinked-follow-up-0001",
+            },
+        ),
+    )
+    assert reply.status == 400
+    assert reply.document()["error"]["safe_details"] == ["selector"]
+
+
+def test_task_read_keeps_terminal_history_link_after_a_later_update(
+    staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, _ = staged
+    task = staged_task(scene)
+    transitioned = wire.send(
+        Capability.TASKS_TRANSITION.value,
+        document_for(
+            Capability.TASKS_TRANSITION,
+            scene,
+            {
+                "task_id": task.task_id,
+                "to_state": "completed",
+                "expected_version": task.version,
+                "closure_evidence_ref": "cap_origin0001origin0001",
+                "idempotency_key": "terminal-history-transition-0001",
+            },
+        ),
+    ).document()["result"]
+    closure_history_id = transitioned["history"]["history_id"]
+    terminal = transitioned["task"]
+    updated = wire.send(
+        Capability.TASKS_UPDATE.value,
+        document_for(
+            Capability.TASKS_UPDATE,
+            scene,
+            {
+                "task_id": task.task_id,
+                "expected_version": terminal["version"],
+                "priority": "p1",
+                "idempotency_key": "terminal-history-update-0001",
+            },
+        ),
+    )
+    assert updated.status == 200
+    read = wire.send(
+        Capability.TASKS_READ.value,
+        document_for(Capability.TASKS_READ, scene, {"task_id": task.task_id}),
+    ).document()["result"]["task"]
+    assert read["closure_history_id"] == closure_history_id
+
+
+def test_expired_or_drifted_bulk_confirm_writes_no_task_or_history(
+    staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, _ = staged
+    task = staged_task(scene)
+    mutations = [
+        {
+            "kind": "update",
+            "task_id": task.task_id,
+            "expected_version": task.version,
+            "values": {"priority": "p2"},
+            "clear_fields": [],
+        }
+    ]
+    preview = wire.send(
+        Capability.TASKS_BULK_PREVIEW.value,
+        document_for(
+            Capability.TASKS_BULK_PREVIEW,
+            scene,
+            {"mutations": mutations, "idempotency_key": "bulk-expired-preview-0001"},
+        ),
+    ).document()["result"]
+    key = (scene.principal.principal_id, preview["bulk_operation_id"])
+    scene.world.task_bulk_operations[key] = replace(
+        scene.world.task_bulk_operations[key], expires_at=WHEN - timedelta(seconds=1)
+    )
+    before_tasks = tuple(scene.world.tasks_v2)
+    before_history = tuple(scene.world.task_history_v2)
+    reply = wire.send(
+        Capability.TASKS_BULK_CONFIRM.value,
+        document_for(
+            Capability.TASKS_BULK_CONFIRM,
+            scene,
+            {
+                "bulk_operation_id": preview["bulk_operation_id"],
+                "idempotency_key": "bulk-expired-confirm-0001",
+                "mutations": mutations,
+            },
+        ),
+    )
+    assert reply.status == 409
+    assert tuple(scene.world.tasks_v2) == before_tasks
+    assert tuple(scene.world.task_history_v2) == before_history
+
+    drift_preview = wire.send(
+        Capability.TASKS_BULK_PREVIEW.value,
+        document_for(
+            Capability.TASKS_BULK_PREVIEW,
+            scene,
+            {"mutations": mutations, "idempotency_key": "bulk-drift-preview-0001"},
+        ),
+    ).document()["result"]
+    drifted = replace(task, version=task.version + 1, updated_at=WHEN + timedelta(seconds=1))
+    scene.world.tasks_v2[:] = [
+        drifted if item.task_id == task.task_id else item for item in scene.world.tasks_v2
+    ]
+    before_drift_confirm = tuple(scene.world.tasks_v2)
+    before_drift_history = tuple(scene.world.task_history_v2)
+    drift_reply = wire.send(
+        Capability.TASKS_BULK_CONFIRM.value,
+        document_for(
+            Capability.TASKS_BULK_CONFIRM,
+            scene,
+            {
+                "bulk_operation_id": drift_preview["bulk_operation_id"],
+                "idempotency_key": "bulk-drift-confirm-0001",
+                "mutations": mutations,
+            },
+        ),
+    )
+    assert drift_reply.status == 409
+    assert tuple(scene.world.tasks_v2) == before_drift_confirm
+    assert tuple(scene.world.task_history_v2) == before_drift_history
 
 
 @pytest.mark.parametrize("capability", ALL_CAPABILITIES, ids=lambda c: c.value)
@@ -915,7 +1450,8 @@ def test_the_body_is_the_envelope_the_application_produced(
     assert len(service.envelopes) == 1, "one request reached the application once"
     produced = service.envelopes[0]
     assert reply.body == produced.to_canonical_json()
-    assert reply.status == (501 if capability in _UNIMPLEMENTED_CAPABILITIES else 200)
+    expected_status = 404 if capability is Capability.TASKS_BULK_CONFIRM else 200
+    assert reply.status == expected_status
     assert produced.correlation_id in reply.body
 
 

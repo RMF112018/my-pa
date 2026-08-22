@@ -23,11 +23,16 @@ caller gets back.
 
 from __future__ import annotations
 
+from datetime import date, datetime
+
 import pytest
 
 from my_pa.application.commands import (
     DecideReviewCase,
+    ListTasks,
     PrepareContext,
+    SearchCommitments,
+    SearchTasks,
     TransitionTask,
     UpdateTask,
     _conversation_context,
@@ -36,6 +41,7 @@ from my_pa.application.commands import (
 from my_pa.application.errors import InvalidRequestError
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, make_identifier
+from my_pa.domain.task.lifecycle import TaskWorkView
 from my_pa.domain.task.task import TaskLifecycleState
 
 TASK_ID = make_identifier(IdKind.TASK, "a" * 24)
@@ -121,3 +127,34 @@ def test_conversation_context_refuses_a_non_string_and_keeps_none() -> None:
 def test_prepare_context_refuses_a_non_string_conversation_context() -> None:
     with pytest.raises(InvalidRequestError):
         PrepareContext(query="q", conversation_context=NOT_A_STRING)
+
+
+@pytest.mark.parametrize("command", (ListTasks, SearchTasks))
+def test_work_views_refuse_non_string_timezones(command: type) -> None:
+    arguments = {
+        "work_view": TaskWorkView.TODAY,
+        "work_date": date(2026, 8, 21),
+        "timezone": NOT_A_STRING,
+    }
+    if command is SearchTasks:
+        arguments["query"] = "synthetic"
+    with pytest.raises(InvalidRequestError):
+        command(**arguments)
+
+
+@pytest.mark.parametrize("command", (ListTasks, SearchTasks))
+def test_work_views_refuse_non_date_values(command: type) -> None:
+    arguments = {
+        "work_view": TaskWorkView.TODAY,
+        "work_date": datetime(2026, 8, 21),
+        "timezone": "UTC",
+    }
+    if command is SearchTasks:
+        arguments["query"] = "synthetic"
+    with pytest.raises(InvalidRequestError):
+        command(**arguments)
+
+
+def test_search_commitments_refuses_a_non_string_query() -> None:
+    with pytest.raises(InvalidRequestError):
+        SearchCommitments(query=NOT_A_STRING)

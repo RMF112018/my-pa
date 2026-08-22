@@ -2,14 +2,14 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-sixty-two capabilities. There are two ways to prove that and only one of them stays
+sixty-five capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
 **Structural: there is one normalisation, and all three call it.** A comparison
 of three snapshots proves that three implementations agreed on the day the
 snapshots were taken. What actually holds the property is that there is nothing
-to disagree: `RequestMetadata` and the thirteen commands are constructed in exactly
+to disagree: `RequestMetadata` and the sixty-six commands are constructed in exactly
 one module, `adapters/normalization.py`, and every transport reaches the
 application by handing that module a capability name and a document. The rules
 below check both halves by parsing — no transport builds a request value of its
@@ -26,7 +26,10 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over all sixty-two capabilities and ten refusals.** Each
+**And the answers, over all sixty-five fully composed capabilities and ten
+refusals.** The default composition exposes fifty-three because the six
+managed-document and six Relationship Intelligence capabilities are withheld
+without their explicit configuration. Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
 `sources.enroll` alone would make the second and third callers idempotent
@@ -123,16 +126,6 @@ NORMALIZE_SITES = (cli_module, http_module, mcp_module)
 
 TRANSPORT_NAMES = frozenset({"http", "mcp", "cli"})
 CORRECTED_VALUE_MARKER = "PRIVATE-CORRECTED-VALUE-MARKER"
-
-#: `tasks.bulk_preview` and `tasks.bulk_confirm` are wired all the way through
-#: `normalize`, but `ApplicationService._tasks_bulk_preview`/`_tasks_bulk_confirm`
-#: are documented placeholders that answer `unsupported` unconditionally — the
-#: mutation-simulation and atomic-apply logic they would need is its own work
-#: package, not a transport-parity concern. Parity for these two means exactly
-#: that: the same `unsupported` refusal, identically, over all three transports.
-_UNIMPLEMENTED_CAPABILITIES = frozenset(
-    {Capability.TASKS_BULK_PREVIEW, Capability.TASKS_BULK_CONFIRM}
-)
 
 
 def a_permitted_purpose(capability: Capability) -> Purpose:
@@ -250,9 +243,37 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     """
     capture = staged_capture(scene)
     review_case = staged_review_case(scene, capture)
-    document = staged_managed_document(scene)
+    managed_document = staged_managed_document(scene)
     task = staged_task(scene)
     commitment = staged_commitment(scene)
+    bulk_mutations = [
+        {
+            "kind": "update",
+            "task_id": task.task_id,
+            "expected_version": task.version,
+            "values": {"priority": "p1"},
+            "clear_fields": [],
+        }
+    ]
+    preview_metadata, preview_command = normalize(
+        Capability.TASKS_BULK_PREVIEW.value,
+        document(
+            Capability.TASKS_BULK_PREVIEW,
+            scene.principal.principal_id,
+            {
+                "mutations": bulk_mutations,
+                "idempotency_key": f"parity-task-bulk-setup-v{task.version:04d}",
+            },
+        ),
+    )
+    preview = build_service(scene.world, scene.providers).invoke(
+        preview_metadata,
+        preview_command,
+        principal=scene.principal,
+    )
+    assert preview.error is None and preview.result is not None
+    bulk_operation_id = preview.result["bulk_operation_id"]
+    assert isinstance(bulk_operation_id, str)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
     at = datetime(2026, 8, 2, 11, tzinfo=UTC)
@@ -387,21 +408,21 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "parity-document-0001",
         },
         Capability.DOCUMENTS_REVISE: {
-            "document_id": document.document_id,
-            "expected_version_number": document.version_number,
+            "document_id": managed_document.document_id,
+            "expected_version_number": managed_document.version_number,
             "title": "Synthetic parity document, revised",
             "media_type": "text/markdown",
             "content": b64encode(b"# Synthetic parity document, revised").decode("ascii"),
             "idempotency_key": "parity-document-revise-0001",
         },
         Capability.DOCUMENTS_READ: {
-            "document_id": document.document_id,
-            "version_id": document.version_id,
+            "document_id": managed_document.document_id,
+            "version_id": managed_document.version_id,
             "include_bytes": True,
         },
         Capability.DOCUMENTS_LIST: {"limit": 10, "include_archived": True},
-        Capability.DOCUMENTS_ARCHIVE: {"document_id": document.document_id},
-        Capability.DOCUMENTS_RESTORE: {"document_id": document.document_id},
+        Capability.DOCUMENTS_ARCHIVE: {"document_id": managed_document.document_id},
+        Capability.DOCUMENTS_RESTORE: {"document_id": managed_document.document_id},
         # The task-management plane (WP-TM-01..05). `task`/`commitment` are
         # staged before the world is copied per transport, so all three see the
         # same stored rows and a read is the same read everywhere.
@@ -427,23 +448,21 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "parity-task-transition-0001",
         },
         Capability.TASKS_BULK_PREVIEW: {
-            "mutations": [
-                {
-                    "capability": "tasks.update",
-                    "task_id": task.task_id,
-                    "expected_version": task.version,
-                    "idempotency_key": "parity-task-bulk-preview-0001",
-                    "title": "Parity task-plane task, bulk-previewed",
-                }
-            ],
+            "mutations": bulk_mutations,
             "idempotency_key": "parity-task-bulk-preview-op-0001",
         },
         Capability.TASKS_BULK_CONFIRM: {
-            "bulk_operation_id": issue_identifier(IdKind.BULK_OPERATION),
+            "bulk_operation_id": bulk_operation_id,
             "idempotency_key": "parity-task-bulk-confirm-0001",
+            "mutations": bulk_mutations,
         },
         Capability.COMMITMENTS_READ: {"commitment_id": commitment.commitment_id},
         Capability.COMMITMENTS_LIST: {},
+        Capability.COMMITMENTS_SEARCH: {"query": "synthetic", "page_size": 10},
+        Capability.COMMITMENTS_HISTORY: {
+            "commitment_id": commitment.commitment_id,
+            "page_size": 10,
+        },
         Capability.COMMITMENTS_WAITING_ON: {},
         Capability.COMMITMENTS_CREATE: {
             "counterparty_person_id": issue_identifier(IdKind.PERSON),
@@ -451,6 +470,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "summary": "Parity commitment-plane commitment",
             "origin_evidence_ref": "cap_origin0001origin0001",
             "idempotency_key": "parity-commitment-create-0001",
+        },
+        Capability.COMMITMENTS_UPDATE: {
+            "commitment_id": commitment.commitment_id,
+            "expected_version": commitment.version,
+            "summary": "Parity commitment-plane commitment, revised",
+            "idempotency_key": "parity-commitment-update-0001",
         },
         Capability.COMMITMENTS_CLOSE: {
             "commitment_id": commitment.commitment_id,
@@ -700,7 +725,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 63, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 66, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -1017,13 +1042,6 @@ def test_every_capability_answers_identically_over_all_three_transports(
         capability, scene.principal.principal_id, payloads_for(scene, record)[capability]
     )
     answers = answers_for(scene, capability.value, request)
-    if capability in _UNIMPLEMENTED_CAPABILITIES:
-        assert all(answer.failed for answer in answers.values()), answers
-        for name, answer in answers.items():
-            assert answer.document["error"]["code"] == "unsupported", f"{name} did not refuse"
-            assert answer.document["request_id"] == request["request_id"]
-        assert_same_answer(answers, request, capability.value)
-        return
     assert not any(answer.failed for answer in answers.values()), answers
     for name, answer in answers.items():
         assert answer.document["error"] is None, f"{name} refused {capability.value}"
@@ -1378,7 +1396,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: sixty-two capabilities answered from an empty world prove little."""
+    """Guard the matrix: sixty-five capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

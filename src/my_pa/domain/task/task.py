@@ -106,6 +106,8 @@ class Task:
             validate_identifier(self.commitment_id, IdKind.COMMITMENT)
         if self.role is not None and not isinstance(self.role, TaskRole):
             raise ValueError("a task role, when set, is one known value")
+        if self.role is TaskRole.FOLLOW_UP and self.commitment_id is None:
+            raise ValueError("a follow-up task names the commitment it follows up")
         if self.accepted_by_review_decision_id is not None:
             validate_identifier(self.accepted_by_review_decision_id, IdKind.REVIEW_DECISION)
         _require_acceptance_pairing(

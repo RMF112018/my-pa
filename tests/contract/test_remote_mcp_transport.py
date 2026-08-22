@@ -465,6 +465,10 @@ async def test_remote_task_create_is_visible_on_tasks_list(scene: Scene) -> None
     create = Capability.TASKS_CREATE
     listing = Capability.TASKS_LIST
     reading = Capability.TASKS_READ
+    # The write contract admits only evidence already accepted for this
+    # Principal. The fake models that durable admission explicitly; production
+    # validation remains unchanged and is exercised by the application tests.
+    scene.world.work_evidence_refs.add((scene.principal.principal_id, "cap_origin0001origin0001"))
     app = create_remote_mcp_app(
         build_service(scene.world, scene.providers),
         resolve_access=lambda _authorization: RemoteAccessContext(

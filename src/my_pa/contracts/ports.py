@@ -1,4 +1,4 @@
-"""The ports the sixty-two capability use cases call, and nothing else.
+"""The ports the sixty-five capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -133,11 +133,26 @@ from my_pa.domain.situation.situation import (
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import ConfiguredSource
+from my_pa.domain.task.bulk import TaskBulkOperation
 from my_pa.domain.task.commitment import Commitment as CommitmentAggregate
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
 from my_pa.domain.task.history import TaskHistoryEntry
-from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.lifecycle import (
+    TaskArchiveMode,
+    TaskLifecycleState,
+    TaskPriority,
+    TaskWorkView,
+)
 from my_pa.domain.task.task import Task as TaskAggregate
+
+
+class WorkCursorError(Exception):
+    """A Work cursor anchor is absent from the authenticated Principal's partition."""
+
+
+class BulkIdempotencyConflictError(Exception):
+    """A concurrent bulk request claimed this Principal/idempotency key first."""
+
 
 __all__ = [
     "Acceptance",
@@ -1067,6 +1082,16 @@ class CaptureRepository(ABC):
         plane" is a fact about this build and says nothing about whether the
         subject exists.
         """
+
+    def accepts_work_evidence_reference(self, reference: str, *, principal_id: str) -> bool:
+        """Whether ``reference`` is usable as Work origin/closure evidence.
+
+        Implementations must answer from metadata only: a Principal-owned Quick
+        Capture (``cap_...``), or an accepted, non-superseded assertion
+        (``asrt_...``).  The operation deliberately exposes neither evidence
+        content nor whether a differently-owned reference exists.
+        """
+        raise NotImplementedError
 
 
 @dataclass(frozen=True, slots=True)
@@ -2580,6 +2605,32 @@ class TaskManagementRepository(ABC):
     def insert_history(self, entry: TaskHistoryEntry) -> None:
         """Append one mutation receipt. Never updated, never deleted."""
 
+    def find_bulk_by_preview_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskBulkOperation | None:
+        """A prior preview under this Principal/key, if any."""
+        raise NotImplementedError
+
+    def find_bulk_by_confirm_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskBulkOperation | None:
+        """A prior confirmation under this Principal/key, across all operations."""
+        raise NotImplementedError
+
+    def get_bulk_for_update(
+        self, principal_id: str, bulk_operation_id: str
+    ) -> TaskBulkOperation | None:
+        """One Principal-owned bulk row, locked through the transaction."""
+        raise NotImplementedError
+
+    def insert_bulk(self, operation: TaskBulkOperation) -> None:
+        """Persist one content-free preview ledger row."""
+        raise NotImplementedError
+
+    def confirm_bulk(self, operation: TaskBulkOperation) -> None:
+        """Persist the terminal receipt fields for a confirmed operation."""
+        raise NotImplementedError
+
     # --- WP-TM-03: the read plane -------------------------------------------
     #
     # The four methods below answer `tasks.read`/`list`/`search`/`history` and
@@ -2607,20 +2658,35 @@ class TaskManagementRepository(ABC):
         *,
         lifecycle_state: TaskLifecycleState | None = None,
         priority: TaskPriority | None = None,
-        include_archived: bool = False,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        after: str | None = None,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
         limit: int,
     ) -> tuple[TaskAggregate, ...]:
         """One bounded page of this Principal's own tasks, newest created first.
 
         `lifecycle_state` and `priority`, when given, are exact matches — a
         structured filter, not the lexical one `search` performs. Archived
-        tasks are excluded unless `include_archived` says otherwise, for the
+        tasks are excluded unless `archive_mode` is `only`, for the
         same reason `ListManagedDocuments` excludes archived documents: a
         caller who wants a withdrawn task back has to ask for it by name.
         """
 
     @abstractmethod
-    def search(self, principal_id: str, query: str, limit: int) -> tuple[TaskAggregate, ...]:
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        limit: int,
+        *,
+        after: str | None = None,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+    ) -> tuple[TaskAggregate, ...]:
         """One bounded page of this Principal's own tasks whose title matches `query`.
 
         A case-insensitive substring match against `title`, the one free-text
@@ -2632,7 +2698,7 @@ class TaskManagementRepository(ABC):
 
     @abstractmethod
     def list_history(
-        self, principal_id: str, task_id: str, limit: int
+        self, principal_id: str, task_id: str, limit: int, *, after: str | None = None
     ) -> tuple[TaskHistoryEntry, ...]:
         """One bounded page of one task's append-only mutation record, oldest first.
 
@@ -2642,6 +2708,18 @@ class TaskManagementRepository(ABC):
         sense `get` is — a history entry for a task belonging to another
         Principal is unreachable, not merely filtered out.
         """
+
+    @abstractmethod
+    def latest_applied_terminal_history(
+        self, principal_id: str, task_id: str
+    ) -> TaskHistoryEntry | None:
+        """Latest applied terminal lifecycle receipt for a Principal-owned Task."""
+
+    def get_follow_up_for_commitment(
+        self, principal_id: str, commitment_id: str
+    ) -> TaskAggregate | None:
+        """The deterministic follow-up Task for one Principal-owned Commitment, if present."""
+        raise NotImplementedError
 
 
 class TaskManagementUnitOfWork(ABC):
@@ -2710,6 +2788,7 @@ class CommitmentManagementRepository(ABC):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        after: str | None = None,
         limit: int,
     ) -> tuple[CommitmentAggregate, ...]:
         """One bounded page of this Principal's own commitments, newest created first.
@@ -2742,9 +2821,22 @@ class CommitmentManagementRepository(ABC):
 
     @abstractmethod
     def list_history(
-        self, principal_id: str, commitment_id: str, limit: int
+        self, principal_id: str, commitment_id: str, limit: int, *, after: str | None = None
     ) -> tuple[CommitmentHistoryEntry, ...]:
         """One bounded page of one commitment's append-only mutation record, oldest first."""
+
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        limit: int,
+        *,
+        after: str | None = None,
+        direction: CommitmentDirection | None = None,
+        state: CommitmentState | None = None,
+    ) -> tuple[CommitmentAggregate, ...]:
+        """One bounded lexical page over summaries, optionally after an opaque row ID."""
+        raise NotImplementedError
 
 
 class CommitmentManagementUnitOfWork(ABC):

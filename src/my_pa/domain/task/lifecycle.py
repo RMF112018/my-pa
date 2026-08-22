@@ -39,8 +39,10 @@ from typing import Final
 
 __all__ = [
     "TERMINAL_TASK_LIFECYCLE_STATES",
+    "TaskArchiveMode",
     "TaskLifecycleState",
     "TaskPriority",
+    "TaskWorkView",
     "legacy_state_for",
 ]
 
@@ -84,6 +86,24 @@ class TaskPriority(StrEnum):
     P2 = "p2"
     P3 = "p3"
     P4 = "p4"
+
+
+class TaskWorkView(StrEnum):
+    """The six server-owned Task views admitted by WP-FE-03."""
+
+    TODAY = "today"
+    UPCOMING = "upcoming"
+    WAITING = "waiting"
+    BLOCKED = "blocked"
+    ALL_OPEN = "all-open"
+    COMPLETED = "completed"
+
+
+class TaskArchiveMode(StrEnum):
+    """Whether a Work query returns active or archived Tasks, never a mixture."""
+
+    EXCLUDE = "exclude"
+    ONLY = "only"
 
 
 def legacy_state_for(lifecycle_state: TaskLifecycleState) -> str:

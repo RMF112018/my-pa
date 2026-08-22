@@ -121,7 +121,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 65
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 66
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

@@ -66,6 +66,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCommitmentHistory,
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
@@ -104,12 +105,14 @@ from my_pa.application.commands import (
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchCommitments,
     SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
     TransitionTask,
+    UpdateCommitment,
     UpdateTask,
     WaitingOn,
 )
@@ -267,8 +270,11 @@ def _requested_scope(
             | BulkConfirmTasks()
             | ReadCommitment()
             | ListCommitments()
+            | SearchCommitments()
+            | GetCommitmentHistory()
             | WaitingOn()
             | CreateCommitment()
+            | UpdateCommitment()
             | CloseCommitment()
             # `context.prepare` names a query, not a source. The requested scope
             # is empty as a measurement: the request does not name a grant, and

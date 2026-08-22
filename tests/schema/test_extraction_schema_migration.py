@@ -267,6 +267,7 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "intelligence_provenance_refs",
         }
     ),
+    "a4d9e7c2b615": frozenset({"task_bulk_operations"}),
     # WP-RI-01's relationship-intelligence entity plane: the entity itself, the
     # external identifiers it is known by, its assignments, and the relationships
     # between entities.

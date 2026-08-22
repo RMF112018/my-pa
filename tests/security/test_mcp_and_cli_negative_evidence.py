@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route sixty-two capability names and none of them mutates a source, and every
+  surface route sixty-five capability names and none of them mutates a source, and every
   capability driven over both transports is shown to have called only the three
   read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -77,7 +77,9 @@ from tests.contract.test_transport_parity import (
     a_forbidden_purpose,
     a_permitted_purpose,
     document,
-    payloads_for,
+)
+from tests.contract.test_transport_parity import (
+    payloads_for as transport_payloads_for,
 )
 from tests.transports import (
     Answer,
@@ -163,6 +165,19 @@ def assert_clean(text: str, root: Path, where: str) -> None:
     assert_no_marker(text, root, where)
     for internal in ("sqlalchemy", "starlette", "uvicorn", "pydantic", "anyio", "jsonschema"):
         assert internal not in text, f"{where} disclosed {internal!r}"
+
+
+def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dict[str, Any]]:
+    """Build valid parity payloads without counting their setup as an attack.
+
+    The shared fixture persists a bulk-preview receipt through the application,
+    which correctly emits one allowed audit event. Security assertions below
+    measure only the requests they send, so discard that explicit setup event
+    after the payload table has been assembled.
+    """
+    payloads = transport_payloads_for(marked, record)
+    marked.world.audit.clear()
+    return payloads
 
 
 @contextmanager
@@ -323,8 +338,11 @@ SCOPED_CAPABILITIES = [
         Capability.TASKS_BULK_CONFIRM,
         Capability.COMMITMENTS_READ,
         Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_SEARCH,
+        Capability.COMMITMENTS_HISTORY,
         Capability.COMMITMENTS_WAITING_ON,
         Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_UPDATE,
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_PREPARE,
         Capability.CONTEXT_FEEDBACK,
@@ -549,7 +567,12 @@ CONTINUITY_AUTHORING_EXEMPTION = frozenset(
 #: `commitments.close` are not exempt because they pass the name check on
 #: their own.
 TASK_MANAGEMENT_EXEMPTION = frozenset(
-    {Capability.TASKS_CREATE, Capability.TASKS_UPDATE, Capability.COMMITMENTS_CREATE}
+    {
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_UPDATE,
+    }
 )
 
 

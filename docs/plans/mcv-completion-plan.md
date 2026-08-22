@@ -39,7 +39,7 @@ Drive mirrors are review surfaces rather than a competing ledger.
 | Database container | `my-pa-postgres`, `postgres:17.10`, healthy | `docker ps` |
 | Database binding | `127.0.0.1:5433 -> 5432`, loopback only | `docker ps` port map |
 | Logical database | `my_pa` | `select current_database()` |
-| Alembic head | `e9b2c4d7a150` in the repository, sixty-five revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
+| Alembic head | `a4d9e7c2b615` in the repository, sixty-six revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
 | Extensions | `pg_trgm`, `unaccent`, `plpgsql` | `select extname from pg_extension` |
 
 ## 2. Verified corpus claim
@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Two hundred and fifty-nine Python modules under `src/my_pa` and three hundred and thirteen test modules —
+Two hundred and sixty Python modules under `src/my_pa` and three hundred and fourteen test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -89,10 +89,10 @@ section disagrees with the tree.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, GoodNotes notebook lineage, GoodNotes NOTE_UNIT occurrence persistence, GoodNotes semantic work/proposal receipts, GoodNotes entity associations with NEW-only delivery receipts, and additive GoodNotes exact visual render digests, additive `goodnotes.content` vocabulary, additive durable-note stage ledger and Principal-bound page rasters, additive GoodNotes server-grounded NOTE_UNIT crop identity with immutable revision provenance, additive GoodNotes Meeting/Agenda association kinds, and an additive dormant GoodNotes delivery-attempt ledger, and the relationship-intelligence entity plane — `entities`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, the additive `entity_aliases` table, and the `entities.*` capability family with the `entity_read` purpose, and the entity observation, proposal, and merge-lineage tables, and the Intelligence Artifact report plane — cycle runs, producer runs, immutable artifacts, commit receipts, pipeline dependencies, and external provenance, with the eight `reports.*` capabilities and the `report_authoring`/`report_read` purposes | Implemented, sixty-five revisions, head `e9b2c4d7a150` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, GoodNotes notebook lineage, GoodNotes NOTE_UNIT occurrence persistence, GoodNotes semantic work/proposal receipts, GoodNotes entity associations with NEW-only delivery receipts, and additive GoodNotes exact visual render digests, additive `goodnotes.content` vocabulary, additive durable-note stage ledger and Principal-bound page rasters, additive GoodNotes server-grounded NOTE_UNIT crop identity with immutable revision provenance, additive GoodNotes Meeting/Agenda association kinds, and an additive dormant GoodNotes delivery-attempt ledger, and the relationship-intelligence entity plane — `entities`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, the additive `entity_aliases` table, and the `entities.*` capability family with the `entity_read` purpose, and the entity observation, proposal, and merge-lineage tables, the Intelligence Artifact report plane — cycle runs, producer runs, immutable artifacts, commit receipts, pipeline dependencies, and external provenance, with the eight `reports.*` capabilities and the `report_authoring`/`report_read` purposes, and the Work Task/Commitment contract, history digests, and bounded bulk ledger | Implemented, sixty-six revisions, head `a4d9e7c2b615` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
-All sixty-two capability names, their operator-only flags, and their permitted
+All sixty-five capability names, their operator-only flags, and their permitted
 purposes exist in `domain/identity/operation.py`, alongside twenty-five purposes. The v1 request,
 response, disclosure, and error shapes already exist and are contract-tested.
 
@@ -257,8 +257,8 @@ agent that did not author it.
 11. **WP-9 — relationship identity and read-only profiles.**
 12. **WP-10 — PWA capture surface and offline recovery.** **Deferred until after
     MCV completion by direct operator instruction on 2026-08-04 (`D-104`).** It
-    remains the only frontend package here; active gates `D-09`, `O-04`, and
-    `O-20` remain unresolved.
+    remained the only frontend package here until the narrow WP-FE-03 exception
+    in `D-108`; active gates `D-09`, `O-04`, and `O-20` otherwise remain unresolved.
 13. **WP-11 — Native Apple Reminders execution projection.** Internal sequence
     `NAR-00` canonical policy amendment, `NAR-01` target-Mac EventKit
     feasibility proof, `NAR-02` provider-neutral domain and contracts, `NAR-03`
@@ -315,7 +315,7 @@ claim left visible.
 | D-02 | tmux channel replaced by subagent delegation | `tmux` is not installed on this machine and no `claude-code` session exists. The dispatched plan assumed a separate orchestrator driving this session through tmux; this session is itself the implementation agent. Plan §3 and §9.2 independently require fresh subagents for implementation and exact-head review, which is the substituted mechanism. | Departure, disclosed |
 | D-03 | Workstreams E, F, I deferred | Outside the single read-only vertical slice `AGENTS.md` §1 and §3 define, and named as excluded by `docs/specs/mcv-read-only-vertical-slice.md` §5.2. The specification is `PROPOSED_FOR_REPOSITORY_REVIEW`, so `AGENTS.md` carries the argument and the specification corroborates it. | Deferred |
 | D-04 | Workstreams G, H deferred | Dependency-blocked on B/C/D, which do not exist. The specification is silent on both, so nothing excludes them; they are sequenced, not ruled out. Plan §7-H forbids fabricating backend behavior; `P00-OD-009` gates G's source root to the operator. | Deferred |
-| D-09 | Workstream H additionally held by operator instruction | The operator directed on 2026-08-01 that no frontend implementation is in scope until they say otherwise. This is a stronger and more durable hold than D-04's dependency argument, which would lapse once B/C/D exist. Recorded separately so that satisfying the dependency does not read as authorisation to start. | Operator-directed |
+| D-09 | Workstream H additionally held by operator instruction | The operator directed on 2026-08-01 that no frontend implementation was in scope until they said otherwise. `D-108` partially supersedes this hold only for WP-FE-03 — Work: Tasks and Commitments. Every other frontend package and surface remains held unless separately reprioritized, so satisfying a dependency still does not read as authorization to start it. | Partially superseded by D-108; otherwise operator-directed |
 | D-05 | Corpus claim accepted | Recomputed from the live database, not restated. Exact match. | Verified |
 | D-06 | PDF remains `unsupported` | `P00-OD-003` is `OPEN_OPERATOR`. Reporting `unsupported` is the specified behavior; silently skipping is forbidden. | Accepted |
 | D-07 | Corrected in place: this document first said "five revisions" | The count came from a truncated directory listing. Recounted from `migrations/versions/*.py`: six, chained `5d75f23847c9 → 1e6c0a94f3b7 → 4b9f0d27ac31 → 2f7d1ba05c48 → 3a8e2cb16d59 → 6c4d3ea82f10`, the last creating target views, and the head matching `alembic_version` in the live database. The mechanism, not just the number, is fixed: the count is now stated with the head revision beside it, so a future drift between the files and the database is visible rather than latent. | Corrected |
@@ -540,8 +540,10 @@ they are scheduled rather than forgotten.
 - Whether to promote E, F, G, or I into current scope. That takes an explicit
   reprioritisation of the objective under `AGENTS.md` §3, not an implementation
   choice, and not a specification amendment alone.
-- H is held by direct operator instruction (D-09) and resumes only when the
-  operator lifts it, independently of whether its backend dependencies exist.
+- Except for WP-FE-03 — Work: Tasks and Commitments, which `D-108` narrowly
+  admits, H is held by direct operator instruction (`D-09`) and resumes only
+  when the operator lifts it, independently of whether its backend dependencies
+  exist. WP-FE-02 and WP-FE-04 onward remain held.
 - Note that the `AGENTS.md` basis is strongest for E and F, which a read-only
   slice excludes directly, and weakest for I, where the deferral leans on §3's
   preference for one slice over partial systems and on the proposed
@@ -559,6 +561,13 @@ Intelligence and Quick Capture. Section 13 records the instruments that admitted
 them. This section is the resulting work-package plan. It replaces nothing in
 section 7; WP-1 through WP-3 are merged, and WP-4 and WP-5 keep the objectives
 section 7 gave them.
+
+On 2026-08-21 the operator separately and narrowly admitted WP-FE-03 — Work:
+Tasks and Commitments — to bounded frontend implementation (`D-108`). That
+exception does not activate WP-10, WP-FE-02, WP-FE-04 or any later phase, or any
+other frontend surface, and it grants no authority for authentication
+replacement, deployment, production or shared-database access, credentials,
+live personal data, new infrastructure, destructive action, or risk acceptance.
 
 Two facts constrain the sequence more than anything in the feature packages.
 
@@ -642,7 +651,9 @@ repository implementation; this reorders only WP-12 and does not reactivate the
 two deferred packages. The remaining
 frontend stages — Quick Capture `QC-05` through `QC-08`, and every responsive
 surface in the Relationship Intelligence specification — are not planned here
-and remain held.
+and remain held, except only for the bounded WP-FE-03 Work: Tasks and
+Commitments surface admitted by `D-108`. That exception does not reactivate
+WP-10, WP-FE-02, WP-FE-04, or any later phase.
 
 `D-107` records the next-campaign handoff without starting it: only after MCV
 completion is independently verified, a fresh orchestrator defines a
@@ -1354,6 +1365,7 @@ managed-document write and grants the source-provider port nothing.
 | D-105 | **Canonical version 2.3 is re-mirrored; Apple Mail, Calendar & Contacts yields provisional WP-12 with planning reserved to the operator** | `REQ-MYPA-CANONICAL-PRODUCT-APPLE-MCC-MOSS-INTEGRATION-20260804T214700Z` revised 17 of the canonical package's 21 numbered artifacts in place, preserved all 21 Drive identities and parent bindings, and took the package from 2.2 to 2.3. The publisher labels the Native Apple Personal Data Capture Bridge as conditional MCV scope and calls its sequence WP-12. Authority evidence is layered rather than identical: the numbered canonical artifacts carry their own implementation-not-granted blocks; the disposition denies implementation, live access, source mutation, deployment, production, and risk acceptance; the readback asserts only that implementation authority was not granted; and the publication and roundtrip receipts carry the fuller denial list covering live personal data, TCC/credential mutation, source mutation, deployment/watchers, production activation, external-model disclosure, destructive retention, and risk acceptance. The operator then clarified that the MCV is explicitly not complete and that WP-12 is provisional after WP-10 and WP-11; separate operator authorization is required before WP-12 implementation planning. The operator assigned WP-12 no pre-MCV or post-MCV disposition. Because `D-104` still defers WP-10 until completion and WP-11 depends on WP-10, the resulting completion-boundary conflict is recorded rather than resolved by inference. Nothing in WP-12 is planned, implemented, or authorized. | Historical state, superseded by the later direct authorization in `D-106`; retained as provenance |
 | D-106 | **WP-12 is promoted ahead of WP-10/WP-11 for bounded implementation before MCV completion** | Direct operator authorization `AUTH-WP12-20260804-OPERATOR-001` supersedes only WP-12's provisional sequencing and implementation hold. WP-10 remains deferred by `D-104`; WP-11 remains dependency-blocked on WP-10. WP-12 executes in reviewed slice order A, B, D, C, E, F, G, H against the exact 48-row `NAPDCB-AC-*` map. The authority permits repository planning and synthetic implementation but not live Apple or personal-data access, TCC/credential/entitlement changes, signing/notarization, installation or watcher activation, external-model disclosure, source mutation, destructive retention, deployment/production, or risk acceptance. Slice A freezes the map and protocol-v1 source boundary but discharges no final acceptance criterion. | Operator-directed; WP-12 active before MCV completion; WP-10/WP-11 remain deferred |
 | D-107 | **After independently verified MCV completion, a fresh orchestrator owns a comprehensive full-MVP campaign** | Direct operator instruction establishes a future handoff, not present implementation scope. After MCV completion has been independently verified, a fresh orchestration context must define a comprehensive MVP `CAMPAIGN-BRIEF` and execute the full MVP, explicitly including WP-10 and WP-11. Until that condition is met, this row does not start MVP, reactivate either package, declare MCV complete, authorize deployment, resolve their open product/operator gates, or relax `AGENTS.md` section 8.2. | Durable future handoff; condition not yet met; no current MVP execution authority |
+| D-108 | **WP-FE-03 — Work: Tasks and Commitments is narrowly admitted to bounded frontend implementation** | Direct operator instruction on 2026-08-21 partially supersedes `D-09` only for WP-FE-03. The promotion preserves ADR-004's synthetic-development identity, verified server session, and backend-for-frontend boundary. WP-FE-02 WebAuthn/passkey replacement, WP-FE-04 and later phases, WP-10, and every other frontend surface remain deferred unless separately reprioritized. This decision does not authorize authentication replacement, WebAuthn/passkeys, credential persistence or recovery, Entra/MSAL removal, deployment or production activation, production or shared-database access, credentials or live personal data, new infrastructure, destructive action, or risk acceptance. | Operator-directed; only WP-FE-03 active; all stated exclusions preserved |
 
 **Identifier reservation: `D-106` and `D-107` are not available, and the two
 corrections dated 2026-08-08 therefore mint no new row.** Parsed structurally at
@@ -1635,8 +1647,9 @@ in a package.
 
 4. **The GoodNotes and frontend workstreams (`D-04`).** Both were deferred as
    dependency-blocked on B, C, and D. WP-4 removes that dependency. `D-09`
-   independently holds the frontend, so nothing changes there without an
-   operator act. GoodNotes has no such second hold — only `P00-OD-009`, which
+   independently holds the frontend except for the operator's narrow WP-FE-03
+   exception in `D-108`; nothing else changes there without an operator act.
+   GoodNotes has no such second hold — only `P00-OD-009`, which
    gates its source root.
 
    Two things the operator should know. `D-04`'s argument for GoodNotes lapses
@@ -1753,12 +1766,14 @@ authority for this remediation only; it does not amend repository policy and it
 does not make `PLAN_APPROVED` an authorization to amend `AGENTS.md`.
 
 The resulting inconsistency with the older policy statements that defer
-frontend and managed-document work is deliberately recorded in this plan, the
-remediation pull request, and the final-state report. `AGENTS.md` remains
-unchanged for later operator correction unless the operator separately and
-explicitly authorizes amendment of that policy. All other policy boundaries,
-including live-data, deployment, destructive-action, credential, and
-independent-review gates, continue to apply.
+frontend and managed-document work was deliberately recorded in this plan, the
+remediation pull request, and the final-state report. On 2026-08-21 the operator
+separately authorized the policy amendment recorded by `D-108`, but only for
+WP-FE-03 — Work: Tasks and Commitments. That later decision does not broaden the
+2026-08-12 remediation authority or admit managed-document work, WP-FE-02,
+WP-FE-04 or later phases, WP-10, or any other frontend surface. All other policy
+boundaries, including live-data, deployment, destructive-action, credential,
+and independent-review gates, continue to apply.
 
 On 2026-08-02 the operator ratified `MYPA-CANONICAL-PRODUCT-DEFINITION-20260802-006`.
 Section 14 item 3 anticipated that this could invalidate section 12's shapes. It
@@ -1818,7 +1833,7 @@ would overstate what the work packages deliver.
 | Canonical stage | This plan | Status |
 |---|---|---|
 | `R0` complete active read-only MCV | WP-4 + WP-5 | Next, and unchanged by ratification. The closest to a true match |
-| `R1` product contracts / frontend proof | Not planned | **Split.** Its frontend half is held by `D-09` and `OP-06`; its contracts half — canonical object, state, error, span, region, Situation, Frame, Trace, Review and Receipt contracts — is simply unplanned, and no hold explains that |
+| `R1` product contracts / frontend proof | WP-FE-03 only | **Split.** `D-108` admits only WP-FE-03; the rest of its frontend half remains held by `D-09` and `OP-06`. Its contracts half — canonical object, state, error, span, region, Situation, Frame, Trace, Review and Receipt contracts — is otherwise unplanned, and no hold explains that |
 | `R2` product-owned Capture source | WP-6 | **Subset.** `R2` also requires responsive PWA, global and contextual launch, and capture modes; WP-6 is frontend-free and builds none of them |
 | `R4` proposal / review / promotion | WP-7 + WP-8 | **Subset.** `D-14` excludes the model-assisted extraction stages `R4` assumes |
 | `R5` relationship and project continuity | WP-9 | **Subset**, and the largest gap. `R5` adds commitments, briefings, Situations, Frame, Trace and Today/Pulse gates; WP-9 builds identity and read-only profiles over fixtures per `D-13` |

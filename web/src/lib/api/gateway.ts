@@ -57,7 +57,7 @@ export interface PythonDisclosure {
   readonly coverage: { readonly state: string };
   readonly freshness: { readonly observed_at: string; readonly state: string };
   readonly trust: { readonly level: string; readonly basis: readonly string[] };
-  readonly truncation: { readonly is_truncated: boolean };
+  readonly truncation: { readonly is_truncated: boolean; readonly next_cursor?: string | null };
   readonly limitations: readonly string[];
   readonly partial_result: boolean;
 }
@@ -399,6 +399,9 @@ export function backendDisclosure(
     authority: AUTHORITY[disclosure.trust?.level ?? ""] ?? "derived",
     limitations: [...(disclosure.limitations ?? []), ...extraLimitations],
     truncated,
+    ...(typeof disclosure.truncation?.next_cursor === "string"
+      ? { nextCursor: disclosure.truncation.next_cursor }
+      : {}),
   };
 }
 

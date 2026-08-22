@@ -14,7 +14,7 @@ Use this precedence when facts conflict:
 
 The product is in **Minimum Viable Candidate (MCV)** development. The objective is one complete vertical slice—not a broad platform.
 
-That slice was read-only until 2026-08-01, when the operator reprioritized the objective to admit Relationship Intelligence and Quick Capture. Quick Capture creates records the product itself owns, which section 4 bounds through ADR-003; it is not a source-system write and not a managed-document write. Everything else the slice excluded, it still excludes.
+That slice was read-only until 2026-08-01, when the operator reprioritized the objective to admit Relationship Intelligence and Quick Capture. Quick Capture creates records the product itself owns, which section 4 bounds through ADR-003; it is not a source-system write and not a managed-document write. Everything else the slice excluded remained excluded at that point; section 3 records later bounded reprioritizations, and no broader promotion may be inferred from them.
 
 This section previously ran the MCV "through August 2, 2026". That date has passed and no replacement is set, because choosing one is an operator decision rather than a drafting choice. Until it is set, the MCV runs until the operator declares it complete. The open decision is recorded in [`docs/plans/mcv-completion-plan.md`](docs/plans/mcv-completion-plan.md) section 14.
 
@@ -45,7 +45,11 @@ Unless the operator explicitly reprioritizes the objective, defer:
 - additional databases, caches, queues, worker types, or deployment environments;
 - implementation merely because a scaffold path exists.
 
-The operator exercised that reprioritization on 2026-08-01, admitting **Relationship Intelligence** and **Quick Capture**. Both are recorded with the work packages that carry them in [`docs/plans/mcv-completion-plan.md`](docs/plans/mcv-completion-plan.md) sections 12 and 13. Nothing else moved: managed documents, the Obsidian projection, live personal-data connector access, public research, and frontend implementation all remain deferred, the last by direct operator instruction. A promoted feature is still bound by everything else in this policy — admitting it to scope is not admitting its whole specification.
+The operator first exercised that reprioritization on 2026-08-01, admitting **Relationship Intelligence** and **Quick Capture**. Both are recorded with the work packages that carry them in [`docs/plans/mcv-completion-plan.md`](docs/plans/mcv-completion-plan.md) sections 12 and 13. Managed documents, the Obsidian projection, live personal-data connector access, and public research remain deferred.
+
+On 2026-08-21, the operator expressly admitted only **WP-FE-03 — Work: Tasks and Commitments** to bounded frontend implementation. This narrow promotion preserves the accepted ADR-004 synthetic-development identity, verified server session, and backend-for-frontend boundary. **WP-FE-02 — WebAuthn/passkey authentication replacement remains blocked**, and WP-FE-04 and later phases plus every other frontend surface remain deferred unless separately reprioritized. WP-FE-03 does not authorize auth replacement, WebAuthn/passkeys, credential persistence or recovery, Entra/MSAL removal, deployment or production activation, production or shared-database access, credentials or live personal data, new infrastructure, destructive action, or risk acceptance.
+
+A promoted feature is still bound by everything else in this policy — admitting it to scope is not admitting its whole specification.
 
 Pull requests are single-purpose, short-lived, and reviewable. State scope changes explicitly; never hide them in implementation details. Favor one end-to-end vertical slice over multiple partial systems.
 

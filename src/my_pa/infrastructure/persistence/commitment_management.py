@@ -17,10 +17,14 @@ from contextlib import AbstractContextManager
 from types import TracebackType
 from typing import Any
 
-from sqlalchemy import Engine, and_, asc, desc, insert, select, update
+from sqlalchemy import Engine, and_, asc, desc, insert, or_, select, update
 from sqlalchemy.engine import Connection, Row
 
-from my_pa.contracts.ports import CommitmentManagementRepository, CommitmentManagementUnitOfWork
+from my_pa.contracts.ports import (
+    CommitmentManagementRepository,
+    CommitmentManagementUnitOfWork,
+    WorkCursorError,
+)
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -76,6 +80,7 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        after: str | None = None,
         limit: int,
     ) -> tuple[Commitment, ...]:
         conditions = [commitments.c.principal_id == principal_id]
@@ -83,10 +88,46 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
             conditions.append(commitments.c.direction == direction.value)
         if state is not None:
             conditions.append(commitments.c.state == state.value)
+        if after is not None:
+            anchor = self._connection.execute(
+                select(
+                    commitments.c.due_at,
+                    commitments.c.created_at,
+                    commitments.c.commitment_id,
+                ).where(
+                    and_(
+                        commitments.c.principal_id == principal_id,
+                        commitments.c.commitment_id == after,
+                    )
+                )
+            ).one_or_none()
+            if anchor is None:
+                raise WorkCursorError
+            later_created = or_(
+                commitments.c.created_at < anchor.created_at,
+                and_(
+                    commitments.c.created_at == anchor.created_at,
+                    commitments.c.commitment_id > anchor.commitment_id,
+                ),
+            )
+            if anchor.due_at is None:
+                conditions.append(and_(commitments.c.due_at.is_(None), later_created))
+            else:
+                conditions.append(
+                    or_(
+                        commitments.c.due_at > anchor.due_at,
+                        commitments.c.due_at.is_(None),
+                        and_(commitments.c.due_at == anchor.due_at, later_created),
+                    )
+                )
         rows = self._connection.execute(
             select(*commitments.c)
             .where(and_(*conditions))
-            .order_by(desc(commitments.c.created_at), asc(commitments.c.commitment_id))
+            .order_by(
+                asc(commitments.c.due_at).nullslast(),
+                desc(commitments.c.created_at),
+                asc(commitments.c.commitment_id),
+            )
             .limit(limit)
         ).all()
         return tuple(_to_commitment(row) for row in rows)
@@ -167,26 +208,110 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
                 after_version=entry.after_version,
                 idempotency_key=entry.idempotency_key,
                 client_context=entry.client_context,
+                request_digest=entry.request_digest,
                 occurred_at=entry.occurred_at,
                 recorded_at=entry.recorded_at,
             )
         )
 
     def list_history(
-        self, principal_id: str, commitment_id: str, limit: int
+        self, principal_id: str, commitment_id: str, limit: int, *, after: str | None = None
     ) -> tuple[CommitmentHistoryEntry, ...]:
-        rows = self._connection.execute(
-            select(*commitment_history.c)
-            .where(
-                and_(
-                    commitment_history.c.principal_id == principal_id,
-                    commitment_history.c.commitment_id == commitment_id,
+        conditions = [
+            commitment_history.c.principal_id == principal_id,
+            commitment_history.c.commitment_id == commitment_id,
+        ]
+        if after is not None:
+            anchor = self._connection.execute(
+                select(commitment_history.c.recorded_at, commitment_history.c.history_id).where(
+                    and_(
+                        commitment_history.c.principal_id == principal_id,
+                        commitment_history.c.commitment_id == commitment_id,
+                        commitment_history.c.history_id == after,
+                    )
+                )
+            ).one_or_none()
+            if anchor is None:
+                raise WorkCursorError
+            conditions.append(
+                or_(
+                    commitment_history.c.recorded_at > anchor.recorded_at,
+                    and_(
+                        commitment_history.c.recorded_at == anchor.recorded_at,
+                        commitment_history.c.history_id > anchor.history_id,
+                    ),
                 )
             )
+        rows = self._connection.execute(
+            select(*commitment_history.c)
+            .where(and_(*conditions))
             .order_by(asc(commitment_history.c.recorded_at), asc(commitment_history.c.history_id))
             .limit(limit)
         ).all()
         return tuple(_to_history(row) for row in rows)
+
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        limit: int,
+        *,
+        after: str | None = None,
+        direction: CommitmentDirection | None = None,
+        state: CommitmentState | None = None,
+    ) -> tuple[Commitment, ...]:
+        escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        conditions = [
+            commitments.c.principal_id == principal_id,
+            commitments.c.summary.ilike(f"%{escaped}%", escape="\\"),
+        ]
+        if direction is not None:
+            conditions.append(commitments.c.direction == direction.value)
+        if state is not None:
+            conditions.append(commitments.c.state == state.value)
+        if after is not None:
+            anchor = self._connection.execute(
+                select(
+                    commitments.c.due_at,
+                    commitments.c.created_at,
+                    commitments.c.commitment_id,
+                ).where(
+                    and_(
+                        commitments.c.principal_id == principal_id,
+                        commitments.c.commitment_id == after,
+                    )
+                )
+            ).one_or_none()
+            if anchor is None:
+                raise WorkCursorError
+            later_created = or_(
+                commitments.c.created_at < anchor.created_at,
+                and_(
+                    commitments.c.created_at == anchor.created_at,
+                    commitments.c.commitment_id > anchor.commitment_id,
+                ),
+            )
+            if anchor.due_at is None:
+                conditions.append(and_(commitments.c.due_at.is_(None), later_created))
+            else:
+                conditions.append(
+                    or_(
+                        commitments.c.due_at > anchor.due_at,
+                        commitments.c.due_at.is_(None),
+                        and_(commitments.c.due_at == anchor.due_at, later_created),
+                    )
+                )
+        rows = self._connection.execute(
+            select(*commitments.c)
+            .where(and_(*conditions))
+            .order_by(
+                asc(commitments.c.due_at).nullslast(),
+                desc(commitments.c.created_at),
+                asc(commitments.c.commitment_id),
+            )
+            .limit(limit)
+        ).all()
+        return tuple(_to_commitment(row) for row in rows)
 
 
 def _to_commitment(row: Row[Any]) -> Commitment:
@@ -228,6 +353,7 @@ def _to_history(row: Row[Any]) -> CommitmentHistoryEntry:
         recorded_at=mapping["recorded_at"],
         idempotency_key=mapping["idempotency_key"],
         client_context=mapping["client_context"],
+        request_digest=mapping.get("request_digest"),
     )
 
 

@@ -21,6 +21,7 @@ Scenario: "Sarah / permit log / Friday"
 from __future__ import annotations
 
 import dataclasses
+from datetime import UTC, datetime
 from types import TracebackType
 
 from my_pa.application.commands import (
@@ -38,8 +39,8 @@ from my_pa.contracts.ports import (
     TaskManagementRepository,
     TaskManagementUnitOfWork,
 )
-from my_pa.contracts.v1.capabilities import Capability
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
@@ -49,7 +50,12 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.commitment import Commitment
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
 from my_pa.domain.task.history import TaskHistoryEntry
-from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.lifecycle import (
+    TaskArchiveMode,
+    TaskLifecycleState,
+    TaskPriority,
+    TaskWorkView,
+)
 from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task
 from tests.conftest import (
@@ -96,6 +102,7 @@ class _CommitmentRepo(CommitmentManagementRepository):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        after: str | None = None,
         limit: int,
     ) -> tuple[Commitment, ...]:
         owned = [c for c in self._world.commitments_v2 if c.principal_id == principal_id]
@@ -103,7 +110,26 @@ class _CommitmentRepo(CommitmentManagementRepository):
             owned = [c for c in owned if c.direction is direction]
         if state is not None:
             owned = [c for c in owned if c.state is state]
-        ordered = sorted(owned, key=lambda c: (c.created_at, c.commitment_id), reverse=True)
+        ordered = sorted(
+            owned,
+            key=lambda c: (
+                c.due_at is None,
+                c.due_at or datetime.max.replace(tzinfo=UTC),
+                -c.created_at.timestamp(),
+                c.commitment_id,
+            ),
+        )
+        if after is not None:
+            ordered = ordered[
+                next(
+                    (
+                        index + 1
+                        for index, commitment in enumerate(ordered)
+                        if commitment.commitment_id == after
+                    ),
+                    len(ordered),
+                ) :
+            ]
         return tuple(ordered[:limit])
 
     def insert_commitment(self, commitment: Commitment) -> None:
@@ -131,7 +157,12 @@ class _CommitmentRepo(CommitmentManagementRepository):
         self._world.commitment_history_v2.append(entry)
 
     def list_history(
-        self, principal_id: str, commitment_id: str, limit: int
+        self,
+        principal_id: str,
+        commitment_id: str,
+        limit: int,
+        *,
+        after: str | None = None,
     ) -> tuple[CommitmentHistoryEntry, ...]:
         owned = [
             h
@@ -209,17 +240,37 @@ class _TaskRepo(TaskManagementRepository):
         *,
         lifecycle_state: TaskLifecycleState | None = None,
         priority: TaskPriority | None = None,
-        include_archived: bool = False,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        after: str | None = None,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
         limit: int,
     ) -> tuple[Task, ...]:
         raise NotImplementedError("write-plane fake does not serve list reads")
 
-    def search(self, principal_id: str, query: str, limit: int) -> tuple[Task, ...]:
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        limit: int,
+        *,
+        after: str | None = None,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+    ) -> tuple[Task, ...]:
         raise NotImplementedError("write-plane fake does not serve search")
 
     def list_history(
-        self, principal_id: str, task_id: str, limit: int
+        self, principal_id: str, task_id: str, limit: int, *, after: str | None = None
     ) -> tuple[TaskHistoryEntry, ...]:
+        raise NotImplementedError("write-plane fake does not serve history reads")
+
+    def latest_applied_terminal_history(
+        self, principal_id: str, task_id: str
+    ) -> TaskHistoryEntry | None:
         raise NotImplementedError("write-plane fake does not serve history reads")
 
 
@@ -268,6 +319,7 @@ def test_sarah_permit_log_scenario() -> None:
     world = World()
     service = _build_wired_service(world)
     principal_a = operator()
+    world.work_evidence_refs.add((principal_a.principal_id, ORIGIN))
 
     # --- Step 1: Create an OWED_TO_PRINCIPAL commitment ----------------------
     create_key = _idempotency_key("create-commitment")

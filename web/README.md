@@ -15,7 +15,7 @@ An explicitly enabled synthetic provider remains available for development and
 is refused when `NODE_ENV=production`. It does not silently replace an
 unconfigured or unavailable backend.
 
-The Python contract contains sixty-two capability names. The System route reads
+The Python contract contains sixty-five capability names. The System route reads
 the live `capabilities.get` manifest, including each capability's runtime
 availability, instead of restating an availability count in this tier. Six of
 those names are the managed-document lifecycle (`documents.create`,
@@ -40,6 +40,18 @@ All application pages require a verified session. `/sign-in` is public;
 | `/review`, `GET /api/review` | `review.list` | Lists the acting Principal's review cases |
 | `POST /api/review/:id/decide` | `review.decide` | Applies an optimistic-concurrency review decision |
 | `POST /api/capture` | `capture.create` | Persists a Quick Capture with backend-owned idempotency and a verifiable receipt |
+| `GET /api/tasks` | `tasks.list`, `tasks.search` | Lists or searches server-owned Tasks with Work-view filters and opaque cursors |
+| `POST /api/tasks` | `tasks.create` | Creates a Task with server-validated origin evidence and idempotency |
+| `GET /api/tasks/:taskId` | `tasks.read` | Reads one same-Principal Task and its safe evidence metadata |
+| `PATCH /api/tasks/:taskId` | `tasks.update` | Applies one expected-version atomic Task patch |
+| `GET /api/tasks/:taskId/history` | `tasks.history` | Reads the Task's append-only mutation history |
+| `POST /api/tasks/:taskId/transition` | `tasks.transition` | Applies one lifecycle transition with closure evidence when terminal |
+| `GET /api/commitments` | `commitments.list`, `commitments.search` | Lists or searches server-owned Commitments with opaque cursors |
+| `POST /api/commitments` | `commitments.create` | Creates a Commitment with server-validated origin evidence and idempotency |
+| `GET /api/commitments/:commitmentId` | `commitments.read` | Reads one same-Principal Commitment |
+| `PATCH /api/commitments/:commitmentId` | `commitments.update` | Applies one expected-version bounded Commitment update |
+| `GET /api/commitments/:commitmentId/history` | `commitments.history` | Reads the Commitment's append-only history |
+| `POST /api/commitments/:commitmentId/close` | `commitments.close` | Closes a Commitment explicitly with validated closure evidence |
 | `/system`, `GET /api/system` | `capabilities.get` | Reports the runtime manifest, readiness, and worker planes; connected-source enumeration remains unknown because no v1 capability provides it |
 | `POST /api/session` | none | Synthetic development sign-in only; refused in Entra mode and in production |
 

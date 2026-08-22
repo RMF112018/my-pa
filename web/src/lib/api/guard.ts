@@ -39,7 +39,7 @@ export async function requirePrincipal(request: NextRequest): Promise<Guarded> {
 export async function readCleanBody(
   request: NextRequest,
 ): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; response: NextResponse }> {
-  let body: Record<string, unknown>;
+  let body: unknown;
   try {
     body = (await request.json()) as Record<string, unknown>;
   } catch {
@@ -51,8 +51,18 @@ export async function readCleanBody(
       ),
     };
   }
+  if (body === null || Array.isArray(body) || typeof body !== "object") {
+    return {
+      ok: false,
+      response: NextResponse.json(
+        { error: { code: "bad_request", message: "request body must be a JSON object" } },
+        { status: 400 },
+      ),
+    };
+  }
+  const cleanBody = body as Record<string, unknown>;
   try {
-    rejectCallerSuppliedPrincipal(body);
+    rejectCallerSuppliedPrincipal(cleanBody);
   } catch (error) {
     if (error instanceof TokenClaimsError) {
       return {
@@ -65,5 +75,5 @@ export async function readCleanBody(
     }
     throw error;
   }
-  return { ok: true, body };
+  return { ok: true, body: cleanBody };
 }

@@ -51,7 +51,7 @@ from __future__ import annotations
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
-from datetime import datetime
+from datetime import date, datetime
 from types import MappingProxyType
 from typing import Any, Final
 
@@ -73,6 +73,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCommitmentHistory,
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
@@ -112,12 +113,14 @@ from my_pa.application.commands import (
     ReviseCapture,
     ReviseManagedDocument,
     SearchCaptures,
+    SearchCommitments,
     SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
     TransitionTask,
+    UpdateCommitment,
     UpdateTask,
     WaitingOn,
 )
@@ -139,7 +142,12 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.situation.continuity import CommitmentDirection, CommitmentState
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
-from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.lifecycle import (
+    TaskArchiveMode,
+    TaskLifecycleState,
+    TaskPriority,
+    TaskWorkView,
+)
 from my_pa.domain.task.role import TaskRole
 
 __all__ = ["MAX_REQUEST_BYTES", "PAYLOAD_KEY", "normalize"]
@@ -391,6 +399,12 @@ def _read_task(payload: Mapping[str, Any]) -> Command:
 
 def _list_tasks(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
+    named = converted.get("archive_mode")
+    if isinstance(named, str):
+        try:
+            converted["archive_mode"] = TaskArchiveMode(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
     named = converted.get("lifecycle_state")
     if isinstance(named, str):
         try:
@@ -403,11 +417,42 @@ def _list_tasks(payload: Mapping[str, Any]) -> Command:
             converted["priority"] = TaskPriority(named)
         except ValueError:
             raise InvalidRequestError(SafeDetail.PRIORITY) from None
+    named = converted.get("work_view")
+    if isinstance(named, str):
+        try:
+            converted["work_view"] = TaskWorkView(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    named_date = converted.get("work_date")
+    if isinstance(named_date, str):
+        try:
+            converted["work_date"] = date.fromisoformat(named_date)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
     return ListTasks(**converted)
 
 
 def _search_tasks(payload: Mapping[str, Any]) -> Command:
-    return SearchTasks(**payload)
+    converted = dict(payload)
+    named = converted.get("archive_mode")
+    if isinstance(named, str):
+        try:
+            converted["archive_mode"] = TaskArchiveMode(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    named = converted.get("work_view")
+    if isinstance(named, str):
+        try:
+            converted["work_view"] = TaskWorkView(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    named_date = converted.get("work_date")
+    if isinstance(named_date, str):
+        try:
+            converted["work_date"] = date.fromisoformat(named_date)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    return SearchTasks(**converted)
 
 
 def _get_task_history(payload: Mapping[str, Any]) -> Command:
@@ -483,11 +528,9 @@ def _transition_task(payload: Mapping[str, Any]) -> Command:
 def _mutations(value: object) -> tuple[dict[str, object], ...]:
     """A JSON array of objects as the tuple of mappings `BulkPreviewTasks` holds.
 
-    Each entry stays an opaque `dict` — the same shape the command declares —
-    because a bulk mutation names one of `CreateTask`, `UpdateTask`, or
-    `TransitionTask`'s own fields, and re-validating that shape here would be a
-    second copy of each command's own `__post_init__` rather than the one this
-    module's docstring promises.
+    Each entry stays a `dict` for the command boundary. The application bulk
+    normalizer then enforces the closed update/transition vocabulary, canonical
+    ordering, bounds, and digest; creation is not a bulk mutation.
     """
     if not isinstance(value, list):
         raise InvalidRequestError(SafeDetail.MUTATIONS)
@@ -507,7 +550,10 @@ def _bulk_preview_tasks(payload: Mapping[str, Any]) -> Command:
 
 
 def _bulk_confirm_tasks(payload: Mapping[str, Any]) -> Command:
-    return BulkConfirmTasks(**payload)
+    converted = dict(payload)
+    if "mutations" in converted:
+        converted["mutations"] = _mutations(converted["mutations"])
+    return BulkConfirmTasks(**converted)
 
 
 def _read_commitment(payload: Mapping[str, Any]) -> Command:
@@ -531,6 +577,27 @@ def _list_commitments(payload: Mapping[str, Any]) -> Command:
     return ListCommitments(**converted)
 
 
+def _search_commitments(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    named = converted.get("direction")
+    if isinstance(named, str):
+        try:
+            converted["direction"] = CommitmentDirection(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    named = converted.get("state")
+    if isinstance(named, str):
+        try:
+            converted["state"] = CommitmentState(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    return SearchCommitments(**converted)
+
+
+def _get_commitment_history(payload: Mapping[str, Any]) -> Command:
+    return GetCommitmentHistory(**payload)
+
+
 def _waiting_on(payload: Mapping[str, Any]) -> Command:
     return WaitingOn(**payload)
 
@@ -545,6 +612,12 @@ def _create_commitment(payload: Mapping[str, Any]) -> Command:
         except ValueError:
             raise InvalidRequestError(SafeDetail.SELECTOR) from None
     return CreateCommitment(**converted)
+
+
+def _update_commitment(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    _task_moment(converted, "due_at", SafeDetail.DUE_AT)
+    return UpdateCommitment(**converted)
 
 
 def _close_commitment(payload: Mapping[str, Any]) -> Command:
@@ -925,8 +998,11 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.TASKS_BULK_CONFIRM: _bulk_confirm_tasks,
         Capability.COMMITMENTS_READ: _read_commitment,
         Capability.COMMITMENTS_LIST: _list_commitments,
+        Capability.COMMITMENTS_SEARCH: _search_commitments,
+        Capability.COMMITMENTS_HISTORY: _get_commitment_history,
         Capability.COMMITMENTS_WAITING_ON: _waiting_on,
         Capability.COMMITMENTS_CREATE: _create_commitment,
+        Capability.COMMITMENTS_UPDATE: _update_commitment,
         Capability.COMMITMENTS_CLOSE: _close_commitment,
         Capability.CONTEXT_PREPARE: _prepare_context,
         Capability.CONTEXT_FEEDBACK: _record_context_feedback,
@@ -956,7 +1032,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the sixty-two names nothing.
+    not one of the sixty-five names nothing.
     """
     try:
         return Capability(capability)

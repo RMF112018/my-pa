@@ -593,6 +593,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             managed_store=managed_byte_store(settings, work_engine),
             task_management_unit_of_work=task_management_unit_of_work,
             relationship_intelligence_enabled=settings.relationship_intelligence_enabled,
+            relationship_memory_enabled=settings.relationship_memory_enabled,
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

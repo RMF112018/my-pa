@@ -53,7 +53,7 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
-from my_pa.domain.relationship.entity import EntityStatus
+from my_pa.domain.relationship.entity import EntityStatus, EntityType
 from my_pa.domain.relationship.memory import (
     CONTEXT_TARGET_ID_KINDS,
     ContextLinkAuthority,
@@ -73,6 +73,7 @@ from my_pa.domain.relationship.memory import (
     RelationshipMemoryError,
     RelationshipMemoryVersion,
     StaleMemoryVersionError,
+    check_kind_permits_subject,
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.principal_scope import (
@@ -259,7 +260,7 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             return self._create(request)
         return self._mutate(request)
 
-    def _require_writable_subject(self, principal_id: str, subject_entity_id: str) -> str:
+    def _require_writable_subject(self, principal_id: str, subject_entity_id: str) -> EntityType:
         """The subject must be this Principal's and must not be merged away.
 
         A merged-away subject raises rather than being followed. Following it
@@ -282,7 +283,7 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             raise UnknownScopeError("a memory write names an entity outside this scope")
         if EntityStatus(row.status) is EntityStatus.MERGED_REDIRECT:
             raise MergedSubjectError(row.superseded_by_entity_id)
-        return str(row.entity_type)
+        return EntityType(row.entity_type)
 
     def _require_own_context_targets(
         self, principal_id: str, links: tuple[Mapping[str, str], ...]
@@ -413,7 +414,12 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             # and a create reaching here without a subject would then insert a
             # row with a null one.
             raise RelationshipMemoryError("a memory creation names its subject and kind")
-        self._require_writable_subject(request.principal_id, subject_entity_id)
+        entity_type = self._require_writable_subject(request.principal_id, subject_entity_id)
+        # Checked here rather than in the application service because the
+        # subject's type is a fact this read already has: asking for it again
+        # a layer up would be a second query, and deciding without it would be
+        # a Person-only kind admitted against an organization.
+        check_kind_permits_subject(memory_kind, entity_type)
         self._require_own_context_targets(request.principal_id, request.context_links)
         memory_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY)
         self._connection.execute(
@@ -492,7 +498,10 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         revising = request.operation is MemoryOperation.REVISE
         memory_kind = request.memory_kind or MemoryKind(current.memory_kind)
         if revising:
-            self._require_writable_subject(request.principal_id, current.subject_entity_id)
+            entity_type = self._require_writable_subject(
+                request.principal_id, current.subject_entity_id
+            )
+            check_kind_permits_subject(memory_kind, entity_type)
             self._require_own_context_targets(request.principal_id, request.context_links)
 
         lifecycle = {

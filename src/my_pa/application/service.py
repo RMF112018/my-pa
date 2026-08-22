@@ -119,6 +119,7 @@ from my_pa.application.capabilities import build_capability_manifest, build_read
 from my_pa.application.commands import (
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
+    ArchiveRelationshipMemory,
     BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -130,6 +131,7 @@ from my_pa.application.commands import (
     CreateManagedDocument,
     CreateManagedDocumentCommand,
     CreateProject,
+    CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
     DecideReviewCase,
@@ -144,6 +146,8 @@ from my_pa.application.commands import (
     GetGoodNotesWork,
     GetLatestIntelligenceArtifact,
     GetPulse,
+    GetRelationshipMemory,
+    GetRelationshipMemoryHistory,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -153,6 +157,7 @@ from my_pa.application.commands import (
     ListManagedDocuments,
     ListManagedDocumentsCommand,
     ListProjects,
+    ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
     ListSources,
@@ -174,14 +179,17 @@ from my_pa.application.commands import (
     ResolveIntelligenceSet,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
+    RestoreRelationshipMemory,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
     ReviseManagedDocumentCommand,
+    ReviseRelationshipMemory,
     SearchCaptures,
     SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchRelationshipMemories,
     SearchTasks,
     SubmitGoodNotesProposal,
     TransitionTask,
@@ -239,6 +247,12 @@ from my_pa.application.intelligence import (
 )
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.model_gate import BoundedModelGate
+from my_pa.application.relationship_memory import (
+    ArchiveMemoryCommand,
+    CreateMemoryCommand,
+    RelationshipMemoryService,
+    ReviseMemoryCommand,
+)
 from my_pa.application.tasks import TaskManagementService
 from my_pa.contracts.ports import (
     Acceptance,
@@ -250,8 +264,11 @@ from my_pa.contracts.ports import (
     EntitySummary,
     EvidenceUnavailableError,
     ManagedByteStore,
+    MemoryDetail,
+    MemoryPage,
     PortError,
     PreferenceConflictError,
+    RelationshipMemoryRepository,
     ReviewDecisionRequest,
     SearchOutcome,
     UnitOfWork,
@@ -318,6 +335,19 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifierNamespace,
 )
 from my_pa.domain.relationship.governance import EntityObservation
+from my_pa.domain.relationship.memory import (
+    MemoryAdmission,
+    MemoryBoundsError,
+    MemoryConflictError,
+    MemoryKind,
+    MemoryKindNotPermittedError,
+    MemoryStructuredValueError,
+    MergedSubjectError,
+    RelationshipMemory,
+    RelationshipMemoryError,
+    RelationshipMemoryVersion,
+    StaleMemoryVersionError,
+)
 from my_pa.domain.relationship.resolution import EntityResolution
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -367,6 +397,132 @@ class _Result:
 
     payload: dict[str, Any]
     disclosure: Disclosure
+
+
+#: What a memory answer rests on: the Principal's own partition, exactly as the
+#: entity plane's does. Not `configured_interface`, which is what a capability
+#: description rests on, and not a source provider, which a memory never has.
+_MEMORY_TRUST_BASIS: Final = ("principal_partition",)
+
+
+@contextmanager
+def _memory_translated() -> Iterator[None]:
+    """Classify the Relationship Memory domain's refusals as public errors.
+
+    Separate from `_translated` because these are domain rules rather than port
+    failures, and each maps to a different public class: a stale expectation and
+    a duplicate key are both `conflict`, a merged-away subject is a `conflict`
+    that also has somewhere to point, and a bad kind, statement or structured
+    value is `invalid_request`. `MergedSubjectError` names the canonical entity
+    in the safe details rather than in a message, so a caller learns *that* it
+    must retarget without the error string carrying an identifier.
+    """
+    try:
+        yield
+    except StaleMemoryVersionError:
+        raise ConflictError(SafeDetail.EXPECTED_VERSION) from None
+    except MemoryConflictError:
+        raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+    except MergedSubjectError:
+        raise ConflictError(SafeDetail.SUBJECT_ENTITY_ID) from None
+    except MemoryKindNotPermittedError:
+        raise InvalidRequestError(SafeDetail.MEMORY_KIND) from None
+    except MemoryStructuredValueError:
+        raise InvalidRequestError(SafeDetail.STRUCTURED_VALUE) from None
+    except MemoryBoundsError:
+        raise InvalidRequestError(SafeDetail.STATEMENT) from None
+    except RelationshipMemoryError:
+        raise InvalidRequestError(SafeDetail.SUBJECT) from None
+
+
+def _memory_links(links: tuple[dict[str, object], ...]) -> tuple[dict[str, str], ...]:
+    """The command's context links as the use case takes them."""
+    return tuple({key: str(value) for key, value in link.items()} for link in links)
+
+
+def _memory_kinds(kinds: tuple[MemoryKind, ...] | None) -> frozenset[MemoryKind] | None:
+    """The command's kind filter as the repository takes it."""
+    return None if kinds is None else frozenset(kinds)
+
+
+def _memory_summary_view(
+    memory: RelationshipMemory, statement: str | None, *, include_statement: bool
+) -> dict[str, Any]:
+    """One memory as a listing discloses it.
+
+    `statement` is present exactly when the caller asked for it and policy
+    disclosed the row; a withheld memory never reaches this function, so there is
+    no case here where the field is omitted for a reason a caller has to guess.
+    """
+    view: dict[str, Any] = {
+        "memory_id": memory.memory_id,
+        "subject_entity_id": memory.subject_entity_id,
+        "kind": memory.memory_kind.value,
+        "lifecycle": memory.lifecycle_state.value,
+        "version": memory.version,
+        "current_version_number": memory.current_version_number,
+        "pinned": memory.pinned,
+        "created_at": format_rfc3339(memory.created_at),
+        "updated_at": format_rfc3339(memory.updated_at),
+    }
+    if include_statement and statement is not None:
+        view["statement"] = statement
+    return view
+
+
+def _memory_version_view(version: RelationshipMemoryVersion) -> dict[str, Any]:
+    """One immutable version as history discloses it."""
+    return {
+        "memory_version_id": version.memory_version_id,
+        "version_number": version.version_number,
+        "statement": version.statement,
+        "statement_sha256": version.statement_sha256,
+        "structured_value": version.structured_value,
+        "kind": version.memory_kind.value,
+        "authority": version.authority.value,
+        "classification": version.classification.value,
+        "cloud_eligible": version.cloud_eligible,
+        "recorded_by": version.created_by_actor.value,
+        "recorded_at": format_rfc3339(version.recorded_at),
+        "observed_at": _memory_moment(version.observed_at),
+        "effective_from": _memory_moment(version.effective_from),
+        "effective_to": _memory_moment(version.effective_to),
+        "prior_version_id": version.prior_version_id,
+        "correction_reason": version.correction_reason,
+    }
+
+
+def _memory_moment(moment: datetime | None) -> str | None:
+    """An optional instant, still optional. An unknown time stays unknown."""
+    return None if moment is None else format_rfc3339(moment)
+
+
+def _memory_view(detail: MemoryDetail, *, include_statement: bool) -> dict[str, Any]:
+    """One memory as `relationship_memory.get` discloses it."""
+    view = _memory_summary_view(
+        detail.memory,
+        detail.current_version.statement,
+        include_statement=include_statement,
+    )
+    view["current_version"] = _memory_version_view(detail.current_version)
+    if not include_statement:
+        view["current_version"].pop("statement")
+    view["context_links"] = [
+        {
+            "target_type": link.target_type.value,
+            "target_id": link.target_id,
+            "role": link.role.value,
+            "authority": link.authority.value,
+        }
+        for link in detail.context_links
+    ]
+    view["evidence_count"] = detail.evidence_count
+    # Present only when the subject has actually been merged away, so a caller
+    # cannot read "the subject is current" from the field's absence *and* from
+    # its null — one spelling, one meaning.
+    if detail.canonical_entity_id is not None:
+        view["canonical_subject_entity_id"] = detail.canonical_entity_id
+    return view
 
 
 def _review_case_payload(case: ReviewCase | GoodNotesReviewCase) -> dict[str, Any]:
@@ -1075,6 +1231,7 @@ class ApplicationService:
         task_management_unit_of_work: Callable[[], Any] | None = None,
         commitment_management_unit_of_work: Callable[[], Any] | None = None,
         relationship_intelligence_enabled: bool = False,
+        relationship_memory_enabled: bool = False,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._limits = _effective_limits(limits)
@@ -1095,6 +1252,7 @@ class ApplicationService:
         #: process, and it keeps `capabilities.get`, `tools/list`, and the remote
         #: profile agreeing about what exists.
         self._relationship_intelligence_enabled = relationship_intelligence_enabled
+        self._relationship_memory_enabled = relationship_memory_enabled
         #: Explicit production composition of the optional proposal plane. The
         #: default gate is disabled; an enabled gate cannot be constructed
         #: without its local provider and canonical Review router.
@@ -1103,6 +1261,7 @@ class ApplicationService:
         #: stateless, takes its ports as arguments, and constructing one per call
         #: would say it held something.
         self._managed = ManagedDocumentService()
+        self._memory = RelationshipMemoryService()
         #: WP-TM-02's task management service, held rather than built per request:
         #: it is stateless, takes its own unit-of-work factory as an argument, and
         #: constructing one per call would say it held something. The factory is
@@ -1141,6 +1300,11 @@ class ApplicationService:
             served -= _MANAGED_CAPABILITIES
         if not self._relationship_intelligence_enabled:
             served -= _ENTITY_CAPABILITIES
+        # Two conditions, not one. The plane needs its own switch *and* the
+        # entity plane, because a memory's subject is an Entity and the
+        # repository proves ownership of it by reading `knowledge.entities`.
+        if not (self._relationship_intelligence_enabled and self._relationship_memory_enabled):
+            served -= _RELATIONSHIP_MEMORY_CAPABILITIES
         return served
 
     def invoke(
@@ -2888,6 +3052,311 @@ class ApplicationService:
         """
         if not self._relationship_intelligence_enabled:
             raise UnsupportedError()
+
+    # ---- the Relationship Memory plane -------------------------------------
+    #
+    # Eight handlers over one service, and the shape every plane here uses:
+    # resolve the gate, build the use-case command with the Principal the
+    # authorization already resolved, hand both to `RelationshipMemoryService`.
+    # No memory rule is restated in this file. Which authority a direct write
+    # carries, which classification floor a kind implies, whether a subject may
+    # be written to, and how a replay is decided all stay in the service, the
+    # repository and the domain, so a second copy here cannot disagree with them.
+    #
+    # `principal_id=authorization.principal.principal_id` is the only thing these
+    # handlers say about identity, and the transport-facing commands have no
+    # `principal_id` field at all, so there is nothing a caller could have
+    # supplied for it to be confused with.
+
+    def _relationship_memory_plane(self) -> None:
+        """Refuse when this build has not enabled the Relationship Memory plane.
+
+        The floor `_entity_plane` documents, for the same reason and against the
+        same gap: `available_capabilities` withholds the eight names from
+        `capabilities.get` and from the MCP tool list, and the HTTP transport
+        consults neither — it routes by path segment straight into `_HANDLERS`.
+        Every handler below calls this first, so the refusal does not depend on
+        which transport asked.
+
+        It requires the entity plane too, and that is not belt and braces: a
+        memory binds a generalized Entity as its subject, and the repository
+        proves the subject belongs to the acting Principal by reading
+        `knowledge.entities`. A build serving memories without the plane that
+        owns their subjects would be serving writes it cannot validate.
+        """
+        if not self._relationship_intelligence_enabled or not self._relationship_memory_enabled:
+            raise UnsupportedError()
+
+    def _memory_repository(self, unit_of_work: UnitOfWork) -> RelationshipMemoryRepository:
+        self._relationship_memory_plane()
+        return unit_of_work.relationship_memory
+
+    def _relationship_memory_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateRelationshipMemory,
+    ) -> _Result:
+        """`relationship_memory.create`: one direct user-authored memory."""
+        repository = self._memory_repository(unit_of_work)
+        with _translated(), _memory_translated():
+            admission = self._memory.create(
+                repository,
+                CreateMemoryCommand(
+                    principal_id=authorization.principal.principal_id,
+                    subject_entity_id=command.entity_id,
+                    memory_kind=command.kind,
+                    statement=command.statement,
+                    structured_value=command.structured_value,
+                    context_links=_memory_links(command.context_links),
+                    pinned=command.pinned,
+                    observed_at=command.observed_at,
+                    effective_from=command.effective_from,
+                    effective_to=command.effective_to,
+                    idempotency_key=command.idempotency_key,
+                ),
+                at=authorization.at,
+            )
+        return self._memory_receipt(authorization, admission)
+
+    def _relationship_memory_revise(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReviseRelationshipMemory,
+    ) -> _Result:
+        """`relationship_memory.revise`: append a successor, refusing a stale expectation."""
+        repository = self._memory_repository(unit_of_work)
+        principal_id = authorization.principal.principal_id
+        with _translated(), _memory_translated():
+            existing = self._memory.get(repository, command.memory_id, principal_id=principal_id)
+            if existing is None:
+                raise NotFoundError(SafeDetail.MEMORY_ID)
+            admission = self._memory.revise(
+                repository,
+                ReviseMemoryCommand(
+                    principal_id=principal_id,
+                    memory_id=command.memory_id,
+                    expected_version=command.expected_version,
+                    statement=command.statement,
+                    memory_kind=command.kind,
+                    structured_value=command.structured_value,
+                    context_links=_memory_links(command.context_links),
+                    pinned=command.pinned,
+                    observed_at=command.observed_at,
+                    effective_from=command.effective_from,
+                    effective_to=command.effective_to,
+                    correction_reason=command.correction_reason,
+                    idempotency_key=command.idempotency_key,
+                ),
+                at=authorization.at,
+                current_kind=existing.memory.memory_kind,
+            )
+        return self._memory_receipt(authorization, admission)
+
+    def _relationship_memory_archive(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ArchiveRelationshipMemory,
+    ) -> _Result:
+        """`relationship_memory.archive`: withdraw one memory, reversibly."""
+        repository = self._memory_repository(unit_of_work)
+        with _translated(), _memory_translated():
+            admission = self._memory.archive(
+                repository,
+                ArchiveMemoryCommand(
+                    principal_id=authorization.principal.principal_id,
+                    memory_id=command.memory_id,
+                    expected_version=command.expected_version,
+                    idempotency_key=command.idempotency_key,
+                ),
+                at=authorization.at,
+            )
+        return self._memory_receipt(authorization, admission)
+
+    def _relationship_memory_restore(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RestoreRelationshipMemory,
+    ) -> _Result:
+        """`relationship_memory.restore`: return one archived memory to the current set."""
+        repository = self._memory_repository(unit_of_work)
+        with _translated(), _memory_translated():
+            admission = self._memory.restore(
+                repository,
+                ArchiveMemoryCommand(
+                    principal_id=authorization.principal.principal_id,
+                    memory_id=command.memory_id,
+                    expected_version=command.expected_version,
+                    idempotency_key=command.idempotency_key,
+                ),
+                at=authorization.at,
+            )
+        return self._memory_receipt(authorization, admission)
+
+    def _relationship_memory_get(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetRelationshipMemory,
+    ) -> _Result:
+        """`relationship_memory.get`: one memory, its current version and provenance."""
+        repository = self._memory_repository(unit_of_work)
+        with _translated(), _memory_translated():
+            detail = self._memory.get(
+                repository, command.memory_id, principal_id=authorization.principal.principal_id
+            )
+        if detail is None:
+            raise NotFoundError(SafeDetail.MEMORY_ID)
+        return _Result(
+            payload={"memory": _memory_view(detail, include_statement=command.include_statement)},
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEMORY_TRUST_BASIS),
+        )
+
+    def _relationship_memory_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListRelationshipMemories,
+    ) -> _Result:
+        """`relationship_memory.list`: one bounded page of one entity's memories."""
+        repository = self._memory_repository(unit_of_work)
+        limit = self._page_size(command.page_size)
+        with _translated(), _memory_translated():
+            page = self._memory.list_for_entity(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                subject_entity_id=command.entity_id,
+                limit=limit,
+                kinds=_memory_kinds(command.kinds),
+                lifecycle=command.lifecycle,
+                context_entity_id=command.context_entity_id,
+                as_of=command.as_of,
+                after_memory_id=command.after,
+            )
+        return self._memory_page(authorization, page, include_statement=command.include_statement)
+
+    def _relationship_memory_search(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SearchRelationshipMemories,
+    ) -> _Result:
+        """`relationship_memory.search`: lexical matches over eligible current memories."""
+        repository = self._memory_repository(unit_of_work)
+        limit = self._page_size(command.page_size)
+        with _translated(), _memory_translated():
+            page = self._memory.search(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                query=command.query,
+                limit=limit,
+                subject_entity_id=command.entity_id,
+                kinds=_memory_kinds(command.kinds),
+                after_memory_id=command.after,
+            )
+        return self._memory_page(authorization, page, include_statement=True)
+
+    def _relationship_memory_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetRelationshipMemoryHistory,
+    ) -> _Result:
+        """`relationship_memory.history`: every stored version of one memory."""
+        repository = self._memory_repository(unit_of_work)
+        limit = self._page_size(command.page_size)
+        with _translated(), _memory_translated():
+            versions, truncated = self._memory.history(
+                repository,
+                command.memory_id,
+                principal_id=authorization.principal.principal_id,
+                limit=limit,
+                after_version_id=command.after,
+            )
+        return _Result(
+            payload={
+                "memory_id": command.memory_id,
+                "versions": [_memory_version_view(version) for version in versions],
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_MEMORY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=versions[-1].memory_version_id if truncated and versions else None,
+                ),
+            ),
+        )
+
+    def _memory_receipt(self, authorization: Authorization, admission: MemoryAdmission) -> _Result:
+        """The one shape all four memory writes answer with.
+
+        No statement. A receipt acknowledges that a record is durable, and one
+        that echoed the note would put it on a second surface for no gain — the
+        caller already has it, and a *replayed* receipt would put an earlier
+        caller's text on this one.
+        """
+        receipt = admission.receipt
+        return _Result(
+            payload={
+                "memory_id": receipt.memory_id,
+                "memory_version_id": receipt.memory_version_id,
+                "version_number": receipt.version_number,
+                "version": receipt.aggregate_version,
+                "lifecycle": receipt.lifecycle_state.value,
+                "statement_sha256": receipt.statement_sha256,
+                "idempotency_key": receipt.idempotency_key,
+                "issued_at": format_rfc3339(receipt.issued_at),
+                "created": admission.created,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEMORY_TRUST_BASIS),
+        )
+
+    def _memory_page(
+        self, authorization: Authorization, page: MemoryPage, *, include_statement: bool
+    ) -> _Result:
+        """One page of memories, with truncation and withholding stated separately.
+
+        They are different facts and the envelope keeps them apart: `truncation`
+        says the page ran out of room and hands a cursor, and
+        `memories_withheld_by_policy` says a classification decision removed
+        rows this request was not eligible for. A caller reading only the first
+        would take a policy omission for the end of the list.
+        """
+        limitations = (
+            (Limitation.LISTING_HAS_NO_CONTINUATION,)
+            if page.is_truncated and not page.memories
+            else ()
+        )
+        return _Result(
+            payload={
+                "memories": [
+                    _memory_summary_view(
+                        memory,
+                        page.statements.get(memory.memory_id),
+                        include_statement=include_statement,
+                    )
+                    for memory in page.memories
+                ],
+                "memories_withheld_by_policy": page.withheld_by_policy,
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_MEMORY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.is_truncated,
+                    reason="page_size_reached" if page.is_truncated else None,
+                    next_cursor=(
+                        page.memories[-1].memory_id if page.is_truncated and page.memories else None
+                    ),
+                ),
+                extra_limitations=limitations,
+            ),
+        )
 
     def _entities_search(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchEntities
@@ -4713,6 +5182,14 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_CONTEXT: ApplicationService._entities_context,
         Capability.ENTITIES_RELATIONSHIPS: ApplicationService._entities_relationships,
         Capability.ENTITIES_UNRESOLVED_MENTIONS: (ApplicationService._entities_unresolved_mentions),
+        Capability.RELATIONSHIP_MEMORY_CREATE: ApplicationService._relationship_memory_create,
+        Capability.RELATIONSHIP_MEMORY_GET: ApplicationService._relationship_memory_get,
+        Capability.RELATIONSHIP_MEMORY_LIST: ApplicationService._relationship_memory_list,
+        Capability.RELATIONSHIP_MEMORY_SEARCH: ApplicationService._relationship_memory_search,
+        Capability.RELATIONSHIP_MEMORY_HISTORY: ApplicationService._relationship_memory_history,
+        Capability.RELATIONSHIP_MEMORY_REVISE: ApplicationService._relationship_memory_revise,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE: ApplicationService._relationship_memory_archive,
+        Capability.RELATIONSHIP_MEMORY_RESTORE: ApplicationService._relationship_memory_restore,
     }
 )
 
@@ -4731,6 +5208,24 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+    }
+)
+
+#: The Relationship Memory plane's names, withheld from a process that has not
+#: enabled it. Written out rather than derived from the `relationship_memory.`
+#: prefix, for the reason `_MANAGED_CAPABILITIES` and `_ENTITY_CAPABILITIES` are:
+#: admitting another is a decision here and not a spelling that happens to start
+#: the right way.
+_RELATIONSHIP_MEMORY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_GET,
+        Capability.RELATIONSHIP_MEMORY_LIST,
+        Capability.RELATIONSHIP_MEMORY_SEARCH,
+        Capability.RELATIONSHIP_MEMORY_HISTORY,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
     }
 )
 

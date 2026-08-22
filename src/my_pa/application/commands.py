@@ -2793,17 +2793,17 @@ def _memory_docs(*names: str) -> Mapping[str, Mapping[str, str]]:
     return MappingProxyType({name: _MEMORY_FIELD_DOCS[name] for name in names})
 
 
-def _memory_kind(value: object) -> str:
-    """One member of the closed memory vocabulary, named rather than guessed."""
-    if not isinstance(value, str):
+def _memory_kind(value: object) -> MemoryKind:
+    """One member of the closed memory vocabulary.
+
+    The command holds a `MemoryKind` rather than a string, so the MCP schema
+    publishes the ten members as an `enum` and a model calling the tool can see
+    the vocabulary instead of guessing at it. `adapters.normalization` converts
+    the caller's string into one, exactly as it does for `Representation`.
+    """
+    if not isinstance(value, MemoryKind):
         raise InvalidRequestError(SafeDetail.MEMORY_KIND)
-    try:
-        MemoryKind(value)
-    except ValueError:
-        pass
-    else:
-        return value
-    raise InvalidRequestError(SafeDetail.MEMORY_KIND)
+    return value
 
 
 def _memory_statement(value: object) -> str:
@@ -2874,7 +2874,7 @@ def _memory_context_links(value: object) -> tuple[dict[str, object], ...]:
     return tuple(links)
 
 
-def _memory_kinds_filter(value: object) -> tuple[str, ...] | None:
+def _memory_kinds_filter(value: object) -> tuple[MemoryKind, ...] | None:
     """An optional kind filter. Absent means every kind; empty is refused.
 
     The contract left the choice open and this is it, stated once: absent is no
@@ -2887,7 +2887,7 @@ def _memory_kinds_filter(value: object) -> tuple[str, ...] | None:
         return None
     if not isinstance(value, tuple | list) or not value:
         raise InvalidRequestError(SafeDetail.KINDS)
-    kinds: list[str] = []
+    kinds: list[MemoryKind] = []
     for entry in value:
         kinds.append(_memory_kind(entry))
     if len(set(kinds)) != len(kinds):
@@ -2895,16 +2895,11 @@ def _memory_kinds_filter(value: object) -> tuple[str, ...] | None:
     return tuple(kinds)
 
 
-def _memory_lifecycle(value: object) -> str:
-    if not isinstance(value, str):
+def _memory_lifecycle(value: object) -> MemoryLifecycle:
+    """Which lifecycle a listing asks for, as the closed member itself."""
+    if not isinstance(value, MemoryLifecycle):
         raise InvalidRequestError(SafeDetail.LIFECYCLE)
-    try:
-        MemoryLifecycle(value)
-    except ValueError:
-        pass
-    else:
-        return value
-    raise InvalidRequestError(SafeDetail.LIFECYCLE)
+    return value
 
 
 def _expected_version(value: object) -> int:
@@ -2945,7 +2940,7 @@ class CreateRelationshipMemory:
     entity_id: str
     statement: str = field(repr=False)
     idempotency_key: str
-    kind: str = MemoryKind.GENERAL_NOTE.value
+    kind: MemoryKind = MemoryKind.GENERAL_NOTE
     structured_value: dict[str, Any] | None = field(default=None, repr=False)
     context_links: tuple[dict[str, object], ...] = ()
     pinned: bool = False
@@ -3016,8 +3011,8 @@ class ListRelationshipMemories:
     )
 
     entity_id: str
-    kinds: tuple[str, ...] | None = None
-    lifecycle: str = MemoryLifecycle.ACTIVE.value
+    kinds: tuple[MemoryKind, ...] | None = None
+    lifecycle: MemoryLifecycle = MemoryLifecycle.ACTIVE
     context_entity_id: str | None = None
     as_of: datetime | None = None
     include_statement: bool = True
@@ -3056,7 +3051,7 @@ class SearchRelationshipMemories:
 
     query: str = field(repr=False)
     entity_id: str | None = None
-    kinds: tuple[str, ...] | None = None
+    kinds: tuple[MemoryKind, ...] | None = None
     page_size: int | None = None
     after: str | None = None
 
@@ -3131,7 +3126,7 @@ class ReviseRelationshipMemory:
     expected_version: int
     statement: str = field(repr=False)
     idempotency_key: str
-    kind: str | None = None
+    kind: MemoryKind | None = None
     structured_value: dict[str, Any] | None = field(default=None, repr=False)
     context_links: tuple[dict[str, object], ...] = ()
     pinned: bool = False

@@ -2902,6 +2902,22 @@ def _memory_lifecycle(value: object) -> MemoryLifecycle:
     return value
 
 
+def _memory_query(value: object) -> str:
+    """A non-blank, bounded search query. The query text never reaches a message.
+
+    `value` is `object` and not `str` for the reason `_idempotency_key` states:
+    the field *is* annotated `str`, so annotating it here too makes the
+    `isinstance` unreachable to a type checker and the check reads as dead code
+    to delete. The annotation describes what actually arrives from a transport,
+    which is anything the caller sent.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequestError(SafeDetail.QUERY)
+    if len(value) > MAX_QUERY_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.QUERY)
+    return value
+
+
 def _expected_version(value: object) -> int:
     """The aggregate version a state-dependent write says it read."""
     if type(value) is not int or value < 1:
@@ -3056,10 +3072,7 @@ class SearchRelationshipMemories:
     after: str | None = None
 
     def __post_init__(self) -> None:
-        if not isinstance(self.query, str) or not self.query.strip():
-            raise InvalidRequestError(SafeDetail.QUERY)
-        if len(self.query) > MAX_QUERY_CHARACTERS:
-            raise InvalidRequestError(SafeDetail.QUERY)
+        _memory_query(self.query)
         if self.entity_id is not None:
             _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.SUBJECT_ENTITY_ID)
         _memory_kinds_filter(self.kinds)

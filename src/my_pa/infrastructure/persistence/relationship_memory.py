@@ -171,7 +171,15 @@ def _to_memory(row: Row[Any]) -> RelationshipMemory:
     )
 
 
-def _to_version(row: Row[Any]) -> RelationshipMemoryVersion:
+def _to_version(row: Any) -> RelationshipMemoryVersion:  # noqa: ANN401 - a Row or a labelled view
+    """One stored version, from a `Row` or from `_VersionRow` over a joined one.
+
+    `Any` rather than `Row`, and that is the honest annotation: the context-card
+    query selects both tables at once and reads its version columns through
+    `_VersionRow`, which is not a `Row` and cannot be. Narrowing the parameter
+    would be a suppression at the call site instead, and the
+    dependency-floor job forbids one.
+    """
     structured = row.structured_value
     if isinstance(structured, str):
         structured = json.loads(structured)

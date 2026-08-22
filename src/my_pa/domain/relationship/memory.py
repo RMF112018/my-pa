@@ -535,12 +535,19 @@ def _require(condition: bool, message: str) -> None:
 
 
 def _optional_int(value: object, name: str) -> int | None:
+    """One optional whole number out of a caller's JSON object.
+
+    `type(value) is int` rather than `isinstance`, because `bool` is a subclass
+    of `int` and `True` is not a month. The narrowing is a real `if` rather than
+    a `_require` plus a cast: `_require` raises but says nothing a type checker
+    can read, so the value stayed `object` and the conversion needed a
+    suppression — and a suppression is what the dependency-floor job forbids.
+    """
     if value is None:
         return None
-    # `bool` is a subclass of `int` and `True` is not a month. Checked exactly
-    # rather than with `isinstance`, which would admit it.
-    _require(type(value) is int, f"{name} is a whole number")
-    return int(value)  # type: ignore[arg-type]
+    if type(value) is not int:
+        raise MemoryStructuredValueError(f"{name} is a whole number")
+    return value
 
 
 def _validate_important_date(value: dict[str, Any]) -> None:
@@ -551,13 +558,15 @@ def _validate_important_date(value: dict[str, Any]) -> None:
     day = _optional_int(value.get("day"), "an important date day")
     year = _optional_int(value.get("year"), "an important date year")
     precision_value = value.get("precision")
-    _require(isinstance(precision_value, str), "an important date states its precision")
+    if not isinstance(precision_value, str):
+        raise MemoryStructuredValueError("an important date states its precision")
     try:
         precision = DatePrecision(precision_value)
     except ValueError as exc:
         raise MemoryStructuredValueError("an important date precision is known") from exc
     recurrence_value = value.get("recurrence", DateRecurrence.NONE.value)
-    _require(isinstance(recurrence_value, str), "an important date recurrence is text")
+    if not isinstance(recurrence_value, str):
+        raise MemoryStructuredValueError("an important date recurrence is text")
     try:
         DateRecurrence(recurrence_value)
     except ValueError as exc:

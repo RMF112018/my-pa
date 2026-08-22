@@ -473,3 +473,51 @@ def test_sarah_permit_log_scenario() -> None:
     assert waiting_resp_b.error is None, waiting_resp_b.error
     assert waiting_resp_b.result is not None
     assert waiting_resp_b.result["waiting_on"] == []
+
+
+def test_counterparty_picker_queries_are_principal_scoped() -> None:
+    """The picker cannot label a Person outside the authenticated partition."""
+    from dataclasses import dataclass
+
+    from sqlalchemy.sql.elements import ClauseElement
+
+    from my_pa.infrastructure.persistence.commitment_management import (
+        SqlCommitmentManagementRepository,
+    )
+
+    @dataclass(frozen=True)
+    class Row:
+        person_id: str
+        display_name: str
+
+    class Result:
+        def all(self) -> list[Row]:
+            return [Row("per_aaaaaaaa11111111", "Sam Rivera")]
+
+        def one_or_none(self) -> None:
+            return None
+
+    class Connection:
+        def __init__(self) -> None:
+            self.statements: list[ClauseElement] = []
+
+        def execute(self, statement: ClauseElement) -> Result:
+            self.statements.append(statement)
+            return Result()
+
+    connection = Connection()
+    repository = SqlCommitmentManagementRepository(connection)  # type: ignore[arg-type]
+    options = repository.list_counterparties("prn_aaaaaaaa11111111", limit=101)
+    assert [(item.person_id, item.display_name) for item in options] == [
+        ("per_aaaaaaaa11111111", "Sam Rivera")
+    ]
+    list_sql = str(connection.statements[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "relationship_people.principal_id = 'prn_aaaaaaaa11111111'" in list_sql
+    assert "relationship_people.superseded_by_person_id IS NULL" in list_sql
+    assert "ORDER BY lower(knowledge.relationship_people.display_name) ASC" in list_sql
+    assert "LIMIT 101" in list_sql
+
+    assert repository.counterparty("prn_aaaaaaaa11111111", "per_bbbbbbbb22222222") is None
+    lookup_sql = str(connection.statements[1].compile(compile_kwargs={"literal_binds": True}))
+    assert "relationship_people.principal_id = 'prn_aaaaaaaa11111111'" in lookup_sql
+    assert "relationship_people.person_id = 'per_bbbbbbbb22222222'" in lookup_sql

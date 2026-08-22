@@ -17,12 +17,13 @@ from contextlib import AbstractContextManager
 from types import TracebackType
 from typing import Any
 
-from sqlalchemy import Engine, and_, asc, desc, insert, or_, select, update
+from sqlalchemy import Engine, and_, asc, desc, func, insert, or_, select, update
 from sqlalchemy.engine import Connection, Row
 
 from my_pa.contracts.ports import (
     CommitmentManagementRepository,
     CommitmentManagementUnitOfWork,
+    CounterpartyOption,
     WorkCursorError,
 )
 from my_pa.domain.situation.continuity import (
@@ -34,7 +35,15 @@ from my_pa.domain.task.commitment import Commitment
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry, CommitmentMutationAction
 from my_pa.domain.task.history import TaskMutationActor
 from my_pa.domain.task.history import TaskMutationOutcome as _TaskMutationOutcome
-from my_pa.infrastructure.persistence.tables import commitment_history, commitments
+from my_pa.infrastructure.persistence.principal_scope import (
+    capture_context,
+    partition_criterion,
+)
+from my_pa.infrastructure.persistence.tables import (
+    commitment_history,
+    commitments,
+    relationship_people,
+)
 
 __all__ = ["SqlAlchemyCommitmentManagementUnitOfWork", "SqlCommitmentManagementRepository"]
 
@@ -73,6 +82,48 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
             )
         ).one_or_none()
         return None if row is None else _to_commitment(row)
+
+    def counterparty(self, principal_id: str, person_id: str) -> CounterpartyOption | None:
+        row = self._connection.execute(
+            select(
+                relationship_people.c.person_id,
+                relationship_people.c.display_name,
+            ).where(
+                partition_criterion(relationship_people, capture_context(principal_id)),
+                relationship_people.c.person_id == person_id,
+                relationship_people.c.superseded_by_person_id.is_(None),
+            )
+        ).one_or_none()
+        return (
+            None
+            if row is None
+            else CounterpartyOption(
+                person_id=str(row.person_id), display_name=str(row.display_name)
+            )
+        )
+
+    def list_counterparties(
+        self, principal_id: str, *, limit: int
+    ) -> tuple[CounterpartyOption, ...]:
+        rows = self._connection.execute(
+            select(
+                relationship_people.c.person_id,
+                relationship_people.c.display_name,
+            )
+            .where(
+                partition_criterion(relationship_people, capture_context(principal_id)),
+                relationship_people.c.superseded_by_person_id.is_(None),
+            )
+            .order_by(
+                asc(func.lower(relationship_people.c.display_name)),
+                asc(relationship_people.c.person_id),
+            )
+            .limit(limit)
+        ).all()
+        return tuple(
+            CounterpartyOption(person_id=str(row.person_id), display_name=str(row.display_name))
+            for row in rows
+        )
 
     def list_commitments(
         self,

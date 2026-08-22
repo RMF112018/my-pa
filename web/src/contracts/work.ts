@@ -1,6 +1,11 @@
 export type TaskLifecycle = "open" | "in_progress" | "waiting" | "blocked" | "completed" | "cancelled";
 export type TaskPriority = "p1" | "p2" | "p3" | "p4";
 
+export interface CounterpartyOption {
+  person_id: string;
+  display_name: string;
+}
+
 export interface TaskRow {
   task_id: string; title: string; lifecycle_state: TaskLifecycle; priority: TaskPriority | null;
   due_at: string | null; archived_at: string | null; created_at: string; updated_at: string;
@@ -15,6 +20,7 @@ export interface CommitmentRow {
   commitment_id: string; direction: "owed_by_principal" | "owed_to_principal"; state: "open" | "closed";
   counterparty_person_id: string | null; title: string; description: string | null; due_date: string | null;
   created_at: string; updated_at: string; version: number;
+  counterparty: CounterpartyOption | null;
 }
 export interface CommitmentDetail extends CommitmentRow {
   evidence_state: string; origin_evidence_ref: string; closure_evidence_ref: string | null; closed_at: string | null;
@@ -24,6 +30,7 @@ export interface WaitingOnRow {
   due_date: string | null; state: "open";
   follow_up_task_id: string | null; follow_up_task_title: string | null;
   follow_up_task_state: TaskLifecycle | null;
+  counterparty: CounterpartyOption | null;
 }
 export interface WorkHistoryRow {
   history_id: string; action: string; actor: string; outcome: string; before_version: number;

@@ -173,6 +173,7 @@ __all__ = [
     "ContinuityAuthoringRepository",
     "ContinuityReadRepository",
     "ContinuityRepository",
+    "CounterpartyOption",
     "EnrollmentRepository",
     "EntitiesRepository",
     "EntitySummary",
@@ -2760,6 +2761,19 @@ class TaskManagementUnitOfWork(ABC):
 # scope's explicit refusal of a separate WaitingOn store.
 
 
+@dataclass(frozen=True, slots=True)
+class CounterpartyOption:
+    """A verified canonical Person identity paired with its display label."""
+
+    person_id: str
+    display_name: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.person_id, IdKind.PERSON)
+        if not self.display_name.strip():
+            raise ValueError("a counterparty display name is not blank")
+
+
 class CommitmentManagementRepository(ABC):
     """`knowledge.commitments` and `knowledge.commitment_history`, inside one transaction.
 
@@ -2780,6 +2794,26 @@ class CommitmentManagementRepository(ABC):
     @abstractmethod
     def get(self, principal_id: str, commitment_id: str) -> CommitmentAggregate | None:
         """One commitment in this Principal's partition, unlocked, or `None`."""
+
+    def counterparty(self, principal_id: str, person_id: str) -> CounterpartyOption | None:
+        """One current canonical Person label in this Principal's partition.
+
+        The display name is mutable presentation metadata; callers retain and
+        submit ``person_id`` as the stable identity. ``None`` deliberately
+        covers absent, superseded, and another Principal's Person alike.
+        """
+        return None
+
+    def list_counterparties(
+        self, principal_id: str, *, limit: int
+    ) -> tuple[CounterpartyOption, ...]:
+        """A bounded alphabetical picker projection of current canonical People.
+
+        This is presentation support for the existing Commitment capability,
+        not a new identity write path. Implementations must filter by the
+        authenticated Principal before ordering or limiting.
+        """
+        return ()
 
     @abstractmethod
     def list_commitments(

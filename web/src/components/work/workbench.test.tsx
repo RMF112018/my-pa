@@ -169,13 +169,30 @@ describe("Work surface", () => {
   });
 
   it("uses the dedicated Waiting On endpoint and truthfully disables unsupported search", async () => {
-    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ waiting_on: [{ commitment_id: "cmt_aaaaaaaa11111111", title: "Revised schedule", counterparty_person_id: "per_aaaaaaaa11111111", due_date: null, state: "open", follow_up_task_id: "tsk_aaaaaaaa11111111", follow_up_task_title: "Ask Sam", follow_up_task_state: "waiting" }] }), { status: 200, headers: { "content-type": "application/json" } }));
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ waiting_on: [{ commitment_id: "cmt_aaaaaaaa11111111", title: "Revised schedule", counterparty_person_id: "per_aaaaaaaa11111111", counterparty: { person_id: "per_aaaaaaaa11111111", display_name: "Sam Rivera" }, due_date: null, state: "open", follow_up_task_id: "tsk_aaaaaaaa11111111", follow_up_task_title: "Ask Sam", follow_up_task_state: "waiting" }] }), { status: 200, headers: { "content-type": "application/json" } }));
     vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=commitments&commitment=waiting-on&q=Sam"); renderFromUrl();
-    expect(await screen.findByText(/Follow-up: Ask Sam · tsk_aaaaaaaa11111111 · waiting/)).toBeTruthy();
+    expect(await screen.findByText(/Sam Rivera · waiting on · open/)).toBeTruthy();
+    expect(screen.getByText(/Follow-up: Ask Sam · waiting/)).toBeTruthy();
+    expect(screen.queryByText(/per_aaaaaaaa|cmt_aaaaaaaa|tsk_aaaaaaaa/)).toBeNull();
     expect(screen.getByText("Search is unavailable for the dedicated Waiting On view.")).toBeTruthy();
     expect(screen.getByRole("textbox", { name: "Search commitments" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "Search" })).toBeDisabled();
     expect(String(fetcher.mock.calls[0]?.[0])).toBe("/api/commitments/waiting-on?pageSize=50");
+  });
+
+  it("offers only human-readable verified counterparty and Commitment choices", async () => {
+    const commitment = { commitment_id: "cmt_aaaaaaaa11111111", title: "Revised schedule", direction: "owed_to_principal", state: "open", counterparty_person_id: "per_aaaaaaaa11111111", counterparty: { person_id: "per_aaaaaaaa11111111", display_name: "Sam Rivera" }, description: null, due_date: null, created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-21T12:00:00Z", version: 1 };
+    const fetcher = vi.fn<typeof fetch>(async (input) => String(input).startsWith("/api/commitments")
+      ? new Response(JSON.stringify({ commitments: [commitment], counterparty_options: [commitment.counterparty], counterparty_options_truncated: false }), { status: 200, headers: { "content-type": "application/json" } })
+      : new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=commitments"); renderFromUrl();
+    await screen.findByText("Revised schedule");
+    await userEvent.click(screen.getByRole("button", { name: "New commitment" }));
+    expect(await screen.findByRole("option", { name: "Sam Rivera" })).toBeTruthy();
+    expect(screen.queryByLabelText(/person ID/i)).toBeNull();
+    await userEvent.click(screen.getByRole("button", { name: "Today" }));
+    expect(await screen.findByRole("option", { name: "Revised schedule" })).toBeTruthy();
+    expect(screen.queryByLabelText(/Commitment ID/i)).toBeNull();
   });
 
   it("hydrates exact URL state and honors a validated timezone", async () => {

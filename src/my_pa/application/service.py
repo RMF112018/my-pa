@@ -719,6 +719,54 @@ def _commitment_list_entry(commitment: Commitment) -> CommitmentListEntry:
     )
 
 
+_COUNTERPARTY_OPTION_LIMIT: Final = 100
+
+
+def _counterparty_projection(
+    unit_of_work: UnitOfWork, principal_id: str, person_id: str
+) -> dict[str, str] | None:
+    option = unit_of_work.commitments.counterparty(principal_id, person_id)
+    if option is None:
+        return None
+    return {"person_id": option.person_id, "display_name": option.display_name}
+
+
+def _counterparty_options(
+    unit_of_work: UnitOfWork, principal_id: str
+) -> tuple[list[dict[str, str]], bool]:
+    found = unit_of_work.commitments.list_counterparties(
+        principal_id, limit=_COUNTERPARTY_OPTION_LIMIT + 1
+    )
+    truncated = len(found) > _COUNTERPARTY_OPTION_LIMIT
+    return (
+        [
+            {"person_id": option.person_id, "display_name": option.display_name}
+            for option in found[:_COUNTERPARTY_OPTION_LIMIT]
+        ],
+        truncated,
+    )
+
+
+def _commitment_public_view(
+    unit_of_work: UnitOfWork, principal_id: str, commitment: Commitment
+) -> dict[str, object]:
+    result = _commitment_view(commitment).to_canonical_dict()
+    result["counterparty"] = _counterparty_projection(
+        unit_of_work, principal_id, commitment.counterparty_person_id
+    )
+    return result
+
+
+def _commitment_public_list_entry(
+    unit_of_work: UnitOfWork, principal_id: str, commitment: Commitment
+) -> dict[str, object]:
+    result = _commitment_list_entry(commitment).to_canonical_dict()
+    result["counterparty"] = _counterparty_projection(
+        unit_of_work, principal_id, commitment.counterparty_person_id
+    )
+    return result
+
+
 def _normalise_bulk_mutations(
     raw_mutations: tuple[dict[str, object], ...],
 ) -> tuple[tuple[dict[str, object], ...], str]:
@@ -4040,14 +4088,22 @@ class ApplicationService:
     def _commitments_read(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadCommitment
     ) -> _Result:
+        principal_id = authorization.principal.principal_id
         with _translated():
-            commitment = unit_of_work.commitments.get(
-                authorization.principal.principal_id, command.commitment_id
-            )
+            commitment = unit_of_work.commitments.get(principal_id, command.commitment_id)
         if commitment is None:
             raise NotFoundError(SafeDetail.COMMITMENT_ID)
+        with _translated():
+            public = _commitment_public_view(unit_of_work, principal_id, commitment)
+            counterparty_options, counterparty_options_truncated = _counterparty_options(
+                unit_of_work, principal_id
+            )
         return _Result(
-            payload={"commitment": _commitment_view(commitment).to_canonical_dict()},
+            payload={
+                "commitment": public,
+                "counterparty_options": counterparty_options,
+                "counterparty_options_truncated": counterparty_options_truncated,
+            },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
         )
 
@@ -4055,17 +4111,18 @@ class ApplicationService:
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListCommitments
     ) -> _Result:
         page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
         with _work_cursor_translated(), _translated():
             if command.after is None:
                 found = unit_of_work.commitments.list_commitments(
-                    authorization.principal.principal_id,
+                    principal_id,
                     direction=command.direction,
                     state=command.state,
                     limit=page_size + 1,
                 )
             else:
                 found = unit_of_work.commitments.list_commitments(
-                    authorization.principal.principal_id,
+                    principal_id,
                     direction=command.direction,
                     state=command.state,
                     after=command.after,
@@ -4073,9 +4130,17 @@ class ApplicationService:
                 )
         truncated = len(found) > page_size
         page = found[:page_size]
-        entries = [_commitment_list_entry(c).to_canonical_dict() for c in page]
+        with _translated():
+            entries = [_commitment_public_list_entry(unit_of_work, principal_id, c) for c in page]
+            counterparty_options, counterparty_options_truncated = _counterparty_options(
+                unit_of_work, principal_id
+            )
         return _Result(
-            payload={"commitments": entries},
+            payload={
+                "commitments": entries,
+                "counterparty_options": counterparty_options,
+                "counterparty_options_truncated": counterparty_options_truncated,
+            },
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_COMMITMENT_TRUST_BASIS,
@@ -4091,9 +4156,10 @@ class ApplicationService:
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchCommitments
     ) -> _Result:
         page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
         with _work_cursor_translated(), _translated():
             found = unit_of_work.commitments.search(
-                authorization.principal.principal_id,
+                principal_id,
                 command.query,
                 page_size + 1,
                 after=command.after,
@@ -4102,9 +4168,18 @@ class ApplicationService:
             )
         truncated = len(found) > page_size
         page = found[:page_size]
+        with _translated():
+            entries = [
+                _commitment_public_list_entry(unit_of_work, principal_id, item) for item in page
+            ]
+            counterparty_options, counterparty_options_truncated = _counterparty_options(
+                unit_of_work, principal_id
+            )
         return _Result(
             payload={
-                "commitments": [_commitment_list_entry(item).to_canonical_dict() for item in page]
+                "commitments": entries,
+                "counterparty_options": counterparty_options,
+                "counterparty_options_truncated": counterparty_options_truncated,
             },
             disclosure=unenrolled_disclosure(
                 authorization.at,
@@ -4184,18 +4259,21 @@ class ApplicationService:
                 follow_up_task_id = follow_up.task_id
                 follow_up_task_title = follow_up.title
                 follow_up_task_state = follow_up.lifecycle_state.value
-            entries.append(
-                WaitingOnEntry(
-                    commitment_id=c.commitment_id,
-                    title=c.summary,
-                    counterparty_person_id=c.counterparty_person_id,
-                    due_date=c.due_at.isoformat() if c.due_at is not None else None,
-                    state=c.state.value,
-                    follow_up_task_id=follow_up_task_id,
-                    follow_up_task_title=follow_up_task_title,
-                    follow_up_task_state=follow_up_task_state,
-                ).to_canonical_dict()
-            )
+            entry = WaitingOnEntry(
+                commitment_id=c.commitment_id,
+                title=c.summary,
+                counterparty_person_id=c.counterparty_person_id,
+                due_date=c.due_at.isoformat() if c.due_at is not None else None,
+                state=c.state.value,
+                follow_up_task_id=follow_up_task_id,
+                follow_up_task_title=follow_up_task_title,
+                follow_up_task_state=follow_up_task_state,
+            ).to_canonical_dict()
+            with _translated():
+                entry["counterparty"] = _counterparty_projection(
+                    unit_of_work, principal_id, c.counterparty_person_id
+                )
+            entries.append(entry)
         return _Result(
             payload={"waiting_on": entries},
             disclosure=unenrolled_disclosure(
@@ -4240,9 +4318,11 @@ class ApplicationService:
                 )
         except CommitmentIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        with _translated():
+            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
         return _Result(
             payload={
-                "commitment": _commitment_view(receipt.commitment).to_canonical_dict(),
+                "commitment": public,
                 "replayed": receipt.replayed,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
@@ -4291,9 +4371,11 @@ class ApplicationService:
             raise _CommitRejectedConflictError(ConflictError(SafeDetail.COMMITMENT_ID)) from None
         except CommitmentIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        with _translated():
+            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
         return _Result(
             payload={
-                "commitment": _commitment_view(receipt.commitment).to_canonical_dict(),
+                "commitment": public,
                 "replayed": receipt.replayed,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
@@ -4311,6 +4393,7 @@ class ApplicationService:
         )
         from my_pa.domain.task.history import TaskMutationActor
 
+        principal_id = authorization.principal.principal_id
         values: dict[str, object] = {}
         if command.summary is not None:
             values["summary"] = command.summary
@@ -4321,7 +4404,7 @@ class ApplicationService:
         try:
             with _translated():
                 receipt = self._commitments.update_commitment(
-                    principal_id=authorization.principal.principal_id,
+                    principal_id=principal_id,
                     commitment_id=command.commitment_id,
                     expected_version=command.expected_version,
                     actor=TaskMutationActor.PRINCIPAL,
@@ -4335,7 +4418,6 @@ class ApplicationService:
             raise NotFoundError(SafeDetail.COMMITMENT_ID) from None
         except CommitmentVersionConflictError as conflict:
             receipt = conflict.receipt
-            principal_id = authorization.principal.principal_id
             current = unit_of_work.commitments.get(principal_id, command.commitment_id)
             if (
                 receipt.history.outcome.value != "rejected"
@@ -4347,9 +4429,11 @@ class ApplicationService:
             raise _CommitRejectedConflictError(ConflictError(SafeDetail.COMMITMENT_ID)) from None
         except CommitmentIdempotencyConflictError:
             raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        with _translated():
+            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
         return _Result(
             payload={
-                "commitment": _commitment_view(receipt.commitment).to_canonical_dict(),
+                "commitment": public,
                 "history": _commitment_history_view(receipt.history).to_canonical_dict(),
                 "replayed": receipt.replayed,
             },

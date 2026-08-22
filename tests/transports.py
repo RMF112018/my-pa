@@ -160,10 +160,10 @@ class McpTransport:
 
     def send(self, capability: str, document: Mapping[str, Any] | None = None) -> Answer:
         result = self.call(capability, document)
-        blocks = [getattr(block, "text", "") for block in result.content]
-        assert len(blocks) == 1, f"mcp answered {len(blocks)} content blocks"
+        texts = [block for block in result.content if getattr(block, "type", None) == "text"]
+        assert len(texts) == 1, f"mcp answered {len(texts)} text content blocks"
         return Answer(
-            document=_decode(blocks[0], "mcp"),
+            document=_decode(getattr(texts[0], "text", ""), "mcp"),
             failed=bool(result.is_error),
             rendered=repr(result),
         )

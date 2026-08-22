@@ -38,8 +38,11 @@ it does not replace A-X.
 - [`EVALUATOR.md`](EVALUATOR.md) — GSQS formulas, thresholds, and critical
   errors.
 - [`B0_RUNBOOK.md`](B0_RUNBOOK.md) — governed live-B0 preflight/execute
-  contract. The RouteLLM transport is bound; `b0_suitable` is still not
-  disclosure permission. `MEASURED_B0` remains `NOT_YET_ESTABLISHED`.
+  contract. The RouteLLM transport is bound. The bound RouteLLM HTTP
+  transport (`MY_PA_ROUTELLM_*`) is B0/evaluator only; production visual
+  interpretation uses MCP tools, not `MY_PA_ROUTELLM_*`. `b0_suitable` is
+  still not disclosure permission. `MEASURED_B0` remains
+  `NOT_YET_ESTABLISHED`.
 - [`SUCCESSOR-B0-PROMPT.md`](SUCCESSOR-B0-PROMPT.md) — later operator-authorized
   execution phase after exact-head review. ChatLLM must not grade itself.
 

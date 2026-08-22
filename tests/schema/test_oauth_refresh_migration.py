@@ -60,6 +60,7 @@ GOVERNANCE_REVISION = "d2b8f5c04e71"
 QUEUE_REVISION = "e4d7b2f9a316"
 MENTION_REVISION = "f3a8c1d7e592"
 HEAD_REVISION = INTELLIGENCE_REVISION
+CURRENT_SCHEMA_HEAD = "a4d9e7c2b615"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -167,7 +168,7 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == HEAD_REVISION
+            assert revision == CURRENT_SCHEMA_HEAD
             assert "oauth_refresh_token_families" in set(
                 connection.execute(
                     text(

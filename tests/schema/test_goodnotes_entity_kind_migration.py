@@ -37,6 +37,7 @@ GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 QUEUE_REVISION: Final = "e4d7b2f9a316"
 MENTION_REVISION: Final = "f3a8c1d7e592"
 HEAD_REVISION: Final = INTELLIGENCE_REVISION
+CURRENT_SCHEMA_HEAD: Final = "a4d9e7c2b615"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_d9c4e1a7b628_widen_goodnotes_entity_kind_meeting_agenda.py"
 )
@@ -153,7 +154,7 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == HEAD_REVISION
+            assert revision == CURRENT_SCHEMA_HEAD
         definition = _kind_check(engine, "goodnotes_entity_association_kind_is_known")
         assert definition is not None
         assert "MEETING" in definition

@@ -35,6 +35,7 @@ GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 QUEUE_REVISION: Final = "e4d7b2f9a316"
 MENTION_REVISION: Final = "f3a8c1d7e592"
 HEAD_REVISION: Final = INTELLIGENCE_REVISION
+CURRENT_SCHEMA_HEAD: Final = "a4d9e7c2b615"
 PRIOR: Final = "f8c3a1e6b247"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_c9e2b6a4d813_add_goodnotes_note_unit_occurrence_.py"
@@ -168,7 +169,7 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == HEAD_REVISION
+            assert revision == CURRENT_SCHEMA_HEAD
         assert _tables(engine) >= NEW_TABLES | LINEAGE_TABLES | LEGACY_TABLES
     finally:
         engine.dispose()
@@ -201,7 +202,7 @@ def test_prior_head_to_new_head_preserves_lineage_rows(disposable_database: str)
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == HEAD_REVISION
+            assert revision == CURRENT_SCHEMA_HEAD
         assert _tables(engine) >= NEW_TABLES | LINEAGE_TABLES
     finally:
         engine.dispose()

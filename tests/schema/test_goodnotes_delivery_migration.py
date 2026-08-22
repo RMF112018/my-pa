@@ -41,6 +41,7 @@ GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 QUEUE_REVISION: Final = "e4d7b2f9a316"
 MENTION_REVISION: Final = "f3a8c1d7e592"
 HEAD_REVISION: Final = INTELLIGENCE_REVISION
+CURRENT_SCHEMA_HEAD: Final = "a4d9e7c2b615"
 PRIOR: Final = "d7e1a4c8b926"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_e8c1b5a7d204_add_goodnotes_new_only_delivery_receipts.py"
@@ -163,7 +164,7 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == HEAD_REVISION
+            assert revision == CURRENT_SCHEMA_HEAD
         assert _tables(engine) >= NEW_TABLES
     finally:
         engine.dispose()

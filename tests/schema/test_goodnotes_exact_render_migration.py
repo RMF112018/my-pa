@@ -36,6 +36,7 @@ GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 QUEUE_REVISION: Final = "e4d7b2f9a316"
 MENTION_REVISION: Final = "f3a8c1d7e592"
 HEAD_REVISION: Final = INTELLIGENCE_REVISION
+CURRENT_SCHEMA_HEAD: Final = "a4d9e7c2b615"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_c3e9a7f1b204_add_goodnotes_exact_render_digest.py"
 )
@@ -139,7 +140,7 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == HEAD_REVISION
+            assert revision == CURRENT_SCHEMA_HEAD
         assert NEW_COLUMN in _columns(engine, "goodnotes_page_versions")
     finally:
         engine.dispose()
@@ -193,7 +194,7 @@ def test_prior_head_to_new_head_leaves_legacy_exact_render_null(
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == HEAD_REVISION
+            assert revision == CURRENT_SCHEMA_HEAD
         with engine.begin() as connection, pytest.raises(IntegrityError):
             connection.execute(
                 text(

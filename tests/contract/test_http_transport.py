@@ -1475,9 +1475,7 @@ def test_work_views_use_trusted_now_civil_bounds_and_stable_cursor_order(
     assert future_with_overdue_due not in tasks.list_tasks(
         principal_id, work_view=TaskWorkView.UPCOMING, **bounds
     )
-    unscheduled = tasks.list_tasks(
-        principal_id, work_view=TaskWorkView.UNSCHEDULED, limit=20
-    )
+    unscheduled = tasks.list_tasks(principal_id, work_view=TaskWorkView.UNSCHEDULED, limit=20)
     assert due_only in unscheduled
     assert scheduled not in unscheduled
     recent_bounds = {

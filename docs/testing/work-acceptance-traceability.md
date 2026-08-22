@@ -6,61 +6,71 @@ This matrix maps the Tasks & Commitments criteria dated 2026-08-22 to repository
 
 | Criterion | Status | Exact evidence |
 |---|---|---|
-| TC-AC-001 | PARTIAL | `web/src/components/work/workbench.test.tsx`; `tests/contract/test_http_transport.py`; lifecycle enum remains closed in `domain/task/lifecycle.py`. Component runtime was unavailable. |
-| TC-AC-002 | PARTIAL | `web/src/components/work/workbench.test.tsx`; `web/src/components/work/work.stories.tsx`; task list DTO exposes due/scheduled/deferred separately. Frontend evidence was unrun. |
-| TC-AC-003 | PARTIAL | `tests/contract/test_http_transport.py` and Task application-service tests passed; browser create was unrun. |
+| TC-AC-001 | PARTIAL | The full component suite, Storybook build, HTTP contract evidence, and exact-source Work browser/visual gates passed; the lifecycle enum remains closed in `domain/task/lifecycle.py`. The browser slice did not execute every lifecycle transition. |
+| TC-AC-002 | PARTIAL | The component suite passed distinct due/scheduled/deferred labels and Storybook compiled their canonical states; the task DTO exposes the fields separately. Database/browser mutation evidence remains unrun. |
+| TC-AC-003 | PARTIAL | HTTP/application evidence passed, and the exact-source browser created a synthetic Task in a freshly migrated disposable database, reopened it through the server-backed Unscheduled view, and exercised its canonical detail. Broader mutation cases remain covered below the browser tier. |
 | TC-AC-004 | PARTIAL | HTTP contract tests passed; database atomic rollback and component compare/reapply evidence were not rerun. |
-| TC-AC-005 | PARTIAL | Task transition/evidence unit/HTTP evidence passed; detail Storybook/browser evidence was unrun. |
+| TC-AC-005 | PARTIAL | Task transition/evidence unit/HTTP evidence passed and Task detail Storybook compiled; interactive detail/browser evidence remains unrun. |
 | TC-AC-006 | PARTIAL | `tests/unit/test_commitment_integration.py` passed; browser cross-object assertion was unrun. |
 | TC-AC-007 | PARTIAL | link/unlink HTTP/application evidence passed; database and browser gates were unrun. |
-| TC-AC-008 | PARTIAL | bulk HTTP evidence passed; component/browser preview-confirm evidence was unrun. |
-| TC-AC-009 | PARTIAL | backend contract evidence passed; obligation component/story evidence was unrun. |
+| TC-AC-008 | PARTIAL | Bulk HTTP evidence and component preview/conflict/confirm/replay evidence passed; database/browser evidence remains unrun. |
+| TC-AC-009 | PARTIAL | Backend contract evidence passed and both obligation directions compiled in Storybook; an asserted screen-reader-text browser case remains unrun. |
 | TC-AC-010 | PARTIAL | Commitment service/integration/HTTP evidence passed; database/browser gates were unrun. |
-| TC-AC-011 | PARTIAL | HTTP search/history evidence passed; frontend editable-state evidence was unrun. |
-| TC-AC-012 | PARTIAL | HTTP current-state conflict evidence passed; component and concurrent-browser evidence was unrun. |
-| TC-AC-013 | PARTIAL | HTTP state evidence passed; Work component and outage E2E evidence was unrun. |
-| TC-AC-014 | PARTIAL | evidence-body separation is static and HTTP evidence passed; security suite was not rerun. |
-| TC-AC-015 | PARTIAL | HTTP same-principal evidence passed; architecture and BFF JavaScript gates were unrun. |
-| TC-AC-016 | ADDED/UNRUN | `web/e2e/work-acceptance.spec.ts` keyboard perspective workflow; lifecycle movement uses a native labelled select, not drag. |
-| TC-AC-017 | PARTIAL | Component URL/detail focus evidence passed; `web/e2e/work-acceptance.spec.ts` browser context evidence remains unrun. |
+| TC-AC-011 | PARTIAL | HTTP search/history evidence and the component refusal of unsupported Waiting On search passed; interactive detail-edit and browser evidence remain unrun. |
+| TC-AC-012 | PARTIAL | HTTP current-state conflict and frontend conflict-classification evidence passed; interactive compare/reapply and concurrent-browser evidence remain unrun. |
+| TC-AC-013 | PARTIAL | Gateway/HTTP state evidence (255 tests), the full frontend component suite, and exact-browser dead-gateway failure-state assertions across desktop/tablet/mobile passed. The browser suite did not inject every backend failure class. |
+| TC-AC-014 | PARTIAL | Evidence-body separation remains a bounded source-review claim; gateway/HTTP evidence and the affected security file (85 tests) passed. Real-stack reveal UI evidence remains unrun. |
+| TC-AC-015 | PARTIAL | Gateway/HTTP, transport-parity (177 tests), security (85 tests), and the full JavaScript BFF/component suite passed. Corrected architecture count/secret-signature nodes passed, but the complete architecture suite was not rerun; a two-identity browser case is not constructible in the pinned local-operator tier. |
+| TC-AC-016 | PARTIAL | The exact-source browser keyboard perspective workflow passed across desktop/tablet/mobile; lifecycle movement uses a native labelled select, not drag. A dedicated browser lifecycle-transition assertion did not run. |
+| TC-AC-017 | PASS | Component URL/detail focus evidence and the exact-source browser context, selection, drawer-close, URL preservation, and trigger-focus restoration workflow passed across desktop/tablet/mobile. |
 | TC-AC-018 | DEFERRED | No AI/context suggestion persistence control is exposed in Work. |
-| TC-AC-019 | ADDED/UNRUN | explicit 390/768/1440 and 200%-equivalent reflow cases in `web/e2e/work-acceptance.spec.ts`; existing shell visual snapshots do not substitute for these unrun cases. |
-| TC-AC-020 | ADDED/UNRUN | `web/e2e/pwa.spec.ts` asserts the service-worker cache allowlist excludes principal-bound responses; it was not rerun this cycle. |
-| TC-AC-021 | STATIC + ADDED/UNRUN | Work remains under successor `AppShell`; shell keyboard/theme/reflow suites exist, and Work-specific Playwright coverage was added. |
-| TC-AC-022 | STATIC + ADDED/UNRUN | Work composes existing Button/Input/Sheet/SurfaceState/Card/Badge primitives; `web/src/components/work/work.stories.tsx` adds feature Storybook/a11y states. |
-| TC-AC-023 | STATIC | changed dependency/config paths are empty; no second shell, UI kit, token, overlay, theme, density, or responsive framework was introduced. |
+| TC-AC-019 | PASS | Explicit 390/768/1440 and 200%-equivalent Work reflow cases passed across all configured projects; the reviewed deterministic 200% snapshots also passed without horizontal overflow. |
+| TC-AC-020 | PASS | The service-worker registration/activation and principal-bound cache-exclusion assertions passed across desktop/tablet/mobile. |
+| TC-AC-021 | PASS | Work remains under successor `AppShell`; full component, lint, typecheck, Storybook and Next build gates passed, followed by exact-browser keyboard, focus, theme, and responsive coverage across all projects. |
+| TC-AC-022 | PASS | Work composes existing Button/Input/Sheet/SurfaceState/Card/Badge primitives; Storybook compiled, and exact-browser visual and automated accessibility regression gates passed across all projects. |
+| TC-AC-023 | STATIC | Changed dependency/config paths are empty and no second shell, UI kit, token, overlay, theme, density, or responsive framework was introduced. The affected architecture count and secret-signature nodes passed after correction/artifact cleanup; the full architecture suite was not rerun afterward. |
 
 ## UX acceptance
 
 | Criterion | Status | Exact evidence |
 |---|---|---|
-| TC-UX-001 | PARTIAL | Component perspective/context evidence passed; keyboard browser evidence remains unrun. |
-| TC-UX-002 | PARTIAL | HTTP expected-version/conflict evidence passed; board component/browser evidence was unrun. |
-| TC-UX-003 | PASS | Priority is separately labelled and its component test passed; Storybook compiled the canonical Task states. |
+| TC-UX-001 | PASS | Component perspective/context evidence and the exact-browser keyboard List→Board→Calendar URL/filter-preservation workflow passed across desktop/tablet/mobile. |
+| TC-UX-002 | PARTIAL | HTTP expected-version/conflict, board component and frontend conflict-classification evidence passed; interactive compare/reapply and concurrent-browser evidence remain unrun. |
+| TC-UX-003 | PARTIAL | Priority is separately labelled and Storybook compiled the canonical Task states; no dedicated runtime assertion of priority-versus-focus semantics ran. |
 | TC-UX-004 | PASS | Distinct Deadline, Planned work, and Available after component evidence passed and stories compiled. |
-| TC-UX-005 | PARTIAL | Backend evidence-reference contract passed; detail UI evidence was unrun. |
+| TC-UX-005 | PARTIAL | Backend evidence-reference contract passed and detail stories compiled; interactive detail evidence remains unrun. |
 | TC-UX-006 | PARTIAL | Cross-object integration evidence passed; browser assertion was unrun. |
-| TC-UX-007 | PASS | Human obligation sentences passed component tests for both directions and their stories compiled. |
-| TC-UX-008 | STATIC + ADDED/UNRUN | No drag path exists and native select is the only move control; keyboard browser evidence was unrun. |
+| TC-UX-007 | PARTIAL | Human obligation sentences for both directions compiled in Storybook; no dedicated runtime assertion for both directions ran. |
+| TC-UX-008 | PARTIAL | No drag path exists, a native labelled select is the only lifecycle move control, and keyboard perspective navigation passed in exact-browser runs. A dedicated keyboard lifecycle-transition browser assertion did not run. |
 | TC-UX-009 | PARTIAL | HTTP state distinctions passed; component/browser state matrix was unrun. |
-| TC-UX-010 | PARTIAL | Drawer close, URL cleanup, and trigger-focus restoration passed in the component suite; real-stack browser evidence remains unrun. |
+| TC-UX-010 | PASS | Drawer close, URL cleanup, selection preservation, and trigger-focus restoration passed in both the component suite and exact-source real-stack browser runs across all projects. |
 | TC-UX-011 | PARTIAL | Atomic versioned backend patch evidence passed; component evidence was unrun. |
-| TC-UX-012 | PARTIAL | Bulk server receipt evidence passed; component/browser controls were unrun. |
+| TC-UX-012 | PARTIAL | Bulk server receipt and component preview/conflict/confirm/replay evidence passed; browser controls remain unrun. |
 | TC-UX-013 | PARTIAL | HTTP link roundtrip evidence passed; database/browser gates were unrun. |
 | TC-UX-014 | DEFERRED | Work exposes no AI/context suggestion control. |
-| TC-UX-015 | ADDED/UNRUN | Storybook a11y error gate and existing axe Work scan; keyboard Work Playwright added. Automated checks are explicitly not full WCAG conformance. |
-| TC-UX-016 | STATIC + ADDED/UNRUN | Work route is a successor-shell child and uses its nav/command/Inspector/theme model; responsive keyboard suite added. |
+| TC-UX-015 | PARTIAL | Storybook compiled, and Work axe, landmark/heading, announcement, keyboard/focus, reduced-motion, and responsive browser checks passed across configured projects. Automated evidence is explicitly not a complete manual WCAG conformance assessment. |
+| TC-UX-016 | PASS | Work is a successor-shell child; full component, lint, typecheck, Storybook and Next build gates passed, plus responsive keyboard/focus/theme browser coverage across desktop/tablet/mobile. |
 | TC-UX-017 | STATIC | imports show reuse of existing shared controls and semantic styles; only domain-specific Work composition is local. |
-| TC-UX-018 | STATIC + ADDED/UNRUN | no new dependency/config/framework; Work stories provide light/dark/compact/mobile regression inputs. |
+| TC-UX-018 | PASS | No new dependency/config/framework was introduced; Work stories compiled, and reviewed light/dark/Inspector/command/200%-reflow snapshots plus automated accessibility checks passed across desktop/tablet/mobile. |
 
 ## Validation receipt
 
+- Markdown and YAML governance guards — **passed**.
+- Ruff lint and format checks — **passed**.
+- Mypy — **passed**, with no issues in 366 source files.
 - `python3 -m pytest -q tests/unit/test_command_input_types.py tests/unit/test_task_management_service.py tests/unit/test_commitment_management_service.py tests/unit/test_commitment_integration.py tests/contract/test_http_transport.py` — **296 passed**, two dependency deprecation warnings, 37.66 seconds.
-- Ruff over the changed backend/test paths — **passed**.
+- Architecture suite — initial full run **3,989 passed / 2 failed**. After correction and generated-artifact cleanup, both affected count/secret-signature nodes passed; the full architecture suite was not rerun.
+- Official non-database FAST suite — initial full run **9,247 passed / 8 failed / 1,001 skipped**. Six source failures were corrected and the affected full files/nodes passed. Two optional Trio nodes remain unavailable in this environment; their asyncio counterparts passed. The complete FAST suite was not rerun after correction.
+- Gateway and HTTP suite — **255 passed**.
+- Transport-parity suite — **177 passed**.
+- Affected security file — **85 passed**.
 - Vitest — **37 files / 422 tests passed** under the exact-lock runtime.
-- Targeted ESLint — **passed**.
+- Full frontend ESLint (`npm run lint`) — **passed**.
 - Storybook build — **passed**.
 - TypeScript typecheck (`npm run typecheck`) — **passed** after aliasing Storybook contract types.
-- Playwright — **not run**; the real-stack/disposable-database browser harness was unavailable in this cycle.
-- Disposable PostgreSQL database tier — **not run**; no available disposable server was assumed.
-- Visual snapshots — **not generated** because deterministic Playwright execution was unavailable; no baseline was fabricated.
+- Next production build (`npm run build`) — **passed**; 24 static pages were generated and all application/BFF routes compiled.
+- Exact-source Playwright selection (`work-acceptance.spec.ts`, `accessibility.spec.ts`, `visual.spec.ts`, `journeys.spec.ts`, `failure-states.spec.ts`, `pwa.spec.ts`) — **157 passed / 2 expected project-specific target-size skips / 0 failed**, 2.3 minutes, across desktop/tablet/mobile.
+- Exact-source runtime attestation — the gateway Python resolved `my_pa` from this worktree and exposed the expected `TaskWorkView` vocabulary; the pre-existing unknown gateway on port 9099 was excluded, and the harness used the explicitly owned loopback port 9101.
+- Disposable PostgreSQL tier — the repository harness created only `my_pa_wp13_e2e` on loopback `127.0.0.1:5433`, migrated empty-to-head for each bounded run, and dropped it on teardown; final independent count was zero.
+- Visual snapshots — the independent visual review passed the exact-source desktop/tablet/mobile 200%-reflow states. The dynamic freshness value remains truthful semantic `<time>` content at runtime and is hidden only for the screenshot assertion; tabular numerals preserve deterministic layout. Baselines were regenerated under the exact-source disposable stack and immediately passed **3/3** without update.
+- Repository diff check (`git diff --check`) — **passed**.

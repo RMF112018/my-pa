@@ -28,7 +28,7 @@ const SURFACES = [
   { path: "/knowledge", testId: "library-unavailable", heading: "Knowledge" },
   { path: "/today", testId: "today-unavailable", heading: "Today" },
   { path: "/review", testId: "review-queue-unavailable", heading: "Review" },
-  { path: "/work", testId: "situations-unavailable", heading: "Work" },
+  { path: "/work", testId: "state-unavailable", heading: "Work" },
 ] as const;
 
 for (const surface of SURFACES) {

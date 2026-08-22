@@ -198,7 +198,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
     }
   }
 
-  return <section aria-labelledby="work-heading" className="mx-auto max-w-5xl">
+  return <section aria-labelledby="work-heading" className="mx-auto max-w-5xl pb-24">
     <div className="flex flex-wrap items-start justify-between gap-4">
       <div><h1 id="work-heading" className="text-2xl font-semibold text-moss-slate">Work</h1><p className="mt-1 max-w-2xl text-sm text-muted">Tasks and commitments remain evidence-backed, versioned, and owned by the authenticated Work plane.</p></div>
       <Button onClick={() => setCreating((open) => !open)}>{creating ? "Cancel" : view === "commitments" ? "New commitment" : "New task"}</Button>
@@ -233,7 +233,7 @@ export function Workbench({ initialState = DEFAULT_STATE }: { initialState?: Wor
 function Disclosure({ details }: { details: DisclosureEnvelope }) {
   return <aside aria-label="Work answer disclosure" className="mt-4 rounded-lg border border-moss-slate/15 bg-surface p-3 text-xs text-muted">
     <p><span className="font-medium text-moss-slate">Authority:</span> {details.authority.replaceAll("_", " ")} · <span className="font-medium text-moss-slate">Coverage:</span> {details.coverage}</p>
-    <p className="mt-1"><span className="font-medium text-moss-slate">Freshness:</span> {details.freshnessAt ? new Date(details.freshnessAt).toLocaleString() : "not disclosed"} · <span className="font-medium text-moss-slate">Truncation:</span> {details.truncated ? "yes" : "no"}</p>
+    <p className="mt-1"><span className="font-medium text-moss-slate">Freshness:</span> {details.freshnessAt ? <time className="tabular-nums" data-visual-dynamic="freshness" dateTime={details.freshnessAt}>{new Date(details.freshnessAt).toLocaleString()}</time> : "not disclosed"} · <span className="font-medium text-moss-slate">Truncation:</span> {details.truncated ? "yes" : "no"}</p>
     {details.limitations.length ? <ul className="mt-1 list-inside list-disc">{details.limitations.map((limitation) => <li key={limitation}>{limitation}</li>)}</ul> : <p className="mt-1">No additional limitations were disclosed.</p>}
   </aside>;
 }

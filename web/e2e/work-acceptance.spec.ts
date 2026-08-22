@@ -31,6 +31,10 @@ test("a synthetic Task preserves selection and restores focus after its detail d
   await page.getByLabel("Title").fill(title);
   await page.getByLabel("Origin note").fill("Synthetic acceptance evidence; disposable database only.");
   await page.getByRole("button", { name: "Create task" }).click();
+  await expect(page.getByRole("heading", { name: "Create task" })).toHaveCount(0);
+  // Creation sets no work date, so the canonical Today view must continue to
+  // exclude this Task. Read it from the server-backed Unscheduled view instead.
+  await page.getByRole("button", { name: "Unscheduled" }).click();
   const trigger = page.getByRole("link", { name: new RegExp(title) });
   await expect(trigger).toBeVisible();
   await page.getByRole("checkbox", { name: `Select ${title}` }).check();

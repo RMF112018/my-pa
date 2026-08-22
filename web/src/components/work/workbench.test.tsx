@@ -8,6 +8,14 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); history.replaceState(null, "
 function renderFromUrl() { return render(<Workbench initialState={parseWorkUrlState(Object.fromEntries(new URLSearchParams(location.search)))} />); }
 
 describe("Work surface", () => {
+  it("reserves the shell capture clearance below scrollable Work content", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } })));
+    history.replaceState(null, "", "/work?view=today");
+    renderFromUrl();
+    await screen.findByText("No today tasks");
+    expect(screen.getByRole("region", { name: "Work" }).className).toContain("pb-24");
+  });
+
   it("keeps the approved view order and asks the server for exact Today semantics", async () => {
     const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ tasks: [] }), { status: 200, headers: { "content-type": "application/json" } })); vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=today");
     renderFromUrl();
@@ -168,6 +176,8 @@ describe("Work surface", () => {
     await userEvent.click(screen.getByRole("button", { name: "Search" }));
     await waitFor(() => expect(location.search).toContain("q=Find"));
     expect(await screen.findByText("More Work is available")).toBeTruthy();
+    const freshness = document.querySelector('time[data-visual-dynamic="freshness"]');
+    expect(freshness?.getAttribute("datetime")).toBe("2026-08-21T12:00:00Z");
     await userEvent.click(screen.getByRole("button", { name: "Next page" }));
     expect(location.search).toContain("cursor=tsk_aaaaaaaa11111111");
     await waitFor(() => expect(fetcher.mock.calls.some(([path]) => String(path).includes("q=Find") && String(path).includes("after=tsk_aaaaaaaa11111111"))).toBe(true));

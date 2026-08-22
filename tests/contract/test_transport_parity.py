@@ -465,7 +465,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         },
         Capability.COMMITMENTS_WAITING_ON: {},
         Capability.COMMITMENTS_CREATE: {
-            "counterparty_person_id": issue_identifier(IdKind.PERSON),
+            "counterparty_person_id": commitment.counterparty_person_id,
             "direction": "owed_by_principal",
             "summary": "Parity commitment-plane commitment",
             "origin_evidence_ref": "cap_origin0001origin0001",

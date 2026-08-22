@@ -211,10 +211,7 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
             )
         )
         rows = self._connection.execute(
-            select(*commitments.c)
-            .where(and_(*conditions))
-            .order_by(*order_columns)
-            .limit(limit)
+            select(*commitments.c).where(and_(*conditions)).order_by(*order_columns).limit(limit)
         ).all()
         return tuple(_to_commitment(row) for row in rows)
 
@@ -422,10 +419,7 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
             )
         )
         rows = self._connection.execute(
-            select(*commitments.c)
-            .where(and_(*conditions))
-            .order_by(*order_columns)
-            .limit(limit)
+            select(*commitments.c).where(and_(*conditions)).order_by(*order_columns).limit(limit)
         ).all()
         return tuple(_to_commitment(row) for row in rows)
 

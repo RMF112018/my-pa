@@ -70,6 +70,9 @@ test("the shell reflows at 200 percent without horizontal loss", async ({ page }
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
   );
   expect(overflow).toBeLessThanOrEqual(1);
+  await page.addStyleTag({
+    content: '[data-visual-dynamic="freshness"] { visibility: hidden !important; }',
+  });
   await expect(page).toHaveScreenshot("shell-zoom-200.png", {
     animations: "disabled",
     fullPage: false,

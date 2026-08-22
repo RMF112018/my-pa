@@ -152,12 +152,12 @@
     },
     "commitments.list": {
       "purpose": "commitment_read",
-      "payloadFields": ["direction", "state", "page_size", "after"],
+      "payloadFields": ["direction", "state", "page_size", "after", "work_view", "work_date", "timezone"],
       "probe": { "page_size": 25 }
     },
     "commitments.search": {
       "purpose": "commitment_read",
-      "payloadFields": ["query", "page_size", "after", "direction", "state"],
+      "payloadFields": ["query", "page_size", "after", "direction", "state", "work_view", "work_date", "timezone"],
       "probe": { "query": "synthetic commitment", "page_size": 25 }
     },
     "commitments.history": {

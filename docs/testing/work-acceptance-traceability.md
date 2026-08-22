@@ -28,7 +28,7 @@ This matrix maps the Tasks & Commitments criteria dated 2026-08-22 to repository
 | TC-AC-020 | PASS | The service-worker registration/activation and principal-bound cache-exclusion assertions passed across desktop/tablet/mobile. |
 | TC-AC-021 | PASS | Work remains under successor `AppShell`; full component, lint, typecheck, Storybook and Next build gates passed, followed by exact-browser keyboard, focus, theme, and responsive coverage across all projects. |
 | TC-AC-022 | PASS | Work composes existing Button/Input/Sheet/SurfaceState/Card/Badge primitives; Storybook compiled, and exact-browser visual and automated accessibility regression gates passed across all projects. |
-| TC-AC-023 | STATIC | Changed dependency/config paths are empty and no second shell, UI kit, token, overlay, theme, density, or responsive framework was introduced. The affected architecture count and secret-signature nodes passed after correction/artifact cleanup; the full architecture suite was not rerun afterward. |
+| TC-AC-023 | STATIC | The existing SQLAlchemy lower bound was raised to its mypy-compatible 2.0.32 release and the database-tier timeout was increased from 40 to 55 minutes using measured runtime; no dependency family, second shell, UI kit, token, overlay, theme, density, or responsive framework was introduced. The affected architecture, dependency-floor, count, and secret-signature guards passed. |
 
 ## UX acceptance
 
@@ -51,7 +51,7 @@ This matrix maps the Tasks & Commitments criteria dated 2026-08-22 to repository
 | TC-UX-015 | PARTIAL | Storybook compiled, and Work axe, landmark/heading, announcement, keyboard/focus, reduced-motion, and responsive browser checks passed across configured projects. Automated evidence is explicitly not a complete manual WCAG conformance assessment. |
 | TC-UX-016 | PASS | Work is a successor-shell child; full component, lint, typecheck, Storybook and Next build gates passed, plus responsive keyboard/focus/theme browser coverage across desktop/tablet/mobile. |
 | TC-UX-017 | STATIC | imports show reuse of existing shared controls and semantic styles; only domain-specific Work composition is local. |
-| TC-UX-018 | PASS | No new dependency/config/framework was introduced; Work stories compiled, and reviewed light/dark/Inspector/command/200%-reflow snapshots plus automated accessibility checks passed across desktop/tablet/mobile. |
+| TC-UX-018 | PASS | No new dependency family or UI framework was introduced. The existing SQLAlchemy floor and CI timeout were adjusted as disclosed above; Work stories compiled, and reviewed light/dark/Inspector/command/200%-reflow snapshots plus automated accessibility checks passed across desktop/tablet/mobile. |
 
 ## Validation receipt
 

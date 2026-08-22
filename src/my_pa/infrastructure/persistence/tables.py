@@ -199,6 +199,26 @@ from my_pa.domain.relationship.governance import (
     ObservationKind,
 )
 from my_pa.domain.relationship.identity import ResolutionAction
+from my_pa.domain.relationship.memory import (
+    MAX_CORRECTION_REASON_CHARACTERS,
+    MAX_STATEMENT_CHARACTERS,
+    EvidenceLinkRole,
+    MemoryActorClass,
+    MemoryAuthority,
+    MemoryKind,
+    MemoryLifecycle,
+    MemoryProposalMethod,
+    MemoryProposalState,
+)
+from my_pa.domain.relationship.memory import (
+    ContextLinkAuthority as MemoryContextLinkAuthority,
+)
+from my_pa.domain.relationship.memory import (
+    ContextLinkRole as MemoryContextLinkRole,
+)
+from my_pa.domain.relationship.memory import (
+    ContextLinkTargetType as MemoryContextLinkTargetType,
+)
 from my_pa.domain.relationship.profile import EvidenceAuthority
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -6779,4 +6799,538 @@ intelligence_provenance_refs = Table(
         "principal_id", "artifact_id", "position", name="intelligence_provenance_refs_pkey"
     ),
     _one_of("relation", ProvenanceRelation, name="intelligence_provenance_relation_is_known"),
+)
+
+
+# --- Relationship Memory ----------------------------------------------------
+#
+# Seven tables. Six are the contract's own record set; the seventh,
+# `relationship_memory_submissions`, is the idempotency mechanism, and it is a
+# table rather than a unique column because that is what this schema already
+# does twice — `capture_submissions` and `managed_document_submissions` are the
+# same shape, and a third spelling of "one key admits one write per Principal"
+# would be a third thing to keep true.
+#
+# **No narrative text on the aggregate.** `relationship_memories` carries
+# identity, kind, lifecycle, the current-version pointer and the concurrency
+# counter; every statement is on a version. That is what keeps a list of a
+# person's memories from being a read of what was written about them, and it is
+# `RM-P-AC-001`.
+#
+# **Cross-plane targets carry no foreign key, and that is deliberate.** A context
+# link may name a Situation, a Task or a Commitment, and a foreign key to those
+# tables would prove the row exists without proving it belongs to the acting
+# Principal — the identifiers are globally unique, so an FK would happily admit
+# another Principal's Task. Same-Principal ownership is proven by the repository
+# before the insert, which is the only place it can be proven, and `RM-P-AC-010`
+# is a test of that path rather than of a constraint.
+
+#: One logical memory: stable identity, current version pointer, lifecycle.
+#:
+#: `current_version_id` and `relationship_memory_versions.memory_id` are mutually
+#: dependent — the parent names its first version and the version names its
+#: parent — so the pointer's foreign key is `DEFERRABLE INITIALLY DEFERRED` and
+#: both rows land in one transaction, the same device `capture_submissions` uses
+#: for the reason it states.
+#:
+#: `version` is the aggregate's optimistic-concurrency counter and is distinct
+#: from `current_version_number`: archiving a memory advances the first and not
+#: the second, because archiving writes no statement. Two counters rather than
+#: one because collapsing them would make `expected_version` on an archive
+#: either meaningless or a lie about the version chain.
+relationship_memories = Table(
+    "relationship_memories",
+    METADATA,
+    Column("memory_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("subject_entity_id", Text, nullable=False),
+    Column("memory_kind", Text, nullable=False),
+    Column("lifecycle_state", Text, nullable=False, server_default=text("'active'")),
+    Column(
+        "current_version_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.relationship_memory_versions.memory_version_id",
+            deferrable=True,
+            initially="DEFERRED",
+            # `use_alter` because this reference and
+            # `relationship_memory_versions.memory_id` form a cycle: the
+            # aggregate names its current version and the version names its
+            # aggregate. Without it neither table can be ordered before the
+            # other and `drop_all` raises `CircularDependencyError`, which is a
+            # downgrade that cannot run — and `7e5a1fb93d62` drops the schema
+            # with `RESTRICT`, so a plane that cannot be dropped breaks
+            # `downgrade base` at a revision with no idea this one existed.
+            use_alter=True,
+            name="a_memory_points_at_its_current_version",
+        ),
+        nullable=False,
+    ),
+    Column("current_version_number", Integer, nullable=False),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("pinned", Boolean, nullable=False, server_default=text("false")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("archived_at", DateTime(timezone=True)),
+    _is_identifier("memory_id", IdKind.RELATIONSHIP_MEMORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("subject_entity_id", IdKind.ENTITY),
+    _is_identifier("current_version_id", IdKind.RELATIONSHIP_MEMORY_VERSION),
+    _one_of("memory_kind", MemoryKind, name="a_memory_kind_is_known"),
+    _one_of("lifecycle_state", MemoryLifecycle, name="a_memory_lifecycle_state_is_known"),
+    CheckConstraint("version >= 1", name="a_memory_version_counter_is_positive"),
+    CheckConstraint(
+        "current_version_number >= 1", name="a_memory_current_version_number_starts_at_one"
+    ),
+    CheckConstraint(
+        "updated_at >= created_at", name="a_memory_is_not_updated_before_it_is_created"
+    ),
+    CheckConstraint(
+        "(lifecycle_state = 'archived') = (archived_at IS NOT NULL)",
+        name="a_memory_is_archived_exactly_when_it_records_when",
+    ),
+    Index(
+        "relationship_memories_by_subject",
+        "principal_id",
+        "subject_entity_id",
+        "lifecycle_state",
+        "memory_kind",
+        "memory_id",
+    ),
+    Index(
+        "relationship_memories_by_principal_recency",
+        "principal_id",
+        "lifecycle_state",
+        "updated_at",
+        "memory_id",
+    ),
+)
+
+#: One immutable version of one memory. Insert only, enforced by the server:
+#: this plane's revision adds a `BEFORE UPDATE OR DELETE` trigger, exactly as
+#: `1a4c9e77b2d5` does for `capture_versions` and `4c7b2e91d8a5` for managed
+#: versions, because no CHECK can express "no UPDATE" and `RM-P-AC-003` has to
+#: hold under a concurrent writer rather than under the current one's restraint.
+#:
+#: **`superseded_at` is therefore not a column here.** A mutable supersession
+#: stamp would be an UPDATE on an append-only table, and the trigger would refuse
+#: it. Supersession is read from the chain instead: a version is superseded
+#: exactly when another version names it as `prior_version_id`, which is the
+#: same fact with no second writer and nothing to drift.
+#:
+#: **`prior_version_id` is `UNIQUE`**, so two versions cannot name one
+#: predecessor and the chain is a line rather than a fork. Together with
+#: `one_version_number_per_memory` it is also the expected-version mechanism: a
+#: stale writer computes the same successor number and the same predecessor as
+#: the winner, and the server refuses the second insert.
+#:
+#: `cloud_eligible` is stored and CHECKed false rather than omitted. The column
+#: makes the posture auditable in the database — a reader can see that no row is
+#: eligible — and the constraint is what stops "defaults false" from being a
+#: default a later writer changes without a migration.
+relationship_memory_versions = Table(
+    "relationship_memory_versions",
+    METADATA,
+    Column("memory_version_id", Text, primary_key=True),
+    Column(
+        "memory_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.relationship_memories.memory_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    Column("principal_id", Text, nullable=False),
+    Column("version_number", Integer, nullable=False),
+    Column("statement_text", Text, nullable=False),
+    Column("statement_sha256", Text, nullable=False),
+    Column("structured_value", JSONB),
+    Column("memory_kind", Text, nullable=False),
+    Column("authority", Text, nullable=False),
+    Column("classification", Text, nullable=False),
+    Column("cloud_eligible", Boolean, nullable=False, server_default=text("false")),
+    Column("created_by_actor", Text, nullable=False),
+    Column("observed_at", DateTime(timezone=True)),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("recorded_at", DateTime(timezone=True), nullable=False),
+    Column(
+        "prior_version_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.relationship_memory_versions.memory_version_id", ondelete="CASCADE"),
+        unique=True,
+    ),
+    Column("correction_reason", Text),
+    Column("proposal_id", Text),
+    Column("review_case_id", Text),
+    Column("idempotency_key", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    _is_identifier("memory_version_id", IdKind.RELATIONSHIP_MEMORY_VERSION),
+    _is_identifier("memory_id", IdKind.RELATIONSHIP_MEMORY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _one_of("memory_kind", MemoryKind, name="a_memory_version_kind_is_known"),
+    _one_of("authority", MemoryAuthority, name="a_memory_authority_is_known"),
+    _one_of("classification", Classification, name="a_memory_classification_is_known"),
+    _one_of("created_by_actor", MemoryActorClass, name="a_memory_actor_class_is_known"),
+    _matches(
+        "statement_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_memory_statement_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint("version_number >= 1", name="memory_version_numbers_start_at_one"),
+    CheckConstraint(
+        "(version_number = 1) = (prior_version_id IS NULL)",
+        name="only_the_first_memory_version_supersedes_nothing",
+    ),
+    CheckConstraint(
+        f"length(statement_text) BETWEEN 1 AND {MAX_STATEMENT_CHARACTERS}",
+        name="a_memory_version_carries_a_bounded_statement",
+    ),
+    CheckConstraint(
+        "length(trim(statement_text)) > 0", name="a_memory_version_statement_is_not_blank"
+    ),
+    CheckConstraint(
+        f"correction_reason IS NULL OR length(correction_reason) "
+        f"BETWEEN 1 AND {MAX_CORRECTION_REASON_CHARACTERS}",
+        name="a_memory_correction_reason_is_bounded",
+    ),
+    CheckConstraint("NOT cloud_eligible", name="a_memory_version_is_not_cloud_eligible"),
+    CheckConstraint(
+        "classification <> 'private_local' OR memory_kind <> 'sensitivity'",
+        name="a_sensitivity_memory_is_at_least_restricted",
+    ),
+    CheckConstraint(
+        "created_by_actor <> 'user' OR authority = 'user_authored_private_note'",
+        name="a_user_written_memory_version_is_user_authored",
+    ),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="a_memory_applicability_does_not_end_before_it_starts",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_memory_version_records_a_bounded_key",
+    ),
+    UniqueConstraint("memory_id", "version_number", name="one_version_number_per_memory"),
+    Index("relationship_memory_versions_by_memory", "memory_id", "version_number"),
+)
+
+#: One row per admitted memory write, and the row whose unique key *is* the
+#: idempotency mechanism. `payload_sha256` is what decides whether a key already
+#: in use is a replay (return the original receipt) or a conflict (refuse), and
+#: the collision domain is per Principal so one Principal's replay can never
+#: return another's result.
+relationship_memory_submissions = Table(
+    "relationship_memory_submissions",
+    METADATA,
+    Column("submission_id", Text, primary_key=True),
+    Column("idempotency_key", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("operation", Text, nullable=False),
+    Column("payload_sha256", Text, nullable=False),
+    Column("server_received_at", DateTime(timezone=True), nullable=False),
+    Column(
+        "memory_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.relationship_memories.memory_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    Column(
+        "memory_version_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.relationship_memory_versions.memory_version_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    Column("aggregate_version", Integer, nullable=False),
+    Column("lifecycle_state", Text, nullable=False),
+    _is_identifier("submission_id", IdKind.RELATIONSHIP_MEMORY_SUBMISSION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("memory_id", IdKind.RELATIONSHIP_MEMORY),
+    _is_identifier("memory_version_id", IdKind.RELATIONSHIP_MEMORY_VERSION),
+    _one_of(
+        "operation",
+        frozenset({"create", "revise", "archive", "restore"}),
+        name="a_memory_submission_operation_is_known",
+    ),
+    _one_of(
+        "lifecycle_state", MemoryLifecycle, name="a_memory_submission_lifecycle_state_is_known"
+    ),
+    _matches(
+        "payload_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_memory_payload_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_memory_submission_records_a_bounded_key",
+    ),
+    CheckConstraint("aggregate_version >= 1", name="a_memory_submission_names_a_positive_version"),
+    UniqueConstraint(
+        "principal_id",
+        "idempotency_key",
+        name="a_memory_key_admits_one_submission_per_principal",
+    ),
+)
+
+#: Where one memory version applies, or what it arose from. Bound to the version
+#: rather than the aggregate so a revision that changes the scope does not
+#: retroactively rescope the wording it replaced.
+relationship_memory_context_links = Table(
+    "relationship_memory_context_links",
+    METADATA,
+    Column("context_link_id", Text, primary_key=True),
+    Column(
+        "memory_version_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.relationship_memory_versions.memory_version_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    Column("principal_id", Text, nullable=False),
+    Column("target_type", Text, nullable=False),
+    Column("target_id", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("authority", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("context_link_id", IdKind.RELATIONSHIP_MEMORY_CONTEXT_LINK),
+    _is_identifier("memory_version_id", IdKind.RELATIONSHIP_MEMORY_VERSION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of(
+        "target_type",
+        MemoryContextLinkTargetType,
+        name="a_memory_context_target_type_is_known",
+    ),
+    _one_of("role", MemoryContextLinkRole, name="a_memory_context_role_is_known"),
+    _one_of(
+        "authority",
+        MemoryContextLinkAuthority,
+        name="a_memory_context_authority_is_known",
+    ),
+    UniqueConstraint(
+        "memory_version_id",
+        "target_type",
+        "target_id",
+        "role",
+        name="one_memory_context_link_per_target_and_role",
+    ),
+    Index(
+        "relationship_memory_context_links_by_target",
+        "principal_id",
+        "target_type",
+        "target_id",
+    ),
+)
+
+#: One exact record a memory version rests on. Exactly one target column is
+#: non-null, checked by the server rather than by the writer's restraint: a row
+#: naming two evidence records would be a row whose basis is ambiguous, and a row
+#: naming none would be evidence of nothing.
+relationship_memory_evidence_links = Table(
+    "relationship_memory_evidence_links",
+    METADATA,
+    Column("evidence_link_id", Text, primary_key=True),
+    Column(
+        "memory_version_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.relationship_memory_versions.memory_version_id",
+            ondelete="CASCADE",
+            deferrable=True,
+            initially="DEFERRED",
+        ),
+        nullable=False,
+    ),
+    Column("principal_id", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("entity_observation_id", Text),
+    Column("capture_span_id", Text),
+    Column("knowledge_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("evidence_link_id", IdKind.RELATIONSHIP_MEMORY_EVIDENCE_LINK),
+    _is_identifier("memory_version_id", IdKind.RELATIONSHIP_MEMORY_VERSION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("role", EvidenceLinkRole, name="a_memory_evidence_role_is_known"),
+    CheckConstraint(
+        "(entity_observation_id IS NOT NULL)::int "
+        "+ (capture_span_id IS NOT NULL)::int "
+        "+ (knowledge_id IS NOT NULL)::int = 1",
+        name="memory_evidence_names_exactly_one_record",
+    ),
+    Index("relationship_memory_evidence_links_by_version", "memory_version_id"),
+)
+
+#: A candidate memory that is not memory. It lives here and never in
+#: `relationship_memories`, which is what makes "a proposal cannot appear in an
+#: ordinary memory read" a property of the schema rather than a predicate every
+#: query has to remember.
+relationship_memory_proposals = Table(
+    "relationship_memory_proposals",
+    METADATA,
+    Column("memory_proposal_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("subject_entity_id", Text, nullable=False),
+    Column("proposed_kind", Text, nullable=False),
+    Column("proposed_statement", Text, nullable=False),
+    Column("proposed_statement_sha256", Text, nullable=False),
+    Column("structured_value", JSONB),
+    Column("state", Text, nullable=False),
+    Column("method", Text, nullable=False),
+    Column("method_version", Text, nullable=False),
+    Column("model_id", Text),
+    Column("model_version", Text),
+    Column("classification", Text, nullable=False),
+    Column("proposed_at", DateTime(timezone=True), nullable=False),
+    Column("review_case_id", Text),
+    Column("accepted_memory_id", Text),
+    Column("accepted_memory_version_id", Text),
+    Column("invalidated_reason", Text),
+    _is_identifier("memory_proposal_id", IdKind.RELATIONSHIP_MEMORY_PROPOSAL),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("subject_entity_id", IdKind.ENTITY),
+    _one_of("proposed_kind", MemoryKind, name="a_memory_proposal_kind_is_known"),
+    _one_of("state", MemoryProposalState, name="a_memory_proposal_state_is_known"),
+    _one_of("method", MemoryProposalMethod, name="a_memory_proposal_method_is_known"),
+    _one_of("classification", Classification, name="a_memory_proposal_classification_is_known"),
+    _matches(
+        "proposed_statement_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_memory_proposal_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        f"length(proposed_statement) BETWEEN 1 AND {MAX_STATEMENT_CHARACTERS}",
+        name="a_memory_proposal_carries_a_bounded_statement",
+    ),
+    CheckConstraint(
+        "classification <> 'private_local' OR proposed_kind <> 'sensitivity'",
+        name="a_sensitivity_proposal_is_at_least_restricted",
+    ),
+    CheckConstraint(
+        "(method = 'local_model') = (model_id IS NOT NULL)",
+        name="a_model_proposal_names_its_model",
+    ),
+    CheckConstraint(
+        "(model_id IS NULL) = (model_version IS NULL)",
+        name="a_named_proposal_model_states_its_version",
+    ),
+    CheckConstraint(
+        "(state IN ('accepted', 'corrected_accepted')) = (accepted_memory_id IS NOT NULL)",
+        name="a_memory_proposal_names_its_result_exactly_when_accepted",
+    ),
+    CheckConstraint(
+        "(accepted_memory_id IS NULL) = (accepted_memory_version_id IS NULL)",
+        name="an_accepted_memory_proposal_names_both_identities",
+    ),
+    Index(
+        "relationship_memory_proposals_by_subject",
+        "principal_id",
+        "subject_entity_id",
+        "state",
+    ),
+)
+
+#: One exact record a proposal rests on. Same one-target discipline as accepted
+#: memory evidence, and required for every source- or model-derived proposal.
+relationship_memory_proposal_evidence = Table(
+    "relationship_memory_proposal_evidence",
+    METADATA,
+    Column("proposal_evidence_id", Text, primary_key=True),
+    Column(
+        "memory_proposal_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.relationship_memory_proposals.memory_proposal_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    ),
+    Column("principal_id", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("entity_observation_id", Text),
+    Column("capture_span_id", Text),
+    Column("knowledge_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("proposal_evidence_id", IdKind.RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE),
+    _is_identifier("memory_proposal_id", IdKind.RELATIONSHIP_MEMORY_PROPOSAL),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("role", EvidenceLinkRole, name="a_memory_proposal_evidence_role_is_known"),
+    CheckConstraint(
+        "(entity_observation_id IS NOT NULL)::int "
+        "+ (capture_span_id IS NOT NULL)::int "
+        "+ (knowledge_id IS NOT NULL)::int = 1",
+        name="memory_proposal_evidence_names_exactly_one_record",
+    ),
+    Index("relationship_memory_proposal_evidence_by_proposal", "memory_proposal_id"),
+)
+
+#: One appended reviewer disposition of one memory proposal.
+#:
+#: The shape `goodnotes_review_decisions` established, and reused rather than
+#: reinvented: a Relationship Memory proposal is the *third* subject kind on the
+#: one canonical Review surface, after capture proposals and GoodNotes regions,
+#: and `_Reviews.cases`/`_Reviews.decide` already dispatch on which kind a case
+#: is. Reusing the shared `Disposition` vocabulary is what lets that happen
+#: without widening any frozen capture-plane CHECK.
+#:
+#: `sequence` is the optimistic-concurrency control a reviewer states as
+#: `expected_review_version`, and the unique `(review_case_id, sequence)` is what
+#: makes a stale second decision the server's refusal rather than the writer's.
+relationship_memory_review_decisions = Table(
+    "relationship_memory_review_decisions",
+    METADATA,
+    Column("decision_id", Text, primary_key=True),
+    Column(
+        "memory_proposal_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.relationship_memory_proposals.memory_proposal_id", ondelete="CASCADE"
+        ),
+        nullable=False,
+    ),
+    Column("review_case_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("disposition", Text, nullable=False),
+    Column("corrected_statement", Text),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("decision_id", IdKind.REVIEW_DECISION),
+    _is_identifier("memory_proposal_id", IdKind.RELATIONSHIP_MEMORY_PROPOSAL),
+    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    CheckConstraint("sequence >= 1", name="a_memory_review_sequence_is_positive"),
+    _one_of("disposition", Disposition, name="a_memory_review_disposition_is_known"),
+    CheckConstraint(
+        "(disposition = 'correct_and_accept' AND length(trim(corrected_statement)) > 0) OR "
+        "(disposition <> 'correct_and_accept' AND corrected_statement IS NULL)",
+        name="a_memory_correction_matches_its_disposition",
+    ),
+    CheckConstraint(
+        f"corrected_statement IS NULL OR length(corrected_statement) "
+        f"BETWEEN 1 AND {MAX_STATEMENT_CHARACTERS}",
+        name="a_memory_corrected_statement_is_bounded",
+    ),
+    UniqueConstraint("review_case_id", "sequence", name="one_memory_decision_per_review_sequence"),
+    Index("relationship_memory_review_decisions_by_case", "review_case_id", "sequence"),
 )

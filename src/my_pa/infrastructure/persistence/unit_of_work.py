@@ -79,6 +79,7 @@ from my_pa.contracts.ports import (
     OperationQueue,
     ProjectRepository,
     PulseRepository,
+    RelationshipMemoryRepository,
     RepositoryFailureError,
     ReviewDecisionRequest,
     ReviewRepository,
@@ -147,6 +148,9 @@ from my_pa.infrastructure.persistence.registry import (
     UnknownSourceError,
     get_source,
     source_of_object,
+)
+from my_pa.infrastructure.persistence.relationship_memory import (
+    SqlRelationshipMemoryRepository,
 )
 from my_pa.infrastructure.persistence.reveal import reveal_subject
 from my_pa.infrastructure.persistence.review import decide_review, review_cases
@@ -757,6 +761,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def entities(self) -> EntitiesRepository:
         """The generalized entity rows, on this transaction's connection."""
         return SqlEntityRepository(self._open)
+
+    @property
+    def relationship_memory(self) -> RelationshipMemoryRepository:
+        """The Relationship Memory rows, on this transaction's connection."""
+        return SqlRelationshipMemoryRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

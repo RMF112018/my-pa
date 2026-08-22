@@ -178,3 +178,28 @@ class Purpose(StrEnum):
     # has no write capability, and a purpose no capability permits is denied for
     # everything and reads as a mistake rather than as a decision.
     ENTITY_READ = "entity_read"
+    # The Relationship Memory plane's pair. Two rather than one, on the rule
+    # this module states for the capture and managed-document planes: a purpose
+    # wide enough to cover writing and reading is a purpose that grants both,
+    # and here that matters more than anywhere else in this schema — a grant
+    # issued so an assistant can recall what the user recorded about someone
+    # must not also let it write new assertions about that person.
+    #
+    # Neither is a reuse. `ENTITY_READ` is the identity plane and reaches
+    # aliases, identifiers, assignments and edges; admitting a memory read under
+    # it would let a grant issued to learn who someone is also return the
+    # user's private notes about them. `CAPTURE_AUTHORING` is ADR-003's
+    # append-only capture plane; admitting a memory write under it would let a
+    # grant issued to store a Quick Note write an entity-bound statement about
+    # another person. Different tables, different subject, different exposure.
+    #
+    # `RELATIONSHIP_MEMORY_READ` covers all four reads (`get`, `list`,
+    # `search`, `history`) for the reason `TASK_READ` covers its four: they are
+    # four queries over the acting Principal's own rows and no write, so a
+    # purpose wide enough for one is wide enough for the rest without widening
+    # what a grant reaches. Holding it is still not sufficient to disclose a
+    # `restricted_local` memory to every destination — classification and
+    # destination are decided separately, which is why `sensitivity` can be
+    # readable in a profile and absent from a broad search under the same grant.
+    RELATIONSHIP_MEMORY_READ = "relationship_memory_read"
+    RELATIONSHIP_MEMORY_AUTHORING = "relationship_memory_authoring"

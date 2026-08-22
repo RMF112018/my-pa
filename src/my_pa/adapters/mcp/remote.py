@@ -54,6 +54,7 @@ _WRITE_PURPOSES: Final = frozenset(
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
         Purpose.REPORT_AUTHORING,
+        Purpose.RELATIONSHIP_MEMORY_AUTHORING,
     }
 )
 

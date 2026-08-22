@@ -190,6 +190,21 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.DOCUMENTS_LIST,
         Capability.DOCUMENTS_ARCHIVE,
         Capability.DOCUMENTS_RESTORE,
+        # The Relationship Memory plane names an Entity, not a source. A memory
+        # is the product's own knowledge under ADR-003 — written by the
+        # Principal about a person, never read out of a source root — so its
+        # rows carry no `source_id` and no `enrollment_id` for a scope to be
+        # compared against, exactly as a capture's and a managed document's do
+        # not. Requiring one would make the whole plane permanently unusable;
+        # naming one would be naming a grant this plane cannot hold.
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_GET,
+        Capability.RELATIONSHIP_MEMORY_LIST,
+        Capability.RELATIONSHIP_MEMORY_SEARCH,
+        Capability.RELATIONSHIP_MEMORY_HISTORY,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
         # The task plane (WP-TM-03) names a Principal, not a source. A task is
         # opened by a Principal directly — through the assistant surface or an
         # accepted review decision — and never through a configured source's

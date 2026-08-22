@@ -32,11 +32,12 @@ inside the payload the caller controls.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from enum import StrEnum
 from types import MappingProxyType
-from typing import ClassVar
+from typing import Any, ClassVar, Final
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail
@@ -84,7 +85,21 @@ from my_pa.domain.intelligence.catalog import (
     SourceLaneId,
 )
 from my_pa.domain.relationship.event import RelationshipEventType
-from my_pa.domain.search.query import SearchQuery, SearchQueryError
+from my_pa.domain.relationship.memory import (
+    CONTEXT_TARGET_ID_KINDS,
+    MAX_CONTEXT_LINKS_PER_VERSION,
+    MAX_CORRECTION_REASON_CHARACTERS,
+    MAX_STATEMENT_CHARACTERS,
+    MemoryKind,
+    MemoryLifecycle,
+)
+from my_pa.domain.relationship.memory import (
+    ContextLinkRole as MemoryContextRole,
+)
+from my_pa.domain.relationship.memory import (
+    ContextLinkTargetType as MemoryContextTargetType,
+)
+from my_pa.domain.search.query import MAX_QUERY_CHARACTERS, SearchQuery, SearchQueryError
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     CommitmentDirection,
@@ -2624,6 +2639,581 @@ class ResolveIntelligenceSet:
 
 #: Every command there is. A union rather than a base class, so adding a
 #: capability is a type error at every dispatch site until it is handled.
+# --- the Relationship Memory plane ------------------------------------------
+#
+# Eight commands. Their docstring first lines are the MCP tool descriptions —
+# `adapters.mcp.tools._summary` publishes exactly that line — so each opens with
+# what the tool does and what it needs, in the terms a model calling it has:
+# "an entity id you already resolved", "archive, which is reversible", "the
+# version you read". That is the whole of the model-facing documentation, so it
+# carries the distinctions a caller could otherwise get wrong.
+#
+# `mcp_payload_properties` carries the per-field descriptions beside them.
+# `payload_schema_for` overlays a mapping onto properties the dataclass already
+# published, so this adds no field and invents no shape: it annotates the ones
+# the type graph already produced. Field semantics that a one-line summary
+# cannot hold — that `entity_id` is an identifier and never a person's name,
+# that `expected_version` is the aggregate version and not the version number,
+# that archive is not delete — live there.
+#
+# **No command carries authority, classification, cloud eligibility, principal,
+# recorded time, actor class or review state.** Those are server-owned, assigned
+# in `application.relationship_memory`, and their absence from these dataclasses
+# is what makes "a caller cannot self-assert them" structural: the fields do not
+# exist, so a payload naming one is refused by the constructor as an unknown
+# field before any handler runs.
+
+
+#: Shared field documentation for the MCP schema. One mapping rather than a copy
+#: per command, so the same field cannot be described two ways.
+_MEMORY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
+    {
+        "entity_id": {
+            "description": (
+                "Opaque identifier of the subject entity, as returned by "
+                "entities.resolve, entities.search or entities.get. Never a person's "
+                "name: resolve the name first and refuse to guess if resolution is "
+                "ambiguous."
+            )
+        },
+        "memory_id": {
+            "description": (
+                "Opaque identifier of one memory, as returned by "
+                "relationship_memory.create, .list or .search."
+            )
+        },
+        "kind": {
+            "description": (
+                "What the memory means. Defaults to general_note. Use "
+                "important_date for birthdays and anniversaries, "
+                "communication_preference for how someone prefers to be contacted, "
+                "sensitivity for a topic to handle carefully."
+            )
+        },
+        "statement": {
+            "description": (
+                "The note itself, in the user's own words, 1-4000 characters. Stored "
+                "immutably: correcting it later appends a new version rather than "
+                "overwriting this one."
+            )
+        },
+        "structured_value": {
+            "description": (
+                "Optional machine-readable detail, permitted only for "
+                "important_date, communication_preference and interest, and "
+                "validated against that kind's schema. important_date takes month, "
+                "day, optional year, precision (month_day, date, year_only, "
+                "approximate) and recurrence (none, annual); omit year when it is "
+                "unknown rather than guessing one."
+            )
+        },
+        "expected_version": {
+            "description": (
+                "The aggregate version you last read, from a get or list. The write "
+                "is refused with a conflict if the memory changed since, and nothing "
+                "is written. This is the memory's version counter, not the version "
+                "number of a statement."
+            )
+        },
+        "idempotency_key": {
+            "description": (
+                "A unique key you choose for this write. Retrying with the same key "
+                "and the same payload returns the original result instead of writing "
+                "twice; reusing it with a different payload is refused."
+            )
+        },
+        "context_links": {
+            "description": (
+                "Optional scopes this memory applies in, as objects with target_type "
+                "(entity, situation, task, commitment), target_id and role "
+                "(applies_in, arose_from, related_to). Use applies_in for a "
+                "preference that holds only on one project. On revise this replaces "
+                "the whole set rather than adding to it."
+            )
+        },
+        "pinned": {
+            "description": (
+                "Whether to give this memory elevated prominence. Affects ordering "
+                "only, never truth or authority."
+            )
+        },
+        "observed_at": {
+            "description": "Optional moment the user observed this, if known. Never inferred."
+        },
+        "effective_from": {"description": "Optional moment this became applicable, if known."},
+        "effective_to": {
+            "description": (
+                "Optional moment this stopped being applicable. Use it for a concern "
+                "that has passed rather than deleting the memory."
+            )
+        },
+        "correction_reason": {"description": "Optional short note on why this revision was made."},
+        "lifecycle": {
+            "description": (
+                "Which memories to return: active (default) or archived. Archived "
+                "memories are withdrawn from current use, not deleted."
+            )
+        },
+        "kinds": {
+            "description": (
+                "Optional filter to these kinds. Omit for all kinds; an explicit "
+                "empty list is refused."
+            )
+        },
+        "context_entity_id": {
+            "description": (
+                "Optional filter to memories scoped to this entity through a context "
+                "link, such as a project."
+            )
+        },
+        "as_of": {
+            "description": (
+                "Optional moment to evaluate applicability at, so a memory whose "
+                "effective period had not begun or had ended is excluded."
+            )
+        },
+        "include_statement": {
+            "description": ("Whether to return statement text. False returns metadata only.")
+        },
+        "query": {
+            "description": (
+                "Words to match against memory statements. Restricted memories, "
+                "including every sensitivity, are excluded from search regardless of "
+                "the query and their existence is not disclosed by counts."
+            )
+        },
+        "page_size": {"description": "How many results to return in this page."},
+        "after": {"description": "Opaque cursor from a previous page's next_after."},
+    }
+)
+
+
+def _memory_docs(*names: str) -> Mapping[str, Mapping[str, str]]:
+    """The subset of `_MEMORY_FIELD_DOCS` one command publishes."""
+    return MappingProxyType({name: _MEMORY_FIELD_DOCS[name] for name in names})
+
+
+def _memory_kind(value: object) -> str:
+    """One member of the closed memory vocabulary, named rather than guessed."""
+    if not isinstance(value, str):
+        raise InvalidRequestError(SafeDetail.MEMORY_KIND)
+    try:
+        MemoryKind(value)
+    except ValueError:
+        pass
+    else:
+        return value
+    raise InvalidRequestError(SafeDetail.MEMORY_KIND)
+
+
+def _memory_statement(value: object) -> str:
+    """Presence, type and bound. The statement never reaches a message.
+
+    The bound is restated here rather than left to the domain, unlike
+    `_text` for a capture: a statement above the ceiling would otherwise be
+    refused only after the subject entity had been read, and the field name is
+    the whole of what a caller needs to fix it.
+    """
+    if not isinstance(value, str):
+        raise InvalidRequestError(SafeDetail.STATEMENT)
+    if not value.strip() or len(value) > MAX_STATEMENT_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.STATEMENT)
+    return value
+
+
+def _memory_structured_value(value: object) -> dict[str, Any] | None:
+    """Shape only: a JSON object with string keys, or nothing.
+
+    What the object may *contain* is decided by
+    `domain.relationship.memory.validate_structured_value` against the kind, and
+    restating that here would be a second copy of every schema able to disagree
+    with the first.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise InvalidRequestError(SafeDetail.STRUCTURED_VALUE)
+    for key in value:
+        if not isinstance(key, str):
+            raise InvalidRequestError(SafeDetail.STRUCTURED_VALUE)
+    return dict(value)
+
+
+def _memory_context_links(value: object) -> tuple[dict[str, object], ...]:
+    """The context links a write declares, shape-checked and bounded.
+
+    Each entry names a target type from the closed set, an identifier of the kind
+    that type implies, and a role. The *ownership* of the target — that it
+    belongs to the acting Principal — is not decidable here and is proven by the
+    repository before the insert, which is the only place it can be proven.
+    """
+    if not isinstance(value, tuple | list):
+        raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
+    if len(value) > MAX_CONTEXT_LINKS_PER_VERSION:
+        raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
+    links: list[dict[str, object]] = []
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
+        if set(entry) != {"target_type", "target_id", "role"}:
+            raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
+        raw_type = entry["target_type"]
+        raw_role = entry["role"]
+        raw_target = entry["target_id"]
+        if not isinstance(raw_type, str) or not isinstance(raw_role, str):
+            raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
+        if not isinstance(raw_target, str):
+            raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
+        try:
+            target_type = MemoryContextTargetType(raw_type)
+            MemoryContextRole(raw_role)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.CONTEXT_LINKS) from None
+        _identifier(raw_target, CONTEXT_TARGET_ID_KINDS[target_type], SafeDetail.CONTEXT_LINKS)
+        links.append({"target_type": raw_type, "target_id": raw_target, "role": raw_role})
+    return tuple(links)
+
+
+def _memory_kinds_filter(value: object) -> tuple[str, ...] | None:
+    """An optional kind filter. Absent means every kind; empty is refused.
+
+    The contract left the choice open and this is it, stated once: absent is no
+    filter, and an explicit empty list is `invalid_request` rather than silently
+    meaning the same thing. A caller that sends `[]` has almost certainly built
+    it from an empty selection and means "none", and returning everything would
+    be the opposite of what they asked.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, tuple | list) or not value:
+        raise InvalidRequestError(SafeDetail.KINDS)
+    kinds: list[str] = []
+    for entry in value:
+        kinds.append(_memory_kind(entry))
+    if len(set(kinds)) != len(kinds):
+        raise InvalidRequestError(SafeDetail.KINDS)
+    return tuple(kinds)
+
+
+def _memory_lifecycle(value: object) -> str:
+    if not isinstance(value, str):
+        raise InvalidRequestError(SafeDetail.LIFECYCLE)
+    try:
+        MemoryLifecycle(value)
+    except ValueError:
+        pass
+    else:
+        return value
+    raise InvalidRequestError(SafeDetail.LIFECYCLE)
+
+
+def _expected_version(value: object) -> int:
+    """The aggregate version a state-dependent write says it read."""
+    if type(value) is not int or value < 1:
+        raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class CreateRelationshipMemory:
+    """Record one durable note about a person or other entity you have already resolved.
+
+    The subject is named by `entity_id` and never by a name: resolve the person
+    with `entities.resolve` or `entities.search` first, and if resolution is
+    ambiguous ask rather than choosing. The note is stored as the user's own
+    private record — the server assigns its authority, classification and
+    timestamps — and becomes current immediately. It is never treated as a
+    verified fact about the subject, and it causes no task, reminder, calendar
+    entry or message.
+    """
+
+    capability: ClassVar[Capability] = Capability.RELATIONSHIP_MEMORY_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _memory_docs(
+        "entity_id",
+        "kind",
+        "statement",
+        "structured_value",
+        "context_links",
+        "pinned",
+        "observed_at",
+        "effective_from",
+        "effective_to",
+        "idempotency_key",
+    )
+
+    entity_id: str
+    statement: str = field(repr=False)
+    idempotency_key: str
+    kind: str = MemoryKind.GENERAL_NOTE.value
+    structured_value: dict[str, Any] | None = field(default=None, repr=False)
+    context_links: tuple[dict[str, object], ...] = ()
+    pinned: bool = False
+    observed_at: datetime | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.SUBJECT_ENTITY_ID)
+        _memory_statement(self.statement)
+        _idempotency_key(self.idempotency_key)
+        _memory_kind(self.kind)
+        _memory_structured_value(self.structured_value)
+        _memory_context_links(self.context_links)
+        if not isinstance(self.pinned, bool):
+            raise InvalidRequestError(SafeDetail.PINNED)
+        _moment(self.observed_at, SafeDetail.OBSERVED_AT)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class GetRelationshipMemory:
+    """Read one memory by its identifier, with its current statement and provenance.
+
+    Returns the current version, who or what it came from, whether it is active
+    or archived, and the aggregate version to pass as `expected_version` when
+    revising it. Answers about exactly the memory named and enumerates no others.
+    """
+
+    capability: ClassVar[Capability] = Capability.RELATIONSHIP_MEMORY_GET
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _memory_docs(
+        "memory_id", "include_statement"
+    )
+
+    memory_id: str
+    include_statement: bool = True
+
+    def __post_init__(self) -> None:
+        _identifier(self.memory_id, IdKind.RELATIONSHIP_MEMORY, SafeDetail.MEMORY_ID)
+        if not isinstance(self.include_statement, bool):
+            raise InvalidRequestError(SafeDetail.INCLUDE_STATEMENT)
+
+
+@dataclass(frozen=True, slots=True)
+class ListRelationshipMemories:
+    """List what has been recorded about one entity, filtered by kind and lifecycle.
+
+    This is the capability to use for "what do I know about this person" once the
+    entity is resolved. Scoped to one entity so it cannot become an enumeration
+    of everyone. Returns active memories by default; restricted memories are
+    omitted unless the request is eligible, and the response says so rather than
+    presenting a partial answer as complete.
+    """
+
+    capability: ClassVar[Capability] = Capability.RELATIONSHIP_MEMORY_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _memory_docs(
+        "entity_id",
+        "kinds",
+        "lifecycle",
+        "context_entity_id",
+        "as_of",
+        "include_statement",
+        "page_size",
+        "after",
+    )
+
+    entity_id: str
+    kinds: tuple[str, ...] | None = None
+    lifecycle: str = MemoryLifecycle.ACTIVE.value
+    context_entity_id: str | None = None
+    as_of: datetime | None = None
+    include_statement: bool = True
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.SUBJECT_ENTITY_ID)
+        _memory_kinds_filter(self.kinds)
+        _memory_lifecycle(self.lifecycle)
+        if self.context_entity_id is not None:
+            _identifier(self.context_entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        _moment(self.as_of, SafeDetail.AS_OF)
+        if not isinstance(self.include_statement, bool):
+            raise InvalidRequestError(SafeDetail.INCLUDE_STATEMENT)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.RELATIONSHIP_MEMORY, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchRelationshipMemories:
+    """Search your recorded memories by words, across entities or within one.
+
+    Lexical search over current, active memories the request is eligible to see.
+    Restricted memories — every sensitivity, and anything else classified
+    restricted — are excluded, and neither the results nor any count discloses
+    that one exists. Use relationship_memory.list when the entity is known.
+    """
+
+    capability: ClassVar[Capability] = Capability.RELATIONSHIP_MEMORY_SEARCH
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _memory_docs(
+        "query", "entity_id", "kinds", "page_size", "after"
+    )
+
+    query: str = field(repr=False)
+    entity_id: str | None = None
+    kinds: tuple[str, ...] | None = None
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str) or not self.query.strip():
+            raise InvalidRequestError(SafeDetail.QUERY)
+        if len(self.query) > MAX_QUERY_CHARACTERS:
+            raise InvalidRequestError(SafeDetail.QUERY)
+        if self.entity_id is not None:
+            _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.SUBJECT_ENTITY_ID)
+        _memory_kinds_filter(self.kinds)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.RELATIONSHIP_MEMORY, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class GetRelationshipMemoryHistory:
+    """Read every past version of one memory, oldest first, with what changed and why.
+
+    Statements are immutable, so this is the full record of how the note has been
+    corrected: each version's text, when it was recorded, what superseded it, and
+    the correction reason if one was given.
+    """
+
+    capability: ClassVar[Capability] = Capability.RELATIONSHIP_MEMORY_HISTORY
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _memory_docs(
+        "memory_id", "page_size", "after"
+    )
+
+    memory_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.memory_id, IdKind.RELATIONSHIP_MEMORY, SafeDetail.MEMORY_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.RELATIONSHIP_MEMORY_VERSION, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseRelationshipMemory:
+    """Correct one memory by appending a new version; the previous wording is kept.
+
+    Use this when something the user recorded has changed — a preference that is
+    now different, a concern that has passed. Requires `expected_version` from a
+    recent read: if the memory changed since, the revision is refused and nothing
+    is written rather than overwriting what you did not see. `context_links`
+    replaces the whole set on the successor rather than adding to it.
+    """
+
+    capability: ClassVar[Capability] = Capability.RELATIONSHIP_MEMORY_REVISE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _memory_docs(
+        "memory_id",
+        "expected_version",
+        "statement",
+        "kind",
+        "structured_value",
+        "context_links",
+        "pinned",
+        "observed_at",
+        "effective_from",
+        "effective_to",
+        "correction_reason",
+        "idempotency_key",
+    )
+
+    memory_id: str
+    expected_version: int
+    statement: str = field(repr=False)
+    idempotency_key: str
+    kind: str | None = None
+    structured_value: dict[str, Any] | None = field(default=None, repr=False)
+    context_links: tuple[dict[str, object], ...] = ()
+    pinned: bool = False
+    observed_at: datetime | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    correction_reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.memory_id, IdKind.RELATIONSHIP_MEMORY, SafeDetail.MEMORY_ID)
+        _expected_version(self.expected_version)
+        _memory_statement(self.statement)
+        _idempotency_key(self.idempotency_key)
+        if self.kind is not None:
+            _memory_kind(self.kind)
+        _memory_structured_value(self.structured_value)
+        _memory_context_links(self.context_links)
+        if not isinstance(self.pinned, bool):
+            raise InvalidRequestError(SafeDetail.PINNED)
+        _moment(self.observed_at, SafeDetail.OBSERVED_AT)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        if self.correction_reason is not None:
+            if not isinstance(self.correction_reason, str):
+                raise InvalidRequestError(SafeDetail.CORRECTION_REASON)
+            if (
+                not self.correction_reason.strip()
+                or len(self.correction_reason) > MAX_CORRECTION_REASON_CHARACTERS
+            ):
+                raise InvalidRequestError(SafeDetail.CORRECTION_REASON)
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveRelationshipMemory:
+    """Withdraw one memory from current use. Reversible, and not a delete.
+
+    The memory stops appearing in ordinary reads, its history is kept in full,
+    and relationship_memory.restore brings it back. There is no capability that
+    destroys a memory.
+    """
+
+    capability: ClassVar[Capability] = Capability.RELATIONSHIP_MEMORY_ARCHIVE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _memory_docs(
+        "memory_id", "expected_version", "idempotency_key"
+    )
+
+    memory_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.memory_id, IdKind.RELATIONSHIP_MEMORY, SafeDetail.MEMORY_ID)
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreRelationshipMemory:
+    """Return one archived memory to current use.
+
+    The inverse of relationship_memory.archive. Refused if the subject entity has
+    since been merged away, so a restore cannot quietly reattach a note to an
+    identity the user did not choose.
+    """
+
+    capability: ClassVar[Capability] = Capability.RELATIONSHIP_MEMORY_RESTORE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _memory_docs(
+        "memory_id", "expected_version", "idempotency_key"
+    )
+
+    memory_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.memory_id, IdKind.RELATIONSHIP_MEMORY, SafeDetail.MEMORY_ID)
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -2687,6 +3277,14 @@ type Command = (
     | GetEntityContext
     | GetEntityRelationships
     | ListUnresolvedMentions
+    | CreateRelationshipMemory
+    | GetRelationshipMemory
+    | ListRelationshipMemories
+    | SearchRelationshipMemories
+    | GetRelationshipMemoryHistory
+    | ReviseRelationshipMemory
+    | ArchiveRelationshipMemory
+    | RestoreRelationshipMemory
 )
 
 

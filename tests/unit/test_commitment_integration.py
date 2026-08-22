@@ -45,6 +45,7 @@ from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
+    ContinuityEvidenceState,
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.commitment import Commitment
@@ -69,6 +70,7 @@ from tests.conftest import (
 
 COUNTERPARTY = issue_identifier(IdKind.PERSON)
 ORIGIN = "cap_origin0001origin0001"
+ACCEPTANCE = issue_identifier(IdKind.REVIEW_DECISION)
 
 
 # ---------------------------------------------------------------------------
@@ -102,6 +104,7 @@ class _CommitmentRepo(CommitmentManagementRepository):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        evidence_state: ContinuityEvidenceState | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[Commitment, ...]:
@@ -110,6 +113,8 @@ class _CommitmentRepo(CommitmentManagementRepository):
             owned = [c for c in owned if c.direction is direction]
         if state is not None:
             owned = [c for c in owned if c.state is state]
+        if evidence_state is not None:
+            owned = [c for c in owned if c.evidence_state is evidence_state]
         ordered = sorted(
             owned,
             key=lambda c: (
@@ -315,6 +320,37 @@ def _idempotency_key(suffix: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def test_waiting_on_excludes_proposed_commitments() -> None:
+    world = World()
+    service = _build_wired_service(world)
+    principal = operator()
+    world.work_evidence_refs.add((principal.principal_id, ORIGIN))
+
+    create = service.invoke(
+        metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
+        CreateCommitment(
+            counterparty_person_id=COUNTERPARTY,
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            summary="Unreviewed permit promise",
+            origin_evidence_ref=ORIGIN,
+            idempotency_key=_idempotency_key("proposed-commitment"),
+        ),
+        principal=principal,
+    )
+    assert create.error is None, create.error
+    assert create.result is not None
+    assert create.result["commitment"]["evidence_state"] == ContinuityEvidenceState.PROPOSED.value
+
+    waiting = service.invoke(
+        metadata_for(Capability.COMMITMENTS_WAITING_ON, Purpose.COMMITMENT_READ, principal),
+        WaitingOn(),
+        principal=principal,
+    )
+    assert waiting.error is None, waiting.error
+    assert waiting.result is not None
+    assert waiting.result["waiting_on"] == []
+
+
 def test_sarah_permit_log_scenario() -> None:
     world = World()
     service = _build_wired_service(world)
@@ -331,6 +367,7 @@ def test_sarah_permit_log_scenario() -> None:
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Send permit log by Friday",
         origin_evidence_ref=ORIGIN,
+        accepted_by_review_decision_id=ACCEPTANCE,
         idempotency_key=create_key,
     )
     create_resp = service.invoke(create_meta, create_cmd, principal=principal_a)

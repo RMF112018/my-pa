@@ -154,7 +154,10 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
-from my_pa.domain.situation.continuity import CommitmentDirection
+from my_pa.domain.situation.continuity import (
+    CommitmentDirection,
+    ContinuityEvidenceState,
+)
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.lifecycle import TaskLifecycleState
 
@@ -1106,6 +1109,32 @@ def test_absent_work_cursor_is_one_safe_typed_conflict(
     reply = wire.send(capability.value, document_for(capability, scene, payload))
     assert reply.status == 409
     assert reply.document()["error"]["safe_details"] == ["cursor"]
+
+
+def test_waiting_on_returns_only_accepted_commitments(
+    staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, _ = staged
+    proposed = replace(
+        staged_commitment(scene),
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+    )
+    accepted = replace(
+        proposed,
+        commitment_id=issue_identifier(IdKind.COMMITMENT),
+        evidence_state=ContinuityEvidenceState.ACCEPTED,
+        accepted_by_review_decision_id=issue_identifier(IdKind.REVIEW_DECISION),
+    )
+    scene.world.commitments_v2[:] = [proposed, accepted]
+
+    reply = wire.send(
+        Capability.COMMITMENTS_WAITING_ON.value,
+        document_for(Capability.COMMITMENTS_WAITING_ON, scene, {}),
+    )
+
+    assert reply.status == 200
+    rows = reply.document()["result"]["waiting_on"]
+    assert [row["commitment_id"] for row in rows] == [accepted.commitment_id]
 
 
 def test_fake_work_repositories_refuse_foreign_cursor_anchors(

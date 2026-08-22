@@ -1929,6 +1929,7 @@ class _CommitmentsRead(CommitmentManagementRepository):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        evidence_state: ContinuityEvidenceState | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[CommitmentV2, ...]:
@@ -1937,6 +1938,8 @@ class _CommitmentsRead(CommitmentManagementRepository):
             owned = [c for c in owned if c.direction is direction]
         if state is not None:
             owned = [c for c in owned if c.state is state]
+        if evidence_state is not None:
+            owned = [c for c in owned if c.evidence_state is evidence_state]
         ordered = sorted(
             owned,
             key=lambda c: (
@@ -2205,10 +2208,11 @@ class _CommitmentsWrite(CommitmentManagementRepository):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        evidence_state: ContinuityEvidenceState | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[CommitmentV2, ...]:
-        del after
+        del after, evidence_state
         raise NotImplementedError("the write plane's fake does not serve list reads")
 
     def insert_commitment(self, commitment: CommitmentV2) -> None:

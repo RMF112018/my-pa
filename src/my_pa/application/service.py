@@ -4153,7 +4153,11 @@ class ApplicationService:
     def _commitments_waiting_on(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: WaitingOn
     ) -> _Result:
-        from my_pa.domain.situation.continuity import CommitmentDirection, CommitmentState
+        from my_pa.domain.situation.continuity import (
+            CommitmentDirection,
+            CommitmentState,
+            ContinuityEvidenceState,
+        )
 
         principal_id = authorization.principal.principal_id
         page_size = self._page_size(command.page_size)
@@ -4162,6 +4166,7 @@ class ApplicationService:
                 principal_id,
                 direction=CommitmentDirection.OWED_TO_PRINCIPAL,
                 state=CommitmentState.OPEN,
+                evidence_state=ContinuityEvidenceState.ACCEPTED,
                 after=command.after,
                 limit=page_size + 1,
             )

@@ -80,6 +80,7 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        evidence_state: ContinuityEvidenceState | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[Commitment, ...]:
@@ -88,18 +89,15 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
             conditions.append(commitments.c.direction == direction.value)
         if state is not None:
             conditions.append(commitments.c.state == state.value)
+        if evidence_state is not None:
+            conditions.append(commitments.c.evidence_state == evidence_state.value)
         if after is not None:
             anchor = self._connection.execute(
                 select(
                     commitments.c.due_at,
                     commitments.c.created_at,
                     commitments.c.commitment_id,
-                ).where(
-                    and_(
-                        commitments.c.principal_id == principal_id,
-                        commitments.c.commitment_id == after,
-                    )
-                )
+                ).where(and_(*conditions, commitments.c.commitment_id == after))
             ).one_or_none()
             if anchor is None:
                 raise WorkCursorError

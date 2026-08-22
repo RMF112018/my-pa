@@ -2788,12 +2788,13 @@ class CommitmentManagementRepository(ABC):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        evidence_state: ContinuityEvidenceState | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[CommitmentAggregate, ...]:
         """One bounded page of this Principal's own commitments, newest created first.
 
-        `direction` and `state`, when given, are exact matches — the same
+        `direction`, `state`, and `evidence_state`, when given, are exact matches — the same
         structured-filter shape `TaskManagementRepository.list_tasks` gives
         `lifecycle_state`/`priority`.
         """

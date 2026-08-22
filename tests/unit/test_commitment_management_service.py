@@ -80,10 +80,11 @@ class _FakeRepository(CommitmentManagementRepository):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        evidence_state: ContinuityEvidenceState | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[Commitment, ...]:
-        del after
+        del after, evidence_state
         raise NotImplementedError("this suite does not exercise the read plane")
 
     def insert_commitment(self, commitment: Commitment) -> None:

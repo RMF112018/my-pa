@@ -46,7 +46,11 @@ from my_pa.application.tasks import TaskManagementService, TaskVersionConflictEr
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import BulkIdempotencyConflictError, WorkCursorError
 from my_pa.domain.common.identifiers import IdKind
-from my_pa.domain.situation.continuity import CommitmentDirection, ContinuityAcceptanceKind
+from my_pa.domain.situation.continuity import (
+    CommitmentDirection,
+    ContinuityAcceptanceKind,
+    ContinuityEvidenceState,
+)
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.bulk import TaskBulkOperation
 from my_pa.domain.task.history import (
@@ -477,8 +481,35 @@ def test_sql_commitment_cursors_refuse_absent_and_foreign_anchors(
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=_idempotency_key("commitment-cursor-foreign"),
     )
+    accepted = service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Accepted",
+        origin_evidence_ref=ORIGIN,
+        accepted_by_review_decision_id=issue_identifier(IdKind.REVIEW_DECISION),
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("commitment-cursor-accepted"),
+    )
     with migrated_engine.begin() as connection:
         repository = SqlCommitmentManagementRepository(connection)
+        visible = repository.list_commitments(
+            PRINCIPAL_A,
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            evidence_state=ContinuityEvidenceState.ACCEPTED,
+            limit=10,
+        )
+        assert [commitment.commitment_id for commitment in visible] == [
+            accepted.commitment.commitment_id
+        ]
+        with pytest.raises(WorkCursorError):
+            repository.list_commitments(
+                PRINCIPAL_A,
+                direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+                evidence_state=ContinuityEvidenceState.ACCEPTED,
+                after=mine.commitment.commitment_id,
+                limit=10,
+            )
         for cursor in (issue_identifier(IdKind.COMMITMENT), foreign.commitment.commitment_id):
             with pytest.raises(WorkCursorError):
                 repository.list_commitments(PRINCIPAL_A, after=cursor, limit=10)

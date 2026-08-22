@@ -60,6 +60,7 @@ from sqlalchemy.sql.elements import ColumnElement
 
 from my_pa.contracts.ports import (
     MemoryDetail,
+    MemoryListingFacts,
     MemoryPage,
     MemoryWriteRequest,
     RelationshipMemoryRepository,
@@ -682,7 +683,12 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             raise ValueError("a memory page contains at least one memory")
         current = relationship_memory_versions.alias("current")
         statement = (
-            select(*_MEMORY_COLUMNS, current.c.statement_text, current.c.classification)
+            select(
+                *_MEMORY_COLUMNS,
+                current.c.statement_text,
+                current.c.authority,
+                current.c.classification,
+            )
             .select_from(
                 relationship_memories.join(
                     current,
@@ -790,7 +796,12 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         vector = func.to_tsvector(text(f"'{_SEARCH_CONFIG}'"), current.c.statement_text)
         parsed = func.websearch_to_tsquery(text(f"'{_SEARCH_CONFIG}'"), query)
         statement = (
-            select(*_MEMORY_COLUMNS, current.c.statement_text, current.c.classification)
+            select(
+                *_MEMORY_COLUMNS,
+                current.c.statement_text,
+                current.c.authority,
+                current.c.classification,
+            )
             .select_from(
                 relationship_memories.join(
                     current,
@@ -948,21 +959,33 @@ def _with_version(request: MemoryWriteRequest, memory_version_id: str) -> Memory
 
 
 def _page(rows: list[Row[Any]], *, limit: int, include_restricted: bool) -> MemoryPage:
+    """One page from the joined rows both listing reads select.
+
+    The three current-version values land in one `MemoryListingFacts` inside the
+    same loop iteration that appends the memory, which is what keeps the page's
+    own invariant satisfiable: the withholding `continue` is above both, so a
+    withheld row contributes neither a memory nor a facts record and cannot be
+    inferred from a key that outlived its row.
+    """
     truncated = len(rows) > limit
     kept = rows[:limit]
     withheld = 0
     memories: list[RelationshipMemory] = []
-    statements: dict[str, str] = {}
+    facts: dict[str, MemoryListingFacts] = {}
     for row in kept:
         if not include_restricted and row.classification == Classification.RESTRICTED_LOCAL.value:
             withheld += 1
             continue
         memory = _to_memory(row)
         memories.append(memory)
-        statements[memory.memory_id] = row.statement_text
+        facts[memory.memory_id] = MemoryListingFacts(
+            statement=row.statement_text,
+            authority=MemoryAuthority(row.authority),
+            classification=Classification(row.classification),
+        )
     return MemoryPage(
         memories=tuple(memories),
-        statements=statements,
+        listing_facts=facts,
         is_truncated=truncated,
         withheld_by_policy=withheld,
     )

@@ -2493,13 +2493,63 @@ class MemoryWriteRequest:
 
 
 @dataclass(frozen=True, slots=True)
+class MemoryListingFacts:
+    """What one memory's *current version* contributes to a listing row.
+
+    **One record rather than three mappings, and the difference is not
+    presentational.** `statement`, `authority` and `classification` are read off
+    a single joined row and are only true together. Three parallel mappings
+    keyed by `memory_id` can disagree in ways nothing in the type would notice —
+    one populated, one missing the key, one carrying an earlier version's value —
+    and every way they can disagree is a false claim about provenance: a
+    listing that printed `source_backed_assertion` beside a statement the user
+    typed would attribute the user's own note to a source, and one that printed
+    `user_authored_private_note` beside a promoted assertion would hide that a
+    reviewer, not the user, put it there. Binding the three into one record makes
+    that drift unrepresentable: they are written once, from one row, or not at
+    all.
+
+    They are carried *here* rather than on `RelationshipMemory` because they are
+    not properties of the memory. The aggregate is the stable identity and the
+    pointer to its current version; authority and classification belong to the
+    version, and a revision may change either. A listing states the current
+    version's values, and this record is exactly that scope.
+
+    `statement` is `repr=False` for the reason it is on `RelationshipMemoryVersion`
+    and on `MemoryWriteRequest`: a value that reaches a log line or a
+    test-failure diff must not be the note the user wrote about another person.
+    `authority` and `classification` say *how* the memory came to be and how
+    widely it may travel; they disclose nothing the user wrote and stay in the
+    repr, which is what makes a page's repr useful for diagnosing a disclosure
+    bug without printing the notes.
+    """
+
+    statement: str = field(repr=False)
+    authority: MemoryAuthority
+    classification: Classification
+
+
+@dataclass(frozen=True, slots=True)
 class MemoryPage:
-    """One bounded page of memories, and whether the bound bit."""
+    """One bounded page of memories, and whether the bound bit.
+
+    `listing_facts` holds exactly one record per memory in `memories` — no more,
+    because a withheld memory must leave no trace a caller could read, and no
+    fewer, because a row whose authority the renderer could not state would be
+    disclosed as though it carried no provenance at all. That is checked here
+    rather than trusted, since the two collections are built in one loop by each
+    implementation and a `continue` in the wrong place is the exact defect the
+    check catches.
+    """
 
     memories: tuple[RelationshipMemory, ...]
-    statements: Mapping[str, str] = field(repr=False)
+    listing_facts: Mapping[str, MemoryListingFacts]
     is_truncated: bool = False
     withheld_by_policy: int = 0
+
+    def __post_init__(self) -> None:
+        if set(self.listing_facts) != {memory.memory_id for memory in self.memories}:
+            raise ValueError("a memory page carries one facts record per disclosed memory")
 
 
 @dataclass(frozen=True, slots=True)

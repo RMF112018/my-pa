@@ -7001,8 +7001,35 @@ relationship_memory_versions = Table(
         name="a_memory_correction_reason_is_bounded",
     ),
     CheckConstraint("NOT cloud_eligible", name="a_memory_version_is_not_cloud_eligible"),
+    # **A floor, stated as a floor.** This read
+    # `classification <> 'private_local' OR memory_kind <> 'sensitivity'` and
+    # named one forbidden value rather than expressing a minimum, so the one
+    # classification that ranks *below* `private_local` walked through it:
+    # `domain.relationship.memory._CLASSIFICATION_RANK` puts `synthetic_test` at
+    # 0 and `satisfies_floor` refuses it for a `sensitivity`, but the server
+    # accepted it, and a reviewer demonstrated that with a raw INSERT. Defence in
+    # depth that only defends against the value its author happened to think of
+    # is not depth.
+    #
+    # Written as an equality because `restricted_local` is the most restrictive
+    # member of `Classification`, so "at least restricted" and "exactly
+    # restricted" are the same set today. That equivalence is a fact about the
+    # vocabulary and not an assumption this line may quietly outlive: a stricter
+    # member added later would have to widen this constraint in a forward
+    # revision, and what catches the omission is
+    # `tests/unit/test_relationship_memory_domain.py`, which pins the floor
+    # against the domain, together with `tests/schema/
+    # test_capture_schema_migration.py`, which compares the vocabulary a live
+    # database admits at head against the one the domain declares.
+    #
+    # Not one of the eighteen closed sets `f1c6b904a2d7` freezes, and correctly
+    # so: a frozen set is a *vocabulary*, and this is a conditional pairing rule
+    # between two columns. The revision copies these table objects rather than
+    # restating them, so it emits whatever this expression says — which is why
+    # the correction reaches a fresh database and why the revision, unmerged on
+    # this branch, is the right place for it to land.
     CheckConstraint(
-        "classification <> 'private_local' OR memory_kind <> 'sensitivity'",
+        "memory_kind <> 'sensitivity' OR classification = 'restricted_local'",
         name="a_sensitivity_memory_is_at_least_restricted",
     ),
     CheckConstraint(
@@ -7222,8 +7249,14 @@ relationship_memory_proposals = Table(
         f"length(proposed_statement) BETWEEN 1 AND {MAX_STATEMENT_CHARACTERS}",
         name="a_memory_proposal_carries_a_bounded_statement",
     ),
+    # The sibling of `a_sensitivity_memory_is_at_least_restricted`, corrected
+    # with it and for the same reason: a candidate that would become a
+    # `sensitivity` is held to the floor the accepted statement will have to
+    # meet, so the proposal plane cannot stage a row the memory plane would
+    # refuse. Naming `private_local` alone let `synthetic_test` — which ranks
+    # below it — persist here too.
     CheckConstraint(
-        "classification <> 'private_local' OR proposed_kind <> 'sensitivity'",
+        "proposed_kind <> 'sensitivity' OR classification = 'restricted_local'",
         name="a_sensitivity_proposal_is_at_least_restricted",
     ),
     CheckConstraint(

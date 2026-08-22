@@ -265,6 +265,7 @@ from my_pa.contracts.ports import (
     EvidenceUnavailableError,
     ManagedByteStore,
     MemoryDetail,
+    MemoryListingFacts,
     MemoryPage,
     PortError,
     PreferenceConflictError,
@@ -447,18 +448,34 @@ def _memory_kinds(kinds: tuple[MemoryKind, ...] | None) -> frozenset[MemoryKind]
 
 
 def _memory_summary_view(
-    memory: RelationshipMemory, statement: str | None, *, include_statement: bool
+    memory: RelationshipMemory, current: MemoryListingFacts, *, include_statement: bool
 ) -> dict[str, Any]:
     """One memory as a listing discloses it.
 
-    `statement` is present exactly when the caller asked for it and policy
-    disclosed the row; a withheld memory never reaches this function, so there is
-    no case here where the field is omitted for a reason a caller has to guess.
+    **`authority` and `classification` are unconditional, and `statement` is
+    not.** The statement is the note itself and the caller says whether it wants
+    it; the other two are metadata about where the note came from and how far it
+    may travel, and withholding them would leave a promoted
+    `source_backed_assertion` looking exactly like the user's own
+    `user_authored_private_note`. The primary reader of this plane is an
+    assistant deciding whether it may present a line as something it knows or
+    only as something the user once wrote, and that decision is made from
+    `authority`. A listing that dropped it made the two indistinguishable —
+    which is the distinction ADR-003 exists to preserve — so it is not gated on
+    `include_statement` and has no way to be absent.
+
+    `current` is required rather than optional for the same reason. A page
+    guarantees one facts record per disclosed memory, so an absent one is a
+    repository defect and not a caller's choice; taking `None` here would let
+    that defect render as a row with no provenance, which is precisely the
+    silent outcome the field exists to prevent.
     """
     view: dict[str, Any] = {
         "memory_id": memory.memory_id,
         "subject_entity_id": memory.subject_entity_id,
         "kind": memory.memory_kind.value,
+        "authority": current.authority.value,
+        "classification": current.classification.value,
         "lifecycle": memory.lifecycle_state.value,
         "version": memory.version,
         "current_version_number": memory.current_version_number,
@@ -466,8 +483,8 @@ def _memory_summary_view(
         "created_at": format_rfc3339(memory.created_at),
         "updated_at": format_rfc3339(memory.updated_at),
     }
-    if include_statement and statement is not None:
-        view["statement"] = statement
+    if include_statement:
+        view["statement"] = current.statement
     return view
 
 
@@ -499,10 +516,23 @@ def _memory_moment(moment: datetime | None) -> str | None:
 
 
 def _memory_view(detail: MemoryDetail, *, include_statement: bool) -> dict[str, Any]:
-    """One memory as `relationship_memory.get` discloses it."""
+    """One memory as `relationship_memory.get` discloses it.
+
+    Built on the listing view, so `get` gains the same top-level `authority` and
+    `classification` a listing now carries. That duplicates two values already
+    nested under `current_version`, and the duplication is the point: a caller
+    that reads one memory and a caller that reads a page of them read the same
+    keys in the same place, so a client cannot be written against a shape that
+    only one of the two answers with. The two spellings cannot disagree because
+    both are read from this one `current_version`.
+    """
     view = _memory_summary_view(
         detail.memory,
-        detail.current_version.statement,
+        MemoryListingFacts(
+            statement=detail.current_version.statement,
+            authority=detail.current_version.authority,
+            classification=detail.current_version.classification,
+        ),
         include_statement=include_statement,
     )
     view["current_version"] = _memory_version_view(detail.current_version)
@@ -3405,7 +3435,7 @@ class ApplicationService:
                 "memories": [
                     _memory_summary_view(
                         memory,
-                        page.statements.get(memory.memory_id),
+                        page.listing_facts[memory.memory_id],
                         include_statement=include_statement,
                     )
                     for memory in page.memories

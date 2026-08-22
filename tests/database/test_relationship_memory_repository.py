@@ -30,7 +30,7 @@ this module's own fixture and is never the configured one.
 
 from __future__ import annotations
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -44,15 +44,17 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.contracts.ports import MemoryWriteRequest, UnknownScopeError
+from my_pa.contracts.ports import MemoryPage, MemoryWriteRequest, UnknownScopeError
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.memory import (
+    PERSON_ONLY_KINDS,
     MemoryActorClass,
     MemoryAdmission,
     MemoryAuthority,
     MemoryConflictError,
     MemoryKind,
+    MemoryKindNotPermittedError,
     MemoryLifecycle,
     MemoryOperation,
     MemoryReceipt,
@@ -103,6 +105,13 @@ WRITE_TABLES: Final = (
     "relationship_memory_submissions",
 )
 
+#: The planes an automatic action would have to land in for a note to have
+#: quietly become an obligation, a promise or a captured artefact. Named as the
+#: schema names them — `tasks` and `commitments`, not `continuity_*`, which is
+#: what the first version of this list guessed — and checked against
+#: `information_schema` before they are counted.
+OTHER_PLANES: Final = ("tasks", "commitments", "captures")
+
 PRINCIPAL_A: Final = "prn_aaaa0001aaaa0001aaaa0001"
 PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"
 
@@ -128,8 +137,36 @@ SECOND_NOTE: Final = "Synthetic subject prefers phone calls now, not Teams."
 #: isolation rather than a query that matches nobody.
 _SEARCHABLE_TERM: Final = "Teams"
 
+THIRD_NOTE: Final = "Synthetic subject prefers email above all."
+
+#: A `sensitivity` note, whose classification floors at `restricted_local` — the
+#: one kind a page can withhold. Deliberately shares no token with the search
+#: fixtures, so it can never be the thing a term probe matched.
+SENSITIVE_NOTE: Final = "Synthetic subject is caring for an unwell relative."
+
+#: Three notes that share one token, so one arrangement serves both keyset
+#: reads: `page_for_entity` pages them by subject and `search` pages the same
+#: three by the term they have in common. Distinct wording, so a page that lost
+#: one is a missing identifier rather than a repeated sentence.
+PAGED_NOTES: Final = (
+    "Synthetic paged note about the north dock.",
+    "Synthetic paged note about the weekday roster.",
+    "Synthetic paged note about the pallet count.",
+)
+PAGED_TERM: Final = "paged"
+
 WHEN: Final = datetime(2026, 8, 22, 12, tzinfo=UTC)
 LATER: Final = datetime(2026, 8, 22, 13, tzinfo=UTC)
+
+#: One timeline for the `as_of` filter: a window that has closed, a window that
+#: opened later and is still open, and two probes — one inside the closed window
+#: and one after both — so each read has something to include and something to
+#: exclude. Both are before `WHEN`, which is when every fixture row is recorded.
+WINDOW_OPENED: Final = datetime(2026, 1, 1, 12, tzinfo=UTC)
+WINDOW_CLOSED: Final = datetime(2026, 3, 1, 12, tzinfo=UTC)
+SECOND_WINDOW_OPENED: Final = datetime(2026, 6, 1, 12, tzinfo=UTC)
+INSIDE_THE_FIRST_WINDOW: Final = datetime(2026, 2, 1, 12, tzinfo=UTC)
+AFTER_BOTH_WINDOWS_OPENED: Final = datetime(2026, 7, 1, 12, tzinfo=UTC)
 
 
 def _config() -> Config:
@@ -233,6 +270,8 @@ def _create_request(
     structured_value: dict[str, Any] | None = None,
     context_links: tuple[Mapping[str, str], ...] = (),
     pinned: bool = False,
+    effective_from: datetime | None = None,
+    effective_to: datetime | None = None,
     at: datetime = WHEN,
 ) -> MemoryWriteRequest:
     return MemoryWriteRequest(
@@ -252,8 +291,11 @@ def _create_request(
         context_links=context_links,
         pinned=pinned,
         observed_at=None,
-        effective_from=None,
-        effective_to=None,
+        # Supplied here rather than left at `None`, because `page_for_entity`
+        # reads exactly these two columns for its `as_of` filter and a builder
+        # that could not express a window left that filter unreachable.
+        effective_from=effective_from,
+        effective_to=effective_to,
         correction_reason=None,
         idempotency_key=idempotency_key,
         correlation_id=issue_identifier(IdKind.CORRELATION),
@@ -348,6 +390,74 @@ def _created(engine: Engine, **overrides: object) -> MemoryReceipt:
         return _admit(SqlRelationshipMemoryRepository(connection), request).receipt
 
 
+def _revised(
+    engine: Engine,
+    memory_id: str,
+    *,
+    expected_version: int,
+    statement: str,
+    idempotency_key: str,
+    pinned: bool | None = None,
+) -> MemoryReceipt:
+    """One admitted revise of A's memory, committed."""
+    with engine.begin() as connection:
+        return _admit(
+            SqlRelationshipMemoryRepository(connection),
+            _mutate_request(
+                MemoryOperation.REVISE,
+                principal_id=PRINCIPAL_A,
+                memory_id=memory_id,
+                expected_version=expected_version,
+                idempotency_key=idempotency_key,
+                statement=statement,
+                pinned=pinned,
+            ),
+        ).receipt
+
+
+def _three_paged_notes(engine: Engine) -> list[str]:
+    """Three admitted notes about Dana, and the identifiers the plane gave them.
+
+    The identifiers are minted inside `_create`, so a test that needs the sort
+    key to disagree with identifier order has to read them back rather than
+    choose them — which is why this returns them and the callers below pick out
+    the one they want by value.
+    """
+    return [
+        _created(
+            engine,
+            statement=statement,
+            idempotency_key=f"synthetic-paged-{index:04d}",
+        ).memory_id
+        for index, statement in enumerate(PAGED_NOTES)
+    ]
+
+
+def _walk(read: Callable[[str | None], MemoryPage], *, pages: int) -> tuple[list[str], list[bool]]:
+    """Every memory a keyset read reaches, in order, and each page's truncation flag.
+
+    Bounded by `pages` rather than looping until the last page, because a cursor
+    that fails to advance is exactly the defect this walk exists to find, and an
+    unbounded loop would hang the suite instead of failing it.
+    """
+    reached: list[str] = []
+    truncation: list[bool] = []
+    cursor: str | None = None
+    for _ in range(pages):
+        page = read(cursor)
+        reached.extend(memory.memory_id for memory in page.memories)
+        truncation.append(page.is_truncated)
+        if not page.is_truncated:
+            break
+        cursor = page.memories[-1].memory_id
+    return reached, truncation
+
+
+def _listed(page: MemoryPage) -> list[str]:
+    """The identifiers one page discloses, sorted, for a set comparison."""
+    return sorted(memory.memory_id for memory in page.memories)
+
+
 # --- create, read, list, history ---------------------------------------------
 
 
@@ -373,10 +483,89 @@ def test_a_created_memory_round_trips_through_every_read(two_principals: Engine)
     assert detail.current_version.statement == FIRST_NOTE
     assert detail.current_version.statement_sha256 == statement_digest(FIRST_NOTE)
     assert [memory.memory_id for memory in page.memories] == [receipt.memory_id]
-    assert page.statements[receipt.memory_id] == FIRST_NOTE
+    assert page.listing_facts[receipt.memory_id].statement == FIRST_NOTE
     assert [version.version_number for version in versions] == [1]
     assert versions[0].statement == FIRST_NOTE
     assert truncated is False
+
+
+def test_both_listing_reads_carry_the_current_versions_authority_and_classification(
+    two_principals: Engine,
+) -> None:
+    """`RM-AC-019`: a listing states where each memory came from, not only what it says.
+
+    The three values are asserted off one `MemoryListingFacts` rather than off
+    three lookups, because that is the property the record exists for: the
+    statement, the authority that backs it and the classification that bounds it
+    are read from one joined row and are only true together. They are checked on
+    `page_for_entity` *and* on `search` because each builds its own `SELECT`, and
+    a column added to one of them is exactly the shape of drift the pair catches.
+
+    The values compared against are the version's own, read through `detail`,
+    rather than the constants this fixture wrote — so a page that answered with a
+    plausible default instead of the stored row would still fail.
+    """
+    receipt = _created(two_principals)
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        page = repository.page_for_entity(DANA, principal_id=PRINCIPAL_A, limit=10)
+        found = repository.search(_SEARCHABLE_TERM, principal_id=PRINCIPAL_A, limit=10)
+        detail = repository.detail(receipt.memory_id, principal_id=PRINCIPAL_A)
+
+    assert detail is not None
+    listed = page.listing_facts[receipt.memory_id]
+    matched = found.listing_facts[receipt.memory_id]
+    assert listed.statement == detail.current_version.statement
+    assert listed.authority is detail.current_version.authority
+    assert listed.classification is detail.current_version.classification
+    # The public write path may claim nothing else, so this is the value a
+    # promotion has to differ from for the distinction to mean anything.
+    assert listed.authority is MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE
+    assert matched == listed
+
+
+def test_a_withheld_memory_leaves_no_facts_record_behind(two_principals: Engine) -> None:
+    """A page carries facts for what it disclosed, and for nothing it withheld.
+
+    **The withheld row is the whole test.** The two collections are built in one
+    loop with the withholding `continue` above both, so the failure mode is a
+    restricted memory contributing a statement, an authority and a
+    classification under a key no `memories` entry names — a caller reading the
+    mapping rather than the tuple would then be handed the very note the policy
+    removed, and the count of withheld rows would tell them where to look.
+
+    Asserted as an equality of key sets rather than as a length: a count still
+    matches when one key is dropped and another added.
+
+    `include_restricted=False` is passed explicitly. The use case calls
+    `page_for_entity` with `True` — the entity-scoped profile view discloses
+    restricted memories on purpose — so this branch has no caller in `src/` and
+    is reachable only from here, which is exactly why it needs a test of its own
+    rather than cover from one of the reads above.
+    """
+    ordinary = _created(two_principals, idempotency_key="facts-key-0001", statement=FIRST_NOTE)
+    restricted = _created(
+        two_principals,
+        idempotency_key="facts-key-0002",
+        statement=SENSITIVE_NOTE,
+        kind=MemoryKind.SENSITIVITY,
+    )
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        withholding = repository.page_for_entity(
+            DANA, principal_id=PRINCIPAL_A, limit=10, include_restricted=False
+        )
+        disclosing = repository.page_for_entity(
+            DANA, principal_id=PRINCIPAL_A, limit=10, include_restricted=True
+        )
+
+    # The restricted memory really is there, so the withheld page's silence is a
+    # policy decision rather than an empty fixture.
+    assert set(disclosing.listing_facts) == {ordinary.memory_id, restricted.memory_id}
+    assert withholding.withheld_by_policy == 1
+    assert [memory.memory_id for memory in withholding.memories] == [ordinary.memory_id]
+    assert set(withholding.listing_facts) == {ordinary.memory_id}
+    assert restricted.memory_id not in withholding.listing_facts
 
 
 def test_the_receipt_names_the_version_that_was_written(two_principals: Engine) -> None:
@@ -717,36 +906,68 @@ def test_recording_a_memory_writes_into_no_other_plane(two_principals: Engine) -
     assertion is over the tables an automatic action would have to land in, and
     the counts are taken before and after rather than asserted as zero, because
     an emptiness check over a table the fixture never populates asserts nothing.
-    """
-    planes = ("continuity_tasks", "continuity_commitments", "captures")
-    with two_principals.connect() as connection:
-        before = {plane: _row_count(connection, plane) for plane in planes}
 
-    _created(
+    **The plane names are resolved against the catalogue first, and that is the
+    whole guard.** This test named `continuity_tasks` and
+    `continuity_commitments` for its first three weeks. Neither exists — the
+    obligation planes are `tasks` and `commitments` — and `_row_count` answered
+    a missing table with `-1` instead of raising. Worse, all three counts shared
+    one connection, so the first `ProgrammingError` aborted the transaction and
+    `captures` answered `-1` as well: `after == before` compared one constant
+    dict with itself, and a repository that opened a task on every note would
+    have passed. So the names are checked to exist before anything is counted, a
+    table that has been renamed reddens this test rather than vanishing from it,
+    and each count runs on a connection of its own so one failure cannot poison
+    the rest.
+    """
+    _require_planes(two_principals, OTHER_PLANES)
+    before = {plane: _row_count(two_principals, plane) for plane in OTHER_PLANES}
+
+    receipt = _created(
         two_principals,
         kind=MemoryKind.FOLLOW_UP_CONTEXT,
         statement="Ask about the graduation next time.",
         idempotency_key="synthetic-follow-up-0001",
     )
 
+    after = {plane: _row_count(two_principals, plane) for plane in OTHER_PLANES}
+    # The note itself landed, so the unchanged counts are evidence about the
+    # other planes rather than about a create that never happened.
     with two_principals.connect() as connection:
-        after = {plane: _row_count(connection, plane) for plane in planes}
+        detail = SqlRelationshipMemoryRepository(connection).detail(
+            receipt.memory_id, principal_id=PRINCIPAL_A
+        )
+    assert detail is not None
     assert after == before
 
 
-def _row_count(connection: Connection, table: str) -> int:
-    """How many rows one `knowledge` table holds, or `-1` if this build has none.
+def _require_planes(engine: Engine, planes: tuple[str, ...]) -> None:
+    """Fail unless `knowledge` really carries every table `planes` names.
 
-    `-1` rather than a skip: a table that does not exist cannot have been written
-    to, and the comparison above still holds. Returning zero would make an absent
-    table indistinguishable from an empty one.
+    Read from `information_schema.tables` rather than trusted: a count over a
+    table this build does not have is not a weaker assertion, it is no assertion
+    at all, and the failure mode it produces is silence.
     """
-    try:
+    catalogue = text(
+        "SELECT table_name FROM information_schema.tables WHERE table_schema = :schema"
+    )
+    with engine.connect() as connection:
+        present = {row[0] for row in connection.execute(catalogue, {"schema": SCHEMA})}
+    assert set(planes) <= present, f"no such plane in {SCHEMA}: {sorted(set(planes) - present)}"
+
+
+def _row_count(engine: Engine, table: str) -> int:
+    """How many rows one `knowledge` table holds, on a connection of its own.
+
+    No `except`: a name this build does not carry raises out of here and fails
+    the caller, which is the behaviour a sentinel return value took away. The
+    fresh connection is the other half — three counts sharing one transaction
+    made the first failure decide the other two.
+    """
+    with engine.connect() as connection:
         return int(
-            connection.execute(text(f"SELECT count(*) FROM knowledge.{table}")).scalar_one()  # noqa: S608
+            connection.execute(text(f"SELECT count(*) FROM {SCHEMA}.{table}")).scalar_one()  # noqa: S608
         )
-    except DBAPIError:
-        return -1
 
 
 def test_a_foreign_search_term_reads_exactly_as_an_absent_one(
@@ -779,6 +1000,452 @@ def test_a_foreign_search_term_reads_exactly_as_an_absent_one(
     # answered exactly as an absent one, so the shape of the answer cannot be
     # used to learn that the term matched something somewhere.
     assert foreign == absent
+
+
+# --- the keyset, at the page size that exposes a wrong one --------------------
+#
+# Every read on this plane is paged and none of them was paged in a test: no
+# call passed `after_memory_id` or `after_version_id`, and nothing asserted
+# `is_truncated`. So the cursor could be reverted to comparing `memory_id` alone
+# and the suite stayed green while a memory became unreachable by any page.
+# `limit=1` throughout, because a page size that fits the whole fixture never
+# issues a second query and therefore never uses the cursor at all.
+
+
+def test_listing_at_one_a_page_reaches_every_memory_exactly_once(
+    two_principals: Engine,
+) -> None:
+    """The keyset is the whole sort key, and this is the arrangement that proves it.
+
+    `page_for_entity` orders pinned memories first, so a cursor compared on
+    `memory_id` alone names a position in a *different* ordering than the one
+    being paged. Put the pin on the memory with the **highest** identifier and
+    the two orderings disagree as sharply as they can: page two then asks for
+    identifiers above the pinned one, there are none, and both unpinned notes
+    are unreachable by any page the caller can construct.
+
+    The pinned memory is chosen after the write rather than before it, because
+    `_create` mints the identifier — so the fixture reads them back and pins the
+    maximum instead of hoping the order came out the useful way.
+
+    Three assertions, and each kills a different wrong implementation: the exact
+    sequence kills a cursor that skips, the set-size equality kills one that
+    repeats a row forever, and the truncation flags kill a read that stops early
+    or claims a further page that is not there.
+    """
+    written = _three_paged_notes(two_principals)
+    pinned = max(written)
+    _revised(
+        two_principals,
+        pinned,
+        expected_version=1,
+        statement="Synthetic paged note about the pinned dock roster.",
+        idempotency_key="synthetic-paged-pin",
+        pinned=True,
+    )
+
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        reached, truncation = _walk(
+            lambda cursor: repository.page_for_entity(
+                DANA, principal_id=PRINCIPAL_A, limit=1, after_memory_id=cursor
+            ),
+            pages=len(written) + 1,
+        )
+
+    unpinned = sorted(memory for memory in written if memory != pinned)
+    assert reached == [pinned, *unpinned]
+    assert len(reached) == len(set(reached)) == len(written)
+    assert truncation == [True, True, False]
+
+
+def test_searching_at_one_a_page_reaches_every_match_exactly_once(
+    two_principals: Engine,
+) -> None:
+    """`search` pages by identifier alone, and nothing had walked it.
+
+    The same three notes, reached through the other keyset. A search whose
+    cursor never advanced would return the first match three times and a search
+    that advanced twice would drop the middle one; both are green against a page
+    large enough to hold everything, which is what every other test of this read
+    used.
+    """
+    written = _three_paged_notes(two_principals)
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        reached, truncation = _walk(
+            lambda cursor: repository.search(
+                PAGED_TERM, principal_id=PRINCIPAL_A, limit=1, after_memory_id=cursor
+            ),
+            pages=len(written) + 1,
+        )
+    assert reached == sorted(written)
+    assert len(reached) == len(set(reached)) == len(written)
+    assert truncation == [True, True, False]
+
+
+def test_paging_history_at_one_reaches_every_version_exactly_once(
+    two_principals: Engine,
+) -> None:
+    """The version chain is the thing a user is entitled to read in full.
+
+    Three versions and a page that holds one: the walk has to arrive at every
+    wording the user ever wrote, oldest first, and stop exactly once. History
+    keys its cursor on the version *number* the named version holds rather than
+    on the identifier, which is why a chain whose identifiers are not ascending
+    still pages in order — and why nothing here may assume they are.
+    """
+    created = _created(two_principals)
+    second = _revised(
+        two_principals,
+        created.memory_id,
+        expected_version=1,
+        statement=SECOND_NOTE,
+        idempotency_key="synthetic-history-page-0002",
+    )
+    third = _revised(
+        two_principals,
+        created.memory_id,
+        expected_version=2,
+        statement=THIRD_NOTE,
+        idempotency_key="synthetic-history-page-0003",
+    )
+
+    reached: list[str] = []
+    truncation: list[bool] = []
+    cursor: str | None = None
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        for _ in range(4):
+            versions, truncated = repository.history(
+                created.memory_id, principal_id=PRINCIPAL_A, limit=1, after_version_id=cursor
+            )
+            reached.extend(version.memory_version_id for version in versions)
+            truncation.append(truncated)
+            if not truncated:
+                break
+            cursor = versions[-1].memory_version_id
+
+    assert reached == [
+        created.memory_version_id,
+        second.memory_version_id,
+        third.memory_version_id,
+    ]
+    assert len(reached) == len(set(reached)) == 3
+    assert truncation == [True, True, False]
+
+
+def test_a_list_cursor_naming_a_memory_outside_the_scope_is_refused(
+    two_principals: Engine,
+) -> None:
+    """Refused, not silently restarted from the top.
+
+    An unknown cursor answered with page one is indistinguishable from having
+    reached the end of the list, so a caller paging a foreign or a mistyped
+    identifier would be handed a page boundary that is not theirs and would have
+    no way to tell. The foreign memory and the absent one are refused
+    identically, which is the same equality the reads make: a refusal cannot be
+    used to learn that an identifier names something.
+    """
+    _created(two_principals)
+    theirs = _created(
+        two_principals,
+        principal_id=PRINCIPAL_B,
+        subject_entity_id=FOREIGN_PERSON,
+        statement="Bo Synthetic prefers email.",
+        idempotency_key="synthetic-foreign-cursor-0001",
+    )
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        with pytest.raises(UnknownScopeError):
+            repository.page_for_entity(
+                DANA, principal_id=PRINCIPAL_A, limit=1, after_memory_id=theirs.memory_id
+            )
+        with pytest.raises(UnknownScopeError):
+            repository.page_for_entity(
+                DANA, principal_id=PRINCIPAL_A, limit=1, after_memory_id=ABSENT_MEMORY
+            )
+        # And the read still answers when the cursor is one this Principal holds,
+        # so the refusals above are about the cursor rather than about the read.
+        held = repository.page_for_entity(DANA, principal_id=PRINCIPAL_A, limit=1)
+    assert len(held.memories) == 1
+
+
+def test_a_history_cursor_naming_a_version_of_another_memory_is_refused(
+    two_principals: Engine,
+) -> None:
+    """A position in one chain is not a position in another.
+
+    `history` looks the cursor up *within* the memory being read, so a version
+    identifier belonging to a different memory — the caller's own or another
+    Principal's — is refused rather than treated as "start again". Restarting
+    would hand back version one under a cursor that claimed to be past it.
+    """
+    read = _created(two_principals, idempotency_key="synthetic-history-scope-0001")
+    other = _created(
+        two_principals,
+        statement=SECOND_NOTE,
+        idempotency_key="synthetic-history-scope-0002",
+    )
+    theirs = _created(
+        two_principals,
+        principal_id=PRINCIPAL_B,
+        subject_entity_id=FOREIGN_PERSON,
+        statement="Bo Synthetic prefers email.",
+        idempotency_key="synthetic-history-scope-0003",
+    )
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        with pytest.raises(UnknownScopeError):
+            repository.history(
+                read.memory_id,
+                principal_id=PRINCIPAL_A,
+                limit=1,
+                after_version_id=other.memory_version_id,
+            )
+        with pytest.raises(UnknownScopeError):
+            repository.history(
+                read.memory_id,
+                principal_id=PRINCIPAL_A,
+                limit=1,
+                after_version_id=theirs.memory_version_id,
+            )
+        versions, truncated = repository.history(
+            read.memory_id,
+            principal_id=PRINCIPAL_A,
+            limit=1,
+            after_version_id=read.memory_version_id,
+        )
+    # Its own current version is a valid cursor, and there is nothing past it.
+    assert versions == ()
+    assert truncated is False
+
+
+# --- the list filters, each with something it must exclude --------------------
+#
+# `kinds`, `as_of` and `context_entity_id` were supplied by callers and asserted
+# by nobody: every test of this read either passed no filter or passed one and
+# checked only that the answer was non-empty. Each test below stages rows that
+# match and rows that do not, reads once without the filter as a control, and
+# compares the filtered answer to an exact set — so deleting the predicate
+# reddens the test rather than widening the answer unnoticed.
+
+
+def test_a_kind_filter_returns_exactly_the_memories_of_those_kinds(
+    two_principals: Engine,
+) -> None:
+    """Three kinds staged, one and then two asked for.
+
+    The unfiltered read is the control: it establishes that all three are
+    visible to this Principal at this subject, so the two filtered answers are
+    the filter working rather than the fixture being thin. Asking for two kinds
+    as well as one is what stops a predicate that always returns a single row
+    from passing.
+    """
+    note = _created(
+        two_principals,
+        kind=MemoryKind.GENERAL_NOTE,
+        statement=FIRST_NOTE,
+        idempotency_key="synthetic-kind-note",
+    )
+    preference = _created(
+        two_principals,
+        kind=MemoryKind.COMMUNICATION_PREFERENCE,
+        statement="Synthetic subject prefers a written summary first.",
+        idempotency_key="synthetic-kind-preference",
+    )
+    follow_up = _created(
+        two_principals,
+        kind=MemoryKind.FOLLOW_UP_CONTEXT,
+        statement="Ask about the graduation next time.",
+        idempotency_key="synthetic-kind-follow-up",
+    )
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        unfiltered = repository.page_for_entity(DANA, principal_id=PRINCIPAL_A, limit=10)
+        one = repository.page_for_entity(
+            DANA,
+            principal_id=PRINCIPAL_A,
+            limit=10,
+            kinds=frozenset({MemoryKind.COMMUNICATION_PREFERENCE}),
+        )
+        two = repository.page_for_entity(
+            DANA,
+            principal_id=PRINCIPAL_A,
+            limit=10,
+            kinds=frozenset({MemoryKind.COMMUNICATION_PREFERENCE, MemoryKind.FOLLOW_UP_CONTEXT}),
+        )
+    assert _listed(unfiltered) == sorted(
+        [note.memory_id, preference.memory_id, follow_up.memory_id]
+    )
+    assert _listed(one) == [preference.memory_id]
+    assert _listed(two) == sorted([preference.memory_id, follow_up.memory_id])
+
+
+def test_an_as_of_filter_returns_exactly_the_memories_in_effect_then(
+    two_principals: Engine,
+) -> None:
+    """Effective dating is a claim about *when* something was true.
+
+    A memory whose window has closed is not a memory the caller may be shown as
+    current, and one whose window has not opened yet is not one they may be
+    shown at all. Two probes rather than one, because a single probe is
+    satisfied by a predicate that only reads `effective_to`: the closed window
+    has to come back at a moment inside it, and the later window has to stay
+    away until it opens. The undated memory is in both answers, which is the
+    third case — no window means always in effect, and a filter that treated
+    `NULL` as "not matching" would hide every ordinary note.
+    """
+    closed = _created(
+        two_principals,
+        statement="Synthetic subject was on the north dock rotation.",
+        idempotency_key="synthetic-as-of-closed",
+        effective_from=WINDOW_OPENED,
+        effective_to=WINDOW_CLOSED,
+    )
+    later = _created(
+        two_principals,
+        statement="Synthetic subject moved to the weekday roster.",
+        idempotency_key="synthetic-as-of-later",
+        effective_from=SECOND_WINDOW_OPENED,
+    )
+    undated = _created(
+        two_principals,
+        statement=FIRST_NOTE,
+        idempotency_key="synthetic-as-of-undated",
+    )
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        unfiltered = repository.page_for_entity(DANA, principal_id=PRINCIPAL_A, limit=10)
+        inside = repository.page_for_entity(
+            DANA, principal_id=PRINCIPAL_A, limit=10, as_of=INSIDE_THE_FIRST_WINDOW
+        )
+        after = repository.page_for_entity(
+            DANA, principal_id=PRINCIPAL_A, limit=10, as_of=AFTER_BOTH_WINDOWS_OPENED
+        )
+    assert _listed(unfiltered) == sorted([closed.memory_id, later.memory_id, undated.memory_id])
+    assert _listed(inside) == sorted([closed.memory_id, undated.memory_id])
+    assert _listed(after) == sorted([later.memory_id, undated.memory_id])
+
+
+def test_a_context_filter_returns_exactly_the_memories_linked_to_that_entity(
+    two_principals: Engine,
+) -> None:
+    """One read answers "what do I know about Dana in the context of Riverside".
+
+    Two different targets are asked for rather than one, so a predicate that
+    matched any link at all — or the first link it found — is refused by the
+    second answer. The unlinked memory is the third case: it is in the
+    unfiltered read and in neither filtered one.
+    """
+    riverside = _created(
+        two_principals,
+        statement="Synthetic subject runs the Riverside stand-up.",
+        idempotency_key="synthetic-context-riverside",
+        context_links=({"target_type": "entity", "target_id": RIVERSIDE, "role": "applies_in"},),
+    )
+    eli = _created(
+        two_principals,
+        statement="Synthetic subject hands over to Eli on Fridays.",
+        idempotency_key="synthetic-context-eli",
+        context_links=({"target_type": "entity", "target_id": ELI, "role": "applies_in"},),
+    )
+    unlinked = _created(
+        two_principals,
+        statement=FIRST_NOTE,
+        idempotency_key="synthetic-context-none",
+    )
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        unfiltered = repository.page_for_entity(DANA, principal_id=PRINCIPAL_A, limit=10)
+        at_riverside = repository.page_for_entity(
+            DANA, principal_id=PRINCIPAL_A, limit=10, context_entity_id=RIVERSIDE
+        )
+        with_eli = repository.page_for_entity(
+            DANA, principal_id=PRINCIPAL_A, limit=10, context_entity_id=ELI
+        )
+    staged = sorted([riverside.memory_id, eli.memory_id, unlinked.memory_id])
+    assert _listed(unfiltered) == staged
+    assert _listed(at_riverside) == [riverside.memory_id]
+    assert _listed(with_eli) == [eli.memory_id]
+
+
+# --- the create path asks the domain whether the kind suits the subject -------
+
+#: The Person-only kinds, written out rather than derived from the domain's own
+#: frozenset, so admitting a kind to it is a decision — and so the parametrized
+#: test identifiers below are stable. The equality that pays for writing them
+#: out is the first test in this section.
+PERSON_ONLY_ARGUMENTS: Final = (
+    MemoryKind.PERSONAL_DETAIL,
+    MemoryKind.IMPORTANT_DATE,
+    MemoryKind.INTEREST,
+)
+
+
+def test_the_person_only_kinds_asserted_below_are_all_of_them() -> None:
+    """No database. A fourth Person-only kind would otherwise go untested."""
+    assert set(PERSON_ONLY_ARGUMENTS) == PERSON_ONLY_KINDS
+
+
+@pytest.mark.parametrize("kind", PERSON_ONLY_ARGUMENTS, ids=lambda kind: kind.value)
+def test_a_person_only_kind_is_refused_for_a_subject_that_is_not_a_person(
+    two_principals: Engine, kind: MemoryKind
+) -> None:
+    """`check_kind_permits_subject` is called by the create path, not merely by DOM.
+
+    The domain proves the function refuses; nothing proved that `_create`
+    consults it, so deleting the call left the rule true and unenforced — and a
+    birthday could be recorded against a project. The subject is Riverside, the
+    project A already holds, rather than a new fixture entity: the plane's own
+    fixture already contains a non-Person subject, and adding a second would
+    only be a second thing to keep in step.
+
+    The row counts are read inside the failed transaction and again after it,
+    the shape the other refusals here use, so the refusal is shown to have come
+    before any insert rather than after one that was rolled back.
+    """
+    with two_principals.begin() as connection:
+        before = _counts(connection)
+        with pytest.raises(MemoryKindNotPermittedError):
+            _admit(
+                SqlRelationshipMemoryRepository(connection),
+                _create_request(
+                    principal_id=PRINCIPAL_A,
+                    subject_entity_id=RIVERSIDE,
+                    statement="Synthetic note that describes a person, not a project.",
+                    idempotency_key=f"synthetic-person-only-{kind.value}",
+                    kind=kind,
+                ),
+            )
+        assert _counts(connection) == before
+    with two_principals.connect() as connection:
+        assert _counts(connection) == before
+
+
+def test_a_kind_that_is_not_person_only_is_admitted_against_a_project(
+    two_principals: Engine,
+) -> None:
+    """The other half, so the refusals above are not passing by refusing everything.
+
+    Without this, a create path that raised for every non-Person subject — or
+    for every write to Riverside — would satisfy all three parametrized cases
+    while making it impossible to note anything about a project at all.
+    """
+    receipt = _created(
+        two_principals,
+        subject_entity_id=RIVERSIDE,
+        kind=MemoryKind.GENERAL_NOTE,
+        statement="Riverside Synthetic runs its stand-up on Tuesdays.",
+        idempotency_key="synthetic-project-note",
+    )
+    with two_principals.connect() as connection:
+        detail = SqlRelationshipMemoryRepository(connection).detail(
+            receipt.memory_id, principal_id=PRINCIPAL_A
+        )
+    assert detail is not None
+    assert detail.memory.subject_entity_id == RIVERSIDE
+    assert detail.memory.memory_kind is MemoryKind.GENERAL_NOTE
 
 
 def test_a_revision_that_does_not_restate_pinned_keeps_the_pin(

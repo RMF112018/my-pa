@@ -449,18 +449,39 @@ type _ReviewCaseVariant = ReviewCase | GoodNotesReviewCase | RelationshipMemoryR
 
 
 class _Reviews(ReviewRepository):
-    """The governed review and promotion plane."""
+    """The governed review and promotion plane.
 
-    def __init__(self, connection: Connection) -> None:
+    **The Relationship Memory branch is composed, not unconditional.** The other
+    two planes on this surface are always part of a build; Relationship Memory is
+    a default-off plane behind two settings, and `ApplicationService` withholds
+    all eight of its capability names unless both are on. This class used to
+    reach the memory tables regardless, so a build that had never enabled the
+    plane still ran its query on every `review.list` and still routed
+    `review.decide` through its case test — and a memory case that surfaced there
+    would put a `subject_entity_id` and a `proposed_kind` in front of a reviewer
+    of a product that does not have the feature. Whether the plane is composed
+    is a fact about the build, so the composition root states it and this class
+    obeys it rather than deriving it from a query.
+    """
+
+    def __init__(self, connection: Connection, *, relationship_memory_enabled: bool) -> None:
         self._connection = connection
+        self._relationship_memory_enabled = relationship_memory_enabled
 
     def cases(self, *, limit: int, principal_id: str) -> tuple[_ReviewCaseVariant, ...]:
-        """One page merged from the three planes that open cases on this surface.
+        """One page merged from the planes that open cases on this surface.
 
-        Each plane is asked for `limit` of its own and the merge takes the oldest
-        `limit` overall, so a plane holding nothing costs one query and changes
-        nothing — which is what lets Relationship Memory join the surface without
-        the other two knowing it exists.
+        Each composed plane is asked for `limit` of its own and the merge takes
+        the oldest `limit` overall, so a plane holding nothing costs one query
+        and changes nothing — which is what lets Relationship Memory join the
+        surface without the other two knowing it exists.
+
+        An *uncomposed* plane costs no query at all and contributes no case. That
+        is a stronger statement than "it would have returned nothing anyway":
+        with no producer of proposals the memory query is empty today, but "empty
+        because nothing wrote a row" is a fact about the data and "absent because
+        the build does not have the plane" is a fact about the build, and only
+        the second survives the day a producer is admitted.
         """
 
         def statement() -> tuple[_ReviewCaseVariant, ...]:
@@ -470,9 +491,11 @@ class _Reviews(ReviewRepository):
             goodnotes = goodnotes_review_cases(
                 self._connection, principal_id=principal_id, limit=limit
             )
-            memories = relationship_memory_review_cases(
-                self._connection, principal_id=principal_id, limit=limit
-            )
+            memories: tuple[RelationshipMemoryReviewCase, ...] = ()
+            if self._relationship_memory_enabled:
+                memories = relationship_memory_review_cases(
+                    self._connection, principal_id=principal_id, limit=limit
+                )
             combined: list[_ReviewCaseVariant] = sorted(
                 [*capture, *goodnotes, *memories],
                 key=lambda case: (case.opened_at, case.review_case_id),
@@ -482,6 +505,16 @@ class _Reviews(ReviewRepository):
         return _read(statement)
 
     def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
+        """Route one decision to the plane that opened the case.
+
+        With the memory plane uncomposed the memory branch is skipped and the
+        request falls through to `decide_review`, which finds no capture case and
+        raises `ReviewNotFoundError` — the identical answer an invented
+        identifier gets. That equality is the point: a build without the plane
+        must not let a reviewer learn that an identifier names a memory case by
+        watching a decision behave differently from a decision on nothing.
+        """
+
         def statement() -> ReviewDecision | None:
             if is_goodnotes_review_case(
                 self._connection,
@@ -489,7 +522,7 @@ class _Reviews(ReviewRepository):
                 principal_id=request.principal_id,
             ):
                 return decide_goodnotes_review(self._connection, request)
-            if is_relationship_memory_review_case(
+            if self._relationship_memory_enabled and is_relationship_memory_review_case(
                 self._connection,
                 review_case_id=request.review_case_id,
                 principal_id=request.principal_id,
@@ -630,9 +663,28 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     its own.
     """
 
-    def __init__(self, engine: Engine, *, audit: AuditSink) -> None:
+    def __init__(
+        self, engine: Engine, *, audit: AuditSink, relationship_memory_enabled: bool = False
+    ) -> None:
+        """Take the engine, the audit sink, and which optional planes are composed.
+
+        `relationship_memory_enabled` is one plain `bool` and not a settings
+        object, because infrastructure may not import `bootstrap` —
+        `tests/architecture/test_dependency_direction` enforces that, and reading
+        the switch here would invert the direction the composition root exists to
+        keep. The caller passes the *conjunction* it also gives
+        `ApplicationService`: the memory plane binds its subjects from the entity
+        plane, so a build with entities off does not have it however the memory
+        switch is set.
+
+        The default is `False` because that is the setting's own default and the
+        failing-closed direction: a caller that has not said the plane is
+        composed gets a unit of work that does not reach it, which is the answer
+        that discloses nothing if the caller was simply not updated.
+        """
         self._engine = engine
         self._audit = audit
+        self._relationship_memory_enabled = relationship_memory_enabled
         self._context: AbstractContextManager[Connection] | None = None
         self._connection: Connection | None = None
 
@@ -727,7 +779,7 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
 
     @property
     def reviews(self) -> ReviewRepository:
-        return _Reviews(self._open)
+        return _Reviews(self._open, relationship_memory_enabled=self._relationship_memory_enabled)
 
     @property
     def situations(self) -> SituationRepository:

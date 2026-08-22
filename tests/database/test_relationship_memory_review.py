@@ -47,7 +47,7 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.contracts.ports import MemoryWriteRequest, ReviewDecisionRequest
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
     Disposition,
@@ -63,6 +63,7 @@ from my_pa.domain.relationship.memory import (
     MemoryActorClass,
     MemoryAuthority,
     MemoryKind,
+    MemoryOperation,
     MemoryProposalMethod,
     MemoryProposalState,
     classification_floor_for,
@@ -71,6 +72,7 @@ from my_pa.domain.relationship.memory import (
 from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.relationship_memory import SqlRelationshipMemoryRepository
 from my_pa.infrastructure.persistence.relationship_memory_review import (
@@ -82,6 +84,7 @@ from my_pa.infrastructure.persistence.tables import (
     relationship_memory_proposal_evidence,
     relationship_memory_proposals,
 )
+from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 pytestmark = pytest.mark.database
 
@@ -114,6 +117,10 @@ FOREIGN_PERSON: Final = "ent_bbbb0002bbbb0002"
 
 PROPOSED_NOTE: Final = "Synthetic subject asked for closeout updates in writing."
 CORRECTED_NOTE: Final = "Synthetic subject asked for weekly closeout updates in writing."
+
+#: A note the user writes themselves, sharing the proposal's search term so one
+#: `search` matches both and the two rows differ in nothing but authority.
+OWN_NOTE: Final = "Synthetic subject reads closeout mail on Fridays."
 
 WHEN: Final = datetime(2026, 8, 22, 12, tzinfo=UTC)
 LATER: Final = datetime(2026, 8, 22, 13, tzinfo=UTC)
@@ -549,7 +556,7 @@ def test_the_promoted_memory_is_then_an_ordinary_readable_memory(
         cases = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
 
     assert len(page.memories) == 1
-    assert page.statements[page.memories[0].memory_id] == PROPOSED_NOTE
+    assert page.listing_facts[page.memories[0].memory_id].statement == PROPOSED_NOTE
     assert [memory.memory_id for memory in found.memories] == [page.memories[0].memory_id]
     assert detail is not None
     assert detail.evidence_count == 1
@@ -557,6 +564,87 @@ def test_the_promoted_memory_is_then_an_ordinary_readable_memory(
     assert cases[0].accepted_memory_id == page.memories[0].memory_id
     assert cases[0].review_version == 1
     assert cases[0].latest_disposition is Disposition.ACCEPT
+
+
+def _a_user_authored_note(connection: Connection, statement: str, key: str) -> str:
+    """One note written the way a user writes one, on the same subject.
+
+    Built here rather than borrowed from the repository suite because this test
+    needs the *other* half of the comparison and nothing else: the public write
+    path may claim exactly one authority, so a note admitted through `admit` is
+    the only thing a promoted assertion can be told apart from.
+    """
+    request = MemoryWriteRequest(
+        operation=MemoryOperation.CREATE,
+        memory_id=None,
+        memory_version_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+        expected_version=None,
+        principal_id=PRINCIPAL_A,
+        subject_entity_id=DANA,
+        memory_kind=MemoryKind.WORKING_PREFERENCE,
+        statement=statement,
+        statement_sha256=statement_digest(statement),
+        structured_value=None,
+        authority=MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE,
+        classification=classification_floor_for(MemoryKind.WORKING_PREFERENCE),
+        created_by_actor=MemoryActorClass.USER,
+        context_links=(),
+        pinned=False,
+        observed_at=None,
+        effective_from=None,
+        effective_to=None,
+        correction_reason=None,
+        idempotency_key=key,
+        correlation_id=issue_identifier(IdKind.CORRELATION),
+        server_received_at=WHEN,
+    )
+    return SqlRelationshipMemoryRepository(connection).admit(request).receipt.memory_id
+
+
+def test_a_listing_tells_a_promoted_assertion_apart_from_the_users_own_note(
+    two_principals: Engine,
+) -> None:
+    """`RM-AC-019`: the two rows a listing must never render identically.
+
+    Both memories are on one subject, of one kind, with one lifecycle, both
+    unpinned, so *every* other field a listing publishes is equal between them
+    and `authority` is the only thing that can separate them. That arrangement is
+    the test: with authority absent from the page, a reader — an assistant
+    deciding whether it may present a line as something it knows or only as
+    something the user once wrote — has nothing left to tell a reviewer-promoted
+    `source_backed_assertion` from a private note, which is the distinction
+    ADR-003 exists to preserve.
+
+    Asserted through `page_for_entity` and `search`, because they are two
+    statements and each could carry the column the other dropped.
+    """
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(connection)
+    with two_principals.begin() as connection:
+        decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.ACCEPT))
+    with two_principals.begin() as connection:
+        own = _a_user_authored_note(connection, OWN_NOTE, "listing-authority-0001")
+
+    with two_principals.connect() as connection:
+        memories = SqlRelationshipMemoryRepository(connection)
+        page = memories.page_for_entity(DANA, principal_id=PRINCIPAL_A, limit=10)
+        found = memories.search("closeout", principal_id=PRINCIPAL_A, limit=10)
+
+    promoted = next(memory.memory_id for memory in page.memories if memory.memory_id != own)
+    # The listing really does hold two otherwise-identical rows; if it did not,
+    # the inequality below would be a claim about one memory and a missing one.
+    assert {memory.memory_id for memory in page.memories} == {own, promoted}
+    assert len({memory.memory_kind for memory in page.memories}) == 1
+    assert {memory.pinned for memory in page.memories} == {False}
+
+    assert page.listing_facts[promoted].authority is MemoryAuthority.SOURCE_BACKED_ASSERTION
+    assert page.listing_facts[own].authority is MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE
+    assert page.listing_facts[promoted].authority is not page.listing_facts[own].authority
+    # Both notes share the search term, so the same distinction has to survive
+    # the second statement as well.
+    assert {memory.memory_id for memory in found.memories} == {own, promoted}
+    assert found.listing_facts[promoted].authority is MemoryAuthority.SOURCE_BACKED_ASSERTION
+    assert found.listing_facts[own].authority is MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE
 
 
 def test_a_corrected_acceptance_is_user_confirmed_and_commits_the_reviewers_words(
@@ -847,3 +935,84 @@ def test_another_principals_proposal_is_invisible_and_undecidable(
 
     with two_principals.connect() as connection:
         assert _counts(connection) == before
+
+
+# --- the plane is composed, or it is not reached ------------------------------
+#
+# Everything above calls `relationship_memory_review.py` directly, which is the
+# right scope for asserting what a promotion does. It cannot say whether a
+# composed build reaches that code at all, and `_Reviews` used to reach it
+# unconditionally: a process that had never enabled Relationship Memory still ran
+# the memory query on every `review.list` and still routed every `review.decide`
+# through the memory case test. These two tests are about the route rather than
+# the promotion, so they go through `SqlAlchemyUnitOfWork` — the object the
+# composition root actually builds.
+
+
+def _reviews_of(engine: Engine, *, composed: bool) -> SqlAlchemyUnitOfWork:
+    """One unit of work built the way `bootstrap.gateway` builds it."""
+    return SqlAlchemyUnitOfWork(
+        engine, audit=SqlAlchemyAuditSink(engine), relationship_memory_enabled=composed
+    )
+
+
+def test_a_build_without_the_memory_plane_composed_never_reaches_a_memory_case(
+    two_principals: Engine,
+) -> None:
+    """`review.list` in a build that does not have the plane discloses nothing from it.
+
+    The proposal, its evidence and its review case are all in the database, so an
+    empty answer is the composition refusing to look rather than an empty
+    fixture. The composed unit of work is asked the same question in the same
+    test and answers with the case — which is what stops the uncomposed empty
+    result being read as "this query never returns anything".
+
+    What the case would have carried is named rather than left implicit: a
+    `subject_entity_id` and a `proposed_kind` about a person, in front of a
+    reviewer of a product whose eight `relationship_memory.` capability names
+    `available_capabilities` withholds.
+    """
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(connection)
+
+    with _reviews_of(two_principals, composed=False) as uncomposed:
+        withheld = uncomposed.reviews.cases(limit=10, principal_id=PRINCIPAL_A)
+    with _reviews_of(two_principals, composed=True) as composed:
+        disclosed = composed.reviews.cases(limit=10, principal_id=PRINCIPAL_A)
+
+    assert withheld == ()
+    assert [case.review_case_id for case in disclosed] == [review_case_id]
+    assert [getattr(case, "subject_entity_id", None) for case in disclosed] == [DANA]
+
+
+def test_deciding_a_memory_case_in_an_uncomposed_build_answers_as_an_absent_one(
+    two_principals: Engine,
+) -> None:
+    """`review.decide` must not let the router disclose what the listing withheld.
+
+    Both directions, because either alone is satisfiable by the wrong fix. The
+    refusal has to be the *same* refusal an invented identifier gets, or a
+    reviewer could learn that an identifier names a memory case by watching the
+    two behave differently; and the promotion tables have to be unchanged, or the
+    plane was reached after all. The composed build then accepts the same case,
+    so the refusal is the composition and not a broken fixture.
+    """
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(connection)
+        before = _counts(connection)
+    absent_case = issue_identifier(IdKind.REVIEW_CASE)
+
+    with _reviews_of(two_principals, composed=False) as uncomposed:
+        with pytest.raises(ReviewNotFoundError) as refused:
+            uncomposed.reviews.decide(_decision(review_case_id, Disposition.ACCEPT))
+        with pytest.raises(ReviewNotFoundError) as absent:
+            uncomposed.reviews.decide(_decision(absent_case, Disposition.ACCEPT))
+    assert str(refused.value) == str(absent.value)
+
+    with two_principals.connect() as connection:
+        assert _counts(connection) == before
+
+    with _reviews_of(two_principals, composed=True) as composed:
+        decision = composed.reviews.decide(_decision(review_case_id, Disposition.ACCEPT))
+    assert decision is not None
+    assert decision.proposal_state is ProposalState.ACCEPTED

@@ -81,6 +81,7 @@ from my_pa.contracts.ports import (
     ManagedDocumentRepository,
     ManagedWriteRequest,
     MemoryDetail,
+    MemoryListingFacts,
     MemoryPage,
     MemoryWriteRequest,
     Operation,
@@ -3421,7 +3422,16 @@ class _RelationshipMemories(RelationshipMemoryRepository):
                 ),
                 current_version_number=next_number,
                 memory_kind=memory_kind if revising else current.memory_kind,
-                pinned=request.pinned if revising else current.pinned,
+                # Absent keeps, explicit `False` unpins — which is what the SQL
+                # repository does, writing `pinned` only when the request states
+                # one. This read `request.pinned if revising else current.pinned`
+                # and so wrote `None` onto a `bool` field the moment a wording
+                # correction said nothing about the pin: the fake unpinned by
+                # accident where the server carried the value forward, so a test
+                # driven through it would have proved the opposite of production.
+                pinned=(
+                    request.pinned if revising and request.pinned is not None else current.pinned
+                ),
             ),
         )
         if revising:
@@ -3675,20 +3685,29 @@ def _memory_page(
     way the SQL repository decides it — by whether a row beyond the bound
     existed — rather than by counting what survived the withholding, which would
     make a fully-withheld page look like the end of the collection.
+
+    The facts record is built from the same `version` the withholding test read,
+    exactly as `_page` in the SQL repository builds it from the same joined row.
+    A double that filled it from anywhere else would let the FAST tier agree with
+    a production path that disagreed with itself.
     """
     truncated = len(rows) > limit
     withheld = 0
     memories: list[RelationshipMemory] = []
-    statements: dict[str, str] = {}
+    facts: dict[str, MemoryListingFacts] = {}
     for memory, version in rows[:limit]:
         if not include_restricted and version.classification is Classification.RESTRICTED_LOCAL:
             withheld += 1
             continue
         memories.append(memory)
-        statements[memory.memory_id] = version.statement
+        facts[memory.memory_id] = MemoryListingFacts(
+            statement=version.statement,
+            authority=version.authority,
+            classification=version.classification,
+        )
     return MemoryPage(
         memories=tuple(memories),
-        statements=statements,
+        listing_facts=facts,
         is_truncated=truncated,
         withheld_by_policy=withheld,
     )

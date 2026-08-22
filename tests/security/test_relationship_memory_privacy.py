@@ -7,7 +7,7 @@ where it would most easily escape, run real requests through the real service an
 the real durable sink, then read **every column of every row** back and require
 the marker to appear in none of it.
 
-Four claims, each with a way it could plausibly fail:
+Five claims, each with a way it could plausibly fail:
 
 * **A restricted memory is excluded from broad search as a predicate, not as a
   post-filter.** A filtered row can still reach a count, a truncation flag or a
@@ -24,6 +24,10 @@ Four claims, each with a way it could plausibly fail:
   rejected it.
 * **A caller cannot set cloud eligibility.** Not by payload, not by schema, and
   not in what is stored.
+* **The classification floor is the server's and not only the domain's.** The
+  domain refuses a `sensitivity` below `restricted_local` before any statement
+  is issued, so the only way to ask the *server* whether it would have caught a
+  writer that skipped the domain is to go around the domain with a raw INSERT.
 
 Everything is synthetic: one invented Principal, invented people, invented notes,
 a disposable database this module creates and drops. No real person, no live
@@ -42,6 +46,7 @@ from alembic import command as alembic_command
 from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 
 from my_pa.adapters.mcp.tools import payload_schema_for
 from my_pa.adapters.normalization import PAYLOAD_KEY, normalize
@@ -62,12 +67,13 @@ from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import UnitOfWork
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
-from my_pa.domain.relationship.memory import MemoryKind
+from my_pa.domain.relationship.memory import MemoryKind, statement_digest
 from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -676,3 +682,183 @@ def test_what_is_stored_and_disclosed_is_not_cloud_eligible(runtime: _Runtime) -
             text("SELECT bool_or(cloud_eligible) FROM knowledge.relationship_memory_versions")
         ).scalar_one()
     assert eligible is False
+
+
+# --- the classification floor is the server's, not only the domain's ---------
+
+#: The statement the raw rows below carry. Invented dispute, invented project,
+#: invented person, and distinctive enough that a row surviving a rollback would
+#: be recognisable as this test's.
+FLOOR_PROBE: Final = "Do not raise the invented Synthetic Holdings dispute with Noor Synthetic."
+
+
+@pytest.fixture
+def one_memory(runtime: _Runtime) -> _Runtime:
+    """One ordinary memory, so the probe rows below have a real chain to extend."""
+    runtime.result(
+        CreateRelationshipMemory(
+            entity_id=NOOR,
+            statement="Noor Synthetic prefers written summaries.",
+            idempotency_key="floor-probe-base-0001",
+        )
+    )
+    return runtime
+
+
+def _append_sensitivity_version(runtime: _Runtime, classification: Classification) -> int:
+    """Append one otherwise-valid `sensitivity` version at `classification`, raw.
+
+    *Otherwise valid* is the load-bearing word. PostgreSQL reports one violated
+    constraint, so a probe row with a second fault would test whichever the
+    server happened to name rather than the floor. This row supersedes the
+    memory's real first version, so its number, its predecessor, its actor and
+    its authority are all consistent with the chain it joins and the
+    classification is the only thing wrong with it.
+
+    Raw SQL rather than a repository call, for the reason the cloud-eligibility
+    test beside it goes around the domain: `RelationshipMemoryVersion` refuses
+    this in `__post_init__`, so a repository call never reaches the server and
+    would prove only that the domain still works. The floor is claimed as
+    defence in depth by `RM-AC-006` and `RM-P-AC-006`, and depth that no test
+    asks the server about is depth nobody has checked.
+
+    Nothing is committed. The transaction is rolled back when the connection
+    closes, so the admitted case leaves no synthetic sensitivity in the database
+    and the refused case leaves nothing at all. Returns how many sensitivity
+    versions the transaction can see, so an admission is asserted as a row that
+    exists rather than as an exception that did not happen.
+    """
+    with runtime.reader.connect() as connection:
+        prior_version_id = connection.execute(
+            text("SELECT current_version_id FROM knowledge.relationship_memories")
+        ).scalar_one()
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.relationship_memory_versions ("
+                "memory_version_id, memory_id, principal_id, version_number, "
+                "statement_text, statement_sha256, memory_kind, authority, "
+                "classification, cloud_eligible, created_by_actor, recorded_at, "
+                "prior_version_id, idempotency_key, correlation_id) "
+                "SELECT :version_id, memory_id, :principal_id, 2, :statement, :digest, "
+                "'sensitivity', 'user_authored_private_note', :classification, false, "
+                "'user', now(), :prior_version_id, :key, :correlation_id "
+                "FROM knowledge.relationship_memories"
+            ),
+            {
+                "version_id": issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+                "principal_id": PRINCIPAL,
+                "statement": FLOOR_PROBE,
+                "digest": statement_digest(FLOOR_PROBE),
+                "classification": classification.value,
+                "prior_version_id": prior_version_id,
+                "key": f"floor-probe-{classification.value}",
+                "correlation_id": issue_identifier(IdKind.CORRELATION),
+            },
+        )
+        return int(
+            connection.execute(
+                text(
+                    "SELECT count(*) FROM knowledge.relationship_memory_versions "
+                    "WHERE memory_kind = 'sensitivity'"
+                )
+            ).scalar_one()
+        )
+
+
+@pytest.mark.database
+@pytest.mark.parametrize(
+    "classification",
+    [Classification.SYNTHETIC_TEST, Classification.PRIVATE_LOCAL],
+    ids=lambda value: value.value,
+)
+def test_the_server_refuses_a_sensitivity_below_its_floor(
+    one_memory: _Runtime, classification: Classification
+) -> None:
+    """Both classifications that rank below the floor, not only the named one.
+
+    `a_sensitivity_memory_is_at_least_restricted` read
+    `classification <> 'private_local' OR memory_kind <> 'sensitivity'`, which
+    named one forbidden value instead of expressing a minimum. `synthetic_test`
+    ranks *below* `private_local` in `_CLASSIFICATION_RANK`, `satisfies_floor`
+    refuses it, and the server admitted it — a reviewer proved that with a raw
+    INSERT of exactly this shape. Parametrized over both ranks so the constraint
+    is asked to be a floor rather than asked about one value: a repaired
+    expression that again enumerates values passes for whichever value it
+    happens to enumerate and fails here.
+    """
+    with pytest.raises(DBAPIError) as refused:
+        _append_sensitivity_version(one_memory, classification)
+    assert "a_sensitivity_memory_is_at_least_restricted" in str(refused.value)
+
+
+@pytest.mark.database
+def test_the_server_admits_a_sensitivity_at_its_floor(one_memory: _Runtime) -> None:
+    """Guards the two refusals above: a constraint refusing everything would pass them.
+
+    `restricted_local` is the floor and the most restrictive member there is, so
+    this is the one classification a `sensitivity` may be stored at. Asserted as
+    a row the transaction can see rather than as an absent exception, because
+    "nothing was raised" is also what a silently discarded statement looks like.
+    """
+    assert _append_sensitivity_version(one_memory, Classification.RESTRICTED_LOCAL) == 1
+
+
+def _stage_sensitivity_proposal(runtime: _Runtime, classification: Classification) -> int:
+    """Stage one otherwise-valid `sensitivity` proposal at `classification`, raw.
+
+    The proposal plane's floor is a separate CHECK on a separate table, it was
+    weak in the same way and for the same reason, and nothing else in the suite
+    asks the server about it — the promotion tests stage their proposals through
+    the domain, which refuses this before any statement is issued. A candidate
+    that could be staged below the floor its accepted form must meet would make
+    the memory-side CHECK the only thing standing between a `sensitivity` and
+    `private_local`, which is one control rather than the two the design claims.
+
+    Rolled back like the version probe, so no synthetic proposal survives.
+    """
+    with runtime.reader.connect() as connection:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.relationship_memory_proposals ("
+                "memory_proposal_id, principal_id, subject_entity_id, proposed_kind, "
+                "proposed_statement, proposed_statement_sha256, state, method, "
+                "method_version, classification, proposed_at) VALUES ("
+                ":proposal_id, :principal_id, :subject_entity_id, 'sensitivity', "
+                ":statement, :digest, 'proposed', 'deterministic', 'v1', "
+                ":classification, now())"
+            ),
+            {
+                "proposal_id": issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL),
+                "principal_id": PRINCIPAL,
+                "subject_entity_id": NOOR,
+                "statement": FLOOR_PROBE,
+                "digest": statement_digest(FLOOR_PROBE),
+                "classification": classification.value,
+            },
+        )
+        return int(
+            connection.execute(
+                text("SELECT count(*) FROM knowledge.relationship_memory_proposals")
+            ).scalar_one()
+        )
+
+
+@pytest.mark.database
+@pytest.mark.parametrize(
+    "classification",
+    [Classification.SYNTHETIC_TEST, Classification.PRIVATE_LOCAL],
+    ids=lambda value: value.value,
+)
+def test_the_server_refuses_a_sensitivity_proposal_below_its_floor(
+    runtime: _Runtime, classification: Classification
+) -> None:
+    """`a_sensitivity_proposal_is_at_least_restricted`, asked of the server directly."""
+    with pytest.raises(DBAPIError) as refused:
+        _stage_sensitivity_proposal(runtime, classification)
+    assert "a_sensitivity_proposal_is_at_least_restricted" in str(refused.value)
+
+
+@pytest.mark.database
+def test_the_server_admits_a_sensitivity_proposal_at_its_floor(runtime: _Runtime) -> None:
+    """The same guard the version probe carries: a CHECK refusing everything proves nothing."""
+    assert _stage_sensitivity_proposal(runtime, Classification.RESTRICTED_LOCAL) == 1

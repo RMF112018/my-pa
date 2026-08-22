@@ -123,7 +123,8 @@ Eight tables in schema `knowledge`, created by revision `f1c6b904a2d7`:
   `relationship_memory_review_decisions` — the proposal plane. A proposal never
   enters `relationship_memories`, which is what makes "a proposal cannot appear
   in an ordinary memory read" a property of the schema rather than a predicate
-  every query has to remember.
+  every query has to remember. **Nothing in this build writes those three
+  tables**; section 11 states what that means and why they exist anyway.
 
 Two version counters, deliberately: `version` is the aggregate's
 optimistic-concurrency counter and advances on archive and restore, which write
@@ -178,3 +179,59 @@ enabled, because `relationship_memory_authoring` is a write purpose.
 - any widening of cloud eligibility;
 - the frontend experience, which `MYPA-RM-04` describes and which this
   implementation does not build.
+
+## 11. The promotion path has no producer
+
+**Nothing in `src/`, `apps/` or `ops/` writes `relationship_memory_proposals` or
+`relationship_memory_proposal_evidence`.** Only test fixtures do. Everything the
+promotion path is made of is therefore implemented and tested but unreachable in
+any composed build, however the feature flags are set:
+
+- three of the eight tables — `relationship_memory_proposals`,
+  `relationship_memory_proposal_evidence` and
+  `relationship_memory_review_decisions`;
+- the whole of `infrastructure/persistence/relationship_memory_review.py`,
+  including the authority rules a promotion applies and the evidence copy that
+  makes an accepted memory checkable;
+- three domain records — `RelationshipMemoryProposal`,
+  `MemoryProposalEvidence` and `RelationshipMemoryReviewCase`;
+- the widening of `ReviewRepository.cases` to a three-variant union, and the
+  `relationship_memory` branch of the review-case payload.
+
+`review.list` and `review.decide` consequently answer today exactly as they did
+before this branch, and for two independent reasons. In a build that composed
+the plane, the memory query returns nothing and the decide router's memory
+branch never matches, because no producer has written a proposal. In a build
+that did not compose it, the query is not issued and the branch is not consulted
+at all — the unit of work is constructed with the plane off, so `review.list`
+cannot disclose a subject or a proposed kind from a plane the operator never
+enabled. This is stated rather than implied because
+`AGENTS.md` section 2 requires it: code that runs in no composed build is code a
+reader would otherwise take for a working feature, and this specification is the
+executable-truth record.
+
+**What a producer would have to be.** Something that writes a row into
+`relationship_memory_proposals` with a subject Entity this Principal owns, a
+`proposed_kind`, the candidate statement and its digest, a `method` and
+`method_version` (and, for `local_model`, a `model_id` and `model_version`), a
+classification that meets the kind's floor, and a `review_case_id` — plus, for
+anything that claims a source, one `relationship_memory_proposal_evidence` row
+per record it rests on. The obvious candidate is a deterministic reader over
+Quick Capture text or over extracted knowledge, and it is out of scope: it needs
+its own capability, its own grant boundary, its own precision evidence and its
+own decision about which statements are worth proposing at all. None of that is
+in this objective.
+
+**Why it exists now rather than later.** The contract this plane implements
+requires that a model or rule can never create active memory — `RM-AC-005`,
+`RM-P-AC-008`, `RM-API-AC-012` — and "never" is a claim about the *only* route
+that exists, not about a route nobody has built yet. Deferring the promotion
+semantics would leave the authority vocabulary, the separate proposal table, the
+`review_promotion` actor class and the evidence-copy rule as prose, and the
+first producer admitted would be the change that both invented a route and
+decided its epistemics, under the pressure of shipping the producer. Building
+the destination first is what makes admitting a producer a bounded change: it
+writes proposal rows and nothing else, and every question about what a promoted
+statement may claim is already answered and already tested. That is also the
+form the refusal takes today — `MemoryAuthority` has no `model_inference`
+member, so there is no value a producer could write even if one existed.

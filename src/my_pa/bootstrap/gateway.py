@@ -558,8 +558,23 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     )
     audit = SqlAlchemyAuditSink(audit_engine)
 
+    # The same conjunction `ApplicationService.available_capabilities` applies,
+    # spelled once here so the review surface turns on with the plane's own
+    # capability names rather than separately. A memory binds its subject to an
+    # Entity, so the memory switch alone does not compose the plane — and a
+    # review surface that offered a memory case in a build whose
+    # `relationship_memory.` names are withheld would be the one route into the
+    # plane that the manifest denies exists.
+    relationship_memory_composed = (
+        settings.relationship_intelligence_enabled and settings.relationship_memory_enabled
+    )
+
     def unit_of_work() -> UnitOfWork:
-        return SqlAlchemyUnitOfWork(work_engine, audit=audit)
+        return SqlAlchemyUnitOfWork(
+            work_engine,
+            audit=audit,
+            relationship_memory_enabled=relationship_memory_composed,
+        )
 
     def task_management_unit_of_work() -> SqlAlchemyTaskManagementUnitOfWork:
         return SqlAlchemyTaskManagementUnitOfWork(work_engine)

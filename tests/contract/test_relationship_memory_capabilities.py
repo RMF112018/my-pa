@@ -39,8 +39,16 @@ from typing import Any, Final
 import pytest
 from alembic import command as alembic_command
 from alembic.config import Config
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, insert, select, text
 from sqlalchemy.engine import make_url
+from tests.conftest import (
+    FakeProviders,
+    FakeUnitOfWork,
+    World,
+    build_service,
+    metadata_for,
+    operator,
+)
 
 import my_pa.adapters.http.app as http_module
 import my_pa.adapters.mcp.server as mcp_module
@@ -64,10 +72,13 @@ from my_pa.application.commands import (
 from my_pa.application.errors import InvalidRequestError
 from my_pa.application.service import _HANDLERS, ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.contracts.ports import UnitOfWork
+from my_pa.contracts.ports import ReviewDecisionRequest, UnitOfWork
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import Disposition
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
@@ -80,13 +91,29 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
 )
-from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
+from my_pa.domain.relationship.memory import (
+    EvidenceLinkRole,
+    MemoryAuthority,
+    MemoryKind,
+    MemoryLifecycle,
+    MemoryProposalMethod,
+    MemoryProposalState,
+    classification_floor_for,
+    statement_digest,
+)
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
 from my_pa.domain.relationship.resolution import ResolutionOutcome
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
+from my_pa.infrastructure.persistence.relationship_memory_review import (
+    decide_relationship_memory_review,
+)
+from my_pa.infrastructure.persistence.tables import (
+    relationship_memory_proposal_evidence,
+    relationship_memory_proposals,
+)
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 ROOT: Final = Path(__file__).resolve().parents[2]
@@ -114,6 +141,11 @@ SARAH_EMAIL: Final = "sarah@synthetic.invalid"
 JOHN_EMAIL: Final = "john@synthetic.invalid"
 
 WHEN: Final = datetime(2026, 8, 22, 12, tzinfo=UTC)
+
+#: The floor a `communication_preference` proposal has to meet, read from the
+#: domain rule rather than spelled, so a change to the floor moves the fixture
+#: with it instead of leaving the server to refuse the insert.
+_PROMOTED_CLASSIFICATION: Final = classification_floor_for(MemoryKind.COMMUNICATION_PREFERENCE)
 
 LIMITS: Final = EffectiveLimits(
     max_page_size=200,
@@ -566,6 +598,190 @@ def test_no_capability_reaches_the_remote_profile_when_the_plane_is_off(
     assert capability.value not in profile
 
 
+# --- the in-memory double answers what the server answers ------------------------
+#
+# `tests/conftest._RelationshipMemories` stands in for the SQL repository
+# everywhere the FAST tier drives this plane, so a double that disagrees with
+# production quietly turns every test above it into evidence about the double.
+# This section is FAST and opens nothing; the server's own answer to the same
+# question is `tests/database/test_relationship_memory_repository.py`.
+
+
+def _over_the_double() -> tuple[ApplicationService, Principal, str]:
+    """The composed service over the in-memory plane, and one synthetic subject.
+
+    `tests/conftest.build_service` is the FAST-tier composition — the same
+    `ApplicationService` this file inspects above, over `FakeUnitOfWork` instead
+    of over PostgreSQL — so a turn driven through it reaches the double by the
+    route a caller reaches the server, rather than by calling the repository
+    directly and asserting about an object no capability returns.
+    """
+    world = World()
+    principal = operator(PRINCIPAL)
+    FakeUnitOfWork(world).entities.create(PRINCIPAL, _an_entity(SARAH, SARAH_NAME))
+    return build_service(world, FakeProviders(), LIMITS), principal, SARAH
+
+
+def _answered(
+    service: ApplicationService, principal: Principal, request: Command
+) -> dict[str, Any]:
+    """One turn through the composed service, refused nothing."""
+    envelope = service.invoke(
+        metadata_for(request.capability, _a_permitted_purpose(request.capability), principal),
+        request,
+        principal=principal,
+    )
+    assert envelope.error is None, envelope.error
+    assert envelope.result is not None
+    return dict(envelope.result)
+
+
+def _the_one_memory(
+    service: ApplicationService, principal: Principal, subject: str
+) -> Mapping[str, Any]:
+    """The single memory the listing discloses about `subject`.
+
+    Read through `relationship_memory.list` rather than off the repository,
+    because the listing is where `pinned` is published and therefore where a
+    caller would have met the wrong value.
+    """
+    listed = _answered(service, principal, ListRelationshipMemories(entity_id=subject))
+    memories = listed["memories"]
+    assert isinstance(memories, list)
+    assert len(memories) == 1
+    entry = memories[0]
+    assert isinstance(entry, Mapping)
+    return entry
+
+
+def test_a_revise_through_the_double_treats_an_absent_pin_as_the_server_does() -> None:
+    """The double contradicted production, and no test could see it.
+
+    `_RelationshipMemories._mutate` wrote `request.pinned` whenever it was
+    revising. A revise that says nothing about the pin sends `None` — the
+    command's default, and the field's whole point — so the double put `None`
+    onto a `bool` field and `relationship_memory.list` published
+    `"pinned": null` where the SQL repository publishes the value it carried
+    forward. Nothing caught it because no FAST test had ever revised a *pinned*
+    memory through the double.
+
+    Both halves, exactly as the database tests state them for the server: absent
+    keeps the pin, explicit `False` unpins. The second is not decoration — it is
+    what stops the fix being "never write `pinned` on a revise", which would
+    agree with the first half while making unpinning impossible.
+    """
+    service, principal, subject = _over_the_double()
+    created = _answered(
+        service,
+        principal,
+        CreateRelationshipMemory(
+            entity_id=subject,
+            kind=MemoryKind.COMMUNICATION_PREFERENCE,
+            statement="Sarah Synthetic prefers Teams messages.",
+            pinned=True,
+            idempotency_key="double-pin-0001",
+        ),
+    )
+    assert created["created"] is True
+    assert _the_one_memory(service, principal, subject)["pinned"] is True
+
+    revised = _answered(
+        service,
+        principal,
+        ReviseRelationshipMemory(
+            memory_id=str(created["memory_id"]),
+            expected_version=int(created["version"]),
+            statement="Sarah Synthetic prefers Teams messages, and replies fastest before noon.",
+            correction_reason="a wording correction that says nothing about the pin",
+            idempotency_key="double-pin-0002",
+        ),
+    )
+    assert _the_one_memory(service, principal, subject)["pinned"] is True
+
+    _answered(
+        service,
+        principal,
+        ReviseRelationshipMemory(
+            memory_id=str(created["memory_id"]),
+            expected_version=int(revised["version"]),
+            statement="Sarah Synthetic prefers Teams messages.",
+            pinned=False,
+            idempotency_key="double-pin-0003",
+        ),
+    )
+    assert _the_one_memory(service, principal, subject)["pinned"] is False
+
+
+def test_a_listing_publishes_authority_and_classification_beside_every_kind() -> None:
+    """`RM-AC-019`: the two provenance fields reach the wire, on both listing reads.
+
+    Through `invoke` rather than off `MemoryPage`, because carrying the values on
+    the port and dropping them in `_memory_summary_view` is exactly the shape of
+    the defect this covers: the repository already selected `classification`
+    while the rendered view emitted neither field.
+
+    `search` is asserted beside `list` because each is a separate capability over
+    the one view function, and a caller reaching the plane by a term rather than
+    by an entity must be able to make the same judgement about what it found.
+    """
+    service, principal, subject = _over_the_double()
+    _answered(
+        service,
+        principal,
+        CreateRelationshipMemory(
+            entity_id=subject,
+            kind=MemoryKind.COMMUNICATION_PREFERENCE,
+            statement="Sarah Synthetic prefers Teams messages.",
+            idempotency_key="double-authority-0001",
+        ),
+    )
+    listed = _the_one_memory(service, principal, subject)
+    assert listed["authority"] == MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE.value
+    assert listed["classification"] == Classification.PRIVATE_LOCAL.value
+
+    searched = _answered(service, principal, SearchRelationshipMemories(query="Teams"))
+    matches = searched["memories"]
+    assert isinstance(matches, list)
+    assert [entry["authority"] for entry in matches] == [
+        MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE.value
+    ]
+    assert [entry["classification"] for entry in matches] == [Classification.PRIVATE_LOCAL.value]
+
+
+def test_withholding_the_statement_still_states_where_the_memory_came_from() -> None:
+    """The statement is the caller's choice; the provenance is not.
+
+    A caller that asks for a listing without the notes is asking not to be handed
+    the text — an index, a count, a picker. It is not asking to be told less about
+    where each record came from, and `authority` is the field that decides whether
+    a line may be presented as something known or only as something the user once
+    wrote. Both directions are asserted, because "always emitted" and "emitted
+    only when the statement is" are indistinguishable from one call.
+    """
+    service, principal, subject = _over_the_double()
+    _answered(
+        service,
+        principal,
+        CreateRelationshipMemory(
+            entity_id=subject,
+            kind=MemoryKind.COMMUNICATION_PREFERENCE,
+            statement="Sarah Synthetic prefers Teams messages.",
+            idempotency_key="double-authority-0002",
+        ),
+    )
+    withheld = _answered(
+        service,
+        principal,
+        ListRelationshipMemories(entity_id=subject, include_statement=False),
+    )["memories"]
+    assert isinstance(withheld, list)
+    assert len(withheld) == 1
+    assert "statement" not in withheld[0]
+    assert withheld[0]["authority"] == MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE.value
+    assert withheld[0]["classification"] == Classification.PRIVATE_LOCAL.value
+    assert "statement" in _the_one_memory(service, principal, subject)
+
+
 # --- the conversational flows, end to end ---------------------------------------
 #
 # Seven turns a user actually says, driven through `ApplicationService.invoke`
@@ -629,7 +845,15 @@ class _Assistant:
         audit = SqlAlchemyAuditSink(self.audit_engine)
 
         def unit_of_work() -> UnitOfWork:
-            return SqlAlchemyUnitOfWork(self.work_engine, audit=audit)
+            # The plane's composition is stated on the unit of work as well as on
+            # the service, exactly as `bootstrap.gateway` states it: the review
+            # surface is inside the transaction and cannot read the service's
+            # switches, so a build that publishes this plane's capability names
+            # while its unit of work does not reach the plane would be giving two
+            # different answers to one question.
+            return SqlAlchemyUnitOfWork(
+                self.work_engine, audit=audit, relationship_memory_enabled=True
+            )
 
         self.service = ApplicationService(
             unit_of_work=unit_of_work,
@@ -764,7 +988,140 @@ def test_what_do_i_know_about_sarah(assistant: _Assistant) -> None:
     assert isinstance(memories, list)
     assert [entry["statement"] for entry in memories] == ["Sarah Synthetic prefers Teams messages."]
     assert [entry["kind"] for entry in memories] == [MemoryKind.COMMUNICATION_PREFERENCE.value]
+    assert [entry["authority"] for entry in memories] == [
+        MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE.value
+    ]
     assert listed["memories_withheld_by_policy"] == 0
+
+
+def _an_evidence_id() -> str:
+    """One proposal-evidence identifier. Named so the insert below fits a line."""
+    return issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE)
+
+
+def _a_promoted_assertion(engine: Engine, subject: str, statement: str) -> str:
+    """One reviewer-accepted proposal on `subject`, and the memory it became.
+
+    Written as direct inserts for the reason
+    `tests/database/test_relationship_memory_review.py` gives: no producer of
+    proposals exists, and inventing one here would make this a test of the
+    invention. The rows are what a producer would have to write, and the schema's
+    own CHECKs police that.
+
+    It is here rather than borrowed from that module because the claim is about
+    the *assistant's* listing: the memory has to arrive in the same database the
+    composed service reads, through the route the plane says is the only one that
+    can produce a non-`user_authored_private_note` authority.
+    """
+    review_case_id = issue_identifier(IdKind.REVIEW_CASE)
+    memory_proposal_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
+    with engine.begin() as connection:
+        connection.execute(
+            insert(relationship_memory_proposals).values(
+                memory_proposal_id=memory_proposal_id,
+                principal_id=PRINCIPAL,
+                subject_entity_id=subject,
+                proposed_kind=MemoryKind.COMMUNICATION_PREFERENCE.value,
+                proposed_statement=statement,
+                proposed_statement_sha256=statement_digest(statement),
+                structured_value=None,
+                state=MemoryProposalState.NEEDS_REVIEW.value,
+                method=MemoryProposalMethod.RULE.value,
+                method_version="synthetic-rule-v1",
+                model_id=None,
+                model_version=None,
+                classification=_PROMOTED_CLASSIFICATION.value,
+                proposed_at=WHEN,
+                review_case_id=review_case_id,
+                accepted_memory_id=None,
+                accepted_memory_version_id=None,
+                invalidated_reason=None,
+            )
+        )
+        # One evidence row, because it is what decides the authority: an
+        # acceptance resting on nothing is `user_confirmed_assertion` — the
+        # reviewer's own word — and only an evidence-backed one becomes
+        # `source_backed_assertion`, which is the value this test is about.
+        connection.execute(
+            insert(relationship_memory_proposal_evidence).values(
+                proposal_evidence_id=_an_evidence_id(),
+                memory_proposal_id=memory_proposal_id,
+                principal_id=PRINCIPAL,
+                role=EvidenceLinkRole.DIRECT.value,
+                entity_observation_id=issue_identifier(IdKind.ENTITY_OBSERVATION),
+                capture_span_id=None,
+                knowledge_id=None,
+                created_at=WHEN,
+            )
+        )
+    with engine.begin() as connection:
+        decision = decide_relationship_memory_review(
+            connection,
+            ReviewDecisionRequest(
+                review_case_id=review_case_id,
+                expected_review_version=0,
+                disposition=Disposition.ACCEPT,
+                principal_id=PRINCIPAL,
+                correlation_id=issue_identifier(IdKind.CORRELATION),
+                audit_id=issue_identifier(IdKind.AUDIT),
+                policy_version="policy-v1",
+                decided_at=WHEN,
+                corrected_value=None,
+            ),
+        )
+    assert decision.proposal_state is ProposalState.ACCEPTED
+    # Read off the proposal, which is where the promotion stamps it: the decision
+    # record is the capture plane's shape and carries no memory identifier.
+    with engine.connect() as connection:
+        accepted = connection.execute(
+            select(relationship_memory_proposals.c.accepted_memory_id).where(
+                relationship_memory_proposals.c.memory_proposal_id == memory_proposal_id
+            )
+        ).scalar_one()
+    assert isinstance(accepted, str)
+    return accepted
+
+
+@pytest.mark.database
+def test_the_assistants_listing_tells_a_promoted_finding_from_the_users_own_note(
+    assistant: _Assistant,
+) -> None:
+    """`RM-AC-019` at the surface a model reads: two rows, one distinguishing field.
+
+    This is the functional claim behind the field, and it can only be made here.
+    An assistant answering "what do I know about Sarah?" gets a list, and it must
+    not present a line a reviewer promoted from a source the way it presents a
+    line the user typed — one is a finding, the other is a note. Both memories
+    are on one subject, of one kind, unpinned and active, so `authority` is the
+    only field in the payload that separates them.
+
+    Driven through `ApplicationService.invoke`, because the values exist on the
+    port and existed on the version long before they reached the wire: the whole
+    defect was a render that dropped them.
+    """
+    subject = _resolved(assistant, SARAH_EMAIL)
+    own = assistant.result(
+        CreateRelationshipMemory(
+            entity_id=subject,
+            kind=MemoryKind.COMMUNICATION_PREFERENCE,
+            statement="Sarah Synthetic prefers Teams messages.",
+            idempotency_key="promoted-vs-note-0001",
+        )
+    )["memory_id"]
+    promoted = _a_promoted_assertion(
+        assistant.work_engine, subject, "Sarah Synthetic asked for written closeout updates."
+    )
+
+    memories = assistant.result(ListRelationshipMemories(entity_id=subject))["memories"]
+    assert isinstance(memories, list)
+    by_id = {str(entry["memory_id"]): entry for entry in memories}
+    assert set(by_id) == {str(own), promoted}
+    assert {entry["kind"] for entry in memories} == {MemoryKind.COMMUNICATION_PREFERENCE.value}
+    assert {entry["pinned"] for entry in memories} == {False}
+
+    assert by_id[promoted]["authority"] == MemoryAuthority.SOURCE_BACKED_ASSERTION.value
+    assert by_id[str(own)]["authority"] == MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE.value
+    assert by_id[promoted]["authority"] != by_id[str(own)]["authority"]
 
 
 @pytest.mark.database

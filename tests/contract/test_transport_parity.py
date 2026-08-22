@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-sixty-two capabilities. There are two ways to prove that and only one of them stays
+seventy capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -26,7 +26,7 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over all sixty-two capabilities and ten refusals.** Each
+**And the answers, over all seventy capabilities and ten refusals.** Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
 `sources.enroll` alone would make the second and third callers idempotent
@@ -80,10 +80,11 @@ import my_pa.adapters.mcp.server as mcp_module
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import Command
 from my_pa.application.intelligence import begin_cycle, commit_artifact
-from my_pa.contracts.ports import KnowledgeRecord
+from my_pa.contracts.ports import KnowledgeRecord, MemoryWriteRequest
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import (
     IdKind,
     InvalidIdentifierError,
@@ -107,6 +108,15 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+)
+from my_pa.domain.relationship.memory import (
+    DIRECT_USER_AUTHORITY,
+    ContextLinkRole,
+    ContextLinkTargetType,
+    MemoryActorClass,
+    MemoryKind,
+    MemoryOperation,
+    statement_digest,
 )
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.source.registry import issue_identifier
@@ -133,6 +143,17 @@ CORRECTED_VALUE_MARKER = "PRIVATE-CORRECTED-VALUE-MARKER"
 _UNIMPLEMENTED_CAPABILITIES = frozenset(
     {Capability.TASKS_BULK_PREVIEW, Capability.TASKS_BULK_CONFIRM}
 )
+
+#: The eight `relationship_memory.` names stood beside them in a second set,
+#: `_UNCOMPOSED_CAPABILITIES`, for a different reason: `FakeUnitOfWork` offered
+#: no `relationship_memory` repository and `tests/conftest.build_service` left
+#: the plane off, so every one of them was refused at the composition floor and
+#: parity for the eight meant the same *refusal* over three transports. Both
+#: facts have changed — the unit of work carries the plane and `build_service`
+#: composes it by default — so the set is gone rather than kept empty, and the
+#: payloads below name a memory that is actually staged. Parity for the eight is
+#: now what it is for every other name here: the same answer, byte-identically,
+#: over HTTP, MCP and the CLI.
 
 
 def a_permitted_purpose(capability: Capability) -> Purpose:
@@ -240,6 +261,79 @@ def _entity(principal_id: str, entity_type: EntityType, display_name: str) -> En
     )
 
 
+#: What the staged memory says. It carries the token `parity` because
+#: `relationship_memory.search` matches whole case-folded tokens and a query
+#: that matched nothing would compare three empty pages — an agreement any
+#: three transports reach without doing the read.
+MEMORY_STATEMENT = "A parity memory about the staged person"
+
+
+def staged_memory(scene: Scene, key: str = "parity-memory-staging-0001") -> str:
+    """One memory about the staged person, and the identifier the plane gave it.
+
+    Admitted through `RelationshipMemoryRepository` rather than pushed into
+    `World`, for the reason `staged_entities` goes through `EntitiesRepository`:
+    a row no writer could have produced is a row the reads were never asked
+    about. One memory per `key` per Principal per scene, memoized the way
+    `staged_entities` is and for the same reason — a payload table that admitted
+    a fresh memory on every call would name a different one each time it was
+    read, and every comparison below would be measuring the staging rather than
+    the request.
+
+    `key` is the write's idempotency key and the memo is the submission it binds,
+    so a caller that needs *two* memories asks for two keys rather than
+    discovering that the second call returned the first memory. This file needs
+    one; `tests/security/test_http_negative_evidence.py` drives a revise, an
+    archive and a restore in one pass over one scene and needs each to meet a
+    memory still at version one.
+
+    It is linked to the staged organization, because `relationship_memory.list`
+    below supplies `context_entity_id` and a memory with no context link would
+    make that payload's answer an empty page.
+
+    Shared with `tests/security/test_http_negative_evidence.py`, as
+    `staged_entities` is: one staging is one thing to keep in step.
+    """
+    principal_id = scene.principal.principal_id
+    held = scene.world.relationship_memory_keys.get((principal_id, key))
+    if held is not None:
+        return held.memory_id
+    person, organization = staged_entities(scene)
+    admission = FakeUnitOfWork(scene.world).relationship_memory.admit(
+        MemoryWriteRequest(
+            operation=MemoryOperation.CREATE,
+            memory_id=None,
+            memory_version_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+            expected_version=None,
+            principal_id=principal_id,
+            subject_entity_id=person.entity_id,
+            memory_kind=MemoryKind.PERSONAL_DETAIL,
+            statement=MEMORY_STATEMENT,
+            statement_sha256=statement_digest(MEMORY_STATEMENT),
+            structured_value=None,
+            authority=DIRECT_USER_AUTHORITY,
+            classification=Classification.PRIVATE_LOCAL,
+            created_by_actor=MemoryActorClass.USER,
+            context_links=(
+                {
+                    "target_type": ContextLinkTargetType.ENTITY.value,
+                    "target_id": organization.entity_id,
+                    "role": ContextLinkRole.APPLIES_IN.value,
+                },
+            ),
+            pinned=False,
+            observed_at=None,
+            effective_from=None,
+            effective_to=None,
+            correction_reason=None,
+            idempotency_key=key,
+            correlation_id=issue_identifier(IdKind.CORRELATION),
+            server_received_at=WHEN,
+        )
+    )
+    return admission.receipt.memory_id
+
+
 def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict[str, Any]]:
     """A payload per capability that the application can actually answer.
 
@@ -291,6 +385,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(scene)
+    memory_id = staged_memory(scene)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -577,6 +672,70 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # The Relationship Memory plane (WP-RM-01). A memory names an Entity and
+        # never a source, so `person`/`organization` are the only staged rows
+        # these payloads reach for; the memory itself is `staged_memory`'s, so
+        # the seven reads and mutations below name something the plane actually
+        # holds rather than a derived identifier every transport would refuse
+        # identically.
+        #
+        # Every optional field is supplied for the reason this docstring gives,
+        # and here it is not decoration: `kind`, `kinds` and `lifecycle` are
+        # closed vocabularies `normalization._memory_vocabulary` coerces from
+        # strings, and `observed_at`/`as_of` are RFC 3339 strings
+        # `_memory_moments` coerces to datetimes. A transport that dropped one,
+        # or that handed the coercion a value of another shape, would normalise
+        # to a different pair — and a table that never sent them would compare
+        # three transports on a conversion none of them had performed.
+        Capability.RELATIONSHIP_MEMORY_CREATE: {
+            "entity_id": person.entity_id,
+            "statement": "Parity memory-plane statement",
+            "idempotency_key": "parity-memory-create-0001",
+            "kind": "personal_detail",
+            "pinned": True,
+            "observed_at": "2026-08-02T10:00:00Z",
+        },
+        Capability.RELATIONSHIP_MEMORY_GET: {
+            "memory_id": memory_id,
+            "include_statement": True,
+        },
+        Capability.RELATIONSHIP_MEMORY_LIST: {
+            "entity_id": person.entity_id,
+            "kinds": ["personal_detail"],
+            "lifecycle": "active",
+            "context_entity_id": organization.entity_id,
+            "as_of": "2026-08-02T12:00:00Z",
+            "include_statement": True,
+            "page_size": 10,
+        },
+        Capability.RELATIONSHIP_MEMORY_SEARCH: {
+            "query": "parity",
+            "entity_id": person.entity_id,
+            "kinds": ["personal_detail"],
+            "page_size": 10,
+        },
+        Capability.RELATIONSHIP_MEMORY_HISTORY: {
+            "memory_id": memory_id,
+            "page_size": 10,
+        },
+        Capability.RELATIONSHIP_MEMORY_REVISE: {
+            "memory_id": memory_id,
+            "expected_version": 1,
+            "statement": "Parity memory-plane statement, revised",
+            "idempotency_key": "parity-memory-revise-0001",
+            "kind": "personal_detail",
+            "correction_reason": "the parity table revised it",
+        },
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE: {
+            "memory_id": memory_id,
+            "expected_version": 1,
+            "idempotency_key": "parity-memory-archive-0001",
+        },
+        Capability.RELATIONSHIP_MEMORY_RESTORE: {
+            "memory_id": memory_id,
+            "expected_version": 1,
+            "idempotency_key": "parity-memory-restore-0001",
+        },
     }
 
 
@@ -700,7 +859,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 63, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 71, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -1378,7 +1537,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: sixty-two capabilities answered from an empty world prove little."""
+    """Guard the matrix: seventy capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

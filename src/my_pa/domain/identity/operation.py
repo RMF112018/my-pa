@@ -420,6 +420,37 @@ class Capability(StrEnum):
     #: only the unresolved ones, which is the whole of its use.
     ENTITIES_UNRESOLVED_MENTIONS = "entities.unresolved_mentions"
 
+    # The Relationship Memory plane: durable, entity-bound knowledge the user
+    # meant to keep. **A family of its own rather than an `entities.update`**,
+    # and the naming is a policy decision rather than a style one. These
+    # capabilities reach a different record class from entity identity, aliases,
+    # assignments and edges, and one grant spanning both would let a client
+    # issued authority to correct a misspelled name also read and write private
+    # notes about the person. The noun is what makes the sensitive class legible
+    # where grants are decided.
+    #
+    # Eight, and the ninth is deliberately absent: there is no
+    # `relationship_memory.delete`. Archive is reversible and history is
+    # retained, hard deletion is unresolved by ADR-003 and reserved to the
+    # operator, and a capability name for it would be the first half of building
+    # one.
+    #
+    # Not operator-only, on the argument `_OPERATOR_ONLY` makes for the capture
+    # plane: these write and read content the acting Principal already owns and
+    # grant no authority — none of them widens the scope a later request is
+    # evaluated against, which is the property that puts `sources.enroll` there.
+    # Withholding them from a build that has not enabled the plane is
+    # `_RELATIONSHIP_MEMORY_CAPABILITIES` in `application.service`, for the
+    # reason the entity comment beside it gives.
+    RELATIONSHIP_MEMORY_CREATE = "relationship_memory.create"
+    RELATIONSHIP_MEMORY_GET = "relationship_memory.get"
+    RELATIONSHIP_MEMORY_LIST = "relationship_memory.list"
+    RELATIONSHIP_MEMORY_SEARCH = "relationship_memory.search"
+    RELATIONSHIP_MEMORY_HISTORY = "relationship_memory.history"
+    RELATIONSHIP_MEMORY_REVISE = "relationship_memory.revise"
+    RELATIONSHIP_MEMORY_ARCHIVE = "relationship_memory.archive"
+    RELATIONSHIP_MEMORY_RESTORE = "relationship_memory.restore"
+
 
 class NativeSourceCapability(StrEnum):
     """Authenticated native-host commands, separate from legacy public transports."""
@@ -670,6 +701,37 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ENTITIES_RESOLVE: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_CONTEXT: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_RELATIONSHIPS: frozenset({Purpose.ENTITY_READ}),
+        # The Relationship Memory pair, and neither is a reuse. `D-91`'s test
+        # asks whether reuse would widen the grant, and here it plainly would in
+        # both directions: `entity_read` is the identity plane — aliases,
+        # identifiers, assignments, edges — and admitting a memory read under it
+        # would let a grant issued to learn who someone *is* also return what the
+        # user privately wrote about them; `capture_authoring` is ADR-003's
+        # append-only capture plane and admitting a memory write under it would
+        # let a grant issued to store a Quick Note write an entity-bound
+        # assertion about another person.
+        #
+        # **Writing and reading are separated, and the lifecycle transitions
+        # travel with the writes.** A purpose wide enough to cover both is a
+        # purpose that grants both, which is the rule `purpose.py` states for the
+        # capture plane. `archive` and `restore` sit under
+        # `relationship_memory_authoring` rather than under a purpose of their
+        # own, exactly as `documents.archive`/`documents.restore` sit under
+        # `document_authoring`: they write, they touch only the acting
+        # Principal's own memories, they destroy nothing and each undoes the
+        # other. The residual is stated rather than smoothed over: a grant issued
+        # to write a memory also reaches the reversible lifecycle state of every
+        # memory that Principal holds. It does not reach a *read* of any of them,
+        # which is the separation that matters here more than anywhere else in
+        # this schema.
+        Capability.RELATIONSHIP_MEMORY_CREATE: frozenset({Purpose.RELATIONSHIP_MEMORY_AUTHORING}),
+        Capability.RELATIONSHIP_MEMORY_REVISE: frozenset({Purpose.RELATIONSHIP_MEMORY_AUTHORING}),
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE: frozenset({Purpose.RELATIONSHIP_MEMORY_AUTHORING}),
+        Capability.RELATIONSHIP_MEMORY_RESTORE: frozenset({Purpose.RELATIONSHIP_MEMORY_AUTHORING}),
+        Capability.RELATIONSHIP_MEMORY_GET: frozenset({Purpose.RELATIONSHIP_MEMORY_READ}),
+        Capability.RELATIONSHIP_MEMORY_LIST: frozenset({Purpose.RELATIONSHIP_MEMORY_READ}),
+        Capability.RELATIONSHIP_MEMORY_SEARCH: frozenset({Purpose.RELATIONSHIP_MEMORY_READ}),
+        Capability.RELATIONSHIP_MEMORY_HISTORY: frozenset({Purpose.RELATIONSHIP_MEMORY_READ}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),

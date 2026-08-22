@@ -79,6 +79,7 @@ from my_pa.contracts.ports import (
     OperationQueue,
     ProjectRepository,
     PulseRepository,
+    RelationshipMemoryRepository,
     RepositoryFailureError,
     ReviewDecisionRequest,
     ReviewRepository,
@@ -100,6 +101,7 @@ from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
 from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.goodnotes.models import GoodNotesReviewCase
+from my_pa.domain.relationship.memory import RelationshipMemoryReviewCase
 from my_pa.domain.search.query import SearchRequest
 from my_pa.domain.source.enrollment import Enrollment, EnrollmentRequest
 from my_pa.domain.source.registry import ConfiguredSource
@@ -147,6 +149,14 @@ from my_pa.infrastructure.persistence.registry import (
     UnknownSourceError,
     get_source,
     source_of_object,
+)
+from my_pa.infrastructure.persistence.relationship_memory import (
+    SqlRelationshipMemoryRepository,
+)
+from my_pa.infrastructure.persistence.relationship_memory_review import (
+    decide_relationship_memory_review,
+    is_relationship_memory_review_case,
+    relationship_memory_review_cases,
 )
 from my_pa.infrastructure.persistence.reveal import reveal_subject
 from my_pa.infrastructure.persistence.review import decide_review, review_cases
@@ -429,24 +439,42 @@ class _Captures(CaptureRepository):
         )
 
 
+#: One case on the canonical Review surface, whichever plane opened it.
+#:
+#: An alias rather than the union spelled out three times: `_Reviews.cases`, its
+#: inner statement and the list it sorts all describe the same set, and three
+#: copies of a union is three places a fourth subject kind would have to be
+#: remembered.
+type _ReviewCaseVariant = ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase
+
+
 class _Reviews(ReviewRepository):
     """The governed review and promotion plane."""
 
     def __init__(self, connection: Connection) -> None:
         self._connection = connection
 
-    def cases(
-        self, *, limit: int, principal_id: str
-    ) -> tuple[ReviewCase | GoodNotesReviewCase, ...]:
-        def statement() -> tuple[ReviewCase | GoodNotesReviewCase, ...]:
+    def cases(self, *, limit: int, principal_id: str) -> tuple[_ReviewCaseVariant, ...]:
+        """One page merged from the three planes that open cases on this surface.
+
+        Each plane is asked for `limit` of its own and the merge takes the oldest
+        `limit` overall, so a plane holding nothing costs one query and changes
+        nothing — which is what lets Relationship Memory join the surface without
+        the other two knowing it exists.
+        """
+
+        def statement() -> tuple[_ReviewCaseVariant, ...]:
             capture = review_cases(
                 self._connection, limit=limit, context=capture_context(principal_id)
             )
             goodnotes = goodnotes_review_cases(
                 self._connection, principal_id=principal_id, limit=limit
             )
-            combined: list[ReviewCase | GoodNotesReviewCase] = sorted(
-                [*capture, *goodnotes],
+            memories = relationship_memory_review_cases(
+                self._connection, principal_id=principal_id, limit=limit
+            )
+            combined: list[_ReviewCaseVariant] = sorted(
+                [*capture, *goodnotes, *memories],
                 key=lambda case: (case.opened_at, case.review_case_id),
             )
             return tuple(combined[:limit])
@@ -461,6 +489,12 @@ class _Reviews(ReviewRepository):
                 principal_id=request.principal_id,
             ):
                 return decide_goodnotes_review(self._connection, request)
+            if is_relationship_memory_review_case(
+                self._connection,
+                review_case_id=request.review_case_id,
+                principal_id=request.principal_id,
+            ):
+                return decide_relationship_memory_review(self._connection, request)
             return decide_review(self._connection, request)
 
         return _read(statement)
@@ -757,6 +791,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def entities(self) -> EntitiesRepository:
         """The generalized entity rows, on this transaction's connection."""
         return SqlEntityRepository(self._open)
+
+    @property
+    def relationship_memory(self) -> RelationshipMemoryRepository:
+        """The Relationship Memory rows, on this transaction's connection."""
+        return SqlRelationshipMemoryRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

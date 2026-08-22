@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route sixty-two capability names and none of them mutates a source, and every
+  surface route seventy capability names and none of them mutates a source, and every
   capability driven over both transports is shown to have called only the three
   read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -353,6 +353,20 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        # The Relationship Memory plane (WP-RM-01) joins them one step further
+        # out: a memory names an Entity, and an Entity names no `src_…` and no
+        # `enr_…`, so a memory request has no scope to state and there is none
+        # for a stranger to be refused. The domain says so — all eight are in
+        # `domain.policy.decision._SCOPELESS` — and `tests/policy` re-derives
+        # the partition from `evaluate` rather than from this list.
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_GET,
+        Capability.RELATIONSHIP_MEMORY_LIST,
+        Capability.RELATIONSHIP_MEMORY_SEARCH,
+        Capability.RELATIONSHIP_MEMORY_HISTORY,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
     }
 ]
 
@@ -555,6 +569,19 @@ TASK_MANAGEMENT_EXEMPTION = frozenset(
     {Capability.TASKS_CREATE, Capability.TASKS_UPDATE, Capability.COMMITMENTS_CREATE}
 )
 
+#: The Relationship Memory exemption (WP-RM-01), and it is deliberately **one
+#: name**, the way `MANAGED_DOCUMENT_EXEMPTION` is.
+#: `relationship_memory.create` is the only one of the eight the substring proxy
+#: refuses, and it is refused for the reason `capture.create` and
+#: `documents.create` are: a memory is a *product-owned* record under `ADR-003`
+#: — a note the user wrote about a person — and writing one mutates no source.
+#: Its rows carry no `source_id`, and the plane reaches no `SourceProvider`.
+#:
+#: `relationship_memory.revise`, `.archive` and `.restore` are **not** exempt:
+#: they pass the name check on their own, so exempting them would widen the hole
+#: for nothing. A future `relationship_memory.delete` is still caught here.
+RELATIONSHIP_MEMORY_EXEMPTION = frozenset({Capability.RELATIONSHIP_MEMORY_CREATE})
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -574,6 +601,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | MANAGED_DOCUMENT_EXEMPTION
         | CONTINUITY_AUTHORING_EXEMPTION
         | TASK_MANAGEMENT_EXEMPTION
+        | RELATIONSHIP_MEMORY_EXEMPTION
     )
     checked = [c for c in Capability if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

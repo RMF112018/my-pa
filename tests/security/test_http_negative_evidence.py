@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes sixty-two capability names and none of them mutates a source,
+  ends: the transport routes seventy capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -64,7 +64,7 @@ from tests.conftest import (
     staged_search,
     staged_task,
 )
-from tests.contract.test_transport_parity import ENTITY_EMAIL, staged_entities
+from tests.contract.test_transport_parity import ENTITY_EMAIL, staged_entities, staged_memory
 from tests.wire import Reply, Wire, serve
 
 from my_pa.adapters.http import (
@@ -268,6 +268,15 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(marked)
+    # Four memories rather than one, because the sweeps below drive this whole
+    # table in one pass over one scene: a revise, an archive and a restore that
+    # all named the memory the reads name would meet it at version two and
+    # three, and `expected_version` is not a field this table can make
+    # order-dependent without making the sweeps order-dependent too.
+    read_memory = staged_memory(marked, "wire-memory-staging-read")
+    revise_memory = staged_memory(marked, "wire-memory-staging-revise")
+    archive_memory = staged_memory(marked, "wire-memory-staging-archive")
+    restore_memory = staged_memory(marked, "wire-memory-staging-restore")
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -524,6 +533,51 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.ENTITIES_CONTEXT: {"entity_id": person.entity_id},
         Capability.ENTITIES_RELATIONSHIPS: {"entity_id": person.entity_id, "direction": "any"},
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # The Relationship Memory plane (WP-RM-01), and unlike the entity plane
+        # above **these payloads do carry a marker**, because this plane is the
+        # one place in the relationship tier where the *request* supplies free
+        # text: a memory's `statement` is the note a user dictated about a
+        # person, and `relationship_memory.search`'s `query` is what they asked
+        # about them. The statement carries `MARKER_CONTENT` for the reason the
+        # capture and managed-document bodies do — it is content the caller
+        # sent, echoed back only to the caller who asked for it — and the query
+        # carries `MARKER_QUERY`, which `markers()` forbids everywhere: a
+        # refusal, a header, an audit row or a log line that named the words
+        # somebody searched their own private notes for would disclose the
+        # subject of the question even where it disclosed no answer. Planting it
+        # anywhere else on this plane would be planting it in an identifier,
+        # which is the one field on the plane that discloses nothing about a
+        # person.
+        #
+        # The subject is the staged `person` and every memory named here is one
+        # `staged_memory` actually admitted, so each of the eight answers with a
+        # result and the scans below are over the answers this plane really
+        # gives rather than over a refusal.
+        Capability.RELATIONSHIP_MEMORY_CREATE: {
+            "entity_id": person.entity_id,
+            "statement": MARKER_CONTENT,
+            "idempotency_key": "wire-memory-create-0001",
+        },
+        Capability.RELATIONSHIP_MEMORY_GET: {"memory_id": read_memory},
+        Capability.RELATIONSHIP_MEMORY_LIST: {"entity_id": person.entity_id},
+        Capability.RELATIONSHIP_MEMORY_SEARCH: {"query": MARKER_QUERY},
+        Capability.RELATIONSHIP_MEMORY_HISTORY: {"memory_id": read_memory},
+        Capability.RELATIONSHIP_MEMORY_REVISE: {
+            "memory_id": revise_memory,
+            "expected_version": 1,
+            "statement": MARKER_CONTENT,
+            "idempotency_key": "wire-memory-revise-0001",
+        },
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE: {
+            "memory_id": archive_memory,
+            "expected_version": 1,
+            "idempotency_key": "wire-memory-archive-0001",
+        },
+        Capability.RELATIONSHIP_MEMORY_RESTORE: {
+            "memory_id": restore_memory,
+            "expected_version": 1,
+            "idempotency_key": "wire-memory-restore-0001",
+        },
     }
 
 
@@ -714,6 +768,22 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        # The Relationship Memory plane (WP-RM-01) joins them for the same
+        # reason, one step further out: a memory names an Entity, which itself
+        # names no `src_…` and no `enr_…`, so a memory request has no scope to
+        # state and there is none for a stranger to be refused. The domain says
+        # so — all eight are in `domain.policy.decision._SCOPELESS` — and
+        # `tests/policy` re-derives the partition from `evaluate` rather than
+        # from this list. Leaving them in would make this rule assert that a
+        # stranger is denied a scope neither the request nor the plane has.
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_GET,
+        Capability.RELATIONSHIP_MEMORY_LIST,
+        Capability.RELATIONSHIP_MEMORY_SEARCH,
+        Capability.RELATIONSHIP_MEMORY_HISTORY,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
     }
 ]
 
@@ -777,6 +847,20 @@ _UNIMPLEMENTED_CAPABILITIES = frozenset(
     {Capability.TASKS_BULK_PREVIEW, Capability.TASKS_BULK_CONFIRM}
 )
 
+#: The eight `relationship_memory.` names stood beside them in a second set,
+#: `_UNCOMPOSED_CAPABILITIES`, because `FakeUnitOfWork` had no
+#: `relationship_memory` repository and `tests/conftest.build_service` left the
+#: plane off, so every one of them answered `unsupported` at the composition
+#: floor and every sweep below scanned a refusal. Both facts have changed, so
+#: the set is gone rather than kept empty and the eight are swept as results.
+#:
+#: **That is the stronger claim, not a weaker one.** A `501` that named the
+#: statement a caller sent, or the words they searched their own notes for,
+#: would disclose exactly what a `403` must not — but so would a `200`, and a
+#: `200` is the answer that actually carries a memory. The payloads still plant
+#: their markers; what changed is that the marker now travels through the plane
+#: rather than stopping at its floor.
+
 MUTATING_NAMES = ("write", "create", "update", "delete", "remove", "rename", "move", "put")
 
 #: The capabilities the name check above does *not* apply to, and the reason it
@@ -834,6 +918,26 @@ TASK_MANAGEMENT_EXEMPTION = frozenset(
     {Capability.TASKS_CREATE, Capability.TASKS_UPDATE, Capability.COMMITMENTS_CREATE}
 )
 
+#: The Relationship Memory exemption (WP-RM-01), and it is deliberately **one
+#: name**, the way `MANAGED_DOCUMENT_EXEMPTION` is. `relationship_memory.create`
+#: is the only one of the eight the substring proxy refuses, and it is refused
+#: for the reason `capture.create` and `documents.create` are: a memory is a
+#: *product-owned* record under `ADR-003` — a note the user wrote about a person
+#: — and writing one mutates no source. Its rows carry no `source_id`, and the
+#: plane reaches no `SourceProvider` at all.
+#:
+#: This is an extension of the registry the rule reads and not a relaxation of
+#: the rule: the four writes on this plane are `create`, `revise`, `archive` and
+#: `restore`, and only the first is exempted, because the other three pass the
+#: name check unaided. A future `relationship_memory.delete` is still caught
+#: here — and could not exist in any case, since archive is reversible and there
+#: is no capability that destroys a memory. The property the proxy stands for is
+#: carried behaviourally for this plane by
+#: `test_no_capability_over_the_wire_calls_anything_but_a_read`, which drives
+#: every capability against a recording provider, exactly as it is for
+#: `capture.*` and `documents.create`.
+RELATIONSHIP_MEMORY_EXEMPTION = frozenset({Capability.RELATIONSHIP_MEMORY_CREATE})
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -870,6 +974,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | MANAGED_DOCUMENT_EXEMPTION
         | CONTINUITY_AUTHORING_EXEMPTION
         | TASK_MANAGEMENT_EXEMPTION
+        | RELATIONSHIP_MEMORY_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

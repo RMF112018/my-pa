@@ -1,4 +1,4 @@
-"""The ports the sixty-two capability use cases call, and nothing else.
+"""The ports the seventy capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -42,11 +42,12 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
 from types import TracebackType
+from typing import Any
 
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.status import SourceStatusState
@@ -107,6 +108,19 @@ from my_pa.domain.relationship.identity import (
     IdentityResolution,
     ResolutionAction,
     UnresolvedMention,
+)
+from my_pa.domain.relationship.memory import (
+    MemoryActorClass,
+    MemoryAdmission,
+    MemoryAuthority,
+    MemoryContextLink,
+    MemoryKind,
+    MemoryLifecycle,
+    MemoryOperation,
+    MemoryReceipt,
+    RelationshipMemory,
+    RelationshipMemoryReviewCase,
+    RelationshipMemoryVersion,
 )
 from my_pa.domain.relationship.profile import OrganizationProfile, PersonProfile
 from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
@@ -1110,12 +1124,18 @@ class ReviewRepository(ABC):
     @abstractmethod
     def cases(
         self, *, limit: int, principal_id: str
-    ) -> tuple[ReviewCase | GoodNotesReviewCase, ...]:
+    ) -> tuple[ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase, ...]:
         """One bounded page for this Principal, oldest case first.
 
         `principal_id` is the authenticated caller's identifier: the page is
         confined to that Principal's partition, and a case belonging to any
         other Principal is unreachable through this port (MU-AC-04).
+
+        Three variants and one surface. A capture proposal, a GoodNotes region
+        and a Relationship Memory candidate are decided by the same reviewer
+        through the same capability; the union is what keeps that one surface
+        from becoming three, and each variant carries only the subject facts its
+        own decision needs.
         """
 
     @abstractmethod
@@ -1798,6 +1818,23 @@ class UnitOfWork(ABC):
         raise NotImplementedError
 
     @property
+    def relationship_memory(self) -> RelationshipMemoryRepository:
+        """The Relationship Memory rows, inside this transaction.
+
+        Non-abstract with a refusal rather than `@abstractmethod`, the shape
+        `continuity_read` and `worker_health` already use: the narrow test
+        doubles in `tests/schema` and `tests/concurrency` implement only the
+        ports their subject needs, and making this abstract would break them for
+        a plane they never reach. The canonical PostgreSQL composition overrides
+        it; a build that has not composed the plane refuses here rather than
+        answering with something that is not the plane.
+
+        `principal_id` remains a parameter on every method of the port and is
+        the authenticated caller's partition, never a caller-supplied field.
+        """
+        raise NotImplementedError
+
+    @property
     @abstractmethod
     def audit(self) -> AuditSink:
         """The audit sink, inside this transaction.
@@ -2343,6 +2380,226 @@ class ManagedWriteRequest:
         return sha256(
             json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryWriteRequest:
+    """One request to write a relationship memory, already normalized.
+
+    **The identifiers are minted by the caller and travel in the request**, the
+    ordering `ManagedWriteRequest` uses and for a related reason: the aggregate
+    and its first version are mutually dependent, so both identifiers have to
+    exist before either row is inserted, and the same values reach the
+    submission row that records the write.
+
+    `memory_id` absent means "create", present means "revise", "archive" or
+    "restore" — which one is `operation`. `expected_version` is required for
+    every operation except `create`, because a state-dependent write without one
+    is a blind write.
+
+    `statement` is `repr=False` for the reason it is on the version: a request
+    value is logged, compared and rendered in test failures, and this is the
+    field carrying what the user wrote about another person.
+    """
+
+    operation: MemoryOperation
+    memory_id: str | None
+    memory_version_id: str
+    expected_version: int | None
+    principal_id: str
+    subject_entity_id: str | None
+    memory_kind: MemoryKind | None
+    statement: str | None = field(repr=False)
+    statement_sha256: str | None
+    structured_value: dict[str, Any] | None = field(repr=False)
+    authority: MemoryAuthority
+    classification: Classification
+    created_by_actor: MemoryActorClass
+    context_links: tuple[Mapping[str, str], ...]
+    pinned: bool | None
+    observed_at: datetime | None
+    effective_from: datetime | None
+    effective_to: datetime | None
+    correction_reason: str | None = field(repr=False)
+    idempotency_key: str
+    correlation_id: str
+    server_received_at: datetime
+    proposal_id: str | None = None
+    review_case_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.memory_version_id, IdKind.RELATIONSHIP_MEMORY_VERSION)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if self.memory_id is not None:
+            validate_identifier(self.memory_id, IdKind.RELATIONSHIP_MEMORY)
+        creating = self.operation is MemoryOperation.CREATE
+        if creating is (self.memory_id is not None):
+            raise ValueError("a memory creation names no memory; every other operation does")
+        if creating is (self.expected_version is not None):
+            raise ValueError("a state-dependent memory write names the version it expects")
+        if self.expected_version is not None and self.expected_version < 1:
+            raise ValueError("an expected memory version starts at one")
+        writes_content = self.operation in (MemoryOperation.CREATE, MemoryOperation.REVISE)
+        if writes_content:
+            if self.statement is None or self.statement_sha256 is None:
+                raise ValueError("a memory create or revise carries a statement")
+            if self.memory_kind is None:
+                raise ValueError("a memory create or revise carries a kind")
+        if creating and self.subject_entity_id is None:
+            raise ValueError("a memory creation names its subject")
+        if self.subject_entity_id is not None:
+            validate_identifier(self.subject_entity_id, IdKind.ENTITY)
+        if not self.idempotency_key:
+            raise ValueError("a memory write carries an idempotency key")
+        ensure_utc(self.server_received_at)
+
+    @property
+    def payload_digest(self) -> str:
+        """What makes a replay decidable without a second copy of the content.
+
+        Every field a caller supplied that could differ between two requests
+        carrying one key, and none this layer added: the minted identifiers, the
+        correlation identifier and the receipt time are excluded because they
+        differ on every attempt by construction, and including any of them would
+        make every retry a conflict.
+
+        The *digest* of the statement stands in for the statement, so a payload
+        digest can be computed and stored without the note itself passing through
+        a second value that is compared and logged.
+        """
+        payload = {
+            "operation": self.operation.value,
+            "memory_id": self.memory_id,
+            "expected_version": self.expected_version,
+            "subject_entity_id": self.subject_entity_id,
+            "memory_kind": None if self.memory_kind is None else self.memory_kind.value,
+            "statement_sha256": self.statement_sha256,
+            "structured_value": self.structured_value,
+            "authority": self.authority.value,
+            "classification": self.classification.value,
+            "context_links": [dict(sorted(link.items())) for link in self.context_links],
+            "pinned": self.pinned,
+            "observed_at": None if self.observed_at is None else self.observed_at.isoformat(),
+            "effective_from": (
+                None if self.effective_from is None else self.effective_from.isoformat()
+            ),
+            "effective_to": None if self.effective_to is None else self.effective_to.isoformat(),
+            "correction_reason": self.correction_reason,
+        }
+        return sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryPage:
+    """One bounded page of memories, and whether the bound bit."""
+
+    memories: tuple[RelationshipMemory, ...]
+    statements: Mapping[str, str] = field(repr=False)
+    is_truncated: bool = False
+    withheld_by_policy: int = 0
+
+
+@dataclass(frozen=True, slots=True)
+class MemoryDetail:
+    """One memory with its current version, as `relationship_memory.get` answers."""
+
+    memory: RelationshipMemory
+    current_version: RelationshipMemoryVersion
+    context_links: tuple[MemoryContextLink, ...] = ()
+    evidence_count: int = 0
+    canonical_entity_id: str | None = None
+
+
+class RelationshipMemoryRepository(ABC):
+    """The Relationship Memory plane, inside one transaction.
+
+    Every method is principal-scoped. A memory another Principal owns answers
+    exactly what a memory that does not exist answers, so a refusal cannot be
+    used to learn that an identifier names something.
+    """
+
+    @abstractmethod
+    def admit(self, request: MemoryWriteRequest) -> MemoryAdmission:
+        """Admit one memory write, or return the receipt its key is bound to.
+
+        Raises `MemoryConflictError` when the key is bound to a materially
+        different request, `StaleMemoryVersionError` when the named expected
+        version is no longer current, `MergedSubjectError` when the subject has
+        been merged away, and `UnknownScopeError` when the request names a
+        memory, subject or context target this Principal does not hold.
+        """
+
+    @abstractmethod
+    def replay_for(
+        self, idempotency_key: str, payload_digest: str, *, principal_id: str
+    ) -> MemoryReceipt | None:
+        """The receipt this Principal's key is already bound to, or `None`.
+
+        Takes the digest for the reason `ManagedDocumentRepository.replay_for`
+        does: a lookup on the key alone would answer a *conflicting* request with
+        the original receipt, silently reporting a write that never happened as
+        durable. A key bound to a different digest raises `MemoryConflictError`
+        here, exactly as `admit` does at the unique constraint.
+        """
+
+    @abstractmethod
+    def detail(self, memory_id: str, *, principal_id: str) -> MemoryDetail | None:
+        """One memory this Principal owns, with its current version, or `None`."""
+
+    @abstractmethod
+    def page_for_entity(
+        self,
+        subject_entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        kinds: frozenset[MemoryKind] | None = None,
+        lifecycle: MemoryLifecycle = MemoryLifecycle.ACTIVE,
+        context_entity_id: str | None = None,
+        as_of: datetime | None = None,
+        after_memory_id: str | None = None,
+        include_restricted: bool = False,
+    ) -> MemoryPage:
+        """One bounded page of one entity's memories, newest first."""
+
+    @abstractmethod
+    def search(
+        self,
+        query: str,
+        *,
+        principal_id: str,
+        limit: int,
+        subject_entity_id: str | None = None,
+        kinds: frozenset[MemoryKind] | None = None,
+        after_memory_id: str | None = None,
+    ) -> MemoryPage:
+        """One bounded page of lexical matches over eligible current memories.
+
+        Never returns a `restricted_local` memory and never reports one in any
+        count, so a caller cannot learn that one exists by probing terms.
+        """
+
+    @abstractmethod
+    def history(
+        self, memory_id: str, *, principal_id: str, limit: int, after_version_id: str | None = None
+    ) -> tuple[tuple[RelationshipMemoryVersion, ...], bool]:
+        """Every stored version of one memory this Principal owns, oldest first."""
+
+    @abstractmethod
+    def summaries_for_context(
+        self, subject_entity_id: str, *, principal_id: str, limit: int
+    ) -> tuple[tuple[MemoryDetail, ...], bool, int]:
+        """The bounded memory summary `entities.context` carries.
+
+        Returns the summaries, whether more exist than the card can hold, and how
+        many were withheld by classification policy. Three values rather than a
+        list, because "there are none", "there are more" and "some are withheld"
+        are different facts and a card that could not tell them apart would let a
+        reader infer absence from a policy decision.
+        """
 
 
 @dataclass(frozen=True, slots=True)

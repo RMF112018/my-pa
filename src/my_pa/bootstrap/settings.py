@@ -342,6 +342,21 @@ class Settings(StrictModel):
     #: per-capability exclusion list, so "available" and "remotely reachable"
     #: are one decision and this is where it is made.
     relationship_intelligence_enabled: bool = False
+    #: Process-local gate for the Relationship Memory plane. Default off, and it
+    #: requires `relationship_intelligence_enabled` as well: a memory binds a
+    #: generalized Entity as its subject and the repository proves ownership of
+    #: that subject by reading the entity tables, so serving memories without the
+    #: plane that owns their subjects would be serving writes it cannot validate.
+    #:
+    #: A switch of its own rather than a reuse of the entity flag, because the
+    #: two admit different things. The entity flag publishes six *read*
+    #: capabilities over identity. This one publishes four reads and four
+    #: **writes** over the most private records this product holds, and the
+    #: remote MCP profile is derived from the capability set with no
+    #: per-capability exclusion list — so "available" and "remotely reachable"
+    #: are one decision, and an operator who wants entity reads should not have
+    #: to accept memory authoring to get them.
+    relationship_memory_enabled: bool = False
     goodnotes_self_improving_optimizer_enabled: bool = False
     goodnotes_rollout_stage: GoodNotesRolloutStage = GoodNotesRolloutStage.OBSERVE_ONLY
     remote_mcp_public_host: str = ""

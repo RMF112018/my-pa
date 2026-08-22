@@ -263,6 +263,21 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     63: "Sixty-three",
     64: "Sixty-four",
     65: "Sixty-five",
+    66: "Sixty-six",
+    67: "Sixty-seven",
+    68: "Sixty-eight",
+    69: "Sixty-nine",
+    70: "Seventy",
+    71: "Seventy-one",
+    72: "Seventy-two",
+    73: "Seventy-three",
+    74: "Seventy-four",
+    75: "Seventy-five",
+    76: "Seventy-six",
+    77: "Seventy-seven",
+    78: "Seventy-eight",
+    79: "Seventy-nine",
+    80: "Eighty",
 }
 
 
@@ -365,7 +380,7 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
     }
     for label, path in documents.items():
         text = path.read_text(encoding="utf-8")
-        assert "sixty-two capabilit" in text.lower().replace(" public ", " "), (
+        assert "seventy capabilit" in text.lower().replace(" public ", " "), (
             f"{label} lost the current capability count"
         )
         assert "fifty" in text, f"{label} lost the current revision count"
@@ -427,7 +442,7 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
     assert routed <= documented, (
         f"web README omits routed capabilities {sorted(routed - documented)}"
     )
-    assert "sixty-two capability names" in lowered
+    assert "seventy capability names" in lowered
     # Derived, not spelled out here: see the note on
     # `test_current_state_docs_name_the_current_capability_and_migration_counts`.
     # A literal in this guard is the same claim, with the same shelf life, as the

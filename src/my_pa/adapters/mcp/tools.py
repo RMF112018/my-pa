@@ -165,7 +165,14 @@ def payload_schema_for(command: type) -> dict[str, Any]:
     if isinstance(overlays, Mapping):
         for name, value in overlays.items():
             if name in properties and isinstance(value, Mapping):
-                properties[name] = dict(value)
+                # **Merged over the derived property, not substituted for it.**
+                # A substitution loses whatever `_schema_for` worked out from the
+                # annotation, which is fine for an overlay that restates a whole
+                # nested object and silently wrong for one that only adds a
+                # `description`: the published field ends up with documentation
+                # and no type. Overlay keys win, so an overlay that does describe
+                # the whole shape still does.
+                properties[name] = {**properties[name], **dict(value)}
             elif name in _PAYLOAD_SCHEMA_APPLICATORS:
                 schema[name] = value
     return schema

@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with sixty-two capabilities and twenty-five
+emits what it emitted on the day it merged, with seventy capabilities and twenty-seven
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -255,6 +255,21 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # nothing has placed. `e4d7b2f9a316` is the forward `ALTER` that admits
         # it, and this line is why a further one cannot arrive without it.
         "entities.unresolved_mentions",
+        # The Relationship Memory plane. `f1c6b904a2d7` is the forward `ALTER`
+        # that admits the eight `relationship_memory.` names, and it travels in
+        # the same revision as the tables rather than after them: a build that
+        # could serve `relationship_memory.create` against a database whose
+        # `capability_is_known` refuses the string would fail on the *audit*
+        # insert, after the memory row, which is the one failure ordering
+        # `AGENTS.md` section 5 rules out.
+        "relationship_memory.create",
+        "relationship_memory.get",
+        "relationship_memory.list",
+        "relationship_memory.search",
+        "relationship_memory.history",
+        "relationship_memory.revise",
+        "relationship_memory.archive",
+        "relationship_memory.restore",
     }
 )
 
@@ -988,6 +1003,10 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "intelligence_commit_receipts_are_append_only",
             "intelligence_pipeline_dependencies_are_append_only",
             "intelligence_provenance_refs_are_append_only",
+            # The Relationship Memory plane's two append-only triggers, named for
+            # the same reason as the report plane's above.
+            "relationship_memory_versions_are_append_only",
+            "relationship_memory_decisions_are_append_only",
             "goodnotes_page_versions_are_immutable",
             "goodnotes_region_proposals_are_immutable",
             "goodnotes_source_snapshots_are_immutable",

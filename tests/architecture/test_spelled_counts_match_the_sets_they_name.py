@@ -312,6 +312,26 @@ _ORDINAL_UNITS = (
     "sixty-eighth",
     "sixty-ninth",
     "seventieth",
+    # The seventies, added when the Relationship Memory plane admitted eight
+    # `relationship_memory.*` capabilities and the public set reached seventy, so
+    # `a seventy-first capability` became the ordinal a correct claim would use.
+    # This boundary announced itself in both the ways the four above did at once:
+    # the green-half plant raised `IndexError` on index seventy-one, and
+    # `tests/contract/test_http_transport.py` — whose prose already said
+    # `seventy-first` — was reported as claiming *one*, because the longest-match
+    # scan could find no compound ordinal here and fell back to the bare `first`
+    # inside it. A false finding rather than a false pass, which is what the
+    # density of this tuple buys.
+    "seventy-first",
+    "seventy-second",
+    "seventy-third",
+    "seventy-fourth",
+    "seventy-fifth",
+    "seventy-sixth",
+    "seventy-seventh",
+    "seventy-eighth",
+    "seventy-ninth",
+    "eightieth",
 )
 
 

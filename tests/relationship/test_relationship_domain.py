@@ -410,10 +410,156 @@ EXPECTED_MODEL_FIELDS = {
             "observations",
             "coverage",
             "limitations",
+            "memories",
         }
     ),
     "my_pa.domain.relationship.resolution.EntityResolution": frozenset(
         {"outcome", "candidates", "warnings", "candidates_were_truncated"}
+    ),
+    "my_pa.domain.relationship.context_card.ContextCardMemory": frozenset(
+        {
+            "memory",
+            "current_version",
+        }
+    ),
+    "my_pa.domain.relationship.memory.MemoryAdmission": frozenset(
+        {
+            "receipt",
+            "created",
+        }
+    ),
+    "my_pa.domain.relationship.memory.MemoryContextLink": frozenset(
+        {
+            "context_link_id",
+            "memory_version_id",
+            "principal_id",
+            "target_type",
+            "target_id",
+            "role",
+            "authority",
+            "created_at",
+        }
+    ),
+    "my_pa.domain.relationship.memory.MemoryEvidenceLink": frozenset(
+        {
+            "evidence_link_id",
+            "memory_version_id",
+            "principal_id",
+            "role",
+            "created_at",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+        }
+    ),
+    "my_pa.domain.relationship.memory.MemoryProposalEvidence": frozenset(
+        {
+            "proposal_evidence_id",
+            "memory_proposal_id",
+            "principal_id",
+            "role",
+            "created_at",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+        }
+    ),
+    "my_pa.domain.relationship.memory.MemoryReceipt": frozenset(
+        {
+            "memory_id",
+            "memory_version_id",
+            "version_number",
+            "aggregate_version",
+            "lifecycle_state",
+            "idempotency_key",
+            "statement_sha256",
+            "issued_at",
+            "created",
+        }
+    ),
+    "my_pa.domain.relationship.memory.RelationshipMemory": frozenset(
+        {
+            "memory_id",
+            "principal_id",
+            "subject_entity_id",
+            "memory_kind",
+            "lifecycle_state",
+            "current_version_id",
+            "current_version_number",
+            "version",
+            "pinned",
+            "created_at",
+            "updated_at",
+            "archived_at",
+        }
+    ),
+    "my_pa.domain.relationship.memory.RelationshipMemoryProposal": frozenset(
+        {
+            "memory_proposal_id",
+            "principal_id",
+            "subject_entity_id",
+            "proposed_kind",
+            "proposed_statement",
+            "proposed_statement_sha256",
+            "state",
+            "method",
+            "method_version",
+            "classification",
+            "proposed_at",
+            "structured_value",
+            "model_id",
+            "model_version",
+            "review_case_id",
+            "accepted_memory_id",
+            "accepted_memory_version_id",
+            "invalidated_reason",
+        }
+    ),
+    # No `statement` and no `risk_class`, and both absences are load-bearing.
+    # The proposed text is withheld from the review listing on purpose (see
+    # `application.service._review_case_payload`), and `risk_class` is a
+    # property over a module constant because a dataclass field carrying the
+    # token `risk` is refused by the scoring deny rule next door.
+    "my_pa.domain.relationship.memory.RelationshipMemoryReviewCase": frozenset(
+        {
+            "review_case_id",
+            "proposal_id",
+            "subject_entity_id",
+            "principal_id",
+            "proposed_kind",
+            "opened_at",
+            "proposal_state",
+            "review_version",
+            "latest_disposition",
+            "accepted_memory_id",
+            "accepted_memory_version_id",
+        }
+    ),
+    "my_pa.domain.relationship.memory.RelationshipMemoryVersion": frozenset(
+        {
+            "memory_version_id",
+            "memory_id",
+            "principal_id",
+            "version_number",
+            "statement",
+            "statement_sha256",
+            "memory_kind",
+            "authority",
+            "classification",
+            "created_by_actor",
+            "recorded_at",
+            "idempotency_key",
+            "correlation_id",
+            "structured_value",
+            "cloud_eligible",
+            "observed_at",
+            "effective_from",
+            "effective_to",
+            "prior_version_id",
+            "correction_reason",
+            "proposal_id",
+            "review_case_id",
+        }
     ),
 }
 
@@ -642,6 +788,135 @@ EXPECTED_TABLE_COLUMNS = {
             "principal_id",
         }
     ),
+    "relationship_memories": frozenset(
+        {
+            "memory_id",
+            "principal_id",
+            "subject_entity_id",
+            "memory_kind",
+            "lifecycle_state",
+            "current_version_id",
+            "current_version_number",
+            "version",
+            "pinned",
+            "created_at",
+            "updated_at",
+            "archived_at",
+        }
+    ),
+    "relationship_memory_context_links": frozenset(
+        {
+            "context_link_id",
+            "memory_version_id",
+            "principal_id",
+            "target_type",
+            "target_id",
+            "role",
+            "authority",
+            "created_at",
+        }
+    ),
+    "relationship_memory_evidence_links": frozenset(
+        {
+            "evidence_link_id",
+            "memory_version_id",
+            "principal_id",
+            "role",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+            "created_at",
+        }
+    ),
+    "relationship_memory_proposal_evidence": frozenset(
+        {
+            "proposal_evidence_id",
+            "memory_proposal_id",
+            "principal_id",
+            "role",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+            "created_at",
+        }
+    ),
+    "relationship_memory_proposals": frozenset(
+        {
+            "memory_proposal_id",
+            "principal_id",
+            "subject_entity_id",
+            "proposed_kind",
+            "proposed_statement",
+            "proposed_statement_sha256",
+            "structured_value",
+            "state",
+            "method",
+            "method_version",
+            "model_id",
+            "model_version",
+            "classification",
+            "proposed_at",
+            "review_case_id",
+            "accepted_memory_id",
+            "accepted_memory_version_id",
+            "invalidated_reason",
+        }
+    ),
+    "relationship_memory_review_decisions": frozenset(
+        {
+            "decision_id",
+            "memory_proposal_id",
+            "review_case_id",
+            "principal_id",
+            "sequence",
+            "disposition",
+            "corrected_statement",
+            "correlation_id",
+            "audit_id",
+            "decided_at",
+        }
+    ),
+    "relationship_memory_submissions": frozenset(
+        {
+            "submission_id",
+            "idempotency_key",
+            "principal_id",
+            "correlation_id",
+            "operation",
+            "payload_sha256",
+            "server_received_at",
+            "memory_id",
+            "memory_version_id",
+            "aggregate_version",
+            "lifecycle_state",
+        }
+    ),
+    "relationship_memory_versions": frozenset(
+        {
+            "memory_version_id",
+            "memory_id",
+            "principal_id",
+            "version_number",
+            "statement_text",
+            "statement_sha256",
+            "structured_value",
+            "memory_kind",
+            "authority",
+            "classification",
+            "cloud_eligible",
+            "created_by_actor",
+            "observed_at",
+            "effective_from",
+            "effective_to",
+            "recorded_at",
+            "prior_version_id",
+            "correction_reason",
+            "proposal_id",
+            "review_case_id",
+            "idempotency_key",
+            "correlation_id",
+        }
+    ),
 }
 
 
@@ -675,8 +950,8 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 30
-    assert len(actual_table_columns) == 26
+    assert len(actual_model_fields) == 40
+    assert len(actual_table_columns) == 34
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

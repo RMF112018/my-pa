@@ -122,6 +122,12 @@ ABSENT_MEMORY: Final = "mem_ffff0006ffff0006"
 FIRST_NOTE: Final = "Synthetic subject prefers Teams messages."
 SECOND_NOTE: Final = "Synthetic subject prefers phone calls now, not Teams."
 
+#: A word that appears in `FIRST_NOTE` and in no other synthetic fixture, so a
+#: search for it matches exactly one memory and a second Principal searching it
+#: is asking about a term that exists — which is what makes the empty answer
+#: isolation rather than a query that matches nobody.
+_SEARCHABLE_TERM: Final = "Teams"
+
 WHEN: Final = datetime(2026, 8, 22, 12, tzinfo=UTC)
 LATER: Final = datetime(2026, 8, 22, 13, tzinfo=UTC)
 
@@ -266,6 +272,7 @@ def _mutate_request(
     kind: MemoryKind | None = None,
     correction_reason: str | None = None,
     context_links: tuple[Mapping[str, str], ...] = (),
+    pinned: bool | None = None,
     at: datetime = LATER,
 ) -> MemoryWriteRequest:
     # A revise carries a kind because it writes a version; an archive and a
@@ -288,7 +295,9 @@ def _mutate_request(
         classification=floor,
         created_by_actor=MemoryActorClass.USER,
         context_links=context_links,
-        pinned=False,
+        # `None` by default, which is what a revise that says nothing about the
+        # pin sends. The repository keeps the aggregate's own value.
+        pinned=pinned,
         observed_at=None,
         effective_from=None,
         effective_to=None,
@@ -643,6 +652,143 @@ def test_archive_and_restore_are_reversible_and_write_no_version(
 
 
 # --- the partition ------------------------------------------------------------
+
+
+def test_a_foreign_search_term_reads_exactly_as_an_absent_one(
+    two_principals: Engine,
+) -> None:
+    """`search` is a read like the others, and it was the one nobody checked.
+
+    An independent reviewer deleted the Principal predicate from the search
+    statement and watched 506 tests pass while another Principal's private note
+    text came back in the results. The other three reads were covered; this one
+    was not, so the predicate that stops the disclosure was held in place by
+    nothing.
+
+    Two searches rather than one, because a search that returns nothing proves
+    nothing on its own: the control establishes that the term *is* findable by
+    the Principal who wrote it, so the empty answer to the other one is
+    isolation rather than a query that matches nobody.
+    """
+    created = _created(two_principals)
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        held = repository.search(_SEARCHABLE_TERM, principal_id=PRINCIPAL_A, limit=25)
+        foreign = repository.search(_SEARCHABLE_TERM, principal_id=PRINCIPAL_B, limit=25)
+        absent = repository.search("nothingmatchesthisterm", principal_id=PRINCIPAL_B, limit=25)
+    assert [memory.memory_id for memory in held.memories] == [created.memory_id]
+    assert foreign.memories == ()
+    assert foreign.withheld_by_policy == 0
+    assert not foreign.is_truncated
+    # The equality, not two separate emptiness checks: a foreign term must be
+    # answered exactly as an absent one, so the shape of the answer cannot be
+    # used to learn that the term matched something somewhere.
+    assert foreign == absent
+
+
+def test_a_revision_that_does_not_restate_pinned_keeps_the_pin(
+    two_principals: Engine,
+) -> None:
+    """Correcting the wording of a pinned memory must not unpin it.
+
+    It did. `pinned` was `bool = False` on the revise command and was written
+    into the aggregate unconditionally, so a caller who fixed a typo destroyed a
+    presentation choice they never mentioned — and the published tool
+    description gave a model no reason to suspect it. Absent now means keep;
+    `kind` two fields away has behaved that way all along.
+    """
+    created = _created(two_principals, pinned=True)
+    with two_principals.begin() as connection:
+        _admit(
+            SqlRelationshipMemoryRepository(connection),
+            _mutate_request(
+                MemoryOperation.REVISE,
+                principal_id=PRINCIPAL_A,
+                memory_id=created.memory_id,
+                expected_version=created.aggregate_version,
+                idempotency_key="synthetic-revise-keeps-pin",
+                statement=SECOND_NOTE,
+            ),
+        )
+    with two_principals.connect() as connection:
+        detail = SqlRelationshipMemoryRepository(connection).detail(
+            created.memory_id, principal_id=PRINCIPAL_A
+        )
+    assert detail is not None
+    assert detail.memory.pinned is True
+    assert detail.current_version.statement == SECOND_NOTE
+
+
+def test_a_revision_that_states_pinned_false_unpins(two_principals: Engine) -> None:
+    """The other half, so "absent keeps it" is not satisfied by ignoring the field.
+
+    Without this, a repository that never wrote `pinned` on a revise at all
+    would pass the test above, and unpinning would have become impossible.
+    """
+    created = _created(two_principals, pinned=True)
+    with two_principals.begin() as connection:
+        _admit(
+            SqlRelationshipMemoryRepository(connection),
+            _mutate_request(
+                MemoryOperation.REVISE,
+                principal_id=PRINCIPAL_A,
+                memory_id=created.memory_id,
+                expected_version=created.aggregate_version,
+                idempotency_key="synthetic-revise-unpins",
+                statement=SECOND_NOTE,
+                pinned=False,
+            ),
+        )
+    with two_principals.connect() as connection:
+        detail = SqlRelationshipMemoryRepository(connection).detail(
+            created.memory_id, principal_id=PRINCIPAL_A
+        )
+    assert detail is not None
+    assert detail.memory.pinned is False
+
+
+def test_the_server_refuses_a_sensitivity_stored_below_its_floor(
+    two_principals: Engine,
+) -> None:
+    """The classification floor is defence in depth, and depth has to be tested.
+
+    `classification_floor_for` is proven at the domain layer, but RM-AC-006 and
+    RM-P-AC-006 both name the database CHECK as their evidence — and deleting
+    `a_sensitivity_memory_is_at_least_restricted` from `tables.py` failed
+    nothing. Worse, the migration copies the live table objects rather than
+    restating them, and this constraint is not one of the eighteen it freezes,
+    so removing it would silently change what an already-merged revision creates
+    on a fresh database.
+
+    A raw INSERT rather than a repository call, for the reason the
+    cloud-eligibility test beside it uses one: the domain refuses this before
+    any statement is issued, so the only way to ask the *server* is to go around
+    the domain.
+    """
+    created = _created(two_principals)
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            text(
+                "INSERT INTO knowledge.relationship_memory_versions ("
+                "memory_version_id, memory_id, principal_id, version_number, "
+                "statement_text, statement_sha256, memory_kind, authority, "
+                "classification, cloud_eligible, created_by_actor, recorded_at, "
+                "idempotency_key, correlation_id) VALUES ("
+                ":version_id, :memory_id, :principal_id, 99, :statement, :digest, "
+                "'sensitivity', 'user_authored_private_note', 'private_local', false, "
+                "'user', now(), :key, :correlation_id)"
+            ),
+            {
+                "version_id": issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+                "memory_id": created.memory_id,
+                "principal_id": PRINCIPAL_A,
+                "statement": FIRST_NOTE,
+                "digest": statement_digest(FIRST_NOTE),
+                "key": "synthetic-floor-probe",
+                "correlation_id": issue_identifier(IdKind.CORRELATION),
+            },
+        )
+    assert "a_sensitivity_memory_is_at_least_restricted" in str(refused.value)
 
 
 def test_a_foreign_memory_reads_exactly_as_an_absent_one(two_principals: Engine) -> None:

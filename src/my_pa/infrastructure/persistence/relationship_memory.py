@@ -456,7 +456,7 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
                         "current_version_id": request.memory_version_id,
                         "current_version_number": 1,
                         "version": 1,
-                        "pinned": request.pinned,
+                        "pinned": bool(request.pinned),
                         "created_at": request.server_received_at,
                         "updated_at": request.server_received_at,
                         "archived_at": None,
@@ -544,7 +544,11 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             values["current_version_id"] = request.memory_version_id
             values["current_version_number"] = next_number
             values["memory_kind"] = memory_kind.value
-            values["pinned"] = request.pinned
+            if request.pinned is not None:
+                # Omitted means keep it. Writing `False` here unconditionally is
+                # what made an ordinary wording correction silently unpin a
+                # pinned memory.
+                values["pinned"] = request.pinned
         updated = self._connection.execute(
             update(relationship_memories)
             .where(
@@ -686,6 +690,13 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             )
             .where(
                 _mine(relationship_memories, principal_id),
+                # The version alias carries the predicate too. The join through
+                # the partitioned aggregate already confines these rows, so this
+                # is redundant *today* — and that is the point: it makes the
+                # guarantee a property of the statement rather than a property
+                # of the join, so a later reader that changes the join condition
+                # cannot widen the partition without noticing.
+                _mine(current, principal_id),
                 relationship_memories.c.subject_entity_id == subject_entity_id,
                 relationship_memories.c.lifecycle_state == lifecycle.value,
             )
@@ -781,6 +792,10 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             )
             .where(
                 _mine(relationship_memories, principal_id),
+                # See `page_for_entity`: the predicate on the version alias is
+                # redundant through the join and stated anyway, so the partition
+                # is local to this statement.
+                _mine(current, principal_id),
                 relationship_memories.c.lifecycle_state == MemoryLifecycle.ACTIVE.value,
                 # **The exclusion is a predicate, not a post-filter.** A
                 # restricted memory is never selected, so it cannot reach a
@@ -869,6 +884,7 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
                 )
                 .where(
                     _mine(relationship_memories, principal_id),
+                    _mine(current, principal_id),
                     relationship_memories.c.subject_entity_id == subject_entity_id,
                     relationship_memories.c.lifecycle_state == MemoryLifecycle.ACTIVE.value,
                 )

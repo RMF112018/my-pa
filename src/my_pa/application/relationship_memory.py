@@ -96,7 +96,9 @@ class ReviseMemoryCommand:
     memory_kind: MemoryKind | None
     structured_value: dict[str, Any] | None
     context_links: tuple[dict[str, str], ...]
-    pinned: bool
+    #: `None` keeps whatever the aggregate holds. Only a revise can say that; a
+    #: create has nothing to carry forward and states a real boolean.
+    pinned: bool | None
     observed_at: datetime | None
     effective_from: datetime | None
     effective_to: datetime | None
@@ -325,7 +327,7 @@ class RelationshipMemoryService:
         statement: str | None,
         structured_value: dict[str, Any] | None,
         context_links: tuple[dict[str, str], ...],
-        pinned: bool,
+        pinned: bool | None,
         observed_at: datetime | None,
         effective_from: datetime | None,
         effective_to: datetime | None,

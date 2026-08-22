@@ -6804,12 +6804,14 @@ intelligence_provenance_refs = Table(
 
 # --- Relationship Memory ----------------------------------------------------
 #
-# Seven tables. Six are the contract's own record set; the seventh,
+# Eight tables. Six are the contract's own record set. The seventh,
 # `relationship_memory_submissions`, is the idempotency mechanism, and it is a
 # table rather than a unique column because that is what this schema already
 # does twice — `capture_submissions` and `managed_document_submissions` are the
 # same shape, and a third spelling of "one key admits one write per Principal"
-# would be a third thing to keep true.
+# would be a third thing to keep true. The eighth,
+# `relationship_memory_review_decisions`, is this plane's seat on the one
+# canonical Review surface, the shape `goodnotes_review_decisions` established.
 #
 # **No narrative text on the aggregate.** `relationship_memories` carries
 # identity, kind, lifecycle, the current-version pointer and the concurrency

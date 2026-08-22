@@ -2734,7 +2734,8 @@ _MEMORY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "pinned": {
             "description": (
                 "Whether to give this memory elevated prominence. Affects ordering "
-                "only, never truth or authority."
+                "only, never truth or authority. On revise, omit it to keep the "
+                "current value; send false to unpin."
             )
         },
         "observed_at": {
@@ -3142,7 +3143,7 @@ class ReviseRelationshipMemory:
     kind: MemoryKind | None = None
     structured_value: dict[str, Any] | None = field(default=None, repr=False)
     context_links: tuple[dict[str, object], ...] = ()
-    pinned: bool = False
+    pinned: bool | None = None
     observed_at: datetime | None = None
     effective_from: datetime | None = None
     effective_to: datetime | None = None
@@ -3157,7 +3158,12 @@ class ReviseRelationshipMemory:
             _memory_kind(self.kind)
         _memory_structured_value(self.structured_value)
         _memory_context_links(self.context_links)
-        if not isinstance(self.pinned, bool):
+        # `None` rather than `False` is the default, and the difference is a
+        # correction: a revise that omitted `pinned` used to write `False` and
+        # silently unpin a pinned memory, so an ordinary wording fix threw away a
+        # presentation choice the caller never mentioned. Absent now means carry
+        # the current value forward; `false` means unpin, and says so.
+        if self.pinned is not None and not isinstance(self.pinned, bool):
             raise InvalidRequestError(SafeDetail.PINNED)
         _moment(self.observed_at, SafeDetail.OBSERVED_AT)
         _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)

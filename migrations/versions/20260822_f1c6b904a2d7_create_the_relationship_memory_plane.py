@@ -33,8 +33,19 @@ change under optimistic concurrency.
 closed-set constraint from a domain enum. Each is written out here, so a database
 migrated to this revision holds the vocabulary this revision describes rather
 than whatever the domain says on the day it runs. `tests/architecture/
-test_no_revision_derives_a_closed_set_from_an_enum.py` holds all eighteen texts
-and reddens if a member is added to any of the enums without a forward `ALTER`.
+test_no_revision_derives_a_closed_set_from_an_enum.py` holds all eighteen texts,
+so a member added to any of those enums cannot silently move what this revision
+emits.
+
+**That guard does not redden when an enum grows, and an earlier draft of this
+docstring said it did.** Freezing is precisely what stops it: this revision goes
+on emitting the eighteen texts whatever the domain says later, which is the
+whole point. What catches a member added *without* a forward `ALTER` is
+`tests/unit/test_relationship_memory_domain.py`, which pins each vocabulary
+against the domain, together with `tests/schema/test_capture_schema_migration.py`,
+which compares the vocabulary a live database admits at head against the one the
+domain declares. Naming the wrong control is the defect class this campaign
+keeps finding, so the correction is recorded rather than quietly applied.
 
 Revision ID: f1c6b904a2d7
 Revises: e9b2c4d7a150

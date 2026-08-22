@@ -2416,7 +2416,7 @@ class MemoryWriteRequest:
     classification: Classification
     created_by_actor: MemoryActorClass
     context_links: tuple[Mapping[str, str], ...]
-    pinned: bool
+    pinned: bool | None
     observed_at: datetime | None
     effective_from: datetime | None
     effective_to: datetime | None

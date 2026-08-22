@@ -256,9 +256,9 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # it, and this line is why a further one cannot arrive without it.
         "entities.unresolved_mentions",
         # The Relationship Memory plane. `f1c6b904a2d7` is the forward `ALTER`
-        # that admits all eight, and it travels in the same revision as the
-        # tables rather than after them: a build that could serve
-        # `relationship_memory.create` against a database whose
+        # that admits the eight `relationship_memory.` names, and it travels in
+        # the same revision as the tables rather than after them: a build that
+        # could serve `relationship_memory.create` against a database whose
         # `capability_is_known` refuses the string would fail on the *audit*
         # insert, after the memory row, which is the one failure ordering
         # `AGENTS.md` section 5 rules out.

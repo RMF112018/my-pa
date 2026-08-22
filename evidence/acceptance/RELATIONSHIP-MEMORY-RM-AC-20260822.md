@@ -13,7 +13,10 @@
 ## How to read this
 
 `PASS` means a test in this repository fails if the property stops holding.
-Every row names that test. A criterion whose subject is presentation rather
+Every row names that test. A row that cannot be held by a test — because it is a
+claim about process, or about the absence of code nobody wrote — is marked
+`NOT_APPLICABLE` with the reason, rather than marked `PASS` on the strength of
+being true. A criterion whose subject is presentation rather
 than data is marked `BACKEND_ONLY` — the backend supplies the data and
 semantics the criterion needs, and the presentation it describes belongs to the
 deferred frontend. Nothing here is marked `PASS` on the strength of a docstring.
@@ -45,7 +48,7 @@ Test module abbreviations:
 | RM-AC-008 optional observed/effective times without fabricating unknown dates | PASS | nullable moments, no defaulting anywhere; `DOM`, `CAP` |
 | RM-AC-009 important_date partial values, never infers year or age | PASS | precision rules refuse a year on `month_day`; no age field exists; `DOM` |
 | RM-AC-010 follow_up_context does not silently become a Task/Commitment | PASS | no Task or Commitment write exists on any memory path; `CAP` |
-| RM-AC-011 no automatic task, reminder, calendar or communication action | PASS | as above; the plane's only writes are its own eight tables |
+| RM-AC-011 no automatic task, reminder, calendar or communication action | PASS | `CAP` asserts a memory write leaves the task and commitment planes untouched. Stated as a bounded claim rather than a containment guard: no test forbids a *future* writer from reaching another plane from here |
 | RM-AC-012 context-scoped memory not presented as globally applicable | PASS | context links bound to the *version*; `relationship_memory.list` exposes `context_entity_id` filtering; `REPO`, `CAP` |
 | RM-AC-013 restricted memory excluded from broad search/export/cloud by default | PASS | SQL predicate excludes `restricted_local` from search; cloud eligibility CHECKed false; `PRIV` |
 | RM-AC-014 no restricted-existence disclosure via counts or term probing | PASS | exclusion is a predicate, so no count, cursor or truncation flag can carry one; `PRIV` (probing a restricted-only term returns nothing, zero withheld, no truncation) |
@@ -56,15 +59,15 @@ Test module abbreviations:
 | RM-AC-019 Overview can surface current eligible preferences, dates, interests, concerns, pinned context and sensitivities with authority distinction | BACKEND_ONLY | `relationship_memory.list` returns all of them with `kind`, `authority`, `classification` and `pinned`, pinned first; `entities.context` carries the bounded summary. The Overview surface itself is `MYPA-RM-04`, out of scope |
 | RM-AC-020 bounded, paginated, history-aware retrieval for one Entity | PASS | `relationship_memory.list` + `.history`, keyset paginated over the whole sort key; `REPO`, `CAP` |
 | RM-AC-021 editing exposes prior versions according to policy | PASS | `relationship_memory.history`; `REPO`, `CAP` |
-| RM-AC-022 Quick Capture can be evidence without becoming the memory | PASS | `relationship_memory_evidence_links.capture_span_id` is one of the three exclusive evidence targets; the memory is its own record |
+| RM-AC-022 Quick Capture can be evidence without becoming the memory | PASS | `REV` promotes a capture-span-backed proposal and asserts the span is carried onto the accepted version while the capture row is untouched; the exclusive-target CHECK is exercised in `REPO` |
 | RM-AC-023 direct note entry requires no hidden Capture | PASS | `relationship_memory.create` writes no capture row; `CAP` |
 | RM-AC-024 `EntityObservation` not overloaded as the memory store | PASS | separate tables and separate domain module; `SCHEMA` |
-| RM-AC-025 legacy `RelationshipEvent(OBSERVATION)` remains projection, not canonical store | PASS | untouched by this branch; no memory write reaches it |
-| RM-AC-026 Principal isolation on every path; fail closed on cross-Principal | PASS | every statement through `principal_scope`, enforced by `tests/architecture/test_principal_partition_is_reached_through_the_guard`; `REPO` (foreign equals absent) |
+| RM-AC-025 legacy `RelationshipEvent(OBSERVATION)` remains projection, not canonical store | NOT_APPLICABLE | this branch adds no projection and writes nothing to `relationship_events`. The criterion is satisfied by absence, which no test can assert without asserting a negative over the whole tree |
+| RM-AC-026 Principal isolation on every path; fail closed on cross-Principal | PASS | `REPO` covers all four reads — `detail`, `history`, `page_for_entity` and `search` — each asserting a foreign answer *equal* to an absent one, and a cross-Principal write refused before any row. The architecture guard registers both persistence modules at module level, which proves they reach `principal_scope` and does **not** prove it per statement; the four read tests are what hold the predicates in place, and a reviewer demonstrated that by deleting one and watching them redden |
 | RM-AC-027 audit/error/telemetry carry no raw memory text | PASS | `AuditEvent` has no free-text field; `SafeDetail` names fields only; `PRIV` plants a marker in the statement and asserts it reaches no audit column |
 | RM-AC-028 no hard-delete capability | PASS | no such capability, no such repository method, no such lifecycle member; `CAP` |
 | RM-AC-029 `entities.context` inclusion bounded, discloses truncation/withholding | PASS | four distinct limitations; `CARD` proves all four are pairwise distinguishable |
-| RM-AC-030 implementation status never inferred from the target contract | PASS | `docs/specs/relationship-memory-v0.1.md` states implemented truth separately from the package, and repository identity was reauthenticated before work began |
+| RM-AC-030 implementation status never inferred from the target contract | NOT_APPLICABLE | a process criterion about how the work was conducted, not a property of the code. `docs/specs/relationship-memory-v0.1.md` records implemented truth separately from the package; repository identity was reauthenticated at `a1beef75` before any edit |
 
 ## Persistence — `RM-P-AC-001` … `RM-P-AC-020`
 
@@ -89,7 +92,7 @@ Test module abbreviations:
 | RM-P-AC-017 merges retain lineage and reject ambiguous writes to redirects | PASS | `REPO`, `REV` |
 | RM-P-AC-018 capture/observation/legacy tables not overloaded | PASS | eight new tables; no existing table gains a memory column; `SCHEMA` |
 | RM-P-AC-019 migrations forward-safe and preserve current data | PASS | empty→head, head→predecessor→head and `downgrade base` all exercised; `SCHEMA` |
-| RM-P-AC-020 no new database or service technology | PASS | PostgreSQL only; no cache, queue, graph or vector store added |
+| RM-P-AC-020 no new database or service technology | PASS | `tests/architecture/test_no_vector_retrieval_exists` and `test_scope_and_hygiene` both scan for a second store or driver; the branch adds no dependency (`pyproject.toml` unchanged) |
 
 ## API and MCP — `RM-API-AC-001` … `RM-API-AC-018`
 
@@ -110,7 +113,7 @@ Test module abbreviations:
 | RM-API-AC-013 `entities.context` bounded and advertises truncation/withholding | PASS | `CARD` |
 | RM-API-AC-014 Quick Capture entity linkage cannot guess identity from a name | PASS | a name is refused as an `entity_id` at the transport boundary; no name-to-entity resolution exists on any memory or capture write path; `CAP` |
 | RM-API-AC-015 local MCP, remote MCP and HTTP share one application path | PASS | one `_BUILDERS` table and one `ApplicationService.invoke`; `PAR` asserts all three answer identically |
-| RM-API-AC-016 remote writes require explicit grants and gates beyond authentication | PASS | `relationship_memory_authoring` is in `_WRITE_PURPOSES`, so the four writes are withheld from the remote profile until remote writes are enabled |
+| RM-API-AC-016 remote writes require explicit grants and gates beyond authentication | PASS | `relationship_memory_authoring` is in `_WRITE_PURPOSES`, so `remote_tool_names` withholds the four writes until remote writes are enabled; `CAP` asserts the profile with writes disabled and enabled |
 | RM-API-AC-017 error/audit surfaces never disclose raw memory text | PASS | `PRIV`, `NEG` |
 | RM-API-AC-018 feature unavailability explicit | PASS | withheld from the manifest and the tool list, and refused `unsupported` at a per-handler floor; `CAP` |
 
@@ -122,7 +125,7 @@ retention and hard deletion, multi-user or delegated visibility, reminder rules
 over important dates, memory redistribution after an identity split, and any
 widening of cloud eligibility.
 
-Two context-link target types — `situation`, `task`, `commitment` — are declared
+Three context-link target types — `situation`, `task` and `commitment` — are declared
 in the closed vocabulary and refused by the repository, which validates only
 `entity` targets. That is narrower than the contract's candidate set on purpose:
 this plane holds no port into those partitions, and admitting a link whose

@@ -328,6 +328,9 @@ def test_idempotency_key_reused_for_different_content_conflicts() -> None:
     inserts_after_first = world.insert_commitment_calls
     history_writes_after_first = world.insert_history_calls
 
+    def should_not_validate_a_digest_mismatch() -> None:
+        raise AssertionError("digest conflict must precede mutable first-write validation")
+
     with pytest.raises(CommitmentIdempotencyConflictError):
         service.create_commitment(
             principal_id=PRINCIPAL_A,
@@ -337,10 +340,50 @@ def test_idempotency_key_reused_for_different_content_conflicts() -> None:
             origin_evidence_ref=ORIGIN,
             actor=TaskMutationActor.PRINCIPAL,
             idempotency_key=key,
+            validate_first_write=should_not_validate_a_digest_mismatch,
         )
     assert world.insert_commitment_calls == inserts_after_first
     assert world.update_commitment_calls == 0
     assert world.insert_history_calls == history_writes_after_first
+
+
+def test_update_exact_replay_precedes_mutable_first_write_validation() -> None:
+    world = _World()
+    service = _service(world)
+    created = service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_person_id=COUNTERPARTY,
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Old summary",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    key = _idempotency_key("update-replay-validation")
+    first = service.update_commitment(
+        principal_id=PRINCIPAL_A,
+        commitment_id=created.commitment.commitment_id,
+        expected_version=created.commitment.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"counterparty_person_id": issue_identifier(IdKind.PERSON)},
+        idempotency_key=key,
+        validate_first_write=lambda: None,
+    )
+
+    def no_longer_eligible() -> None:
+        raise AssertionError("an exact replay must not re-run mutable identity validation")
+
+    replay = service.update_commitment(
+        principal_id=PRINCIPAL_A,
+        commitment_id=created.commitment.commitment_id,
+        expected_version=created.commitment.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"counterparty_person_id": first.commitment.counterparty_person_id},
+        idempotency_key=key,
+        validate_first_write=no_longer_eligible,
+    )
+    assert replay.replayed is True
+    assert replay.history == first.history
+    assert replay.commitment == first.commitment
 
 
 def test_update_commitment_is_one_atomic_versioned_mutation() -> None:

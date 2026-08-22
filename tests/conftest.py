@@ -67,6 +67,7 @@ from my_pa.contracts.ports import (
     ContextPreferenceRepository,
     ContextRunRepository,
     ContinuityAuthoringRepository,
+    CounterpartyOption,
     EnrollmentRepository,
     EntitiesRepository,
     EntitySummary,
@@ -403,6 +404,7 @@ class World:
     task_bulk_operations: dict[tuple[str, str], TaskBulkOperation] = field(default_factory=dict)
     commitments_v2: list[CommitmentV2] = field(default_factory=list)
     commitment_history_v2: list[CommitmentHistoryEntry] = field(default_factory=list)
+    current_counterparties: set[tuple[str, str]] = field(default_factory=set)
     dismissed_pulse_ids: set[str] = field(default_factory=set)
     audit: list[AuditEvent] = field(default_factory=list)
     #: Insert-only context-run metadata. The fake cannot prove the server
@@ -1922,6 +1924,11 @@ class _CommitmentsRead(CommitmentManagementRepository):
             ),
             None,
         )
+
+    def counterparty(self, principal_id: str, person_id: str) -> CounterpartyOption | None:
+        if (principal_id, person_id) not in self._world.current_counterparties:
+            return None
+        return CounterpartyOption(person_id=person_id, display_name="Synthetic counterparty")
 
     def list_commitments(
         self,
@@ -3778,11 +3785,13 @@ def staged_commitment(
     if existing is not None:
         return existing
     scene.world.work_evidence_refs.add((scene.principal.principal_id, "cap_origin0001origin0001"))
+    person_id = counterparty_person_id or issue_identifier(IdKind.PERSON)
+    scene.world.current_counterparties.add((scene.principal.principal_id, person_id))
     receipt = CommitmentManagementService(
         unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(scene.world)
     ).create_commitment(
         principal_id=scene.principal.principal_id,
-        counterparty_person_id=counterparty_person_id or issue_identifier(IdKind.PERSON),
+        counterparty_person_id=person_id,
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary=summary,
         origin_evidence_ref="cap_origin0001origin0001",

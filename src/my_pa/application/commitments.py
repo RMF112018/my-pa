@@ -194,6 +194,7 @@ class CommitmentManagementService:
         idempotency_key: str | None = None,
         client_context: str | None = None,
         active_uow: _ActiveCommitmentUnitOfWork | None = None,
+        validate_first_write: Callable[[], None] | None = None,
     ) -> CommitmentMutationReceipt:
         """Atomically update only the mutable Work-facing commitment fields."""
         allowed = {"summary", "due_at", "counterparty_person_id"}
@@ -224,6 +225,7 @@ class CommitmentManagementService:
                 clear_due_at=clear_due_at,
             ),
             active_uow=active_uow,
+            validate_first_write=validate_first_write,
         )
 
     def close_commitment(

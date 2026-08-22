@@ -1671,6 +1671,32 @@ class ApplicationService:
         if not valid:
             raise InvalidRequestError(SafeDetail.INVALID_EVIDENCE_REFERENCE)
 
+    @staticmethod
+    def _require_current_counterparty(
+        unit_of_work: UnitOfWork, principal_id: str, person_id: str
+    ) -> None:
+        """Fail closed unless ``person_id`` is current in this Principal's partition.
+
+        The repository intentionally returns the same ``None`` for an absent,
+        foreign, or superseded Person.  Preserving that collapse here prevents
+        a Commitment write from becoming an identity-enumeration side channel.
+        """
+        with _translated():
+            counterparty = unit_of_work.commitments.counterparty(principal_id, person_id)
+        if counterparty is None:
+            raise NotFoundError(SafeDetail.COUNTERPARTY_PERSON_ID)
+
+    def _require_commitment_create_eligibility(
+        self,
+        unit_of_work: UnitOfWork,
+        principal_id: str,
+        *,
+        evidence_ref: str,
+        counterparty_person_id: str,
+    ) -> None:
+        self._require_work_evidence(unit_of_work, principal_id, evidence_ref)
+        self._require_current_counterparty(unit_of_work, principal_id, counterparty_person_id)
+
     def _capabilities_get(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetCapabilities
     ) -> _Result:
@@ -4312,8 +4338,11 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
-                    validate_first_write=lambda: self._require_work_evidence(
-                        unit_of_work, principal_id, command.origin_evidence_ref
+                    validate_first_write=lambda: self._require_commitment_create_eligibility(
+                        unit_of_work,
+                        principal_id,
+                        evidence_ref=command.origin_evidence_ref,
+                        counterparty_person_id=command.counterparty_person_id,
                     ),
                 )
         except CommitmentIdempotencyConflictError:
@@ -4413,6 +4442,13 @@ class ApplicationService:
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
                     active_uow=unit_of_work,
+                    validate_first_write=(
+                        None
+                        if command.counterparty_person_id is None
+                        else lambda: self._require_current_counterparty(
+                            unit_of_work, principal_id, command.counterparty_person_id or ""
+                        )
+                    ),
                 )
         except CommitmentNotFoundError:
             raise NotFoundError(SafeDetail.COMMITMENT_ID) from None

@@ -396,7 +396,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         Capability.COMMITMENTS_HISTORY: {"commitment_id": commitment.commitment_id},
         Capability.COMMITMENTS_WAITING_ON: {},
         Capability.COMMITMENTS_CREATE: {
-            "counterparty_person_id": issue_identifier(IdKind.PERSON),
+            "counterparty_person_id": commitment.counterparty_person_id,
             "direction": "owed_by_principal",
             "summary": "HTTP commitment-plane commitment",
             "origin_evidence_ref": "cap_origin0001origin0001",
@@ -983,6 +983,33 @@ def test_work_writes_collapse_foreign_evidence_to_the_same_refusal(
     assert reply.document()["error"]["safe_details"] == ["invalid_evidence_reference"]
 
 
+def test_commitment_create_refuses_a_superseded_counterparty_without_disclosure(
+    staged: tuple[Scene, KnowledgeRecord], wire: Wire
+) -> None:
+    scene, _ = staged
+    commitment = staged_commitment(scene)
+    scene.world.current_counterparties.remove(
+        (scene.principal.principal_id, commitment.counterparty_person_id)
+    )
+    reply = wire.send(
+        Capability.COMMITMENTS_CREATE.value,
+        document_for(
+            Capability.COMMITMENTS_CREATE,
+            scene,
+            {
+                "counterparty_person_id": commitment.counterparty_person_id,
+                "direction": "owed_to_principal",
+                "summary": "Synthetic refused commitment",
+                "origin_evidence_ref": "cap_origin0001origin0001",
+                "idempotency_key": "superseded-counterparty-refusal-0001",
+            },
+        ),
+    )
+    assert reply.status == 404
+    assert reply.document()["error"]["code"] == "not_found"
+    assert reply.document()["error"]["safe_details"] == ["counterparty_person_id"]
+
+
 @pytest.mark.parametrize(
     ("capability", "payload_factory"),
     [
@@ -1007,7 +1034,7 @@ def test_work_writes_collapse_foreign_evidence_to_the_same_refusal(
         (
             Capability.COMMITMENTS_CREATE,
             lambda scene, reference: {
-                "counterparty_person_id": issue_identifier(IdKind.PERSON),
+                "counterparty_person_id": staged_commitment(scene).counterparty_person_id,
                 "direction": "owed_by_principal",
                 "summary": "Replay survives superseded evidence",
                 "origin_evidence_ref": reference,

@@ -30,6 +30,7 @@ from my_pa.application.commands import (
     ListCommitments,
     ReadCommitment,
     TransitionTask,
+    UpdateCommitment,
     WaitingOn,
 )
 from my_pa.application.service import ApplicationService
@@ -39,6 +40,7 @@ from my_pa.contracts.ports import (
     TaskManagementRepository,
     TaskManagementUnitOfWork,
 )
+from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
@@ -325,6 +327,7 @@ def test_waiting_on_excludes_proposed_commitments() -> None:
     service = _build_wired_service(world)
     principal = operator()
     world.work_evidence_refs.add((principal.principal_id, ORIGIN))
+    world.current_counterparties.add((principal.principal_id, COUNTERPARTY))
 
     create = service.invoke(
         metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
@@ -351,11 +354,103 @@ def test_waiting_on_excludes_proposed_commitments() -> None:
     assert waiting.result["waiting_on"] == []
 
 
+def test_commitment_writes_require_a_current_same_principal_counterparty() -> None:
+    world = World()
+    service = _build_wired_service(world)
+    principal = operator()
+    other_principal = operator()
+    world.work_evidence_refs.add((principal.principal_id, ORIGIN))
+    current = issue_identifier(IdKind.PERSON)
+    foreign = issue_identifier(IdKind.PERSON)
+    replacement = issue_identifier(IdKind.PERSON)
+    world.current_counterparties.add((principal.principal_id, current))
+    world.current_counterparties.add((other_principal.principal_id, foreign))
+
+    create_command = CreateCommitment(
+        counterparty_person_id=current,
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Current counterparty",
+        origin_evidence_ref=ORIGIN,
+        idempotency_key=_idempotency_key("validated-counterparty"),
+    )
+    created = service.invoke(
+        metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
+        create_command,
+        principal=principal,
+    )
+    assert created.error is None, created.error
+    assert created.result is not None
+
+    for person_id in (issue_identifier(IdKind.PERSON), foreign):
+        refused = service.invoke(
+            metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
+            dataclasses.replace(
+                create_command,
+                counterparty_person_id=person_id,
+                idempotency_key=_idempotency_key(f"refused-{person_id[-4:]}"),
+            ),
+            principal=principal,
+        )
+        assert refused.error is not None
+        assert refused.error.code is ErrorCode.NOT_FOUND
+        assert refused.error.safe_details == ("counterparty_person_id",)
+
+    world.current_counterparties.remove((principal.principal_id, current))
+    replay = service.invoke(
+        metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
+        create_command,
+        principal=principal,
+    )
+    assert replay.error is None, replay.error
+    assert replay.result is not None and replay.result["replayed"] is True
+
+    commitment = created.result["commitment"]
+    refused_update = service.invoke(
+        metadata_for(Capability.COMMITMENTS_UPDATE, Purpose.COMMITMENT_AUTHORING, principal),
+        UpdateCommitment(
+            commitment_id=commitment["commitment_id"],
+            expected_version=commitment["version"],
+            counterparty_person_id=replacement,
+            idempotency_key=_idempotency_key("refused-update-counterparty"),
+        ),
+        principal=principal,
+    )
+    assert refused_update.error is not None
+    assert refused_update.error.code is ErrorCode.NOT_FOUND
+    assert refused_update.error.safe_details == ("counterparty_person_id",)
+
+    world.current_counterparties.add((principal.principal_id, replacement))
+    update_command = UpdateCommitment(
+        commitment_id=commitment["commitment_id"],
+        expected_version=commitment["version"],
+        counterparty_person_id=replacement,
+        idempotency_key=_idempotency_key("accepted-update-counterparty"),
+    )
+    accepted_update = service.invoke(
+        metadata_for(Capability.COMMITMENTS_UPDATE, Purpose.COMMITMENT_AUTHORING, principal),
+        update_command,
+        principal=principal,
+    )
+    assert accepted_update.error is None, accepted_update.error
+    assert accepted_update.result is not None
+    assert accepted_update.result["commitment"]["counterparty_person_id"] == replacement
+
+    world.current_counterparties.remove((principal.principal_id, replacement))
+    update_replay = service.invoke(
+        metadata_for(Capability.COMMITMENTS_UPDATE, Purpose.COMMITMENT_AUTHORING, principal),
+        update_command,
+        principal=principal,
+    )
+    assert update_replay.error is None, update_replay.error
+    assert update_replay.result is not None and update_replay.result["replayed"] is True
+
+
 def test_sarah_permit_log_scenario() -> None:
     world = World()
     service = _build_wired_service(world)
     principal_a = operator()
     world.work_evidence_refs.add((principal_a.principal_id, ORIGIN))
+    world.current_counterparties.add((principal_a.principal_id, COUNTERPARTY))
 
     # --- Step 1: Create an OWED_TO_PRINCIPAL commitment ----------------------
     create_key = _idempotency_key("create-commitment")

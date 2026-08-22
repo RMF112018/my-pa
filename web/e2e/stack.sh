@@ -73,7 +73,7 @@ echo "e2e: migrating it to head"
 ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" -m alembic upgrade head >/dev/null )
 
 echo "e2e: seeding one Principal-scoped synthetic counterparty"
-( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" web/e2e/seed-work.py )
+( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_work.py )
 
 echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
 (

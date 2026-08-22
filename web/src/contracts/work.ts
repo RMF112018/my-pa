@@ -8,7 +8,9 @@ export interface CounterpartyOption {
 
 export interface TaskRow {
   task_id: string; title: string; lifecycle_state: TaskLifecycle; priority: TaskPriority | null;
-  due_at: string | null; archived_at: string | null; created_at: string; updated_at: string;
+  due_at: string | null; scheduled_at: string | null; deferred_until: string | null;
+  archived_at: string | null; created_at: string; updated_at: string;
+  version?: number;
 }
 export interface TaskDetail extends TaskRow {
   description: string | null; evidence_state: string; origin_evidence_ref: string;

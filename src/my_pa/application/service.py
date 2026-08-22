@@ -340,6 +340,7 @@ from my_pa.domain.search.query import (
     SearchRequest,
     label_for_media_type,
 )
+from my_pa.domain.situation.continuity import CommitmentWorkView
 from my_pa.domain.situation.situation import Project, Situation
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
@@ -374,6 +375,7 @@ from my_pa.domain.task.lifecycle import (
     TERMINAL_TASK_LIFECYCLE_STATES,
     TaskLifecycleState,
     TaskPriority,
+    TaskWorkView,
 )
 from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task as TaskManagementTask
@@ -663,10 +665,24 @@ def _task_list_entry(task: TaskManagementTask) -> TaskListEntry:
         lifecycle_state=task.lifecycle_state,
         priority=task.priority,
         due_at=task.due_at,
+        scheduled_at=task.scheduled_at,
+        deferred_until=task.deferred_until,
         archived_at=task.archived_at,
         created_at=task.created_at,
         updated_at=task.updated_at,
+        version=task.version,
     )
+
+
+def _work_window(
+    work_date: date, timezone: str, *, recent: bool = False
+) -> tuple[datetime, datetime]:
+    """Return DST-correct UTC bounds for one civil day or its seven-day lookback."""
+    zone = ZoneInfo(timezone)
+    first_date = work_date - timedelta(days=6) if recent else work_date
+    local_start = datetime.combine(first_date, datetime.min.time(), zone)
+    local_end = datetime.combine(work_date + timedelta(days=1), datetime.min.time(), zone)
+    return local_start.astimezone(UTC), local_end.astimezone(UTC)
 
 
 def _task_history_view(entry: TaskManagementHistoryEntry) -> TaskHistoryEntryView:
@@ -3579,13 +3595,11 @@ class ApplicationService:
         work_start: datetime | None = None
         work_end: datetime | None = None
         if command.work_view is not None and command.work_date is not None:
-            zone = ZoneInfo(command.timezone or "UTC")
-            local_start = datetime.combine(command.work_date, datetime.min.time(), zone)
-            local_end = datetime.combine(
-                command.work_date + timedelta(days=1), datetime.min.time(), zone
+            work_start, work_end = _work_window(
+                command.work_date,
+                command.timezone or "UTC",
+                recent=command.work_view is TaskWorkView.RECENTLY_UPDATED,
             )
-            work_start = local_start.astimezone(UTC)
-            work_end = local_end.astimezone(UTC)
         with _work_cursor_translated(), _translated():
             found = unit_of_work.tasks.list_tasks(
                 authorization.principal.principal_id,
@@ -3596,6 +3610,7 @@ class ApplicationService:
                 work_view=command.work_view,
                 work_start=work_start,
                 work_end=work_end,
+                work_now=authorization.at,
                 limit=page_size + 1,
             )
         truncated = len(found) > page_size
@@ -3631,13 +3646,11 @@ class ApplicationService:
         work_start: datetime | None = None
         work_end: datetime | None = None
         if command.work_view is not None and command.work_date is not None:
-            zone = ZoneInfo(command.timezone or "UTC")
-            local_start = datetime.combine(command.work_date, datetime.min.time(), zone)
-            local_end = datetime.combine(
-                command.work_date + timedelta(days=1), datetime.min.time(), zone
+            work_start, work_end = _work_window(
+                command.work_date,
+                command.timezone or "UTC",
+                recent=command.work_view is TaskWorkView.RECENTLY_UPDATED,
             )
-            work_start = local_start.astimezone(UTC)
-            work_end = local_end.astimezone(UTC)
         with _work_cursor_translated(), _translated():
             found = unit_of_work.tasks.search(
                 authorization.principal.principal_id,
@@ -3648,6 +3661,7 @@ class ApplicationService:
                 work_view=command.work_view,
                 work_start=work_start,
                 work_end=work_end,
+                work_now=authorization.at,
             )
         truncated = len(found) > page_size
         page = found[:page_size]
@@ -4138,12 +4152,23 @@ class ApplicationService:
     ) -> _Result:
         page_size = self._page_size(command.page_size)
         principal_id = authorization.principal.principal_id
+        work_start: datetime | None = None
+        work_end: datetime | None = None
+        if command.work_view is not None and command.work_date is not None:
+            work_start, work_end = _work_window(
+                command.work_date,
+                command.timezone or "UTC",
+                recent=command.work_view is CommitmentWorkView.RECENTLY_UPDATED,
+            )
         with _work_cursor_translated(), _translated():
             if command.after is None:
                 found = unit_of_work.commitments.list_commitments(
                     principal_id,
                     direction=command.direction,
                     state=command.state,
+                    work_view=command.work_view,
+                    work_start=work_start,
+                    work_end=work_end,
                     limit=page_size + 1,
                 )
             else:
@@ -4151,6 +4176,9 @@ class ApplicationService:
                     principal_id,
                     direction=command.direction,
                     state=command.state,
+                    work_view=command.work_view,
+                    work_start=work_start,
+                    work_end=work_end,
                     after=command.after,
                     limit=page_size + 1,
                 )
@@ -4183,6 +4211,14 @@ class ApplicationService:
     ) -> _Result:
         page_size = self._page_size(command.page_size)
         principal_id = authorization.principal.principal_id
+        work_start: datetime | None = None
+        work_end: datetime | None = None
+        if command.work_view is not None and command.work_date is not None:
+            work_start, work_end = _work_window(
+                command.work_date,
+                command.timezone or "UTC",
+                recent=command.work_view is CommitmentWorkView.RECENTLY_UPDATED,
+            )
         with _work_cursor_translated(), _translated():
             found = unit_of_work.commitments.search(
                 principal_id,
@@ -4191,6 +4227,9 @@ class ApplicationService:
                 after=command.after,
                 direction=command.direction,
                 state=command.state,
+                work_view=command.work_view,
+                work_start=work_start,
+                work_end=work_end,
             )
         truncated = len(found) > page_size
         page = found[:page_size]

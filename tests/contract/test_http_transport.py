@@ -157,6 +157,7 @@ from my_pa.domain.intelligence.catalog import (
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
     ContinuityEvidenceState,
 )
 from my_pa.domain.source.registry import issue_identifier
@@ -1396,6 +1397,129 @@ def test_fake_work_cursors_are_bound_to_the_complete_result_predicate(
         after=commitment_anchor.commitment_id,
         **search_arguments,
     ) == (commitment_next,)
+
+
+def test_work_views_use_trusted_now_civil_bounds_and_stable_cursor_order(
+    staged: tuple[Scene, KnowledgeRecord],
+) -> None:
+    scene, _ = staged
+    principal_id = scene.principal.principal_id
+    seed = staged_task(scene)
+    day_start = WHEN.replace(hour=0, minute=0, second=0, microsecond=0)
+    day_end = day_start + timedelta(days=1)
+    overdue = replace(
+        seed,
+        task_id=issue_identifier(IdKind.TASK),
+        title="overdue",
+        due_at=WHEN - timedelta(minutes=1),
+        scheduled_at=WHEN + timedelta(hours=1),
+        updated_at=day_start - timedelta(days=7),
+    )
+    today = replace(
+        seed,
+        task_id=issue_identifier(IdKind.TASK),
+        title="today",
+        due_at=WHEN + timedelta(hours=1),
+        scheduled_at=None,
+        updated_at=day_start - timedelta(days=7),
+    )
+    due_only = replace(
+        seed,
+        task_id=issue_identifier(IdKind.TASK),
+        title="due only",
+        due_at=WHEN + timedelta(hours=2),
+        scheduled_at=None,
+        updated_at=day_start - timedelta(days=7),
+    )
+    scheduled = replace(
+        seed,
+        task_id=issue_identifier(IdKind.TASK),
+        title="scheduled",
+        due_at=None,
+        scheduled_at=WHEN + timedelta(hours=2),
+        updated_at=day_start - timedelta(days=7),
+    )
+    future_with_overdue_due = replace(
+        seed,
+        task_id=issue_identifier(IdKind.TASK),
+        title="future schedule with overdue due",
+        due_at=WHEN - timedelta(days=1),
+        scheduled_at=day_end + timedelta(hours=1),
+        updated_at=day_start - timedelta(days=7),
+    )
+    recent_first = replace(
+        seed,
+        task_id=issue_identifier(IdKind.TASK),
+        title="recent first",
+        updated_at=WHEN,
+    )
+    recent_second = replace(
+        seed,
+        task_id=issue_identifier(IdKind.TASK),
+        title="recent second",
+        updated_at=WHEN - timedelta(days=1),
+    )
+    scene.world.tasks_v2[:] = [
+        overdue,
+        today,
+        due_only,
+        scheduled,
+        future_with_overdue_due,
+        recent_first,
+        recent_second,
+    ]
+    tasks = FakeUnitOfWork(scene.world).tasks
+    bounds = {"work_start": day_start, "work_end": day_end, "work_now": WHEN, "limit": 20}
+    assert overdue in tasks.list_tasks(principal_id, work_view=TaskWorkView.OVERDUE, **bounds)
+    assert overdue not in tasks.list_tasks(principal_id, work_view=TaskWorkView.TODAY, **bounds)
+    assert future_with_overdue_due not in tasks.list_tasks(
+        principal_id, work_view=TaskWorkView.UPCOMING, **bounds
+    )
+    unscheduled = tasks.list_tasks(
+        principal_id, work_view=TaskWorkView.UNSCHEDULED, limit=20
+    )
+    assert due_only in unscheduled
+    assert scheduled not in unscheduled
+    recent_bounds = {
+        "work_start": day_start - timedelta(days=6),
+        "work_end": day_end,
+        "work_now": WHEN,
+        "limit": 20,
+    }
+    recent = tasks.list_tasks(
+        principal_id, work_view=TaskWorkView.RECENTLY_UPDATED, **recent_bounds
+    )
+    assert recent.index(recent_first) < recent.index(recent_second)
+    continuation = tasks.list_tasks(
+        principal_id,
+        work_view=TaskWorkView.RECENTLY_UPDATED,
+        after=recent_first.task_id,
+        **recent_bounds,
+    )
+    assert continuation[0] is recent_second
+
+    commitment = staged_commitment(scene)
+    due_open = replace(
+        commitment,
+        commitment_id=issue_identifier(IdKind.COMMITMENT),
+        due_at=WHEN + timedelta(hours=1),
+    )
+    due_closed = replace(
+        due_open,
+        commitment_id=issue_identifier(IdKind.COMMITMENT),
+        state=CommitmentState.CLOSED,
+        closed_at=WHEN,
+        closure_evidence_ref="cap_closure0001closure0001",
+    )
+    scene.world.commitments_v2[:] = [due_open, due_closed]
+    due = FakeUnitOfWork(scene.world).commitments.list_commitments(
+        principal_id,
+        work_view=CommitmentWorkView.DUE,
+        work_start=day_start,
+        work_end=day_end,
+        limit=20,
+    )
+    assert due == (due_open,)
 
 
 def test_bulk_preview_and_confirm_replay_the_original_receipts(

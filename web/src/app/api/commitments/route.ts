@@ -5,6 +5,9 @@ const LIST_FIELDS = {
   state: { gateway: "state", type: "string" },
   pageSize: { gateway: "page_size", type: "integer" },
   after: { gateway: "after", type: "string" },
+  workView: { gateway: "work_view", type: "string" },
+  workDate: { gateway: "work_date", type: "string" },
+  timezone: { gateway: "timezone", type: "string" },
 } as const;
 const CREATE_FIELDS = {
   counterpartyPersonId: { gateway: "counterparty_person_id", type: "string" },

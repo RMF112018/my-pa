@@ -30,6 +30,7 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
     ContinuityEvidenceState,
 )
 from my_pa.domain.source.registry import issue_identifier
@@ -81,10 +82,13 @@ class _FakeRepository(CommitmentManagementRepository):
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
         evidence_state: ContinuityEvidenceState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[Commitment, ...]:
-        del after, evidence_state
+        del after, evidence_state, work_end, work_start, work_view
         raise NotImplementedError("this suite does not exercise the read plane")
 
     def insert_commitment(self, commitment: Commitment) -> None:

@@ -140,7 +140,11 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
-from my_pa.domain.situation.continuity import CommitmentDirection, CommitmentState
+from my_pa.domain.situation.continuity import (
+    CommitmentDirection,
+    CommitmentState,
+    CommitmentWorkView,
+)
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.task.lifecycle import (
     TaskArchiveMode,
@@ -574,6 +578,18 @@ def _list_commitments(payload: Mapping[str, Any]) -> Command:
             converted["state"] = CommitmentState(named)
         except ValueError:
             raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    named = converted.get("work_view")
+    if isinstance(named, str):
+        try:
+            converted["work_view"] = CommitmentWorkView(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    named_date = converted.get("work_date")
+    if isinstance(named_date, str):
+        try:
+            converted["work_date"] = date.fromisoformat(named_date)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
     return ListCommitments(**converted)
 
 
@@ -589,6 +605,18 @@ def _search_commitments(payload: Mapping[str, Any]) -> Command:
     if isinstance(named, str):
         try:
             converted["state"] = CommitmentState(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    named = converted.get("work_view")
+    if isinstance(named, str):
+        try:
+            converted["work_view"] = CommitmentWorkView(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SELECTOR) from None
+    named_date = converted.get("work_date")
+    if isinstance(named_date, str):
+        try:
+            converted["work_date"] = date.fromisoformat(named_date)
         except ValueError:
             raise InvalidRequestError(SafeDetail.SELECTOR) from None
     return SearchCommitments(**converted)

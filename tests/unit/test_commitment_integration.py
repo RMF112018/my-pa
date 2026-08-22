@@ -47,6 +47,7 @@ from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
     ContinuityEvidenceState,
 )
 from my_pa.domain.source.registry import issue_identifier
@@ -107,9 +108,13 @@ class _CommitmentRepo(CommitmentManagementRepository):
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
         evidence_state: ContinuityEvidenceState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[Commitment, ...]:
+        del work_end, work_start, work_view
         owned = [c for c in self._world.commitments_v2 if c.principal_id == principal_id]
         if direction is not None:
             owned = [c for c in owned if c.direction is direction]
@@ -252,6 +257,7 @@ class _TaskRepo(TaskManagementRepository):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
         limit: int,
     ) -> tuple[Task, ...]:
         raise NotImplementedError("write-plane fake does not serve list reads")
@@ -267,6 +273,7 @@ class _TaskRepo(TaskManagementRepository):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
     ) -> tuple[Task, ...]:
         raise NotImplementedError("write-plane fake does not serve search")
 

@@ -52,6 +52,7 @@ __all__ = [
     "Commitment",
     "CommitmentDirection",
     "CommitmentState",
+    "CommitmentWorkView",
     "ContinuityAcceptanceKind",
     "ContinuityEvidenceState",
     "ContinuityLifecycleEvent",
@@ -122,6 +123,18 @@ class CommitmentDirection(StrEnum):
 
     OWED_BY_PRINCIPAL = "owed_by_principal"
     OWED_TO_PRINCIPAL = "owed_to_principal"
+
+
+class CommitmentWorkView(StrEnum):
+    """Server-owned Commitment sections for the Work hub.
+
+    ``due`` means open obligations due within the selected civil day;
+    ``recently-updated`` means records updated within the bounded seven-day
+    window calculated by the application service.
+    """
+
+    DUE = "due"
+    RECENTLY_UPDATED = "recently-updated"
 
 
 class ContinuityObjectKind(StrEnum):

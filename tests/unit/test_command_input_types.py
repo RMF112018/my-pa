@@ -29,6 +29,7 @@ import pytest
 
 from my_pa.application.commands import (
     DecideReviewCase,
+    ListCommitments,
     ListTasks,
     PrepareContext,
     SearchCommitments,
@@ -41,6 +42,7 @@ from my_pa.application.commands import (
 from my_pa.application.errors import InvalidRequestError
 from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, make_identifier
+from my_pa.domain.situation.continuity import CommitmentWorkView
 from my_pa.domain.task.lifecycle import TaskWorkView
 from my_pa.domain.task.task import TaskLifecycleState
 
@@ -153,6 +155,39 @@ def test_work_views_refuse_non_date_values(command: type) -> None:
         arguments["query"] = "synthetic"
     with pytest.raises(InvalidRequestError):
         command(**arguments)
+
+
+@pytest.mark.parametrize("work_view", tuple(TaskWorkView))
+@pytest.mark.parametrize("command", (ListTasks, SearchTasks))
+def test_every_task_work_view_is_an_explicit_command_contract(
+    command: type, work_view: TaskWorkView
+) -> None:
+    arguments: dict[str, object] = {"work_view": work_view}
+    if command is SearchTasks:
+        arguments["query"] = "synthetic"
+    if work_view in {
+        TaskWorkView.OVERDUE,
+        TaskWorkView.TODAY,
+        TaskWorkView.UPCOMING,
+        TaskWorkView.RECENTLY_UPDATED,
+    }:
+        arguments.update(work_date=date(2026, 8, 22), timezone="America/New_York")
+    assert command(**arguments).work_view is work_view
+
+
+@pytest.mark.parametrize("work_view", tuple(CommitmentWorkView))
+@pytest.mark.parametrize("command", (ListCommitments, SearchCommitments))
+def test_every_commitment_work_view_is_an_explicit_command_contract(
+    command: type, work_view: CommitmentWorkView
+) -> None:
+    arguments: dict[str, object] = {
+        "work_view": work_view,
+        "work_date": date(2026, 8, 22),
+        "timezone": "America/New_York",
+    }
+    if command is SearchCommitments:
+        arguments["query"] = "synthetic"
+    assert command(**arguments).work_view is work_view
 
 
 def test_search_commitments_refuses_a_non_string_query() -> None:

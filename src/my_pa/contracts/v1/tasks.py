@@ -106,9 +106,12 @@ class TaskListEntry(StrictModel):
     lifecycle_state: TaskLifecycleState
     priority: TaskPriority | None = None
     due_at: UtcDatetime | None = None
+    scheduled_at: UtcDatetime | None = None
+    deferred_until: UtcDatetime | None = None
     archived_at: UtcDatetime | None = None
     created_at: UtcDatetime
     updated_at: UtcDatetime
+    version: int = Field(ge=1)
 
     @model_validator(mode="after")
     def _check(self) -> TaskListEntry:

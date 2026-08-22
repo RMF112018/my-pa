@@ -13,13 +13,67 @@ describe("Work surface", () => {
     renderFromUrl();
     const navigation = screen.getByRole("navigation", { name: "Work views" });
     expect(Array.from(navigation.querySelectorAll("button"), (button) => button.textContent)).toEqual([
-      "Today", "Upcoming", "Waiting", "Blocked", "All open", "Completed", "Commitments",
+      "Overdue", "Today", "Upcoming", "Unscheduled", "Waiting", "Blocked", "Recently updated", "All open", "Completed", "Commitments",
     ]);
     expect(await screen.findByText("No today tasks")).toBeTruthy();
     const path = String(fetcher.mock.calls[0]?.[0]);
     expect(path).toContain("/api/tasks?pageSize=50&workView=today&archived=exclude");
     expect(path).toMatch(/workDate=\d{4}-\d{2}-\d{2}/);
     expect(path).toContain("timezone=");
+  });
+
+  it("switches list, lifecycle board, and calendar without losing selection or URL filters", async () => {
+    const task = {
+      task_id: "tsk_aaaaaaaa11111111", title: "Prepare permit set", lifecycle_state: "in_progress", priority: "p1",
+      due_at: "2026-08-24T16:00:00Z", scheduled_at: "2026-08-23T13:00:00Z", deferred_until: "2026-08-22T12:00:00Z",
+      archived_at: null, created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-22T12:00:00Z", version: 4,
+    };
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({ tasks: [task] }), { status: 200, headers: { "content-type": "application/json" } })));
+    history.replaceState(null, "", "/work?view=all-open&q=permit&archived=exclude"); renderFromUrl();
+    const checkbox = await screen.findByRole("checkbox", { name: "Select Prepare permit set" });
+    await userEvent.click(checkbox);
+    await userEvent.click(screen.getByRole("button", { name: "Board" }));
+    expect(await screen.findByRole("region", { name: "Task lifecycle board" })).toBeTruthy();
+    expect(screen.getByRole("checkbox", { name: "Select Prepare permit set" })).toBeChecked();
+    expect(location.search).toContain("q=permit"); expect(location.search).toContain("perspective=board");
+    await userEvent.click(screen.getByRole("button", { name: "Calendar" }));
+    expect(await screen.findByText("Deadline")).toBeTruthy();
+    expect(screen.getByText("Planned work")).toBeTruthy();
+    expect(screen.getByText("Available after")).toBeTruthy();
+    expect(location.search).toContain("perspective=calendar");
+  });
+
+  it("opens canonical detail in the foundation Sheet and restores URL and trigger focus", async () => {
+    const task = {
+      task_id: "tsk_aaaaaaaa11111111", title: "Inspect me", lifecycle_state: "open", priority: null,
+      due_at: null, scheduled_at: null, deferred_until: null, archived_at: null,
+      created_at: "2026-08-21T12:00:00Z", updated_at: "2026-08-22T12:00:00Z", version: 2,
+    };
+    const detail = { ...task, description: null, evidence_state: "proposed", origin_evidence_ref: "cap_origin0001origin0001", closure_evidence_ref: null, closure_history_id: null, commitment_id: null, role: null, opened_at: task.created_at, closed_at: null };
+    const fetcher = vi.fn<typeof fetch>(async (input) => {
+      const path = String(input);
+      if (path === "/api/tasks/tsk_aaaaaaaa11111111") return new Response(JSON.stringify({ task: detail }), { status: 200, headers: { "content-type": "application/json" } });
+      if (path.includes("/history")) return new Response(JSON.stringify({ history: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      if (path.startsWith("/api/commitments")) return new Response(JSON.stringify({ commitments: [] }), { status: 200, headers: { "content-type": "application/json" } });
+      return new Response(JSON.stringify({ tasks: [task] }), { status: 200, headers: { "content-type": "application/json" } });
+    });
+    vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=all-open&q=inspect"); renderFromUrl();
+    const trigger = await screen.findByRole("link", { name: /Inspect me/ });
+    await userEvent.click(trigger);
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+    expect(location.search).toContain("task=tsk_aaaaaaaa11111111");
+    await userEvent.click(screen.getByRole("button", { name: "Close panel" }));
+    await waitFor(() => expect(location.search).not.toContain("task="));
+    await waitFor(() => expect(document.activeElement).toBe(trigger));
+    expect(location.search).toContain("q=inspect");
+  });
+
+  it("passes Commitment due focus and civil-date timezone to the server", async () => {
+    const fetcher = vi.fn<typeof fetch>(async () => new Response(JSON.stringify({ commitments: [] }), { status: 200, headers: { "content-type": "application/json" } }));
+    vi.stubGlobal("fetch", fetcher); history.replaceState(null, "", "/work?view=commitments&commitment=due&tz=America%2FNew_York"); renderFromUrl();
+    await screen.findByText("No matching commitments");
+    const path = String(fetcher.mock.calls[0]?.[0]);
+    expect(path).toContain("workView=due"); expect(path).toMatch(/workDate=\d{4}-\d{2}-\d{2}/); expect(path).toContain("timezone=America%2FNew_York");
   });
 
   it("loads an executable lifecycle view without deriving it in the browser", async () => {

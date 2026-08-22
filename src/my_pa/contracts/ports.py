@@ -115,6 +115,7 @@ from my_pa.domain.situation.continuity import (
     Commitment,
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
     ContinuityEvidenceState,
     ContinuityLifecycleEvent,
     ContinuityObjectKind,
@@ -2664,6 +2665,7 @@ class TaskManagementRepository(ABC):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
         limit: int,
     ) -> tuple[TaskAggregate, ...]:
         """One bounded page of this Principal's own tasks, newest created first.
@@ -2687,6 +2689,7 @@ class TaskManagementRepository(ABC):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
     ) -> tuple[TaskAggregate, ...]:
         """One bounded page of this Principal's own tasks whose title matches `query`.
 
@@ -2823,6 +2826,9 @@ class CommitmentManagementRepository(ABC):
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
         evidence_state: ContinuityEvidenceState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[CommitmentAggregate, ...]:
@@ -2869,6 +2875,9 @@ class CommitmentManagementRepository(ABC):
         after: str | None = None,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
     ) -> tuple[CommitmentAggregate, ...]:
         """One bounded lexical page over summaries, optionally after an opaque row ID."""
         raise NotImplementedError

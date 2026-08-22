@@ -14,6 +14,7 @@ Commitment.
 from __future__ import annotations
 
 from contextlib import AbstractContextManager
+from datetime import datetime
 from types import TracebackType
 from typing import Any
 
@@ -29,6 +30,7 @@ from my_pa.contracts.ports import (
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
     ContinuityEvidenceState,
 )
 from my_pa.domain.task.commitment import Commitment
@@ -132,6 +134,9 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
         evidence_state: ContinuityEvidenceState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[Commitment, ...]:
@@ -142,41 +147,73 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
             conditions.append(commitments.c.state == state.value)
         if evidence_state is not None:
             conditions.append(commitments.c.evidence_state == evidence_state.value)
+        if work_view is not None:
+            if work_start is None or work_end is None:
+                raise ValueError("date-bounded Commitment views require both UTC boundaries")
+            if work_view is CommitmentWorkView.DUE:
+                conditions.extend(
+                    (
+                        commitments.c.state == CommitmentState.OPEN.value,
+                        commitments.c.due_at >= work_start,
+                        commitments.c.due_at < work_end,
+                    )
+                )
+            else:
+                conditions.extend(
+                    (commitments.c.updated_at >= work_start, commitments.c.updated_at < work_end)
+                )
         if after is not None:
             anchor = self._connection.execute(
                 select(
                     commitments.c.due_at,
                     commitments.c.created_at,
+                    commitments.c.updated_at,
                     commitments.c.commitment_id,
                 ).where(and_(*conditions, commitments.c.commitment_id == after))
             ).one_or_none()
             if anchor is None:
                 raise WorkCursorError
-            later_created = or_(
-                commitments.c.created_at < anchor.created_at,
-                and_(
-                    commitments.c.created_at == anchor.created_at,
-                    commitments.c.commitment_id > anchor.commitment_id,
-                ),
-            )
-            if anchor.due_at is None:
-                conditions.append(and_(commitments.c.due_at.is_(None), later_created))
-            else:
+            if work_view is CommitmentWorkView.RECENTLY_UPDATED:
                 conditions.append(
                     or_(
-                        commitments.c.due_at > anchor.due_at,
-                        commitments.c.due_at.is_(None),
-                        and_(commitments.c.due_at == anchor.due_at, later_created),
+                        commitments.c.updated_at < anchor.updated_at,
+                        and_(
+                            commitments.c.updated_at == anchor.updated_at,
+                            commitments.c.commitment_id > anchor.commitment_id,
+                        ),
                     )
                 )
-        rows = self._connection.execute(
-            select(*commitments.c)
-            .where(and_(*conditions))
-            .order_by(
+            else:
+                later_created = or_(
+                    commitments.c.created_at < anchor.created_at,
+                    and_(
+                        commitments.c.created_at == anchor.created_at,
+                        commitments.c.commitment_id > anchor.commitment_id,
+                    ),
+                )
+                if anchor.due_at is None:
+                    conditions.append(and_(commitments.c.due_at.is_(None), later_created))
+                else:
+                    conditions.append(
+                        or_(
+                            commitments.c.due_at > anchor.due_at,
+                            commitments.c.due_at.is_(None),
+                            and_(commitments.c.due_at == anchor.due_at, later_created),
+                        )
+                    )
+        order_columns = (
+            (desc(commitments.c.updated_at), asc(commitments.c.commitment_id))
+            if work_view is CommitmentWorkView.RECENTLY_UPDATED
+            else (
                 asc(commitments.c.due_at).nullslast(),
                 desc(commitments.c.created_at),
                 asc(commitments.c.commitment_id),
             )
+        )
+        rows = self._connection.execute(
+            select(*commitments.c)
+            .where(and_(*conditions))
+            .order_by(*order_columns)
             .limit(limit)
         ).all()
         return tuple(_to_commitment(row) for row in rows)
@@ -308,6 +345,9 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
         after: str | None = None,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
     ) -> tuple[Commitment, ...]:
         escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
         conditions = [
@@ -318,41 +358,73 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
             conditions.append(commitments.c.direction == direction.value)
         if state is not None:
             conditions.append(commitments.c.state == state.value)
+        if work_view is not None:
+            if work_start is None or work_end is None:
+                raise ValueError("date-bounded Commitment views require both UTC boundaries")
+            if work_view is CommitmentWorkView.DUE:
+                conditions.extend(
+                    (
+                        commitments.c.state == CommitmentState.OPEN.value,
+                        commitments.c.due_at >= work_start,
+                        commitments.c.due_at < work_end,
+                    )
+                )
+            else:
+                conditions.extend(
+                    (commitments.c.updated_at >= work_start, commitments.c.updated_at < work_end)
+                )
         if after is not None:
             anchor = self._connection.execute(
                 select(
                     commitments.c.due_at,
                     commitments.c.created_at,
+                    commitments.c.updated_at,
                     commitments.c.commitment_id,
                 ).where(and_(*conditions, commitments.c.commitment_id == after))
             ).one_or_none()
             if anchor is None:
                 raise WorkCursorError
-            later_created = or_(
-                commitments.c.created_at < anchor.created_at,
-                and_(
-                    commitments.c.created_at == anchor.created_at,
-                    commitments.c.commitment_id > anchor.commitment_id,
-                ),
-            )
-            if anchor.due_at is None:
-                conditions.append(and_(commitments.c.due_at.is_(None), later_created))
-            else:
+            if work_view is CommitmentWorkView.RECENTLY_UPDATED:
                 conditions.append(
                     or_(
-                        commitments.c.due_at > anchor.due_at,
-                        commitments.c.due_at.is_(None),
-                        and_(commitments.c.due_at == anchor.due_at, later_created),
+                        commitments.c.updated_at < anchor.updated_at,
+                        and_(
+                            commitments.c.updated_at == anchor.updated_at,
+                            commitments.c.commitment_id > anchor.commitment_id,
+                        ),
                     )
                 )
-        rows = self._connection.execute(
-            select(*commitments.c)
-            .where(and_(*conditions))
-            .order_by(
+            else:
+                later_created = or_(
+                    commitments.c.created_at < anchor.created_at,
+                    and_(
+                        commitments.c.created_at == anchor.created_at,
+                        commitments.c.commitment_id > anchor.commitment_id,
+                    ),
+                )
+                if anchor.due_at is None:
+                    conditions.append(and_(commitments.c.due_at.is_(None), later_created))
+                else:
+                    conditions.append(
+                        or_(
+                            commitments.c.due_at > anchor.due_at,
+                            commitments.c.due_at.is_(None),
+                            and_(commitments.c.due_at == anchor.due_at, later_created),
+                        )
+                    )
+        order_columns = (
+            (desc(commitments.c.updated_at), asc(commitments.c.commitment_id))
+            if work_view is CommitmentWorkView.RECENTLY_UPDATED
+            else (
                 asc(commitments.c.due_at).nullslast(),
                 desc(commitments.c.created_at),
                 asc(commitments.c.commitment_id),
             )
+        )
+        rows = self._connection.execute(
+            select(*commitments.c)
+            .where(and_(*conditions))
+            .order_by(*order_columns)
             .limit(limit)
         ).all()
         return tuple(_to_commitment(row) for row in rows)

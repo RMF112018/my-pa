@@ -194,6 +194,7 @@ from my_pa.domain.situation.continuity import (
     Commitment,
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
     ContinuityAcceptanceKind,
     ContinuityEvidenceState,
     TaskState,
@@ -1733,6 +1734,7 @@ class _TasksRead(TaskManagementRepository):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
         limit: int,
     ) -> tuple[TaskV2, ...]:
         owned = [task for task in self._world.tasks_v2 if task.principal_id == principal_id]
@@ -1754,15 +1756,53 @@ class _TasksRead(TaskManagementRepository):
                 default=None,
             )
 
-        if work_view is TaskWorkView.TODAY:
+        if work_view is TaskWorkView.OVERDUE:
             owned = [
                 task
                 for task in owned
                 if task.lifecycle_state
                 not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
-                and (moment := effective(task)) is not None
+                and task.due_at is not None
+                and work_now is not None
+                and task.due_at < work_now
+            ]
+        elif work_view is TaskWorkView.TODAY:
+            owned = [
+                task
+                for task in owned
+                if task.lifecycle_state
+                not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
+                and (task.due_at is None or (work_now is not None and task.due_at >= work_now))
+                and (
+                    (
+                        task.due_at is not None
+                        and work_start is not None
+                        and work_end is not None
+                        and work_start <= task.due_at < work_end
+                    )
+                    or (
+                        task.scheduled_at is not None
+                        and work_start is not None
+                        and work_end is not None
+                        and work_start <= task.scheduled_at < work_end
+                    )
+                )
+            ]
+        elif work_view is TaskWorkView.UNSCHEDULED:
+            owned = [
+                task
+                for task in owned
+                if task.lifecycle_state
+                not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
+                and task.scheduled_at is None
+            ]
+        elif work_view is TaskWorkView.RECENTLY_UPDATED:
+            owned = [
+                task
+                for task in owned
+                if work_start is not None
                 and work_end is not None
-                and moment < work_end
+                and work_start <= task.updated_at < work_end
             ]
         elif work_view is TaskWorkView.UPCOMING:
             owned = [
@@ -1773,6 +1813,7 @@ class _TasksRead(TaskManagementRepository):
                 and (moment := effective(task)) is not None
                 and work_end is not None
                 and moment >= work_end
+                and (task.due_at is None or (work_now is not None and task.due_at >= work_now))
             ]
         elif work_view is TaskWorkView.WAITING:
             owned = [task for task in owned if task.lifecycle_state is TaskLifecycleState.WAITING]
@@ -1797,7 +1838,41 @@ class _TasksRead(TaskManagementRepository):
                 if task.lifecycle_state
                 in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
             ]
-        ordered = sorted(owned, key=lambda task: (task.created_at, task.task_id), reverse=True)
+        if work_view is TaskWorkView.OVERDUE:
+            ordered = sorted(
+                owned,
+                key=lambda task: (
+                    task.due_at or datetime.max.replace(tzinfo=UTC),
+                    task.priority.value if task.priority else "p5",
+                    task.task_id,
+                ),
+            )
+        elif work_view in {TaskWorkView.TODAY, TaskWorkView.UPCOMING}:
+            ordered = sorted(
+                owned,
+                key=lambda task: (
+                    min(
+                        (value for value in (task.due_at, task.scheduled_at) if value),
+                        default=datetime.max.replace(tzinfo=UTC),
+                    ),
+                    task.priority.value if task.priority else "p5",
+                    task.task_id,
+                ),
+            )
+        elif work_view is TaskWorkView.UNSCHEDULED:
+            ordered = sorted(
+                owned,
+                key=lambda task: (
+                    task.due_at is None,
+                    task.due_at or datetime.max.replace(tzinfo=UTC),
+                    task.priority.value if task.priority else "p5",
+                    task.task_id,
+                ),
+            )
+        elif work_view is TaskWorkView.RECENTLY_UPDATED:
+            ordered = sorted(owned, key=lambda task: (-task.updated_at.timestamp(), task.task_id))
+        else:
+            ordered = sorted(owned, key=lambda task: (task.created_at, task.task_id), reverse=True)
         # `reverse=True` sorts `task_id` descending alongside `created_at`, which
         # is not what the real `ORDER BY created_at DESC, task_id ASC` does for
         # two rows sharing one `created_at`. No test in this fake's suite pins two
@@ -1825,6 +1900,7 @@ class _TasksRead(TaskManagementRepository):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
     ) -> tuple[TaskV2, ...]:
         needle = query.casefold()
         owned = list(
@@ -1834,6 +1910,7 @@ class _TasksRead(TaskManagementRepository):
                 work_view=work_view,
                 work_start=work_start,
                 work_end=work_end,
+                work_now=work_now,
                 limit=len(self._world.tasks_v2) + 1,
             )
         )
@@ -1937,6 +2014,9 @@ class _CommitmentsRead(CommitmentManagementRepository):
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
         evidence_state: ContinuityEvidenceState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
         after: str | None = None,
         limit: int,
     ) -> tuple[CommitmentV2, ...]:
@@ -1947,15 +2027,30 @@ class _CommitmentsRead(CommitmentManagementRepository):
             owned = [c for c in owned if c.state is state]
         if evidence_state is not None:
             owned = [c for c in owned if c.evidence_state is evidence_state]
-        ordered = sorted(
-            owned,
-            key=lambda c: (
-                c.due_at is None,
-                c.due_at or datetime.max.replace(tzinfo=UTC),
-                -c.created_at.timestamp(),
-                c.commitment_id,
-            ),
-        )
+        if work_view is CommitmentWorkView.DUE:
+            assert work_start is not None and work_end is not None
+            owned = [
+                c
+                for c in owned
+                if c.state is CommitmentState.OPEN
+                and c.due_at is not None
+                and work_start <= c.due_at < work_end
+            ]
+        elif work_view is CommitmentWorkView.RECENTLY_UPDATED:
+            assert work_start is not None and work_end is not None
+            owned = [c for c in owned if work_start <= c.updated_at < work_end]
+        if work_view is CommitmentWorkView.RECENTLY_UPDATED:
+            ordered = sorted(owned, key=lambda c: (-c.updated_at.timestamp(), c.commitment_id))
+        else:
+            ordered = sorted(
+                owned,
+                key=lambda c: (
+                    c.due_at is None,
+                    c.due_at or datetime.max.replace(tzinfo=UTC),
+                    -c.created_at.timestamp(),
+                    c.commitment_id,
+                ),
+            )
         if after is not None:
             if not any(commitment.commitment_id == after for commitment in owned):
                 raise WorkCursorError
@@ -2029,6 +2124,9 @@ class _CommitmentsRead(CommitmentManagementRepository):
         after: str | None = None,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
     ) -> tuple[CommitmentV2, ...]:
         needle = query.casefold()
         owned = [
@@ -2040,15 +2138,32 @@ class _CommitmentsRead(CommitmentManagementRepository):
             owned = [item for item in owned if item.direction is direction]
         if state is not None:
             owned = [item for item in owned if item.state is state]
-        ordered = sorted(
-            owned,
-            key=lambda item: (
-                item.due_at is None,
-                item.due_at or datetime.max.replace(tzinfo=UTC),
-                -item.created_at.timestamp(),
-                item.commitment_id,
-            ),
-        )
+        if work_view is CommitmentWorkView.DUE:
+            assert work_start is not None and work_end is not None
+            owned = [
+                item
+                for item in owned
+                if item.state is CommitmentState.OPEN
+                and item.due_at is not None
+                and work_start <= item.due_at < work_end
+            ]
+        elif work_view is CommitmentWorkView.RECENTLY_UPDATED:
+            assert work_start is not None and work_end is not None
+            owned = [item for item in owned if work_start <= item.updated_at < work_end]
+        if work_view is CommitmentWorkView.RECENTLY_UPDATED:
+            ordered = sorted(
+                owned, key=lambda item: (-item.updated_at.timestamp(), item.commitment_id)
+            )
+        else:
+            ordered = sorted(
+                owned,
+                key=lambda item: (
+                    item.due_at is None,
+                    item.due_at or datetime.max.replace(tzinfo=UTC),
+                    -item.created_at.timestamp(),
+                    item.commitment_id,
+                ),
+            )
         if after is not None:
             if not any(item.commitment_id == after for item in owned):
                 raise WorkCursorError
@@ -2129,6 +2244,7 @@ class _TasksWrite(TaskManagementRepository):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
         limit: int,
     ) -> tuple[TaskV2, ...]:
         raise NotImplementedError("the write plane's fake does not serve list reads")
@@ -2144,6 +2260,7 @@ class _TasksWrite(TaskManagementRepository):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
     ) -> tuple[TaskV2, ...]:
         raise NotImplementedError("the write plane's fake does not serve search")
 

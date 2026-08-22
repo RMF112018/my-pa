@@ -122,6 +122,7 @@ class _FakeRepository(TaskManagementRepository):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
         limit: int,
     ) -> tuple[Task, ...]:
         raise NotImplementedError("this suite does not exercise the read plane")
@@ -137,6 +138,7 @@ class _FakeRepository(TaskManagementRepository):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
     ) -> tuple[Task, ...]:
         raise NotImplementedError("this suite does not exercise the read plane")
 

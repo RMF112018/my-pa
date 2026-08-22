@@ -90,6 +90,7 @@ from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
 )
 from my_pa.domain.task.lifecycle import (
     TaskArchiveMode,
@@ -1513,7 +1514,12 @@ class ListTasks:
             _identifier(self.after, IdKind.TASK, SafeDetail.CURSOR)
         if self.work_view is not None and not isinstance(self.work_view, TaskWorkView):
             raise InvalidRequestError(SafeDetail.SELECTOR)
-        if self.work_view in {TaskWorkView.TODAY, TaskWorkView.UPCOMING}:
+        if self.work_view in {
+            TaskWorkView.OVERDUE,
+            TaskWorkView.TODAY,
+            TaskWorkView.UPCOMING,
+            TaskWorkView.RECENTLY_UPDATED,
+        }:
             if (
                 not isinstance(self.work_date, date)
                 or isinstance(self.work_date, datetime)
@@ -1574,7 +1580,12 @@ class SearchTasks:
             raise InvalidRequestError(SafeDetail.SELECTOR)
         if self.work_view is not None and not isinstance(self.work_view, TaskWorkView):
             raise InvalidRequestError(SafeDetail.SELECTOR)
-        if self.work_view in {TaskWorkView.TODAY, TaskWorkView.UPCOMING}:
+        if self.work_view in {
+            TaskWorkView.OVERDUE,
+            TaskWorkView.TODAY,
+            TaskWorkView.UPCOMING,
+            TaskWorkView.RECENTLY_UPDATED,
+        }:
             if (
                 not isinstance(self.work_date, date)
                 or isinstance(self.work_date, datetime)
@@ -1880,6 +1891,9 @@ class ListCommitments:
     state: CommitmentState | None = None
     page_size: int | None = None
     after: str | None = None
+    work_view: CommitmentWorkView | None = None
+    work_date: date | None = None
+    timezone: str | None = None
 
     def __post_init__(self) -> None:
         if self.direction is not None and not isinstance(self.direction, CommitmentDirection):
@@ -1889,6 +1903,21 @@ class ListCommitments:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
         if self.after is not None:
             _identifier(self.after, IdKind.COMMITMENT, SafeDetail.CURSOR)
+        if self.work_view is not None and not isinstance(self.work_view, CommitmentWorkView):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.work_view is not None:
+            if (
+                not isinstance(self.work_date, date)
+                or isinstance(self.work_date, datetime)
+                or not isinstance(self.timezone, str)
+            ):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            try:
+                ZoneInfo(self.timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        elif self.work_date is not None or self.timezone is not None:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1902,6 +1931,9 @@ class SearchCommitments:
     after: str | None = None
     direction: CommitmentDirection | None = None
     state: CommitmentState | None = None
+    work_view: CommitmentWorkView | None = None
+    work_date: date | None = None
+    timezone: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.query, str):
@@ -1914,6 +1946,21 @@ class SearchCommitments:
         if self.direction is not None and not isinstance(self.direction, CommitmentDirection):
             raise InvalidRequestError(SafeDetail.SELECTOR)
         if self.state is not None and not isinstance(self.state, CommitmentState):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.work_view is not None and not isinstance(self.work_view, CommitmentWorkView):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.work_view is not None:
+            if (
+                not isinstance(self.work_date, date)
+                or isinstance(self.work_date, datetime)
+                or not isinstance(self.timezone, str)
+            ):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            try:
+                ZoneInfo(self.timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        elif self.work_date is not None or self.timezone is not None:
             raise InvalidRequestError(SafeDetail.SELECTOR)
 
 

@@ -89,14 +89,22 @@ class TaskPriority(StrEnum):
 
 
 class TaskWorkView(StrEnum):
-    """The six server-owned Task views admitted by WP-FE-03."""
+    """The server-owned Task sections admitted for the Work surface.
 
+    Date-bounded members are evaluated against one validated civil day by the
+    application service.  They remain query vocabulary, never stored Task
+    state, and therefore cannot blur due, scheduled, or deferred semantics.
+    """
+
+    OVERDUE = "overdue"
     TODAY = "today"
     UPCOMING = "upcoming"
+    UNSCHEDULED = "unscheduled"
     WAITING = "waiting"
     BLOCKED = "blocked"
     ALL_OPEN = "all-open"
     COMPLETED = "completed"
+    RECENTLY_UPDATED = "recently-updated"
 
 
 class TaskArchiveMode(StrEnum):

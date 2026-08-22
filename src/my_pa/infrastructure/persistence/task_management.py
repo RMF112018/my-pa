@@ -28,7 +28,7 @@ from datetime import datetime
 from types import TracebackType
 from typing import Any
 
-from sqlalchemy import Engine, and_, asc, case, desc, func, insert, or_, select, update
+from sqlalchemy import Engine, and_, asc, case, desc, false, func, insert, or_, select, update
 from sqlalchemy.engine import Connection, Row
 from sqlalchemy.exc import IntegrityError
 
@@ -171,6 +171,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
         limit: int,
     ) -> tuple[Task, ...]:
         conditions = [tasks.c.principal_id == principal_id]
@@ -188,6 +189,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
         effective_at = func.greatest(
             func.least(tasks.c.due_at, tasks.c.scheduled_at), tasks.c.deferred_until
         )
+        calendar_at = func.least(tasks.c.due_at, tasks.c.scheduled_at)
         priority_rank = case(
             (tasks.c.priority == "p1", 1),
             (tasks.c.priority == "p2", 2),
@@ -196,20 +198,76 @@ class SqlTaskManagementRepository(TaskManagementRepository):
             else_=5,
         )
         order_columns: tuple[Any, ...]
-        if work_view in {TaskWorkView.TODAY, TaskWorkView.UPCOMING}:
+        if work_view in {
+            TaskWorkView.OVERDUE,
+            TaskWorkView.TODAY,
+            TaskWorkView.UPCOMING,
+            TaskWorkView.RECENTLY_UPDATED,
+        }:
             if work_start is None or work_end is None:
                 raise ValueError("date-bounded Work views require both UTC boundaries")
-            conditions.append(
-                tasks.c.lifecycle_state.not_in(
-                    tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
+            if work_view is not TaskWorkView.RECENTLY_UPDATED and work_now is None:
+                raise ValueError("time-sensitive Work views require trusted current time")
+            if work_view is TaskWorkView.RECENTLY_UPDATED:
+                conditions.extend((tasks.c.updated_at >= work_start, tasks.c.updated_at < work_end))
+                order_columns = (desc(tasks.c.updated_at), asc(tasks.c.task_id))
+            else:
+                conditions.append(
+                    tasks.c.lifecycle_state.not_in(
+                        tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
+                    )
+                )
+                if work_view is TaskWorkView.OVERDUE:
+                    conditions.extend((tasks.c.due_at.is_not(None), tasks.c.due_at < work_now))
+                    order_columns = (
+                        asc(tasks.c.due_at),
+                        asc(priority_rank),
+                        asc(tasks.c.task_id),
+                    )
+                elif work_view is TaskWorkView.TODAY:
+                    conditions.extend(
+                        (
+                            or_(tasks.c.due_at.is_(None), tasks.c.due_at >= work_now),
+                            or_(
+                                and_(tasks.c.due_at >= work_start, tasks.c.due_at < work_end),
+                                and_(
+                                    tasks.c.scheduled_at >= work_start,
+                                    tasks.c.scheduled_at < work_end,
+                                ),
+                            ),
+                        )
+                    )
+                    order_columns = (
+                        asc(calendar_at),
+                        asc(priority_rank),
+                        asc(tasks.c.task_id),
+                    )
+                else:
+                    conditions.extend(
+                        (
+                            or_(tasks.c.due_at.is_(None), tasks.c.due_at >= work_now),
+                            or_(tasks.c.due_at >= work_end, tasks.c.scheduled_at >= work_end),
+                        )
+                    )
+                    order_columns = (
+                        asc(calendar_at),
+                        asc(priority_rank),
+                        asc(tasks.c.task_id),
+                    )
+        elif work_view is TaskWorkView.UNSCHEDULED:
+            conditions.extend(
+                (
+                    tasks.c.lifecycle_state.not_in(
+                        tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
+                    ),
+                    tasks.c.scheduled_at.is_(None),
                 )
             )
-            conditions.append(effective_at.is_not(None))
-            if work_view is TaskWorkView.TODAY:
-                conditions.append(effective_at < work_end)
-            else:
-                conditions.append(effective_at >= work_end)
-            order_columns = (asc(effective_at), asc(priority_rank), asc(tasks.c.task_id))
+            order_columns = (
+                asc(tasks.c.due_at).nullslast(),
+                asc(priority_rank),
+                asc(tasks.c.task_id),
+            )
         elif work_view is TaskWorkView.WAITING:
             conditions.append(tasks.c.lifecycle_state == TaskLifecycleState.WAITING.value)
             order_columns = (
@@ -246,6 +304,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
                 select(
                     *tasks.c,
                     effective_at.label("effective_at"),
+                    calendar_at.label("calendar_at"),
                     priority_rank.label("rank"),
                 ).where(and_(*conditions, tasks.c.task_id == after))
             ).one_or_none()
@@ -254,11 +313,55 @@ class SqlTaskManagementRepository(TaskManagementRepository):
             if work_view in {TaskWorkView.TODAY, TaskWorkView.UPCOMING}:
                 conditions.append(
                     or_(
-                        effective_at > anchor.effective_at,
-                        and_(effective_at == anchor.effective_at, priority_rank > anchor.rank),
+                        calendar_at > anchor.calendar_at,
+                        and_(calendar_at == anchor.calendar_at, priority_rank > anchor.rank),
                         and_(
-                            effective_at == anchor.effective_at,
+                            calendar_at == anchor.calendar_at,
                             priority_rank == anchor.rank,
+                            tasks.c.task_id > anchor.task_id,
+                        ),
+                    )
+                )
+            elif work_view is TaskWorkView.OVERDUE:
+                conditions.append(
+                    or_(
+                        tasks.c.due_at > anchor.due_at,
+                        and_(tasks.c.due_at == anchor.due_at, priority_rank > anchor.rank),
+                        and_(
+                            tasks.c.due_at == anchor.due_at,
+                            priority_rank == anchor.rank,
+                            tasks.c.task_id > anchor.task_id,
+                        ),
+                    )
+                )
+            elif work_view is TaskWorkView.UNSCHEDULED:
+                same_due = (
+                    tasks.c.due_at.is_(None)
+                    if anchor.due_at is None
+                    else tasks.c.due_at == anchor.due_at
+                )
+                later_due = (
+                    false()
+                    if anchor.due_at is None
+                    else or_(tasks.c.due_at > anchor.due_at, tasks.c.due_at.is_(None))
+                )
+                conditions.append(
+                    or_(
+                        later_due,
+                        and_(same_due, priority_rank > anchor.rank),
+                        and_(
+                            same_due,
+                            priority_rank == anchor.rank,
+                            tasks.c.task_id > anchor.task_id,
+                        ),
+                    )
+                )
+            elif work_view is TaskWorkView.RECENTLY_UPDATED:
+                conditions.append(
+                    or_(
+                        tasks.c.updated_at < anchor.updated_at,
+                        and_(
+                            tasks.c.updated_at == anchor.updated_at,
                             tasks.c.task_id > anchor.task_id,
                         ),
                     )
@@ -333,6 +436,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
         work_view: TaskWorkView | None = None,
         work_start: datetime | None = None,
         work_end: datetime | None = None,
+        work_now: datetime | None = None,
     ) -> tuple[Task, ...]:
         # `_` and `%` are `ILIKE` wildcards; a query containing either as a
         # literal character (a task titled "50% done", say) is escaped so the
@@ -352,6 +456,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
         effective_at = func.greatest(
             func.least(tasks.c.due_at, tasks.c.scheduled_at), tasks.c.deferred_until
         )
+        calendar_at = func.least(tasks.c.due_at, tasks.c.scheduled_at)
         priority_rank = case(
             (tasks.c.priority == "p1", 1),
             (tasks.c.priority == "p2", 2),
@@ -359,22 +464,76 @@ class SqlTaskManagementRepository(TaskManagementRepository):
             (tasks.c.priority == "p4", 4),
             else_=5,
         )
-        if work_view in {TaskWorkView.TODAY, TaskWorkView.UPCOMING}:
+        if work_view in {
+            TaskWorkView.OVERDUE,
+            TaskWorkView.TODAY,
+            TaskWorkView.UPCOMING,
+            TaskWorkView.RECENTLY_UPDATED,
+        }:
             if work_start is None or work_end is None:
                 raise ValueError("date-bounded Work views require both UTC boundaries")
+            if work_view is not TaskWorkView.RECENTLY_UPDATED and work_now is None:
+                raise ValueError("time-sensitive Work views require trusted current time")
+            if work_view is TaskWorkView.RECENTLY_UPDATED:
+                conditions.extend((tasks.c.updated_at >= work_start, tasks.c.updated_at < work_end))
+                order_columns: tuple[Any, ...] = (
+                    desc(tasks.c.updated_at),
+                    asc(tasks.c.task_id),
+                )
+            else:
+                conditions.append(
+                    tasks.c.lifecycle_state.not_in(
+                        tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
+                    )
+                )
+                if work_view is TaskWorkView.OVERDUE:
+                    conditions.extend((tasks.c.due_at.is_not(None), tasks.c.due_at < work_now))
+                    order_columns = (
+                        asc(tasks.c.due_at),
+                        asc(priority_rank),
+                        asc(tasks.c.task_id),
+                    )
+                elif work_view is TaskWorkView.TODAY:
+                    conditions.extend(
+                        (
+                            or_(tasks.c.due_at.is_(None), tasks.c.due_at >= work_now),
+                            or_(
+                                and_(tasks.c.due_at >= work_start, tasks.c.due_at < work_end),
+                                and_(
+                                    tasks.c.scheduled_at >= work_start,
+                                    tasks.c.scheduled_at < work_end,
+                                ),
+                            ),
+                        )
+                    )
+                    order_columns = (
+                        asc(calendar_at),
+                        asc(priority_rank),
+                        asc(tasks.c.task_id),
+                    )
+                else:
+                    conditions.extend(
+                        (
+                            or_(tasks.c.due_at.is_(None), tasks.c.due_at >= work_now),
+                            or_(tasks.c.due_at >= work_end, tasks.c.scheduled_at >= work_end),
+                        )
+                    )
+                    order_columns = (
+                        asc(calendar_at),
+                        asc(priority_rank),
+                        asc(tasks.c.task_id),
+                    )
+        elif work_view is TaskWorkView.UNSCHEDULED:
             conditions.extend(
                 (
                     tasks.c.lifecycle_state.not_in(
                         tuple(state.value for state in TERMINAL_TASK_LIFECYCLE_STATES)
                     ),
-                    effective_at.is_not(None),
-                    effective_at < work_end
-                    if work_view is TaskWorkView.TODAY
-                    else effective_at >= work_end,
+                    tasks.c.scheduled_at.is_(None),
                 )
             )
-            order_columns: tuple[Any, ...] = (
-                asc(effective_at),
+            order_columns = (
+                asc(tasks.c.due_at).nullslast(),
                 asc(priority_rank),
                 asc(tasks.c.task_id),
             )
@@ -414,6 +573,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
                 select(
                     *tasks.c,
                     effective_at.label("effective_at"),
+                    calendar_at.label("calendar_at"),
                     priority_rank.label("rank"),
                 ).where(and_(*conditions, tasks.c.task_id == after))
             ).one_or_none()
@@ -422,11 +582,55 @@ class SqlTaskManagementRepository(TaskManagementRepository):
             if work_view in {TaskWorkView.TODAY, TaskWorkView.UPCOMING}:
                 conditions.append(
                     or_(
-                        effective_at > anchor.effective_at,
-                        and_(effective_at == anchor.effective_at, priority_rank > anchor.rank),
+                        calendar_at > anchor.calendar_at,
+                        and_(calendar_at == anchor.calendar_at, priority_rank > anchor.rank),
                         and_(
-                            effective_at == anchor.effective_at,
+                            calendar_at == anchor.calendar_at,
                             priority_rank == anchor.rank,
+                            tasks.c.task_id > anchor.task_id,
+                        ),
+                    )
+                )
+            elif work_view is TaskWorkView.OVERDUE:
+                conditions.append(
+                    or_(
+                        tasks.c.due_at > anchor.due_at,
+                        and_(tasks.c.due_at == anchor.due_at, priority_rank > anchor.rank),
+                        and_(
+                            tasks.c.due_at == anchor.due_at,
+                            priority_rank == anchor.rank,
+                            tasks.c.task_id > anchor.task_id,
+                        ),
+                    )
+                )
+            elif work_view is TaskWorkView.UNSCHEDULED:
+                same_due = (
+                    tasks.c.due_at.is_(None)
+                    if anchor.due_at is None
+                    else tasks.c.due_at == anchor.due_at
+                )
+                later_due = (
+                    false()
+                    if anchor.due_at is None
+                    else or_(tasks.c.due_at > anchor.due_at, tasks.c.due_at.is_(None))
+                )
+                conditions.append(
+                    or_(
+                        later_due,
+                        and_(same_due, priority_rank > anchor.rank),
+                        and_(
+                            same_due,
+                            priority_rank == anchor.rank,
+                            tasks.c.task_id > anchor.task_id,
+                        ),
+                    )
+                )
+            elif work_view is TaskWorkView.RECENTLY_UPDATED:
+                conditions.append(
+                    or_(
+                        tasks.c.updated_at < anchor.updated_at,
+                        and_(
+                            tasks.c.updated_at == anchor.updated_at,
                             tasks.c.task_id > anchor.task_id,
                         ),
                     )

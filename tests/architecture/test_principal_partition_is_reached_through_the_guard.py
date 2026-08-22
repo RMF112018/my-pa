@@ -138,6 +138,12 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         "infrastructure/persistence/managed_documents.py",
         "infrastructure/persistence/worker_health.py",
         "infrastructure/persistence/relationships.py",
+        # WP-29's Relationship Memory plane. Every statement it builds over the
+        # eight memory tables — and over `knowledge.entities`, which it reads to
+        # prove same-Principal ownership of a memory's subject before the insert
+        # — composes `_mine` or `_bound`, and those two are one-line wrappers
+        # over `partition_criterion` and `principal_bound_values` respectively.
+        "infrastructure/persistence/relationship_memory.py",
         # The evidence traversal. Every one of its six statements is rooted at a
         # partitioned table — `captures`, `capture_versions`, `capture_assertions`
         # or `capture_assertion_spans` — and constrained through `principal_scoped`
@@ -336,6 +342,15 @@ PER_MODULE_ONLY: Final = {
         "every read is principal_scoped and every insert is principal_bound_values; "
         "run and artifact updates use partition_criterion. Helper mappers consume "
         "already-scoped rows."
+    ),
+    "infrastructure/persistence/relationship_memory.py": (
+        "every statement naming one of the eight memory tables, or `entities` on "
+        "the ownership-proving path, composes `_mine` or `_bound` — one-line "
+        "wrappers over partition_criterion and principal_bound_values — and a "
+        "walk of the module's query statements finds no exception. It is "
+        "per-module rather than statement-level only because this plane has no "
+        "bespoke statement-level scan of its own yet; writing one is the work "
+        "this entry represents, not a hole it is covering."
     ),
 }
 

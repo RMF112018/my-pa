@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all sixty-two capabilities.
+`tests/contract/test_transport_parity.py` holds it over all seventy capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -163,20 +163,22 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build implements sixty-two, one per
+same as the tools this build implements. The build implements seventy, one per
 capability name. A default process publishes **fifty**. That is the
-sixty-two, less the six `documents.` and six `entities.` names a default
-composition withholds.
+seventy, less the six `documents.` names, the six `entities.` names and the
+eight `relationship_memory.` names a default composition withholds.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
 configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes those six, reaching forty-eight of the sixty-two. The
-remaining six are the `entities.` names, which `D-RI-20` gates behind
-`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms; a child
-publishing all sixty-two has both variables set. An operator who expects `documents.create`
+same child publishes those six, reaching fifty-six of the seventy. The
+remaining fourteen are the six `entities.` names, which `D-RI-20` gates behind
+`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms, and the
+eight `relationship_memory.` names, which need that variable *and*
+`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child
+publishing all seventy has all three variables set. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -188,6 +190,17 @@ apps/gateway.py mcp` — by
 (unset: **fifty**, none beginning `documents.`) and
 `::test_a_child_with_a_managed_root_publishes_every_capability` (set:
 sixty-two).
+
+**Current-state correction (2026-08-22): the second figure is the measurement
+WP-29 outran, and the test beside it has not caught up.** That child is composed
+with `MY_PA_MANAGED_DOCUMENT_ROOT` and `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
+and nothing else, and `ApplicationService.available_capabilities` withholds the
+`relationship_memory.` family unless `MY_PA_RELATIONSHIP_MEMORY_ENABLED` is set
+as well — so a child composed that way now publishes sixty-two of seventy rather
+than every capability, and the assertion under that test's name is the one that
+says so. The figure is left as measured rather than re-spelled, because nobody
+has re-run it: a runbook that states a number no one observed is the defect the
+2026-08-19 correction below was written about.
 
 **Corrected 2026-08-19: both figures above read `twenty` and neither had been
 measured.** The test named here derives what it asserts from `Capability` minus
@@ -236,8 +249,8 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-12):** the tool list is derived from all
-**sixty-two** current capabilities, and the schema has **sixty-five** revisions
-at head `e9b2c4d7a150`. `capabilities.get` also reports content-free
+**seventy** current capabilities, and the schema has **sixty-six** revisions
+at head `f1c6b904a2d7`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its
 stated head.
 

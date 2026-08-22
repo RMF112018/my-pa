@@ -293,6 +293,26 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "entity_merge_records",
         }
     ),
+    # WP-29's Relationship Memory plane: the mutable pointer row, its immutable
+    # version ledger, the submission receipts idempotency is read from, the
+    # context and evidence links a version carries, the proposal plane a review
+    # promotes from, and the append-only decision ledger. Eight tables in one
+    # revision because `relationship_memories` and `relationship_memory_versions`
+    # are mutually dependent — the pointer names its current version and the
+    # version names its memory — so neither can be created in a revision the
+    # other is absent from.
+    "f1c6b904a2d7": frozenset(
+        {
+            "relationship_memories",
+            "relationship_memory_versions",
+            "relationship_memory_submissions",
+            "relationship_memory_context_links",
+            "relationship_memory_evidence_links",
+            "relationship_memory_proposals",
+            "relationship_memory_proposal_evidence",
+            "relationship_memory_review_decisions",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

@@ -156,10 +156,16 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
+    CommitmentState,
     ContinuityEvidenceState,
 )
 from my_pa.domain.source.registry import issue_identifier
-from my_pa.domain.task.lifecycle import TaskLifecycleState
+from my_pa.domain.task.lifecycle import (
+    TaskArchiveMode,
+    TaskLifecycleState,
+    TaskPriority,
+    TaskWorkView,
+)
 
 ALL_CAPABILITIES = list(Capability)
 
@@ -1205,6 +1211,164 @@ def test_fake_work_repositories_refuse_foreign_cursor_anchors(
             10,
             after=foreign_commitment_history.history_id,
         )
+
+
+def test_fake_work_cursors_are_bound_to_the_complete_result_predicate(
+    staged: tuple[Scene, KnowledgeRecord],
+) -> None:
+    scene, _ = staged
+    principal_id = scene.principal.principal_id
+    task = staged_task(scene)
+    task_anchor = replace(
+        task,
+        task_id=issue_identifier(IdKind.TASK),
+        title="needle anchor",
+        lifecycle_state=TaskLifecycleState.WAITING,
+        priority=TaskPriority.P1,
+        created_at=WHEN + timedelta(minutes=2),
+        updated_at=WHEN + timedelta(minutes=2),
+    )
+    task_next = replace(
+        task_anchor,
+        task_id=issue_identifier(IdKind.TASK),
+        title="needle continuation",
+        created_at=WHEN + timedelta(minutes=1),
+        updated_at=WHEN + timedelta(minutes=1),
+    )
+    task_wrong_view = replace(
+        task_anchor,
+        task_id=issue_identifier(IdKind.TASK),
+        lifecycle_state=TaskLifecycleState.BLOCKED,
+    )
+    task_wrong_priority = replace(
+        task_anchor,
+        task_id=issue_identifier(IdKind.TASK),
+        title="priority-only mismatch",
+        priority=TaskPriority.P2,
+    )
+    task_archived = replace(
+        task_anchor,
+        task_id=issue_identifier(IdKind.TASK),
+        archived_at=WHEN,
+    )
+    task_wrong_query = replace(
+        task_anchor,
+        task_id=issue_identifier(IdKind.TASK),
+        title="different result set",
+        created_at=WHEN,
+        updated_at=WHEN,
+    )
+    scene.world.tasks_v2[:] = [
+        task_anchor,
+        task_next,
+        task_wrong_view,
+        task_wrong_priority,
+        task_archived,
+        task_wrong_query,
+    ]
+    tasks = FakeUnitOfWork(scene.world).tasks
+
+    list_arguments = {
+        "work_view": TaskWorkView.WAITING,
+        "priority": TaskPriority.P1,
+        "archive_mode": TaskArchiveMode.EXCLUDE,
+        "limit": 10,
+    }
+    for cursor in (
+        task_wrong_view.task_id,
+        task_wrong_priority.task_id,
+        task_archived.task_id,
+    ):
+        with pytest.raises(WorkCursorError):
+            tasks.list_tasks(principal_id, after=cursor, **list_arguments)
+    with pytest.raises(WorkCursorError):
+        tasks.search(
+            principal_id,
+            "needle",
+            after=task_wrong_query.task_id,
+            work_view=TaskWorkView.WAITING,
+            archive_mode=TaskArchiveMode.EXCLUDE,
+            limit=10,
+        )
+    assert tasks.list_tasks(principal_id, after=task_anchor.task_id, **list_arguments) == (
+        task_next,
+        task_wrong_query,
+    )
+    assert tasks.search(
+        principal_id,
+        "needle",
+        after=task_anchor.task_id,
+        work_view=TaskWorkView.WAITING,
+        archive_mode=TaskArchiveMode.EXCLUDE,
+        limit=10,
+    ) == (task_next,)
+
+    commitment = staged_commitment(scene)
+    commitment_anchor = replace(
+        commitment,
+        commitment_id=issue_identifier(IdKind.COMMITMENT),
+        summary="needle anchor",
+        due_at=WHEN + timedelta(days=1),
+        created_at=WHEN + timedelta(minutes=2),
+        updated_at=WHEN + timedelta(minutes=2),
+    )
+    commitment_next = replace(
+        commitment_anchor,
+        commitment_id=issue_identifier(IdKind.COMMITMENT),
+        summary="needle continuation",
+        due_at=WHEN + timedelta(days=2),
+        created_at=WHEN + timedelta(minutes=1),
+        updated_at=WHEN + timedelta(minutes=1),
+    )
+    commitment_wrong_direction = replace(
+        commitment_anchor,
+        commitment_id=issue_identifier(IdKind.COMMITMENT),
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+    )
+    commitment_wrong_state = replace(
+        commitment_anchor,
+        commitment_id=issue_identifier(IdKind.COMMITMENT),
+        state=CommitmentState.CLOSED,
+        closed_at=WHEN,
+        closure_evidence_ref="cap_closure0001closure0001",
+    )
+    commitment_wrong_query = replace(
+        commitment_anchor,
+        commitment_id=issue_identifier(IdKind.COMMITMENT),
+        summary="different result set",
+    )
+    scene.world.commitments_v2[:] = [
+        commitment_anchor,
+        commitment_next,
+        commitment_wrong_direction,
+        commitment_wrong_state,
+        commitment_wrong_query,
+    ]
+    commitments = FakeUnitOfWork(scene.world).commitments
+    search_arguments = {
+        "direction": commitment_anchor.direction,
+        "state": CommitmentState.OPEN,
+    }
+    for cursor in (
+        commitment_wrong_direction.commitment_id,
+        commitment_wrong_state.commitment_id,
+        commitment_wrong_query.commitment_id,
+    ):
+        with pytest.raises(WorkCursorError):
+            commitments.search(
+                principal_id,
+                "needle",
+                10,
+                after=cursor,
+                **search_arguments,
+            )
+    assert commitments.search(
+        principal_id,
+        "needle",
+        10,
+        after=commitment_anchor.commitment_id,
+        **search_arguments,
+    ) == (commitment_next,)
 
 
 def test_bulk_preview_and_confirm_replay_the_original_receipts(

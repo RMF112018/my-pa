@@ -1837,7 +1837,7 @@ class _TasksRead(TaskManagementRepository):
         )
         ordered = [task for task in owned if needle in task.title.casefold()]
         if after is not None:
-            if not any(task.task_id == after for task in owned):
+            if not any(task.task_id == after for task in ordered):
                 raise WorkCursorError
             ordered = ordered[
                 next(

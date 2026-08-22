@@ -273,12 +273,7 @@ class SqlCommitmentManagementRepository(CommitmentManagementRepository):
                     commitments.c.due_at,
                     commitments.c.created_at,
                     commitments.c.commitment_id,
-                ).where(
-                    and_(
-                        commitments.c.principal_id == principal_id,
-                        commitments.c.commitment_id == after,
-                    )
-                )
+                ).where(and_(*conditions, commitments.c.commitment_id == after))
             ).one_or_none()
             if anchor is None:
                 raise WorkCursorError

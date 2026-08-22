@@ -48,6 +48,7 @@ from my_pa.contracts.ports import BulkIdempotencyConflictError, WorkCursorError
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
+    CommitmentState,
     ContinuityAcceptanceKind,
     ContinuityEvidenceState,
 )
@@ -58,6 +59,11 @@ from my_pa.domain.task.history import (
     TaskMutationAction,
     TaskMutationActor,
     TaskMutationOutcome,
+)
+from my_pa.domain.task.lifecycle import (
+    TaskArchiveMode,
+    TaskPriority,
+    TaskWorkView,
 )
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.commitment_management import (
@@ -444,6 +450,64 @@ def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=_idempotency_key("cursor-foreign"),
     )
+    wrong_query = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Different result set",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("cursor-wrong-query"),
+    )
+    wrong_priority = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Needle priority mismatch",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        priority=TaskPriority.P2,
+        idempotency_key=_idempotency_key("cursor-wrong-priority"),
+    )
+    archived = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Needle archived",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        priority=TaskPriority.P1,
+        idempotency_key=_idempotency_key("cursor-archived"),
+    )
+    archived = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=archived.task.task_id,
+        expected_version=archived.task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"archived_at": datetime(2026, 8, 10, 13, tzinfo=UTC)},
+        idempotency_key=_idempotency_key("cursor-archive-update"),
+    )
+    waiting = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Needle waiting",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        priority=TaskPriority.P1,
+        idempotency_key=_idempotency_key("cursor-waiting"),
+    )
+    needle = tuple(
+        service.create_task(
+            principal_id=PRINCIPAL_A,
+            title=f"Needle continuation {index}",
+            origin_evidence_ref=ORIGIN,
+            actor=TaskMutationActor.PRINCIPAL,
+            priority=TaskPriority.P1,
+            idempotency_key=_idempotency_key(f"cursor-needle-{index}"),
+        )
+        for index in range(2)
+    )
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                f"UPDATE {SCHEMA}.tasks SET lifecycle_state = 'waiting' "  # noqa: S608
+                "WHERE task_id = :task_id"
+            ),
+            {"task_id": waiting.task.task_id},
+        )
     with migrated_engine.begin() as connection:
         repository = SqlTaskManagementRepository(connection)
         for cursor in (issue_identifier(IdKind.TASK), foreign.task.task_id):
@@ -451,6 +515,45 @@ def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
                 repository.list_tasks(PRINCIPAL_A, after=cursor, limit=10)
             with pytest.raises(WorkCursorError):
                 repository.search(PRINCIPAL_A, "mine", 10, after=cursor)
+        with pytest.raises(WorkCursorError):
+            repository.list_tasks(
+                PRINCIPAL_A,
+                priority=TaskPriority.P1,
+                after=wrong_priority.task.task_id,
+                limit=10,
+            )
+        with pytest.raises(WorkCursorError):
+            repository.list_tasks(
+                PRINCIPAL_A,
+                archive_mode=TaskArchiveMode.EXCLUDE,
+                after=archived.task.task_id,
+                limit=10,
+            )
+        with pytest.raises(WorkCursorError):
+            repository.list_tasks(
+                PRINCIPAL_A,
+                work_view=TaskWorkView.BLOCKED,
+                after=waiting.task.task_id,
+                limit=10,
+            )
+        with pytest.raises(WorkCursorError):
+            repository.search(PRINCIPAL_A, "mine", 10, after=wrong_query.task.task_id)
+        with pytest.raises(WorkCursorError):
+            repository.search(PRINCIPAL_A, "needle", 10, after=archived.task.task_id)
+        with pytest.raises(WorkCursorError):
+            repository.search(
+                PRINCIPAL_A,
+                "needle",
+                10,
+                work_view=TaskWorkView.BLOCKED,
+                after=waiting.task.task_id,
+            )
+        first = repository.search(PRINCIPAL_A, "continuation", 1)
+        assert len(first) == 1
+        second = repository.search(PRINCIPAL_A, "continuation", 10, after=first[0].task_id)
+        assert {task.task_id for task in (*first, *second)} == {
+            receipt.task.task_id for receipt in needle
+        }
         for cursor in (issue_identifier(IdKind.TASK_HISTORY), foreign.history.history_id):
             with pytest.raises(WorkCursorError):
                 repository.list_history(PRINCIPAL_A, mine.task.task_id, 10, after=cursor)
@@ -491,6 +594,44 @@ def test_sql_commitment_cursors_refuse_absent_and_foreign_anchors(
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=_idempotency_key("commitment-cursor-accepted"),
     )
+    wrong_direction = service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        direction=CommitmentDirection.OWED_BY_PRINCIPAL,
+        summary="Needle wrong direction",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("commitment-cursor-direction"),
+    )
+    wrong_state = service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Needle wrong state",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("commitment-cursor-state"),
+    )
+    wrong_state = service.close_commitment(
+        principal_id=PRINCIPAL_A,
+        commitment_id=wrong_state.commitment.commitment_id,
+        expected_version=wrong_state.commitment.version,
+        closure_evidence_ref="cap_closure0001closure0001",
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("commitment-cursor-close"),
+    )
+    needle = tuple(
+        service.create_commitment(
+            principal_id=PRINCIPAL_A,
+            counterparty_person_id=issue_identifier(IdKind.PERSON),
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            summary=f"Needle continuation {index}",
+            origin_evidence_ref=ORIGIN,
+            actor=TaskMutationActor.PRINCIPAL,
+            idempotency_key=_idempotency_key(f"commitment-cursor-needle-{index}"),
+        )
+        for index in range(2)
+    )
     with migrated_engine.begin() as connection:
         repository = SqlCommitmentManagementRepository(connection)
         visible = repository.list_commitments(
@@ -510,6 +651,43 @@ def test_sql_commitment_cursors_refuse_absent_and_foreign_anchors(
                 after=mine.commitment.commitment_id,
                 limit=10,
             )
+        with pytest.raises(WorkCursorError):
+            repository.search(PRINCIPAL_A, "mine", 10, after=accepted.commitment.commitment_id)
+        with pytest.raises(WorkCursorError):
+            repository.search(
+                PRINCIPAL_A,
+                "needle",
+                10,
+                direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+                after=wrong_direction.commitment.commitment_id,
+            )
+        with pytest.raises(WorkCursorError):
+            repository.search(
+                PRINCIPAL_A,
+                "needle",
+                10,
+                state=CommitmentState.OPEN,
+                after=wrong_state.commitment.commitment_id,
+            )
+        first = repository.search(
+            PRINCIPAL_A,
+            "continuation",
+            1,
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            state=CommitmentState.OPEN,
+        )
+        assert len(first) == 1
+        second = repository.search(
+            PRINCIPAL_A,
+            "continuation",
+            10,
+            after=first[0].commitment_id,
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            state=CommitmentState.OPEN,
+        )
+        assert {commitment.commitment_id for commitment in (*first, *second)} == {
+            receipt.commitment.commitment_id for receipt in needle
+        }
         for cursor in (issue_identifier(IdKind.COMMITMENT), foreign.commitment.commitment_id):
             with pytest.raises(WorkCursorError):
                 repository.list_commitments(PRINCIPAL_A, after=cursor, limit=10)

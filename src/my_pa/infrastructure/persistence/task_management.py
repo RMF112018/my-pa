@@ -247,7 +247,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
                     *tasks.c,
                     effective_at.label("effective_at"),
                     priority_rank.label("rank"),
-                ).where(and_(tasks.c.principal_id == principal_id, tasks.c.task_id == after))
+                ).where(and_(*conditions, tasks.c.task_id == after))
             ).one_or_none()
             if anchor is None:
                 raise WorkCursorError
@@ -415,7 +415,7 @@ class SqlTaskManagementRepository(TaskManagementRepository):
                     *tasks.c,
                     effective_at.label("effective_at"),
                     priority_rank.label("rank"),
-                ).where(and_(tasks.c.principal_id == principal_id, tasks.c.task_id == after))
+                ).where(and_(*conditions, tasks.c.task_id == after))
             ).one_or_none()
             if anchor is None:
                 raise WorkCursorError

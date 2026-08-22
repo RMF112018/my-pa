@@ -56,6 +56,7 @@ from sqlalchemy import (
     update,
 )
 from sqlalchemy.engine import Connection
+from sqlalchemy.sql.elements import ColumnElement
 
 from my_pa.contracts.ports import (
     MemoryDetail,
@@ -735,7 +736,13 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         # ordinary tuple comparison in the same direction as the sort, rather
         # than an OR of two cases that has to be kept in step with the ORDER BY
         # by hand.
-        rank = not_(relationship_memories.c.pinned)
+        # Annotated, and the annotation is load-bearing rather than decorative.
+        # `not_` is typed loosely enough at the declared SQLAlchemy floor that
+        # mypy cannot infer this, and the `dependency-floor` CI job checks the
+        # floor rather than the resolved newest release — so an inference that
+        # succeeds locally fails there. A suppression is the wrong fix: that job
+        # exists to keep the declared minimum a checked claim.
+        rank: ColumnElement[bool] = not_(relationship_memories.c.pinned)
         if after_memory_id is not None:
             validate_identifier(after_memory_id, IdKind.RELATIONSHIP_MEMORY)
             located = self._connection.execute(

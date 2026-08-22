@@ -1,8 +1,9 @@
 """Assemble the bounded context card for one entity.
 
-Five reads through the same port, bounded per collection, with every bound that
-bit reported. It writes nothing and decides nothing: the card is what is
-recorded, not a view about it.
+Five reads through the entity port and one optional read through the
+Relationship Memory port, bounded per collection, with every bound that bit
+reported. It writes nothing and decides nothing: the card is what is recorded,
+not a view about it.
 
 **Where the bound is decided, and where it is enforced.** The number is decided
 here: the repository answers "what is recorded", and how much of that a card
@@ -18,6 +19,20 @@ thousand rows to render a card carrying twenty-five of them: the read was
 depth-bounded and card-bounded and not count-bounded, and the only one of those
 three the caller could see was the last. `observations` had said so in its own
 port docstring since `WP-RI-06`; the other four collections now say it too.
+
+**The sixth read is optional, and its absence is a reported fact rather than an
+empty list.** `RM-API-AC-013` puts a bounded Relationship Memory summary on the
+card, and that plane has its own switch: a build can serve `entities.context`
+without it. So the repository is an optional constructor argument, and the two
+cases are never rendered alike -- a service holding one reads the plane and the
+card reports what it found, and a service holding none reports
+`THE_MEMORY_PLANE_IS_UNAVAILABLE` and carries no memories.
+
+Nothing here decides *whether* the plane is composed. That is the composition
+root's fact, the handler in `application.service` reads it off the switches it
+was built with, and this module takes the answer as an argument -- because a
+service that consulted a global to find out would be a service whose behaviour a
+caller could not see in its construction.
 """
 
 from __future__ import annotations
@@ -25,13 +40,14 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime
 
-from my_pa.contracts.ports import EntitiesRepository
+from my_pa.contracts.ports import EntitiesRepository, RelationshipMemoryRepository
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.relationship.context_card import (
     CONTEXT_CARD_COLLECTION_LIMIT,
     CONTEXT_CARD_COVERAGE_LIMIT,
     ContextCardCoverage,
     ContextCardLimitation,
+    ContextCardMemory,
     EntityContextCard,
 )
 from my_pa.domain.relationship.governance import EntityObservation
@@ -53,8 +69,26 @@ _FETCH: int = CONTEXT_CARD_COLLECTION_LIMIT + 1
 class EntityContextService:
     """Builds one entity's context card from the records around it."""
 
-    def __init__(self, entities: EntitiesRepository) -> None:
+    def __init__(
+        self,
+        entities: EntitiesRepository,
+        memories: RelationshipMemoryRepository | None = None,
+    ) -> None:
+        """`memories` is optional, and `None` is a state the card reports.
+
+        Defaulted rather than required, because five of the six collections
+        predate the memory plane and every existing caller -- including the
+        service's own five other entity handlers and their tests -- assembles a
+        card without one. A required argument would have made "this build has no
+        memory plane" impossible to express by construction, which is the
+        distinction the card exists to draw.
+
+        `None` is never quietly the same as "no memories": `card` turns it into
+        `THE_MEMORY_PLANE_IS_UNAVAILABLE`, and `EntityContextCard` refuses a card
+        that states that limitation alongside any memory claim.
+        """
         self._entities = entities
+        self._memories = memories
 
     def card(
         self, principal_id: str, entity_id: str, *, assembled_at: datetime
@@ -111,6 +145,8 @@ class EntityContextService:
         # count as a complete one.
         coverage = _coverage(counted)
 
+        memories, memory_limitations = self._memory_summary(principal_id, entity_id)
+
         limitations = tuple(
             limitation
             for limitation, applied in (
@@ -145,7 +181,66 @@ class EntityContextService:
             relationships=tuple(relationships),
             observations=tuple(observations),
             coverage=coverage,
-            limitations=limitations,
+            memories=memories,
+            # The memory limitations are appended rather than folded into the
+            # generator above, because they are the one group whose *absence*
+            # would also have been a claim: the five above are each "this bound
+            # bit or it did not", while the memory group always contributes
+            # exactly one statement about a plane that was either read or not.
+            limitations=limitations + memory_limitations,
+        )
+
+    def _memory_summary(
+        self, principal_id: str, entity_id: str
+    ) -> tuple[tuple[ContextCardMemory, ...], tuple[ContextCardLimitation, ...]]:
+        """The bounded memory summary, and what it could not say.
+
+        **The one read here that does not take `_FETCH`, and the difference is
+        deliberate.** The five entity reads are given the overflow row because
+        the port's contract is "return what I asked for" and this module owns the
+        bound. `summaries_for_context` owns it instead: it takes the number the
+        card can *carry*, adds its own overflow row, and answers with the
+        truncation flag already decided -- because it also drops restricted rows,
+        and a page thinned after the fact cannot be turned back into "was there a
+        twenty-sixth". Passing `_FETCH` here would ask for twenty-seven rows and
+        let a card carry twenty-six.
+
+        The withheld count arrives as a number and leaves as a boolean, and that
+        is the summary's disclosure boundary: the card discloses *that* policy
+        removed something so absence cannot be inferred, and does not publish how
+        much, which would let a caller watch the figure move as someone's private
+        record was written.
+        """
+        if self._memories is None:
+            # Not an empty answer. The plane was never asked, so the only honest
+            # statement is that the card cannot speak for it -- and the domain
+            # refuses to pair this limitation with any other memory claim.
+            return (), (ContextCardLimitation.THE_MEMORY_PLANE_IS_UNAVAILABLE,)
+        summaries, truncated, withheld = self._memories.summaries_for_context(
+            entity_id, principal_id=principal_id, limit=CONTEXT_CARD_COLLECTION_LIMIT
+        )
+        carried = tuple(
+            ContextCardMemory(memory=summary.memory, current_version=summary.current_version)
+            for summary in summaries
+        )
+        return carried, tuple(
+            limitation
+            for limitation, applied in (
+                (ContextCardLimitation.MORE_MEMORIES_THAN_THIS_CARD_CARRIES, truncated),
+                (
+                    ContextCardLimitation.MEMORIES_WERE_WITHHELD_BY_CLASSIFICATION,
+                    withheld > 0,
+                ),
+                # Assertable only here, on the branch that actually queried, and
+                # only when nothing was withheld. An all-withheld page comes back
+                # empty and is *not* an absence; reading it as one is the failure
+                # this whole summary is arranged to prevent.
+                (
+                    ContextCardLimitation.NO_MEMORY_HAS_BEEN_RECORDED,
+                    not carried and withheld == 0,
+                ),
+            )
+            if applied
         )
 
 

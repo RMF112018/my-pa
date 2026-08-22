@@ -1108,7 +1108,26 @@ def _context_card_view(card: EntityContextCard) -> dict[str, object]:
     `coverage` and `limitations` come before the records in reading order for the
     reason `RI-AC-013` gives: coverage, freshness and exclusions belong *before*
     synthesis, not appended after it where a reader has already drawn a
-    conclusion.
+    conclusion. `memories` is the collection that reason was written for: the
+    limitation naming a withheld or unread memory plane is above the list it
+    qualifies, not below it.
+
+    **A memory summary carries its statement, and an observation does not carry
+    its observed value.** The two look like the same decision made differently
+    and are not. An observation's value is a name or an address lifted out of
+    somebody else's mail, and the card is a summary rather than the evidence --
+    `entities.get` on the source object is where that text lives. A memory has no
+    evidence behind it to point at: under ADR-003 the committed statement *is*
+    the record, the Principal wrote it themselves about a person they chose, and
+    a summary of it with the sentence removed would be a list of the fact that
+    they had written something. What the card does not carry is the restricted
+    memory, and it cannot: `summaries_for_context` never returns one and
+    `ContextCardMemory` refuses to hold one.
+
+    Every summary field is read off whichever half owns it -- `pinned` and the
+    kind from the aggregate, the statement and its authority, classification and
+    applicability window from the version in force -- rather than from a copy
+    kept in step by hand.
     """
     return {
         "entity": _entity_view(card.entity),
@@ -1131,6 +1150,20 @@ def _context_card_view(card: EntityContextCard) -> dict[str, object]:
             _relationship_view(edge, card.assembled_at) for edge in card.relationships
         ],
         "observations": [_observation_view(item) for item in card.observations],
+        "memories": [
+            {
+                "memory_id": held.memory.memory_id,
+                "kind": held.memory.memory_kind.value,
+                "statement": held.current_version.statement,
+                "authority": held.current_version.authority.value,
+                "classification": held.current_version.classification.value,
+                "pinned": held.memory.pinned,
+                "effective_from": _moment_or_none(held.current_version.effective_from),
+                "effective_to": _moment_or_none(held.current_version.effective_to),
+                "recorded_at": format_rfc3339(held.current_version.recorded_at),
+            }
+            for held in card.memories
+        ],
     }
 
 
@@ -3072,7 +3105,7 @@ class ApplicationService:
         """Refuse when this build has not enabled the Relationship Memory plane.
 
         The floor `_entity_plane` documents, for the same reason and against the
-        same gap: `available_capabilities` withholds the eight names from
+        same gap: `available_capabilities` withholds this plane's names from
         `capabilities.get` and from the MCP tool list, and the HTTP transport
         consults neither — it routes by path segment straight into `_HANDLERS`.
         Every handler below calls this first, so the refusal does not depend on
@@ -3473,10 +3506,38 @@ class ApplicationService:
     def _entities_context(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetEntityContext
     ) -> _Result:
-        """`entities.context`: the bounded context card for one entity."""
+        """`entities.context`: the bounded context card for one entity.
+
+        **The memory repository is passed only when this build composed the
+        plane, and the two switches are read directly rather than through
+        `_relationship_memory_plane`.** That helper raises `UnsupportedError`,
+        which is the right answer for the eight `relationship_memory.` handlers
+        and the wrong one here: `entities.context` is an entity capability, it is
+        served by builds that never turned the memory plane on, and refusing it
+        for a collection it can honestly decline to speak about would withdraw a
+        capability the manifest still publishes.
+
+        Both switches, matching `available_capabilities` exactly, because a
+        memory's subject is an Entity whose ownership the memory repository
+        proves by reading `knowledge.entities` -- there is no composition in
+        which the memory plane is usable without the entity plane, and a
+        condition here that disagreed with the one there would compose a
+        repository the build does not consider composed.
+
+        `None` is not a quiet degradation: `EntityContextService` turns it into
+        `THE_MEMORY_PLANE_IS_UNAVAILABLE` on the card, so a caller reading a
+        payload from a build without the plane cannot mistake the empty
+        collection for an absence of memories. The property access is guarded by
+        that same condition rather than attempted and caught, because
+        `UnitOfWork.relationship_memory` *raises* on a unit of work that did not
+        compose the plane -- reaching for it first and recovering afterwards
+        would make a refusal into control flow.
+        """
         self._entity_plane()
+        composed = self._relationship_intelligence_enabled and self._relationship_memory_enabled
+        memories = unit_of_work.relationship_memory if composed else None
         with _translated():
-            card = EntityContextService(unit_of_work.entities).card(
+            card = EntityContextService(unit_of_work.entities, memories).card(
                 authorization.principal.principal_id,
                 command.entity_id,
                 assembled_at=authorization.at,

@@ -248,8 +248,11 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         # task plane's read/authoring split.
         (Capability.COMMITMENTS_READ, Purpose.COMMITMENT_READ),
         (Capability.COMMITMENTS_LIST, Purpose.COMMITMENT_READ),
+        (Capability.COMMITMENTS_SEARCH, Purpose.COMMITMENT_READ),
+        (Capability.COMMITMENTS_HISTORY, Purpose.COMMITMENT_READ),
         (Capability.COMMITMENTS_WAITING_ON, Purpose.COMMITMENT_READ),
         (Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING),
+        (Capability.COMMITMENTS_UPDATE, Purpose.COMMITMENT_AUTHORING),
         (Capability.COMMITMENTS_CLOSE, Purpose.COMMITMENT_AUTHORING),
         (Capability.CONTEXT_PREPARE, Purpose.CONTEXT_PREPARATION),
         (Capability.CONTEXT_FEEDBACK, Purpose.CONTEXT_PREFERENCE),
@@ -304,9 +307,9 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # 5 capabilities and 1 purpose, and its unresolved-mention queue one
     # more capability under the purpose the other five already use; the
     # Intelligence Artifact plane added 8 capabilities and 2 purposes.
-    # Unioned: 62 capabilities, 25 purposes, 64 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 64
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 64 == 1486
+    # Unioned: 65 capabilities, 25 purposes, 67 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 67
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 67 == 1558
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

@@ -157,7 +157,7 @@ jobs:
     # FAST tier, which has grown to 8,419 collected tests. At ten minutes
     # `validate` was finishing in 8m24s and this job was cancelled at 10m16s --
     # a budget set when the suite was smaller, failing a tree that was green.
-    # `database-tier` carries 40 for the same reason: a tier's budget is sized
+    # `database-tier` carries 55 for the same reason: a tier's budget is sized
     # to the tier. Guard cost was cut in the same change that raised this, so
     # the headroom is real rather than spent on arrival.
     #
@@ -328,10 +328,10 @@ jobs:
     runs-on: ubuntu-latest
     # Measured on run 31949638484 at head fc39292: the job-level 20-minute
     # timeout cancelled pytest at 20m17s while it was still executing, at 61%
-    # of the suite. Linear extrapolation of that in-progress run is ~33 minutes
-    # of wall time. Allow forty so checkout, install, and teardown still sit
-    # outside an in-budget suite rather than pre-empting it.
-    timeout-minutes: 40
+    # of the suite. The expanded 991-test tier then passed locally at head
+    # 895c4ec in 44m24s. Allow fifty-five so checkout, install, and teardown sit
+    # outside an in-budget suite rather than pre-empting complete coverage.
+    timeout-minutes: 55
 
     services:
       postgres:

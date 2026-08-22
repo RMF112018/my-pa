@@ -51,7 +51,7 @@ from datetime import datetime
 from types import TracebackType
 from typing import assert_never
 
-from sqlalchemy import Connection, Engine
+from sqlalchemy import Connection, Engine, select
 from sqlalchemy.exc import InterfaceError, OperationalError, SQLAlchemyError
 
 from my_pa.contracts.ports import (
@@ -161,7 +161,11 @@ from my_pa.infrastructure.persistence.situation_repository import (
     SqlPulseRepository,
     SqlSituationRepository,
 )
-from my_pa.infrastructure.persistence.tables import JobState
+from my_pa.infrastructure.persistence.tables import (
+    JobState,
+    capture_assertions,
+    captures,
+)
 from my_pa.infrastructure.persistence.task_management import SqlTaskManagementRepository
 from my_pa.infrastructure.persistence.worker_health import worker_plane_health
 from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
@@ -427,6 +431,24 @@ class _Captures(CaptureRepository):
                 self._connection, subject_id, context=capture_context(principal_id)
             )
         )
+
+    def accepts_work_evidence_reference(self, reference: str, *, principal_id: str) -> bool:
+        """Validate a Work evidence reference without selecting evidence content."""
+        if reference.startswith("cap_"):
+            statement = select(captures.c.capture_id).where(
+                captures.c.capture_id == reference,
+                captures.c.owner_principal_id == principal_id,
+            )
+        elif reference.startswith("asrt_"):
+            statement = select(capture_assertions.c.assertion_id).where(
+                capture_assertions.c.assertion_id == reference,
+                capture_assertions.c.principal_id == principal_id,
+                capture_assertions.c.state == "accepted",
+                capture_assertions.c.superseded_by_assertion_id.is_(None),
+            )
+        else:
+            return False
+        return _read(lambda: self._connection.execute(statement).first() is not None)
 
 
 class _Reviews(ReviewRepository):

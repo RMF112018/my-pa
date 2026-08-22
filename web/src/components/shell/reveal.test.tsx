@@ -240,3 +240,42 @@ describe("proposed and accepted are structurally distinct", () => {
     expect(spans).toContain("unicode_code_point_v1");
   });
 });
+
+describe("governed reveal refusals", () => {
+  it.each([
+    [403, "authorization", /not authorized/i],
+    [404, "not_found", /not found, or it is outside your authority/i],
+    [503, "unavailable", /unavailable right now/i],
+  ])("renders status %i without implying an empty evidence search", async (status, errorClass, expected) => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response(JSON.stringify({
+      error: { errorClass, code: "refused", message: "safe refusal" },
+    }), { status, headers: { "content-type": "application/json" } })));
+
+    await openAndReveal();
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(expected);
+    expect(screen.queryByTestId("reveal-no-evidence")).toBeNull();
+    expect(screen.queryByTestId("reveal-evidence")).toBeNull();
+  });
+
+  it("labels a server-limited or redacted disclosure without guessing missing content", async () => {
+    stubReveal({
+      shape: "backend",
+      state: "evidence",
+      result: {
+        state: "evidence", gap: null, subject_kind: "capture",
+        capture_id: "cap_aaaa0001aaaa0001", versions: [], spans: [], proposed: [], accepted: [],
+        versions_with_completed_derivation: 0,
+      },
+      disclosure: {
+        ...SEARCHED_DISCLOSURE,
+        coverage: "partial",
+        limitations: ["some_source_fields_redacted"],
+      },
+    });
+
+    await openAndReveal();
+
+    expect(await screen.findByTestId("reveal-limited")).toHaveTextContent(/redacted or limited/i);
+  });
+});

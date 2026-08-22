@@ -85,4 +85,5 @@ export interface DisclosureEnvelope {
   readonly authority: "accepted" | "proposed" | "derived" | "synthetic_fixture";
   readonly limitations: readonly string[];
   readonly truncated: boolean;
+  readonly nextCursor?: OpaqueId;
 }

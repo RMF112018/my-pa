@@ -34,7 +34,7 @@ import type {
 } from "@/contracts/views";
 
 const BLURB =
-  "Work gathers what matters about a project, relationship, or topic into one purposeful " +
+  "Situations gather what matters about a project, relationship, or topic into one purposeful " +
   "view. Each references records it does not own, and only accepted records appear.";
 
 interface PythonSituation {
@@ -127,7 +127,7 @@ export async function WorkPage() {
   const heading = (
     <>
       <h1 id="work-heading" className="mb-1 text-xl font-semibold text-moss-slate">
-        Work
+        Situations
       </h1>
       <p className="mb-4 text-sm text-muted">{BLURB}</p>
     </>

@@ -20,6 +20,7 @@ from types import TracebackType
 import pytest
 
 from my_pa.application.commitments import (
+    CommitmentIdempotencyConflictError,
     CommitmentManagementService,
     CommitmentNotFoundError,
     CommitmentVersionConflictError,
@@ -29,11 +30,12 @@ from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
     ContinuityEvidenceState,
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.commitment import Commitment
-from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
+from my_pa.domain.task.commitment_history import CommitmentHistoryEntry, CommitmentMutationAction
 from my_pa.domain.task.history import TaskMutationActor, TaskMutationOutcome
 
 PRINCIPAL_A = issue_identifier(IdKind.PRINCIPAL)
@@ -79,8 +81,14 @@ class _FakeRepository(CommitmentManagementRepository):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        evidence_state: ContinuityEvidenceState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        after: str | None = None,
         limit: int,
     ) -> tuple[Commitment, ...]:
+        del after, evidence_state, work_end, work_start, work_view
         raise NotImplementedError("this suite does not exercise the read plane")
 
     def insert_commitment(self, commitment: Commitment) -> None:
@@ -103,7 +111,12 @@ class _FakeRepository(CommitmentManagementRepository):
             self._world.history_by_key[(entry.principal_id, entry.idempotency_key)] = entry
 
     def list_history(
-        self, principal_id: str, commitment_id: str, limit: int
+        self,
+        principal_id: str,
+        commitment_id: str,
+        limit: int,
+        *,
+        after: str | None = None,
     ) -> tuple[CommitmentHistoryEntry, ...]:
         raise NotImplementedError("this suite does not exercise the read plane")
 
@@ -303,11 +316,11 @@ def test_close_nonexistent_commitment_raises_not_found() -> None:
 # --- idempotency -------------------------------------------------------------------
 
 
-def test_replayed_idempotency_key_returns_identical_receipt_and_writes_nothing() -> None:
+def test_idempotency_key_reused_for_different_content_conflicts() -> None:
     world = _World()
     service = _service(world)
     key = _idempotency_key("create")
-    first = service.create_commitment(
+    service.create_commitment(
         principal_id=PRINCIPAL_A,
         counterparty_person_id=COUNTERPARTY,
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
@@ -319,19 +332,91 @@ def test_replayed_idempotency_key_returns_identical_receipt_and_writes_nothing()
     inserts_after_first = world.insert_commitment_calls
     history_writes_after_first = world.insert_history_calls
 
-    second = service.create_commitment(
-        principal_id=PRINCIPAL_A,
-        counterparty_person_id=COUNTERPARTY,
-        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
-        summary="A different summary the replay must not apply",
-        origin_evidence_ref=ORIGIN,
-        actor=TaskMutationActor.PRINCIPAL,
-        idempotency_key=key,
-    )
+    def should_not_validate_a_digest_mismatch() -> None:
+        raise AssertionError("digest conflict must precede mutable first-write validation")
 
-    assert second.replayed is True
-    assert second.history == first.history
-    assert second.commitment == first.commitment
+    with pytest.raises(CommitmentIdempotencyConflictError):
+        service.create_commitment(
+            principal_id=PRINCIPAL_A,
+            counterparty_person_id=COUNTERPARTY,
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            summary="A different summary the replay must not apply",
+            origin_evidence_ref=ORIGIN,
+            actor=TaskMutationActor.PRINCIPAL,
+            idempotency_key=key,
+            validate_first_write=should_not_validate_a_digest_mismatch,
+        )
     assert world.insert_commitment_calls == inserts_after_first
     assert world.update_commitment_calls == 0
     assert world.insert_history_calls == history_writes_after_first
+
+
+def test_update_exact_replay_precedes_mutable_first_write_validation() -> None:
+    world = _World()
+    service = _service(world)
+    created = service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_person_id=COUNTERPARTY,
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Old summary",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+    )
+    key = _idempotency_key("update-replay-validation")
+    first = service.update_commitment(
+        principal_id=PRINCIPAL_A,
+        commitment_id=created.commitment.commitment_id,
+        expected_version=created.commitment.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"counterparty_person_id": issue_identifier(IdKind.PERSON)},
+        idempotency_key=key,
+        validate_first_write=lambda: None,
+    )
+
+    def no_longer_eligible() -> None:
+        raise AssertionError("an exact replay must not re-run mutable identity validation")
+
+    replay = service.update_commitment(
+        principal_id=PRINCIPAL_A,
+        commitment_id=created.commitment.commitment_id,
+        expected_version=created.commitment.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"counterparty_person_id": first.commitment.counterparty_person_id},
+        idempotency_key=key,
+        validate_first_write=no_longer_eligible,
+    )
+    assert replay.replayed is True
+    assert replay.history == first.history
+    assert replay.commitment == first.commitment
+
+
+def test_update_commitment_is_one_atomic_versioned_mutation() -> None:
+    world = _World()
+    service = _service(world)
+    created = service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_person_id=COUNTERPARTY,
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Old summary",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        due_at=NOW,
+        idempotency_key=_idempotency_key("update-create"),
+    )
+    writes_before = world.insert_history_calls
+
+    receipt = service.update_commitment(
+        principal_id=PRINCIPAL_A,
+        commitment_id=created.commitment.commitment_id,
+        expected_version=created.commitment.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"summary": "New summary"},
+        clear_due_at=True,
+        idempotency_key=_idempotency_key("update-fields"),
+    )
+
+    assert receipt.commitment.summary == "New summary"
+    assert receipt.commitment.due_at is None
+    assert receipt.commitment.version == created.commitment.version + 1
+    assert receipt.history.action is CommitmentMutationAction.UPDATE
+    assert world.insert_history_calls == writes_before + 1

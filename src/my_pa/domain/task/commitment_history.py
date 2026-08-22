@@ -24,6 +24,7 @@ package's minimal-implementation constraint refuses.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -44,6 +45,7 @@ class CommitmentMutationAction(StrEnum):
     """What this build normalised a commitment mutation request into."""
 
     CREATE = "create"
+    UPDATE = "update"
     CLOSE = "close"
 
 
@@ -68,6 +70,7 @@ class CommitmentHistoryEntry:
     recorded_at: datetime
     idempotency_key: str | None = None
     client_context: str | None = None
+    request_digest: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.history_id, IdKind.COMMITMENT_HISTORY)
@@ -98,3 +101,7 @@ class CommitmentHistoryEntry:
                 raise ValueError("client context must be non-blank when present")
             if len(stripped) > MAX_CLIENT_CONTEXT_CHARACTERS:
                 raise ValueError("client context exceeds the stored bound")
+        if self.request_digest is not None and not re.fullmatch(
+            r"[0-9a-f]{64}", self.request_digest
+        ):
+            raise ValueError("a request digest is a lowercase SHA-256 hex value")

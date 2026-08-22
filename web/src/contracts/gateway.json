@@ -99,6 +99,91 @@
       "purpose": "capture_review",
       "payloadFields": ["page_size"],
       "probe": {}
+    },
+    "tasks.read": {
+      "purpose": "task_read",
+      "payloadFields": ["task_id"],
+      "probe": { "task_id": "tsk_aaaaaaaa11111111" }
+    },
+    "tasks.list": {
+      "purpose": "task_read",
+      "payloadFields": ["lifecycle_state", "priority", "archive_mode", "page_size", "after", "work_view", "work_date", "timezone"],
+      "probe": { "page_size": 25 }
+    },
+    "tasks.search": {
+      "purpose": "task_read",
+      "payloadFields": ["query", "page_size", "after", "work_view", "work_date", "timezone", "archive_mode"],
+      "probe": { "query": "synthetic follow up", "page_size": 25 }
+    },
+    "tasks.history": {
+      "purpose": "task_read",
+      "payloadFields": ["task_id", "page_size", "after"],
+      "probe": { "task_id": "tsk_aaaaaaaa11111111", "page_size": 25 }
+    },
+    "tasks.create": {
+      "purpose": "task_authoring",
+      "payloadFields": ["title", "origin_evidence_ref", "idempotency_key", "description", "priority", "due_at", "project_id", "situation_id", "accepted_by_review_decision_id", "commitment_id", "role", "client_context"],
+      "probe": { "title": "Synthetic task", "origin_evidence_ref": "cap_aaaaaaaa11111111", "idempotency_key": "idem-task-create-0001" }
+    },
+    "tasks.update": {
+      "purpose": "task_authoring",
+      "payloadFields": ["task_id", "expected_version", "idempotency_key", "title", "description", "priority", "due_at", "scheduled_at", "deferred_until", "commitment_id", "role", "clear_fields", "archived", "client_context"],
+      "probe": { "task_id": "tsk_aaaaaaaa11111111", "expected_version": 1, "idempotency_key": "idem-task-update-0001", "title": "Updated synthetic task" }
+    },
+    "tasks.transition": {
+      "purpose": "task_authoring",
+      "payloadFields": ["task_id", "to_state", "expected_version", "idempotency_key", "closure_evidence_ref", "client_context"],
+      "probe": { "task_id": "tsk_aaaaaaaa11111111", "to_state": "in_progress", "expected_version": 1, "idempotency_key": "idem-task-transition-0001" }
+    },
+    "tasks.bulk_preview": {
+      "purpose": "task_authoring",
+      "payloadFields": ["mutations", "idempotency_key"],
+      "probe": { "mutations": [{ "kind": "update", "task_id": "tsk_aaaaaaaa11111111", "expected_version": 1, "values": { "priority": "p1" }, "clear_fields": [] }], "idempotency_key": "idem-task-bulk-preview-0001" }
+    },
+    "tasks.bulk_confirm": {
+      "purpose": "task_authoring",
+      "payloadFields": ["bulk_operation_id", "idempotency_key", "mutations"],
+      "probe": { "bulk_operation_id": "bulk_aaaaaaaa11111111", "idempotency_key": "idem-task-bulk-confirm-0001", "mutations": [{ "kind": "update", "task_id": "tsk_aaaaaaaa11111111", "expected_version": 1, "values": { "priority": "p1" }, "clear_fields": [] }] }
+    },
+    "commitments.read": {
+      "purpose": "commitment_read",
+      "payloadFields": ["commitment_id"],
+      "probe": { "commitment_id": "cmt_aaaaaaaa11111111" }
+    },
+    "commitments.list": {
+      "purpose": "commitment_read",
+      "payloadFields": ["direction", "state", "page_size", "after", "work_view", "work_date", "timezone"],
+      "probe": { "page_size": 25 }
+    },
+    "commitments.search": {
+      "purpose": "commitment_read",
+      "payloadFields": ["query", "page_size", "after", "direction", "state", "work_view", "work_date", "timezone"],
+      "probe": { "query": "synthetic commitment", "page_size": 25 }
+    },
+    "commitments.history": {
+      "purpose": "commitment_read",
+      "payloadFields": ["commitment_id", "page_size", "after"],
+      "probe": { "commitment_id": "cmt_aaaaaaaa11111111", "page_size": 25 }
+    },
+    "commitments.waiting_on": {
+      "purpose": "commitment_read",
+      "payloadFields": ["page_size", "after"],
+      "probe": { "page_size": 25 }
+    },
+    "commitments.create": {
+      "purpose": "commitment_authoring",
+      "payloadFields": ["counterparty_person_id", "direction", "summary", "origin_evidence_ref", "idempotency_key", "due_at", "project_id", "situation_id", "accepted_by_review_decision_id", "client_context"],
+      "probe": { "counterparty_person_id": "per_aaaaaaaa11111111", "direction": "owed_to_principal", "summary": "Synthetic commitment", "origin_evidence_ref": "cap_aaaaaaaa11111111", "idempotency_key": "idem-commitment-create-0001" }
+    },
+    "commitments.update": {
+      "purpose": "commitment_authoring",
+      "payloadFields": ["commitment_id", "expected_version", "idempotency_key", "summary", "due_at", "counterparty_person_id", "clear_due_at", "client_context"],
+      "probe": { "commitment_id": "cmt_aaaaaaaa11111111", "expected_version": 1, "idempotency_key": "idem-commitment-update-0001", "summary": "Updated synthetic commitment" }
+    },
+    "commitments.close": {
+      "purpose": "commitment_authoring",
+      "payloadFields": ["commitment_id", "expected_version", "closure_evidence_ref", "idempotency_key", "client_context"],
+      "probe": { "commitment_id": "cmt_aaaaaaaa11111111", "expected_version": 1, "closure_evidence_ref": "cap_aaaaaaaa11111111", "idempotency_key": "idem-commitment-close-0001" }
     }
   },
   "_dispositionComment": [

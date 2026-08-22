@@ -4,11 +4,10 @@ WP-TM-05. Mirrors `application.tasks.TaskManagementService`'s `_mutate`
 transactional/idempotency/optimistic-concurrency/receipt mechanism exactly,
 over `domain.task.commitment.Commitment`/`CommitmentHistoryEntry` instead of
 `Task`/`TaskHistoryEntry`. See that module's docstring for the full rationale;
-it applies here unchanged. Two public mutations only, per the
-operator-approved minimal scope: `create_commitment` and `close_commitment`.
-There is no `update_commitment` beyond closure here because WP-TM-05 names no
-other Commitment mutation a caller needs yet — adding one speculatively is
-exactly what `AGENTS.md`'s minimal-implementation rule refuses.
+it applies here unchanged. The bounded public mutations are create, atomic
+update of summary/due/counterparty, and explicit close. Request digests bind
+idempotency keys to normalized content, and runtime composition shares the Work
+unit of work with Task linkage validation.
 
 **Closing a Commitment is always an explicit, separate call.** Nothing in
 this module, `application.tasks.TaskManagementService`, or
@@ -22,11 +21,18 @@ be closed.
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Protocol
 
-from my_pa.contracts.ports import CommitmentManagementUnitOfWork
+from my_pa.contracts.ports import (
+    CommitmentManagementRepository,
+    CommitmentManagementUnitOfWork,
+)
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.situation.continuity import (
@@ -40,6 +46,7 @@ from my_pa.domain.task.commitment_history import CommitmentHistoryEntry, Commitm
 from my_pa.domain.task.history import TaskMutationActor, TaskMutationOutcome
 
 __all__ = [
+    "CommitmentIdempotencyConflictError",
     "CommitmentManagementService",
     "CommitmentMutationReceipt",
     "CommitmentNotFoundError",
@@ -62,6 +69,15 @@ class CommitmentVersionConflictError(Exception):
     def __init__(self, receipt: CommitmentMutationReceipt) -> None:
         super().__init__("the commitment's current version does not match expected_version")
         self.receipt = receipt
+
+
+class CommitmentIdempotencyConflictError(Exception):
+    """Raised when a key is reused for different normalized commitment content."""
+
+
+class _ActiveCommitmentUnitOfWork(Protocol):
+    @property
+    def commitments(self) -> CommitmentManagementRepository: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -102,6 +118,8 @@ class CommitmentManagementService:
         accepted_by_review_decision_id: str | None = None,
         idempotency_key: str | None = None,
         client_context: str | None = None,
+        active_uow: _ActiveCommitmentUnitOfWork | None = None,
+        validate_first_write: Callable[[], None] | None = None,
     ) -> CommitmentMutationReceipt:
         """Create a new commitment.
 
@@ -150,6 +168,64 @@ class CommitmentManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             change=change,
+            request_digest=_request_digest(
+                counterparty_person_id=counterparty_person_id,
+                direction=direction,
+                summary=summary,
+                origin_evidence_ref=origin_evidence_ref,
+                due_at=due_at,
+                project_id=project_id,
+                situation_id=situation_id,
+                accepted_by_review_decision_id=accepted_by_review_decision_id,
+            ),
+            active_uow=active_uow,
+            validate_first_write=validate_first_write,
+        )
+
+    def update_commitment(
+        self,
+        *,
+        principal_id: str,
+        commitment_id: str,
+        expected_version: int,
+        actor: TaskMutationActor,
+        values: dict[str, object],
+        clear_due_at: bool = False,
+        idempotency_key: str | None = None,
+        client_context: str | None = None,
+        active_uow: _ActiveCommitmentUnitOfWork | None = None,
+        validate_first_write: Callable[[], None] | None = None,
+    ) -> CommitmentMutationReceipt:
+        """Atomically update only the mutable Work-facing commitment fields."""
+        allowed = {"summary", "due_at", "counterparty_person_id"}
+        if unknown := set(values) - allowed:
+            raise ValueError(f"unknown commitment patch fields: {sorted(unknown)!r}")
+        if clear_due_at and "due_at" in values:
+            raise ValueError("due_at cannot be both set and cleared")
+
+        def change(current: Commitment) -> Commitment:
+            replacements: dict[str, Any] = dict(values)
+            if clear_due_at:
+                replacements["due_at"] = None
+            return dataclasses.replace(current, **replacements)
+
+        return self._mutate(
+            principal_id=principal_id,
+            commitment_id=commitment_id,
+            expected_version=expected_version,
+            action=CommitmentMutationAction.UPDATE,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            client_context=client_context,
+            change=change,
+            request_digest=_request_digest(
+                commitment_id=commitment_id,
+                expected_version=expected_version,
+                values=values,
+                clear_due_at=clear_due_at,
+            ),
+            active_uow=active_uow,
+            validate_first_write=validate_first_write,
         )
 
     def close_commitment(
@@ -162,6 +238,8 @@ class CommitmentManagementService:
         actor: TaskMutationActor,
         idempotency_key: str | None = None,
         client_context: str | None = None,
+        active_uow: _ActiveCommitmentUnitOfWork | None = None,
+        validate_first_write: Callable[[], None] | None = None,
     ) -> CommitmentMutationReceipt:
         """Close a commitment. Already-closed is recorded `NO_OP`, not `APPLIED`."""
 
@@ -186,6 +264,13 @@ class CommitmentManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             change=change,
+            request_digest=_request_digest(
+                commitment_id=commitment_id,
+                expected_version=expected_version,
+                closure_evidence_ref=closure_evidence_ref,
+            ),
+            active_uow=active_uow,
+            validate_first_write=validate_first_write,
         )
 
     def _mutate(
@@ -199,6 +284,9 @@ class CommitmentManagementService:
         idempotency_key: str | None,
         client_context: str | None,
         change: Callable[[Commitment], Commitment] | Callable[[Commitment | None], Commitment],
+        request_digest: str | None = None,
+        active_uow: _ActiveCommitmentUnitOfWork | None = None,
+        validate_first_write: Callable[[], None] | None = None,
     ) -> CommitmentMutationReceipt:
         """The single transactional mechanism every public method delegates to.
 
@@ -211,12 +299,17 @@ class CommitmentManagementService:
         pending_conflict: CommitmentMutationReceipt | None = None
         result: CommitmentMutationReceipt | None = None
 
-        with self._unit_of_work() as uow:
+        context = self._unit_of_work() if active_uow is None else nullcontext(active_uow)
+        with context as uow:
             if idempotency_key is not None:
                 prior = uow.commitments.find_history_by_idempotency_key(
                     principal_id, idempotency_key
                 )
                 if prior is not None:
+                    if prior.request_digest != request_digest:
+                        raise CommitmentIdempotencyConflictError(
+                            "the idempotency key was used for different normalized content"
+                        )
                     prior_commitment = uow.commitments.get_for_update(
                         principal_id, prior.commitment_id
                     )
@@ -229,6 +322,10 @@ class CommitmentManagementService:
                     )
 
             if result is None:
+                # Mutable evidence eligibility gates first-time writes, not a
+                # byte-identical replay of an already-recorded receipt.
+                if validate_first_write is not None:
+                    validate_first_write()
                 current = (
                     uow.commitments.get_for_update(principal_id, commitment_id)
                     if commitment_id is not None
@@ -256,6 +353,7 @@ class CommitmentManagementService:
                         occurred_at=now,
                         idempotency_key=idempotency_key,
                         client_context=client_context,
+                        request_digest=request_digest,
                     )
                     pending_conflict = CommitmentMutationReceipt(
                         history=rejected_history, commitment=current
@@ -277,6 +375,7 @@ class CommitmentManagementService:
                             occurred_at=now,
                             idempotency_key=idempotency_key,
                             client_context=client_context,
+                            request_digest=request_digest,
                         )
                         result = CommitmentMutationReceipt(
                             history=no_op_history, commitment=current
@@ -301,6 +400,7 @@ class CommitmentManagementService:
                             occurred_at=now,
                             idempotency_key=idempotency_key,
                             client_context=client_context,
+                            request_digest=request_digest,
                         )
                         result = CommitmentMutationReceipt(
                             history=applied_history, commitment=applied_commitment
@@ -322,7 +422,7 @@ class CommitmentManagementService:
     def _record(
         self,
         *,
-        uow: CommitmentManagementUnitOfWork,
+        uow: _ActiveCommitmentUnitOfWork,
         principal_id: str,
         commitment_id: str,
         action: CommitmentMutationAction,
@@ -333,6 +433,7 @@ class CommitmentManagementService:
         occurred_at: datetime,
         idempotency_key: str | None,
         client_context: str | None,
+        request_digest: str | None,
     ) -> CommitmentHistoryEntry:
         entry = CommitmentHistoryEntry(
             history_id=issue_identifier(IdKind.COMMITMENT_HISTORY),
@@ -347,6 +448,12 @@ class CommitmentManagementService:
             recorded_at=self._clock(),
             idempotency_key=idempotency_key,
             client_context=client_context,
+            request_digest=request_digest,
         )
         uow.commitments.insert_history(entry)
         return entry
+
+
+def _request_digest(**values: object) -> str:
+    canonical = json.dumps(values, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

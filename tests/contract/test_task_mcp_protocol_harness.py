@@ -28,6 +28,7 @@ from tests.conftest import (
     build_service,
     staged_record,
     staged_search,
+    staged_task,
 )
 from tests.contract.test_transport_parity import document
 from tests.transports import McpTransport, mcp_transport
@@ -100,6 +101,7 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
     previous one.
     """
     staged_record(scene, text="lifecycle harness")
+    evidence_ref = staged_task(scene).origin_evidence_ref
     scene.world.searches[scene.enrollment.enrollment_id] = staged_search(scene)
     served = mcp_transport(build_service(scene.world, scene.providers), scene.principal)
 
@@ -112,7 +114,7 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
                 Capability.TASKS_CREATE,
                 {
                     "title": "Harness lifecycle task",
-                    "origin_evidence_ref": "cap_origin0001origin0001",
+                    "origin_evidence_ref": evidence_ref,
                     "idempotency_key": "harness-lifecycle-create-001",
                 },
             ),
@@ -179,7 +181,7 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
                     "to_state": "completed",
                     "expected_version": version_1,
                     "idempotency_key": "harness-lifecycle-transition-001",
-                    "closure_evidence_ref": "cap_origin0001origin0001",
+                    "closure_evidence_ref": evidence_ref,
                 },
             ),
         )
@@ -207,6 +209,7 @@ def test_task_lifecycle_over_mcp(scene: Scene) -> None:
 def test_stale_version_produces_conflict_error(scene: Scene) -> None:
     """A stale expected_version on tasks.update → conflict error code."""
     staged_record(scene, text="conflict harness")
+    evidence_ref = staged_task(scene).origin_evidence_ref
     scene.world.searches[scene.enrollment.enrollment_id] = staged_search(scene)
     served = mcp_transport(build_service(scene.world, scene.providers), scene.principal)
 
@@ -219,7 +222,7 @@ def test_stale_version_produces_conflict_error(scene: Scene) -> None:
                 Capability.TASKS_CREATE,
                 {
                     "title": "Conflict test task",
-                    "origin_evidence_ref": "cap_origin0001origin0001",
+                    "origin_evidence_ref": evidence_ref,
                     "idempotency_key": "harness-conflict-create-001",
                 },
             ),

@@ -23,6 +23,7 @@ import pytest
 
 from my_pa.application.tasks import (
     IllegalTaskTransitionError,
+    TaskIdempotencyConflictError,
     TaskManagementService,
     TaskNotFoundError,
     TaskVersionConflictError,
@@ -31,8 +32,19 @@ from my_pa.contracts.ports import TaskManagementRepository, TaskManagementUnitOf
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.source.registry import issue_identifier
-from my_pa.domain.task.history import TaskHistoryEntry, TaskMutationActor, TaskMutationOutcome
-from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.history import (
+    TaskHistoryEntry,
+    TaskMutationAction,
+    TaskMutationActor,
+    TaskMutationOutcome,
+)
+from my_pa.domain.task.lifecycle import (
+    TaskArchiveMode,
+    TaskLifecycleState,
+    TaskPriority,
+    TaskWorkView,
+)
+from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task
 
 PRINCIPAL_A = issue_identifier(IdKind.PRINCIPAL)
@@ -105,17 +117,39 @@ class _FakeRepository(TaskManagementRepository):
         *,
         lifecycle_state: TaskLifecycleState | None = None,
         priority: TaskPriority | None = None,
-        include_archived: bool = False,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        after: str | None = None,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        work_now: datetime | None = None,
         limit: int,
     ) -> tuple[Task, ...]:
         raise NotImplementedError("this suite does not exercise the read plane")
 
-    def search(self, principal_id: str, query: str, limit: int) -> tuple[Task, ...]:
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        limit: int,
+        *,
+        after: str | None = None,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        work_now: datetime | None = None,
+    ) -> tuple[Task, ...]:
         raise NotImplementedError("this suite does not exercise the read plane")
 
     def list_history(
-        self, principal_id: str, task_id: str, limit: int
+        self, principal_id: str, task_id: str, limit: int, *, after: str | None = None
     ) -> tuple[TaskHistoryEntry, ...]:
+        raise NotImplementedError("this suite does not exercise the read plane")
+
+    def latest_applied_terminal_history(
+        self, principal_id: str, task_id: str
+    ) -> TaskHistoryEntry | None:
         raise NotImplementedError("this suite does not exercise the read plane")
 
 
@@ -587,11 +621,11 @@ def test_a_stale_expected_version_is_rejected_and_leaves_the_row_untouched() -> 
 # --- idempotency -------------------------------------------------------------------
 
 
-def test_a_replayed_idempotency_key_returns_the_identical_receipt_and_writes_nothing() -> None:
+def test_an_idempotency_key_reused_for_different_content_conflicts() -> None:
     world = _World()
     service = _service(world)
     key = _idempotency_key("create")
-    first = service.create_task(
+    service.create_task(
         principal_id=PRINCIPAL_A,
         title="Draft the synthetic summary",
         origin_evidence_ref=ORIGIN,
@@ -601,20 +635,56 @@ def test_a_replayed_idempotency_key_returns_the_identical_receipt_and_writes_not
     inserts_after_first = world.insert_task_calls
     history_writes_after_first = world.insert_history_calls
 
-    second = service.create_task(
-        principal_id=PRINCIPAL_A,
-        title="A materially different title that must not be applied",
-        origin_evidence_ref=ORIGIN,
-        actor=TaskMutationActor.PRINCIPAL,
-        idempotency_key=key,
-    )
-
-    assert second.replayed is True
-    assert second.history == first.history
-    assert second.task == first.task
+    with pytest.raises(TaskIdempotencyConflictError):
+        service.create_task(
+            principal_id=PRINCIPAL_A,
+            title="A materially different title that must not be applied",
+            origin_evidence_ref=ORIGIN,
+            actor=TaskMutationActor.PRINCIPAL,
+            idempotency_key=key,
+        )
     assert world.insert_task_calls == inserts_after_first
     assert world.update_task_calls == 0
     assert world.insert_history_calls == history_writes_after_first
+
+
+def test_atomic_patch_changes_multiple_fields_with_one_version_and_receipt() -> None:
+    world = _World()
+    service = _service(world)
+    commitment_id = issue_identifier(IdKind.COMMITMENT)
+    created = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Original",
+        description="clear me",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("atomic-create"),
+    )
+    writes_before = world.insert_history_calls
+
+    receipt = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=created.task.task_id,
+        expected_version=created.task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={
+            "title": "Patched",
+            "priority": TaskPriority.P1,
+            "commitment_id": commitment_id,
+            "role": TaskRole.FOLLOW_UP,
+        },
+        clear_fields=frozenset({"description"}),
+        idempotency_key=_idempotency_key("atomic-update"),
+    )
+
+    assert receipt.task.version == created.task.version + 1
+    assert receipt.task.title == "Patched"
+    assert receipt.task.description is None
+    assert receipt.task.priority is TaskPriority.P1
+    assert receipt.task.commitment_id == commitment_id
+    assert receipt.task.role is TaskRole.FOLLOW_UP
+    assert receipt.history.action is TaskMutationAction.UPDATE
+    assert world.insert_history_calls == writes_before + 1
 
 
 def test_idempotency_replay_also_applies_to_a_mutation_on_an_existing_task() -> None:

@@ -28,7 +28,7 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with sixty-two capabilities and twenty-five
+emits what it emitted on the day it merged, with sixty-five capabilities and twenty-five
 purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
@@ -220,8 +220,11 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # domain declares them and the head constraint admits them.
         "commitments.close",
         "commitments.create",
+        "commitments.history",
         "commitments.list",
         "commitments.read",
+        "commitments.search",
+        "commitments.update",
         "commitments.waiting_on",
         "tasks.bulk_confirm",
         "tasks.bulk_preview",

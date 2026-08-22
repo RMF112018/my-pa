@@ -253,6 +253,16 @@ result.manifest.capabilities: 12, every one available, readiness.state: ready
 Re-executed 2026-08-03 in the same session as the tool list above. It recorded
 `8` until then.
 
+**Current-state correction (2026-08-22):** MCP answers are no longer
+universally one text content block. The 2026-08-03 transcript above remains
+historical evidence for `capabilities.get` at its stated head. Raster-shaped
+authorized successes (a pinned PNG projection: `media_type` `image/png`
+plus renderer and digest fields) include a second `ImageContent` block
+(`type=image`, `mimeType=image/png`) after the text envelope. The envelope
+JSON remains the canonical application result and is still `content[0]`.
+Failures and non-raster tools stay one text block. HTTP and the CLI are
+unchanged: they still return the envelope only.
+
 `isError` is a function of the envelope's own `error` field and of nothing else,
 so a refusal is a tool result rather than a protocol error, and the content
 block is the same bytes HTTP would have written as its body.

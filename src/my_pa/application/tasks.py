@@ -7,15 +7,10 @@ updates, and transitions a Task, with the two guarantees the plan asks of it —
 optimistic concurrency (`expected_version`) and idempotency (`idempotency_key`)
 — and a receipt written for every attempt, whatever became of it.
 
-**This is not wired into `ApplicationService.invoke` or any transport.**
-`TaskManagementService` takes its own `Callable[[], TaskManagementUnitOfWork]`
-factory, mirroring `ApplicationService.__init__`'s shape without touching
-`ApplicationService` itself, `SqlAlchemyUnitOfWork`, the command dispatch
-table, or the MCP tool surface. Composing this service into any of those,
-choosing its command names and transport-facing schemas, and binding it to an
-OAuth client profile are later work: this package's job is the mutation
-mechanism underneath that wiring, proven against a real database, not the
-wiring itself.
+`ApplicationService.invoke` wires this service to the public Task capabilities.
+Runtime composition supplies the shared SQLAlchemy Work unit of work so Task
+and Commitment validation, Task state, and history receipts participate in the
+same transaction.
 
 **Every mutation is one transaction: version check, task write, history write,
 together or not at all.** `_mutate` is the single private mechanism every
@@ -26,14 +21,12 @@ attempt produced — an applied mutation with no receipt, or a receipt with no
 matching task state, is exactly the drift this table exists to make
 impossible.
 
-**Idempotency defers entirely to the prior receipt.** A mutation carrying an
-`idempotency_key` this Principal has used before returns the *original*
+**Idempotency is bound to normalized request content.** A mutation carrying an
+`idempotency_key` this Principal has used for the same request returns the *original*
 `TaskHistoryEntry` — whatever it recorded, applied, rejected, or no-op —
 without re-validating or re-applying anything, and marks the returned
 `TaskMutationReceipt.replayed` `True` so a caller can tell a replay from a
-first attempt. This does not detect a key reused for a materially different
-request; it only guarantees what the plan requires, that retrying the same
-request never doubles its effect.
+first attempt. Reusing the key for a different normalized digest conflicts.
 
 **"Direct acceptance" is a parameter on `create_task`, not a new action.**
 `domain.task.history.TaskMutationAction` is a closed, ten-member vocabulary
@@ -47,29 +40,28 @@ the whole "direct acceptance path": passing it creates the task already
 accepted, under the ordinary `CREATE` action, in the one call. This module
 never creates, resolves, or validates a review decision itself — the
 Review/AI-proposal promotion workflow that would produce one is out of scope
-here, exactly as recurrence generation, bulk operations, and the Daily Brief
-projection are.
+here, exactly as recurrence generation and the Daily Brief projection are.
 
 **Errors here are plain exceptions, not `application.errors` codes.** The
 existing precedent is `domain.source.provider.VersionChangedError`: a plain
 exception a lower layer raises and a higher one (`ApplicationService.invoke`)
 translates into the public taxonomy at the boundary that owns that
 translation. `TaskNotFoundError`, `TaskVersionConflictError`, and
-`IllegalTaskTransitionError` follow the same shape here, because the boundary
-that would translate them — the dispatcher this service is not yet wired
-into — does not exist yet either. Translating them into
-`application.errors.NotFoundError`/`ConflictError` is that later package's
-job, not a gap in this one.
+`IllegalTaskTransitionError` follow that established shape.
 """
 
 from __future__ import annotations
 
 import dataclasses
+import hashlib
+import json
 from collections.abc import Callable
+from contextlib import nullcontext
 from dataclasses import dataclass
 from datetime import datetime
+from typing import Any, Protocol
 
-from my_pa.contracts.ports import TaskManagementUnitOfWork
+from my_pa.contracts.ports import TaskManagementRepository, TaskManagementUnitOfWork
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
@@ -90,6 +82,7 @@ from my_pa.domain.task.task import Task
 
 __all__ = [
     "IllegalTaskTransitionError",
+    "TaskIdempotencyConflictError",
     "TaskManagementService",
     "TaskMutationReceipt",
     "TaskNotFoundError",
@@ -115,8 +108,17 @@ class TaskVersionConflictError(Exception):
         self.receipt = receipt
 
 
+class TaskIdempotencyConflictError(Exception):
+    """Raised when an idempotency key is reused for different normalized content."""
+
+
 class IllegalTaskTransitionError(ValueError):
     """Raised when a requested lifecycle transition is not one this build permits."""
+
+
+class _ActiveTaskUnitOfWork(Protocol):
+    @property
+    def tasks(self) -> TaskManagementRepository: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,6 +159,10 @@ class TaskManagementService:
         accepted_by_review_decision_id: str | None = None,
         idempotency_key: str | None = None,
         client_context: str | None = None,
+        commitment_id: str | None = None,
+        role: TaskRole | None = None,
+        active_uow: _ActiveTaskUnitOfWork | None = None,
+        validate_first_write: Callable[[], None] | None = None,
     ) -> TaskMutationReceipt:
         """Create a new task. The direct-acceptance path: pass `accepted_by_review_decision_id`.
 
@@ -194,6 +200,8 @@ class TaskManagementService:
                 acceptance_kind=(
                     ContinuityAcceptanceKind.REVIEW if accepted else ContinuityAcceptanceKind.NONE
                 ),
+                commitment_id=commitment_id,
+                role=role,
             )
 
         return self._mutate(
@@ -205,6 +213,78 @@ class TaskManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             change=change,
+            request_digest=_request_digest(
+                title=title,
+                description=description,
+                priority=priority,
+                due_at=due_at,
+                project_id=project_id,
+                situation_id=situation_id,
+                commitment_id=commitment_id,
+                role=role,
+                origin_evidence_ref=origin_evidence_ref,
+                accepted_by_review_decision_id=accepted_by_review_decision_id,
+            ),
+            active_uow=active_uow,
+            validate_first_write=validate_first_write,
+        )
+
+    def update_task(
+        self,
+        *,
+        principal_id: str,
+        task_id: str,
+        expected_version: int,
+        actor: TaskMutationActor,
+        values: dict[str, object],
+        clear_fields: frozenset[str] = frozenset(),
+        idempotency_key: str | None = None,
+        client_context: str | None = None,
+        active_uow: _ActiveTaskUnitOfWork | None = None,
+    ) -> TaskMutationReceipt:
+        """Apply one normalized Task patch under one lock and one history receipt."""
+        mutable = {
+            "title",
+            "description",
+            "priority",
+            "due_at",
+            "scheduled_at",
+            "deferred_until",
+            "commitment_id",
+            "role",
+            "archived_at",
+        }
+        clearable = mutable - {"title"}
+        if unknown := (set(values) | set(clear_fields)) - mutable:
+            raise ValueError(f"unknown task patch fields: {sorted(unknown)!r}")
+        if not set(clear_fields) <= clearable:
+            raise ValueError("title cannot be cleared")
+        if set(values) & set(clear_fields):
+            raise ValueError("a task patch field cannot be both set and cleared")
+
+        def change(current: Task) -> Task:
+            replacements: dict[str, Any] = dict(values)
+            replacements.update(dict.fromkeys(clear_fields))
+            if replacements.get("commitment_id", current.commitment_id) is None:
+                replacements["role"] = None
+            return dataclasses.replace(current, **replacements)
+
+        return self._mutate(
+            principal_id=principal_id,
+            task_id=task_id,
+            expected_version=expected_version,
+            action=TaskMutationAction.UPDATE,
+            actor=actor,
+            idempotency_key=idempotency_key,
+            client_context=client_context,
+            change=change,
+            request_digest=_request_digest(
+                task_id=task_id,
+                expected_version=expected_version,
+                values=values,
+                clear_fields=sorted(clear_fields),
+            ),
+            active_uow=active_uow,
         )
 
     def update_title(
@@ -377,6 +457,8 @@ class TaskManagementService:
         closure_evidence_ref: str | None = None,
         idempotency_key: str | None = None,
         client_context: str | None = None,
+        active_uow: _ActiveTaskUnitOfWork | None = None,
+        validate_first_write: Callable[[], None] | None = None,
     ) -> TaskMutationReceipt:
         """Move a task to `to_state`.
 
@@ -419,6 +501,14 @@ class TaskManagementService:
             idempotency_key=idempotency_key,
             client_context=client_context,
             change=change,
+            request_digest=_request_digest(
+                task_id=task_id,
+                expected_version=expected_version,
+                to_state=to_state,
+                closure_evidence_ref=closure_evidence_ref,
+            ),
+            active_uow=active_uow,
+            validate_first_write=validate_first_write,
         )
 
     def link_commitment(
@@ -434,14 +524,10 @@ class TaskManagementService:
     ) -> TaskMutationReceipt:
         """WP-TM-05: link a task to the `Commitment` named by `commitment_id`.
 
-        This writes only the Task row — `Task.commitment_id` — and never
-        touches the Commitment itself: linking does not fulfil, close, or
-        otherwise mutate the Commitment, and this build does not verify here
-        that `commitment_id` names a real, principal-owned commitment, exactly
-        as `create_task`'s `project_id`/`situation_id` are not cross-checked
-        against their own tables at this layer. A caller that wants that
-        check performs it first, at the layer that already holds a
-        `CommitmentManagementRepository` (`application.service`).
+        This low-level mutation writes only the Task row and never fulfils,
+        closes, or otherwise mutates the Commitment. The public application
+        handler validates same-Principal Commitment ownership in the shared
+        Work unit of work before invoking it.
         """
         return self._mutate(
             principal_id=principal_id,
@@ -488,6 +574,9 @@ class TaskManagementService:
         idempotency_key: str | None,
         client_context: str | None,
         change: Callable[[Task], Task] | Callable[[Task | None], Task],
+        request_digest: str | None = None,
+        active_uow: _ActiveTaskUnitOfWork | None = None,
+        validate_first_write: Callable[[], None] | None = None,
     ) -> TaskMutationReceipt:
         """The single transactional mechanism every public method delegates to.
 
@@ -508,10 +597,15 @@ class TaskManagementService:
         pending_conflict: TaskMutationReceipt | None = None
         result: TaskMutationReceipt | None = None
 
-        with self._unit_of_work() as uow:
+        context = self._unit_of_work() if active_uow is None else nullcontext(active_uow)
+        with context as uow:
             if idempotency_key is not None:
                 prior = uow.tasks.find_history_by_idempotency_key(principal_id, idempotency_key)
                 if prior is not None:
+                    if prior.request_digest != request_digest:
+                        raise TaskIdempotencyConflictError(
+                            "the idempotency key was used for different normalized content"
+                        )
                     prior_task = uow.tasks.get_for_update(principal_id, prior.task_id)
                     if prior_task is None:
                         raise RuntimeError(
@@ -520,6 +614,14 @@ class TaskManagementService:
                     result = TaskMutationReceipt(history=prior, task=prior_task, replayed=True)
 
             if result is None:
+                # A replay is a read of an already-authorized historical
+                # receipt.  Eligibility may legitimately have changed since
+                # that first write (for example, an accepted assertion can be
+                # superseded), so mutable validation belongs after the replay
+                # gate.  First attempts still fail closed before any row read
+                # for mutation or any write.
+                if validate_first_write is not None:
+                    validate_first_write()
                 current = (
                     uow.tasks.get_for_update(principal_id, task_id) if task_id is not None else None
                 )
@@ -545,6 +647,7 @@ class TaskManagementService:
                         occurred_at=now,
                         idempotency_key=idempotency_key,
                         client_context=client_context,
+                        request_digest=request_digest,
                     )
                     pending_conflict = TaskMutationReceipt(history=rejected_history, task=current)
                 else:
@@ -564,6 +667,7 @@ class TaskManagementService:
                             occurred_at=now,
                             idempotency_key=idempotency_key,
                             client_context=client_context,
+                            request_digest=request_digest,
                         )
                         result = TaskMutationReceipt(history=no_op_history, task=current)
                     else:
@@ -586,6 +690,7 @@ class TaskManagementService:
                             occurred_at=now,
                             idempotency_key=idempotency_key,
                             client_context=client_context,
+                            request_digest=request_digest,
                         )
                         result = TaskMutationReceipt(history=applied_history, task=applied_task)
 
@@ -603,7 +708,7 @@ class TaskManagementService:
     def _record(
         self,
         *,
-        uow: TaskManagementUnitOfWork,
+        uow: _ActiveTaskUnitOfWork,
         principal_id: str,
         task_id: str,
         action: TaskMutationAction,
@@ -614,6 +719,7 @@ class TaskManagementService:
         occurred_at: datetime,
         idempotency_key: str | None,
         client_context: str | None,
+        request_digest: str | None,
     ) -> TaskHistoryEntry:
         entry = TaskHistoryEntry(
             history_id=issue_identifier(IdKind.TASK_HISTORY),
@@ -628,6 +734,12 @@ class TaskManagementService:
             recorded_at=self._clock(),
             idempotency_key=idempotency_key,
             client_context=client_context,
+            request_digest=request_digest,
         )
         uow.tasks.insert_history(entry)
         return entry
+
+
+def _request_digest(**values: object) -> str:
+    canonical = json.dumps(values, sort_keys=True, separators=(",", ":"), default=str)
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()

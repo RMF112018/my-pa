@@ -1,4 +1,4 @@
-"""All seventy capabilities execute real behaviour, and disclose what they did.
+"""All seventy-three capabilities execute real behaviour, and disclose what they did.
 
 Each test below runs one capability through `ApplicationService.invoke` — the
 only public entry point there is — against the real fixture source provider and

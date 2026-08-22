@@ -45,8 +45,8 @@ request does too, because `1a4c9e77b2d5` creates the capture tables and widens
 
 ## What the gateway is, and what it does not yet do
 
-`apps/gateway.py` routes the seventy public capabilities over HTTP on loopback
-and, in a default process, serves fifty of them.
+`apps/gateway.py` routes the seventy-three public capabilities over HTTP on
+loopback and, in a default process, serves fifty-three of them.
 One request is one call to `ApplicationService.invoke`, and the response body is
 the envelope that call produced — the transport maps and does not decide.
 
@@ -55,12 +55,12 @@ capabilities", and a default gateway does not.** Two families are composed only
 when their variable is set — the six `documents.` names behind
 `MY_PA_MANAGED_DOCUMENT_ROOT` and the six `entities.` names behind
 `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`, neither of which has a default.
-`/v1/{capability}` is a path parameter, so all fifty-four *route*: dispatch
+`/v1/{capability}` is a path parameter, so all sixty-five *route*: dispatch
 reaches the handler, which refuses with `unsupported` and the transport maps that
 to **`501`**. This section already discloses the source-root gate below in the
 same detail; it said nothing about these two, which is the omission being
 corrected. `capabilities.get` on such a process reports readiness `degraded` and
-`12 of 54 capabilities are unwired.` rather than `ready`.
+`12 of 65 capabilities are unwired.` rather than `ready`.
 
 **It is bound to `127.0.0.1` and there is no option to bind elsewhere.** That is
 `D-30` and `AGENTS.md` §5: `P00-OD-010` — which authentication mechanism this
@@ -144,11 +144,19 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
        "payload":{}}'
 ```
 
-**Current-state correction (2026-08-15):** the candidate has **seventy**
-capabilities and **sixty-six** Alembic revisions at head `f1c6b904a2d7`.
+**Current-state correction (2026-08-22):** the candidate has **seventy-three**
+capabilities and **sixty-seven** Alembic revisions at head `f1c6b904a2d7`.
 `capabilities.get` now also returns `worker_planes`; backlog without a live
 heartbeat is `worker_absent`/`worker_stale`, never silently healthy. The dated
 transcript below remains historical evidence for its stated head.
+
+The Task/Commitment plane comprises the fourteen previously admitted names plus
+`commitments.search`, `commitments.history`, and `commitments.update`. Its full
+HTTP vocabulary is `tasks.read`, `tasks.list`, `tasks.search`, `tasks.history`,
+`tasks.create`, `tasks.update`, `tasks.transition`, `tasks.bulk_preview`,
+`tasks.bulk_confirm`, `commitments.read`, `commitments.list`,
+`commitments.search`, `commitments.history`, `commitments.waiting_on`,
+`commitments.create`, `commitments.update`, and `commitments.close`.
 
 **Re-executed 2026-08-03**, against a disposable database at head
 `1a4c9e77b2d5`, because WP-6 changed what this answers. Observed: `200`,

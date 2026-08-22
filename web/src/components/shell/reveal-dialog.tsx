@@ -130,9 +130,12 @@ export function RevealDialog({
 }) {
   const [response, setResponse] = useState<RevealResponse | null>(null);
   const [status, setStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [failure, setFailure] = useState<string | null>(null);
 
   async function reveal() {
     setStatus("loading");
+    setResponse(null);
+    setFailure(null);
     try {
       const answer = await apiPost<RevealResponse>({ hasSession: true }, "/api/reveal", {
         subjectId,
@@ -141,9 +144,19 @@ export function RevealDialog({
         setResponse(answer.data);
         setStatus("idle");
       } else {
+        if (answer.status === 401 || answer.errorClass === "authentication") {
+          setFailure("Your session expired before evidence could be read.");
+        } else if (answer.status === 403 || answer.errorClass === "authorization" || answer.errorClass === "policy_denied") {
+          setFailure("Evidence was not authorized. Nothing was disclosed.");
+        } else if (answer.status === 404 || answer.errorClass === "not_found") {
+          setFailure("Evidence was not found, or it is outside your authority.");
+        } else {
+          setFailure("Evidence is unavailable right now. Nothing was disclosed.");
+        }
         setStatus("error");
       }
     } catch {
+      setFailure("Evidence is unavailable right now. Nothing was disclosed.");
       setStatus("error");
     }
   }
@@ -230,14 +243,21 @@ export function RevealDialog({
         ) : null}
 
         {response ? (
-          <p className="text-xs text-muted">
-            Coverage: {response.disclosure.coverage}. {response.disclosure.limitations.join(" ")}
-          </p>
+          <div className="text-xs text-muted">
+            <p>Coverage: {response.disclosure.coverage}. {response.disclosure.limitations.join(" ")}</p>
+            {response.disclosure.truncated || response.disclosure.limitations.length > 0 ? (
+              <p data-testid="reveal-limited" className="mt-1">
+                {response.disclosure.limitations.some((item) => item.toLowerCase().includes("redact"))
+                  ? "Evidence disclosure is redacted or limited by the server."
+                  : "Evidence disclosure is limited by the server."}
+              </p>
+            ) : null}
+          </div>
         ) : null}
 
         {status === "error" ? (
           <p role="alert" className="text-moss-coral-strong">
-            Reveal failed.
+            {failure ?? "Evidence is unavailable right now. Nothing was disclosed."}
           </p>
         ) : null}
         <div className="flex justify-end gap-2">

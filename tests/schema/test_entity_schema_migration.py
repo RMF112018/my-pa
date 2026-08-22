@@ -257,6 +257,7 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "intelligence_commit_receipts",
         "intelligence_pipeline_dependencies",
         "intelligence_provenance_refs",
+        "task_bulk_operations",
         "relationship_memories",
         "relationship_memory_versions",
         "relationship_memory_submissions",

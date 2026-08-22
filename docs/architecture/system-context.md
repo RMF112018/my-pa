@@ -22,9 +22,9 @@ supersession_state: CURRENT
 authorized source systems, structured knowledge storage, and policy-bound
 retrieval interfaces. The MCV remains one bounded vertical slice, with frontend
 and managed-document implementation admitted only for the current remediation
-objective. This objective-specific reprioritization does not amend repository
-policy; the stale policy inconsistency remains recorded for later, separately
-authorized operator correction.
+objective. Repository policy and decision `D-108` now record the bounded
+WP-FE-03 Work frontend amendment. They do not admit auth replacement, later frontend
+phases, deployment, live personal data, or a broader product surface.
 
 
 This document refines the accepted foundation in ADR-001, ADR-002, and ADR-008.
@@ -71,9 +71,9 @@ hash.
 
 
 The repository is an executable local candidate, not a documentation scaffold.
-The `my_pa` application defines and wires seventy capabilities through HTTP,
+The `my_pa` application defines and wires seventy-three capabilities through HTTP,
 MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
-planes. **A default composition exposes fifty of them.** The six
+planes. **A default composition exposes fifty-three of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT`, the six
 `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`, and the
 eight `relationship_memory.` names require that variable *and*
@@ -81,13 +81,15 @@ eight `relationship_memory.` names require that variable *and*
 subject and ownership is proven by reading `knowledge.entities`; none has
 a default, so an unconfigured process withholds all three families from
 `capabilities.get` and from the MCP tool list, refuses them `unsupported` over
-HTTP, and reports readiness `degraded`. The default figure did not move when
-WP-29 admitted the `relationship_memory.` family, because every name in it
-arrived on the withheld side of that split. Corrected 2026-08-19: this sentence read
-"exposes seventy capabilities" under a heading claiming authenticated
+HTTP, and reports readiness `degraded`. The default figure moved from fifty to
+fifty-three when WP-FE-03 admitted `commitments.history`, `commitments.search`
+and `commitments.update`, which arrive on the served side of that split; it did
+not move when WP-29 admitted the `relationship_memory.` family, because every
+name in it arrived on the withheld side. Corrected 2026-08-19: this sentence read
+"exposes seventy-three capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns sixty-six revisions at head `f1c6b904a2d7`, including the merge of
+Alembic owns sixty-seven revisions at head `f1c6b904a2d7`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
 semantic-retrieval gate remains `SEMANTIC_GATE_FAIL` and production semantic
@@ -104,8 +106,18 @@ bucket into immutable admission envelopes. No TCC grant was requested and no
 live source read was executed. GoodNotes reconciliation is bound to
 exact registry versions and Principal enrollment before OCR, then enters
 ordinary canonical Review/search. Managed documents and the MossAIc frontend
-are implemented under the current objective-specific reprioritization; neither
-fact amends the still-stale policy.
+are implemented under bounded objective-specific reprioritizations. The Work
+frontend amendment is recorded in repository policy and `D-108`; it admits only
+WP-FE-03 and leaves every named exclusion in that decision in force.
+
+The Work plane now routes all seventeen Task and Commitment capabilities:
+`tasks.read`, `tasks.list`, `tasks.search`, `tasks.history`, `tasks.create`,
+`tasks.update`, `tasks.transition`, `tasks.bulk_preview`, `tasks.bulk_confirm`,
+`commitments.read`, `commitments.list`, `commitments.search`,
+`commitments.history`, `commitments.waiting_on`, `commitments.create`,
+`commitments.update`, and `commitments.close`. Of these, 14 predated WP-FE-03;
+the revision admits the three missing Commitment operations and the web BFF
+routes the whole plane.
 
 Historical note: the earlier figures (eleven, then twenty-one revisions; eight,
 then twelve capabilities) were accurate at their dated work-package heads. They

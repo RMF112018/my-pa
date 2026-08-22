@@ -4311,6 +4311,11 @@ commitments = Table(
         name="a_commitment_review_decision_is_an_opaque_identifier",
     ),
     CheckConstraint("version >= 1", name="a_commitment_version_is_positive"),
+    UniqueConstraint(
+        "principal_id",
+        "commitment_id",
+        name="commitments_principal_commitment_is_unique",
+    ),
     Index("commitments_by_principal", "principal_id"),
     Index("commitments_by_principal_state", "principal_id", "state"),
     Index("commitments_by_principal_evidence_state", "principal_id", "evidence_state"),
@@ -4437,7 +4442,7 @@ tasks = Table(
     #: two canonical planes — a Task still names at most one Commitment, never
     #: the reverse, and "Waiting On" stays a derived, in-memory-assembled read
     #: over both tables rather than a third one.
-    Column("commitment_id", Text, ForeignKey(f"{SCHEMA}.commitments.commitment_id")),
+    Column("commitment_id", Text),
     Column("role", Text),
     _is_identifier("task_id", IdKind.TASK),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
@@ -4497,6 +4502,11 @@ tasks = Table(
     CheckConstraint(
         f"role IS NULL OR role IN ({_literals(TaskRole)})",
         name="a_task_role_is_known",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "commitment_id"],
+        [f"{SCHEMA}.commitments.principal_id", f"{SCHEMA}.commitments.commitment_id"],
+        name="tasks_commitment_is_same_principal",
     ),
     Index("tasks_by_principal", "principal_id"),
     Index("tasks_by_principal_state", "principal_id", "state"),
@@ -4578,6 +4588,8 @@ task_history = Table(
     Column("after_version", Integer, nullable=False),
     Column("idempotency_key", Text),
     Column("client_context", Text),
+    Column("request_digest", Text),
+    Column("bulk_operation_id", Text),
     Column("occurred_at", DateTime(timezone=True), nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
     _is_identifier("history_id", IdKind.TASK_HISTORY),
@@ -4608,6 +4620,14 @@ task_history = Table(
         f"OR length(trim(client_context)) BETWEEN 1 AND {MAX_CLIENT_CONTEXT_CHARACTERS}",
         name="a_task_history_client_context_is_bounded",
     ),
+    CheckConstraint(
+        "request_digest IS NULL OR request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_task_history_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "bulk_operation_id IS NULL OR bulk_operation_id ~ '^bulk_[A-Za-z0-9]{8,64}$'",
+        name="a_task_history_bulk_operation_is_opaque",
+    ),
     Index("task_history_by_principal", "principal_id"),
     Index("task_history_by_principal_task", "principal_id", "task_id"),
     Index(
@@ -4617,6 +4637,79 @@ task_history = Table(
         unique=True,
         postgresql_where=text("idempotency_key IS NOT NULL"),
     ),
+)
+
+#: Content-free two-phase bulk ledger. The normalized request itself is
+#: deliberately not persisted: confirm resubmits it and must reproduce this
+#: digest. Receipts contain only counts and opaque history identifiers.
+task_bulk_operations = Table(
+    "task_bulk_operations",
+    METADATA,
+    Column("bulk_operation_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("preview_idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("previewed_at", DateTime(timezone=True), nullable=False),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("preview_affected", Integer, nullable=False),
+    Column("preview_no_op", Integer, nullable=False),
+    Column("confirmed_at", DateTime(timezone=True)),
+    Column("confirm_idempotency_key", Text),
+    Column("affected", Integer),
+    Column("no_op", Integer),
+    Column("rejected", Integer),
+    Column("history_ids", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    _is_identifier("bulk_operation_id", IdKind.BULK_OPERATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "preview_idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_task_bulk_preview_key_is_bounded",
+    ),
+    CheckConstraint(
+        "confirm_idempotency_key IS NULL OR confirm_idempotency_key ~ '^[A-Za-z0-9_-]{8,128}$'",
+        name="a_task_bulk_confirm_key_is_bounded",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_task_bulk_request_digest_is_sha256",
+    ),
+    CheckConstraint("expires_at > previewed_at", name="a_task_bulk_preview_expires_later"),
+    CheckConstraint(
+        "preview_affected >= 0 AND preview_no_op >= 0",
+        name="task_bulk_preview_counts_are_non_negative",
+    ),
+    CheckConstraint(
+        "preview_affected + preview_no_op BETWEEN 1 AND 100",
+        name="task_bulk_preview_size_is_bounded",
+    ),
+    CheckConstraint(
+        "(confirmed_at IS NULL) = (confirm_idempotency_key IS NULL)",
+        name="a_task_bulk_confirmation_key_is_paired",
+    ),
+    CheckConstraint(
+        "(confirmed_at IS NULL AND affected IS NULL AND no_op IS NULL AND rejected IS NULL "
+        "AND jsonb_array_length(history_ids) = 0) OR "
+        "(confirmed_at IS NOT NULL AND affected IS NOT NULL AND no_op IS NOT NULL "
+        "AND rejected IS NOT NULL)",
+        name="a_task_bulk_result_is_paired",
+    ),
+    CheckConstraint(
+        "confirmed_at IS NULL OR (affected = preview_affected AND no_op = preview_no_op "
+        "AND rejected = 0 AND jsonb_array_length(history_ids) = "
+        "preview_affected + preview_no_op)",
+        name="task_bulk_confirmation_matches_preview",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "preview_idempotency_key",
+        name="one_task_bulk_preview_key_per_principal",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "confirm_idempotency_key",
+        name="one_task_bulk_confirm_key_per_principal",
+    ),
+    Index("task_bulk_operations_by_principal", "principal_id", "bulk_operation_id"),
 )
 
 #: Replay gate for user-directed continuity writes. Unique per Principal and
@@ -4660,6 +4753,7 @@ commitment_history = Table(
     Column("after_version", Integer, nullable=False),
     Column("idempotency_key", Text),
     Column("client_context", Text),
+    Column("request_digest", Text),
     Column("occurred_at", DateTime(timezone=True), nullable=False),
     Column("recorded_at", DateTime(timezone=True), nullable=False),
     _is_identifier("history_id", IdKind.COMMITMENT_HISTORY),
@@ -4667,7 +4761,7 @@ commitment_history = Table(
     _is_identifier("commitment_id", IdKind.COMMITMENT),
     _one_of(
         "action",
-        frozenset({"create", "close"}),
+        frozenset({"create", "update", "close"}),
         name="a_commitment_history_action_is_known",
     ),
     _one_of("actor", TaskMutationActor, name="a_commitment_history_actor_is_known"),
@@ -4691,6 +4785,10 @@ commitment_history = Table(
         f"client_context IS NULL "
         f"OR length(trim(client_context)) BETWEEN 1 AND {MAX_CLIENT_CONTEXT_CHARACTERS}",
         name="a_commitment_history_client_context_is_bounded",
+    ),
+    CheckConstraint(
+        "request_digest IS NULL OR request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_commitment_history_request_digest_is_sha256",
     ),
     Index("commitment_history_by_principal", "principal_id"),
     Index("commitment_history_by_principal_commitment", "principal_id", "commitment_id"),

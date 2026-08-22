@@ -737,8 +737,8 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 66
-    assert len({revision for revision, _ in revisions}) == 66
+    assert len(revisions) == 67
+    assert len({revision for revision, _ in revisions}) == 67
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

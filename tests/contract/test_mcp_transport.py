@@ -51,7 +51,7 @@ import my_pa.adapters.mcp.server as mcp_module
 from my_pa.adapters.mcp import TOOLS, create_mcp_server
 from my_pa.adapters.mcp.tools import payload_schema_for
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, PAYLOAD_KEY
-from my_pa.application.commands import Command
+from my_pa.application.commands import Command, ListTasks
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability
@@ -144,6 +144,15 @@ def test_a_ninth_capability_gets_a_schema_without_the_adapter_being_edited() -> 
         "verbose": {"type": "boolean"},
     }
     assert schema["required"] == ["subject_id", "tags"]
+
+
+def test_list_tasks_publishes_an_exact_calendar_date_schema() -> None:
+    work_date = payload_schema_for(ListTasks)["properties"]["work_date"]
+    assert work_date == {
+        "type": "string",
+        "format": "date",
+        "pattern": r"^\d{4}-\d{2}-\d{2}$",
+    }
 
 
 def test_every_command_field_has_a_described_json_type() -> None:

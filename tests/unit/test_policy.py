@@ -248,8 +248,11 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         # task plane's read/authoring split.
         (Capability.COMMITMENTS_READ, Purpose.COMMITMENT_READ),
         (Capability.COMMITMENTS_LIST, Purpose.COMMITMENT_READ),
+        (Capability.COMMITMENTS_SEARCH, Purpose.COMMITMENT_READ),
+        (Capability.COMMITMENTS_HISTORY, Purpose.COMMITMENT_READ),
         (Capability.COMMITMENTS_WAITING_ON, Purpose.COMMITMENT_READ),
         (Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING),
+        (Capability.COMMITMENTS_UPDATE, Purpose.COMMITMENT_AUTHORING),
         (Capability.COMMITMENTS_CLOSE, Purpose.COMMITMENT_AUTHORING),
         (Capability.CONTEXT_PREPARE, Purpose.CONTEXT_PREPARATION),
         (Capability.CONTEXT_FEEDBACK, Purpose.CONTEXT_PREFERENCE),
@@ -311,14 +314,17 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # goodnotes.content added 1 capability and 1 purpose; the entity plane added
     # 5 capabilities and 1 purpose, and its unresolved-mention queue one
     # more capability under the purpose the other five already use; the
-    # Intelligence Artifact plane added 8 capabilities and 2 purposes; the
-    # Relationship Memory plane added 8 capabilities and 2 purposes, and it maps
-    # one-to-one onto them — four writes under `relationship_memory_authoring`
-    # and four reads under `relationship_memory_read` — so it contributes eight
-    # pairs rather than the sixteen a cross product would give.
-    # Unioned: 70 capabilities, 27 purposes, 72 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 72
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 72 == 1818
+    # Intelligence Artifact plane added 8 capabilities and 2 purposes; WP-FE-03
+    # added 3 commitment capabilities and no purpose, two reads under
+    # `commitment_read` and one write under `commitment_authoring`, so it
+    # contributes three pairs; the Relationship Memory plane added 8
+    # capabilities and 2 purposes, and it maps one-to-one onto them — four
+    # writes under `relationship_memory_authoring` and four reads under
+    # `relationship_memory_read` — so it contributes eight pairs rather than the
+    # sixteen a cross product would give.
+    # Unioned: 73 capabilities, 27 purposes, 75 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 75
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 75 == 1896
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

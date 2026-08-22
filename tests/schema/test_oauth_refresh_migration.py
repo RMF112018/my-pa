@@ -59,8 +59,11 @@ GOVERNANCE_REVISION = "d2b8f5c04e71"
 #: The unresolved-mention capability admission, between governance and head.
 QUEUE_REVISION = "e4d7b2f9a316"
 MENTION_REVISION = "f3a8c1d7e592"
+#: The Work task and commitment contracts, which stack on the intelligence
+#: plane and carry the head until the Relationship Memory plane stacks on them.
+WORK_REVISION = "a4d9e7c2b615"
 #: The Relationship Memory plane, which is where `upgrade head` now lands.
-#: `INTELLIGENCE_REVISION` above was head until this revision stacked on it;
+#: `WORK_REVISION` above was head until this revision stacked on it;
 #: naming both keeps the chain assertion below a statement about the order
 #: rather than about whichever revision happens to be last.
 MEMORY_REVISION = "f1c6b904a2d7"
@@ -160,8 +163,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(QUEUE_REVISION).down_revision == GOVERNANCE_REVISION
     assert script.get_revision(MENTION_REVISION).down_revision == QUEUE_REVISION
     assert script.get_revision(INTELLIGENCE_REVISION).down_revision == MENTION_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == INTELLIGENCE_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 66
+    assert script.get_revision(WORK_REVISION).down_revision == INTELLIGENCE_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == WORK_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 67
 
 
 @pytest.mark.database

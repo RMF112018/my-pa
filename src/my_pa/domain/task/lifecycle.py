@@ -39,8 +39,10 @@ from typing import Final
 
 __all__ = [
     "TERMINAL_TASK_LIFECYCLE_STATES",
+    "TaskArchiveMode",
     "TaskLifecycleState",
     "TaskPriority",
+    "TaskWorkView",
     "legacy_state_for",
 ]
 
@@ -84,6 +86,32 @@ class TaskPriority(StrEnum):
     P2 = "p2"
     P3 = "p3"
     P4 = "p4"
+
+
+class TaskWorkView(StrEnum):
+    """The server-owned Task sections admitted for the Work surface.
+
+    Date-bounded members are evaluated against one validated civil day by the
+    application service.  They remain query vocabulary, never stored Task
+    state, and therefore cannot blur due, scheduled, or deferred semantics.
+    """
+
+    OVERDUE = "overdue"
+    TODAY = "today"
+    UPCOMING = "upcoming"
+    UNSCHEDULED = "unscheduled"
+    WAITING = "waiting"
+    BLOCKED = "blocked"
+    ALL_OPEN = "all-open"
+    COMPLETED = "completed"
+    RECENTLY_UPDATED = "recently-updated"
+
+
+class TaskArchiveMode(StrEnum):
+    """Whether a Work query returns active or archived Tasks, never a mixture."""
+
+    EXCLUDE = "exclude"
+    ONLY = "only"
 
 
 def legacy_state_for(lifecycle_state: TaskLifecycleState) -> str:

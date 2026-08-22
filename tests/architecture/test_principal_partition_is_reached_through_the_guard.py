@@ -256,6 +256,12 @@ QUARANTINED: Final = {
         "quarantined for above. WP-TM-05 wires this into "
         "`application.commitments.CommitmentManagementService`."
     ),
+    "infrastructure/persistence/unit_of_work.py": (
+        "the shared Work unit of work validates an origin reference by querying "
+        "accepted capture assertions and their owning captures with explicit "
+        "Principal predicates. The reference is never caller-supplied authority; "
+        "both comparisons are registered in HAND_WRITTEN_COMPARISONS below."
+    ),
 }
 
 #: The guarded modules whose *statements* are checked one by one, rather than
@@ -477,8 +483,15 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("traces", "principal_id"),
     ),
     "infrastructure/persistence/task_management.py": (
+        ("task_bulk_operations", "principal_id"),
+        ("task_bulk_operations", "principal_id"),
+        ("task_bulk_operations", "principal_id"),
+        ("task_bulk_operations", "principal_id"),
         ("task_history", "principal_id"),
         ("task_history", "principal_id"),
+        ("task_history", "principal_id"),
+        ("task_history", "principal_id"),
+        ("tasks", "principal_id"),
         ("tasks", "principal_id"),
         ("tasks", "principal_id"),
         ("tasks", "principal_id"),
@@ -488,10 +501,16 @@ HAND_WRITTEN_COMPARISONS: Final = {
     "infrastructure/persistence/commitment_management.py": (
         ("commitment_history", "principal_id"),
         ("commitment_history", "principal_id"),
+        ("commitment_history", "principal_id"),
         ("commitments", "principal_id"),
         ("commitments", "principal_id"),
         ("commitments", "principal_id"),
         ("commitments", "principal_id"),
+        ("commitments", "principal_id"),
+    ),
+    "infrastructure/persistence/unit_of_work.py": (
+        ("capture_assertions", "principal_id"),
+        ("captures", "owner_principal_id"),
     ),
 }
 

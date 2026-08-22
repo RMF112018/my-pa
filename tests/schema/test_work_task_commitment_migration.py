@@ -1,0 +1,84 @@
+"""Static and metadata contract for the WP-FE-03 Work migration.
+
+The disposable PostgreSQL migration suite supplies execution proof when a
+local isolated server is available. These tests remain meaningful without one:
+they pin the Alembic edge, downgrade symmetry, and the SQLAlchemy metadata the
+runtime uses to issue Task bulk statements.
+"""
+
+from __future__ import annotations
+
+from pathlib import Path
+
+from alembic.config import Config
+from alembic.script import ScriptDirectory
+from sqlalchemy import CheckConstraint, UniqueConstraint
+
+from my_pa.infrastructure.persistence.tables import task_bulk_operations
+
+ROOT = Path(__file__).resolve().parents[2]
+REVISION = "a4d9e7c2b615"
+PREVIOUS = "e9b2c4d7a150"
+#: The Relationship Memory plane, which stacked on this revision rather than
+#: forking beside it. This revision was head when it merged and is not now, so
+#: the edge is asserted in both directions below and the head is asserted once,
+#: which is what "single head" was there to say.
+SUCCESSOR = "f1c6b904a2d7"
+REVISION_PATH = (
+    ROOT
+    / "migrations"
+    / "versions"
+    / "20260821_a4d9e7c2b615_admit_work_task_commitment_contracts.py"
+)
+
+
+def test_work_revision_sits_on_the_single_head_chain_after_its_predecessor() -> None:
+    script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
+    assert script.get_heads() == [SUCCESSOR]
+    assert script.get_revision(REVISION).down_revision == PREVIOUS
+    assert script.get_revision(SUCCESSOR).down_revision == REVISION
+
+
+def test_bulk_metadata_matches_the_persisted_preview_and_confirmation_contract() -> None:
+    assert {
+        "preview_affected",
+        "preview_no_op",
+        "confirm_idempotency_key",
+        "affected",
+        "no_op",
+        "rejected",
+        "history_ids",
+    } <= set(task_bulk_operations.c.keys())
+    checks = {
+        constraint.name
+        for constraint in task_bulk_operations.constraints
+        if isinstance(constraint, CheckConstraint)
+    }
+    uniques = {
+        constraint.name
+        for constraint in task_bulk_operations.constraints
+        if isinstance(constraint, UniqueConstraint)
+    }
+    assert {
+        "task_bulk_preview_counts_are_non_negative",
+        "task_bulk_preview_size_is_bounded",
+        "task_bulk_confirmation_matches_preview",
+    } <= checks
+    assert {
+        "one_task_bulk_preview_key_per_principal",
+        "one_task_bulk_confirm_key_per_principal",
+    } <= uniques
+
+
+def test_upgrade_and_downgrade_are_symmetric_for_the_work_ledger_and_link_constraint() -> None:
+    source = REVISION_PATH.read_text(encoding="utf-8")
+    assert "CREATE TABLE knowledge.task_bulk_operations" in source
+    assert "DROP TABLE knowledge.task_bulk_operations" in source
+    assert "tasks_commitment_is_same_principal" in source
+    assert (
+        "ALTER TABLE knowledge.tasks DROP CONSTRAINT tasks_commitment_is_same_principal" in source
+    )
+    assert "one_task_bulk_confirm_key_per_principal" in source
+    assert "task_bulk_confirmation_matches_preview" in source
+    assert "my_pa.domain" not in source
+    assert "infrastructure.persistence.tables" not in source

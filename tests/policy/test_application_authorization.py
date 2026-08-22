@@ -70,6 +70,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCommitmentHistory,
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
@@ -113,6 +114,7 @@ from my_pa.application.commands import (
     ReviseManagedDocument,
     ReviseRelationshipMemory,
     SearchCaptures,
+    SearchCommitments,
     SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
@@ -120,6 +122,7 @@ from my_pa.application.commands import (
     SearchTasks,
     SubmitGoodNotesProposal,
     TransitionTask,
+    UpdateCommitment,
     UpdateTask,
     WaitingOn,
 )
@@ -285,11 +288,16 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.TASKS_BULK_CONFIRM: BulkConfirmTasks(
             bulk_operation_id=issue_identifier(IdKind.BULK_OPERATION),
             idempotency_key="denial-tasks-bulk-confirm-0001",
+            mutations=({"task_id": issue_identifier(IdKind.TASK)},),
         ),
         Capability.COMMITMENTS_READ: ReadCommitment(
             commitment_id=issue_identifier(IdKind.COMMITMENT)
         ),
         Capability.COMMITMENTS_LIST: ListCommitments(),
+        Capability.COMMITMENTS_SEARCH: SearchCommitments(query="denial"),
+        Capability.COMMITMENTS_HISTORY: GetCommitmentHistory(
+            commitment_id=issue_identifier(IdKind.COMMITMENT)
+        ),
         Capability.COMMITMENTS_WAITING_ON: WaitingOn(),
         Capability.COMMITMENTS_CREATE: CreateCommitment(
             counterparty_person_id=issue_identifier(IdKind.PERSON),
@@ -303,6 +311,12 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             expected_version=1,
             closure_evidence_ref=issue_identifier(IdKind.CAPTURE),
             idempotency_key="denial-commitments-close-0001",
+        ),
+        Capability.COMMITMENTS_UPDATE: UpdateCommitment(
+            commitment_id=issue_identifier(IdKind.COMMITMENT),
+            expected_version=1,
+            idempotency_key="denial-commitments-update-0001",
+            summary="Denial-path commitment revised",
         ),
         Capability.CONTEXT_PREPARE: PrepareContext(query="revenue"),
         Capability.CONTEXT_FEEDBACK: RecordContextFeedback(
@@ -651,8 +665,11 @@ SCOPED_CAPABILITIES = [
         Capability.TASKS_BULK_CONFIRM,
         Capability.COMMITMENTS_READ,
         Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_SEARCH,
+        Capability.COMMITMENTS_HISTORY,
         Capability.COMMITMENTS_WAITING_ON,
         Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_UPDATE,
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_PREPARE,
         Capability.CONTEXT_FEEDBACK,
@@ -781,8 +798,11 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.TASKS_BULK_CONFIRM,
         Capability.COMMITMENTS_READ,
         Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_SEARCH,
+        Capability.COMMITMENTS_HISTORY,
         Capability.COMMITMENTS_WAITING_ON,
         Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_UPDATE,
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_PREPARE,
         Capability.CONTEXT_FEEDBACK,

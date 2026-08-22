@@ -68,6 +68,7 @@ from my_pa.contracts.ports import (
     ContextPreferenceRepository,
     ContextRunRepository,
     ContinuityAuthoringRepository,
+    CounterpartyOption,
     EnrollmentRepository,
     EntitiesRepository,
     EntitySummary,
@@ -101,6 +102,7 @@ from my_pa.contracts.ports import (
     TaskManagementUnitOfWork,
     UnitOfWork,
     UnknownScopeError,
+    WorkCursorError,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.disclosure import (
@@ -219,6 +221,7 @@ from my_pa.domain.situation.continuity import (
     Commitment,
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
     ContinuityAcceptanceKind,
     ContinuityEvidenceState,
     TaskState,
@@ -246,10 +249,17 @@ from my_pa.domain.source.provider import (
     SourceProvider,
 )
 from my_pa.domain.source.registry import ConfiguredSource, SourceProviderKind, issue_identifier
+from my_pa.domain.task.bulk import TaskBulkOperation
 from my_pa.domain.task.commitment import Commitment as CommitmentV2
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
 from my_pa.domain.task.history import TaskHistoryEntry, TaskMutationActor
-from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.lifecycle import (
+    TaskArchiveMode,
+    TaskLifecycleState,
+    TaskPriority,
+    TaskWorkView,
+)
+from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task as TaskV2
 from my_pa.infrastructure.providers.fixture import FixtureSourceProvider
 
@@ -361,6 +371,9 @@ class World:
     capture_versions: list[CaptureVersion] = field(default_factory=list)
     capture_receipts: dict[str, CaptureReceipt] = field(default_factory=dict)
     capture_keys: dict[tuple[str, str], tuple[str, str]] = field(default_factory=dict)
+    #: Metadata-only synthetic evidence authority used by Work mutation tests.
+    #: Values are partitioned exactly like the production metadata query.
+    work_evidence_refs: set[tuple[str, str]] = field(default_factory=set)
     #: Every admission request the store was *asked* to perform, in order, whether
     #: it was created, replayed, or refused. Recorded rather than derived from the
     #: rows above because two claims need the request itself: which transport the
@@ -434,8 +447,10 @@ class World:
     #: over is the clearest place to see one missing.
     tasks_v2: list[TaskV2] = field(default_factory=list)
     task_history_v2: list[TaskHistoryEntry] = field(default_factory=list)
+    task_bulk_operations: dict[tuple[str, str], TaskBulkOperation] = field(default_factory=dict)
     commitments_v2: list[CommitmentV2] = field(default_factory=list)
     commitment_history_v2: list[CommitmentHistoryEntry] = field(default_factory=list)
+    current_counterparties: set[tuple[str, str]] = field(default_factory=set)
     dismissed_pulse_ids: set[str] = field(default_factory=set)
     audit: list[AuditEvent] = field(default_factory=list)
     #: Insert-only context-run metadata. The fake cannot prove the server
@@ -907,6 +922,9 @@ class _Captures(CaptureRepository):
             ),
             None,
         )
+
+    def accepts_work_evidence_reference(self, reference: str, *, principal_id: str) -> bool:
+        return (principal_id, reference) in self._world.work_evidence_refs
 
     def captures(self, *, limit: int, principal_id: str) -> tuple[CaptureSummary, ...]:
         self._world.fail("capture_page")
@@ -1708,21 +1726,71 @@ class _TasksRead(TaskManagementRepository):
         self._world = world
 
     def get_for_update(self, principal_id: str, task_id: str) -> TaskV2 | None:
-        raise NotImplementedError("the read plane's fake does not serve mutation")
+        return self.get(principal_id, task_id)
 
     def insert_task(self, task: TaskV2) -> None:
-        raise NotImplementedError("the read plane's fake does not serve mutation")
+        self._world.tasks_v2.append(task)
 
     def update_task(self, task: TaskV2) -> None:
-        raise NotImplementedError("the read plane's fake does not serve mutation")
+        self._world.tasks_v2[:] = [
+            task if existing.task_id == task.task_id else existing
+            for existing in self._world.tasks_v2
+        ]
 
     def find_history_by_idempotency_key(
         self, principal_id: str, idempotency_key: str
     ) -> TaskHistoryEntry | None:
-        raise NotImplementedError("the read plane's fake does not serve mutation")
+        return next(
+            (
+                entry
+                for entry in self._world.task_history_v2
+                if entry.principal_id == principal_id and entry.idempotency_key == idempotency_key
+            ),
+            None,
+        )
 
     def insert_history(self, entry: TaskHistoryEntry) -> None:
-        raise NotImplementedError("the read plane's fake does not serve mutation")
+        self._world.task_history_v2.append(entry)
+
+    def find_bulk_by_preview_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskBulkOperation | None:
+        return next(
+            (
+                operation
+                for (owner, _), operation in self._world.task_bulk_operations.items()
+                if owner == principal_id and operation.preview_idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def find_bulk_by_confirm_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> TaskBulkOperation | None:
+        return next(
+            (
+                operation
+                for (owner, _), operation in self._world.task_bulk_operations.items()
+                if owner == principal_id and operation.confirm_idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def get_bulk_for_update(
+        self, principal_id: str, bulk_operation_id: str
+    ) -> TaskBulkOperation | None:
+        return self._world.task_bulk_operations.get((principal_id, bulk_operation_id))
+
+    def insert_bulk(self, operation: TaskBulkOperation) -> None:
+        self._world.task_bulk_operations[
+            (
+                operation.principal_id,
+                operation.bulk_operation_id,
+            )
+        ] = operation
+
+    def confirm_bulk(self, operation: TaskBulkOperation) -> None:
+        self.insert_bulk(operation)
 
     def get(self, principal_id: str, task_id: str) -> TaskV2 | None:
         return next(
@@ -1740,7 +1808,12 @@ class _TasksRead(TaskManagementRepository):
         *,
         lifecycle_state: TaskLifecycleState | None = None,
         priority: TaskPriority | None = None,
-        include_archived: bool = False,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        after: str | None = None,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        work_now: datetime | None = None,
         limit: int,
     ) -> tuple[TaskV2, ...]:
         owned = [task for task in self._world.tasks_v2 if task.principal_id == principal_id]
@@ -1748,28 +1821,197 @@ class _TasksRead(TaskManagementRepository):
             owned = [task for task in owned if task.lifecycle_state is lifecycle_state]
         if priority is not None:
             owned = [task for task in owned if task.priority is priority]
-        if not include_archived:
+        if archive_mode is TaskArchiveMode.EXCLUDE:
             owned = [task for task in owned if task.archived_at is None]
-        ordered = sorted(owned, key=lambda task: (task.created_at, task.task_id), reverse=True)
+        else:
+            owned = [task for task in owned if task.archived_at is not None]
+
+        def effective(task: TaskV2) -> datetime | None:
+            due_or_scheduled = min(
+                (value for value in (task.due_at, task.scheduled_at) if value), default=None
+            )
+            return max(
+                (value for value in (due_or_scheduled, task.deferred_until) if value),
+                default=None,
+            )
+
+        if work_view is TaskWorkView.OVERDUE:
+            owned = [
+                task
+                for task in owned
+                if task.lifecycle_state
+                not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
+                and task.due_at is not None
+                and work_now is not None
+                and task.due_at < work_now
+            ]
+        elif work_view is TaskWorkView.TODAY:
+            owned = [
+                task
+                for task in owned
+                if task.lifecycle_state
+                not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
+                and (task.due_at is None or (work_now is not None and task.due_at >= work_now))
+                and (
+                    (
+                        task.due_at is not None
+                        and work_start is not None
+                        and work_end is not None
+                        and work_start <= task.due_at < work_end
+                    )
+                    or (
+                        task.scheduled_at is not None
+                        and work_start is not None
+                        and work_end is not None
+                        and work_start <= task.scheduled_at < work_end
+                    )
+                )
+            ]
+        elif work_view is TaskWorkView.UNSCHEDULED:
+            owned = [
+                task
+                for task in owned
+                if task.lifecycle_state
+                not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
+                and task.scheduled_at is None
+            ]
+        elif work_view is TaskWorkView.RECENTLY_UPDATED:
+            owned = [
+                task
+                for task in owned
+                if work_start is not None
+                and work_end is not None
+                and work_start <= task.updated_at < work_end
+            ]
+        elif work_view is TaskWorkView.UPCOMING:
+            owned = [
+                task
+                for task in owned
+                if task.lifecycle_state
+                not in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
+                and (moment := effective(task)) is not None
+                and work_end is not None
+                and moment >= work_end
+                and (task.due_at is None or (work_now is not None and task.due_at >= work_now))
+            ]
+        elif work_view is TaskWorkView.WAITING:
+            owned = [task for task in owned if task.lifecycle_state is TaskLifecycleState.WAITING]
+        elif work_view is TaskWorkView.BLOCKED:
+            owned = [task for task in owned if task.lifecycle_state is TaskLifecycleState.BLOCKED]
+        elif work_view is TaskWorkView.ALL_OPEN:
+            owned = [
+                task
+                for task in owned
+                if task.lifecycle_state
+                in {
+                    TaskLifecycleState.OPEN,
+                    TaskLifecycleState.IN_PROGRESS,
+                    TaskLifecycleState.WAITING,
+                    TaskLifecycleState.BLOCKED,
+                }
+            ]
+        elif work_view is TaskWorkView.COMPLETED:
+            owned = [
+                task
+                for task in owned
+                if task.lifecycle_state
+                in {TaskLifecycleState.COMPLETED, TaskLifecycleState.CANCELLED}
+            ]
+        if work_view is TaskWorkView.OVERDUE:
+            ordered = sorted(
+                owned,
+                key=lambda task: (
+                    task.due_at or datetime.max.replace(tzinfo=UTC),
+                    task.priority.value if task.priority else "p5",
+                    task.task_id,
+                ),
+            )
+        elif work_view in {TaskWorkView.TODAY, TaskWorkView.UPCOMING}:
+            ordered = sorted(
+                owned,
+                key=lambda task: (
+                    min(
+                        (value for value in (task.due_at, task.scheduled_at) if value),
+                        default=datetime.max.replace(tzinfo=UTC),
+                    ),
+                    task.priority.value if task.priority else "p5",
+                    task.task_id,
+                ),
+            )
+        elif work_view is TaskWorkView.UNSCHEDULED:
+            ordered = sorted(
+                owned,
+                key=lambda task: (
+                    task.due_at is None,
+                    task.due_at or datetime.max.replace(tzinfo=UTC),
+                    task.priority.value if task.priority else "p5",
+                    task.task_id,
+                ),
+            )
+        elif work_view is TaskWorkView.RECENTLY_UPDATED:
+            ordered = sorted(owned, key=lambda task: (-task.updated_at.timestamp(), task.task_id))
+        else:
+            ordered = sorted(owned, key=lambda task: (task.created_at, task.task_id), reverse=True)
         # `reverse=True` sorts `task_id` descending alongside `created_at`, which
         # is not what the real `ORDER BY created_at DESC, task_id ASC` does for
         # two rows sharing one `created_at`. No test in this fake's suite pins two
         # rows to the same instant deliberately for that reason; the real
         # tie-break is proved against PostgreSQL in `tests/database`.
+        if after is not None:
+            if not any(task.task_id == after for task in owned):
+                raise WorkCursorError
+            ordered = ordered[
+                next(
+                    (index + 1 for index, task in enumerate(ordered) if task.task_id == after),
+                    len(ordered),
+                ) :
+            ]
         return tuple(ordered[:limit])
 
-    def search(self, principal_id: str, query: str, limit: int) -> tuple[TaskV2, ...]:
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        limit: int,
+        *,
+        after: str | None = None,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        work_now: datetime | None = None,
+    ) -> tuple[TaskV2, ...]:
         needle = query.casefold()
-        owned = [
-            task
-            for task in self._world.tasks_v2
-            if task.principal_id == principal_id and needle in task.title.casefold()
-        ]
-        ordered = sorted(owned, key=lambda task: (task.created_at, task.task_id), reverse=True)
+        owned = list(
+            self.list_tasks(
+                principal_id,
+                archive_mode=archive_mode,
+                work_view=work_view,
+                work_start=work_start,
+                work_end=work_end,
+                work_now=work_now,
+                limit=len(self._world.tasks_v2) + 1,
+            )
+        )
+        ordered = [task for task in owned if needle in task.title.casefold()]
+        if after is not None:
+            if not any(task.task_id == after for task in ordered):
+                raise WorkCursorError
+            ordered = ordered[
+                next(
+                    (index + 1 for index, task in enumerate(ordered) if task.task_id == after),
+                    len(ordered),
+                ) :
+            ]
         return tuple(ordered[:limit])
 
     def list_history(
-        self, principal_id: str, task_id: str, limit: int
+        self,
+        principal_id: str,
+        task_id: str,
+        limit: int,
+        *,
+        after: str | None = None,
     ) -> tuple[TaskHistoryEntry, ...]:
         owned = [
             entry
@@ -1777,7 +2019,42 @@ class _TasksRead(TaskManagementRepository):
             if entry.principal_id == principal_id and entry.task_id == task_id
         ]
         ordered = sorted(owned, key=lambda entry: (entry.recorded_at, entry.history_id))
+        if after is not None:
+            if not any(entry.history_id == after for entry in owned):
+                raise WorkCursorError
+            ordered = ordered[
+                next(
+                    (index + 1 for index, entry in enumerate(ordered) if entry.history_id == after),
+                    len(ordered),
+                ) :
+            ]
         return tuple(ordered[:limit])
+
+    def latest_applied_terminal_history(
+        self, principal_id: str, task_id: str
+    ) -> TaskHistoryEntry | None:
+        matching = [
+            entry
+            for entry in self._world.task_history_v2
+            if entry.principal_id == principal_id
+            and entry.task_id == task_id
+            and entry.action.value == "transition_lifecycle"
+            and entry.outcome.value == "applied"
+        ]
+        return max(matching, key=lambda entry: (entry.recorded_at, entry.history_id), default=None)
+
+    def get_follow_up_for_commitment(self, principal_id: str, commitment_id: str) -> TaskV2 | None:
+        candidates = [
+            task
+            for task in self._world.tasks_v2
+            if task.principal_id == principal_id
+            and task.commitment_id == commitment_id
+            and task.role is TaskRole.FOLLOW_UP
+        ]
+        return next(
+            iter(sorted(candidates, key=lambda task: (-task.created_at.timestamp(), task.task_id))),
+            None,
+        )
 
 
 class _CommitmentsRead(CommitmentManagementRepository):
@@ -1792,7 +2069,7 @@ class _CommitmentsRead(CommitmentManagementRepository):
         self._world = world
 
     def get_for_update(self, principal_id: str, commitment_id: str) -> CommitmentV2 | None:
-        raise NotImplementedError("the read plane's fake does not serve mutation")
+        return self.get(principal_id, commitment_id)
 
     def get(self, principal_id: str, commitment_id: str) -> CommitmentV2 | None:
         return next(
@@ -1804,12 +2081,22 @@ class _CommitmentsRead(CommitmentManagementRepository):
             None,
         )
 
+    def counterparty(self, principal_id: str, person_id: str) -> CounterpartyOption | None:
+        if (principal_id, person_id) not in self._world.current_counterparties:
+            return None
+        return CounterpartyOption(person_id=person_id, display_name="Synthetic counterparty")
+
     def list_commitments(
         self,
         principal_id: str,
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        evidence_state: ContinuityEvidenceState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        after: str | None = None,
         limit: int,
     ) -> tuple[CommitmentV2, ...]:
         owned = [c for c in self._world.commitments_v2 if c.principal_id == principal_id]
@@ -1817,25 +2104,78 @@ class _CommitmentsRead(CommitmentManagementRepository):
             owned = [c for c in owned if c.direction is direction]
         if state is not None:
             owned = [c for c in owned if c.state is state]
-        ordered = sorted(owned, key=lambda c: (c.created_at, c.commitment_id), reverse=True)
+        if evidence_state is not None:
+            owned = [c for c in owned if c.evidence_state is evidence_state]
+        if work_view is CommitmentWorkView.DUE:
+            assert work_start is not None and work_end is not None
+            owned = [
+                c
+                for c in owned
+                if c.state is CommitmentState.OPEN
+                and c.due_at is not None
+                and work_start <= c.due_at < work_end
+            ]
+        elif work_view is CommitmentWorkView.RECENTLY_UPDATED:
+            assert work_start is not None and work_end is not None
+            owned = [c for c in owned if work_start <= c.updated_at < work_end]
+        if work_view is CommitmentWorkView.RECENTLY_UPDATED:
+            ordered = sorted(owned, key=lambda c: (-c.updated_at.timestamp(), c.commitment_id))
+        else:
+            ordered = sorted(
+                owned,
+                key=lambda c: (
+                    c.due_at is None,
+                    c.due_at or datetime.max.replace(tzinfo=UTC),
+                    -c.created_at.timestamp(),
+                    c.commitment_id,
+                ),
+            )
+        if after is not None:
+            if not any(commitment.commitment_id == after for commitment in owned):
+                raise WorkCursorError
+            ordered = ordered[
+                next(
+                    (
+                        index + 1
+                        for index, commitment in enumerate(ordered)
+                        if commitment.commitment_id == after
+                    ),
+                    len(ordered),
+                ) :
+            ]
         return tuple(ordered[:limit])
 
     def insert_commitment(self, commitment: CommitmentV2) -> None:
-        raise NotImplementedError("the read plane's fake does not serve mutation")
+        self._world.commitments_v2.append(commitment)
 
     def update_commitment(self, commitment: CommitmentV2) -> None:
-        raise NotImplementedError("the read plane's fake does not serve mutation")
+        self._world.commitments_v2[:] = [
+            commitment if existing.commitment_id == commitment.commitment_id else existing
+            for existing in self._world.commitments_v2
+        ]
 
     def find_history_by_idempotency_key(
         self, principal_id: str, idempotency_key: str
     ) -> CommitmentHistoryEntry | None:
-        raise NotImplementedError("the read plane's fake does not serve mutation")
+        return next(
+            (
+                entry
+                for entry in self._world.commitment_history_v2
+                if entry.principal_id == principal_id and entry.idempotency_key == idempotency_key
+            ),
+            None,
+        )
 
     def insert_history(self, entry: CommitmentHistoryEntry) -> None:
-        raise NotImplementedError("the read plane's fake does not serve mutation")
+        self._world.commitment_history_v2.append(entry)
 
     def list_history(
-        self, principal_id: str, commitment_id: str, limit: int
+        self,
+        principal_id: str,
+        commitment_id: str,
+        limit: int,
+        *,
+        after: str | None = None,
     ) -> tuple[CommitmentHistoryEntry, ...]:
         owned = [
             entry
@@ -1843,6 +2183,79 @@ class _CommitmentsRead(CommitmentManagementRepository):
             if entry.principal_id == principal_id and entry.commitment_id == commitment_id
         ]
         ordered = sorted(owned, key=lambda entry: (entry.recorded_at, entry.history_id))
+        if after is not None:
+            if not any(entry.history_id == after for entry in owned):
+                raise WorkCursorError
+            ordered = ordered[
+                next(
+                    (index + 1 for index, entry in enumerate(ordered) if entry.history_id == after),
+                    len(ordered),
+                ) :
+            ]
+        return tuple(ordered[:limit])
+
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        limit: int,
+        *,
+        after: str | None = None,
+        direction: CommitmentDirection | None = None,
+        state: CommitmentState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+    ) -> tuple[CommitmentV2, ...]:
+        needle = query.casefold()
+        owned = [
+            commitment
+            for commitment in self._world.commitments_v2
+            if commitment.principal_id == principal_id and needle in commitment.summary.casefold()
+        ]
+        if direction is not None:
+            owned = [item for item in owned if item.direction is direction]
+        if state is not None:
+            owned = [item for item in owned if item.state is state]
+        if work_view is CommitmentWorkView.DUE:
+            assert work_start is not None and work_end is not None
+            owned = [
+                item
+                for item in owned
+                if item.state is CommitmentState.OPEN
+                and item.due_at is not None
+                and work_start <= item.due_at < work_end
+            ]
+        elif work_view is CommitmentWorkView.RECENTLY_UPDATED:
+            assert work_start is not None and work_end is not None
+            owned = [item for item in owned if work_start <= item.updated_at < work_end]
+        if work_view is CommitmentWorkView.RECENTLY_UPDATED:
+            ordered = sorted(
+                owned, key=lambda item: (-item.updated_at.timestamp(), item.commitment_id)
+            )
+        else:
+            ordered = sorted(
+                owned,
+                key=lambda item: (
+                    item.due_at is None,
+                    item.due_at or datetime.max.replace(tzinfo=UTC),
+                    -item.created_at.timestamp(),
+                    item.commitment_id,
+                ),
+            )
+        if after is not None:
+            if not any(item.commitment_id == after for item in owned):
+                raise WorkCursorError
+            ordered = ordered[
+                next(
+                    (
+                        index + 1
+                        for index, item in enumerate(ordered)
+                        if item.commitment_id == after
+                    ),
+                    len(ordered),
+                ) :
+            ]
         return tuple(ordered[:limit])
 
 
@@ -1905,17 +2318,44 @@ class _TasksWrite(TaskManagementRepository):
         *,
         lifecycle_state: TaskLifecycleState | None = None,
         priority: TaskPriority | None = None,
-        include_archived: bool = False,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        after: str | None = None,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        work_now: datetime | None = None,
         limit: int,
     ) -> tuple[TaskV2, ...]:
         raise NotImplementedError("the write plane's fake does not serve list reads")
 
-    def search(self, principal_id: str, query: str, limit: int) -> tuple[TaskV2, ...]:
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        limit: int,
+        *,
+        after: str | None = None,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        work_now: datetime | None = None,
+    ) -> tuple[TaskV2, ...]:
         raise NotImplementedError("the write plane's fake does not serve search")
 
     def list_history(
-        self, principal_id: str, task_id: str, limit: int
+        self,
+        principal_id: str,
+        task_id: str,
+        limit: int,
+        *,
+        after: str | None = None,
     ) -> tuple[TaskHistoryEntry, ...]:
+        raise NotImplementedError("the write plane's fake does not serve history reads")
+
+    def latest_applied_terminal_history(
+        self, principal_id: str, task_id: str
+    ) -> TaskHistoryEntry | None:
         raise NotImplementedError("the write plane's fake does not serve history reads")
 
 
@@ -1971,8 +2411,11 @@ class _CommitmentsWrite(CommitmentManagementRepository):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        evidence_state: ContinuityEvidenceState | None = None,
+        after: str | None = None,
         limit: int,
     ) -> tuple[CommitmentV2, ...]:
+        del after, evidence_state
         raise NotImplementedError("the write plane's fake does not serve list reads")
 
     def insert_commitment(self, commitment: CommitmentV2) -> None:
@@ -2000,7 +2443,12 @@ class _CommitmentsWrite(CommitmentManagementRepository):
         self._world.commitment_history_v2.append(entry)
 
     def list_history(
-        self, principal_id: str, commitment_id: str, limit: int
+        self,
+        principal_id: str,
+        commitment_id: str,
+        limit: int,
+        *,
+        after: str | None = None,
     ) -> tuple[CommitmentHistoryEntry, ...]:
         raise NotImplementedError("the write plane's fake does not serve history reads")
 
@@ -4212,6 +4660,7 @@ def staged_task(scene: Scene, *, title: str = "a synthetic task") -> TaskV2:
     )
     if existing is not None:
         return existing
+    scene.world.work_evidence_refs.add((scene.principal.principal_id, "cap_origin0001origin0001"))
     service = TaskManagementService(unit_of_work=lambda: FakeTaskManagementUnitOfWork(scene.world))
     receipt = service.create_task(
         principal_id=scene.principal.principal_id,
@@ -4240,11 +4689,14 @@ def staged_commitment(
     )
     if existing is not None:
         return existing
+    scene.world.work_evidence_refs.add((scene.principal.principal_id, "cap_origin0001origin0001"))
+    person_id = counterparty_person_id or issue_identifier(IdKind.PERSON)
+    scene.world.current_counterparties.add((scene.principal.principal_id, person_id))
     receipt = CommitmentManagementService(
         unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(scene.world)
     ).create_commitment(
         principal_id=scene.principal.principal_id,
-        counterparty_person_id=counterparty_person_id or issue_identifier(IdKind.PERSON),
+        counterparty_person_id=person_id,
         direction=CommitmentDirection.OWED_BY_PRINCIPAL,
         summary=summary,
         origin_evidence_ref="cap_origin0001origin0001",

@@ -47,8 +47,21 @@ which compares the vocabulary a live database admits at head against the one the
 domain declares. Naming the wrong control is the defect class this campaign
 keeps finding, so the correction is recorded rather than quietly applied.
 
+**Rebased onto `a4d9e7c2b615` rather than merged with it.** This revision was
+written against `e9b2c4d7a150` and the WP-FE-03 Work contracts landed on that
+same parent while it was unmerged, which is a fork: two heads, and
+`tests/architecture/test_managed_writes_are_contained.py` pins one. An Alembic
+merge revision would have recorded the fork permanently for no schema reason —
+the two touch disjoint tables — so the unmerged side moved instead. The
+consequence is in the two literals below: `_CAPABILITIES_BEFORE_THIS_REVISION`
+is now the vocabulary `a4d9e7c2b615` leaves behind, which is
+`e9b2c4d7a150`'s plus `commitments.history`, `commitments.search` and
+`commitments.update`, and `_CAPABILITIES_AT_THIS_REVISION` is that plus this
+plane's eight. `_PURPOSES_*` are unchanged, because `a4d9e7c2b615` restates only
+`capability_is_known`.
+
 Revision ID: f1c6b904a2d7
-Revises: e9b2c4d7a150
+Revises: a4d9e7c2b615
 Create Date: 2026-08-22
 """
 
@@ -72,7 +85,7 @@ from my_pa.infrastructure.persistence.tables import (
 )
 
 revision: str = "f1c6b904a2d7"
-down_revision: str | None = "e9b2c4d7a150"
+down_revision: str | None = "a4d9e7c2b615"
 branch_labels: str | None = None
 depends_on: str | None = None
 
@@ -203,7 +216,8 @@ def _historical_relationship_memory_tables() -> list[Table]:
 _CAPABILITIES_AT_THIS_REVISION: Final = (
     "capability IN ('capabilities.get', 'capture.create', 'capture.list', "
     "'capture.read', 'capture.revise', 'capture.search', 'commitments.close', "
-    "'commitments.create', 'commitments.list', 'commitments.read', "
+    "'commitments.create', 'commitments.history', 'commitments.list', "
+    "'commitments.read', 'commitments.search', 'commitments.update', "
     "'commitments.waiting_on', 'context.feedback', 'context.prepare', "
     "'continuity.projects', 'continuity.projects.create', 'continuity.pulse', "
     "'continuity.situations', 'continuity.situations.create', "
@@ -211,31 +225,32 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'documents.list', 'documents.read', 'documents.restore', "
     "'documents.revise', 'entities.context', 'entities.get', "
     "'entities.relationships', 'entities.resolve', 'entities.search', "
-    "'entities.unresolved_mentions', 'goodnotes.content', 'goodnotes.propose', "
-    "'goodnotes.work', 'knowledge.coverage', 'knowledge.read', "
-    "'knowledge.reveal', 'knowledge.search', 'native_sources.backfill', "
-    "'native_sources.configure', 'native_sources.disable', "
-    "'native_sources.discover', 'native_sources.pause', "
-    "'native_sources.preflight', 'native_sources.reconcile', "
-    "'native_sources.resume', 'native_sources.retry', "
-    "'native_sources.status', 'native_sources.sync', "
+    "'entities.unresolved_mentions', 'goodnotes.content', "
+    "'goodnotes.propose', 'goodnotes.work', 'knowledge.coverage', "
+    "'knowledge.read', 'knowledge.reveal', 'knowledge.search', "
+    "'native_sources.backfill', 'native_sources.configure', "
+    "'native_sources.disable', 'native_sources.discover', "
+    "'native_sources.pause', 'native_sources.preflight', "
+    "'native_sources.reconcile', 'native_sources.resume', "
+    "'native_sources.retry', 'native_sources.status', 'native_sources.sync', "
     "'relationship_memory.archive', 'relationship_memory.create', "
     "'relationship_memory.get', 'relationship_memory.history', "
     "'relationship_memory.list', 'relationship_memory.restore', "
     "'relationship_memory.revise', 'relationship_memory.search', "
     "'reports.begin_cycle', 'reports.commit', 'reports.latest', "
     "'reports.list', 'reports.read', 'reports.record_run_state', "
-    "'reports.resolve_set', 'reports.search', 'review.decide', "
-    "'review.list', 'sources.enroll', 'sources.fetch', 'sources.list', "
-    "'sources.metadata', 'sources.status', 'tasks.bulk_confirm', "
-    "'tasks.bulk_preview', 'tasks.create', 'tasks.history', 'tasks.list', "
-    "'tasks.read', 'tasks.search', 'tasks.transition', 'tasks.update')"
+    "'reports.resolve_set', 'reports.search', 'review.decide', 'review.list', "
+    "'sources.enroll', 'sources.fetch', 'sources.list', 'sources.metadata', "
+    "'sources.status', 'tasks.bulk_confirm', 'tasks.bulk_preview', "
+    "'tasks.create', 'tasks.history', 'tasks.list', 'tasks.read', "
+    "'tasks.search', 'tasks.transition', 'tasks.update')"
 )
 
 _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "capability IN ('capabilities.get', 'capture.create', 'capture.list', "
     "'capture.read', 'capture.revise', 'capture.search', 'commitments.close', "
-    "'commitments.create', 'commitments.list', 'commitments.read', "
+    "'commitments.create', 'commitments.history', 'commitments.list', "
+    "'commitments.read', 'commitments.search', 'commitments.update', "
     "'commitments.waiting_on', 'context.feedback', 'context.prepare', "
     "'continuity.projects', 'continuity.projects.create', 'continuity.pulse', "
     "'continuity.situations', 'continuity.situations.create', "
@@ -243,21 +258,21 @@ _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "'documents.list', 'documents.read', 'documents.restore', "
     "'documents.revise', 'entities.context', 'entities.get', "
     "'entities.relationships', 'entities.resolve', 'entities.search', "
-    "'entities.unresolved_mentions', 'goodnotes.content', 'goodnotes.propose', "
-    "'goodnotes.work', 'knowledge.coverage', 'knowledge.read', "
-    "'knowledge.reveal', 'knowledge.search', 'native_sources.backfill', "
-    "'native_sources.configure', 'native_sources.disable', "
-    "'native_sources.discover', 'native_sources.pause', "
-    "'native_sources.preflight', 'native_sources.reconcile', "
-    "'native_sources.resume', 'native_sources.retry', "
-    "'native_sources.status', 'native_sources.sync', "
+    "'entities.unresolved_mentions', 'goodnotes.content', "
+    "'goodnotes.propose', 'goodnotes.work', 'knowledge.coverage', "
+    "'knowledge.read', 'knowledge.reveal', 'knowledge.search', "
+    "'native_sources.backfill', 'native_sources.configure', "
+    "'native_sources.disable', 'native_sources.discover', "
+    "'native_sources.pause', 'native_sources.preflight', "
+    "'native_sources.reconcile', 'native_sources.resume', "
+    "'native_sources.retry', 'native_sources.status', 'native_sources.sync', "
     "'reports.begin_cycle', 'reports.commit', 'reports.latest', "
     "'reports.list', 'reports.read', 'reports.record_run_state', "
-    "'reports.resolve_set', 'reports.search', 'review.decide', "
-    "'review.list', 'sources.enroll', 'sources.fetch', 'sources.list', "
-    "'sources.metadata', 'sources.status', 'tasks.bulk_confirm', "
-    "'tasks.bulk_preview', 'tasks.create', 'tasks.history', 'tasks.list', "
-    "'tasks.read', 'tasks.search', 'tasks.transition', 'tasks.update')"
+    "'reports.resolve_set', 'reports.search', 'review.decide', 'review.list', "
+    "'sources.enroll', 'sources.fetch', 'sources.list', 'sources.metadata', "
+    "'sources.status', 'tasks.bulk_confirm', 'tasks.bulk_preview', "
+    "'tasks.create', 'tasks.history', 'tasks.list', 'tasks.read', "
+    "'tasks.search', 'tasks.transition', 'tasks.update')"
 )
 
 _PURPOSES_AT_THIS_REVISION: Final = (

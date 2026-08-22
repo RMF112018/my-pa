@@ -137,6 +137,7 @@ class SafeDetail(StrEnum):
     SCHEDULED_AT = "scheduled_at"
     DEFERRED_UNTIL = "deferred_until"
     CLOSURE_EVIDENCE_REF = "closure_evidence_ref"
+    INVALID_EVIDENCE_REFERENCE = "invalid_evidence_reference"
     REVIEW_DECISION_ID = "review_decision_id"
     BULK_OPERATION_ID = "bulk_operation_id"
     MUTATIONS = "mutations"

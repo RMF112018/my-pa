@@ -38,6 +38,7 @@ from datetime import date, datetime
 from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, ClassVar, Final
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail
@@ -104,8 +105,14 @@ from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
 )
-from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.lifecycle import (
+    TaskArchiveMode,
+    TaskLifecycleState,
+    TaskPriority,
+    TaskWorkView,
+)
 from my_pa.domain.task.role import TaskRole
 
 __all__ = [
@@ -131,6 +138,7 @@ __all__ = [
     "EnterFrameCommand",
     "FetchSource",
     "GetCapabilities",
+    "GetCommitmentHistory",
     "GetCorpusCoverage",
     "GetGoodNotesContent",
     "GetGoodNotesWork",
@@ -172,12 +180,14 @@ __all__ = [
     "ReviseManagedDocument",
     "ReviseManagedDocumentCommand",
     "SearchCaptures",
+    "SearchCommitments",
     "SearchIntelligenceArtifacts",
     "SearchKnowledge",
     "SearchTasks",
     "SubmitGoodNotesProposal",
     "TraceObjectCommand",
     "TransitionTask",
+    "UpdateCommitment",
     "UpdateTask",
     "WaitingOn",
 ]
@@ -1498,8 +1508,12 @@ class ListTasks:
 
     lifecycle_state: TaskLifecycleState | None = None
     priority: TaskPriority | None = None
-    include_archived: bool = False
+    archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE
     page_size: int | None = None
+    after: str | None = None
+    work_view: TaskWorkView | None = None
+    work_date: date | None = None
+    timezone: str | None = None
 
     def __post_init__(self) -> None:
         if self.lifecycle_state is not None and not isinstance(
@@ -1508,9 +1522,31 @@ class ListTasks:
             raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE)
         if self.priority is not None and not isinstance(self.priority, TaskPriority):
             raise InvalidRequestError(SafeDetail.PRIORITY)
-        if not isinstance(self.include_archived, bool):
+        if not isinstance(self.archive_mode, TaskArchiveMode):
             raise InvalidRequestError(SafeDetail.SELECTOR)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.TASK, SafeDetail.CURSOR)
+        if self.work_view is not None and not isinstance(self.work_view, TaskWorkView):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.work_view in {
+            TaskWorkView.OVERDUE,
+            TaskWorkView.TODAY,
+            TaskWorkView.UPCOMING,
+            TaskWorkView.RECENTLY_UPDATED,
+        }:
+            if (
+                not isinstance(self.work_date, date)
+                or isinstance(self.work_date, datetime)
+                or not isinstance(self.timezone, str)
+            ):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            try:
+                ZoneInfo(self.timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        elif self.work_date is not None or self.timezone is not None:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1541,6 +1577,11 @@ class SearchTasks:
 
     query: str = field(repr=False)
     page_size: int | None = None
+    after: str | None = None
+    archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE
+    work_view: TaskWorkView | None = None
+    work_date: date | None = None
+    timezone: str | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.query, str):
@@ -1548,6 +1589,30 @@ class SearchTasks:
         if not self.query.strip():
             raise InvalidRequestError(SafeDetail.QUERY)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.TASK, SafeDetail.CURSOR)
+        if not isinstance(self.archive_mode, TaskArchiveMode):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.work_view is not None and not isinstance(self.work_view, TaskWorkView):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.work_view in {
+            TaskWorkView.OVERDUE,
+            TaskWorkView.TODAY,
+            TaskWorkView.UPCOMING,
+            TaskWorkView.RECENTLY_UPDATED,
+        }:
+            if (
+                not isinstance(self.work_date, date)
+                or isinstance(self.work_date, datetime)
+                or not isinstance(self.timezone, str)
+            ):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            try:
+                ZoneInfo(self.timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        elif self.work_date is not None or self.timezone is not None:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1565,10 +1630,13 @@ class GetTaskHistory:
 
     task_id: str
     page_size: int | None = None
+    after: str | None = None
 
     def __post_init__(self) -> None:
         _identifier(self.task_id, IdKind.TASK, SafeDetail.TASK_ID)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.TASK_HISTORY, SafeDetail.CURSOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1598,14 +1666,8 @@ class CreateTask:
     project_id: str | None = None
     situation_id: str | None = None
     accepted_by_review_decision_id: str | None = None
-    #: WP-TM-05: link the newly created task to a Commitment, and/or tag it
-    #: with a `TaskRole`, in the same call. Neither field is forwarded to
-    #: `TaskManagementService.create_task` directly — that method's own
-    #: signature is unchanged — the handler issues the ordinary `create_task`
-    #: call and then, only if either is supplied, a follow-up
-    #: `link_commitment`/`set_role` call under the identical
-    #: `idempotency_key`'s own transaction semantics. See
-    #: `application.service._tasks_create` for the composition.
+    #: Link the newly created Task to a Commitment, and/or tag its `TaskRole`,
+    #: in the same atomic create call after same-Principal validation.
     commitment_id: str | None = None
     role: TaskRole | None = None
     client_context: str | None = None
@@ -1674,6 +1736,8 @@ class UpdateTask:
     #: reason — see that command's own fields.
     commitment_id: str | None = None
     role: TaskRole | None = None
+    clear_fields: tuple[str, ...] = ()
+    archived: bool | None = None
     client_context: str | None = None
 
     def __post_init__(self) -> None:
@@ -1696,6 +1760,21 @@ class UpdateTask:
         if self.commitment_id is not None:
             _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
         if self.role is not None and not isinstance(self.role, TaskRole):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        allowed_clear = {
+            "description",
+            "priority",
+            "due_at",
+            "scheduled_at",
+            "deferred_until",
+            "commitment_id",
+            "role",
+        }
+        if any(name not in allowed_clear for name in self.clear_fields):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if len(set(self.clear_fields)) != len(self.clear_fields):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.archived is not None and not isinstance(self.archived, bool):
             raise InvalidRequestError(SafeDetail.SELECTOR)
 
 
@@ -1744,14 +1823,12 @@ class TransitionTask:
 class BulkPreviewTasks:
     """`tasks.bulk_preview`: preview changes to multiple tasks without applying them.
 
-    Returns a list of proposed changes, each with the task's current state and
-    the state it would have after the mutation. No changes are applied, and the
-    transaction is rolled back after the preview is returned.
+    Validates the exact normalized mutation set without changing a Task or Task
+    history, then persists a content-free, Principal/digest-bound preview ledger
+    receipt with a bounded expiry.
 
-    `mutations` is a list of mutation requests, each carrying the same fields as
-    the corresponding single-task mutation command (`CreateTask`, `UpdateTask`,
-    `TransitionTask`). The preview returns one result per mutation, in order,
-    with the outcome of each (applied, no-op, rejected, or error).
+    `mutations` contains at most 100 existing-Task atomic updates or lifecycle
+    transitions. Bulk Task creation is deliberately outside the contract.
 
     `idempotency_key` is required and has no default, because the bulk operation
     itself is a write and must be idempotent.
@@ -1763,7 +1840,7 @@ class BulkPreviewTasks:
     idempotency_key: str
 
     def __post_init__(self) -> None:
-        if not self.mutations:
+        if not self.mutations or len(self.mutations) > 100:
             raise InvalidRequestError(SafeDetail.MUTATIONS)
         _idempotency_key(self.idempotency_key)
 
@@ -1787,10 +1864,13 @@ class BulkConfirmTasks:
 
     bulk_operation_id: str
     idempotency_key: str
+    mutations: tuple[dict[str, object], ...]
 
     def __post_init__(self) -> None:
         _identifier(self.bulk_operation_id, IdKind.BULK_OPERATION, SafeDetail.BULK_OPERATION_ID)
         _idempotency_key(self.idempotency_key)
+        if not self.mutations or len(self.mutations) > 100:
+            raise InvalidRequestError(SafeDetail.MUTATIONS)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1825,6 +1905,10 @@ class ListCommitments:
     direction: CommitmentDirection | None = None
     state: CommitmentState | None = None
     page_size: int | None = None
+    after: str | None = None
+    work_view: CommitmentWorkView | None = None
+    work_date: date | None = None
+    timezone: str | None = None
 
     def __post_init__(self) -> None:
         if self.direction is not None and not isinstance(self.direction, CommitmentDirection):
@@ -1832,6 +1916,84 @@ class ListCommitments:
         if self.state is not None and not isinstance(self.state, CommitmentState):
             raise InvalidRequestError(SafeDetail.SELECTOR)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.COMMITMENT, SafeDetail.CURSOR)
+        if self.work_view is not None and not isinstance(self.work_view, CommitmentWorkView):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.work_view is not None:
+            if (
+                not isinstance(self.work_date, date)
+                or isinstance(self.work_date, datetime)
+                or not isinstance(self.timezone, str)
+            ):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            try:
+                ZoneInfo(self.timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        elif self.work_date is not None or self.timezone is not None:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class SearchCommitments:
+    """`commitments.search`: bounded lexical search over commitment summaries."""
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_SEARCH
+
+    query: str = field(repr=False)
+    page_size: int | None = None
+    after: str | None = None
+    direction: CommitmentDirection | None = None
+    state: CommitmentState | None = None
+    work_view: CommitmentWorkView | None = None
+    work_date: date | None = None
+    timezone: str | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.query, str):
+            raise InvalidRequestError(SafeDetail.QUERY)
+        if not self.query.strip():
+            raise InvalidRequestError(SafeDetail.QUERY)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.COMMITMENT, SafeDetail.CURSOR)
+        if self.direction is not None and not isinstance(self.direction, CommitmentDirection):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.state is not None and not isinstance(self.state, CommitmentState):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.work_view is not None and not isinstance(self.work_view, CommitmentWorkView):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        if self.work_view is not None:
+            if (
+                not isinstance(self.work_date, date)
+                or isinstance(self.work_date, datetime)
+                or not isinstance(self.timezone, str)
+            ):
+                raise InvalidRequestError(SafeDetail.SELECTOR)
+            try:
+                ZoneInfo(self.timezone)
+            except (ZoneInfoNotFoundError, ValueError):
+                raise InvalidRequestError(SafeDetail.SELECTOR) from None
+        elif self.work_date is not None or self.timezone is not None:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class GetCommitmentHistory:
+    """`commitments.history`: one bounded, oldest-first history page."""
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_HISTORY
+
+    commitment_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.COMMITMENT_HISTORY, SafeDetail.CURSOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1851,9 +2013,12 @@ class WaitingOn:
     capability: ClassVar[Capability] = Capability.COMMITMENTS_WAITING_ON
 
     page_size: int | None = None
+    after: str | None = None
 
     def __post_init__(self) -> None:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.COMMITMENT, SafeDetail.CURSOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1911,6 +2076,47 @@ class CreateCommitment:
                 IdKind.REVIEW_DECISION,
                 SafeDetail.REVIEW_DECISION_ID,
             )
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateCommitment:
+    """`commitments.update`: atomically patch the bounded mutable fields."""
+
+    capability: ClassVar[Capability] = Capability.COMMITMENTS_UPDATE
+
+    commitment_id: str
+    expected_version: int
+    idempotency_key: str
+    summary: str | None = None
+    due_at: datetime | None = None
+    counterparty_person_id: str | None = None
+    clear_due_at: bool = False
+    client_context: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.commitment_id, IdKind.COMMITMENT, SafeDetail.COMMITMENT_ID)
+        if type(self.expected_version) is not int or self.expected_version < 1:
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        _idempotency_key(self.idempotency_key)
+        if self.summary is not None:
+            _text(self.summary, SafeDetail.TITLE)
+            if not self.summary.strip():
+                raise InvalidRequestError(SafeDetail.TITLE)
+        if self.due_at is not None:
+            _moment(self.due_at, SafeDetail.DUE_AT)
+        if self.counterparty_person_id is not None:
+            _identifier(
+                self.counterparty_person_id, IdKind.PERSON, SafeDetail.COUNTERPARTY_PERSON_ID
+            )
+        if self.clear_due_at and self.due_at is not None:
+            raise InvalidRequestError(SafeDetail.DUE_AT)
+        if (
+            self.summary is None
+            and self.due_at is None
+            and self.counterparty_person_id is None
+            and not self.clear_due_at
+        ):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -3269,8 +3475,11 @@ type Command = (
     | BulkConfirmTasks
     | ReadCommitment
     | ListCommitments
+    | SearchCommitments
+    | GetCommitmentHistory
     | WaitingOn
     | CreateCommitment
+    | UpdateCommitment
     | CloseCommitment
     | PrepareContext
     | RecordContextFeedback

@@ -248,8 +248,11 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         # naming no source of its own.
         Capability.COMMITMENTS_READ,
         Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_SEARCH,
+        Capability.COMMITMENTS_HISTORY,
         Capability.COMMITMENTS_WAITING_ON,
         Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_UPDATE,
         Capability.COMMITMENTS_CLOSE,
         # `context.prepare` names a query, not a source. The package it returns
         # may later cite enrolled source evidence, but the request itself does

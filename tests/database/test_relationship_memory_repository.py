@@ -80,8 +80,11 @@ SCHEMA: Final = "knowledge"
 DISPOSABLE_DATABASE: Final = "my_pa_relationship_memory_repository_test"
 
 #: This plane's revision and the one it revises, for the round trip below.
+#: `e9b2c4d7a150` was the predecessor until the WP-FE-03 Work contracts merged;
+#: this revision was rebased onto them rather than forked beside them, so the
+#: chain has one head and the downgrade target below is the Work revision.
 MEMORY_REVISION: Final = "f1c6b904a2d7"
-PREVIOUS_REVISION: Final = "e9b2c4d7a150"
+PREVIOUS_REVISION: Final = "a4d9e7c2b615"
 
 #: The eight tables the revision creates.
 MEMORY_TABLES: Final = frozenset(

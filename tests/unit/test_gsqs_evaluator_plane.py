@@ -83,3 +83,19 @@ def test_extra_partition_a_case_is_not_filtered() -> None:
     extra = next(item for item in extras if item.partition is CorpusPartition.A)
     with pytest.raises(ValueError, match="evaluator cases do not match"):
         validate_evaluator_plane((*cases, extra), census)
+
+
+def test_v1_loader_still_rejects_unknown_schema(tmp_path: Path) -> None:
+    from my_pa.application.goodnotes_gsqs_evaluator_binding import load_and_admit_evaluator_plane
+    from my_pa.application.goodnotes_gsqs_hw_corpus import load_public_catalog
+    from my_pa.application.goodnotes_gsqs_live_b0 import catalog_path, partition_b_census
+
+    path = tmp_path / "evaluator.json"
+    path.write_text(
+        json.dumps({"schema_version": "gsqs-evaluator-plane-v2", "cases": []}), encoding="utf-8"
+    )
+    census = partition_b_census(load_public_catalog(catalog_path()))
+    with pytest.raises(ValueError, match="malformed evaluator-plane binding"):
+        load_and_admit_evaluator_plane(
+            path, census=census, catalog=load_public_catalog(catalog_path())
+        )

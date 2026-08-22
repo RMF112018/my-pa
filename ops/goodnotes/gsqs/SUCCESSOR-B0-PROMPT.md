@@ -32,6 +32,10 @@ post-rebind digest **and** the exact reviewed implementation commit/tree
 Live evaluator behavior identity at the implementation HEAD that
 carries this file must be the identity `gsqs_b0.py preflight` prints
 (`evaluator_code_identity()`), not the 2026-08-21 snapshot below.
+The Phase C authorization bound to `1a48e99` /
+`c8a111c65f17ca292b48f12e4a4925d425675bdbcc4678fe3745db8ffe3c9583`
+is not reusable. A later measurement authorization must name the
+merged commit/tree and the live evaluator identity at that head.
 
 Cite the exact repository head/tree of the PR that carries this file
 when that later phase is authorized. A later commit invalidates this

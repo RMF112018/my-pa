@@ -427,6 +427,7 @@ def test_evaluator_identity_binds_implementation_bytes() -> None:
         "goodnotes_gsqs.py",
         "goodnotes_gsqs_harness.py",
         "goodnotes_gsqs_corpus.py",
+        "goodnotes_gsqs_evaluator_binding.py",
         "goodnotes_evaluation.py",
         "goodnotes_note_unit_contract.py",
         "models.py",

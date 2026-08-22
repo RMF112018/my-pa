@@ -71,13 +71,18 @@ Evidence plane:
 - `model_identity`: `routellm-goodnotes-b0-v1@sha256:<canonical-inference-config-digest>`
 - evaluator: `goodnotes-gsqs-independent` `1.1`
 - live evaluator behavior identity (this HEAD):
+  `7dfe81005e931c073fc1e06264e20dedffc8dae530cb50822cac81baed10931f`
+- historical identity at the GSQS B0 MCP evaluation merge (`1a48e99` /
+  tree `2080e457…`):
   `c8a111c65f17ca292b48f12e4a4925d425675bdbcc4678fe3745db8ffe3c9583`
 - historical identity at the 2026-08-21 operator decision
   (`5c52cc7` / tree `dda58686…`):
   `3673a9dbf99214dc6d724822682c2b5547c7a0343d56c7024956734f1516fc7d`
-  That earlier decision is not reusable as `EXECUTE_MEASURED_B0` for this
-  HEAD. Scoring formulas did not change; PR #143 added
-  `load_evaluator_plane_cases` to a hashed evaluator-plane file.
+  Those earlier decisions are not reusable as `EXECUTE_MEASURED_B0` for
+  this HEAD. Scoring formulas did not change; this HEAD adds
+  `goodnotes_gsqs_evaluator_binding.py` to the hashed evaluator-plane
+  set so handwriting admission cannot compare public and private case
+  digests as if they were the same payload.
 
 Exact git commit/tree are supplied by the later authorization. Dirty
 worktrees fail closed. `latest` and branch names are not identities.
@@ -160,8 +165,14 @@ python apps/cli/gsqs_b0.py score \
 ```
 
 `score` does not read `MY_PA_ROUTELLM_*`, does not probe `GET /v1/models`,
-and does not POST images. Extra A/C/unscoreable cases are rejected, not
-filtered. Gold never enters the evaluation MCP, the capture documents,
+and does not POST images. Handwriting `--evaluator-corpus` must be a local
+`gsqs-evaluator-plane-v2` binding (`binding_kind`:
+`controlled_handwriting`). Admission recomputes the public case digest
+and the private `label_sha256` and derives scoring regions from that
+label. It does not require `case_digest(CorpusCase)` to equal the public
+census digest. Synthetic `gsqs-evaluator-plane-v1` remains valid only for
+synthetic evaluator-plane tests. Extra A/C/unscoreable cases are rejected,
+not filtered. Gold never enters the evaluation MCP, the capture documents,
 or public evidence. `MEASURED_B0` remains `NOT_YET_ESTABLISHED` until a
 later evidence-bound transition.
 
@@ -182,16 +193,20 @@ python apps/cli/gsqs_b0.py execute \
   --evaluator-corpus <local-private-evaluator-plane.json>
 ```
 
-`--evaluator-corpus` is an explicit local file of evaluator-plane cases
-using the existing `case_digest_payload` shape (`schema_version`:
-`gsqs-evaluator-plane-v1`). It is not hashed into the Class-1 candidate.
-The public catalog has no gold. The artifact must contain exactly the
-frozen scoreable Partition-B cases. Validation checks ordered case IDs,
-raster/content SHA, corpus version, scoreable-B eligibility, and
-`case_digest` against the public census before `GET /v1/models` and
-before any `OUTBOUND_ATTEMPT_STARTED`. Extra A/C/unscoreable cases are
-rejected, not filtered. Gold never enters the HTTP body, prompt, journal,
-or public evidence.
+`--evaluator-corpus` is an explicit local file. Controlled handwriting
+uses `schema_version`: `gsqs-evaluator-plane-v2` with a
+`controlled_handwriting` binding that carries the canonical private
+label beside declared public-case and label SHA-256 values. Those values
+are recomputed; they are not trusted. Synthetic workflows keep
+`gsqs-evaluator-plane-v1` (`case_digest_payload`). The artifact is not
+hashed into the Class-1 candidate. The public catalog has no gold. The
+handwriting artifact must contain exactly the frozen scoreable
+Partition-B cases. Validation checks ordered case IDs, raster/content
+SHA, corpus version, scoreable-B eligibility, public case identity, and
+private `label_sha256` before `GET /v1/models` and before any
+`OUTBOUND_ATTEMPT_STARTED`. Extra A/C/unscoreable cases are rejected,
+not filtered. Gold never enters the HTTP body, prompt, journal, or
+public evidence.
 
 After evaluator validation, execute probes `GET /v1/models` (image-free,
 max three attempts). A successful response must contain a `data` list,

@@ -41,7 +41,20 @@ from dataclasses import replace
 from datetime import datetime
 from typing import Any
 
-from sqlalchemy import Row, func, insert, or_, select, text, update
+from sqlalchemy import (
+    Boolean,
+    Row,
+    Text,
+    bindparam,
+    func,
+    insert,
+    not_,
+    or_,
+    select,
+    text,
+    tuple_,
+    update,
+)
 from sqlalchemy.engine import Connection
 
 from my_pa.contracts.ports import (
@@ -699,26 +712,46 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
                 .scalar_subquery()
             )
             statement = statement.where(relationship_memories.c.current_version_id.in_(scoped))
+        # **The keyset is the whole sort key, and it has to be.** This read orders
+        # pinned memories first, so a cursor compared on `memory_id` alone names
+        # a position in a *different* ordering than the one being paged: with one
+        # pinned memory sorting ahead of a lower identifier, page two skips every
+        # unpinned row whose identifier precedes the pinned one, and those rows
+        # are unreachable by any page. Measured on three memories with one
+        # pinned at `limit=1`, which lost one of the three entirely.
+        #
+        # `pinned DESC` is expressed as `NOT pinned ASC` so the comparison is one
+        # ordinary tuple comparison in the same direction as the sort, rather
+        # than an OR of two cases that has to be kept in step with the ORDER BY
+        # by hand.
+        rank = not_(relationship_memories.c.pinned)
         if after_memory_id is not None:
             validate_identifier(after_memory_id, IdKind.RELATIONSHIP_MEMORY)
             located = self._connection.execute(
-                select(relationship_memories.c.memory_id).where(
+                select(relationship_memories.c.pinned).where(
                     _mine(relationship_memories, principal_id),
                     relationship_memories.c.memory_id == after_memory_id,
                 )
-            ).scalar_one_or_none()
+            ).one_or_none()
             # Refused rather than silently restarted: a cursor naming a memory
             # this Principal cannot read is not a position in their ordering, and
             # an empty page is indistinguishable from having reached the end.
             if located is None:
                 raise UnknownScopeError("a memory cursor names a memory in this scope")
-            statement = statement.where(relationship_memories.c.memory_id > after_memory_id)
+            # Bound parameters rather than inlined literals, the shape
+            # `persistence.search` uses for its own keyset: the cursor is
+            # caller-supplied and belongs in the parameter list, not in the
+            # statement text.
+            statement = statement.where(
+                tuple_(rank, relationship_memories.c.memory_id)
+                > tuple_(
+                    bindparam("memory_cursor_rank", value=not located.pinned, type_=Boolean),
+                    bindparam("memory_cursor_id", value=after_memory_id, type_=Text),
+                )
+            )
         rows = list(
             self._connection.execute(
-                statement.order_by(
-                    relationship_memories.c.pinned.desc(),
-                    relationship_memories.c.memory_id,
-                ).limit(limit + 1)
+                statement.order_by(rank, relationship_memories.c.memory_id).limit(limit + 1)
             )
         )
         return _page(rows, limit=limit, include_restricted=include_restricted)

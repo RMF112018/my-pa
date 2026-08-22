@@ -778,6 +778,14 @@ class RelationshipMemoryVersion:
     deciding it should, and this is the field that carries what the user wrote
     about another person.
 
+    **There is no `superseded_at`, and its absence is the design.** The table is
+    append-only under a trigger, so a supersession stamp would be an `UPDATE`
+    the server refuses; a version is superseded exactly when another version
+    names it as `prior_version_id`, which is the same fact read from the chain
+    with no second writer and nothing to drift. A field declared here and
+    stored nowhere would read as a value a caller could set and silently never
+    be persisted.
+
     The bindings ADR-003 clause 6 requires are all here and all required:
     principal, opaque version identity, monotonic number, exact text, its digest,
     server receipt time, classification, the idempotency key that admitted it,
@@ -803,7 +811,6 @@ class RelationshipMemoryVersion:
     effective_from: datetime | None = None
     effective_to: datetime | None = None
     prior_version_id: str | None = None
-    superseded_at: datetime | None = None
     correction_reason: str | None = field(default=None, repr=False)
     proposal_id: str | None = None
     review_case_id: str | None = None
@@ -847,7 +854,6 @@ class RelationshipMemoryVersion:
             self.observed_at,
             self.effective_from,
             self.effective_to,
-            self.superseded_at,
         ):
             if moment is not None:
                 ensure_utc(moment)

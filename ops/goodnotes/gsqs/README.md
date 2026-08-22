@@ -37,12 +37,15 @@ it does not replace A-X.
   `REJECT_FOR_B0`; kept as a synthetic regression/canary.
 - [`EVALUATOR.md`](EVALUATOR.md) — GSQS formulas, thresholds, and critical
   errors.
-- [`B0_RUNBOOK.md`](B0_RUNBOOK.md) — governed live-B0 preflight/execute
-  contract. The RouteLLM transport is bound. The bound RouteLLM HTTP
-  transport (`MY_PA_ROUTELLM_*`) is B0/evaluator only; production visual
-  interpretation uses MCP tools, not `MY_PA_ROUTELLM_*`. `b0_suitable` is
-  still not disclosure permission. `MEASURED_B0` remains
-  `NOT_YET_ESTABLISHED`.
+- [`B0_RUNBOOK.md`](B0_RUNBOOK.md) — governed live-B0 preflight / MCP
+  evaluation / admit-and-score contract. The commissioned B0 path is
+  RouteLLM-over-MCP against an ephemeral evaluation MCP, then
+  `gsqs_b0.py score`. Direct RouteLLM HTTP (`MY_PA_ROUTELLM_*`,
+  `GET /v1/models`, `POST /v1/chat/completions`) remains in-tree but
+  dormant. Live NAS MCP
+  (`https://my-pa-mcp.bobby-fetting.me`) is not a B0 image source.
+  `b0_suitable` is still not disclosure permission. `MEASURED_B0`
+  remains `NOT_YET_ESTABLISHED`.
 - [`SUCCESSOR-B0-PROMPT.md`](SUCCESSOR-B0-PROMPT.md) — later operator-authorized
   execution phase after exact-head review. ChatLLM must not grade itself.
 

@@ -40,7 +40,7 @@ import asyncio
 import io
 import json
 import threading
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, redirect_stderr, suppress
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -51,7 +51,7 @@ from mcp.types import CallToolResult, InitializeResult, ListToolsResult
 
 from my_pa.adapters.cli import EXIT_OK, run
 from my_pa.adapters.http import create_http_app
-from my_pa.adapters.mcp import create_mcp_server
+from my_pa.adapters.mcp.server import McpAccess, create_mcp_server
 from my_pa.application.service import ApplicationService
 from my_pa.domain.identity.principal import Principal
 from tests.wire import serve
@@ -231,7 +231,11 @@ def http_transport(service: ApplicationService, principal: Principal) -> Iterato
 
 @contextmanager
 def mcp_transport(
-    service: ApplicationService, principal: Principal, *, enabled: bool = True
+    service: ApplicationService,
+    principal: Principal,
+    *,
+    enabled: bool = True,
+    access_for_request: Callable[..., McpAccess | None] | None = None,
 ) -> Iterator[McpTransport]:
     """A running MCP server and an initialized client, on a private event loop.
 
@@ -251,7 +255,12 @@ def mcp_transport(
 
     async def session() -> None:
         async with create_client_server_memory_streams() as (client_streams, server_streams):
-            server = create_mcp_server(service, principal=principal, enabled=enabled)
+            server = create_mcp_server(
+                service,
+                principal=principal,
+                enabled=enabled,
+                access_for_request=access_for_request,
+            )
             serving = asyncio.create_task(
                 server.run(
                     server_streams[0], server_streams[1], server.create_initialization_options()

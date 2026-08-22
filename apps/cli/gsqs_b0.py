@@ -8,15 +8,26 @@ import os
 import sys
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import asdict
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
 from uuid import uuid4
 
+from my_pa.adapters.mcp.server import serve_stdio
 from my_pa.application.goodnotes_gsqs import MeasurementRecord
 from my_pa.application.goodnotes_gsqs_b0_disclosure_journal import (
     EVENT_AUTH_PROBE_COMPLETED,
     DisclosureJournal,
     DisclosureState,
+)
+from my_pa.application.goodnotes_gsqs_b0_mcp import (
+    EVALUATION_MCP_PURPOSES,
+    EVALUATION_MCP_TOOLS,
+    CapturedAnalyzerAdapter,
+    evaluation_handle_records,
+    load_captured_repetitions,
+    stage_evaluation_pages,
+    validate_mcp_evaluation_bindings,
 )
 from my_pa.application.goodnotes_gsqs_corpus import (
     CorpusCase,
@@ -34,6 +45,7 @@ from my_pa.application.goodnotes_gsqs_live_b0 import (
     PreflightReport,
     RepositoryIdentity,
     UnboundIncumbentAdapter,
+    aggregate_b0_measurements,
     catalog_path,
     execute_measured_b0,
     frozen_incumbent_config,
@@ -46,6 +58,7 @@ from my_pa.application.goodnotes_gsqs_live_b0 import (
     repo_root,
     validate_evaluator_plane,
     validate_route_llm_execution_bindings,
+    write_evaluation_handles,
     write_public_evidence,
 )
 from my_pa.application.goodnotes_gsqs_provider_model_mapping import (
@@ -62,6 +75,12 @@ from my_pa.application.goodnotes_gsqs_routellm_envelope import (
     detect_image_mime,
     parse_semantic_content,
 )
+from my_pa.application.service import ApplicationService
+from my_pa.contracts.v1.capabilities import EffectiveLimits
+from my_pa.domain.goodnotes.models import GoodNotesPageRaster, GoodNotesPageWork
+from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
+from my_pa.domain.identity.principal import Principal, PrincipalKind
+from my_pa.infrastructure.gsqs_b0_evaluation import GsqsB0EvaluationUnitOfWork
 from my_pa.infrastructure.gsqs_routellm_transport import (
     RouteLLMHttpResult,
     RouteLLMPostResponseError,
@@ -216,6 +235,137 @@ def _execute(args: argparse.Namespace) -> int:
     )
 
 
+def _score(args: argparse.Namespace) -> int:
+    if args.authorization is None:
+        raise ValueError("score requires --authorization")
+    if not args.evaluator_corpus:
+        raise ValueError("score requires --evaluator-corpus")
+    if not args.analyzer_output_dir:
+        raise ValueError("score requires --analyzer-output-dir")
+    if not args.evidence_dir:
+        raise ValueError("score requires --evidence-dir")
+    root = Path(args.repository_root) if args.repository_root else repo_root()
+    authorization = load_execution_authorization(Path(args.authorization))
+    validate_mcp_evaluation_bindings(authorization)
+    if args.model_identity != authorization.model_identity:
+        raise ValueError("model identity mismatch")
+    prompt_id = prompt_config_identity(root)
+    if not _prompt_matches(root, args.prompt_config, prompt_id):
+        raise ValueError("prompt identity mismatch")
+    if args.repetitions != authorization.repetitions:
+        raise ValueError("wrong repetition scope")
+    report = preflight(
+        root=root,
+        catalog=load_public_catalog(catalog_path(root)),
+        repository=inspect_repository_identity(root),
+        authorization=authorization,
+    )
+    print(json.dumps(_report_dict(report), indent=2, sort_keys=True))
+    if not report.go:
+        return EXIT_REFUSED
+    catalog = load_public_catalog(catalog_path(root))
+    census = partition_b_census(catalog)
+    evaluator_cases = load_evaluator_plane_cases(Path(args.evaluator_corpus))
+    validate_evaluator_plane(evaluator_cases, census)
+    config = frozen_incumbent_config(model_identity=authorization.model_identity, root=root)
+    captures = load_captured_repetitions(Path(args.analyzer_output_dir), census)
+    adapter = CapturedAnalyzerAdapter(captures)
+    evidence_dir = Path(args.evidence_dir).resolve()
+    records, run_state = execute_measured_b0(
+        authorization=authorization,
+        census=census,
+        evaluator_cases=evaluator_cases,
+        manifest=_catalog_manifest(catalog, census),
+        adapter=adapter,
+        config=config,
+        repository=inspect_repository_identity(root),
+        image_loader=None,
+    )
+    summary = aggregate_b0_measurements(records)
+    write_public_evidence(
+        evidence_dir,
+        report=report,
+        records=records,
+        summary=summary,
+        analyzer_config={
+            "model_identity": authorization.model_identity,
+            "run_state": run_state.value,
+        },
+    )
+    return EXIT_OK
+
+
+def _local_operator() -> Principal:
+    return Principal(
+        principal_id=capture_principal_id(LOCAL_OPERATOR_UUID),
+        kind=PrincipalKind.OPERATOR,
+        authenticated=True,
+    )
+
+
+def compose_evaluation_service(
+    pages: Sequence[tuple[GoodNotesPageWork, GoodNotesPageRaster]],
+    *,
+    clock: Callable[[], datetime] | None = None,
+) -> ApplicationService:
+    stamped = clock or (lambda: datetime.now(UTC))
+    return ApplicationService(
+        unit_of_work=lambda: GsqsB0EvaluationUnitOfWork(pages),
+        limits=EffectiveLimits(
+            max_page_size=200,
+            default_page_size=50,
+            max_fetch_bytes=8 * 1024 * 1024,
+            max_enrollment_depth=0,
+        ),
+        clock=stamped,
+        managed_store=None,
+        relationship_intelligence_enabled=False,
+    )
+
+
+def _serve_eval_mcp(args: argparse.Namespace) -> int:
+    if args.authorization is None:
+        raise ValueError("serve-eval-mcp requires --authorization")
+    root = Path(args.repository_root) if args.repository_root else repo_root()
+    authorization = load_execution_authorization(Path(args.authorization))
+    validate_mcp_evaluation_bindings(authorization)
+    report = preflight(
+        root=root,
+        catalog=load_public_catalog(catalog_path(root)),
+        repository=inspect_repository_identity(root),
+        authorization=authorization,
+    )
+    if not report.go:
+        print(json.dumps(_report_dict(report), indent=2, sort_keys=True), file=sys.stderr)
+        return EXIT_REFUSED
+    raster_root = os.environ.get(RASTER_ROOT_ENV)
+    if not raster_root:
+        raise ValueError("MY_PA_GSQS_B0_RASTER_ROOT is required")
+    catalog = load_public_catalog(catalog_path(root))
+    census = partition_b_census(catalog)
+    principal = _local_operator()
+    created_at = datetime.now(UTC)
+    pages = stage_evaluation_pages(
+        census,
+        raster_root=Path(raster_root).resolve(),
+        principal_id=principal.principal_id,
+        created_at=created_at,
+    )
+    if args.evidence_dir:
+        write_evaluation_handles(
+            Path(args.evidence_dir).resolve(),
+            evaluation_handle_records(census, principal_id=principal.principal_id),
+        )
+    service = compose_evaluation_service(pages, clock=lambda: created_at)
+    serve_stdio(
+        service,
+        principal=principal,
+        allowed_tools=EVALUATION_MCP_TOOLS,
+        allowed_capability_purposes=EVALUATION_MCP_PURPOSES,
+    )
+    return EXIT_OK
+
+
 def run_bound_execute(
     *,
     authorization: ExecutionAuthorization,
@@ -347,6 +497,15 @@ def build_parser() -> argparse.ArgumentParser:
     execute.add_argument("--provider-mapping", default="")
     execute.add_argument("--evaluator-corpus", default=None)
     execute.set_defaults(handler=_execute)
+    score = commands.add_parser("score", parents=[shared])
+    score.add_argument("--model-identity", required=True)
+    score.add_argument("--prompt-config", required=True)
+    score.add_argument("--repetitions", type=int, required=True)
+    score.add_argument("--evaluator-corpus", required=True)
+    score.add_argument("--analyzer-output-dir", required=True)
+    score.set_defaults(handler=_score)
+    serve_eval = commands.add_parser("serve-eval-mcp", parents=[shared])
+    serve_eval.set_defaults(handler=_serve_eval_mcp)
     return parser
 
 

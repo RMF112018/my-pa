@@ -195,6 +195,13 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("receipt", "principal_id"),
         ("receipt", "principal_id"),
     ),
+    # In-memory evaluation pages are staged from operator-constructed work and
+    # rasters. Lookup keys copy those objects' partitions so reads stay
+    # principal-bound; the values are not request-body fields.
+    "infrastructure/gsqs_b0_evaluation.py": (
+        ("item", "principal_id"),
+        ("raster", "principal_id"),
+    ),
     # Remote grant staging compares the NAS-issued contract Principal with the
     # store's authenticated Principal partition before persisting any bounds.
     "infrastructure/persistence/native_sources.py": (("grant", "principal_id"),),
@@ -314,6 +321,10 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # The dormant integrity metric groups already-persisted occurrence rows by
     # their stored partition. It does not read a request-body Principal.
     "application/goodnotes_evaluation.py": (("item", "principal_id"),),
+    # Evaluation handles are minted from the authenticated local-operator
+    # Principal passed into `evaluation_handle`. The raster copies that
+    # partition. Neither value is a request-body field.
+    "application/goodnotes_gsqs_b0_mcp.py": (("work", "principal_id"),),
     "infrastructure/persistence/goodnotes_delivery.py": (
         ("association", "principal_id"),
         ("association", "principal_id"),

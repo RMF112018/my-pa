@@ -20,10 +20,18 @@ Current handwriting identities after operator ratification rebind:
 
 `b0_suitable = true`. Admitted labels are `APPROVED` /
 `OPERATOR_ADJUDICATED`. The governed live-B0 **runner** now exists
-(`apps/cli/gsqs_b0.py`, `B0_RUNBOOK.md`). B0 is **still not executable**
-until a separate private-data disclosure authorization names the
-post-rebind digest **and** the exact reviewed implementation commit/tree.
-See [`B0_RUNBOOK.md`](B0_RUNBOOK.md).
+(`apps/cli/gsqs_b0.py`, `B0_RUNBOOK.md`). The commissioned path is
+RouteLLM-over-MCP against an ephemeral evaluation MCP plus local
+admit-and-score (`score`). Direct RouteLLM HTTP remains dormant.
+Live NAS MCP is not a B0 image source. Production `goodnotes.propose`
+is not the scoring path. B0 is **still not executable** until a
+separate private-data disclosure authorization names the
+post-rebind digest **and** the exact reviewed implementation commit/tree
+**and** MCP evaluation bindings. See [`B0_RUNBOOK.md`](B0_RUNBOOK.md).
+
+Live evaluator behavior identity at the implementation HEAD that
+carries this file must be the identity `gsqs_b0.py preflight` prints
+(`evaluator_code_identity()`), not the 2026-08-21 snapshot below.
 
 Cite the exact repository head/tree of the PR that carries this file
 when that later phase is authorized. A later commit invalidates this

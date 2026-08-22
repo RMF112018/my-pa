@@ -58,10 +58,13 @@ requests in.
 
 ## What a caller receives
 
-The `ResponseEnvelope`'s canonical JSON, verbatim, as one text content block —
-the same bytes the HTTP transport writes as its body. `isError` is set from the
-envelope's own `error`, so the protocol's success flag is a function of the
-answer rather than a second judgement about it.
+The `ResponseEnvelope`'s canonical JSON, verbatim, remains the canonical JSON
+text block — the same bytes the HTTP transport writes as its body. When an
+authorized success result matches the pinned-raster projection shape, a second
+image content block is appended whose data is the same base64 string already in
+that envelope. Failures and non-matching successes stay one text block.
+`isError` is set from the envelope's own `error`, so the protocol's success flag
+is a function of the answer rather than a second judgement about it.
 
 A request that never became an envelope — an unknown tool, arguments that are
 not a document, a payload past the transport's ceiling — has no envelope to
@@ -80,7 +83,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -91,6 +94,8 @@ from mcp.server.stdio import stdio_server
 from mcp.types import (
     CallToolRequestParams,
     CallToolResult,
+    ContentBlock,
+    ImageContent,
     ListToolsResult,
     TextContent,
     Tool,
@@ -179,6 +184,83 @@ def _problem(error: ApplicationError) -> ProblemDetail:
     return problem_detail(error, correlation_id=issue_identifier(IdKind.CORRELATION))
 
 
+_INCONSISTENT_RASTER = object()
+
+
+def _is_hex64(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and not (set(value.lower()) - set("0123456789abcdef"))
+    )
+
+
+def _non_empty_str(value: object) -> bool:
+    return isinstance(value, str) and value != ""
+
+
+def _image_from_result(result: object) -> ImageContent | object | None:
+    """Project a pinned-raster success result as one image block, or nothing.
+
+    Keyword unpacking is the inspection: a request-derived mapping must not be
+    subscripted. Encoded-length mismatch after the other fields match is a
+    sentinel, not a silent text-only success.
+    """
+    if not isinstance(result, dict):
+        return None
+    try:
+        return _image_from_mapping(**result)
+    except TypeError:
+        return None
+
+
+def _image_from_mapping(
+    *,
+    media_type: object = None,
+    content_base64: object = None,
+    digest: object = None,
+    exact_render_sha256: object = None,
+    content_sha256: object = None,
+    byte_length: object = None,
+    run_id: object = None,
+    page_version_id: object = None,
+    renderer_name: object = None,
+    renderer_version: object = None,
+    render_profile_version: object = None,
+    **_ignored: object,
+) -> ImageContent | object | None:
+    if media_type != "image/png":
+        return None
+    if not isinstance(content_base64, str) or not content_base64:
+        return None
+    if not (_is_hex64(digest) and _is_hex64(exact_render_sha256) and _is_hex64(content_sha256)):
+        return None
+    if not isinstance(byte_length, int) or isinstance(byte_length, bool) or byte_length < 1:
+        return None
+    if not (
+        _non_empty_str(run_id)
+        and _non_empty_str(page_version_id)
+        and _non_empty_str(renderer_name)
+        and _non_empty_str(renderer_version)
+        and _non_empty_str(render_profile_version)
+    ):
+        return None
+    if len(content_base64) != ((byte_length + 2) // 3) * 4:
+        return _INCONSISTENT_RASTER
+    return ImageContent(type="image", data=content_base64, mime_type="image/png")
+
+
+def _result_bytes(blocks: Sequence[ContentBlock]) -> int:
+    """Every content block, in the units the result-size ceiling counts."""
+    total = 0
+    for block in blocks:
+        if isinstance(block, ImageContent):
+            total += len(block.data.encode("ascii"))
+        elif isinstance(block, TextContent):
+            total += len(block.text.encode("utf-8"))
+    return total
+
+
 def _answer(
     service: ApplicationService,
     principal: Principal,
@@ -187,8 +269,8 @@ def _answer(
     transport: CaptureTransport = CaptureTransport.LOCAL,
     allowed_capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None,
     clock: Callable[[], datetime] = utc_now,
-) -> tuple[str, bool]:
-    """One tool call, executed synchronously: the text to return and whether it failed.
+) -> tuple[str, bool, ImageContent | None]:
+    """One tool call, executed synchronously: text, failure flag, optional image.
 
     Runs in a worker thread. Nothing awaits inside it and nothing it calls is
     async, which is the property that keeps the boundary one function wide.
@@ -212,20 +294,20 @@ def _answer(
                 clock=clock,
             )
         except InvalidRequestError as refusal:
-            return _problem(refusal).to_canonical_json(), True
+            return _problem(refusal).to_canonical_json(), True, None
         except UnsupportedError as refusal:
-            return _problem(refusal).to_canonical_json(), True
+            return _problem(refusal).to_canonical_json(), True, None
     try:
         metadata, command = normalize(name, _document(request_arguments))
     except ApplicationError as refusal:
-        return _problem(refusal).to_canonical_json(), True
+        return _problem(refusal).to_canonical_json(), True, None
     except Exception:
-        return _problem(InternalError()).to_canonical_json(), True
+        return _problem(InternalError()).to_canonical_json(), True, None
     if allowed_capability_purposes is not None and not (
         (metadata.capability, None) in allowed_capability_purposes
         or (metadata.capability, metadata.purpose) in allowed_capability_purposes
     ):
-        return _problem(UnsupportedError()).to_canonical_json(), True
+        return _problem(UnsupportedError()).to_canonical_json(), True, None
     try:
         envelope = service.invoke(
             metadata,
@@ -235,8 +317,15 @@ def _answer(
             capability_grants=allowed_capability_purposes,
         )
     except Exception:
-        return _problem(InternalError()).to_canonical_json(), True
-    return envelope.to_canonical_json(), envelope.error is not None
+        return _problem(InternalError()).to_canonical_json(), True, None
+    if envelope.error is not None:
+        return envelope.to_canonical_json(), True, None
+    projected = _image_from_result(envelope.result)
+    if isinstance(projected, ImageContent):
+        return envelope.to_canonical_json(), False, projected
+    if projected is None:
+        return envelope.to_canonical_json(), False, None
+    return _problem(InternalError()).to_canonical_json(), True, None
 
 
 def published_tools(service: ApplicationService) -> tuple[Tool, ...]:
@@ -378,10 +467,10 @@ def create_mcp_server(
         release_here = True
         try:
             if call_timeout_seconds is None:
-                text, failed = await future
+                text, failed, image = await future
             else:
                 try:
-                    text, failed = await asyncio.wait_for(
+                    text, failed, image = await asyncio.wait_for(
                         asyncio.shield(future), timeout=call_timeout_seconds
                     )
                 except TimeoutError:
@@ -403,9 +492,13 @@ def create_mcp_server(
         finally:
             if release_here:
                 call_slots.release()
-        if max_result_bytes is not None and len(text.encode("utf-8")) > max_result_bytes:
+        content: list[ContentBlock] = [TextContent(type="text", text=text)]
+        if not failed and image is not None:
+            content.append(image)
+        if max_result_bytes is not None and _result_bytes(content) > max_result_bytes:
             text, failed = _problem(InternalError()).to_canonical_json(), True
-        return CallToolResult(content=[TextContent(type="text", text=text)], is_error=failed)
+            content = [TextContent(type="text", text=text)]
+        return CallToolResult(content=content, is_error=failed)
 
     return Server(
         SERVER_NAME,
@@ -421,7 +514,14 @@ async def _serve(server: Server[object]) -> None:
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
-def serve_stdio(service: ApplicationService, *, principal: Principal, enabled: bool = True) -> None:
+def serve_stdio(
+    service: ApplicationService,
+    *,
+    principal: Principal,
+    enabled: bool = True,
+    allowed_tools: frozenset[str] | None = None,
+    allowed_capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None,
+) -> None:
     """Serve `service` over standard input and output until the client goes away.
 
     Synchronous, and that is the boundary: this owns an event loop for the
@@ -431,5 +531,30 @@ def serve_stdio(service: ApplicationService, *, principal: Principal, enabled: b
     **Standard output is the wire.** Anything else written there corrupts the
     protocol stream, which is why the composition root sends its startup notice
     to standard error and why nothing in the application prints.
+
+    `allowed_tools` is an optional ceiling. When set, unpublished and
+    out-of-ceiling names are refused before `invoke`, which is how the GSQS B0
+    evaluation surface withholds `goodnotes.propose`.
     """
-    asyncio.run(_serve(create_mcp_server(service, principal=principal, enabled=enabled)))
+    access_for_request = None
+    if allowed_tools is not None or allowed_capability_purposes is not None:
+        access = McpAccess(
+            principal,
+            allowed_tools=allowed_tools,
+            allowed_capability_purposes=allowed_capability_purposes,
+        )
+
+        def _access(_context: ServerRequestContext[object]) -> McpAccess:
+            return access
+
+        access_for_request = _access
+    asyncio.run(
+        _serve(
+            create_mcp_server(
+                service,
+                principal=principal,
+                enabled=enabled,
+                access_for_request=access_for_request,
+            )
+        )
+    )

@@ -53,6 +53,7 @@ person.
 from __future__ import annotations
 
 import io
+import json
 import logging
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager, redirect_stderr
@@ -70,6 +71,8 @@ from tests.conftest import (
     build_provider,
     build_service,
     operator,
+    staged_goodnotes_raster,
+    staged_goodnotes_work,
     staged_record,
     staged_search,
 )
@@ -997,6 +1000,55 @@ def test_neither_transport_writes_anything_sensitive_to_a_log(
     assert MARKER_CONTENT not in caplog.text
     assert MARKER_INJECTION not in caplog.text
     assert "SELECT" not in caplog.text
+
+
+def test_a_successful_goodnotes_content_call_does_not_log_png_or_base64(
+    marked: Scene, caplog: pytest.LogCaptureFixture
+) -> None:
+    """The raster bytes are on the MCP result, not in the transport log.
+
+    The CallToolResult is the control that a payload existed to leak. An
+    unknown-tool sibling call in the same capture is the control that the log
+    is not vacuously empty — the MCP client warns when a tool was never listed.
+    CLI stdout may carry the envelope JSON; that is the answer, not the log.
+    """
+    work = staged_goodnotes_work(marked)
+    raster = staged_goodnotes_raster(marked)
+    request = document(
+        Capability.GOODNOTES_CONTENT,
+        marked.principal.principal_id,
+        {
+            "run_id": raster.run_id,
+            "page_version_id": raster.page_version_id,
+            "content_sha256": work.content_sha256,
+        },
+    )
+    service = build_service(marked.world, marked.providers)
+    with (
+        caplog.at_level(logging.DEBUG),
+        mcp_transport(service, marked.principal) as session,
+        cli_transport(service, marked.principal) as cli,
+    ):
+        result = session.call(Capability.GOODNOTES_CONTENT.value, request)
+        cli.send(Capability.GOODNOTES_CONTENT.value, request)
+        session.call(
+            "sources.destroy",
+            document(Capability.SOURCES_LIST, marked.principal.principal_id, {}),
+        )
+    assert result.is_error is False
+    assert result.content[0].type == "text"
+    payload = json.loads(result.content[0].text)["result"]
+    encoded = payload["content_base64"]
+    image = next(block for block in result.content if getattr(block, "type", None) == "image")
+    assert encoded == image.data
+    assert encoded
+    assert caplog.records, (
+        "no log record was captured at all, so the absence of the payload from "
+        "the log is an absence from an empty log"
+    )
+    assert encoded not in caplog.text
+    assert image.data not in caplog.text
+    assert "\x89PNG" not in caplog.text
 
 
 def test_the_log_capture_would_have_seen_a_record(

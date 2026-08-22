@@ -70,8 +70,14 @@ Evidence plane:
 - Class-1 inference candidate: `ops/goodnotes/gsqs/b0/routellm-goodnotes-b0-v1.json`
 - `model_identity`: `routellm-goodnotes-b0-v1@sha256:<canonical-inference-config-digest>`
 - evaluator: `goodnotes-gsqs-independent` `1.1`
-- evaluator behavior identity:
+- live evaluator behavior identity (this HEAD):
+  `c8a111c65f17ca292b48f12e4a4925d425675bdbcc4678fe3745db8ffe3c9583`
+- historical identity at the 2026-08-21 operator decision
+  (`5c52cc7` / tree `dda58686…`):
   `3673a9dbf99214dc6d724822682c2b5547c7a0343d56c7024956734f1516fc7d`
+  That earlier decision is not reusable as `EXECUTE_MEASURED_B0` for this
+  HEAD. Scoring formulas did not change; PR #143 added
+  `load_evaluator_plane_cases` to a hashed evaluator-plane file.
 
 Exact git commit/tree are supplied by the later authorization. Dirty
 worktrees fail closed. `latest` and branch names are not identities.
@@ -82,7 +88,14 @@ path. It does not contain endpoint, Path A/B, or provider API ids.
 ## Authorization
 
 Copy `ops/goodnotes/gsqs/b0/EXECUTE_MEASURED_B0.template.json`. Fill every
-blank, including:
+blank. The commissioned path binds the **MCP evaluation surface**:
+
+- `mcp_evaluation_surface` — `stdio-isolated` (never the live remote MCP origin)
+- `mcp_evaluation_binding_mode` — `ISOLATED_IN_PROCESS` or
+  `OPERATOR_LOCAL_STDIO`
+- `mcp_evaluation_evidence_id` — nonempty evidence id
+
+The dormant HTTP execute path still recognizes:
 
 - `route_llm_endpoint_origin` — exact `https://host[:port]`
 - `route_llm_server_side_binding_mode` — `PLATFORM_ATTESTED` or
@@ -96,15 +109,21 @@ self-improvement, automatic promotion, and deployment must remain `true`.
 
 Authorization is checked before any image would leave the trusted boundary.
 Mismatch of commit, tree, corpus, combined identity, partition, analyzer,
-prompt, evaluator, model identity, endpoint origin, Path A/B binding, or
+prompt, evaluator, model identity, evaluation surface, or
 repetition scope fails closed. There is no `--force` / `--skip-governance`
 flag.
 
 Runtime environment (never Git):
 
-- `MY_PA_ROUTELLM_API_KEY`
-- `MY_PA_ROUTELLM_BASE_URL` — origin must equal the authorized origin
-- `MY_PA_GSQS_B0_RASTER_ROOT` — `{case_id}.png` (or jpg/jpeg/webp/gif)
+- `MY_PA_GSQS_B0_RASTER_ROOT` — `{case_id}.png` (or jpg/jpeg/webp/gif),
+  required for `serve-eval-mcp` only
+- `MY_PA_ROUTELLM_API_KEY` / `MY_PA_ROUTELLM_BASE_URL` — required only
+  for the dormant HTTP `execute` path; **not** used by `score` or
+  `serve-eval-mcp`
+
+Do not ingest Partition-B rasters into live NAS knowledge. Do not use
+`https://my-pa-mcp.bobby-fetting.me/mcp` as the B0 image source.
+`goodnotes.propose` is not the scoring path.
 
 ## Preflight (no disclosure)
 
@@ -117,14 +136,41 @@ without making a model call. `--evidence-dir` writes public control files
 only. Verdict is `GO` or `NO-GO`. `disclosure_would_occur` is always false.
 Preflight never probes RouteLLM and never opens a disclosure journal.
 
-## Execute (transport bound; disclosure still gated)
+## Commissioned path (RouteLLM-over-MCP evaluation, then admit-and-score)
 
-The RouteLLM incumbent transport is bound in this tree. That does **not**
-authorize handwriting disclosure or establish `MEASURED_B0`. Execute still
-requires independent exact-head review of the final head/tree **and** a
-fresh `EXECUTE_MEASURED_B0` authorization bound to that reviewed
-commit/tree, prompt SHA, candidate digest, endpoint origin, and Path A/B
-evidence.
+The analyzer is RouteLLM acting as an MCP client of an **ephemeral
+evaluation MCP**, not of live NAS and not of a direct `/v1/chat/completions`
+API. `serve-eval-mcp` publishes `goodnotes.work` and `goodnotes.content`
+(ImageContent PNG) only. `goodnotes.propose` is withheld. Captured
+`gsqs-analyzer-output-v1` documents are admitted and scored locally:
+
+```text
+python apps/cli/gsqs_b0.py serve-eval-mcp \
+  --authorization <filled-EXECUTE_MEASURED_B0.json> \
+  --evidence-dir ops/goodnotes/gsqs/b0/runs/<run_id>
+
+python apps/cli/gsqs_b0.py score \
+  --authorization <filled-EXECUTE_MEASURED_B0.json> \
+  --model-identity routellm-goodnotes-b0-v1@sha256:<digest> \
+  --prompt-config ops/goodnotes/gsqs/b0/incumbent-prompt-v1.txt \
+  --repetitions 3 \
+  --evaluator-corpus <local-private-evaluator-plane.json> \
+  --analyzer-output-dir <captured-repetitions> \
+  --evidence-dir ops/goodnotes/gsqs/b0/runs/<run_id>
+```
+
+`score` does not read `MY_PA_ROUTELLM_*`, does not probe `GET /v1/models`,
+and does not POST images. Extra A/C/unscoreable cases are rejected, not
+filtered. Gold never enters the evaluation MCP, the capture documents,
+or public evidence. `MEASURED_B0` remains `NOT_YET_ESTABLISHED` until a
+later evidence-bound transition.
+
+## Dormant HTTP execute (not commissioned)
+
+The RouteLLM HTTP incumbent transport remains in-tree for the unbound
+refuse path and for any later re-authorization of that transport. It is
+**not** the commissioned B0 driver. Direct RouteLLM HTTP is unavailable
+in this environment and is not to be invented.
 
 ```text
 python apps/cli/gsqs_b0.py execute \

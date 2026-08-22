@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes sixty-two capability names and none of them mutates a source,
+  ends: the transport routes sixty-five capability names and none of them mutates a source,
   and every capability driven over the wire is shown to have called only the
   three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -40,7 +40,7 @@ import logging
 from base64 import b64encode
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -76,7 +76,7 @@ from my_pa.adapters.http import (
 )
 from my_pa.adapters.normalization import _BUILDERS
 from my_pa.application.intelligence import begin_cycle, commit_artifact
-from my_pa.application.service import ApplicationService
+from my_pa.application.service import ApplicationService, _normalise_bulk_mutations
 from my_pa.contracts.ports import EvidenceUnavailableError, KnowledgeRecord
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
@@ -93,6 +93,7 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.bulk import TaskBulkOperation
 
 #: The things that must never appear, each distinctive enough that a substring
 #: search is decisive. The first four are the five `AGENTS.md` section 5 names;
@@ -230,6 +231,35 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     document = staged_managed_document(marked, body=MARKER_CONTENT.encode())
     task = staged_task(marked)
     commitment = staged_commitment(marked)
+    bulk_mutations = [
+        {
+            "kind": "update",
+            "task_id": task.task_id,
+            "expected_version": task.version + 2,
+            "values": {"title": task.title},
+            "clear_fields": [],
+        }
+    ]
+    _, bulk_digest = _normalise_bulk_mutations(tuple(bulk_mutations))
+    bulk_operation_id = issue_identifier(IdKind.BULK_OPERATION)
+    marked.world.task_bulk_operations[(marked.principal.principal_id, bulk_operation_id)] = (
+        TaskBulkOperation(
+            bulk_operation_id=bulk_operation_id,
+            principal_id=marked.principal.principal_id,
+            preview_idempotency_key="wire-task-bulk-confirm-preview-0001",
+            request_digest=bulk_digest,
+            previewed_at=WHEN,
+            expires_at=WHEN + timedelta(minutes=15),
+            preview_affected=0,
+            preview_no_op=1,
+            confirmed_at=WHEN,
+            confirm_idempotency_key="wire-task-bulk-confirm-0001",
+            affected=0,
+            no_op=1,
+            rejected=0,
+            history_ids=(issue_identifier(IdKind.TASK_HISTORY),),
+        )
+    )
     work = staged_goodnotes_work(marked)
     raster = staged_goodnotes_raster(marked)
     at = datetime(2026, 8, 2, 11, tzinfo=UTC)
@@ -383,34 +413,35 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "idempotency_key": "wire-task-transition-0001",
         },
         Capability.TASKS_BULK_PREVIEW: {
-            "mutations": [
-                {
-                    "capability": "tasks.update",
-                    "task_id": task.task_id,
-                    "expected_version": task.version,
-                    "idempotency_key": "wire-task-bulk-preview-0001",
-                    "title": "Marked task-plane task, bulk-previewed",
-                }
-            ],
+            "mutations": bulk_mutations,
             "idempotency_key": "wire-task-bulk-preview-op-0001",
         },
         Capability.TASKS_BULK_CONFIRM: {
-            "bulk_operation_id": issue_identifier(IdKind.BULK_OPERATION),
+            "bulk_operation_id": bulk_operation_id,
             "idempotency_key": "wire-task-bulk-confirm-0001",
+            "mutations": bulk_mutations,
         },
         Capability.COMMITMENTS_READ: {"commitment_id": commitment.commitment_id},
         Capability.COMMITMENTS_LIST: {},
+        Capability.COMMITMENTS_SEARCH: {"query": "synthetic"},
+        Capability.COMMITMENTS_HISTORY: {"commitment_id": commitment.commitment_id},
         Capability.COMMITMENTS_WAITING_ON: {},
         Capability.COMMITMENTS_CREATE: {
-            "counterparty_person_id": issue_identifier(IdKind.PERSON),
+            "counterparty_person_id": commitment.counterparty_person_id,
             "direction": "owed_by_principal",
             "summary": "Marked commitment-plane commitment",
             "origin_evidence_ref": "cap_origin0001origin0001",
             "idempotency_key": "wire-commitment-create-0001",
         },
-        Capability.COMMITMENTS_CLOSE: {
+        Capability.COMMITMENTS_UPDATE: {
             "commitment_id": commitment.commitment_id,
             "expected_version": commitment.version,
+            "idempotency_key": "wire-commitment-update-0001",
+            "summary": "Marked commitment-plane commitment, revised",
+        },
+        Capability.COMMITMENTS_CLOSE: {
+            "commitment_id": commitment.commitment_id,
+            "expected_version": commitment.version + 1,
             "closure_evidence_ref": "cap_origin0001origin0001",
             "idempotency_key": "wire-commitment-close-0001",
         },
@@ -687,8 +718,11 @@ SCOPED_CAPABILITIES = [
         Capability.TASKS_BULK_CONFIRM,
         Capability.COMMITMENTS_READ,
         Capability.COMMITMENTS_LIST,
+        Capability.COMMITMENTS_SEARCH,
+        Capability.COMMITMENTS_HISTORY,
         Capability.COMMITMENTS_WAITING_ON,
         Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_UPDATE,
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_PREPARE,
         Capability.CONTEXT_FEEDBACK,
@@ -767,16 +801,6 @@ def test_every_capability_refuses_a_purpose_it_does_not_permit_over_the_wire(
 # ---- source mutation ---------------------------------------------------------
 
 
-#: `tasks.bulk_preview` and `tasks.bulk_confirm` are wired all the way through
-#: `normalize`, but `ApplicationService._tasks_bulk_preview`/`_tasks_bulk_confirm`
-#: are documented placeholders that answer `unsupported` unconditionally. The
-#: redaction and no-mutating-method sweeps below still drive them — a
-#: placeholder's refusal is exactly the kind of answer those sweeps must also
-#: hold clean — they just do not expect a `200` for the two of them.
-_UNIMPLEMENTED_CAPABILITIES = frozenset(
-    {Capability.TASKS_BULK_PREVIEW, Capability.TASKS_BULK_CONFIRM}
-)
-
 MUTATING_NAMES = ("write", "create", "update", "delete", "remove", "rename", "move", "put")
 
 #: The capabilities the name check above does *not* apply to, and the reason it
@@ -831,7 +855,12 @@ CONTINUITY_AUTHORING_EXEMPTION = frozenset(
 #: own; widening the exemption to them would hide nothing and cover more than
 #: the property needs.
 TASK_MANAGEMENT_EXEMPTION = frozenset(
-    {Capability.TASKS_CREATE, Capability.TASKS_UPDATE, Capability.COMMITMENTS_CREATE}
+    {
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_UPDATE,
+    }
 )
 
 
@@ -924,9 +953,7 @@ def test_no_capability_over_the_wire_calls_anything_but_a_read(
         )
         for capability, payload in payloads.items()
     ]
-    expected = [
-        501 if capability in _UNIMPLEMENTED_CAPABILITIES else 200 for capability in payloads
-    ]
+    expected = [200 for _capability in payloads]
     assert [reply.status for reply in replies] == expected
     assert set(marked.provider.calls) <= {"list_children", "metadata", "fetch"}
     assert marked.provider.calls, "no capability touched the provider at all"
@@ -1091,8 +1118,7 @@ def test_no_header_of_any_answer_names_anything(
     marked.world.searches[marked.enrollment.enrollment_id] = staged_search(marked)
     for capability, payload in payloads_for(marked, record).items():
         reply = wire.send(capability.value, document(capability, marked.principal, payload))
-        expected_status = 501 if capability in _UNIMPLEMENTED_CAPABILITIES else 200
-        assert reply.status == expected_status, f"{capability.value} answered {reply.status}"
+        assert reply.status == 200, f"{capability.value} answered {reply.status}"
         rendered = " ".join(f"{name}: {value}" for name, value in reply.headers.items())
         assert_clean(rendered, marked_root, f"{capability.value} headers")
         assert "server" not in reply.headers
@@ -1122,8 +1148,7 @@ def test_a_running_gateway_writes_nothing_sensitive_to_a_log(
             # The control for the scan below. "Nothing sensitive is in the log"
             # is satisfied for free by requests that never ran, and by a log
             # capture that captured nothing. Both are asserted against.
-            expected_status = 501 if capability in _UNIMPLEMENTED_CAPABILITIES else 200
-            assert answer.status == expected_status, f"{capability.value} answered {answer.status}"
+            assert answer.status == 200, f"{capability.value} answered {answer.status}"
         client.send(
             Capability.KNOWLEDGE_SEARCH.value,
             document(

@@ -305,8 +305,11 @@ class Capability(StrEnum):
     # nothing.
     COMMITMENTS_READ = "commitments.read"
     COMMITMENTS_LIST = "commitments.list"
+    COMMITMENTS_SEARCH = "commitments.search"
+    COMMITMENTS_HISTORY = "commitments.history"
     COMMITMENTS_WAITING_ON = "commitments.waiting_on"
     COMMITMENTS_CREATE = "commitments.create"
+    COMMITMENTS_UPDATE = "commitments.update"
     COMMITMENTS_CLOSE = "commitments.close"
     # A capability rather than a widening of `knowledge.search`. **A new purpose
     # rather than `knowledge_search`.** `D-91`'s test is whether reuse would
@@ -640,8 +643,11 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # for the identical reason the task plane's own pair is split.
         Capability.COMMITMENTS_READ: frozenset({Purpose.COMMITMENT_READ}),
         Capability.COMMITMENTS_LIST: frozenset({Purpose.COMMITMENT_READ}),
+        Capability.COMMITMENTS_SEARCH: frozenset({Purpose.COMMITMENT_READ}),
+        Capability.COMMITMENTS_HISTORY: frozenset({Purpose.COMMITMENT_READ}),
         Capability.COMMITMENTS_WAITING_ON: frozenset({Purpose.COMMITMENT_READ}),
         Capability.COMMITMENTS_CREATE: frozenset({Purpose.COMMITMENT_AUTHORING}),
+        Capability.COMMITMENTS_UPDATE: frozenset({Purpose.COMMITMENT_AUTHORING}),
         Capability.COMMITMENTS_CLOSE: frozenset({Purpose.COMMITMENT_AUTHORING}),
         # A purpose of its own, not a reuse of `KNOWLEDGE_SEARCH`. The mapping
         # comment sits with the member: `knowledge.search` is one enrollment's

@@ -91,7 +91,7 @@ test.describe("the signed-in surfaces", () => {
 
   test("predecessor deep links preserve the successor content and active destination", async ({ page }, testInfo) => {
     await page.goto("/situations");
-    await expect(page.getByRole("heading", { name: "Work", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Situations", level: 1 })).toBeVisible();
     await expect(page.getByRole("link", { name: "Work" }).first()).toHaveAttribute(
       "aria-current",
       "page",

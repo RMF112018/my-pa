@@ -108,11 +108,12 @@ import hashlib
 import json
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass
-from datetime import date, datetime
+from dataclasses import dataclass, replace
+from datetime import UTC, date, datetime, timedelta
 from itertools import islice
 from types import MappingProxyType
-from typing import Any, Final, assert_never
+from typing import Any, Final, assert_never, cast
+from zoneinfo import ZoneInfo
 
 from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
@@ -136,6 +137,7 @@ from my_pa.application.commands import (
     EnrollSource,
     FetchSource,
     GetCapabilities,
+    GetCommitmentHistory,
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
@@ -179,12 +181,14 @@ from my_pa.application.commands import (
     ReviseManagedDocument,
     ReviseManagedDocumentCommand,
     SearchCaptures,
+    SearchCommitments,
     SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
     SearchTasks,
     SubmitGoodNotesProposal,
     TransitionTask,
+    UpdateCommitment,
     UpdateTask,
     WaitingOn,
 )
@@ -243,6 +247,7 @@ from my_pa.application.tasks import TaskManagementService
 from my_pa.contracts.ports import (
     Acceptance,
     AuthoringConflictError,
+    BulkIdempotencyConflictError,
     CaptureAdmission,
     CaptureAdmissionRequest,
     CaptureSearchOutcome,
@@ -256,10 +261,16 @@ from my_pa.contracts.ports import (
     SearchOutcome,
     UnitOfWork,
     UnknownScopeError,
+    WorkCursorError,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
 from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
-from my_pa.contracts.v1.commitments import CommitmentListEntry, CommitmentView, WaitingOnEntry
+from my_pa.contracts.v1.commitments import (
+    CommitmentHistoryEntryView,
+    CommitmentListEntry,
+    CommitmentView,
+    WaitingOnEntry,
+)
 from my_pa.contracts.v1.disclosure import Disclosure, SourceReference, Truncation
 from my_pa.contracts.v1.documents import (
     ManagedDocumentListEntry,
@@ -288,7 +299,7 @@ from my_pa.domain.capture.submission import CaptureKind, CaptureTransport
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
-from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.common.time import format_rfc3339, utc_now
 from my_pa.domain.documents.managed import (
@@ -329,6 +340,7 @@ from my_pa.domain.search.query import (
     SearchRequest,
     label_for_media_type,
 )
+from my_pa.domain.situation.continuity import CommitmentWorkView
 from my_pa.domain.situation.situation import Project, Situation
 from my_pa.domain.source.enrollment import (
     MAX_ENROLLMENT_BYTES,
@@ -350,8 +362,22 @@ from my_pa.domain.source.provider import (
     VersionChangedError,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.domain.task.bulk import TaskBulkOperation
 from my_pa.domain.task.commitment import Commitment
+from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
 from my_pa.domain.task.history import TaskHistoryEntry as TaskManagementHistoryEntry
+from my_pa.domain.task.history import (
+    TaskMutationAction,
+    TaskMutationActor,
+    TaskMutationOutcome,
+)
+from my_pa.domain.task.lifecycle import (
+    TERMINAL_TASK_LIFECYCLE_STATES,
+    TaskLifecycleState,
+    TaskPriority,
+    TaskWorkView,
+)
+from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task as TaskManagementTask
 
 __all__ = ["ApplicationService"]
@@ -367,6 +393,14 @@ class _Result:
 
     payload: dict[str, Any]
     disclosure: Disclosure
+
+
+class _CommitRejectedConflictError(Exception):
+    """Carry one verified rejected-only conflict out after the shared UoW commits."""
+
+    def __init__(self, failure: ConflictError) -> None:
+        super().__init__("commit verified rejected conflict history")
+        self.failure = failure
 
 
 def _review_case_payload(case: ReviewCase | GoodNotesReviewCase) -> dict[str, Any]:
@@ -601,6 +635,10 @@ def _task_view(task: TaskManagementTask) -> TaskView:
         description=task.description,
         lifecycle_state=task.lifecycle_state,
         evidence_state=task.evidence_state,
+        origin_evidence_ref=task.origin_evidence_ref,
+        closure_evidence_ref=task.closure_evidence_ref,
+        accepted_by_review_decision_id=task.accepted_by_review_decision_id,
+        acceptance_kind=task.acceptance_kind,
         version=task.version,
         priority=task.priority,
         due_at=task.due_at,
@@ -627,10 +665,24 @@ def _task_list_entry(task: TaskManagementTask) -> TaskListEntry:
         lifecycle_state=task.lifecycle_state,
         priority=task.priority,
         due_at=task.due_at,
+        scheduled_at=task.scheduled_at,
+        deferred_until=task.deferred_until,
         archived_at=task.archived_at,
         created_at=task.created_at,
         updated_at=task.updated_at,
+        version=task.version,
     )
+
+
+def _work_window(
+    work_date: date, timezone: str, *, recent: bool = False
+) -> tuple[datetime, datetime]:
+    """Return DST-correct UTC bounds for one civil day or its seven-day lookback."""
+    zone = ZoneInfo(timezone)
+    first_date = work_date - timedelta(days=6) if recent else work_date
+    local_start = datetime.combine(first_date, datetime.min.time(), zone)
+    local_end = datetime.combine(work_date + timedelta(days=1), datetime.min.time(), zone)
+    return local_start.astimezone(UTC), local_end.astimezone(UTC)
 
 
 def _task_history_view(entry: TaskManagementHistoryEntry) -> TaskHistoryEntryView:
@@ -651,7 +703,26 @@ def _task_history_view(entry: TaskManagementHistoryEntry) -> TaskHistoryEntryVie
 def _commitment_view(commitment: Commitment) -> CommitmentView:
     return CommitmentView(
         commitment_id=commitment.commitment_id,
-        principal_id=commitment.principal_id,
+        direction=commitment.direction.value,
+        state=commitment.state.value,
+        counterparty_person_id=commitment.counterparty_person_id,
+        title=commitment.summary,
+        description=None,
+        due_date=commitment.due_at.isoformat() if commitment.due_at is not None else None,
+        created_at=commitment.created_at.isoformat(),
+        updated_at=commitment.updated_at.isoformat(),
+        version=commitment.version,
+        evidence_state=commitment.evidence_state.value,
+        origin_evidence_ref=commitment.origin_evidence_ref,
+        closure_evidence_ref=commitment.closure_evidence_ref,
+        accepted_by_review_decision_id=commitment.accepted_by_review_decision_id,
+        closed_at=commitment.closed_at.isoformat() if commitment.closed_at is not None else None,
+    )
+
+
+def _commitment_list_entry(commitment: Commitment) -> CommitmentListEntry:
+    return CommitmentListEntry(
+        commitment_id=commitment.commitment_id,
         direction=commitment.direction.value,
         state=commitment.state.value,
         counterparty_person_id=commitment.counterparty_person_id,
@@ -664,19 +735,281 @@ def _commitment_view(commitment: Commitment) -> CommitmentView:
     )
 
 
-def _commitment_list_entry(commitment: Commitment) -> CommitmentListEntry:
-    return CommitmentListEntry(
-        commitment_id=commitment.commitment_id,
-        principal_id=commitment.principal_id,
-        direction=commitment.direction.value,
-        state=commitment.state.value,
-        counterparty_person_id=commitment.counterparty_person_id,
-        title=commitment.summary,
-        description=None,
-        due_date=commitment.due_at.isoformat() if commitment.due_at is not None else None,
-        created_at=commitment.created_at.isoformat(),
-        updated_at=commitment.updated_at.isoformat(),
-        version=commitment.version,
+_COUNTERPARTY_OPTION_LIMIT: Final = 100
+
+
+def _counterparty_projection(
+    unit_of_work: UnitOfWork, principal_id: str, person_id: str
+) -> dict[str, str] | None:
+    option = unit_of_work.commitments.counterparty(principal_id, person_id)
+    if option is None:
+        return None
+    return {"person_id": option.person_id, "display_name": option.display_name}
+
+
+def _counterparty_options(
+    unit_of_work: UnitOfWork, principal_id: str
+) -> tuple[list[dict[str, str]], bool]:
+    found = unit_of_work.commitments.list_counterparties(
+        principal_id, limit=_COUNTERPARTY_OPTION_LIMIT + 1
+    )
+    truncated = len(found) > _COUNTERPARTY_OPTION_LIMIT
+    return (
+        [
+            {"person_id": option.person_id, "display_name": option.display_name}
+            for option in found[:_COUNTERPARTY_OPTION_LIMIT]
+        ],
+        truncated,
+    )
+
+
+def _commitment_public_view(
+    unit_of_work: UnitOfWork, principal_id: str, commitment: Commitment
+) -> dict[str, object]:
+    result = _commitment_view(commitment).to_canonical_dict()
+    result["counterparty"] = _counterparty_projection(
+        unit_of_work, principal_id, commitment.counterparty_person_id
+    )
+    return result
+
+
+def _commitment_public_list_entry(
+    unit_of_work: UnitOfWork, principal_id: str, commitment: Commitment
+) -> dict[str, object]:
+    result = _commitment_list_entry(commitment).to_canonical_dict()
+    result["counterparty"] = _counterparty_projection(
+        unit_of_work, principal_id, commitment.counterparty_person_id
+    )
+    return result
+
+
+def _normalise_bulk_mutations(
+    raw_mutations: tuple[dict[str, object], ...],
+) -> tuple[tuple[dict[str, object], ...], str]:
+    """Strictly normalise the bounded bulk vocabulary and hash that exact shape."""
+    normalised: list[dict[str, object]] = []
+    seen: set[str] = set()
+    for raw in raw_mutations:
+        kind = raw.get("kind")
+        task_id = raw.get("task_id")
+        expected_version = raw.get("expected_version")
+        if kind not in {"update", "transition"} or not isinstance(task_id, str):
+            raise InvalidRequestError(SafeDetail.MUTATIONS)
+        try:
+            validate_identifier(task_id, IdKind.TASK)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.MUTATIONS) from None
+        if task_id in seen or type(expected_version) is not int or expected_version < 1:
+            raise InvalidRequestError(SafeDetail.MUTATIONS)
+        seen.add(task_id)
+        if kind == "update":
+            if set(raw) != {"kind", "task_id", "expected_version", "values", "clear_fields"}:
+                raise InvalidRequestError(SafeDetail.MUTATIONS)
+            values = raw.get("values")
+            clear_fields = raw.get("clear_fields")
+            if not isinstance(values, dict) or not isinstance(clear_fields, (list, tuple)):
+                raise InvalidRequestError(SafeDetail.MUTATIONS)
+            allowed = {
+                "title",
+                "description",
+                "priority",
+                "due_at",
+                "scheduled_at",
+                "deferred_until",
+                "commitment_id",
+                "role",
+                "archived",
+            }
+            clearable = allowed - {"title", "archived"}
+            if not set(values) <= allowed or any(
+                not isinstance(item, str) or item not in clearable for item in clear_fields
+            ):
+                raise InvalidRequestError(SafeDetail.MUTATIONS)
+            if set(values) & set(clear_fields) or len(set(clear_fields)) != len(clear_fields):
+                raise InvalidRequestError(SafeDetail.MUTATIONS)
+            converted: dict[str, object] = {}
+            for name, value in values.items():
+                if name == "title":
+                    if not isinstance(value, str) or not value.strip():
+                        raise InvalidRequestError(SafeDetail.MUTATIONS)
+                    converted[name] = value.strip()
+                elif name == "description":
+                    if not isinstance(value, str):
+                        raise InvalidRequestError(SafeDetail.MUTATIONS)
+                    converted[name] = value
+                elif name == "priority":
+                    try:
+                        converted[name] = TaskPriority(value).value
+                    except (TypeError, ValueError):
+                        raise InvalidRequestError(SafeDetail.MUTATIONS) from None
+                elif name in {"due_at", "scheduled_at", "deferred_until"}:
+                    if not isinstance(value, str):
+                        raise InvalidRequestError(SafeDetail.MUTATIONS)
+                    try:
+                        moment = datetime.fromisoformat(value)
+                    except ValueError:
+                        raise InvalidRequestError(SafeDetail.MUTATIONS) from None
+                    if moment.tzinfo is None or moment.utcoffset() is None:
+                        raise InvalidRequestError(SafeDetail.MUTATIONS)
+                    converted[name] = moment.isoformat()
+                elif name == "commitment_id":
+                    if not isinstance(value, str):
+                        raise InvalidRequestError(SafeDetail.MUTATIONS)
+                    try:
+                        validate_identifier(value, IdKind.COMMITMENT)
+                    except ValueError:
+                        raise InvalidRequestError(SafeDetail.MUTATIONS) from None
+                    converted[name] = value
+                elif name == "role":
+                    try:
+                        converted[name] = TaskRole(value).value
+                    except (TypeError, ValueError):
+                        raise InvalidRequestError(SafeDetail.MUTATIONS) from None
+                else:
+                    if type(value) is not bool:
+                        raise InvalidRequestError(SafeDetail.MUTATIONS)
+                    converted[name] = value
+            if not converted and not clear_fields:
+                raise InvalidRequestError(SafeDetail.MUTATIONS)
+            normalised.append(
+                {
+                    "kind": kind,
+                    "task_id": task_id,
+                    "expected_version": expected_version,
+                    "values": converted,
+                    "clear_fields": sorted(clear_fields),
+                }
+            )
+        else:
+            allowed_keys = {
+                "kind",
+                "task_id",
+                "expected_version",
+                "to_state",
+                "closure_evidence_ref",
+            }
+            if not set(raw) <= allowed_keys or "to_state" not in raw:
+                raise InvalidRequestError(SafeDetail.MUTATIONS)
+            raw_to_state = raw["to_state"]
+            if not isinstance(raw_to_state, str):
+                raise InvalidRequestError(SafeDetail.MUTATIONS)
+            try:
+                to_state = TaskLifecycleState(raw_to_state).value
+            except (TypeError, ValueError):
+                raise InvalidRequestError(SafeDetail.MUTATIONS) from None
+            closure = raw.get("closure_evidence_ref")
+            if closure is not None and (not isinstance(closure, str) or not closure.strip()):
+                raise InvalidRequestError(SafeDetail.MUTATIONS)
+            normalised.append(
+                {
+                    "kind": kind,
+                    "task_id": task_id,
+                    "expected_version": expected_version,
+                    "to_state": to_state,
+                    "closure_evidence_ref": closure,
+                }
+            )
+    canonical = json.dumps(normalised, sort_keys=True, separators=(",", ":"))
+    return tuple(normalised), hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _bulk_candidate(
+    task: TaskManagementTask, mutation: dict[str, object], *, now: datetime
+) -> TaskManagementTask:
+    """Apply one already-normalised bulk item in memory."""
+    if mutation["kind"] == "update":
+        values = cast(dict[str, object], mutation["values"])
+        replacements: dict[str, object] = {}
+        for name, value in values.items():
+            if name in {"due_at", "scheduled_at", "deferred_until"}:
+                replacements[name] = datetime.fromisoformat(str(value))
+            elif name == "priority":
+                replacements[name] = TaskPriority(str(value))
+            elif name == "role":
+                replacements[name] = TaskRole(str(value))
+            elif name == "archived":
+                replacements["archived_at"] = now if value else None
+            else:
+                replacements[name] = value
+        replacements.update(dict.fromkeys(cast(list[str], mutation["clear_fields"])))
+        if replacements.get("commitment_id", task.commitment_id) is None:
+            replacements["role"] = None
+        proposed = replace(task, **replacements)  # type: ignore[arg-type]
+    else:
+        to_state = TaskLifecycleState(str(mutation["to_state"]))
+        unchanged = task.lifecycle_state is to_state
+        if task.lifecycle_state in TERMINAL_TASK_LIFECYCLE_STATES and not unchanged:
+            raise InvalidRequestError(SafeDetail.MUTATIONS)
+        closure = mutation.get("closure_evidence_ref")
+        if to_state in TERMINAL_TASK_LIFECYCLE_STATES and not unchanged:
+            if not isinstance(closure, str) or not closure.strip():
+                raise InvalidRequestError(SafeDetail.INVALID_EVIDENCE_REFERENCE)
+            proposed = replace(
+                task,
+                lifecycle_state=to_state,
+                closed_at=now,
+                closure_evidence_ref=closure,
+            )
+        else:
+            proposed = replace(task, lifecycle_state=to_state)
+    if proposed == task:
+        return task
+    return replace(proposed, version=task.version + 1, updated_at=now)
+
+
+def _task_commitment_state(
+    task: TaskManagementTask | None,
+    *,
+    values: dict[str, object],
+    clear_fields: frozenset[str] = frozenset(),
+) -> tuple[str | None, TaskRole | None]:
+    """Resolve the final Task link/role shape before any write is attempted."""
+    commitment_id = None if task is None else task.commitment_id
+    role = None if task is None else task.role
+    if "commitment_id" in clear_fields:
+        commitment_id = None
+    elif "commitment_id" in values:
+        commitment_id = cast(str, values["commitment_id"])
+    if "role" in clear_fields:
+        role = None
+    elif "role" in values:
+        raw_role = values["role"]
+        role = raw_role if isinstance(raw_role, TaskRole) else TaskRole(str(raw_role))
+    if commitment_id is None:
+        # Clearing a link clears its dependent role atomically.
+        role = None if "commitment_id" in clear_fields else role
+    return commitment_id, role
+
+
+def _validate_task_commitment_state(
+    unit_of_work: UnitOfWork,
+    principal_id: str,
+    commitment_id: str | None,
+    role: TaskRole | None,
+) -> None:
+    """Validate the shared same-Principal Commitment/link invariant."""
+    if role is TaskRole.FOLLOW_UP and commitment_id is None:
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+    if (
+        commitment_id is not None
+        and unit_of_work.commitments.get(principal_id, commitment_id) is None
+    ):
+        # The Principal-qualified lookup deliberately collapses foreign and
+        # absent Commitments into the same safe result.
+        raise NotFoundError(SafeDetail.COMMITMENT_ID)
+
+
+def _commitment_history_view(entry: CommitmentHistoryEntry) -> CommitmentHistoryEntryView:
+    return CommitmentHistoryEntryView(
+        history_id=entry.history_id,
+        commitment_id=entry.commitment_id,
+        action=entry.action.value,
+        actor=entry.actor.value,
+        outcome=entry.outcome.value,
+        before_version=entry.before_version,
+        after_version=entry.after_version,
+        occurred_at=entry.occurred_at.isoformat(),
+        recorded_at=entry.recorded_at.isoformat(),
     )
 
 
@@ -777,6 +1110,18 @@ def _entity_translated() -> Iterator[None]:
         yield
     except UnknownScopeError:
         failure = NotFoundError(SafeDetail.CURSOR)
+    if failure is not None:
+        raise failure
+
+
+@contextmanager
+def _work_cursor_translated() -> Iterator[None]:
+    """Collapse absent and foreign Work anchors into one safe cursor conflict."""
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except WorkCursorError:
+        failure = ConflictError(SafeDetail.CURSOR)
     if failure is not None:
         raise failure
 
@@ -1276,6 +1621,7 @@ class ApplicationService:
         refusal back along with everything else.
         """
         mismatch = metadata.capability is not command.capability
+        committed_conflict: ConflictError | None = None
         with self._unit_of_work() as unit_of_work:
             if mismatch:
                 unit_of_work.audit.record(
@@ -1306,14 +1652,66 @@ class ApplicationService:
                     capability_grants=capability_grants,
                 )
                 if authorization.allowed:
-                    return _HANDLERS[command.capability](self, unit_of_work, authorization, command)
+                    try:
+                        return _HANDLERS[command.capability](
+                            self, unit_of_work, authorization, command
+                        )
+                    except _CommitRejectedConflictError as conflict:
+                        # The handler raises this marker only after verifying a
+                        # REJECTED receipt whose before/after/current versions
+                        # are identical. Leaving normally commits that receipt;
+                        # no generic ApplicationError receives this treatment.
+                        committed_conflict = conflict.failure
         # Reached only after the transaction committed, which is what preserves
         # the audit event recording the refusal.
         if mismatch:
             raise InvalidRequestError(SafeDetail.SUBJECT)
+        if committed_conflict is not None:
+            raise committed_conflict
         raise DeniedError()
 
     # ---- the source and knowledge planes -----------------------------------
+
+    @staticmethod
+    def _require_work_evidence(unit_of_work: UnitOfWork, principal_id: str, reference: str) -> None:
+        """Fail closed unless Work evidence belongs to this Principal.
+
+        The repository performs a metadata-only existence/state check.  This
+        layer receives one boolean and therefore cannot accidentally expose
+        capture or assertion content in a Work response or error.
+        """
+        with _translated():
+            valid = unit_of_work.captures.accepts_work_evidence_reference(
+                reference, principal_id=principal_id
+            )
+        if not valid:
+            raise InvalidRequestError(SafeDetail.INVALID_EVIDENCE_REFERENCE)
+
+    @staticmethod
+    def _require_current_counterparty(
+        unit_of_work: UnitOfWork, principal_id: str, person_id: str
+    ) -> None:
+        """Fail closed unless ``person_id`` is current in this Principal's partition.
+
+        The repository intentionally returns the same ``None`` for an absent,
+        foreign, or superseded Person.  Preserving that collapse here prevents
+        a Commitment write from becoming an identity-enumeration side channel.
+        """
+        with _translated():
+            counterparty = unit_of_work.commitments.counterparty(principal_id, person_id)
+        if counterparty is None:
+            raise NotFoundError(SafeDetail.COUNTERPARTY_PERSON_ID)
+
+    def _require_commitment_create_eligibility(
+        self,
+        unit_of_work: UnitOfWork,
+        principal_id: str,
+        *,
+        evidence_ref: str,
+        counterparty_person_id: str,
+    ) -> None:
+        self._require_work_evidence(unit_of_work, principal_id, evidence_ref)
+        self._require_current_counterparty(unit_of_work, principal_id, counterparty_person_id)
 
     def _capabilities_get(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetCapabilities
@@ -3172,8 +3570,15 @@ class ApplicationService:
             task = unit_of_work.tasks.get(authorization.principal.principal_id, command.task_id)
         if task is None:
             raise NotFoundError(SafeDetail.TASK_ID)
+        task_payload = _task_view(task).to_canonical_dict()
+        if task.closure_evidence_ref is not None:
+            with _translated():
+                closure = unit_of_work.tasks.latest_applied_terminal_history(
+                    authorization.principal.principal_id, command.task_id
+                )
+            task_payload["closure_history_id"] = None if closure is None else closure.history_id
         return _Result(
-            payload={"task": _task_view(task).to_canonical_dict()},
+            payload={"task": task_payload},
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
         )
 
@@ -3187,25 +3592,40 @@ class ApplicationService:
         rather than a guess, exactly as `_documents_list` does it.
         """
         page_size = self._page_size(command.page_size)
-        with _translated():
+        work_start: datetime | None = None
+        work_end: datetime | None = None
+        if command.work_view is not None and command.work_date is not None:
+            work_start, work_end = _work_window(
+                command.work_date,
+                command.timezone or "UTC",
+                recent=command.work_view is TaskWorkView.RECENTLY_UPDATED,
+            )
+        with _work_cursor_translated(), _translated():
             found = unit_of_work.tasks.list_tasks(
                 authorization.principal.principal_id,
                 lifecycle_state=command.lifecycle_state,
                 priority=command.priority,
-                include_archived=command.include_archived,
+                archive_mode=command.archive_mode,
+                after=command.after,
+                work_view=command.work_view,
+                work_start=work_start,
+                work_end=work_end,
+                work_now=authorization.at,
                 limit=page_size + 1,
             )
         truncated = len(found) > page_size
-        entries = [_task_list_entry(task).to_canonical_dict() for task in found[:page_size]]
+        page = found[:page_size]
+        entries = [_task_list_entry(task).to_canonical_dict() for task in page]
         return _Result(
             payload={"tasks": entries},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_TASK_TRUST_BASIS,
                 truncation=Truncation(
-                    is_truncated=truncated, reason="page_size_reached" if truncated else None
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].task_id if truncated and page else None,
                 ),
-                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
             ),
         )
 
@@ -3223,21 +3643,39 @@ class ApplicationService:
         an MCV prerequisite.
         """
         page_size = self._page_size(command.page_size)
-        with _translated():
+        work_start: datetime | None = None
+        work_end: datetime | None = None
+        if command.work_view is not None and command.work_date is not None:
+            work_start, work_end = _work_window(
+                command.work_date,
+                command.timezone or "UTC",
+                recent=command.work_view is TaskWorkView.RECENTLY_UPDATED,
+            )
+        with _work_cursor_translated(), _translated():
             found = unit_of_work.tasks.search(
-                authorization.principal.principal_id, command.query, page_size + 1
+                authorization.principal.principal_id,
+                command.query,
+                page_size + 1,
+                after=command.after,
+                archive_mode=command.archive_mode,
+                work_view=command.work_view,
+                work_start=work_start,
+                work_end=work_end,
+                work_now=authorization.at,
             )
         truncated = len(found) > page_size
-        entries = [_task_list_entry(task).to_canonical_dict() for task in found[:page_size]]
+        page = found[:page_size]
+        entries = [_task_list_entry(task).to_canonical_dict() for task in page]
         return _Result(
             payload={"tasks": entries},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_TASK_TRUST_BASIS,
                 truncation=Truncation(
-                    is_truncated=truncated, reason="page_size_reached" if truncated else None
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].task_id if truncated and page else None,
                 ),
-                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
             ),
         )
 
@@ -3260,22 +3698,27 @@ class ApplicationService:
         if task is None:
             raise NotFoundError(SafeDetail.TASK_ID)
         page_size = self._page_size(command.page_size)
-        with _translated():
-            found = unit_of_work.tasks.list_history(principal_id, command.task_id, page_size + 1)
+        with _work_cursor_translated(), _translated():
+            if command.after is None:
+                found = unit_of_work.tasks.list_history(
+                    principal_id, command.task_id, page_size + 1
+                )
+            else:
+                found = unit_of_work.tasks.list_history(
+                    principal_id, command.task_id, page_size + 1, after=command.after
+                )
         truncated = len(found) > page_size
+        page = found[:page_size]
         return _Result(
-            payload={
-                "history": [
-                    _task_history_view(entry).to_canonical_dict() for entry in found[:page_size]
-                ]
-            },
+            payload={"history": [_task_history_view(entry).to_canonical_dict() for entry in page]},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_TASK_TRUST_BASIS,
                 truncation=Truncation(
-                    is_truncated=truncated, reason="page_size_reached" if truncated else None
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].history_id if truncated and page else None,
                 ),
-                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
             ),
         )
 
@@ -3291,23 +3734,36 @@ class ApplicationService:
         if self._tasks is None:
             raise InternalError()
         principal_id = authorization.principal.principal_id
+        _validate_task_commitment_state(
+            unit_of_work, principal_id, command.commitment_id, command.role
+        )
+        from my_pa.application.tasks import TaskIdempotencyConflictError
         from my_pa.domain.task.history import TaskMutationActor
 
-        with _translated():
-            receipt = self._tasks.create_task(
-                principal_id=principal_id,
-                title=command.title,
-                origin_evidence_ref=command.origin_evidence_ref,
-                actor=TaskMutationActor.PRINCIPAL,
-                description=command.description,
-                priority=command.priority,
-                due_at=command.due_at,
-                project_id=command.project_id,
-                situation_id=command.situation_id,
-                accepted_by_review_decision_id=command.accepted_by_review_decision_id,
-                idempotency_key=command.idempotency_key,
-                client_context=command.client_context,
-            )
+        try:
+            with _translated():
+                receipt = self._tasks.create_task(
+                    principal_id=principal_id,
+                    title=command.title,
+                    origin_evidence_ref=command.origin_evidence_ref,
+                    actor=TaskMutationActor.PRINCIPAL,
+                    description=command.description,
+                    priority=command.priority,
+                    due_at=command.due_at,
+                    project_id=command.project_id,
+                    situation_id=command.situation_id,
+                    accepted_by_review_decision_id=command.accepted_by_review_decision_id,
+                    idempotency_key=command.idempotency_key,
+                    client_context=command.client_context,
+                    commitment_id=command.commitment_id,
+                    role=command.role,
+                    active_uow=unit_of_work,
+                    validate_first_write=lambda: self._require_work_evidence(
+                        unit_of_work, principal_id, command.origin_evidence_ref
+                    ),
+                )
+        except TaskIdempotencyConflictError:
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
         return _Result(
             payload={
                 "task": _task_view(receipt.task).to_canonical_dict(),
@@ -3322,134 +3778,78 @@ class ApplicationService:
     ) -> _Result:
         """`tasks.update`: modify one task's mutable fields.
 
-        Delegates to `TaskManagementService` methods for each field (update_title,
-        set_priority, schedule, defer, archive, unarchive). Handles optimistic
-        concurrency via `expected_version` and idempotency via `idempotency_key`.
-        Returns the updated task and the history entry that recorded the update.
-
-        **Note:** This implementation applies mutations sequentially, which means
-        each mutation uses the version from the previous one. A production
-        implementation might batch these into a single atomic operation or use
-        a different strategy. For now, this follows the pattern of applying
-        mutations one at a time through the service.
+        Builds one bounded patch and delegates once to
+        `TaskManagementService.update_task`. Expected-version checking, digest-
+        bound idempotency, Task replacement, and its single history receipt are
+        atomic in the shared Work unit of work.
         """
         if self._tasks is None:
             raise InternalError()
         principal_id = authorization.principal.principal_id
-        from my_pa.application.tasks import TaskVersionConflictError
+        from my_pa.application.tasks import (
+            TaskIdempotencyConflictError,
+            TaskNotFoundError,
+            TaskVersionConflictError,
+        )
         from my_pa.domain.task.history import TaskMutationActor
 
-        # Read the current task to determine which fields changed
-        with _translated():
-            current = unit_of_work.tasks.get(principal_id, command.task_id)
+        values: dict[str, object] = {}
+        for field_name in (
+            "title",
+            "description",
+            "priority",
+            "due_at",
+            "scheduled_at",
+            "deferred_until",
+            "commitment_id",
+            "role",
+        ):
+            value = getattr(command, field_name)
+            if value is not None:
+                values[field_name] = value
+        if command.archived is not None:
+            values["archived_at"] = self._clock() if command.archived else None
+        current = unit_of_work.tasks.get(principal_id, command.task_id)
         if current is None:
             raise NotFoundError(SafeDetail.TASK_ID)
-
-        # Track the current version as we apply mutations
-        current_version = command.expected_version
-        receipt = None
-
-        # Apply mutations in order
+        commitment_id, role = _task_commitment_state(
+            current, values=values, clear_fields=frozenset(command.clear_fields)
+        )
+        _validate_task_commitment_state(unit_of_work, principal_id, commitment_id, role)
         try:
             with _translated():
-                if command.title is not None and command.title != current.title:
-                    receipt = self._tasks.update_title(
-                        principal_id=principal_id,
-                        task_id=command.task_id,
-                        title=command.title,
-                        expected_version=current_version,
-                        actor=TaskMutationActor.PRINCIPAL,
-                        idempotency_key=command.idempotency_key,
-                        client_context=command.client_context,
-                    )
-                    current_version = receipt.task.version
-
-                if command.description is not None and command.description != current.description:
-                    receipt = self._tasks.update_description(
-                        principal_id=principal_id,
-                        task_id=command.task_id,
-                        description=command.description,
-                        expected_version=current_version,
-                        actor=TaskMutationActor.PRINCIPAL,
-                        idempotency_key=command.idempotency_key,
-                        client_context=command.client_context,
-                    )
-                    current_version = receipt.task.version
-
-                if command.priority is not None and command.priority != current.priority:
-                    receipt = self._tasks.set_priority(
-                        principal_id=principal_id,
-                        task_id=command.task_id,
-                        priority=command.priority,
-                        expected_version=current_version,
-                        actor=TaskMutationActor.PRINCIPAL,
-                        idempotency_key=command.idempotency_key,
-                        client_context=command.client_context,
-                    )
-                    current_version = receipt.task.version
-
-                if (
-                    command.scheduled_at is not None
-                    and command.scheduled_at != current.scheduled_at
-                ):
-                    receipt = self._tasks.schedule(
-                        principal_id=principal_id,
-                        task_id=command.task_id,
-                        scheduled_at=command.scheduled_at,
-                        expected_version=current_version,
-                        actor=TaskMutationActor.PRINCIPAL,
-                        idempotency_key=command.idempotency_key,
-                        client_context=command.client_context,
-                    )
-                    current_version = receipt.task.version
-
-                if (
-                    command.deferred_until is not None
-                    and command.deferred_until != current.deferred_until
-                ):
-                    receipt = self._tasks.defer(
-                        principal_id=principal_id,
-                        task_id=command.task_id,
-                        deferred_until=command.deferred_until,
-                        expected_version=current_version,
-                        actor=TaskMutationActor.PRINCIPAL,
-                        idempotency_key=command.idempotency_key,
-                        client_context=command.client_context,
-                    )
-                    current_version = receipt.task.version
-        except TaskVersionConflictError:
-            raise ConflictError(SafeDetail.TASK_ID) from None
-
-        # If no mutations were applied, return the current task
-        if receipt is None:
-            receipt_task = current
-            # Record a no-op history entry
-            from my_pa.domain.task.history import TaskMutationAction, TaskMutationOutcome
-
-            with _translated():
-                history = TaskManagementHistoryEntry(
-                    history_id=issue_identifier(IdKind.TASK_HISTORY),
+                receipt = self._tasks.update_task(
                     principal_id=principal_id,
                     task_id=command.task_id,
-                    action=TaskMutationAction.UPDATE_TITLE,  # Placeholder
+                    expected_version=command.expected_version,
                     actor=TaskMutationActor.PRINCIPAL,
-                    outcome=TaskMutationOutcome.NO_OP,
-                    before_version=current.version,
-                    after_version=current.version,
-                    occurred_at=self._clock(),
-                    recorded_at=self._clock(),
+                    values=values,
+                    clear_fields=frozenset(command.clear_fields),
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
+                    active_uow=unit_of_work,
                 )
-                unit_of_work.tasks.insert_history(history)
-        else:
-            receipt_task = receipt.task
-            history = receipt.history
+        except TaskNotFoundError:
+            raise NotFoundError(SafeDetail.TASK_ID) from None
+        except TaskIdempotencyConflictError:
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        except TaskVersionConflictError as conflict:
+            receipt = conflict.receipt
+            current = unit_of_work.tasks.get(principal_id, command.task_id)
+            if (
+                receipt.history.outcome.value != "rejected"
+                or receipt.history.before_version != receipt.history.after_version
+                or current != receipt.task
+                or current.version != receipt.history.before_version
+            ):
+                raise InternalError() from None
+            raise _CommitRejectedConflictError(ConflictError(SafeDetail.TASK_ID)) from None
 
         return _Result(
             payload={
-                "task": _task_view(receipt_task).to_canonical_dict(),
-                "history": _task_history_view(history).to_canonical_dict(),
+                "task": _task_view(receipt.task).to_canonical_dict(),
+                "history": _task_history_view(receipt.history).to_canonical_dict(),
+                "replayed": receipt.replayed,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
         )
@@ -3469,6 +3869,7 @@ class ApplicationService:
         principal_id = authorization.principal.principal_id
         from my_pa.application.tasks import (
             IllegalTaskTransitionError,
+            TaskIdempotencyConflictError,
             TaskNotFoundError,
             TaskVersionConflictError,
         )
@@ -3485,13 +3886,32 @@ class ApplicationService:
                     closure_evidence_ref=command.closure_evidence_ref,
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
+                    active_uow=unit_of_work,
+                    validate_first_write=(
+                        None
+                        if command.closure_evidence_ref is None
+                        else lambda: self._require_work_evidence(
+                            unit_of_work, principal_id, command.closure_evidence_ref or ""
+                        )
+                    ),
                 )
         except IllegalTaskTransitionError as e:
             raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE) from e
         except TaskNotFoundError:
             raise NotFoundError(SafeDetail.TASK_ID) from None
-        except TaskVersionConflictError:
-            raise ConflictError(SafeDetail.TASK_ID) from None
+        except TaskVersionConflictError as conflict:
+            receipt = conflict.receipt
+            current = unit_of_work.tasks.get(principal_id, command.task_id)
+            if (
+                receipt.history.outcome.value != "rejected"
+                or receipt.history.before_version != receipt.history.after_version
+                or current != receipt.task
+                or current.version != receipt.history.before_version
+            ):
+                raise InternalError() from None
+            raise _CommitRejectedConflictError(ConflictError(SafeDetail.TASK_ID)) from None
+        except TaskIdempotencyConflictError:
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
 
         return _Result(
             payload={
@@ -3505,39 +3925,231 @@ class ApplicationService:
     def _tasks_bulk_preview(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: BulkPreviewTasks
     ) -> _Result:
-        """`tasks.bulk_preview`: preview changes to multiple tasks without applying them.
+        """Validate and persist a content-free, fifteen-minute preview receipt."""
+        principal_id = authorization.principal.principal_id
+        mutations, digest = _normalise_bulk_mutations(command.mutations)
+        prior = unit_of_work.tasks.find_bulk_by_preview_key(principal_id, command.idempotency_key)
+        if prior is not None:
+            if prior.request_digest != digest:
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+            return _Result(
+                payload={
+                    "bulk_operation_id": prior.bulk_operation_id,
+                    "expires_at": prior.expires_at.isoformat(),
+                    "affected": prior.preview_affected,
+                    "no_op": prior.preview_no_op,
+                    "rejected": 0,
+                    "replayed": True,
+                },
+                disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+            )
 
-        Returns a list of proposed changes, each with the task's current state and
-        the state it would have after the mutation. No changes are applied, and the
-        transaction is rolled back after the preview is returned.
-        """
-        # This is a placeholder implementation. Full bulk preview would require
-        # parsing the mutations list and simulating each one without committing.
-        raise UnsupportedError(SafeDetail.MUTATIONS)
+        candidates: list[TaskManagementTask] = []
+        for mutation in mutations:
+            task = unit_of_work.tasks.get(principal_id, str(mutation["task_id"]))
+            if task is None:
+                raise NotFoundError(SafeDetail.TASK_ID)
+            if task.version != cast(int, mutation["expected_version"]):
+                raise ConflictError(SafeDetail.TASK_ID)
+            values = cast(dict[str, object], mutation.get("values", {}))
+            clear_fields = frozenset(cast(list[str], mutation.get("clear_fields", [])))
+            commitment_id, role = _task_commitment_state(
+                task, values=values, clear_fields=clear_fields
+            )
+            _validate_task_commitment_state(unit_of_work, principal_id, commitment_id, role)
+            closure = mutation.get("closure_evidence_ref")
+            if closure is not None:
+                self._require_work_evidence(unit_of_work, principal_id, str(closure))
+            candidates.append(_bulk_candidate(task, mutation, now=authorization.at))
+
+        affected = sum(
+            candidate.version > cast(int, mutation["expected_version"])
+            for mutation, candidate in zip(mutations, candidates, strict=True)
+        )
+        operation = TaskBulkOperation(
+            bulk_operation_id=issue_identifier(IdKind.BULK_OPERATION),
+            principal_id=principal_id,
+            preview_idempotency_key=command.idempotency_key,
+            request_digest=digest,
+            previewed_at=authorization.at,
+            expires_at=authorization.at + timedelta(minutes=15),
+            preview_affected=affected,
+            preview_no_op=len(mutations) - affected,
+        )
+        try:
+            unit_of_work.tasks.insert_bulk(operation)
+        except BulkIdempotencyConflictError:
+            # The outer UnitOfWork sees this exception and rolls back the
+            # failed PostgreSQL transaction.  No query is attempted on the
+            # aborted connection, and preview has made no Task writes.
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        return _Result(
+            payload={
+                "bulk_operation_id": operation.bulk_operation_id,
+                "expires_at": operation.expires_at.isoformat(),
+                "affected": affected,
+                "no_op": len(mutations) - affected,
+                "rejected": 0,
+                "replayed": False,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
 
     def _tasks_bulk_confirm(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: BulkConfirmTasks
     ) -> _Result:
-        """`tasks.bulk_confirm`: apply previewed changes to multiple tasks atomically.
+        """Apply an exact preview resubmission under the outer Work transaction."""
+        principal_id = authorization.principal.principal_id
+        mutations, digest = _normalise_bulk_mutations(command.mutations)
+        prior_confirmation = unit_of_work.tasks.find_bulk_by_confirm_key(
+            principal_id, command.idempotency_key
+        )
+        if prior_confirmation is not None:
+            if (
+                prior_confirmation.bulk_operation_id != command.bulk_operation_id
+                or prior_confirmation.request_digest != digest
+                or prior_confirmation.confirmed_at is None
+            ):
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+            return _Result(
+                payload={
+                    "bulk_operation_id": prior_confirmation.bulk_operation_id,
+                    "affected": prior_confirmation.affected,
+                    "no_op": prior_confirmation.no_op,
+                    "rejected": prior_confirmation.rejected,
+                    "history_ids": list(prior_confirmation.history_ids),
+                    "replayed": True,
+                },
+                disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+            )
+        operation = unit_of_work.tasks.get_bulk_for_update(principal_id, command.bulk_operation_id)
+        if operation is None:
+            raise NotFoundError(SafeDetail.BULK_OPERATION_ID)
+        if operation.request_digest != digest:
+            raise ConflictError(SafeDetail.MUTATIONS)
+        if operation.confirmed_at is not None:
+            if operation.confirm_idempotency_key != command.idempotency_key:
+                raise ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+            return _Result(
+                payload={
+                    "bulk_operation_id": operation.bulk_operation_id,
+                    "affected": operation.affected,
+                    "no_op": operation.no_op,
+                    "rejected": operation.rejected,
+                    "history_ids": list(operation.history_ids),
+                    "replayed": True,
+                },
+                disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+            )
+        if authorization.at >= operation.expires_at:
+            raise ConflictError(SafeDetail.BULK_OPERATION_ID)
 
-        Applies all mutations from a prior `BulkPreviewTasks` call in one
-        transaction. If any mutation fails, the entire operation is rolled back.
-        """
-        # This is a placeholder implementation. Full bulk confirm would require
-        # looking up the bulk operation and applying all its mutations atomically.
-        raise UnsupportedError(SafeDetail.BULK_OPERATION_ID)
+        by_id = {str(mutation["task_id"]): mutation for mutation in mutations}
+        locked: dict[str, TaskManagementTask] = {}
+        for task_id in sorted(by_id):
+            task = unit_of_work.tasks.get_for_update(principal_id, task_id)
+            if task is None:
+                raise NotFoundError(SafeDetail.TASK_ID)
+            mutation = by_id[task_id]
+            if task.version != cast(int, mutation["expected_version"]):
+                raise ConflictError(SafeDetail.TASK_ID)
+            values = cast(dict[str, object], mutation.get("values", {}))
+            clear_fields = frozenset(cast(list[str], mutation.get("clear_fields", [])))
+            commitment_id, role = _task_commitment_state(
+                task, values=values, clear_fields=clear_fields
+            )
+            _validate_task_commitment_state(unit_of_work, principal_id, commitment_id, role)
+            closure = mutation.get("closure_evidence_ref")
+            if closure is not None:
+                self._require_work_evidence(unit_of_work, principal_id, str(closure))
+            locked[task_id] = task
+
+        history_ids: list[str] = []
+        affected = 0
+        no_op = 0
+        for mutation in mutations:
+            current = locked[str(mutation["task_id"])]
+            candidate = _bulk_candidate(current, mutation, now=authorization.at)
+            applied = candidate.version > current.version
+            if applied:
+                unit_of_work.tasks.update_task(candidate)
+                affected += 1
+            else:
+                no_op += 1
+            history = TaskManagementHistoryEntry(
+                history_id=issue_identifier(IdKind.TASK_HISTORY),
+                principal_id=principal_id,
+                task_id=current.task_id,
+                action=(
+                    TaskMutationAction.UPDATE
+                    if mutation["kind"] == "update"
+                    else TaskMutationAction.TRANSITION_LIFECYCLE
+                ),
+                actor=TaskMutationActor.PRINCIPAL,
+                outcome=(TaskMutationOutcome.APPLIED if applied else TaskMutationOutcome.NO_OP),
+                before_version=current.version,
+                after_version=candidate.version,
+                occurred_at=authorization.at,
+                recorded_at=self._clock(),
+                request_digest=digest,
+                bulk_operation_id=operation.bulk_operation_id,
+            )
+            unit_of_work.tasks.insert_history(history)
+            history_ids.append(history.history_id)
+
+        confirmed = replace(
+            operation,
+            confirmed_at=authorization.at,
+            confirm_idempotency_key=command.idempotency_key,
+            affected=affected,
+            no_op=no_op,
+            rejected=0,
+            history_ids=tuple(history_ids),
+        )
+        try:
+            unit_of_work.tasks.confirm_bulk(confirmed)
+        except BulkIdempotencyConflictError:
+            # Task/history changes above share this transaction.  The typed
+            # conflict must escape the handler so the outer UnitOfWork rolls
+            # all of them back with the losing unique-key claim.
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        return _Result(
+            payload={
+                "bulk_operation_id": confirmed.bulk_operation_id,
+                "affected": affected,
+                "no_op": no_op,
+                "rejected": 0,
+                "history_ids": history_ids,
+                "replayed": False,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
 
     def _commitments_read(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ReadCommitment
     ) -> _Result:
+        principal_id = authorization.principal.principal_id
         with _translated():
-            commitment = unit_of_work.commitments.get(
-                authorization.principal.principal_id, command.commitment_id
-            )
+            commitment = unit_of_work.commitments.get(principal_id, command.commitment_id)
         if commitment is None:
             raise NotFoundError(SafeDetail.COMMITMENT_ID)
+        with _translated():
+            public = _commitment_public_view(unit_of_work, principal_id, commitment)
+            follow_up = unit_of_work.tasks.get_follow_up_for_commitment(
+                principal_id, command.commitment_id
+            )
+            counterparty_options, counterparty_options_truncated = _counterparty_options(
+                unit_of_work, principal_id
+            )
         return _Result(
-            payload={"commitment": _commitment_view(commitment).to_canonical_dict()},
+            payload={
+                "commitment": public,
+                "follow_up_task": (
+                    None if follow_up is None else _task_list_entry(follow_up).to_canonical_dict()
+                ),
+                "counterparty_options": counterparty_options,
+                "counterparty_options_truncated": counterparty_options_truncated,
+            },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
         )
 
@@ -3545,40 +4157,163 @@ class ApplicationService:
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListCommitments
     ) -> _Result:
         page_size = self._page_size(command.page_size)
-        with _translated():
-            found = unit_of_work.commitments.list_commitments(
-                authorization.principal.principal_id,
-                direction=command.direction,
-                state=command.state,
-                limit=page_size + 1,
+        principal_id = authorization.principal.principal_id
+        work_start: datetime | None = None
+        work_end: datetime | None = None
+        if command.work_view is not None and command.work_date is not None:
+            work_start, work_end = _work_window(
+                command.work_date,
+                command.timezone or "UTC",
+                recent=command.work_view is CommitmentWorkView.RECENTLY_UPDATED,
             )
+        with _work_cursor_translated(), _translated():
+            if command.after is None:
+                found = unit_of_work.commitments.list_commitments(
+                    principal_id,
+                    direction=command.direction,
+                    state=command.state,
+                    work_view=command.work_view,
+                    work_start=work_start,
+                    work_end=work_end,
+                    limit=page_size + 1,
+                )
+            else:
+                found = unit_of_work.commitments.list_commitments(
+                    principal_id,
+                    direction=command.direction,
+                    state=command.state,
+                    work_view=command.work_view,
+                    work_start=work_start,
+                    work_end=work_end,
+                    after=command.after,
+                    limit=page_size + 1,
+                )
         truncated = len(found) > page_size
-        entries = [_commitment_list_entry(c).to_canonical_dict() for c in found[:page_size]]
+        page = found[:page_size]
+        with _translated():
+            entries = [_commitment_public_list_entry(unit_of_work, principal_id, c) for c in page]
+            counterparty_options, counterparty_options_truncated = _counterparty_options(
+                unit_of_work, principal_id
+            )
         return _Result(
-            payload={"commitments": entries},
+            payload={
+                "commitments": entries,
+                "counterparty_options": counterparty_options,
+                "counterparty_options_truncated": counterparty_options_truncated,
+            },
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_COMMITMENT_TRUST_BASIS,
                 truncation=Truncation(
-                    is_truncated=truncated, reason="page_size_reached" if truncated else None
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].commitment_id if truncated and page else None,
                 ),
-                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
+            ),
+        )
+
+    def _commitments_search(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: SearchCommitments
+    ) -> _Result:
+        page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
+        work_start: datetime | None = None
+        work_end: datetime | None = None
+        if command.work_view is not None and command.work_date is not None:
+            work_start, work_end = _work_window(
+                command.work_date,
+                command.timezone or "UTC",
+                recent=command.work_view is CommitmentWorkView.RECENTLY_UPDATED,
+            )
+        with _work_cursor_translated(), _translated():
+            found = unit_of_work.commitments.search(
+                principal_id,
+                command.query,
+                page_size + 1,
+                after=command.after,
+                direction=command.direction,
+                state=command.state,
+                work_view=command.work_view,
+                work_start=work_start,
+                work_end=work_end,
+            )
+        truncated = len(found) > page_size
+        page = found[:page_size]
+        with _translated():
+            entries = [
+                _commitment_public_list_entry(unit_of_work, principal_id, item) for item in page
+            ]
+            counterparty_options, counterparty_options_truncated = _counterparty_options(
+                unit_of_work, principal_id
+            )
+        return _Result(
+            payload={
+                "commitments": entries,
+                "counterparty_options": counterparty_options,
+                "counterparty_options_truncated": counterparty_options_truncated,
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_COMMITMENT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].commitment_id if truncated and page else None,
+                ),
+            ),
+        )
+
+    def _commitments_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetCommitmentHistory,
+    ) -> _Result:
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            commitment = unit_of_work.commitments.get(principal_id, command.commitment_id)
+        if commitment is None:
+            raise NotFoundError(SafeDetail.COMMITMENT_ID)
+        page_size = self._page_size(command.page_size)
+        with _work_cursor_translated(), _translated():
+            found = unit_of_work.commitments.list_history(
+                principal_id, command.commitment_id, page_size + 1, after=command.after
+            )
+        truncated = len(found) > page_size
+        page = found[:page_size]
+        return _Result(
+            payload={
+                "history": [_commitment_history_view(item).to_canonical_dict() for item in page]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_COMMITMENT_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].history_id if truncated and page else None,
+                ),
             ),
         )
 
     def _commitments_waiting_on(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: WaitingOn
     ) -> _Result:
-        from my_pa.domain.situation.continuity import CommitmentDirection, CommitmentState
-        from my_pa.domain.task.role import TaskRole
+        from my_pa.domain.situation.continuity import (
+            CommitmentDirection,
+            CommitmentState,
+            ContinuityEvidenceState,
+        )
 
         principal_id = authorization.principal.principal_id
         page_size = self._page_size(command.page_size)
-        with _translated():
+        with _work_cursor_translated(), _translated():
             commitments = unit_of_work.commitments.list_commitments(
                 principal_id,
                 direction=CommitmentDirection.OWED_TO_PRINCIPAL,
                 state=CommitmentState.OPEN,
+                evidence_state=ContinuityEvidenceState.ACCEPTED,
+                after=command.after,
                 limit=page_size + 1,
             )
         truncated = len(commitments) > page_size
@@ -3588,37 +4323,38 @@ class ApplicationService:
             follow_up_task_title: str | None = None
             follow_up_task_state: str | None = None
             with _translated():
-                tasks = unit_of_work.tasks.list_tasks(
-                    principal_id,
-                    limit=200,
+                follow_up = unit_of_work.tasks.get_follow_up_for_commitment(
+                    principal_id, c.commitment_id
                 )
-            for t in tasks:
-                if t.commitment_id == c.commitment_id and t.role == TaskRole.FOLLOW_UP:
-                    follow_up_task_id = t.task_id
-                    follow_up_task_title = t.title
-                    follow_up_task_state = t.lifecycle_state.value
-                    break
-            entries.append(
-                WaitingOnEntry(
-                    commitment_id=c.commitment_id,
-                    title=c.summary,
-                    counterparty_person_id=c.counterparty_person_id,
-                    due_date=c.due_at.isoformat() if c.due_at is not None else None,
-                    state=c.state.value,
-                    follow_up_task_id=follow_up_task_id,
-                    follow_up_task_title=follow_up_task_title,
-                    follow_up_task_state=follow_up_task_state,
-                ).to_canonical_dict()
-            )
+            if follow_up is not None:
+                follow_up_task_id = follow_up.task_id
+                follow_up_task_title = follow_up.title
+                follow_up_task_state = follow_up.lifecycle_state.value
+            entry = WaitingOnEntry(
+                commitment_id=c.commitment_id,
+                title=c.summary,
+                counterparty_person_id=c.counterparty_person_id,
+                due_date=c.due_at.isoformat() if c.due_at is not None else None,
+                state=c.state.value,
+                follow_up_task_id=follow_up_task_id,
+                follow_up_task_title=follow_up_task_title,
+                follow_up_task_state=follow_up_task_state,
+            ).to_canonical_dict()
+            with _translated():
+                entry["counterparty"] = _counterparty_projection(
+                    unit_of_work, principal_id, c.counterparty_person_id
+                )
+            entries.append(entry)
         return _Result(
             payload={"waiting_on": entries},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=_COMMITMENT_TRUST_BASIS,
                 truncation=Truncation(
-                    is_truncated=truncated, reason="page_size_reached" if truncated else None
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=(commitments[page_size - 1].commitment_id if truncated else None),
                 ),
-                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
             ),
         )
 
@@ -3628,26 +4364,39 @@ class ApplicationService:
         if self._commitments is None:
             raise InternalError()
         principal_id = authorization.principal.principal_id
+        from my_pa.application.commitments import CommitmentIdempotencyConflictError
         from my_pa.domain.task.history import TaskMutationActor
 
+        try:
+            with _translated():
+                receipt = self._commitments.create_commitment(
+                    principal_id=principal_id,
+                    counterparty_person_id=command.counterparty_person_id,
+                    direction=command.direction,
+                    summary=command.summary,
+                    origin_evidence_ref=command.origin_evidence_ref,
+                    actor=TaskMutationActor.PRINCIPAL,
+                    due_at=command.due_at,
+                    project_id=command.project_id,
+                    situation_id=command.situation_id,
+                    accepted_by_review_decision_id=command.accepted_by_review_decision_id,
+                    idempotency_key=command.idempotency_key,
+                    client_context=command.client_context,
+                    active_uow=unit_of_work,
+                    validate_first_write=lambda: self._require_commitment_create_eligibility(
+                        unit_of_work,
+                        principal_id,
+                        evidence_ref=command.origin_evidence_ref,
+                        counterparty_person_id=command.counterparty_person_id,
+                    ),
+                )
+        except CommitmentIdempotencyConflictError:
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
         with _translated():
-            receipt = self._commitments.create_commitment(
-                principal_id=principal_id,
-                counterparty_person_id=command.counterparty_person_id,
-                direction=command.direction,
-                summary=command.summary,
-                origin_evidence_ref=command.origin_evidence_ref,
-                actor=TaskMutationActor.PRINCIPAL,
-                due_at=command.due_at,
-                project_id=command.project_id,
-                situation_id=command.situation_id,
-                accepted_by_review_decision_id=command.accepted_by_review_decision_id,
-                idempotency_key=command.idempotency_key,
-                client_context=command.client_context,
-            )
+            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
         return _Result(
             payload={
-                "commitment": _commitment_view(receipt.commitment).to_canonical_dict(),
+                "commitment": public,
                 "replayed": receipt.replayed,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
@@ -3660,6 +4409,7 @@ class ApplicationService:
             raise InternalError()
         principal_id = authorization.principal.principal_id
         from my_pa.application.commitments import (
+            CommitmentIdempotencyConflictError,
             CommitmentNotFoundError,
             CommitmentVersionConflictError,
         )
@@ -3675,14 +4425,97 @@ class ApplicationService:
                     actor=TaskMutationActor.PRINCIPAL,
                     idempotency_key=command.idempotency_key,
                     client_context=command.client_context,
+                    active_uow=unit_of_work,
+                    validate_first_write=lambda: self._require_work_evidence(
+                        unit_of_work, principal_id, command.closure_evidence_ref
+                    ),
                 )
         except CommitmentNotFoundError:
             raise NotFoundError(SafeDetail.COMMITMENT_ID) from None
-        except CommitmentVersionConflictError:
-            raise ConflictError(SafeDetail.COMMITMENT_ID) from None
+        except CommitmentVersionConflictError as conflict:
+            receipt = conflict.receipt
+            current = unit_of_work.commitments.get(principal_id, command.commitment_id)
+            if (
+                receipt.history.outcome.value != "rejected"
+                or receipt.history.before_version != receipt.history.after_version
+                or current != receipt.commitment
+                or current.version != receipt.history.before_version
+            ):
+                raise InternalError() from None
+            raise _CommitRejectedConflictError(ConflictError(SafeDetail.COMMITMENT_ID)) from None
+        except CommitmentIdempotencyConflictError:
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        with _translated():
+            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
         return _Result(
             payload={
-                "commitment": _commitment_view(receipt.commitment).to_canonical_dict(),
+                "commitment": public,
+                "replayed": receipt.replayed,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
+        )
+
+    def _commitments_update(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateCommitment
+    ) -> _Result:
+        if self._commitments is None:
+            raise InternalError()
+        from my_pa.application.commitments import (
+            CommitmentIdempotencyConflictError,
+            CommitmentNotFoundError,
+            CommitmentVersionConflictError,
+        )
+        from my_pa.domain.task.history import TaskMutationActor
+
+        principal_id = authorization.principal.principal_id
+        values: dict[str, object] = {}
+        if command.summary is not None:
+            values["summary"] = command.summary
+        if command.due_at is not None:
+            values["due_at"] = command.due_at
+        if command.counterparty_person_id is not None:
+            values["counterparty_person_id"] = command.counterparty_person_id
+        try:
+            with _translated():
+                receipt = self._commitments.update_commitment(
+                    principal_id=principal_id,
+                    commitment_id=command.commitment_id,
+                    expected_version=command.expected_version,
+                    actor=TaskMutationActor.PRINCIPAL,
+                    values=values,
+                    clear_due_at=command.clear_due_at,
+                    idempotency_key=command.idempotency_key,
+                    client_context=command.client_context,
+                    active_uow=unit_of_work,
+                    validate_first_write=(
+                        None
+                        if command.counterparty_person_id is None
+                        else lambda: self._require_current_counterparty(
+                            unit_of_work, principal_id, command.counterparty_person_id or ""
+                        )
+                    ),
+                )
+        except CommitmentNotFoundError:
+            raise NotFoundError(SafeDetail.COMMITMENT_ID) from None
+        except CommitmentVersionConflictError as conflict:
+            receipt = conflict.receipt
+            current = unit_of_work.commitments.get(principal_id, command.commitment_id)
+            if (
+                receipt.history.outcome.value != "rejected"
+                or receipt.history.before_version != receipt.history.after_version
+                or current != receipt.commitment
+                or current.version != receipt.history.before_version
+            ):
+                raise InternalError() from None
+            raise _CommitRejectedConflictError(ConflictError(SafeDetail.COMMITMENT_ID)) from None
+        except CommitmentIdempotencyConflictError:
+            raise ConflictError(SafeDetail.IDEMPOTENCY_KEY) from None
+        with _translated():
+            public = _commitment_public_view(unit_of_work, principal_id, receipt.commitment)
+        return _Result(
+            payload={
+                "commitment": public,
+                "history": _commitment_history_view(receipt.history).to_canonical_dict(),
                 "replayed": receipt.replayed,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_COMMITMENT_TRUST_BASIS),
@@ -4691,8 +5524,11 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.TASKS_BULK_CONFIRM: ApplicationService._tasks_bulk_confirm,
         Capability.COMMITMENTS_READ: ApplicationService._commitments_read,
         Capability.COMMITMENTS_LIST: ApplicationService._commitments_list,
+        Capability.COMMITMENTS_SEARCH: ApplicationService._commitments_search,
+        Capability.COMMITMENTS_HISTORY: ApplicationService._commitments_history,
         Capability.COMMITMENTS_WAITING_ON: ApplicationService._commitments_waiting_on,
         Capability.COMMITMENTS_CREATE: ApplicationService._commitments_create,
+        Capability.COMMITMENTS_UPDATE: ApplicationService._commitments_update,
         Capability.COMMITMENTS_CLOSE: ApplicationService._commitments_close,
         Capability.CONTEXT_PREPARE: ApplicationService._context_prepare,
         Capability.CONTEXT_FEEDBACK: ApplicationService._context_feedback,

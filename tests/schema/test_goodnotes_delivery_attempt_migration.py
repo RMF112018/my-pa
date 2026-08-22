@@ -37,6 +37,7 @@ GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 QUEUE_REVISION: Final = "e4d7b2f9a316"
 MENTION_REVISION: Final = "f3a8c1d7e592"
 HEAD_REVISION: Final = INTELLIGENCE_REVISION
+CURRENT_SCHEMA_HEAD: Final = "a4d9e7c2b615"
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_f4c1a8e6b205_add_goodnotes_delivery_attempt_ledger.py"
@@ -126,7 +127,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(HEAD_REVISION).down_revision == MENTION_REVISION
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(PRIOR).down_revision == GROUNDING_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 65
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 66
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -167,7 +168,7 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == HEAD_REVISION
+            assert revision == CURRENT_SCHEMA_HEAD
         assert _tables(engine) >= NEW_TABLES
         definition = _state_check(engine)
         assert definition is not None

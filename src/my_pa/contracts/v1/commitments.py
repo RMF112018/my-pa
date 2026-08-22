@@ -18,7 +18,12 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 
-__all__ = ["CommitmentListEntry", "CommitmentView", "WaitingOnEntry"]
+__all__ = [
+    "CommitmentHistoryEntryView",
+    "CommitmentListEntry",
+    "CommitmentView",
+    "WaitingOnEntry",
+]
 
 
 @dataclass(frozen=True, slots=True)
@@ -26,7 +31,6 @@ class CommitmentView:
     """One commitment, exactly as a single-commitment read answers it."""
 
     commitment_id: str
-    principal_id: str
     direction: str
     state: str
     counterparty_person_id: str | None
@@ -36,6 +40,11 @@ class CommitmentView:
     created_at: str
     updated_at: str
     version: int
+    evidence_state: str
+    origin_evidence_ref: str
+    closure_evidence_ref: str | None
+    accepted_by_review_decision_id: str | None
+    closed_at: str | None
 
     def to_canonical_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -46,7 +55,6 @@ class CommitmentListEntry:
     """One commitment as list responses present it: a page row."""
 
     commitment_id: str
-    principal_id: str
     direction: str
     state: str
     counterparty_person_id: str | None
@@ -78,6 +86,24 @@ class WaitingOnEntry:
     follow_up_task_id: str | None
     follow_up_task_title: str | None
     follow_up_task_state: str | None
+
+    def to_canonical_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True, slots=True)
+class CommitmentHistoryEntryView:
+    """One safe append-only Commitment mutation receipt."""
+
+    history_id: str
+    commitment_id: str
+    action: str
+    actor: str
+    outcome: str
+    before_version: int
+    after_version: int
+    occurred_at: str
+    recorded_at: str
 
     def to_canonical_dict(self) -> dict[str, object]:
         return asdict(self)

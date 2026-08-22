@@ -28,6 +28,8 @@ transaction boundary:
 
 from __future__ import annotations
 
+import dataclasses
+import threading
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -39,13 +41,35 @@ from alembic.config import Config
 from sqlalchemy import Engine, text
 from sqlalchemy.engine import make_url
 
+from my_pa.application.commitments import CommitmentManagementService
 from my_pa.application.tasks import TaskManagementService, TaskVersionConflictError
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.ports import BulkIdempotencyConflictError, WorkCursorError
 from my_pa.domain.common.identifiers import IdKind
-from my_pa.domain.situation.continuity import ContinuityAcceptanceKind
+from my_pa.domain.situation.continuity import (
+    CommitmentDirection,
+    CommitmentState,
+    ContinuityAcceptanceKind,
+    ContinuityEvidenceState,
+)
 from my_pa.domain.source.registry import issue_identifier
-from my_pa.domain.task.history import TaskMutationActor, TaskMutationOutcome
+from my_pa.domain.task.bulk import TaskBulkOperation
+from my_pa.domain.task.history import (
+    TaskHistoryEntry,
+    TaskMutationAction,
+    TaskMutationActor,
+    TaskMutationOutcome,
+)
+from my_pa.domain.task.lifecycle import (
+    TaskArchiveMode,
+    TaskPriority,
+    TaskWorkView,
+)
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.commitment_management import (
+    SqlAlchemyCommitmentManagementUnitOfWork,
+    SqlCommitmentManagementRepository,
+)
 from my_pa.infrastructure.persistence.continuity_authoring import SqlContinuityAuthoringRepository
 from my_pa.infrastructure.persistence.task_management import (
     SqlAlchemyTaskManagementUnitOfWork,
@@ -64,6 +88,7 @@ SCHEMA: Final = "knowledge"
 DISPOSABLE_DATABASE: Final = "my_pa_task_management_service_test"
 
 PRINCIPAL_A: Final = "prn_taskmgmta001taskmgmta001"
+PRINCIPAL_B: Final = "prn_taskmgmtb001taskmgmtb001"
 ORIGIN: Final = "cap_origin0001origin0001"
 
 
@@ -145,6 +170,19 @@ def _row_count(engine: Engine, table: str) -> int:
         ).scalar_one()
 
 
+def _bulk_operation(*, key: str, now: datetime) -> TaskBulkOperation:
+    return TaskBulkOperation(
+        bulk_operation_id=issue_identifier(IdKind.BULK_OPERATION),
+        principal_id=PRINCIPAL_A,
+        preview_idempotency_key=key,
+        request_digest="a" * 64,
+        previewed_at=now,
+        expires_at=now.replace(hour=13),
+        preview_affected=1,
+        preview_no_op=0,
+    )
+
+
 # --- idempotency: exactly one row survives a retry --------------------------
 
 
@@ -163,7 +201,7 @@ def test_a_replayed_create_writes_exactly_one_task_and_one_history_row(
     )
     second = service.create_task(
         principal_id=PRINCIPAL_A,
-        title="A materially different title the replay must not apply",
+        title="Draft the synthetic summary",
         origin_evidence_ref=ORIGIN,
         actor=TaskMutationActor.PRINCIPAL,
         idempotency_key=key,
@@ -255,6 +293,414 @@ def test_a_rejected_attempt_leaves_no_row_beyond_its_own_rejected_history_entry(
 
     history = _history_rows(migrated_engine, task_id)
     assert [row["outcome"] for row in history] == ["applied", "rejected"]
+
+
+def test_concurrent_bulk_preview_key_race_is_typed_and_writes_no_tasks(
+    migrated_engine: Engine,
+) -> None:
+    """The losing unique claim is typed only after PostgreSQL chooses the winner."""
+    now = datetime(2026, 8, 10, 12, tzinfo=UTC)
+    first = _bulk_operation(key="bulk-preview-race-0001", now=now)
+    second = _bulk_operation(key="bulk-preview-race-0001", now=now)
+    first_inserted = threading.Event()
+    second_attempting = threading.Event()
+    release_first = threading.Event()
+    failures: list[BaseException] = []
+
+    def winner() -> None:
+        with migrated_engine.begin() as connection:
+            SqlTaskManagementRepository(connection).insert_bulk(first)
+            first_inserted.set()
+            assert release_first.wait(timeout=5)
+
+    def contender() -> None:
+        assert first_inserted.wait(timeout=5)
+        try:
+            with migrated_engine.begin() as connection:
+                second_attempting.set()
+                SqlTaskManagementRepository(connection).insert_bulk(second)
+        except BaseException as error:
+            failures.append(error)
+
+    first_thread = threading.Thread(target=winner)
+    second_thread = threading.Thread(target=contender)
+    first_thread.start()
+    second_thread.start()
+    assert second_attempting.wait(timeout=5)
+    release_first.set()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert not first_thread.is_alive() and not second_thread.is_alive()
+    assert len(failures) == 1
+    assert isinstance(failures[0], BulkIdempotencyConflictError)
+    assert _row_count(migrated_engine, "task_bulk_operations") == 1
+    assert _row_count(migrated_engine, "tasks") == 0
+    assert _row_count(migrated_engine, "task_history") == 0
+
+
+def test_concurrent_bulk_confirm_key_race_rolls_back_losing_task_and_history(
+    migrated_engine: Engine,
+) -> None:
+    """A confirm-key loser rolls back the Task and history written before its claim."""
+    service = _service(migrated_engine)
+    created = [
+        service.create_task(
+            principal_id=PRINCIPAL_A,
+            title=f"Race task {index}",
+            origin_evidence_ref=ORIGIN,
+            actor=TaskMutationActor.PRINCIPAL,
+            idempotency_key=_idempotency_key(f"bulk-race-create-{index}"),
+        )
+        for index in range(2)
+    ]
+    now = datetime(2026, 8, 10, 12, tzinfo=UTC)
+    operations = [_bulk_operation(key=f"bulk-race-preview-{index}", now=now) for index in range(2)]
+    with migrated_engine.begin() as connection:
+        repository = SqlTaskManagementRepository(connection)
+        for operation in operations:
+            repository.insert_bulk(operation)
+
+    first_claimed = threading.Event()
+    second_attempting = threading.Event()
+    release_first = threading.Event()
+    failures: list[BaseException] = []
+    confirm_key = "bulk-confirm-race-0001"
+
+    def confirm(index: int, *, wait_after_claim: bool) -> None:
+        try:
+            with migrated_engine.begin() as connection:
+                repository = SqlTaskManagementRepository(connection)
+                current = repository.get_for_update(PRINCIPAL_A, created[index].task.task_id)
+                assert current is not None
+                updated = dataclasses.replace(
+                    current,
+                    title=f"Race task {index}, confirmed",
+                    version=current.version + 1,
+                    updated_at=now,
+                )
+                repository.update_task(updated)
+                history = TaskHistoryEntry(
+                    history_id=issue_identifier(IdKind.TASK_HISTORY),
+                    principal_id=PRINCIPAL_A,
+                    task_id=current.task_id,
+                    action=TaskMutationAction.UPDATE,
+                    actor=TaskMutationActor.PRINCIPAL,
+                    outcome=TaskMutationOutcome.APPLIED,
+                    before_version=current.version,
+                    after_version=updated.version,
+                    occurred_at=now,
+                    recorded_at=now,
+                    request_digest="a" * 64,
+                    bulk_operation_id=operations[index].bulk_operation_id,
+                )
+                repository.insert_history(history)
+                confirmed = dataclasses.replace(
+                    operations[index],
+                    confirmed_at=now,
+                    confirm_idempotency_key=confirm_key,
+                    affected=1,
+                    no_op=0,
+                    rejected=0,
+                    history_ids=(history.history_id,),
+                )
+                if not wait_after_claim:
+                    assert first_claimed.wait(timeout=5)
+                    second_attempting.set()
+                repository.confirm_bulk(confirmed)
+                if wait_after_claim:
+                    first_claimed.set()
+                    assert release_first.wait(timeout=5)
+        except BaseException as error:
+            failures.append(error)
+
+    first_thread = threading.Thread(target=confirm, args=(0,), kwargs={"wait_after_claim": True})
+    second_thread = threading.Thread(target=confirm, args=(1,), kwargs={"wait_after_claim": False})
+    first_thread.start()
+    second_thread.start()
+    assert second_attempting.wait(timeout=5)
+    release_first.set()
+    first_thread.join(timeout=5)
+    second_thread.join(timeout=5)
+
+    assert not first_thread.is_alive() and not second_thread.is_alive()
+    assert len(failures) == 1
+    assert isinstance(failures[0], BulkIdempotencyConflictError)
+    assert _task_row(migrated_engine, created[0].task.task_id)["title"].endswith("confirmed")
+    assert _task_row(migrated_engine, created[1].task.task_id)["title"] == "Race task 1"
+    assert len(_history_rows(migrated_engine, created[0].task.task_id)) == 2
+    assert len(_history_rows(migrated_engine, created[1].task.task_id)) == 1
+
+
+def test_sql_task_cursors_refuse_absent_and_foreign_anchors(
+    migrated_engine: Engine,
+) -> None:
+    service = _service(migrated_engine)
+    mine = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Mine",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("cursor-mine"),
+    )
+    foreign = service.create_task(
+        principal_id=PRINCIPAL_B,
+        title="Foreign",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("cursor-foreign"),
+    )
+    wrong_query = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Different result set",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("cursor-wrong-query"),
+    )
+    wrong_priority = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Needle priority mismatch",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        priority=TaskPriority.P2,
+        idempotency_key=_idempotency_key("cursor-wrong-priority"),
+    )
+    archived = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Needle archived",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        priority=TaskPriority.P1,
+        idempotency_key=_idempotency_key("cursor-archived"),
+    )
+    archived = service.update_task(
+        principal_id=PRINCIPAL_A,
+        task_id=archived.task.task_id,
+        expected_version=archived.task.version,
+        actor=TaskMutationActor.PRINCIPAL,
+        values={"archived_at": datetime(2026, 8, 10, 13, tzinfo=UTC)},
+        idempotency_key=_idempotency_key("cursor-archive-update"),
+    )
+    waiting = service.create_task(
+        principal_id=PRINCIPAL_A,
+        title="Needle waiting",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        priority=TaskPriority.P1,
+        idempotency_key=_idempotency_key("cursor-waiting"),
+    )
+    needle = tuple(
+        service.create_task(
+            principal_id=PRINCIPAL_A,
+            title=f"Needle continuation {index}",
+            origin_evidence_ref=ORIGIN,
+            actor=TaskMutationActor.PRINCIPAL,
+            priority=TaskPriority.P1,
+            idempotency_key=_idempotency_key(f"cursor-needle-{index}"),
+        )
+        for index in range(2)
+    )
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                f"UPDATE {SCHEMA}.tasks SET lifecycle_state = 'waiting' "  # noqa: S608
+                "WHERE task_id = :task_id"
+            ),
+            {"task_id": waiting.task.task_id},
+        )
+    with migrated_engine.begin() as connection:
+        repository = SqlTaskManagementRepository(connection)
+        for cursor in (issue_identifier(IdKind.TASK), foreign.task.task_id):
+            with pytest.raises(WorkCursorError):
+                repository.list_tasks(PRINCIPAL_A, after=cursor, limit=10)
+            with pytest.raises(WorkCursorError):
+                repository.search(PRINCIPAL_A, "mine", 10, after=cursor)
+        with pytest.raises(WorkCursorError):
+            repository.list_tasks(
+                PRINCIPAL_A,
+                priority=TaskPriority.P1,
+                after=wrong_priority.task.task_id,
+                limit=10,
+            )
+        with pytest.raises(WorkCursorError):
+            repository.list_tasks(
+                PRINCIPAL_A,
+                archive_mode=TaskArchiveMode.EXCLUDE,
+                after=archived.task.task_id,
+                limit=10,
+            )
+        with pytest.raises(WorkCursorError):
+            repository.list_tasks(
+                PRINCIPAL_A,
+                work_view=TaskWorkView.BLOCKED,
+                after=waiting.task.task_id,
+                limit=10,
+            )
+        with pytest.raises(WorkCursorError):
+            repository.search(PRINCIPAL_A, "mine", 10, after=wrong_query.task.task_id)
+        with pytest.raises(WorkCursorError):
+            repository.search(PRINCIPAL_A, "needle", 10, after=archived.task.task_id)
+        with pytest.raises(WorkCursorError):
+            repository.search(
+                PRINCIPAL_A,
+                "needle",
+                10,
+                work_view=TaskWorkView.BLOCKED,
+                after=waiting.task.task_id,
+            )
+        first = repository.search(PRINCIPAL_A, "continuation", 1)
+        assert len(first) == 1
+        second = repository.search(PRINCIPAL_A, "continuation", 10, after=first[0].task_id)
+        assert {task.task_id for task in (*first, *second)} == {
+            receipt.task.task_id for receipt in needle
+        }
+        for cursor in (issue_identifier(IdKind.TASK_HISTORY), foreign.history.history_id):
+            with pytest.raises(WorkCursorError):
+                repository.list_history(PRINCIPAL_A, mine.task.task_id, 10, after=cursor)
+
+
+def test_sql_commitment_cursors_refuse_absent_and_foreign_anchors(
+    migrated_engine: Engine,
+) -> None:
+    service = CommitmentManagementService(
+        unit_of_work=lambda: SqlAlchemyCommitmentManagementUnitOfWork(migrated_engine),
+        clock=lambda: datetime(2026, 8, 10, 12, tzinfo=UTC),
+    )
+    mine = service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Mine",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("commitment-cursor-mine"),
+    )
+    foreign = service.create_commitment(
+        principal_id=PRINCIPAL_B,
+        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Foreign",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("commitment-cursor-foreign"),
+    )
+    accepted = service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Accepted",
+        origin_evidence_ref=ORIGIN,
+        accepted_by_review_decision_id=issue_identifier(IdKind.REVIEW_DECISION),
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("commitment-cursor-accepted"),
+    )
+    wrong_direction = service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        direction=CommitmentDirection.OWED_BY_PRINCIPAL,
+        summary="Needle wrong direction",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("commitment-cursor-direction"),
+    )
+    wrong_state = service.create_commitment(
+        principal_id=PRINCIPAL_A,
+        counterparty_person_id=issue_identifier(IdKind.PERSON),
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Needle wrong state",
+        origin_evidence_ref=ORIGIN,
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("commitment-cursor-state"),
+    )
+    wrong_state = service.close_commitment(
+        principal_id=PRINCIPAL_A,
+        commitment_id=wrong_state.commitment.commitment_id,
+        expected_version=wrong_state.commitment.version,
+        closure_evidence_ref="cap_closure0001closure0001",
+        actor=TaskMutationActor.PRINCIPAL,
+        idempotency_key=_idempotency_key("commitment-cursor-close"),
+    )
+    needle = tuple(
+        service.create_commitment(
+            principal_id=PRINCIPAL_A,
+            counterparty_person_id=issue_identifier(IdKind.PERSON),
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            summary=f"Needle continuation {index}",
+            origin_evidence_ref=ORIGIN,
+            actor=TaskMutationActor.PRINCIPAL,
+            idempotency_key=_idempotency_key(f"commitment-cursor-needle-{index}"),
+        )
+        for index in range(2)
+    )
+    with migrated_engine.begin() as connection:
+        repository = SqlCommitmentManagementRepository(connection)
+        visible = repository.list_commitments(
+            PRINCIPAL_A,
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            evidence_state=ContinuityEvidenceState.ACCEPTED,
+            limit=10,
+        )
+        assert [commitment.commitment_id for commitment in visible] == [
+            accepted.commitment.commitment_id
+        ]
+        with pytest.raises(WorkCursorError):
+            repository.list_commitments(
+                PRINCIPAL_A,
+                direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+                evidence_state=ContinuityEvidenceState.ACCEPTED,
+                after=mine.commitment.commitment_id,
+                limit=10,
+            )
+        with pytest.raises(WorkCursorError):
+            repository.search(PRINCIPAL_A, "mine", 10, after=accepted.commitment.commitment_id)
+        with pytest.raises(WorkCursorError):
+            repository.search(
+                PRINCIPAL_A,
+                "needle",
+                10,
+                direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+                after=wrong_direction.commitment.commitment_id,
+            )
+        with pytest.raises(WorkCursorError):
+            repository.search(
+                PRINCIPAL_A,
+                "needle",
+                10,
+                state=CommitmentState.OPEN,
+                after=wrong_state.commitment.commitment_id,
+            )
+        first = repository.search(
+            PRINCIPAL_A,
+            "continuation",
+            1,
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            state=CommitmentState.OPEN,
+        )
+        assert len(first) == 1
+        second = repository.search(
+            PRINCIPAL_A,
+            "continuation",
+            10,
+            after=first[0].commitment_id,
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            state=CommitmentState.OPEN,
+        )
+        assert {commitment.commitment_id for commitment in (*first, *second)} == {
+            receipt.commitment.commitment_id for receipt in needle
+        }
+        for cursor in (issue_identifier(IdKind.COMMITMENT), foreign.commitment.commitment_id):
+            with pytest.raises(WorkCursorError):
+                repository.list_commitments(PRINCIPAL_A, after=cursor, limit=10)
+            with pytest.raises(WorkCursorError):
+                repository.search(PRINCIPAL_A, "mine", 10, after=cursor)
+        for cursor in (
+            issue_identifier(IdKind.COMMITMENT_HISTORY),
+            foreign.history.history_id,
+        ):
+            with pytest.raises(WorkCursorError):
+                repository.list_history(
+                    PRINCIPAL_A, mine.commitment.commitment_id, 10, after=cursor
+                )
 
 
 def test_list_and_get_hydrate_a_direct_principal_accepted_task(migrated_engine: Engine) -> None:

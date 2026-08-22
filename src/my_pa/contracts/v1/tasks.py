@@ -35,7 +35,7 @@ from pydantic import Field, model_validator
 
 from my_pa.contracts.v1.base import StrictModel, UtcDatetime
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
-from my_pa.domain.situation.continuity import ContinuityEvidenceState
+from my_pa.domain.situation.continuity import ContinuityAcceptanceKind, ContinuityEvidenceState
 from my_pa.domain.task.history import TaskMutationAction, TaskMutationActor, TaskMutationOutcome
 from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
 
@@ -50,6 +50,11 @@ class TaskView(StrictModel):
     description: str | None = None
     lifecycle_state: TaskLifecycleState
     evidence_state: ContinuityEvidenceState
+    origin_evidence_ref: str = Field(min_length=1)
+    closure_evidence_ref: str | None = None
+    accepted_by_review_decision_id: str | None = None
+    acceptance_kind: ContinuityAcceptanceKind | None = None
+    closure_history_id: str | None = None
     version: int = Field(ge=1)
     priority: TaskPriority | None = None
     due_at: UtcDatetime | None = None
@@ -75,6 +80,12 @@ class TaskView(StrictModel):
             validate_identifier(self.situation_id, IdKind.SITUATION)
         if self.recurrence_id is not None:
             validate_identifier(self.recurrence_id, IdKind.TASK_RECURRENCE)
+        if self.commitment_id is not None:
+            validate_identifier(self.commitment_id, IdKind.COMMITMENT)
+        if self.accepted_by_review_decision_id is not None:
+            validate_identifier(self.accepted_by_review_decision_id, IdKind.REVIEW_DECISION)
+        if self.closure_history_id is not None:
+            validate_identifier(self.closure_history_id, IdKind.TASK_HISTORY)
         return self
 
 
@@ -95,9 +106,12 @@ class TaskListEntry(StrictModel):
     lifecycle_state: TaskLifecycleState
     priority: TaskPriority | None = None
     due_at: UtcDatetime | None = None
+    scheduled_at: UtcDatetime | None = None
+    deferred_until: UtcDatetime | None = None
     archived_at: UtcDatetime | None = None
     created_at: UtcDatetime
     updated_at: UtcDatetime
+    version: int = Field(ge=1)
 
     @model_validator(mode="after")
     def _check(self) -> TaskListEntry:

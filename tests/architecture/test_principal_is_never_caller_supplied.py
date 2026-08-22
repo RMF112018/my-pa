@@ -472,10 +472,6 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # `document` read is the backup manifest's own `principal_id`, compared
     # against the Principal being restored and refused when they differ — so a
     # backup cannot move a document between partitions by being restored.
-    "application/service.py": (
-        ("commitment", "principal_id"),
-        ("commitment", "principal_id"),
-    ),
     "application/managed_documents.py": (
         ("command", "principal_id"),
         ("command", "principal_id"),
@@ -491,6 +487,13 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("commitment", "principal_id"),
         ("commitment", "principal_id"),
         ("entry", "principal_id"),
+    ),
+    # Bulk-operation records are internal domain objects loaded from this
+    # Principal's repository partition. The two reads verify the record still
+    # belongs to the acting Principal before update or confirmation.
+    "infrastructure/persistence/task_management.py": (
+        ("operation", "principal_id"),
+        ("operation", "principal_id"),
     ),
     "infrastructure/persistence/capture.py": (
         ("request", "principal_id"),

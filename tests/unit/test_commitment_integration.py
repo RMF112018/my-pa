@@ -21,6 +21,7 @@ Scenario: "Sarah / permit log / Friday"
 from __future__ import annotations
 
 import dataclasses
+from datetime import UTC, datetime
 from types import TracebackType
 
 from my_pa.application.commands import (
@@ -29,6 +30,7 @@ from my_pa.application.commands import (
     ListCommitments,
     ReadCommitment,
     TransitionTask,
+    UpdateCommitment,
     WaitingOn,
 )
 from my_pa.application.service import ApplicationService
@@ -38,18 +40,26 @@ from my_pa.contracts.ports import (
     TaskManagementRepository,
     TaskManagementUnitOfWork,
 )
-from my_pa.contracts.v1.capabilities import Capability
+from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
+    CommitmentWorkView,
+    ContinuityEvidenceState,
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.commitment import Commitment
 from my_pa.domain.task.commitment_history import CommitmentHistoryEntry
 from my_pa.domain.task.history import TaskHistoryEntry
-from my_pa.domain.task.lifecycle import TaskLifecycleState, TaskPriority
+from my_pa.domain.task.lifecycle import (
+    TaskArchiveMode,
+    TaskLifecycleState,
+    TaskPriority,
+    TaskWorkView,
+)
 from my_pa.domain.task.role import TaskRole
 from my_pa.domain.task.task import Task
 from tests.conftest import (
@@ -63,6 +73,7 @@ from tests.conftest import (
 
 COUNTERPARTY = issue_identifier(IdKind.PERSON)
 ORIGIN = "cap_origin0001origin0001"
+ACCEPTANCE = issue_identifier(IdKind.REVIEW_DECISION)
 
 
 # ---------------------------------------------------------------------------
@@ -96,14 +107,41 @@ class _CommitmentRepo(CommitmentManagementRepository):
         *,
         direction: CommitmentDirection | None = None,
         state: CommitmentState | None = None,
+        evidence_state: ContinuityEvidenceState | None = None,
+        work_view: CommitmentWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        after: str | None = None,
         limit: int,
     ) -> tuple[Commitment, ...]:
+        del work_end, work_start, work_view
         owned = [c for c in self._world.commitments_v2 if c.principal_id == principal_id]
         if direction is not None:
             owned = [c for c in owned if c.direction is direction]
         if state is not None:
             owned = [c for c in owned if c.state is state]
-        ordered = sorted(owned, key=lambda c: (c.created_at, c.commitment_id), reverse=True)
+        if evidence_state is not None:
+            owned = [c for c in owned if c.evidence_state is evidence_state]
+        ordered = sorted(
+            owned,
+            key=lambda c: (
+                c.due_at is None,
+                c.due_at or datetime.max.replace(tzinfo=UTC),
+                -c.created_at.timestamp(),
+                c.commitment_id,
+            ),
+        )
+        if after is not None:
+            ordered = ordered[
+                next(
+                    (
+                        index + 1
+                        for index, commitment in enumerate(ordered)
+                        if commitment.commitment_id == after
+                    ),
+                    len(ordered),
+                ) :
+            ]
         return tuple(ordered[:limit])
 
     def insert_commitment(self, commitment: Commitment) -> None:
@@ -131,7 +169,12 @@ class _CommitmentRepo(CommitmentManagementRepository):
         self._world.commitment_history_v2.append(entry)
 
     def list_history(
-        self, principal_id: str, commitment_id: str, limit: int
+        self,
+        principal_id: str,
+        commitment_id: str,
+        limit: int,
+        *,
+        after: str | None = None,
     ) -> tuple[CommitmentHistoryEntry, ...]:
         owned = [
             h
@@ -209,17 +252,39 @@ class _TaskRepo(TaskManagementRepository):
         *,
         lifecycle_state: TaskLifecycleState | None = None,
         priority: TaskPriority | None = None,
-        include_archived: bool = False,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        after: str | None = None,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        work_now: datetime | None = None,
         limit: int,
     ) -> tuple[Task, ...]:
         raise NotImplementedError("write-plane fake does not serve list reads")
 
-    def search(self, principal_id: str, query: str, limit: int) -> tuple[Task, ...]:
+    def search(
+        self,
+        principal_id: str,
+        query: str,
+        limit: int,
+        *,
+        after: str | None = None,
+        archive_mode: TaskArchiveMode = TaskArchiveMode.EXCLUDE,
+        work_view: TaskWorkView | None = None,
+        work_start: datetime | None = None,
+        work_end: datetime | None = None,
+        work_now: datetime | None = None,
+    ) -> tuple[Task, ...]:
         raise NotImplementedError("write-plane fake does not serve search")
 
     def list_history(
-        self, principal_id: str, task_id: str, limit: int
+        self, principal_id: str, task_id: str, limit: int, *, after: str | None = None
     ) -> tuple[TaskHistoryEntry, ...]:
+        raise NotImplementedError("write-plane fake does not serve history reads")
+
+    def latest_applied_terminal_history(
+        self, principal_id: str, task_id: str
+    ) -> TaskHistoryEntry | None:
         raise NotImplementedError("write-plane fake does not serve history reads")
 
 
@@ -264,10 +329,135 @@ def _idempotency_key(suffix: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+def test_waiting_on_excludes_proposed_commitments() -> None:
+    world = World()
+    service = _build_wired_service(world)
+    principal = operator()
+    world.work_evidence_refs.add((principal.principal_id, ORIGIN))
+    world.current_counterparties.add((principal.principal_id, COUNTERPARTY))
+
+    create = service.invoke(
+        metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
+        CreateCommitment(
+            counterparty_person_id=COUNTERPARTY,
+            direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+            summary="Unreviewed permit promise",
+            origin_evidence_ref=ORIGIN,
+            idempotency_key=_idempotency_key("proposed-commitment"),
+        ),
+        principal=principal,
+    )
+    assert create.error is None, create.error
+    assert create.result is not None
+    assert create.result["commitment"]["evidence_state"] == ContinuityEvidenceState.PROPOSED.value
+
+    waiting = service.invoke(
+        metadata_for(Capability.COMMITMENTS_WAITING_ON, Purpose.COMMITMENT_READ, principal),
+        WaitingOn(),
+        principal=principal,
+    )
+    assert waiting.error is None, waiting.error
+    assert waiting.result is not None
+    assert waiting.result["waiting_on"] == []
+
+
+def test_commitment_writes_require_a_current_same_principal_counterparty() -> None:
+    world = World()
+    service = _build_wired_service(world)
+    principal = operator()
+    other_principal = operator()
+    world.work_evidence_refs.add((principal.principal_id, ORIGIN))
+    current = issue_identifier(IdKind.PERSON)
+    foreign = issue_identifier(IdKind.PERSON)
+    replacement = issue_identifier(IdKind.PERSON)
+    world.current_counterparties.add((principal.principal_id, current))
+    world.current_counterparties.add((other_principal.principal_id, foreign))
+
+    create_command = CreateCommitment(
+        counterparty_person_id=current,
+        direction=CommitmentDirection.OWED_TO_PRINCIPAL,
+        summary="Current counterparty",
+        origin_evidence_ref=ORIGIN,
+        idempotency_key=_idempotency_key("validated-counterparty"),
+    )
+    created = service.invoke(
+        metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
+        create_command,
+        principal=principal,
+    )
+    assert created.error is None, created.error
+    assert created.result is not None
+
+    for person_id in (issue_identifier(IdKind.PERSON), foreign):
+        refused = service.invoke(
+            metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
+            dataclasses.replace(
+                create_command,
+                counterparty_person_id=person_id,
+                idempotency_key=_idempotency_key(f"refused-{person_id[-4:]}"),
+            ),
+            principal=principal,
+        )
+        assert refused.error is not None
+        assert refused.error.code is ErrorCode.NOT_FOUND
+        assert refused.error.safe_details == ("counterparty_person_id",)
+
+    world.current_counterparties.remove((principal.principal_id, current))
+    replay = service.invoke(
+        metadata_for(Capability.COMMITMENTS_CREATE, Purpose.COMMITMENT_AUTHORING, principal),
+        create_command,
+        principal=principal,
+    )
+    assert replay.error is None, replay.error
+    assert replay.result is not None and replay.result["replayed"] is True
+
+    commitment = created.result["commitment"]
+    refused_update = service.invoke(
+        metadata_for(Capability.COMMITMENTS_UPDATE, Purpose.COMMITMENT_AUTHORING, principal),
+        UpdateCommitment(
+            commitment_id=commitment["commitment_id"],
+            expected_version=commitment["version"],
+            counterparty_person_id=replacement,
+            idempotency_key=_idempotency_key("refused-update-counterparty"),
+        ),
+        principal=principal,
+    )
+    assert refused_update.error is not None
+    assert refused_update.error.code is ErrorCode.NOT_FOUND
+    assert refused_update.error.safe_details == ("counterparty_person_id",)
+
+    world.current_counterparties.add((principal.principal_id, replacement))
+    update_command = UpdateCommitment(
+        commitment_id=commitment["commitment_id"],
+        expected_version=commitment["version"],
+        counterparty_person_id=replacement,
+        idempotency_key=_idempotency_key("accepted-update-counterparty"),
+    )
+    accepted_update = service.invoke(
+        metadata_for(Capability.COMMITMENTS_UPDATE, Purpose.COMMITMENT_AUTHORING, principal),
+        update_command,
+        principal=principal,
+    )
+    assert accepted_update.error is None, accepted_update.error
+    assert accepted_update.result is not None
+    assert accepted_update.result["commitment"]["counterparty_person_id"] == replacement
+
+    world.current_counterparties.remove((principal.principal_id, replacement))
+    update_replay = service.invoke(
+        metadata_for(Capability.COMMITMENTS_UPDATE, Purpose.COMMITMENT_AUTHORING, principal),
+        update_command,
+        principal=principal,
+    )
+    assert update_replay.error is None, update_replay.error
+    assert update_replay.result is not None and update_replay.result["replayed"] is True
+
+
 def test_sarah_permit_log_scenario() -> None:
     world = World()
     service = _build_wired_service(world)
     principal_a = operator()
+    world.work_evidence_refs.add((principal_a.principal_id, ORIGIN))
+    world.current_counterparties.add((principal_a.principal_id, COUNTERPARTY))
 
     # --- Step 1: Create an OWED_TO_PRINCIPAL commitment ----------------------
     create_key = _idempotency_key("create-commitment")
@@ -279,6 +469,7 @@ def test_sarah_permit_log_scenario() -> None:
         direction=CommitmentDirection.OWED_TO_PRINCIPAL,
         summary="Send permit log by Friday",
         origin_evidence_ref=ORIGIN,
+        accepted_by_review_decision_id=ACCEPTANCE,
         idempotency_key=create_key,
     )
     create_resp = service.invoke(create_meta, create_cmd, principal=principal_a)
@@ -360,6 +551,11 @@ def test_sarah_permit_log_scenario() -> None:
     assert read_resp.error is None, read_resp.error
     assert read_resp.result is not None
     assert read_resp.result["commitment"]["state"] == CommitmentState.OPEN.value
+    follow_up_read = read_resp.result["follow_up_task"]
+    assert follow_up_read["task_id"] == follow_up_task_id
+    assert follow_up_read["title"] == "Follow up with Sarah about the permit log"
+    assert follow_up_read["lifecycle_state"] == TaskLifecycleState.COMPLETED.value
+    assert follow_up_read["version"] == 2
 
     # --- Step 7: Idempotency replay — re-create with same key ----------------
     replay_resp = service.invoke(create_meta, create_cmd, principal=principal_a)
@@ -384,3 +580,51 @@ def test_sarah_permit_log_scenario() -> None:
     assert waiting_resp_b.error is None, waiting_resp_b.error
     assert waiting_resp_b.result is not None
     assert waiting_resp_b.result["waiting_on"] == []
+
+
+def test_counterparty_picker_queries_are_principal_scoped() -> None:
+    """The picker cannot label a Person outside the authenticated partition."""
+    from dataclasses import dataclass
+
+    from sqlalchemy.sql.elements import ClauseElement
+
+    from my_pa.infrastructure.persistence.commitment_management import (
+        SqlCommitmentManagementRepository,
+    )
+
+    @dataclass(frozen=True)
+    class Row:
+        person_id: str
+        display_name: str
+
+    class Result:
+        def all(self) -> list[Row]:
+            return [Row("per_aaaaaaaa11111111", "Sam Rivera")]
+
+        def one_or_none(self) -> None:
+            return None
+
+    class Connection:
+        def __init__(self) -> None:
+            self.statements: list[ClauseElement] = []
+
+        def execute(self, statement: ClauseElement) -> Result:
+            self.statements.append(statement)
+            return Result()
+
+    connection = Connection()
+    repository = SqlCommitmentManagementRepository(connection)  # type: ignore[arg-type]
+    options = repository.list_counterparties("prn_aaaaaaaa11111111", limit=101)
+    assert [(item.person_id, item.display_name) for item in options] == [
+        ("per_aaaaaaaa11111111", "Sam Rivera")
+    ]
+    list_sql = str(connection.statements[0].compile(compile_kwargs={"literal_binds": True}))
+    assert "relationship_people.principal_id = 'prn_aaaaaaaa11111111'" in list_sql
+    assert "relationship_people.superseded_by_person_id IS NULL" in list_sql
+    assert "ORDER BY lower(knowledge.relationship_people.display_name) ASC" in list_sql
+    assert "LIMIT 101" in list_sql
+
+    assert repository.counterparty("prn_aaaaaaaa11111111", "per_bbbbbbbb22222222") is None
+    lookup_sql = str(connection.statements[1].compile(compile_kwargs={"literal_binds": True}))
+    assert "relationship_people.principal_id = 'prn_aaaaaaaa11111111'" in lookup_sql
+    assert "relationship_people.person_id = 'per_bbbbbbbb22222222'" in lookup_sql

@@ -32,13 +32,14 @@ classifiers = [
 #                     resolve. Raised to the number the dependency graph
 #                     actually requires rather than to a round one.
 #   SQLAlchemy        Core engine, connection pool, and dialect. The floor is
-#                     2.0.20, not 2.0: `sqlalchemy.dialects.postgresql.insert`
-#                     was untyped (`def insert(table):`) through 2.0.10 and only
-#                     gained `-> Insert` by 2.0.20, so the three `pg_insert`
-#                     call sites in the migration control plane fail mypy's
-#                     `no-untyped-call` against anything older. The floor job
-#                     caught this; bisected against the 2.0.0/2.0.10/2.0.20
-#                     wheels. Removal path: raw psycopg.
+#                     2.0.32: this project declares mypy>=1.11, and SQLAlchemy
+#                     2.0.32 is the first release whose internal typing was
+#                     made compatible with mypy 1.11. The Work read plane also
+#                     relies on typed Core function, case, label, ordering, and
+#                     row expressions, so 2.0.20's earlier typing surface is no
+#                     longer an honest checked floor. This remains above the
+#                     prior 2.0.20 floor where PostgreSQL `insert` gained its
+#                     typed return. Removal path: raw psycopg.
 #   psycopg[binary]   the PostgreSQL driver SQLAlchemy's `postgresql+psycopg`
 #                     dialect requires. 3.2 is the floor for the current
 #                     `psycopg.rows`/pipeline behaviour. `[binary]` ships a
@@ -190,7 +191,7 @@ classifiers = [
 dependencies = [
   "pydantic>=2.12,<3",
   "PyJWT[crypto]>=2.10.1,<3",
-  "SQLAlchemy>=2.0.20,<3",
+  "SQLAlchemy>=2.0.32,<3",
   "psycopg[binary]>=3.2,<4",
   "alembic>=1.13,<2",
   "starlette>=0.31,<1",

@@ -44,7 +44,7 @@ from __future__ import annotations
 import dataclasses
 import json
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import date, datetime
 from enum import StrEnum
 from types import MappingProxyType, UnionType
 from typing import Any, Final, Union, get_args, get_origin, get_type_hints
@@ -90,6 +90,14 @@ def _schema_for(annotation: Any) -> dict[str, Any] | None:  # noqa: ANN401 - a t
         # has a name for which kind, so this publishes the wire shape rather than
         # the Python type.
         return {"type": "string", "format": "date-time"}
+    if annotation is date:
+        # A work-view date is normalized with `date.fromisoformat`; publish the
+        # same exact calendar-date wire shape instead of an unconstrained value.
+        return {
+            "type": "string",
+            "format": "date",
+            "pattern": r"^\d{4}-\d{2}-\d{2}$",
+        }
     if annotation is bytes:
         # A command holds real `bytes` — a managed document body — and JSON has
         # no byte string, so the wire form is base64 and

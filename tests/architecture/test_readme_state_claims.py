@@ -39,6 +39,8 @@ RELATIONSHIP_PACKAGE = ROOT / "src" / "my_pa" / "domain" / "relationship"
 SOURCE_INDEX = ROOT / "docs" / "00_REPOSITORY_SOURCE_INDEX.md"
 SPECS_INDEX = ROOT / "docs" / "specs" / "README.md"
 COMPLETION_PLAN = ROOT / "docs" / "plans" / "mcv-completion-plan.md"
+SYSTEM_CONTEXT = ROOT / "docs" / "architecture" / "system-context.md"
+MODULE_BOUNDARIES = ROOT / "docs" / "architecture" / "module-boundaries.md"
 
 #: The paragraph that states what this build reports. Anchored on its opening
 #: word rather than on a line number, and read to the next blank line, so
@@ -263,6 +265,7 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     63: "Sixty-three",
     64: "Sixty-four",
     65: "Sixty-five",
+    66: "Sixty-six",
 }
 
 
@@ -365,9 +368,6 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
     }
     for label, path in documents.items():
         text = path.read_text(encoding="utf-8")
-        assert "sixty-two capabilit" in text.lower().replace(" public ", " "), (
-            f"{label} lost the current capability count"
-        )
         assert "fifty" in text, f"{label} lost the current revision count"
         assert _alembic_identity()[1] in text, f"{label} lost the current Alembic head"
         assert f"{spelled} capabilit" in text.lower().replace(" public ", " "), (
@@ -377,6 +377,30 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
             f"{label} lost the current revision count"
         )
         assert head in text, f"{label} lost the current Alembic head"
+
+
+def test_current_state_docs_derive_the_default_capability_split() -> None:
+    """Bind the default 53/65 and withheld 12/65 claims to runtime wiring."""
+    total = len(Capability)
+    withheld_families = {
+        capability
+        for capability in _HANDLERS
+        if capability.value.startswith(("documents.", "entities."))
+    }
+    default = len(frozenset(_HANDLERS) - withheld_families)
+    withheld = total - default
+    assert default == 53 and total == 65 and withheld == 12
+
+    readme = README.read_text(encoding="utf-8")
+    assert f"{default} of the {total} capabilities are `available`" in readme
+    assert f"`{withheld} of {total} capabilities are unwired.`" in readme
+
+    system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
+    assert "sixty-five capabilities" in system_context
+    assert "exposes fifty-three of them" in system_context
+
+    module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
+    assert "sixty-five capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:
@@ -427,13 +451,30 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
     assert routed <= documented, (
         f"web README omits routed capabilities {sorted(routed - documented)}"
     )
-    assert "sixty-two capability names" in lowered
     # Derived, not spelled out here: see the note on
     # `test_current_state_docs_name_the_current_capability_and_migration_counts`.
     # A literal in this guard is the same claim, with the same shelf life, as the
     # literal in the document it is guarding.
     assert len(capability_values) in SPELLED_COUNTS, "extend the readable count vocabulary"
     assert f"{SPELLED_COUNTS[len(capability_values)].lower()} capability names" in lowered
+    work_routed = {
+        "tasks.read",
+        "tasks.list",
+        "tasks.search",
+        "tasks.history",
+        "tasks.create",
+        "tasks.update",
+        "tasks.transition",
+        "commitments.read",
+        "commitments.list",
+        "commitments.search",
+        "commitments.history",
+        "commitments.create",
+        "commitments.update",
+        "commitments.close",
+    }
+    assert work_routed <= routed
+    assert work_routed <= documented
     assert "worker_planes" in text and "capture" in text and "enrollment" in text
     assert "managed-document lifecycle" in lowered
 

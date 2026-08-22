@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the sixty-two capabilities.
+the sixty-five capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -188,6 +188,9 @@ from my_pa.infrastructure.persistence.apple_bridge_credentials import (
 )
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.capture_clients import authenticate_client, clients_of
+from my_pa.infrastructure.persistence.commitment_management import (
+    SqlAlchemyCommitmentManagementUnitOfWork,
+)
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.registry import configured_source_roots
 from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
@@ -564,6 +567,9 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     def task_management_unit_of_work() -> SqlAlchemyTaskManagementUnitOfWork:
         return SqlAlchemyTaskManagementUnitOfWork(work_engine)
 
+    def commitment_management_unit_of_work() -> SqlAlchemyCommitmentManagementUnitOfWork:
+        return SqlAlchemyCommitmentManagementUnitOfWork(work_engine)
+
     entra = settings.auth_mode is AuthMode.ENTRA
     principal = None if entra else local_principal()
 
@@ -592,6 +598,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             limits=settings.effective_limits(),
             managed_store=managed_byte_store(settings, work_engine),
             task_management_unit_of_work=task_management_unit_of_work,
+            commitment_management_unit_of_work=commitment_management_unit_of_work,
             relationship_intelligence_enabled=settings.relationship_intelligence_enabled,
         ),
         principal=principal,

@@ -161,6 +161,13 @@ PAGED_TERM: Final = "paged"
 WHEN: Final = datetime(2026, 8, 22, 12, tzinfo=UTC)
 LATER: Final = datetime(2026, 8, 22, 13, tzinfo=UTC)
 
+#: When the user says the thing was observed, as distinct from when the server
+#: received it. Deliberately not `WHEN`, `LATER` or either window boundary, so a
+#: writer that quietly substituted the receipt time — or either applicability
+#: bound — for an absent `observed_at` would be caught by value and not merely
+#: by presence.
+OBSERVED: Final = datetime(2026, 5, 4, 9, 30, tzinfo=UTC)
+
 #: One timeline for the `as_of` filter: a window that has closed, a window that
 #: opened later and is still open, and two probes — one inside the closed window
 #: and one after both — so each read has something to include and something to
@@ -273,6 +280,7 @@ def _create_request(
     structured_value: dict[str, Any] | None = None,
     context_links: tuple[Mapping[str, str], ...] = (),
     pinned: bool = False,
+    observed_at: datetime | None = None,
     effective_from: datetime | None = None,
     effective_to: datetime | None = None,
     at: datetime = WHEN,
@@ -293,10 +301,17 @@ def _create_request(
         created_by_actor=MemoryActorClass.USER,
         context_links=context_links,
         pinned=pinned,
-        observed_at=None,
-        # Supplied here rather than left at `None`, because `page_for_entity`
-        # reads exactly these two columns for its `as_of` filter and a builder
-        # that could not express a window left that filter unreachable.
+        # All three default to `None` and all three are settable, because
+        # `RM-AC-008` is a claim about both directions: a create that says
+        # nothing about when a thing was observed or when it applies must store
+        # nothing, and one that says something must store exactly that. A
+        # builder that hard-coded `observed_at=None` could only ever exercise
+        # the first half, which is how the criterion came to be cited by tests
+        # that no defaulting writer would have reddened.
+        observed_at=observed_at,
+        # `effective_from`/`effective_to` are read by `page_for_entity` for its
+        # `as_of` filter as well, and a builder that could not express a window
+        # left that filter unreachable.
         effective_from=effective_from,
         effective_to=effective_to,
         correction_reason=None,
@@ -490,6 +505,74 @@ def test_a_created_memory_round_trips_through_every_read(two_principals: Engine)
     assert [version.version_number for version in versions] == [1]
     assert versions[0].statement == FIRST_NOTE
     assert truncated is False
+
+
+def test_a_create_that_names_no_moment_stores_none_and_one_that_names_them_keeps_them(
+    two_principals: Engine,
+) -> None:
+    """`RM-AC-008`: unknown dates are stored as unknown, not filled in.
+
+    The criterion has two halves and only the pair is worth anything. **A write
+    that supplies no `observed_at`, `effective_from` or `effective_to` must read
+    back with all three still `None`** — the plane must not decide that a note
+    recorded today was *observed* today, because a memory whose observation time
+    was invented is indistinguishable from one the user actually dated, and every
+    later read (`as_of`, a rendered timeline, an eventual reminder rule) would
+    treat the invention as testimony. **A write that supplies all three must read
+    them back unchanged** — otherwise the first half could be satisfied by a
+    column nothing writes at all, and the row would be `PASS` on the strength of
+    a field that does not work.
+
+    Read through `detail` *and* `history`, because they build separate statements
+    over the version table and a column dropped from one projection is a real
+    defect that the other cannot see.
+
+    Without this test the whole criterion is unheld: before it, `observed_at`
+    appeared in this plane's tests only as a fixture input that nothing read
+    back, so defaulting it to the server receipt time reddened nothing.
+    """
+    silent = _created(two_principals, idempotency_key="synthetic-moments-0001")
+    dated = _created(
+        two_principals,
+        subject_entity_id=ELI,
+        statement=SECOND_NOTE,
+        idempotency_key="synthetic-moments-0002",
+        observed_at=OBSERVED,
+        effective_from=WINDOW_OPENED,
+        effective_to=WINDOW_CLOSED,
+    )
+    with two_principals.connect() as connection:
+        repository = SqlRelationshipMemoryRepository(connection)
+        silent_detail = repository.detail(silent.memory_id, principal_id=PRINCIPAL_A)
+        dated_detail = repository.detail(dated.memory_id, principal_id=PRINCIPAL_A)
+        dated_history, _ = repository.history(dated.memory_id, principal_id=PRINCIPAL_A, limit=10)
+    assert silent_detail is not None
+    assert dated_detail is not None
+
+    # Asserted as one tuple rather than three `is None` checks, so a defaulting
+    # writer is reported with the value it invented rather than as a bare
+    # `assert None`.
+    silent_version = silent_detail.current_version
+    assert (
+        silent_version.observed_at,
+        silent_version.effective_from,
+        silent_version.effective_to,
+    ) == (None, None, None)
+    # The receipt time is stored, so "the row holds no times at all" is not an
+    # equally good explanation for the three `None`s above.
+    assert silent_version.recorded_at == WHEN
+
+    supplied = (OBSERVED, WINDOW_OPENED, WINDOW_CLOSED)
+    dated_version = dated_detail.current_version
+    assert (
+        dated_version.observed_at,
+        dated_version.effective_from,
+        dated_version.effective_to,
+    ) == supplied
+    assert [
+        (version.observed_at, version.effective_from, version.effective_to)
+        for version in dated_history
+    ] == [supplied]
 
 
 def test_both_listing_reads_carry_the_current_versions_authority_and_classification(

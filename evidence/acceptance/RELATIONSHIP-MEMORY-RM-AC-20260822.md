@@ -2,13 +2,33 @@
 
 - **Repository:** `RMF112018/my-pa`
 - **Branch:** `bf/relationship-memory-entity-notes-20260822`
-- **Implementation base:** `a1beef75ddf98e60c448a64baa6847f0444d058b`, tree `0e6e9eb3bccf89d68b6075028613cbb50eebd0e8`
+- **Implementation base:** `a1beef75ddf98e60c448a64baa6847f0444d058b`, tree
+  `0e6e9eb3bccf89d68b6075028613cbb50eebd0e8` — the commit this branch's first
+  commit was written on. It is **not** the right base to diff against any more:
+  three merges of `main` have landed on the branch since, so
+  `git diff a1beef75..HEAD` now carries the WP-FE-03 Work plane, the GoodNotes
+  handwriting-evaluator changes and their dependency edits as well as this
+  work. **The base that isolates this branch's own contribution is the current
+  merge base with `main`, `aabac2660241ba805a25355663cf95c2a734f371`**, and
+  every "this branch adds / does not add" claim below is measured from there
+  and says so.
 - **Contract package:** `MYPA-RELATIONSHIP-MEMORY-ENTITY-NOTES-20260822-001`
   (`MYPA-RM-01` product/domain, `MYPA-RM-02` persistence, `MYPA-RM-03` MCP/API)
 - **Scope:** backend and MCP only. `MYPA-RM-04` (frontend) is **out of scope by
   operator instruction**; `RM-FE-AC-001` through `RM-FE-AC-022` are not claimed,
   not assessed, and are not listed below.
-- **Alembic revision added:** `f1c6b904a2d7` (`down_revision e9b2c4d7a150`)
+- **Alembic revision added:** `f1c6b904a2d7` (`down_revision a4d9e7c2b615`).
+  The parent was `e9b2c4d7a150` when the revision was written, and this line
+  said so until a reviewer read the revision file. `a4d9e7c2b615` — the WP-FE-03
+  Work Task and Commitment contracts — merged into `main` first, and the
+  revision was **rebased** onto it rather than forked beside it, so the chain
+  keeps one head and `downgrade` from this revision lands on the Work contracts.
+  `tests/database/test_relationship_memory_repository.py` holds the pair as
+  `MEMORY_REVISION`/`PREVIOUS_REVISION` and round-trips them against a real
+  server, which is why the code was right while this document was wrong; that
+  asymmetry is what `tests/architecture/test_citations_resolve_at_head.py` and
+  `tests/architecture/test_no_stored_revision_is_labelled_head.py` now close by
+  searching `evidence/` as well as `docs/`.
 
 ## How to read this
 
@@ -21,12 +41,25 @@ being true. A criterion whose subject is presentation rather than data is marked
 needs, and the presentation it describes belongs to the deferred frontend. A
 criterion the code does not satisfy is marked `NOT_MET` and the row says exactly
 what is missing; `BACKEND_ONLY` is not a place to park one, because a criterion
-whose data the backend does not supply is not waiting on a frontend.
+whose data the backend does not supply is not waiting on a frontend. A criterion
+with more than one property in it, where some are held by tests and at least one
+is not, is marked `PARTIAL`, and the row names which is which — rounding it up to
+`PASS` would put the unheld property behind a green word, and rounding it down to
+`NOT_MET` would say the code does not do things it demonstrably does.
 
-Nothing here is marked `PASS` on the strength of a docstring, and three rows
-that were have been corrected: an independent reviewer deleted the constraints
-two of them cited and watched the suite stay green, and found that the test the
-third named did not exist.
+Nothing here is marked `PASS` on the strength of a docstring, and seven rows
+that were have been corrected. The first three: an independent reviewer deleted
+the constraints two of them cited and watched the suite stay green, and found
+that the test the third named did not exist. The next four came from a fourth
+reviewer, who checked each row's cited module for the property rather than for
+the subject — `RM-AC-008` cited two modules in which nothing read a stored
+moment back, `RM-P-AC-012` cited a module in which the string `audit` does not
+occur, `RM-API-AC-006` was true structurally and asserted by no test, and
+`RM-AC-012`'s `CAP` half named a filter that module never exercised. Three are
+now held by tests written for them and named in their rows; the fourth is
+`PARTIAL`. **Every one of the seven was a row whose *subject* the cited module
+covered**, which is the failure this legend's first sentence is about: a
+citation is checked by looking for the property, not for the topic.
 
 **Every row whose evidence is `REV` describes a plane no composed build can
 reach.** Nothing in `src/`, `apps/` or `ops/` writes
@@ -74,17 +107,17 @@ Test module abbreviations:
 | RM-AC-005 models cannot create active memory without governed promotion | PASS | `MemoryAuthority` declares no `model_inference`/`unresolved_claim`; proposals live in their own table and never in `relationship_memories`; `REV`. Structural today by a second route as well: no producer writes a proposal, so no promotion can occur at all (spec §11) |
 | RM-AC-006 sensitivity floors restricted_local, others private_local, cloud eligibility false | PASS | `classification_floor_for`, DB CHECKs `a_sensitivity_memory_is_at_least_restricted` and `a_memory_version_is_not_cloud_eligible`; `DOM`, `REPO`, `PRIV`. The CHECK was corrected before this row could be claimed: it read `classification <> 'private_local' OR memory_kind <> 'sensitivity'`, which named one forbidden value instead of a minimum and admitted `synthetic_test` — a rank *below* `private_local` that `satisfies_floor` refuses. `PRIV` now asks the server directly, at both ranks below the floor and at the floor itself |
 | RM-AC-007 narrative immutable per version; correction appends and retains history | PASS | append-only trigger on `relationship_memory_versions`; `REPO` (raw UPDATE refused, prior text still readable) |
-| RM-AC-008 optional observed/effective times without fabricating unknown dates | PASS | nullable moments, no defaulting anywhere; `DOM`, `CAP` |
+| RM-AC-008 optional observed/effective times without fabricating unknown dates | PASS | nullable moments, no defaulting anywhere; `REPO::test_a_create_that_names_no_moment_stores_none_and_one_that_names_them_keeps_them`. Both directions in one test, because either alone is worthless: a create supplying no `observed_at`, `effective_from` or `effective_to` reads back with all three `None` through `detail`, and one supplying all three reads them back unchanged through `detail` *and* `history`. The receipt time is asserted present in the first case, so "the row holds no times at all" is not an equally good explanation for the three nulls. This row previously cited `DOM` and `CAP` and neither held it: `observed_at` appeared in this plane's tests only as a fixture input that nothing read back — `CAP`'s single occurrence is a transport-parity payload compared against itself — so a writer that defaulted it to the server receipt time reddened nothing. Mutation-checked: defaulting `observed_at` to `server_received_at` in the repository insert reddens the first half, and dropping `observed_at` from `_to_version` reddens the second |
 | RM-AC-009 important_date partial values, never infers year or age | PASS | precision rules refuse a year on `month_day`; no age field exists; `DOM` |
 | RM-AC-010 follow_up_context does not silently become a Task/Commitment | PASS | `REPO` records a `follow_up_context` memory and asserts the task, commitment and capture tables hold exactly the rows they held before |
 | RM-AC-011 no automatic task, reminder, calendar or communication action | PASS | `REPO` counts the task, commitment and capture planes before and after a memory write and asserts they are unchanged. Stated as a bounded claim rather than a containment guard: it proves this write reaches no other plane, not that a future writer could not |
-| RM-AC-012 context-scoped memory not presented as globally applicable | PASS | context links bound to the *version*; `relationship_memory.list` exposes `context_entity_id` filtering; `REPO`, `CAP` |
+| RM-AC-012 context-scoped memory not presented as globally applicable | PASS | context links bound to the *version*; `relationship_memory.list` exposes `context_entity_id` filtering. `REPO::test_a_context_filter_returns_exactly_the_memories_linked_to_that_entity` holds the repository predicate. The `CAP` half was uncited — `context_entity_id` had no occurrence in that module — and is now `CAP::test_a_context_scoped_memory_is_not_returned_when_another_context_is_asked_for`, which drives three listings through `ApplicationService.invoke` against a real database over two notes on one subject that differ only in whether they carry a context link: asked for the linked context it returns the scoped note alone, asked for a context the subject has no link to it returns nothing, and asked for no context it returns both. The third read is what makes the first two mean anything, because a filter that returned an empty page for every argument would satisfy the exclusion. Mutation-checked: passing `context_entity_id=None` from the service handler to the port reddens it |
 | RM-AC-013 restricted memory excluded from broad search/export/cloud by default | PASS | SQL predicate excludes `restricted_local` from search; cloud eligibility CHECKed false; `PRIV` |
 | RM-AC-014 no restricted-existence disclosure via counts or term probing | PASS | exclusion is a predicate, so no count, cursor or truncation flag can carry one; `PRIV` (probing a restricted-only term returns nothing, zero withheld, no truncation) |
 | RM-AC-015 accepted derived memory retains evidence sufficient to reveal its basis | PASS | promotion copies every `relationship_memory_proposal_evidence` row onto the accepted version; `REV`. No derived memory exists in a composed build, because no producer writes a proposal (spec §11) |
 | RM-AC-016 model proposal records method/model identity and stays visibly proposed | PASS | `method`/`method_version`/`model_id`/`model_version` with a CHECK that a model proposal names its model; `REV`. No model proposal is produced by this build (spec §11) |
 | RM-AC-017 protected-trait inference structurally prohibited from automated promotion | PASS | no trait field, no classifier, no taxonomy; `sensitivity` deliberately has no structured topic schema; `DOM` |
-| RM-AC-018 merge erases no history and no silent write to a merged-away identity | PASS | `MergedSubjectError` carries the canonical target and the write is refused, never followed; `REPO`, `REV` |
+| RM-AC-018 merge erases no history and no silent write to a merged-away identity | PASS | `MergedSubjectError` carries the canonical target and the write is refused, never followed; `REPO`, `REV`. The read side is now held too: `CAP::test_a_get_tells_the_caller_when_the_subject_has_been_merged_away` reads one memory before and after its subject is merged away and finds the note still naming the original identity — nothing rewritten — with the survivor disclosed beside it |
 | RM-AC-019 Overview can surface current eligible preferences, dates, interests, concerns, pinned context and sensitivities with authority distinction | PASS | `relationship_memory.list` returns every kind, pinned first, with `memory_id`, `subject_entity_id`, `kind`, **`authority`**, **`classification`**, `lifecycle`, `version`, `current_version_number`, `pinned`, `created_at`, `updated_at` and — when the caller asks — the statement. The two provenance fields are unconditional and `statement` is not: withholding the note is a caller's choice, withholding where it came from is not. The authority distinction is asserted where it can actually be exercised, on two memories that differ in nothing else: `REV::test_a_listing_tells_a_promoted_assertion_apart_from_the_users_own_note` puts a reviewer-promoted `source_backed_assertion` and a `user_authored_private_note` on one subject, one kind, both unpinned, and asserts the two authorities differ through `page_for_entity` *and* `search`; `CAP::test_the_assistants_listing_tells_a_promoted_finding_from_the_users_own_note` makes the same claim through `ApplicationService.invoke` against a real database, which is the surface an assistant reads. `REPO::test_both_listing_reads_carry_the_current_versions_authority_and_classification` binds the two rendered values to the version's own, and `CAP::test_withholding_the_statement_still_states_where_the_memory_came_from` holds them present under `include_statement=False`. Carried as one `MemoryListingFacts` per memory rather than as parallel mappings, so statement, authority and classification cannot drift apart; `MemoryPage.__post_init__` requires exactly one record per disclosed memory, and `REPO::test_a_withheld_memory_leaves_no_facts_record_behind` proves a withheld restricted memory leaves none. This row previously read `PASS` on a claim that was false, then `NOT_MET`; the third state is the first one that a test fails if it stops holding. Mutation-checked: dropping `"authority"` from `_memory_summary_view` reddens four tests, and hard-coding the authority in `_page` reddens the two that name the distinction |
 | RM-AC-020 bounded, paginated, history-aware retrieval for one Entity | PASS | `relationship_memory.list` + `.history`, keyset paginated over the whole sort key; `REPO`, `CAP` |
 | RM-AC-021 editing exposes prior versions according to policy | PASS | `relationship_memory.history`; `REPO`, `CAP` |
@@ -113,7 +146,7 @@ Test module abbreviations:
 | RM-P-AC-009 structured JSON schema-versioned and kind-validated | PASS | `{"schema": …, "value": …}` envelope; arbitrary keys and schemaless kinds refused; `DOM` |
 | RM-P-AC-010 context/evidence links validate exact target type and Principal | PASS | closed target vocabulary, ownership proven in the repository before insert; `REPO` |
 | RM-P-AC-011 derived memory has evidence; a user note may legitimately have none | PASS | promotion copies evidence; direct create writes none; `REV`, `REPO` |
-| RM-P-AC-012 create/revise/promotion atomic with required audit state | PASS | one unit of work per request; audit committed by the shared `authorize` path; `REPO`, `REV` |
+| RM-P-AC-012 create/revise/promotion atomic with required audit state | PARTIAL | Split, because the two halves are held by different things and the row previously cited `REPO` for both — a module in which the string `audit` does not occur. **Atomicity is held.** `REPO::test_a_stale_expected_version_raises_and_writes_nothing` counts the three write tables inside the transaction that raised and again from a fresh connection, and `REPO::test_a_create_naming_another_principals_subject_is_refused_before_any_row`, `test_a_context_link_naming_another_principals_entity_is_refused` and `test_a_write_to_a_merged_away_subject_is_refused_and_names_the_survivor` each count them across a refusal; `REV` does the same across a promotion. **The audit half is held for the four public writes and not for promotion.** `PRIV::test_the_planted_run_produced_audit_rows` composes the real `SqlAlchemyUnitOfWork` and `SqlAlchemyAuditSink` on two engines as `bootstrap.gateway` does, drives create, revise, archive, restore and one denial, and asserts the rows carry all four capability names and both outcomes; `POL::test_a_denial_is_audited_and_its_transaction_commits` and `test_an_allowed_request_is_audited_as_allowed` hold the shared `authorize` path that writes them. **What no test holds** is a promotion's audit state: `review.decide` is the capability that promotes, and no test asserts that deciding a *memory* case records an audit row. Separately, and by design rather than by omission, a write and its audit event are **not** one transaction — the sink draws its own connection and commits there precisely so a denial's audit survives the rolled-back request — so the literal reading of "atomic with required audit state" as a single transaction spanning both is not what this plane does and is not claimed. Marked `PARTIAL` rather than `PASS` because the promotion gap is a real part of the criterion, and rather than `NOT_MET` because everything else in it is held |
 | RM-P-AC-013 idempotent retries cannot duplicate aggregates or versions | PASS | unique `(principal_id, idempotency_key)` plus digest-decided replay; `REPO`, `CAP` |
 | RM-P-AC-014 expected-version conflicts perform no write | PASS | `UPDATE … WHERE version = expected` row count checked before any insert; `REPO` counts rows before and after |
 | RM-P-AC-015 archived records retrievable through history; no hard-delete path | PASS | `REPO`, `CAP` |
@@ -121,7 +154,7 @@ Test module abbreviations:
 | RM-P-AC-017 merges retain lineage and reject ambiguous writes to redirects | PASS | `REPO`, `REV` |
 | RM-P-AC-018 capture/observation/legacy tables not overloaded | PASS | eight new tables; no existing table gains a memory column; `SCHEMA` |
 | RM-P-AC-019 migrations forward-safe and preserve current data | PASS | empty→head, head→predecessor→head and `downgrade base` all exercised; `SCHEMA` |
-| RM-P-AC-020 no new database or service technology | PASS | `tests/architecture/test_no_vector_retrieval_exists` and `test_scope_and_hygiene` both scan for a second store or driver; the branch adds no dependency (`pyproject.toml` unchanged) |
+| RM-P-AC-020 no new database or service technology | PASS | `tests/architecture/test_no_vector_retrieval_exists` and `test_scope_and_hygiene` both scan for a second store or driver, and both are tests that redden. The dependency half is a repository fact rather than a test, and it is stated so a reader can run it: **`git diff aabac266..HEAD -- pyproject.toml` is empty** — against the current merge base with `main`, this branch changes the dependency set not at all. It is stated against that base and not against the `a1beef75` implementation base, because against `a1beef75` the diff is *not* empty and this row said it was: the merge of `main` brought commit `e4482db` (WP-FE-03), which raises the SQLAlchemy floor from `>=2.0.20` to `>=2.0.32` for a mypy-compatibility reason of its own. That is a change this branch **merged**, not one it **made**, and the distinction is the whole content of the criterion — no new store, no new driver, no new dependency added here |
 
 ## API and MCP — `RM-API-AC-001` … `RM-API-AC-018`
 
@@ -132,7 +165,7 @@ Test module abbreviations:
 | RM-API-AC-003 public create/revise cannot self-assert source-backed/public/model authority | PASS | no such command field; `CAP`, `NEG` |
 | RM-API-AC-004 Principal and server-owned metadata never accepted from payload | PASS | `tests/architecture/test_principal_is_never_caller_supplied`; `CAP` |
 | RM-API-AC-005 every public write idempotent and retry-safe | PASS | `REPO`, `CAP` |
-| RM-API-AC-006 every state-dependent write requires expected-version | PASS | required with no default on revise/archive/restore; `CAP`, `POL` |
+| RM-API-AC-006 every state-dependent write requires expected-version | PASS | required with no default on revise, archive and restore. True structurally before, and asserted by nothing: this row cited `CAP` and `POL`, neither of which sent a payload without the field. Now `CAP::test_a_state_dependent_write_is_refused_without_an_expected_version` puts each of the three through `normalize` with a payload complete except for `expected_version` and asserts `InvalidRequestError`, then re-sends the same payload *with* it and asserts the command builds — so the refusal is about the missing field and not about the payload. `CAP::test_no_state_dependent_write_command_gives_expected_version_a_default` states the mechanism where a reader can check it: the dataclass field carries neither a `default` nor a `default_factory`. A create is deliberately outside the set — it depends on no prior state. Mutation-checked: reordering `ArchiveRelationshipMemory` so `expected_version` may carry `= 1` reddens both |
 | RM-API-AC-007 `list` is Entity-scoped in v0.1 | PASS | `entity_id` required; `CAP` |
 | RM-API-AC-008 search classification-aware and leaks nothing | PASS | `PRIV` |
 | RM-API-AC-009 history returns immutable revisions | PASS | `CAP`, `REPO` |
@@ -145,6 +178,14 @@ Test module abbreviations:
 | RM-API-AC-016 remote writes require explicit grants and gates beyond authentication | PASS | `relationship_memory_authoring` is in `_WRITE_PURPOSES`, so `remote_tool_names` withholds the four writes until remote writes are enabled; `CAP` asserts the profile with writes disabled and enabled |
 | RM-API-AC-017 error/audit surfaces never disclose raw memory text | PASS | `PRIV`, `NEG` |
 | RM-API-AC-018 feature unavailability explicit | PASS | withheld from the manifest and the tool list, and refused `unsupported` at a per-handler floor; `CAP`. The *shared* Review surface is now withheld on the same switch, which is where unavailability had a hole: `review.list` and `review.decide` are capabilities of the capture plane and stay published, so they could not be withheld — instead the memory plane is not reached from them unless it is composed, and a decision naming a memory case in an uncomposed build raises the identical `ReviewNotFoundError` an invented identifier raises. `REV::test_deciding_a_memory_case_in_an_uncomposed_build_answers_as_an_absent_one` asserts that as an equality of the two refusals and counts the four promotion tables before and after, because "it refused" and "it wrote nothing" are different claims |
+
+One further row, carried here because it is a commitment this repository's own
+specification makes rather than one the contract package names. It is listed so
+that a commitment with a test is not indistinguishable from one without.
+
+| Commitment | Status | Evidence |
+|---|---|---|
+| spec §7: `relationship_memory.get` carries `canonical_subject_entity_id` when the subject has been merged away | PASS | `CAP::test_a_get_tells_the_caller_when_the_subject_has_been_merged_away` asserts both states on one memory: while the subject is current the key is **absent** — not null, so a caller cannot read "current" from two spellings — and after the subject is merged away the same `get` names the survivor while `subject_entity_id` still names the identity the note was written about. This is the field that stops a caller acting confidently on an identifier that no longer names the current person, and until now it was committed in the spec, implemented in `MemoryDetail.canonical_entity_id` and the `get` view, and asserted nowhere. Mutation-checked: returning `canonical_entity_id=None` from the repository reddens the merged half, and emitting the key unconditionally from the view reddens the current half |
 
 ## Deferred, and named rather than implied
 

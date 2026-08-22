@@ -19,9 +19,11 @@ Three things are asserted here that no lower layer can assert for itself:
   and the remote profile all read `available_capabilities`, so a plane that is off
   is absent from all three — and a write is absent from the remote profile again
   whenever remote writes are disabled.
-* **The tool surface supports the sentences a user actually says.** The last
+* **The tool surface supports the sentences a user actually says.** The seventh
   section is seven synthetic conversational turns driven end to end through
-  `ApplicationService.invoke` against a real database. They are marked
+  `ApplicationService.invoke` against a real database, and the last section adds
+  two more reads on the same runtime: a listing asked for one context, and a
+  `get` whose subject was merged away after the note was written. They are marked
   `database`; everything above them is FAST and opens nothing.
 
 Everything is synthetic: invented Principals, invented people, invented notes.
@@ -32,6 +34,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator, Mapping
+from dataclasses import MISSING, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -507,6 +510,98 @@ def test_http_and_mcp_build_the_same_command_from_the_same_payload(
     over_mcp = normalize(capability.value, mcp_module._document(document))
     assert over_http[1] == over_mcp[1]
     assert over_http[0] == over_mcp[0]
+
+
+#: The three writes that change a memory that already exists, and one payload
+#: each that is complete except for `expected_version`. A create is absent on
+#: purpose: it depends on no prior state, so there is no version for it to have
+#: read, and demanding one would be a rule with nothing behind it.
+STATE_DEPENDENT_WRITES: Final[tuple[tuple[Capability, dict[str, Any]], ...]] = (
+    (
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        {
+            "memory_id": "mem_aaaa0001aaaa0001",
+            "statement": "Synthetic subject prefers phone calls.",
+            "idempotency_key": "synthetic-expected-0001",
+        },
+    ),
+    (
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        {
+            "memory_id": "mem_aaaa0001aaaa0001",
+            "idempotency_key": "synthetic-expected-0002",
+        },
+    ),
+    (
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
+        {
+            "memory_id": "mem_aaaa0001aaaa0001",
+            "idempotency_key": "synthetic-expected-0003",
+        },
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("capability", "payload"),
+    STATE_DEPENDENT_WRITES,
+    ids=[capability.value for capability, _ in STATE_DEPENDENT_WRITES],
+)
+def test_a_state_dependent_write_is_refused_without_an_expected_version(
+    capability: Capability, payload: dict[str, Any]
+) -> None:
+    """`RM-API-AC-006`: the caller states the version it read, or it does not write.
+
+    Lost-update protection that a caller can decline is not protection: a revise,
+    an archive or a restore that omitted the version would silently overwrite
+    whatever arrived between the read and the write. The field therefore carries
+    no default on any of the three commands, so a payload without it is refused
+    at the transport boundary before a handler runs — which is what this asserts,
+    together with the same payload *with* it being accepted, so the refusal is
+    about the missing field and not about the payload being malformed in some
+    other way.
+
+    Both halves matter and the negative half is the lethal one. Give
+    `expected_version` any default — `1`, or `None` with a "keep current" reading
+    — and `normalize` stops raising, which is the one change that turns this
+    plane's optimistic concurrency into a suggestion. Before this test the
+    property was true structurally and asserted nowhere.
+    """
+    with pytest.raises(InvalidRequestError):
+        normalize(capability.value, _envelope(capability, payload))
+
+    _, accepted = normalize(
+        capability.value, _envelope(capability, {**payload, "expected_version": 1})
+    )
+    assert isinstance(accepted, MEMORY_COMMANDS[capability])
+    assert isinstance(
+        accepted,
+        ReviseRelationshipMemory | ArchiveRelationshipMemory | RestoreRelationshipMemory,
+    )
+    assert accepted.expected_version == 1
+
+
+@pytest.mark.parametrize(
+    "command",
+    [ReviseRelationshipMemory, ArchiveRelationshipMemory, RestoreRelationshipMemory],
+    ids=["revise", "archive", "restore"],
+)
+def test_no_state_dependent_write_command_gives_expected_version_a_default(
+    command: type[ReviseRelationshipMemory]
+    | type[ArchiveRelationshipMemory]
+    | type[RestoreRelationshipMemory],
+) -> None:
+    """The structural half, stated where a reader can check it.
+
+    The refusal above is a consequence of this and not a second rule, so it is
+    asserted rather than described: a dataclass field with no default is what
+    makes the constructor raise, and `MISSING` is how that reads in `dataclasses`.
+    Both spellings of a default are checked, because `default_factory` would
+    supply one just as effectively and leave `default` untouched.
+    """
+    declared = {field.name: field for field in fields(command)}
+    assert declared["expected_version"].default is MISSING
+    assert declared["expected_version"].default_factory is MISSING
 
 
 # --- purposes and scope --------------------------------------------------------
@@ -1353,3 +1448,103 @@ def test_a_read_purpose_cannot_invoke_a_write_through_the_service(
             ).scalar_one()
         )
     assert written == 0
+
+
+# --- context scope, and a subject that was merged away ---------------------------
+
+
+@pytest.mark.database
+def test_a_context_scoped_memory_is_not_returned_when_another_context_is_asked_for(
+    assistant: _Assistant,
+) -> None:
+    """`RM-AC-012`: a note that is true *in a context* is not offered as true generally.
+
+    Two notes on one subject, identical in kind, lifecycle and authority and
+    differing only in whether they are linked to a context entity. Asked for the
+    context, the listing returns the linked one alone; asked for a context the
+    subject has no link to, it returns nothing; asked for no context at all, it
+    returns both. The third read is what makes the first two mean something —
+    without it, a filter that returned an empty page for every argument would
+    satisfy the exclusion and disclose nothing.
+
+    Driven through `ApplicationService.invoke`, because the criterion is about
+    what a caller is *presented* with. The repository's own filter is proved in
+    `tests/database/test_relationship_memory_repository.py`; this is the half
+    that says the capability surface carries the scope through rather than
+    dropping it and answering the unscoped page — which is what a listing that
+    silently ignored `context_entity_id` would look like, and is exactly how a
+    context-bound note would come to be read as a general fact.
+    """
+    scoped = assistant.result(
+        CreateRelationshipMemory(
+            entity_id=SARAH,
+            statement="Sarah Synthetic chairs the Monday review for this project.",
+            context_links=({"target_type": "entity", "target_id": JOHN, "role": "related_to"},),
+            idempotency_key="context-scope-0001",
+        )
+    )
+    general = assistant.result(
+        CreateRelationshipMemory(
+            entity_id=SARAH,
+            statement="Sarah Synthetic prefers Teams messages.",
+            idempotency_key="context-scope-0002",
+        )
+    )
+
+    def _listed(context_entity_id: str | None) -> list[str]:
+        answer = assistant.result(
+            ListRelationshipMemories(entity_id=SARAH, context_entity_id=context_entity_id)
+        )
+        memories = answer["memories"]
+        assert isinstance(memories, list)
+        return sorted(str(entry["memory_id"]) for entry in memories)
+
+    assert _listed(JOHN) == [str(scoped["memory_id"])]
+    assert _listed(SHARED_ONE) == []
+    assert _listed(None) == sorted([str(scoped["memory_id"]), str(general["memory_id"])])
+
+
+@pytest.mark.database
+def test_a_get_tells_the_caller_when_the_subject_has_been_merged_away(
+    assistant: _Assistant,
+) -> None:
+    """`relationship_memory.get` names the survivor, and only once there is one.
+
+    A memory keeps naming the identity it was written about; a merge does not
+    rewrite it. So a caller reading a note whose subject has since been merged
+    away is holding an identifier that no longer names the current person, and
+    the only thing standing between that and a confident wrong answer is
+    `canonical_subject_entity_id`. It is committed in
+    `docs/specs/relationship-memory-v0.1.md` section 7 and had no test.
+
+    Both states are asserted on one memory, before and after the merge, because
+    the field is *absent* rather than null while the subject is current — one
+    spelling, one meaning — and a view that emitted it unconditionally would pass
+    a test that only looked at the merged case.
+    """
+    created = assistant.result(
+        CreateRelationshipMemory(
+            entity_id=SHARED_TWO,
+            statement="Robin Synthetic keeps the north dock roster.",
+            idempotency_key="merged-subject-0001",
+        )
+    )
+    memory_id = str(created["memory_id"])
+
+    def _read() -> Mapping[str, Any]:
+        answer = assistant.result(GetRelationshipMemory(memory_id=memory_id))["memory"]
+        assert isinstance(answer, Mapping)
+        return answer
+
+    current = _read()
+    assert current["subject_entity_id"] == SHARED_TWO
+    assert "canonical_subject_entity_id" not in current
+
+    with assistant.work_engine.begin() as connection:
+        SqlEntityRepository(connection).redirect_entity(PRINCIPAL, SHARED_TWO, SHARED_ONE)
+
+    merged = _read()
+    # The note still names the identity it was written about; what changed is
+    # that the answer now says where that identity went.
+    assert merged["subject_entity_id"] == SHARED_TWO
+    assert merged["canonical_subject_entity_id"] == SHARED_ONE

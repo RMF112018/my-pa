@@ -193,14 +193,14 @@ def downgrade() -> None:
     )
     op.execute(
         "ALTER TABLE knowledge.commitment_history ADD CONSTRAINT "
-        "a_commitment_history_action_is_known CHECK (action IN ('create','close'))"
+        "a_commitment_history_action_is_known CHECK (action IN ('close','create'))"
     )
     op.execute("ALTER TABLE knowledge.task_history DROP CONSTRAINT a_task_history_action_is_known")
     op.execute(
         "ALTER TABLE knowledge.task_history ADD CONSTRAINT a_task_history_action_is_known "
-        "CHECK (action IN ('create','update_title','update_description','transition_lifecycle',"
-        "'set_priority','schedule','defer','archive','unarchive','set_recurrence',"
-        "'cancel_recurrence','link_commitment','set_role'))"
+        "CHECK (action IN ('archive','cancel_recurrence','create','defer','link_commitment',"
+        "'schedule','set_priority','set_recurrence','set_role','transition_lifecycle',"
+        "'unarchive','update_description','update_title'))"
     )
     op.execute(
         "ALTER TABLE knowledge.commitment_history DROP CONSTRAINT "

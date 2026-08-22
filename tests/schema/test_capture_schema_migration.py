@@ -220,8 +220,11 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # domain declares them and the head constraint admits them.
         "commitments.close",
         "commitments.create",
+        "commitments.history",
         "commitments.list",
         "commitments.read",
+        "commitments.search",
+        "commitments.update",
         "commitments.waiting_on",
         "tasks.bulk_confirm",
         "tasks.bulk_preview",

@@ -551,6 +551,11 @@ def test_sarah_permit_log_scenario() -> None:
     assert read_resp.error is None, read_resp.error
     assert read_resp.result is not None
     assert read_resp.result["commitment"]["state"] == CommitmentState.OPEN.value
+    follow_up_read = read_resp.result["follow_up_task"]
+    assert follow_up_read["task_id"] == follow_up_task_id
+    assert follow_up_read["title"] == "Follow up with Sarah about the permit log"
+    assert follow_up_read["lifecycle_state"] == TaskLifecycleState.COMPLETED.value
+    assert follow_up_read["version"] == 2
 
     # --- Step 7: Idempotency replay — re-create with same key ----------------
     replay_resp = service.invoke(create_meta, create_cmd, principal=principal_a)

@@ -70,11 +70,15 @@ administer "DROP DATABASE IF EXISTS \"${DATABASE_NAME}\" WITH (FORCE)"
 administer "CREATE DATABASE \"${DATABASE_NAME}\""
 
 echo "e2e: migrating it to head"
-( cd "${REPO_DIR}" && MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" -m alembic upgrade head >/dev/null )
+( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" -m alembic upgrade head >/dev/null )
+
+echo "e2e: seeding one Principal-scoped synthetic counterparty"
+( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" web/e2e/seed-work.py )
 
 echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
 (
   cd "${REPO_DIR}"
+  export PYTHONPATH="${REPO_DIR}/src"
   MY_PA_ENVIRONMENT=local \
   MY_PA_AUTH_MODE=local_operator \
   MY_PA_DATABASE_URL="${DATABASE_URL}" \

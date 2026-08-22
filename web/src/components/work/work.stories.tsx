@@ -14,7 +14,9 @@ const task: TaskDetailContract = {
   scheduled_at: "2026-08-22T13:00:00Z", deferred_until: "2026-08-21T13:00:00Z",
   archived_at: null, created_at: "2026-08-20T12:00:00Z", updated_at: "2026-08-22T12:00:00Z",
   evidence_state: "accepted", origin_evidence_ref: "cap_story_origin_0001", closure_evidence_ref: null,
+  accepted_by_review_decision_id: "rdec_story0000000001", acceptance_kind: "review",
   closure_history_id: null, version: 3, commitment_id: "cmt_story000000000001", role: "follow_up",
+  project_id: "prj_story000000000001", situation_id: "sit_story000000000001",
   opened_at: "2026-08-20T12:00:00Z", closed_at: null,
 };
 
@@ -31,7 +33,7 @@ const commitment: CommitmentDetailContract = {
   counterparty: { person_id: "per_story000000000001", display_name: "Sam Rivera" },
   due_date: "2026-08-22T16:00:00Z", created_at: "2026-08-20T12:00:00Z", updated_at: "2026-08-22T11:00:00Z",
   version: 2, evidence_state: "accepted", origin_evidence_ref: "cap_story_origin_0002",
-  closure_evidence_ref: null, closed_at: null,
+  closure_evidence_ref: null, accepted_by_review_decision_id: "rdec_story0000000002", closed_at: null,
 };
 
 const commitments: readonly CommitmentRow[] = [
@@ -66,7 +68,7 @@ function mockDetailFetch() {
         ? { commitments }
         : url.includes("/api/tasks/")
           ? { task }
-          : { commitment, counterparty_options: [commitment.counterparty], counterparty_options_truncated: false };
+          : { commitment, follow_up_task: task, counterparty_options: [commitment.counterparty], counterparty_options_truncated: false };
     return new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json" } });
   };
   return () => { globalThis.fetch = original; };

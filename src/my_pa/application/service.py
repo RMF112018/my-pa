@@ -4135,12 +4135,18 @@ class ApplicationService:
             raise NotFoundError(SafeDetail.COMMITMENT_ID)
         with _translated():
             public = _commitment_public_view(unit_of_work, principal_id, commitment)
+            follow_up = unit_of_work.tasks.get_follow_up_for_commitment(
+                principal_id, command.commitment_id
+            )
             counterparty_options, counterparty_options_truncated = _counterparty_options(
                 unit_of_work, principal_id
             )
         return _Result(
             payload={
                 "commitment": public,
+                "follow_up_task": (
+                    None if follow_up is None else _task_list_entry(follow_up).to_canonical_dict()
+                ),
                 "counterparty_options": counterparty_options,
                 "counterparty_options_truncated": counterparty_options_truncated,
             },

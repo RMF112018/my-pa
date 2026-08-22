@@ -14,9 +14,11 @@ export interface TaskRow {
 }
 export interface TaskDetail extends TaskRow {
   description: string | null; evidence_state: string; origin_evidence_ref: string;
-  closure_evidence_ref: string | null; closure_history_id: string | null; version: number;
+  closure_evidence_ref: string | null; accepted_by_review_decision_id: string | null;
+  acceptance_kind: string | null; closure_history_id: string | null; version: number;
   scheduled_at: string | null; deferred_until: string | null; commitment_id: string | null;
-  role: string | null; opened_at: string; closed_at: string | null;
+  role: string | null; project_id: string | null; situation_id: string | null;
+  opened_at: string; closed_at: string | null;
 }
 export interface CommitmentRow {
   commitment_id: string; direction: "owed_by_principal" | "owed_to_principal"; state: "open" | "closed";
@@ -25,8 +27,13 @@ export interface CommitmentRow {
   counterparty: CounterpartyOption | null;
 }
 export interface CommitmentDetail extends CommitmentRow {
-  evidence_state: string; origin_evidence_ref: string; closure_evidence_ref: string | null; closed_at: string | null;
+  evidence_state: string; origin_evidence_ref: string; closure_evidence_ref: string | null;
+  accepted_by_review_decision_id: string | null; closed_at: string | null;
 }
+export type CommitmentFollowUp =
+  | { state: "linked"; task_id: string; title: string; lifecycle_state: TaskLifecycle }
+  | { state: "empty" }
+  | { state: "unavailable"; reason: string };
 export interface WaitingOnRow {
   commitment_id: string; title: string; counterparty_person_id: string | null;
   due_date: string | null; state: "open";

@@ -35,7 +35,12 @@ GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 #: The unresolved-mention capability admission, between governance and head.
 QUEUE_REVISION: Final = "e4d7b2f9a316"
 MENTION_REVISION: Final = "f3a8c1d7e592"
-HEAD_REVISION: Final = INTELLIGENCE_REVISION
+#: The Relationship Memory plane, which is where `upgrade head` now lands.
+#: `INTELLIGENCE_REVISION` above was head until this revision stacked on it;
+#: naming both keeps the chain assertion below a statement about the order
+#: rather than about whichever revision happens to be last.
+MEMORY_REVISION: Final = "f1c6b904a2d7"
+HEAD_REVISION: Final = MEMORY_REVISION
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_c3e9a7f1b204_add_goodnotes_exact_render_digest.py"
 )

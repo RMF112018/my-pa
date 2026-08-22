@@ -255,6 +255,21 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # nothing has placed. `e4d7b2f9a316` is the forward `ALTER` that admits
         # it, and this line is why a further one cannot arrive without it.
         "entities.unresolved_mentions",
+        # The Relationship Memory plane. `f1c6b904a2d7` is the forward `ALTER`
+        # that admits all eight, and it travels in the same revision as the
+        # tables rather than after them: a build that could serve
+        # `relationship_memory.create` against a database whose
+        # `capability_is_known` refuses the string would fail on the *audit*
+        # insert, after the memory row, which is the one failure ordering
+        # `AGENTS.md` section 5 rules out.
+        "relationship_memory.create",
+        "relationship_memory.get",
+        "relationship_memory.list",
+        "relationship_memory.search",
+        "relationship_memory.history",
+        "relationship_memory.revise",
+        "relationship_memory.archive",
+        "relationship_memory.restore",
     }
 )
 
@@ -988,6 +1003,10 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             "intelligence_commit_receipts_are_append_only",
             "intelligence_pipeline_dependencies_are_append_only",
             "intelligence_provenance_refs_are_append_only",
+            # The Relationship Memory plane's two append-only triggers, named for
+            # the same reason as the report plane's above.
+            "relationship_memory_versions_are_append_only",
+            "relationship_memory_decisions_are_append_only",
             "goodnotes_page_versions_are_immutable",
             "goodnotes_region_proposals_are_immutable",
             "goodnotes_source_snapshots_are_immutable",

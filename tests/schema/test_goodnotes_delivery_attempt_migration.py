@@ -36,7 +36,12 @@ GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 #: The unresolved-mention capability admission, between governance and head.
 QUEUE_REVISION: Final = "e4d7b2f9a316"
 MENTION_REVISION: Final = "f3a8c1d7e592"
-HEAD_REVISION: Final = INTELLIGENCE_REVISION
+#: The Relationship Memory plane, which is where `upgrade head` now lands.
+#: `INTELLIGENCE_REVISION` above was head until this revision stacked on it;
+#: naming both keeps the chain assertion below a statement about the order
+#: rather than about whichever revision happens to be last.
+MEMORY_REVISION: Final = "f1c6b904a2d7"
+HEAD_REVISION: Final = MEMORY_REVISION
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_f4c1a8e6b205_add_goodnotes_delivery_attempt_ledger.py"
@@ -123,7 +128,8 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(GOVERNANCE_REVISION).down_revision == CAPABILITY_REVISION
     assert script.get_revision(QUEUE_REVISION).down_revision == GOVERNANCE_REVISION
     assert script.get_revision(MENTION_REVISION).down_revision == QUEUE_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == MENTION_REVISION
+    assert script.get_revision(INTELLIGENCE_REVISION).down_revision == MENTION_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == INTELLIGENCE_REVISION
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(PRIOR).down_revision == GROUNDING_REVISION
     assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 66

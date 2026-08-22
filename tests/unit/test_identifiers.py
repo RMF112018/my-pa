@@ -29,7 +29,19 @@ def test_contract_prefixes_are_stable() -> None:
     # package that puts three of them on the wire (`mdoc`, `mdver`, `mdrcpt` all
     # appear in `contracts/v1/documents.py`), which makes "these appear in the
     # public contract" true of them in the strongest sense.
+    #
+    # The seven Relationship Memory prefixes are here for the same reason: `mem`
+    # and `memver` are returned on the wire by every `relationship_memory.*`
+    # write and read, and `mctx`, `mevd`, `memsub`, `mprop` and `mpev` name rows
+    # a caller can reach through history, evidence and the review queue.
     assert {kind.value for kind in IdKind} == {
+        "mem",
+        "memver",
+        "mctx",
+        "mevd",
+        "memsub",
+        "mprop",
+        "mpev",
         "mdoc",
         "mdver",
         "mdsub",

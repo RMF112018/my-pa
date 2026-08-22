@@ -274,6 +274,14 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.ENTITIES_CONTEXT, Purpose.ENTITY_READ),
         (Capability.ENTITIES_RELATIONSHIPS, Purpose.ENTITY_READ),
         (Capability.ENTITIES_UNRESOLVED_MENTIONS, Purpose.ENTITY_READ),
+        (Capability.RELATIONSHIP_MEMORY_CREATE, Purpose.RELATIONSHIP_MEMORY_AUTHORING),
+        (Capability.RELATIONSHIP_MEMORY_REVISE, Purpose.RELATIONSHIP_MEMORY_AUTHORING),
+        (Capability.RELATIONSHIP_MEMORY_ARCHIVE, Purpose.RELATIONSHIP_MEMORY_AUTHORING),
+        (Capability.RELATIONSHIP_MEMORY_RESTORE, Purpose.RELATIONSHIP_MEMORY_AUTHORING),
+        (Capability.RELATIONSHIP_MEMORY_GET, Purpose.RELATIONSHIP_MEMORY_READ),
+        (Capability.RELATIONSHIP_MEMORY_LIST, Purpose.RELATIONSHIP_MEMORY_READ),
+        (Capability.RELATIONSHIP_MEMORY_SEARCH, Purpose.RELATIONSHIP_MEMORY_READ),
+        (Capability.RELATIONSHIP_MEMORY_HISTORY, Purpose.RELATIONSHIP_MEMORY_READ),
     }
 )
 
@@ -303,10 +311,14 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # goodnotes.content added 1 capability and 1 purpose; the entity plane added
     # 5 capabilities and 1 purpose, and its unresolved-mention queue one
     # more capability under the purpose the other five already use; the
-    # Intelligence Artifact plane added 8 capabilities and 2 purposes.
-    # Unioned: 62 capabilities, 25 purposes, 64 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 64
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 64 == 1486
+    # Intelligence Artifact plane added 8 capabilities and 2 purposes; the
+    # Relationship Memory plane added 8 capabilities and 2 purposes, and it maps
+    # one-to-one onto them — four writes under `relationship_memory_authoring`
+    # and four reads under `relationship_memory_read` — so it contributes eight
+    # pairs rather than the sixteen a cross product would give.
+    # Unioned: 70 capabilities, 27 purposes, 72 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 72
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 72 == 1818
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

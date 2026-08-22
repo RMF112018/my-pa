@@ -515,6 +515,26 @@ EXPECTED_MODEL_FIELDS = {
             "invalidated_reason",
         }
     ),
+    # No `statement` and no `risk_class`, and both absences are load-bearing.
+    # The proposed text is withheld from the review listing on purpose (see
+    # `application.service._review_case_payload`), and `risk_class` is a
+    # property over a module constant because a dataclass field carrying the
+    # token `risk` is refused by the scoring deny rule next door.
+    "my_pa.domain.relationship.memory.RelationshipMemoryReviewCase": frozenset(
+        {
+            "review_case_id",
+            "proposal_id",
+            "subject_entity_id",
+            "principal_id",
+            "proposed_kind",
+            "opened_at",
+            "proposal_state",
+            "review_version",
+            "latest_disposition",
+            "accepted_memory_id",
+            "accepted_memory_version_id",
+        }
+    ),
     "my_pa.domain.relationship.memory.RelationshipMemoryVersion": frozenset(
         {
             "memory_version_id",
@@ -930,7 +950,7 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 39
+    assert len(actual_model_fields) == 40
     assert len(actual_table_columns) == 34
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"

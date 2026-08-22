@@ -345,6 +345,7 @@ from my_pa.domain.relationship.memory import (
     MergedSubjectError,
     RelationshipMemory,
     RelationshipMemoryError,
+    RelationshipMemoryReviewCase,
     RelationshipMemoryVersion,
     StaleMemoryVersionError,
 )
@@ -525,7 +526,32 @@ def _memory_view(detail: MemoryDetail, *, include_statement: bool) -> dict[str, 
     return view
 
 
-def _review_case_payload(case: ReviewCase | GoodNotesReviewCase) -> dict[str, Any]:
+def _review_case_payload(
+    case: ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase,
+) -> dict[str, Any]:
+    """One review case as the contract may disclose it, whatever its subject kind.
+
+    **No branch discloses the subject's text, and the Relationship Memory branch
+    is where that rule had to be decided rather than inherited.** A capture case
+    names its capture and version; a GoodNotes case names its region and page
+    version; neither hands the reviewer the words. A memory candidate's words are
+    the private thing this whole plane exists to protect, and a `sensitivity`
+    proposal's are the most protected of them: the accepted form of that
+    statement floors at `RESTRICTED_LOCAL`, which `relationship_memory.search`
+    excludes by predicate and the context card withholds and merely counts. A
+    listing that printed the *proposed* text would disclose, to any caller of
+    `review.cases`, exactly the sentence the memory capabilities refuse to
+    return — and it would do so on a read that carries no eligibility decision
+    to make it with. `RelationshipMemoryReviewCase` therefore has no statement
+    field at all, so this is structural and not a formatting choice.
+
+    What the branch does disclose is what a decision needs: which entity the
+    candidate is about, what kind of statement it would become, and — once
+    accepted — the memory identity it produced, so the reviewer can follow their
+    own decision to its result through the memory plane, where classification is
+    enforced. Disclosing `proposed_kind` is deliberate: a reviewer asked to
+    accept a sensitivity has to know that is what they are accepting.
+    """
     common = {
         "review_case_id": case.review_case_id,
         "proposal_id": case.proposal_id,
@@ -544,6 +570,15 @@ def _review_case_payload(case: ReviewCase | GoodNotesReviewCase) -> dict[str, An
             "region_id": case.region_id,
             "page_version_id": case.page_version_id,
             "confidence": case.confidence,
+        }
+    if isinstance(case, RelationshipMemoryReviewCase):
+        return {
+            **common,
+            "subject_kind": "relationship_memory",
+            "subject_entity_id": case.subject_entity_id,
+            "proposed_kind": case.proposed_kind.value,
+            "accepted_memory_id": case.accepted_memory_id,
+            "accepted_memory_version_id": case.accepted_memory_version_id,
         }
     return {
         **common,

@@ -2,10 +2,13 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the sixty-two capabilities is addressable over HTTP
+**Reachability.** Every one of the seventy capabilities is addressable over HTTP
 and answers. Parametrised over `Capability` rather than over a list written
-here, so a sixty-third capability added to the domain arrives as a failing row instead
-of as an untested one.
+here, so a seventy-first capability added to the domain arrives as a failing row instead
+of as an untested one. Ten of the seventy answer a well-formed `501 unsupported`
+rather than a result, and each is recorded with the reason it does:
+`_UNIMPLEMENTED_CAPABILITIES` for the two placeholders, and
+`_UNCOMPOSED_CAPABILITIES` for the plane this harness does not switch on.
 
 **Verbatim.** The bytes a caller receives are the bytes the envelope serialised
 itself to — asserted as byte equality against the envelope the application
@@ -64,6 +67,7 @@ from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    ArchiveRelationshipMemory,
     BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -74,6 +78,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateManagedDocument,
     CreateProject,
+    CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
     DecideReviewCase,
@@ -88,6 +93,8 @@ from my_pa.application.commands import (
     GetGoodNotesWork,
     GetLatestIntelligenceArtifact,
     GetPulse,
+    GetRelationshipMemory,
+    GetRelationshipMemoryHistory,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -96,6 +103,7 @@ from my_pa.application.commands import (
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
+    ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
     ListSources,
@@ -115,13 +123,16 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveIntelligenceSet,
     RestoreManagedDocument,
+    RestoreRelationshipMemory,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
+    ReviseRelationshipMemory,
     SearchCaptures,
     SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchRelationshipMemories,
     SearchTasks,
     SubmitGoodNotesProposal,
     TransitionTask,
@@ -134,7 +145,7 @@ from my_pa.contracts.ports import KnowledgeRecord
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.review import Disposition
-from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.common.identifiers import IdKind, make_identifier
 from my_pa.domain.common.provenance import Provenance
 from my_pa.domain.context.preference import ContextPreferenceAction
 from my_pa.domain.identity.operation import Capability, permitted_purposes
@@ -150,6 +161,7 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
+from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
 from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.lifecycle import TaskLifecycleState
@@ -165,6 +177,49 @@ ALL_CAPABILITIES = list(Capability)
 _UNIMPLEMENTED_CAPABILITIES = frozenset(
     {Capability.TASKS_BULK_PREVIEW, Capability.TASKS_BULK_CONFIRM}
 )
+
+#: The eight `relationship_memory.` names, which are implemented and are refused
+#: here for a different reason: `RecordingService` below leaves
+#: `relationship_memory_enabled` off, so
+#: `ApplicationService._relationship_memory_plane` refuses each of them at the
+#: composition floor. A build that turns it on answers them — `FakeUnitOfWork`
+#: does carry the repository, and `tests/contract/test_transport_parity.py`
+#: reads a staged memory through it over all three transports. Recorded apart
+#: from `_UNIMPLEMENTED_CAPABILITIES` rather than folded into it, because
+#: "nobody wrote it" and "this process did not turn it on" are different facts
+#: and only one of them is about the plane's code.
+#: `tests/contract/test_relationship_memory_capabilities.py` is where the
+#: plane's answers are proved, against a real database.
+#:
+#: Reachability for these eight means what it means for the two above: the name
+#: is addressable, the request reaches the handler, and the refusal comes back
+#: as this contract's own envelope rather than as a stack trace or a bare `404`.
+_UNCOMPOSED_CAPABILITIES = frozenset(
+    {
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_GET,
+        Capability.RELATIONSHIP_MEMORY_LIST,
+        Capability.RELATIONSHIP_MEMORY_SEARCH,
+        Capability.RELATIONSHIP_MEMORY_HISTORY,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
+    }
+)
+
+#: Every capability this harness expects a `501 unsupported` from, for either of
+#: the two distinct reasons above.
+_UNSUPPORTED_CAPABILITIES = _UNIMPLEMENTED_CAPABILITIES | _UNCOMPOSED_CAPABILITIES
+
+#: The memory the payload table and the command table below both name. Derived
+#: from a fixed suffix rather than minted, because the two tables are compared
+#: to each other and one that minted a fresh identifier on every call would be
+#: comparing two different requests. Nothing is stored under it and nothing here
+#: needs anything to be: the build refuses the eight at the composition floor
+#: (see `_UNCOMPOSED_CAPABILITIES`), and what these payloads have to do is build
+#: the command so `normalize` has a real pair to be compared against a
+#: hand-written one.
+MEMORY_ID = make_identifier(IdKind.RELATIONSHIP_MEMORY, "httpwire01httpwire01")
 
 
 def a_permitted_purpose(capability: Capability) -> Purpose:
@@ -498,6 +553,57 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # The Relationship Memory plane (WP-RM-01). A memory names an Entity, so
+        # the subject is the same staged `person` the entity payloads name; the
+        # memory itself is `MEMORY_ID`, a derived rather than minted identifier
+        # shared with the command table below, because two tables each minting
+        # one would compare two different requests. Nothing is stored under it —
+        # this build leaves the memory plane off, see
+        # `_UNCOMPOSED_CAPABILITIES` — and nothing here needs anything to be:
+        # what these payloads have to do is build the command, so that
+        # `normalize` has a real pair to be compared against a hand-written one.
+        #
+        # `kind`, `kinds` and `lifecycle` are sent as their vocabulary strings
+        # and `observed_at` as an RFC 3339 string, because that is what a caller
+        # sends and the coercion from each to the domain value is
+        # `adapters/normalization.py`'s work — which is exactly what the
+        # normalisation comparison below is for.
+        Capability.RELATIONSHIP_MEMORY_CREATE: {
+            "entity_id": person.entity_id,
+            "statement": "A synthetic memory-plane note",
+            "idempotency_key": "http-memory-create-0001",
+            "kind": "personal_detail",
+            "observed_at": "2026-08-02T10:00:00Z",
+        },
+        Capability.RELATIONSHIP_MEMORY_GET: {
+            "memory_id": MEMORY_ID,
+            "include_statement": True,
+        },
+        Capability.RELATIONSHIP_MEMORY_LIST: {
+            "entity_id": person.entity_id,
+            "kinds": ["personal_detail"],
+            "lifecycle": "active",
+            "page_size": 10,
+        },
+        Capability.RELATIONSHIP_MEMORY_SEARCH: {"query": "synthetic", "page_size": 10},
+        Capability.RELATIONSHIP_MEMORY_HISTORY: {"memory_id": MEMORY_ID, "page_size": 10},
+        Capability.RELATIONSHIP_MEMORY_REVISE: {
+            "memory_id": MEMORY_ID,
+            "expected_version": 1,
+            "statement": "A synthetic memory-plane note, revised",
+            "idempotency_key": "http-memory-revise-0001",
+            "correction_reason": "the contract table revised it",
+        },
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE: {
+            "memory_id": MEMORY_ID,
+            "expected_version": 1,
+            "idempotency_key": "http-memory-archive-0001",
+        },
+        Capability.RELATIONSHIP_MEMORY_RESTORE: {
+            "memory_id": MEMORY_ID,
+            "expected_version": 1,
+            "idempotency_key": "http-memory-restore-0001",
+        },
     }
 
 
@@ -794,6 +900,51 @@ def commands_for(
             entity_id=person.entity_id, direction="any"
         ),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
+        # The Relationship Memory plane, written as the commands the payload
+        # table above must normalise to. The vocabulary members and the datetime
+        # are spelled here as domain values because that is what the caller's
+        # strings have to *become*: a normalisation that passed `"personal_detail"`
+        # or `"2026-08-02T10:00:00Z"` through unconverted would satisfy a
+        # comparison written in strings and fail this one.
+        Capability.RELATIONSHIP_MEMORY_CREATE: CreateRelationshipMemory(
+            entity_id=person.entity_id,
+            statement="A synthetic memory-plane note",
+            idempotency_key="http-memory-create-0001",
+            kind=MemoryKind.PERSONAL_DETAIL,
+            observed_at=datetime(2026, 8, 2, 10, tzinfo=UTC),
+        ),
+        Capability.RELATIONSHIP_MEMORY_GET: GetRelationshipMemory(
+            memory_id=MEMORY_ID, include_statement=True
+        ),
+        Capability.RELATIONSHIP_MEMORY_LIST: ListRelationshipMemories(
+            entity_id=person.entity_id,
+            kinds=(MemoryKind.PERSONAL_DETAIL,),
+            lifecycle=MemoryLifecycle.ACTIVE,
+            page_size=10,
+        ),
+        Capability.RELATIONSHIP_MEMORY_SEARCH: SearchRelationshipMemories(
+            query="synthetic", page_size=10
+        ),
+        Capability.RELATIONSHIP_MEMORY_HISTORY: GetRelationshipMemoryHistory(
+            memory_id=MEMORY_ID, page_size=10
+        ),
+        Capability.RELATIONSHIP_MEMORY_REVISE: ReviseRelationshipMemory(
+            memory_id=MEMORY_ID,
+            expected_version=1,
+            statement="A synthetic memory-plane note, revised",
+            idempotency_key="http-memory-revise-0001",
+            correction_reason="the contract table revised it",
+        ),
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE: ArchiveRelationshipMemory(
+            memory_id=MEMORY_ID,
+            expected_version=1,
+            idempotency_key="http-memory-archive-0001",
+        ),
+        Capability.RELATIONSHIP_MEMORY_RESTORE: RestoreRelationshipMemory(
+            memory_id=MEMORY_ID,
+            expected_version=1,
+            idempotency_key="http-memory-restore-0001",
+        ),
     }
 
 
@@ -882,7 +1033,7 @@ def test_every_capability_is_reachable_over_http(
     payload = payloads_for(scene, record)[capability]
     reply = wire.send(capability.value, document_for(capability, scene, payload))
     envelope = reply.document()
-    if capability in _UNIMPLEMENTED_CAPABILITIES:
+    if capability in _UNSUPPORTED_CAPABILITIES:
         assert reply.status == 501, reply.body
         assert envelope["error"]["code"] == "unsupported"
         assert envelope["request_id"] == f"req-{capability.value}"
@@ -915,7 +1066,7 @@ def test_the_body_is_the_envelope_the_application_produced(
     assert len(service.envelopes) == 1, "one request reached the application once"
     produced = service.envelopes[0]
     assert reply.body == produced.to_canonical_json()
-    assert reply.status == (501 if capability in _UNIMPLEMENTED_CAPABILITIES else 200)
+    assert reply.status == (501 if capability in _UNSUPPORTED_CAPABILITIES else 200)
     assert produced.correlation_id in reply.body
 
 

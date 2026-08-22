@@ -144,6 +144,13 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # — composes `_mine` or `_bound`, and those two are one-line wrappers
         # over `partition_criterion` and `principal_bound_values` respectively.
         "infrastructure/persistence/relationship_memory.py",
+        # The Relationship Memory review and promotion plane. Every statement it
+        # builds — the case listing, the dispatch probe, the decision append, the
+        # proposal stamp, the promoted aggregate and version, the evidence copy,
+        # and the `knowledge.entities` read that re-proves the subject is this
+        # Principal's before a promotion writes anything — composes the same
+        # `_mine`/`_bound` wrappers `relationship_memory.py` uses.
+        "infrastructure/persistence/relationship_memory_review.py",
         # The evidence traversal. Every one of its six statements is rooted at a
         # partitioned table — `captures`, `capture_versions`, `capture_assertions`
         # or `capture_assertion_spans` — and constrained through `principal_scoped`
@@ -351,6 +358,14 @@ PER_MODULE_ONLY: Final = {
         "per-module rather than statement-level only because this plane has no "
         "bespoke statement-level scan of its own yet; writing one is the work "
         "this entry represents, not a hole it is covering."
+    ),
+    "infrastructure/persistence/relationship_memory_review.py": (
+        "every statement naming a memory proposal, decision, aggregate, version "
+        "or evidence table, and the `entities` read that re-proves the promoted "
+        "subject, composes `_mine` or `_bound` — the same one-line wrappers over "
+        "partition_criterion and principal_bound_values that the plane it "
+        "promotes into uses. Per-module for the same reason its sibling is: this "
+        "plane has no bespoke statement-level scan yet."
     ),
 }
 

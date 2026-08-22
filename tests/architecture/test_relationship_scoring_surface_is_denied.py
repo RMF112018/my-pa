@@ -6,7 +6,7 @@ relationship surface contains none of them — but *absence today is not a
 guarantee for tomorrow*, and the guard that already exists does not supply one.
 
 `tests/relationship/test_relationship_domain.py` freezes the exact field
-vocabulary of all twenty-six relationship tables and all thirty
+vocabulary of all thirty-four relationship tables and all forty
 relationship dataclasses as a **closed allow-list**. That makes any new field *visible*: a
 column added without touching the constant reddens the build. It does not make a
 scoring field *impossible*, because the constant and the schema are both source,
@@ -51,6 +51,16 @@ denied one, which is asserted directly in
   collide —
   and a `priority` on a *person* would be people ranking, which is why the stem
   is denied on this surface.
+* **`risk` stays denied, and one live construct pays for it.**
+  `RelationshipMemoryReviewCase` reuses the shared `RiskClass` vocabulary — the
+  canonical Review surface expects every case to state one — but exposes it as a
+  *property* over a module constant rather than as a dataclass field, because a
+  field named `risk_class` on this package is a violation here and this rule is
+  not weakened for a convenience. Nothing is hidden by that: the value is the
+  same constant for every case, so there was never a per-person judgement to
+  store, and this scan reads fields precisely because a field is the durable
+  form. A per-case *computed* risk would be a different thing and would have to
+  be argued for on its own.
 * **`index`**, **`fit`**, **`condition`**, **`spouse`**, **`urgency`** — each
   names a composite judgement in one reading and something ordinary in another
   (`index` an ordinal position, `condition` a state, `spouse` a
@@ -254,8 +264,8 @@ def test_the_scan_reaches_the_whole_relationship_surface() -> None:
     vocabularies = relationship_vocabularies()
     declared = declared_allow_list()
 
-    assert len(columns) == 26, f"{len(columns)} relationship tables reached, not twenty-six"
-    assert len(models) == 30, f"{len(models)} relationship models reached, not thirty"
+    assert len(columns) == 34, f"{len(columns)} relationship tables reached, not thirty-four"
+    assert len(models) == 40, f"{len(models)} relationship models reached, not forty"
     assert vocabularies, "no closed relationship vocabulary was reached"
     assert set(declared) == set(ALLOW_LIST_CONSTANTS), (
         f"{sorted(declared)} allow-list constants were read from "

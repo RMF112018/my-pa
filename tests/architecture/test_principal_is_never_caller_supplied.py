@@ -289,6 +289,24 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("row", "principal_id"),
         ("row", "principal_id"),
     ),
+    # The same plane's review and promotion path. All nine reads are of the
+    # `ReviewDecisionRequest.principal_id` the authenticated Review capability
+    # resolved, and eight of them are arguments to `_mine`, `_bound` or the
+    # subject re-validation those two scope — read to constrain a statement to
+    # the partition or to stamp a row with it. The ninth echoes it back onto the
+    # returned `ReviewDecision`, which is the same value the caller was already
+    # authenticated as and carries no partition decision of its own.
+    "infrastructure/persistence/relationship_memory_review.py": (
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+    ),
     "application/goodnotes.py": (
         ("page", "principal_id"),
         ("page", "principal_id"),
@@ -490,8 +508,15 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("values", "principal_id"),
     ),
     # The request Principal is produced by the authenticated Review capability;
-    # both the dispatch probe and the selected repository reapply the partition.
-    "infrastructure/persistence/unit_of_work.py": (("request", "principal_id"),),
+    # every dispatch probe and the selected repository reapply the partition.
+    # Two reads, one per probe: the canonical Review surface now routes three
+    # subject kinds, and each router asks its own plane whether the case is
+    # theirs *within this Principal's partition* — which is also what makes a
+    # foreign case answer "no such case" rather than "not yours".
+    "infrastructure/persistence/unit_of_work.py": (
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+    ),
     "application/situation_service.py": (
         ("cmd", "principal_id"),
         ("cmd", "principal_id"),

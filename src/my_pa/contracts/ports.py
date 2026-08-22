@@ -119,6 +119,7 @@ from my_pa.domain.relationship.memory import (
     MemoryOperation,
     MemoryReceipt,
     RelationshipMemory,
+    RelationshipMemoryReviewCase,
     RelationshipMemoryVersion,
 )
 from my_pa.domain.relationship.profile import OrganizationProfile, PersonProfile
@@ -1123,12 +1124,18 @@ class ReviewRepository(ABC):
     @abstractmethod
     def cases(
         self, *, limit: int, principal_id: str
-    ) -> tuple[ReviewCase | GoodNotesReviewCase, ...]:
+    ) -> tuple[ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase, ...]:
         """One bounded page for this Principal, oldest case first.
 
         `principal_id` is the authenticated caller's identifier: the page is
         confined to that Principal's partition, and a case belonging to any
         other Principal is unreachable through this port (MU-AC-04).
+
+        Three variants and one surface. A capture proposal, a GoodNotes region
+        and a Relationship Memory candidate are decided by the same reviewer
+        through the same capability; the union is what keeps that one surface
+        from becoming three, and each variant carries only the subject facts its
+        own decision needs.
         """
 
     @abstractmethod

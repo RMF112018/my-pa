@@ -15,7 +15,7 @@ request have two owners. The envelope is one fixed shape — `RequestMetadata`'s
 fields, the same for all seventy capabilities — so it is presented as options,
 which is what a CLI is for. The payload is capability-specific, so fifteen sets of
 hand-written options would be fifteen statements of what `application.commands`
-already says, and a sixty-third capability would arrive with none. `--payload` is
+already says, and a seventy-first capability would arrive with none. `--payload` is
 JSON for the same reason `adapters/mcp/tools.py` derives its schemas: a second
 copy of a shape is a second thing to keep true.
 

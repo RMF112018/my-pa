@@ -54,6 +54,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any, Final
 
+from my_pa.domain.capture.proposal import ProposalState, RiskClass
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
@@ -65,6 +67,7 @@ __all__ = [
     "MAX_QUALIFIER_CHARACTERS",
     "MAX_STATEMENT_CHARACTERS",
     "MAX_STRUCTURED_VALUE_BYTES",
+    "MEMORY_REVIEW_RISK_CLASS",
     "MEMORY_STRUCTURED_SCHEMAS",
     "PERSON_ONLY_KINDS",
     "STRUCTURED_VALUE_KINDS",
@@ -96,9 +99,11 @@ __all__ = [
     "RelationshipMemory",
     "RelationshipMemoryError",
     "RelationshipMemoryProposal",
+    "RelationshipMemoryReviewCase",
     "RelationshipMemoryVersion",
     "StaleMemoryVersionError",
     "classification_floor_for",
+    "satisfies_floor",
     "statement_digest",
     "validate_statement",
     "validate_structured_value",
@@ -1058,6 +1063,105 @@ class MemoryProposalEvidence:
         if self.knowledge_id is not None:
             validate_identifier(self.knowledge_id, IdKind.KNOWLEDGE)
         ensure_utc(self.created_at)
+
+
+#: The risk class every Relationship Memory review case is opened at.
+#:
+#: A module constant rather than a stored column or a per-case computation, and
+#: the distinction is the point: nothing here grades the *subject*. Every
+#: candidate memory carries the same consequence — accepting one writes one
+#: private statement about one entity into the current set — so a per-case
+#: number would be a judgement with nothing behind it, and a stored one would be
+#: a column on the relationship surface whose name is `risk`.
+#:
+#: `MODERATE` is the value `GoodNotesReviewCase` opens at for the same reason:
+#: it is the middle of the shared `RiskClass` vocabulary, it widens no frozen
+#: capture-plane CHECK, and it neither suppresses the case from a reviewer's
+#: attention nor escalates it above the review work that actually is critical.
+MEMORY_REVIEW_RISK_CLASS: Final = RiskClass.MODERATE
+
+
+@dataclass(frozen=True, slots=True)
+class RelationshipMemoryReviewCase:
+    """One candidate memory exposed through the ordinary canonical Review surface.
+
+    Relationship Memory is the *third* subject kind on the one Review surface,
+    after capture proposals and GoodNotes regions, and this mirrors
+    `GoodNotesReviewCase` deliberately rather than inventing a fourth review
+    vocabulary. `ProposalState`, `RiskClass` and `Disposition` are the shared
+    capture-plane ones, reused as values and not as tables: nothing here writes
+    a capture row, so no frozen capture-plane CHECK has to widen to admit a
+    memory proposal.
+
+    **It carries no statement text, and that absence is the disclosure control.**
+    A `sensitivity` memory floors at `RESTRICTED_LOCAL` and the read plane
+    withholds restricted statements from search and from pages; putting the
+    *proposed* text on a review listing would be a second disclosure channel for
+    exactly the text the accepted form is withheld on, reached by a read that has
+    no `include_restricted` decision to make. The field is therefore absent from
+    the model rather than filtered in the payload, so a later writer cannot
+    expose it by editing a formatter. A reviewer who needs the words reads the
+    proposal through the memory plane, where the classification is enforced.
+
+    `proposed_kind` *is* disclosed, and that is the deliberate other half: a
+    reviewer being asked to decide has to know they are deciding a sensitivity
+    rather than a birthday, and the kind is the least that says so.
+
+    **`risk_class` is a property, not a field.** A dataclass field named
+    `risk_class` on this package is refused by
+    `tests/architecture/test_relationship_scoring_surface_is_denied.py`, which
+    denies the token `risk` anywhere on the relationship surface because a
+    stored risk number about a person is the hidden relationship score the
+    operating brief forbids. The constant above says why nothing is lost:
+    the value is the same for every case, so there was never a per-person
+    judgement to store.
+    """
+
+    review_case_id: str
+    proposal_id: str
+    subject_entity_id: str
+    principal_id: str
+    proposed_kind: MemoryKind
+    opened_at: datetime
+    proposal_state: ProposalState = ProposalState.NEEDS_REVIEW
+    review_version: int = 0
+    latest_disposition: Disposition | None = None
+    accepted_memory_id: str | None = None
+    accepted_memory_version_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
+        validate_identifier(self.proposal_id, IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
+        validate_identifier(self.subject_entity_id, IdKind.ENTITY)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not isinstance(self.proposed_kind, MemoryKind):
+            raise RelationshipMemoryError("a memory review case names a known kind")
+        if not isinstance(self.proposal_state, ProposalState):
+            raise RelationshipMemoryError("a memory review case carries a known state")
+        ensure_utc(self.opened_at)
+        if self.review_version < 0:
+            raise RelationshipMemoryError("a review version is not negative")
+        if (self.review_version == 0) is not (self.latest_disposition is None):
+            raise RelationshipMemoryError("an undecided case has version zero and no disposition")
+        accepted = self.proposal_state in (
+            ProposalState.ACCEPTED,
+            ProposalState.CORRECTED_ACCEPTED,
+        )
+        if accepted is not (self.accepted_memory_id is not None):
+            raise RelationshipMemoryError(
+                "a review case names a promoted memory exactly when it was accepted"
+            )
+        if (self.accepted_memory_id is None) is not (self.accepted_memory_version_id is None):
+            raise RelationshipMemoryError("a promoted case names both the memory and the version")
+        if self.accepted_memory_id is not None:
+            validate_identifier(self.accepted_memory_id, IdKind.RELATIONSHIP_MEMORY)
+        if self.accepted_memory_version_id is not None:
+            validate_identifier(self.accepted_memory_version_id, IdKind.RELATIONSHIP_MEMORY_VERSION)
+
+    @property
+    def risk_class(self) -> RiskClass:
+        """The one class every candidate memory is reviewed at. See the constant."""
+        return MEMORY_REVIEW_RISK_CLASS
 
 
 @dataclass(frozen=True, slots=True)

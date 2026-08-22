@@ -169,6 +169,9 @@ class ExecutionAuthorization:
     route_llm_server_side_binding_mode: str = ""
     route_llm_server_side_evidence_id: str = ""
     provider_model_mapping_evidence_id: str = ""
+    mcp_evaluation_surface: str = ""
+    mcp_evaluation_binding_mode: str = ""
+    mcp_evaluation_evidence_id: str = ""
 
 
 @dataclass(frozen=True, slots=True)
@@ -322,6 +325,9 @@ def authorization_from_mapping(payload: Mapping[str, object]) -> ExecutionAuthor
         provider_model_mapping_evidence_id=_optional_token(
             payload, "provider_model_mapping_evidence_id"
         ),
+        mcp_evaluation_surface=_optional_token(payload, "mcp_evaluation_surface"),
+        mcp_evaluation_binding_mode=_optional_token(payload, "mcp_evaluation_binding_mode"),
+        mcp_evaluation_evidence_id=_optional_token(payload, "mcp_evaluation_evidence_id"),
     )
 
 
@@ -557,7 +563,16 @@ def execute_measured_b0(
         if disclosure_journal is None:
             raise ValueError("disclosure journal is required before incumbent analyze")
         disclosure_journal.refuse_if_unresolved()
-        validate_route_llm_execution_bindings(authorization)
+        if authorization.mcp_evaluation_surface:
+            from my_pa.application.goodnotes_gsqs_b0_mcp import (
+                validate_mcp_evaluation_bindings,
+            )
+
+            validate_mcp_evaluation_bindings(authorization)
+        elif authorization.route_llm_endpoint_origin:
+            validate_route_llm_execution_bindings(authorization)
+        else:
+            raise ValueError("authorization missing evaluation binding")
     _assert_evaluator_plane(evaluator_cases, census)
     records: list[MeasurementRecord] = []
     stamp = measured_at or datetime.now(UTC)
@@ -799,6 +814,24 @@ def write_public_evidence(
     (directory / "EVIDENCE_INDEX.json").write_text(index_body, encoding="utf-8")
     written["EVIDENCE_INDEX.json"] = sha256(index_body.encode()).hexdigest()
     return written
+
+
+def write_evaluation_handles(
+    directory: Path, records: Sequence[Mapping[str, object]]
+) -> dict[str, str]:
+    """Public evaluation handles only: case ids, gnrun/gnver, and raster hashes."""
+    directory.mkdir(parents=True, exist_ok=True)
+    body = (
+        json.dumps(
+            {"handles": list(records), "schema_version": "gsqs-b0-evaluation-handles-v1"},
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
+    target = directory / "EVALUATION_HANDLES.json"
+    target.write_text(body, encoding="utf-8")
+    return {"EVALUATION_HANDLES.json": sha256(body.encode()).hexdigest()}
 
 
 def frozen_incumbent_config(

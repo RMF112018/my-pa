@@ -514,7 +514,14 @@ async def _serve(server: Server[object]) -> None:
         await server.run(read_stream, write_stream, server.create_initialization_options())
 
 
-def serve_stdio(service: ApplicationService, *, principal: Principal, enabled: bool = True) -> None:
+def serve_stdio(
+    service: ApplicationService,
+    *,
+    principal: Principal,
+    enabled: bool = True,
+    allowed_tools: frozenset[str] | None = None,
+    allowed_capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None,
+) -> None:
     """Serve `service` over standard input and output until the client goes away.
 
     Synchronous, and that is the boundary: this owns an event loop for the
@@ -524,5 +531,30 @@ def serve_stdio(service: ApplicationService, *, principal: Principal, enabled: b
     **Standard output is the wire.** Anything else written there corrupts the
     protocol stream, which is why the composition root sends its startup notice
     to standard error and why nothing in the application prints.
+
+    `allowed_tools` is an optional ceiling. When set, unpublished and
+    out-of-ceiling names are refused before `invoke`, which is how the GSQS B0
+    evaluation surface withholds `goodnotes.propose`.
     """
-    asyncio.run(_serve(create_mcp_server(service, principal=principal, enabled=enabled)))
+    access_for_request = None
+    if allowed_tools is not None or allowed_capability_purposes is not None:
+        access = McpAccess(
+            principal,
+            allowed_tools=allowed_tools,
+            allowed_capability_purposes=allowed_capability_purposes,
+        )
+
+        def _access(_context: ServerRequestContext[object]) -> McpAccess:
+            return access
+
+        access_for_request = _access
+    asyncio.run(
+        _serve(
+            create_mcp_server(
+                service,
+                principal=principal,
+                enabled=enabled,
+                access_for_request=access_for_request,
+            )
+        )
+    )

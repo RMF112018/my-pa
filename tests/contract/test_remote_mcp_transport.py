@@ -3,19 +3,28 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import threading
 import time
-from base64 import b64encode
+from base64 import b64decode, b64encode
 
 import httpx2
 import pytest
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
-from tests.conftest import Scene, build_service, staged_record, staged_search
+from tests.conftest import (
+    Scene,
+    build_service,
+    staged_goodnotes_raster,
+    staged_goodnotes_work,
+    staged_record,
+    staged_search,
+)
 from tests.contract.test_transport_parity import payloads_for
 
 import my_pa.adapters.mcp.remote as remote_module
+import my_pa.infrastructure.gsqs_routellm_transport as routellm
 from my_pa.adapters.mcp.remote import RemoteAccessContext, create_remote_mcp_app, remote_tool_names
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES
 from my_pa.adapters.remote_request import SERVER_OWNED_REMOTE_FIELDS
@@ -744,3 +753,298 @@ async def test_chatllm_domain_only_continuity_calls_succeed(scene: Scene) -> Non
         assert body["disclosure"] is not None
         assert body["request_id"]
         assert body["correlation_id"]
+
+
+def _image_blocks(result: object) -> list:
+    return [b for b in result.content if getattr(b, "type", None) == "image"]
+
+
+def _assert_text_only(result: object) -> None:
+    assert len(result.content) == 1
+    assert result.content[0].type == "text"
+    assert _image_blocks(result) == []
+
+
+def _content_payload(scene: Scene) -> dict[str, object]:
+    work = staged_goodnotes_work(scene)
+    raster = staged_goodnotes_raster(scene)
+    return {
+        "run_id": raster.run_id,
+        "page_version_id": raster.page_version_id,
+        "content_sha256": work.content_sha256,
+    }
+
+
+def _propose_payload(scene: Scene) -> dict[str, object]:
+    work = staged_goodnotes_work(scene)
+    return {
+        "run_id": work.run_id,
+        "page_version_id": work.page_version_id,
+        "content_sha256": work.content_sha256,
+        "schema_version": "note-unit.v1",
+        "analyzer_name": "synthetic",
+        "analyzer_version": "1",
+        "segments": [
+            {
+                "kind": "NOTE_UNIT",
+                "geometry": {"x_min": 0.1, "y_min": 0.1, "width": 0.2, "height": 0.2},
+                "transcription": "synthetic note",
+                "primary_class": "MEETING",
+            }
+        ],
+    }
+
+
+def _goodnotes_remote_app(
+    scene: Scene,
+    *,
+    writes_enabled: bool = False,
+    remote_enabled: bool = True,
+    allowed: frozenset[str] | None = None,
+    purposes: frozenset[tuple[Capability, Purpose | None]] | None = None,
+) -> object:
+    work, content, propose = (
+        Capability.GOODNOTES_WORK,
+        Capability.GOODNOTES_CONTENT,
+        Capability.GOODNOTES_PROPOSE,
+    )
+    if allowed is None:
+        allowed = frozenset({work.value, content.value, propose.value})
+    if purposes is None:
+        purposes = frozenset(
+            {
+                (work, Purpose.GOODNOTES_WORK),
+                (content, Purpose.GOODNOTES_CONTENT),
+                (propose, Purpose.GOODNOTES_PROPOSAL),
+            }
+        )
+    return create_remote_mcp_app(
+        build_service(scene.world, scene.providers),
+        resolve_access=lambda _authorization: RemoteAccessContext(
+            scene.principal,
+            allowed_capabilities=allowed,
+            capability_purposes=purposes,
+        ),
+        allowed_hosts=("testserver",),
+        remote_enabled=remote_enabled,
+        writes_enabled=writes_enabled,
+        resource="https://mcp.example.invalid",
+        authorization_servers=("https://issuer.example.invalid",),
+        scopes=frozenset({"my-pa.read"}),
+    )
+
+
+@pytest.mark.anyio
+async def test_authorized_goodnotes_content_carries_image_over_streamable_http(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A granted remote content call binds ImageContent to the envelope PNG."""
+    invoked: list[object] = []
+
+    def forbidden(*_args: object, **_kwargs: object) -> object:
+        invoked.append((_args, _kwargs))
+        raise AssertionError("RouteLLM HTTP must not be invoked")
+
+    monkeypatch.setattr(routellm, "post_chat_completion", forbidden)
+    monkeypatch.setattr("urllib.request.urlopen", forbidden)
+
+    staged_goodnotes_work(scene)
+    staged_goodnotes_raster(scene)
+    app = _goodnotes_remote_app(scene, writes_enabled=False)
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        initialized = await session.initialize()
+        names = {tool.name for tool in (await session.list_tools()).tools}
+        result = await session.call_tool(
+            Capability.GOODNOTES_CONTENT.value, remote_arguments(_content_payload(scene))
+        )
+    assert initialized.server_info.name == "my-pa"
+    assert Capability.GOODNOTES_WORK.value in names
+    assert Capability.GOODNOTES_CONTENT.value in names
+    assert Capability.GOODNOTES_PROPOSE.value not in names
+    assert result.is_error is False
+    assert result.content[0].type == "text"
+    envelope = json.loads(result.content[0].text)
+    payload = envelope["result"]
+    assert payload["media_type"] == "image/png"
+    assert payload["exact_render_sha256"]
+    assert "path" not in payload
+    assert len(result.content) == 2
+    image = result.content[1]
+    assert image.type == "image"
+    assert image.mime_type == "image/png"
+    assert payload["content_base64"] == image.data
+    png = b64decode(image.data)
+    assert png.startswith(b"\x89PNG")
+    assert hashlib.sha256(png).hexdigest() == payload["digest"]
+    assert len(png) == payload["byte_length"]
+    assert getattr(result, "structured_content", None) is None
+    assert invoked == []
+
+
+@pytest.mark.anyio
+async def test_remote_propose_is_available_only_when_writes_enabled_and_granted(
+    scene: Scene,
+) -> None:
+    """Read-only remote omits propose; a write profile with a grant serves it without an image."""
+    staged_goodnotes_work(scene)
+    staged_goodnotes_raster(scene)
+    request = remote_arguments(_propose_payload(scene))
+
+    async def run(app: object) -> tuple[object, set[str]]:
+        async with (
+            app.router.lifespan_context(app),
+            httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app),
+                base_url="http://testserver",
+                headers={"Authorization": "Bearer synthetic"},
+            ) as http,
+            streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+            ClientSession(*streams[:2]) as session,
+        ):
+            await session.initialize()
+            names = {tool.name for tool in (await session.list_tools()).tools}
+            proposed = await session.call_tool(Capability.GOODNOTES_PROPOSE.value, request)
+            return proposed, names
+
+    read_only = _goodnotes_remote_app(scene, writes_enabled=False)
+    writable = _goodnotes_remote_app(scene, writes_enabled=True)
+    ungranted = _goodnotes_remote_app(
+        scene,
+        writes_enabled=True,
+        allowed=frozenset({Capability.GOODNOTES_WORK.value, Capability.GOODNOTES_CONTENT.value}),
+        purposes=frozenset(
+            {
+                (Capability.GOODNOTES_WORK, Purpose.GOODNOTES_WORK),
+                (Capability.GOODNOTES_CONTENT, Purpose.GOODNOTES_CONTENT),
+            }
+        ),
+    )
+    refused, disabled_names = await run(read_only)
+    accepted, enabled_names = await run(writable)
+    withheld, withheld_names = await run(ungranted)
+
+    assert Capability.GOODNOTES_PROPOSE.value not in disabled_names
+    assert refused.is_error is True
+    _assert_text_only(refused)
+
+    assert Capability.GOODNOTES_PROPOSE.value in enabled_names
+    assert accepted.is_error is False
+    _assert_text_only(accepted)
+    assert json.loads(accepted.content[0].text)["result"]["proposal_id"]
+
+    assert Capability.GOODNOTES_PROPOSE.value not in withheld_names
+    assert withheld.is_error is True
+    _assert_text_only(withheld)
+
+
+@pytest.mark.anyio
+async def test_remote_content_oversize_is_an_internal_error_without_an_image(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The remote result ceiling counts the image block and refuses it as text."""
+    staged_goodnotes_work(scene)
+    staged_goodnotes_raster(scene)
+    monkeypatch.setattr(remote_module, "MAX_REMOTE_RESULT_BYTES", 1)
+    app = _goodnotes_remote_app(scene)
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        oversized = await session.call_tool(
+            Capability.GOODNOTES_CONTENT.value, remote_arguments(_content_payload(scene))
+        )
+    assert oversized.is_error is True
+    assert json.loads(oversized.content[0].text)["code"] == "internal_error"
+    _assert_text_only(oversized)
+
+
+@pytest.mark.anyio
+async def test_remote_content_failures_do_not_carry_an_image(scene: Scene) -> None:
+    """A digest mismatch, missing grant, unknown tool, and disabled surface stay text-only."""
+    staged_goodnotes_work(scene)
+    staged_goodnotes_raster(scene)
+    payload = _content_payload(scene)
+    mismatch_app = _goodnotes_remote_app(scene)
+    missing_grant_app = _goodnotes_remote_app(
+        scene,
+        allowed=frozenset({Capability.GOODNOTES_WORK.value}),
+        purposes=frozenset({(Capability.GOODNOTES_WORK, Purpose.GOODNOTES_WORK)}),
+    )
+    disabled_app = _goodnotes_remote_app(scene, remote_enabled=False)
+
+    async with (
+        mismatch_app.router.lifespan_context(mismatch_app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=mismatch_app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        mismatch = await session.call_tool(
+            Capability.GOODNOTES_CONTENT.value,
+            remote_arguments({**payload, "content_sha256": "b" * 64}),
+        )
+        unknown = await session.call_tool("sources.destroy", remote_arguments())
+    assert mismatch.is_error is True
+    _assert_text_only(mismatch)
+    assert unknown.is_error is True
+    _assert_text_only(unknown)
+
+    async with (
+        missing_grant_app.router.lifespan_context(missing_grant_app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=missing_grant_app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        names = {tool.name for tool in (await session.list_tools()).tools}
+        ungranted = await session.call_tool(
+            Capability.GOODNOTES_CONTENT.value, remote_arguments(payload)
+        )
+    assert Capability.GOODNOTES_CONTENT.value not in names
+    assert ungranted.is_error is True
+    _assert_text_only(ungranted)
+
+    async with (
+        disabled_app.router.lifespan_context(disabled_app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=disabled_app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+    ):
+        ready = await http.get("/readyz")
+        async with (
+            streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+            ClientSession(*streams[:2]) as session,
+        ):
+            await session.initialize()
+            disabled = await session.call_tool(
+                Capability.GOODNOTES_CONTENT.value, remote_arguments(payload)
+            )
+    assert ready.status_code == 503
+    assert disabled.is_error is True
+    _assert_text_only(disabled)

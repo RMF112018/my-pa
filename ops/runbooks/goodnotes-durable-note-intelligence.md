@@ -69,6 +69,15 @@ may add candidate_tags, ranked_candidates, confidence, and
 transcription_status. Runtime validation is unchanged. Remote MCP still stamps
 `idempotency_key`; callers must not send it.
 
+Successful `goodnotes.content` over MCP returns the canonical envelope JSON
+and an `image/png` MCP `ImageContent` block whose `data` is the same
+`content_base64` already in the envelope. Vision clients should consume the
+image block; they must not re-feed envelope `content_base64` into a model.
+Failures and `goodnotes.work` / `goodnotes.propose` remain one text block.
+HTTP and the CLI still return the envelope only. This is the current MCP
+wire shape for the dormant Task contract. It does not activate the Task or
+claim live Abacus inference.
+
 The Task:
 
 - requests only bounded my-pa work (`goodnotes.work`);

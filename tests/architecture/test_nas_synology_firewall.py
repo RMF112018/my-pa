@@ -1562,31 +1562,45 @@ def test_r4_t13_remove_exact_dsm_redirect_restores_docker_baseline(
         forward="default_forward",
         default_forward="redirected",
         chain="exact",
-        broad="present",
+        broad="absent",
     )
     result = _run("remove", _confirm(environment))
     assert result.returncode == 0, result.stderr
     assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "docker"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "present"
     recorded = _recorded(calls)
+    restore = next(
+        rule
+        for rule in recorded.splitlines()
+        if rule.startswith("-I FORWARD_FIREWALL ") and rule.endswith(f" -s {SUBNET} -j RETURN")
+    )
     assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
     assert "-F MY_PA_DATA_PLANE" in recorded
     assert "-X MY_PA_DATA_PLANE" in recorded
+    assert recorded.index(restore) < recorded.index("-D FORWARD -j MY_PA_DATA_PLANE")
 
 
 def test_r4_t14_remove_dsm_missing_attachment_cleans_populated_chain(
     tmp_path: Path,
 ) -> None:
     environment, state, calls = _environment(
-        tmp_path, forward="default_forward", chain="exact", broad="present"
+        tmp_path, forward="default_forward", chain="exact", broad="absent"
     )
     result = _run("remove", _confirm(environment))
     assert result.returncode == 0, result.stderr
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "present"
     recorded = _recorded(calls)
+    restore = next(
+        rule
+        for rule in recorded.splitlines()
+        if rule.startswith("-I FORWARD_FIREWALL ") and rule.endswith(f" -s {SUBNET} -j RETURN")
+    )
     assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
     assert "-F MY_PA_DATA_PLANE" in recorded
     assert "-X MY_PA_DATA_PLANE" in recorded
+    assert recorded.index(restore) < recorded.index("-F MY_PA_DATA_PLANE")
 
 
 def test_r4_t15_remove_dsm_baseline_cleans_empty_chain_only(tmp_path: Path) -> None:

@@ -884,6 +884,7 @@ case "$action" in
           exit 1
         }
         [ "$(topology_class)" = DSM_REDIRECTED_MY_PA ] || exit 1
+        restore_legacy_broad_return || exit 1
         "$iptables_bin" -D FORWARD -j "$enforcement_chain" || {
           echo "failed to remove redirected MY_PA_DATA_PLANE attachment" >&2
           exit 1
@@ -905,6 +906,7 @@ case "$action" in
           exit 1
         }
         [ "$(topology_class)" = DSM_ACCEPTED_BASELINE ] || exit 1
+        restore_legacy_broad_return || exit 1
         remove_unreferenced_owned_chain || exit 1
         attest_dsm_restored || exit 1
         ;;

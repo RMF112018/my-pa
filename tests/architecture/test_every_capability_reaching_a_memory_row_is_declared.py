@@ -136,7 +136,7 @@ guard checked the first.
 this paragraph used to make.** It said "four escapes are closed above; these are
 not" and listed four, and a later review demonstrated three more that left every
 test here green. Those three are now closed: a method named by a *string* through
-`getattr` (claim 9 sweeps `getattr` and declares the four dynamic lookups that do
+`getattr` (claim 9 sweeps `getattr` and declares the five dynamic lookups that do
 exist), a table named inside a SQL *string* rather than by a `Table` object
 (claim 9 sweeps every non-docstring string constant in the package, which also
 closes the `metadata.tables["…"]` spelling this paragraph used to list as open),

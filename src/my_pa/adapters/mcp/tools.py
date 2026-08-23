@@ -31,7 +31,8 @@ refused for.
 **This publishes safety metadata, not authority.** A tool's description is the
 command's own docstring summary. Its read-only and destructive annotations are
 derived from the domain's explicit public-capability classifications, so a
-write-authorized preview is not falsely described as a mutation. Which purposes
+preview that persists a ledger receipt is not falsely described as read-only.
+Which purposes
 may invoke a capability and whether it is operator-only remain decided behind
 `invoke`; annotations never grant authority or replace confirmation.
 

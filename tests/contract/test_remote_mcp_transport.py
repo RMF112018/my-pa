@@ -99,6 +99,7 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.TASKS_CREATE,
         Capability.TASKS_UPDATE,
         Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_PREVIEW,
         Capability.TASKS_BULK_CONFIRM,
         Capability.COMMITMENTS_CREATE,
         Capability.COMMITMENTS_UPDATE,

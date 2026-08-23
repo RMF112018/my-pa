@@ -756,8 +756,7 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
 )
 
 # Public capabilities that can change product-owned state. This is operation
-# truth rather than an authorization-purpose shortcut: for example,
-# `tasks.bulk_preview` is authorized under a write purpose but changes nothing.
+# truth rather than an authorization-purpose shortcut.
 _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.SOURCES_ENROLL,
@@ -774,6 +773,7 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.TASKS_CREATE,
         Capability.TASKS_UPDATE,
         Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_PREVIEW,
         Capability.TASKS_BULK_CONFIRM,
         Capability.COMMITMENTS_CREATE,
         Capability.COMMITMENTS_UPDATE,
@@ -801,6 +801,7 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.CONTINUITY_TASKS_CREATE,
         Capability.DOCUMENTS_CREATE,
         Capability.TASKS_CREATE,
+        Capability.TASKS_BULK_PREVIEW,
         Capability.COMMITMENTS_CREATE,
         Capability.GOODNOTES_PROPOSE,
         Capability.REPORTS_BEGIN_CYCLE,

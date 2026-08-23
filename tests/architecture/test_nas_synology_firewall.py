@@ -163,7 +163,9 @@ case "$*" in
     ;;
   "-I FORWARD 1 -j MY_PA_DATA_PLANE")
     if [ "${FAKE_JUMP_FAIL:-0}" = 1 ]; then exit 1; fi
-    if [ "${FAKE_JUMP_VERIFY_FAIL:-0}" = 1 ]; then
+    if [ "${FAKE_JUMP_VERIFY_FAIL:-0}" = redirect ]; then
+      printf '%s\n' default_forward > "${state_dir}/forward"
+    elif [ "${FAKE_JUMP_VERIFY_FAIL:-0}" = 1 ]; then
       printf '%s\n' after_dsm > "${state_dir}/forward"
     else
       printf '%s\n' effective > "${state_dir}/forward"
@@ -754,6 +756,23 @@ def test_failed_jump_install_rolls_back_owned_chain(tmp_path: Path) -> None:
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
     recorded = calls.read_text(encoding="utf-8")
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
+    assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
+
+
+def test_dsm_default_forward_redirection_is_named_and_rolled_back(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path, jump_verify_fail="redirect")
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "UNSUPPORTED_DSM_FORWARD_REDIRECTION" in result.stderr
+    assert "rollback succeeded" in result.stderr
+    assert "ROLLBACK_FAILED" not in result.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    recorded = _recorded(calls)
     assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
     assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
     assert "-X MY_PA_DATA_PLANE" in recorded

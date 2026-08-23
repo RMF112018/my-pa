@@ -141,6 +141,13 @@ unset MY_PA_CONFIRM_FIREWALL_MUTATION
 ops/nas/synology-data-plane-firewall.sh check
 ```
 
+If `apply` reports `UNSUPPORTED_DSM_FORWARD_REDIRECTION`, the DSM iptables
+frontend placed the requested jump in `DEFAULT_FORWARD`, after
+`FORWARD_FIREWALL`, instead of at the head of the built-in `FORWARD` chain.
+Rollback remains mandatory and that state is not admission. Do not retry,
+accept `DEFAULT_FORWARD`, or edit the check; a reviewed platform mechanism that
+can enforce the same pre-DSM boundary is required before deployment continues.
+
 The script derives the current network ID, Synology bridge name, and subnet
 from the exact internal Compose-owned data plane. Built-in FORWARD order is
 read from `iptables-save -t filter`. `DEFAULT_FORWARD` is obsolete on this

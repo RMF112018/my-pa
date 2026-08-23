@@ -336,6 +336,17 @@ rollback_inserted_forward_jump() {
   return 1
 }
 
+rollback_redirected_forward_jump() {
+  if ! rollback_unverified_forward_jump; then
+    return 1
+  fi
+  if ! cleanup_owned_after_verified_jump_rollback; then
+    return 1
+  fi
+  echo "UNSUPPORTED_DSM_FORWARD_REDIRECTION: iptables redirected the requested FORWARD jump into DEFAULT_FORWARD; rollback succeeded" >&2
+  return 1
+}
+
 remove_unreferenced_owned_chain() {
   assert_no_my_pa_forward_jump || {
     postcondition_unverified "cannot prove MY_PA FORWARD jump absence before chain deletion"
@@ -616,6 +627,11 @@ case "$action" in
           first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
           second=$(printf '%s\n' "$forwards" | awk 'NF {n++; if (n == 2) {print; exit}}')
           forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
+          if [ "$first" = "$firewall_jump" ] && [ "$second" = "$default_jump" ] && \
+             [ "$forward_count" -eq 2 ]; then
+            rollback_redirected_forward_jump
+            exit 1
+          fi
           if [ "$first" != "$my_pa_jump" ] || [ "$second" != "$firewall_jump" ] || \
              [ "$forward_count" -ne 2 ]; then
             rollback_inserted_forward_jump

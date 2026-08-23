@@ -258,6 +258,14 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "intelligence_pipeline_dependencies",
         "intelligence_provenance_refs",
         "task_bulk_operations",
+        "relationship_memories",
+        "relationship_memory_versions",
+        "relationship_memory_submissions",
+        "relationship_memory_context_links",
+        "relationship_memory_evidence_links",
+        "relationship_memory_proposals",
+        "relationship_memory_proposal_evidence",
+        "relationship_memory_review_decisions",
     }
 )
 
@@ -277,9 +285,11 @@ def test_downgrading_to_before_this_revision_drops_only_the_entity_plane(
     the plane removed by one of those downgrades, or a plane table left behind.
 
     Since `e9b2c4d7a150` the chain also stacks the Intelligence Artifact plane
-    above this one, and a downgrade from `head` unwinds that too. `STACKED_ABOVE`
-    names it. The alternative — weakening this to a subset assertion — would
-    stop catching the case the equality is here for.
+    above this one, and since `f1c6b904a2d7` the Relationship Memory plane as
+    well; a downgrade from `head` unwinds both. `STACKED_ABOVE` names them. The
+    alternative — weakening this to a subset assertion — would stop catching the
+    case the equality is here for, which is a table outside the plane removed by
+    one of those downgrades or a plane table left behind.
     """
     before = _tables(migrated_engine)
     assert {"relationship_people", "relationship_organizations"} <= before

@@ -27,7 +27,10 @@ from my_pa.application.commands import (
     SearchEntities,
 )
 from my_pa.application.errors import InvalidRequestError
+from my_pa.contracts.ports import MemoryWriteRequest
 from my_pa.contracts.v1.errors import ErrorCode
+from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.entity import (
@@ -44,14 +47,26 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifierNamespace,
 )
 from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
+from my_pa.domain.relationship.memory import (
+    DIRECT_USER_AUTHORITY,
+    MemoryActorClass,
+    MemoryKind,
+    MemoryOperation,
+    statement_digest,
+)
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
 from my_pa.domain.relationship.resolution import ResolutionOutcome
+from my_pa.domain.source.registry import issue_identifier
 
 ALICE = "ent_alice0001alice0001"
 ALICE_TWO = "ent_alice0002alice0002"
 ACME = "ent_acme0003acme000003"
 TOWER = "ent_tower0004tower0004"
 WHEN = datetime(2026, 8, 18, 12, tzinfo=UTC)
+
+#: What the one staged memory says. Synthetic and about a working preference, so
+#: nothing here resembles a real note about a real person.
+ALICE_MEMORY = "Alice reviews structural drawings before a site walk"
 
 
 def _entity(
@@ -155,6 +170,47 @@ def staged(scene: Scene) -> Scene:
             ),
         )
     return scene
+
+
+def _record_memory(scene: Scene, entity_id: str, statement: str) -> str:
+    """One memory about `entity_id`, and the identifier the plane gave it.
+
+    Admitted through `RelationshipMemoryRepository` rather than pushed into
+    `World`, for the reason the entities above go through `EntitiesRepository`:
+    a row no writer could have produced is a row the card's own invariants were
+    never asked about, and this is the collection the card is read for.
+
+    Not in the `staged` fixture, because only the card is about memories and
+    every other test in this file would then be asserting around one.
+    """
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        admission = unit_of_work.relationship_memory.admit(
+            MemoryWriteRequest(
+                operation=MemoryOperation.CREATE,
+                memory_id=None,
+                memory_version_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+                expected_version=None,
+                principal_id=scene.principal.principal_id,
+                subject_entity_id=entity_id,
+                memory_kind=MemoryKind.PERSONAL_DETAIL,
+                statement=statement,
+                statement_sha256=statement_digest(statement),
+                structured_value=None,
+                authority=DIRECT_USER_AUTHORITY,
+                classification=Classification.PRIVATE_LOCAL,
+                created_by_actor=MemoryActorClass.USER,
+                context_links=(),
+                pinned=False,
+                observed_at=None,
+                effective_from=None,
+                effective_to=None,
+                correction_reason=None,
+                idempotency_key=issue_identifier(IdKind.CORRELATION),
+                correlation_id=issue_identifier(IdKind.CORRELATION),
+                server_received_at=WHEN,
+            )
+        )
+    return admission.receipt.memory_id
 
 
 def _invoke(scene: Scene, capability: Capability, command: object) -> dict[str, object]:
@@ -307,6 +363,14 @@ def test_resolve_refuses_an_unknown_namespace(staged: Scene) -> None:
 
 
 def test_the_context_card_carries_every_record_around_the_entity(staged: Scene) -> None:
+    """Every collection around `ALICE`, memories included.
+
+    The memory is staged here rather than asserted absent: the card reaches the
+    memory plane in this build, so an unstaged entity would have the card
+    reporting `no_memory_has_been_recorded` — an honest answer, and the wrong
+    one for a test about what the card *carries*.
+    """
+    memory_id = _record_memory(staged, ALICE, ALICE_MEMORY)
     result = _payload(staged, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE))
     card = result["context_card"]
     assert isinstance(card, dict)
@@ -315,6 +379,8 @@ def test_the_context_card_carries_every_record_around_the_entity(staged: Scene) 
     assert [item["display_value"] for item in card["identifiers"]] == ["a.chen@acme.test"]
     assert [item["role"] for item in card["assignments"]] == ["structural engineer"]
     assert [edge["to_entity_id"] for edge in card["relationships"]] == [ACME]
+    assert [held["memory_id"] for held in card["memories"]] == [memory_id]
+    assert [held["statement"] for held in card["memories"]] == [ALICE_MEMORY]
     assert card["limitations"] == []
     assert card["is_complete"] is True
 

@@ -1,4 +1,4 @@
-"""The MCP transport: the same sixty-five capabilities, over stdio.
+"""The MCP transport: the same seventy-three capabilities, over stdio.
 
 `create_mcp_server` builds the protocol server; `serve_stdio` runs one
 connection on standard input and output and returns when the client closes it.

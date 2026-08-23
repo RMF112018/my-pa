@@ -34,8 +34,9 @@ Everything is synthetic: no real path, no real person, no live source.
 from __future__ import annotations
 
 import hashlib
+import re
 import sys
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -80,12 +81,17 @@ from my_pa.contracts.ports import (
     ManagedByteStore,
     ManagedDocumentRepository,
     ManagedWriteRequest,
+    MemoryDetail,
+    MemoryListingFacts,
+    MemoryPage,
+    MemoryWriteRequest,
     Operation,
     OperationQueue,
     PortError,
     PreferenceConflictError,
     ProjectRepository,
     PulseRepository,
+    RelationshipMemoryRepository,
     ReviewDecisionRequest,
     ReviewRepository,
     SearchOutcome,
@@ -161,6 +167,7 @@ from my_pa.domain.extraction.text import ExtractionStatus
 from my_pa.domain.goodnotes.models import (
     GoodNotesPageRaster,
     GoodNotesPageWork,
+    GoodNotesReviewCase,
     GoodNotesSemanticProposal,
     issue_stable_id,
 )
@@ -183,6 +190,26 @@ from my_pa.domain.relationship.governance import (
     EntityObservation,
     EntityProposal,
     EntityProposalState,
+)
+from my_pa.domain.relationship.memory import (
+    CONTEXT_TARGET_ID_KINDS,
+    ContextLinkAuthority,
+    ContextLinkRole,
+    ContextLinkTargetType,
+    MemoryAdmission,
+    MemoryConflictError,
+    MemoryContextLink,
+    MemoryKind,
+    MemoryLifecycle,
+    MemoryOperation,
+    MemoryReceipt,
+    MergedSubjectError,
+    RelationshipMemory,
+    RelationshipMemoryError,
+    RelationshipMemoryReviewCase,
+    RelationshipMemoryVersion,
+    StaleMemoryVersionError,
+    check_kind_permits_subject,
 )
 from my_pa.domain.relationship.normalization import (
     is_normalized_identifier,
@@ -290,6 +317,24 @@ def _evidence_state(
     if not all(version.derivation_is_complete for version in versions):
         return EvidenceState.UNAVAILABLE, EvidenceGap.DERIVATION_HAS_NOT_COMPLETED
     return EvidenceState.NO_EVIDENCE, None
+
+
+@dataclass(frozen=True)
+class _MemorySubmission:
+    """One row of `relationship_memory_submissions`, as the fake needs it.
+
+    The five columns a replay is answered from, and no more. It carries the
+    payload digest rather than the request, because that is what the unique
+    index and `replay_for` actually compare — a fake holding the request could
+    decide a replay on a field the server never looks at.
+    """
+
+    payload_sha256: str
+    memory_id: str
+    memory_version_id: str
+    aggregate_version: int
+    lifecycle_state: MemoryLifecycle
+    server_received_at: datetime
 
 
 @dataclass
@@ -443,6 +488,27 @@ class World:
     entity_merges: list[EntityMergeRecord] = field(default_factory=list)
     entity_assignments: list[Assignment] = field(default_factory=list)
     entity_relationships: list[EntityRelationship] = field(default_factory=list)
+    #: The Relationship Memory plane (WP-RM-01). Flat lists again, and the same
+    #: division the schema draws: `relationship_memories` is the aggregate — no
+    #: statement on it, because the table has none — and every word the user
+    #: wrote lives on `relationship_memory_versions`, which is only ever
+    #: appended to. `relationship_memory_keys` stands in for the unique index on
+    #: `relationship_memory_submissions (principal_id, idempotency_key)`, so the
+    #: same key held by two Principals is two independent admissions and never a
+    #: replay.
+    #:
+    #: **What this fake cannot prove.** There is no `BEFORE UPDATE OR DELETE`
+    #: trigger on a Python list, so append-only is a property of
+    #: `_RelationshipMemories` not writing and never of the storage; there is no
+    #: unique constraint, so two concurrent writers producing one memory is not
+    #: demonstrable here; and there is no `to_tsvector`, so `search` matches
+    #: lexically rather than through the server's parser. All three belong to
+    #: `tests/database` and `tests/schema`, against a server that actually
+    #: refuses.
+    relationship_memories: list[RelationshipMemory] = field(default_factory=list)
+    relationship_memory_versions: list[RelationshipMemoryVersion] = field(default_factory=list)
+    relationship_memory_links: list[MemoryContextLink] = field(default_factory=list)
+    relationship_memory_keys: dict[tuple[str, str], _MemorySubmission] = field(default_factory=dict)
     commits: int = 0
     rollbacks: int = 0
     #: Port failures a test wants raised, keyed by the method that should raise.
@@ -1093,7 +1159,20 @@ class _Reviews(ReviewRepository):
     def __init__(self, world: World) -> None:
         self._world = world
 
-    def cases(self, *, limit: int, principal_id: str) -> tuple[ReviewCase, ...]:
+    def cases(
+        self, *, limit: int, principal_id: str
+    ) -> tuple[ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase, ...]:
+        """This fake holds capture cases only, and says so in its return type.
+
+        The port admits three subject kinds now — capture proposals, GoodNotes
+        regions and Relationship Memory candidates — and a `tuple[ReviewCase,
+        ...]` still satisfies it, because a tuple of a narrower element type is a
+        tuple of the wider one. It is widened here anyway so a reader is not left
+        thinking the port is narrower than it is: the other two planes are
+        exercised against a real database, where their SQL and their promotion
+        are the thing under test, and adding them to `World` would be a second
+        implementation of promotion for the fake to disagree with.
+        """
         self._world.fail("review_cases")
         owned = {
             version.capture_id
@@ -3398,6 +3477,690 @@ def _touches(relationship: EntityRelationship, entity_id: str, direction: str) -
     return entity_id in (relationship.from_entity_id, relationship.to_entity_id)
 
 
+def _memory_tokens(text: str) -> frozenset[str]:
+    """How this fake stands in for `to_tsvector('simple', …)`.
+
+    Case-folded and split on everything that is not a letter or a digit. Close
+    to the `simple` configuration and deliberately not close to `english`:
+    `simple` applies no stemming, so whole-token equality is the honest
+    approximation, and a double that stemmed would match rows the server would
+    not — which is the direction a fake must never differ in.
+    """
+    return frozenset(token for token in re.split(r"[^0-9a-z]+", text.casefold()) if token)
+
+
+def _refuse_websearch_control(query: str) -> None:
+    """Refuse the `websearch_to_tsquery` syntax this fake cannot reproduce.
+
+    A quoted phrase, a `-` negation and the `or` keyword are *control* rather
+    than text, and a double that folded them into ordinary tokens would answer
+    a different question than the server and would do it silently. Raising is
+    the house rule: where the fake cannot reproduce a behaviour it says so, and
+    the claim that the server honours exactly this syntax belongs to
+    `tests/security/test_query_is_data_not_sql.py`, against a real parser.
+    """
+    padded = f" {query.casefold()} "
+    if '"' in query or " or " in padded or " -" in padded:
+        raise NotImplementedError(
+            "this in-memory search matches whole tokens and reproduces no websearch operator"
+        )
+
+
+class _RelationshipMemories(RelationshipMemoryRepository):
+    """The Relationship Memory plane over `World`, partition-first.
+
+    Every method takes `principal_id` and applies it before anything else, so a
+    memory another Principal holds answers exactly what an absent one answers —
+    which is the property the plane exists to hold, since a refusal that
+    differed would tell a caller that an identifier names something.
+
+    **What it reproduces, because a test would otherwise prove nothing.** A
+    create mints an aggregate and its first version; a revise appends a
+    successor and advances both the aggregate version and the version number; an
+    archive or a restore advances only the aggregate version and writes no
+    version at all, so the submission it records still names the version that is
+    current. `expected_version` is compared before anything is written, so a
+    stale expectation leaves the world byte-identical. The subject must be an
+    entity in the acting Principal's partition, a merged-away subject raises
+    with its canonical successor rather than being followed, and a Person-only
+    kind is refused for a subject that is not a Person. `search` never selects a
+    `restricted_local` memory and never counts one; `page_for_entity` withholds
+    one and *does* count it; `summaries_for_context` does the same, for the
+    reason the SQL repository states — a card is one entity the caller already
+    named, and a search count would let a term probe find a memory.
+
+    **What it deliberately refuses instead of approximating.** `search` matches
+    whole case-folded tokens and raises on the `websearch_to_tsquery` operators
+    (`_refuse_websearch_control`), because a silent difference in what matches
+    is the one thing a search double must not have. Only `entity` context
+    targets are verifiable here, exactly as in the SQL repository, and the other
+    three target types are refused rather than admitted unproven.
+
+    **What it cannot prove at all.** There is no append-only trigger, no unique
+    index and no `to_tsvector` behind a Python list, so immutability,
+    single-writer admission under concurrency and the server's own lexical
+    parse are not demonstrable here. Those claims live in `tests/database` and
+    `tests/schema`, against a server that actually refuses.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    # --- guards ----------------------------------------------------------
+
+    def _own_entity(self, principal_id: str, entity_id: str) -> Entity | None:
+        return next(
+            (
+                entity
+                for entity in self._world.entities
+                if entity.entity_id == entity_id and entity.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def _require_writable_subject(self, principal_id: str, subject_entity_id: str) -> EntityType:
+        """The subject is this Principal's and has not been merged away.
+
+        A merged-away subject raises rather than being followed, exactly as
+        `SqlRelationshipMemoryRepository` does: rebinding would turn a
+        deliberate annotation about a historical identity into one about the
+        current person, which is a different statement than the user made.
+        """
+        entity = self._own_entity(principal_id, subject_entity_id)
+        if entity is None:
+            raise UnknownScopeError("a memory write names an entity outside this scope")
+        if entity.status is EntityStatus.MERGED_REDIRECT:
+            raise MergedSubjectError(str(entity.superseded_by_entity_id))
+        return entity.entity_type
+
+    def _require_own_context_targets(
+        self, principal_id: str, links: tuple[Mapping[str, str], ...]
+    ) -> None:
+        """Every context target belongs to this Principal, or the write is refused.
+
+        Narrower than the target vocabulary on purpose, and narrow in the same
+        place the SQL repository is: only `entity` targets are verifiable from
+        here, and the other three are refused rather than admitted unproven.
+        """
+        for link in links:
+            target_type = ContextLinkTargetType(link["target_type"])
+            target_id = link["target_id"]
+            validate_identifier(target_id, CONTEXT_TARGET_ID_KINDS[target_type])
+            if target_type is not ContextLinkTargetType.ENTITY:
+                raise UnknownScopeError("this build validates only entity context targets")
+            if self._own_entity(principal_id, target_id) is None:
+                raise UnknownScopeError("a context link names an entity outside this scope")
+
+    # --- rows -------------------------------------------------------------
+
+    def _own_memory(self, principal_id: str, memory_id: str) -> RelationshipMemory | None:
+        return next(
+            (
+                memory
+                for memory in self._world.relationship_memories
+                if memory.memory_id == memory_id and memory.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def _own_version(self, principal_id: str, version_id: str) -> RelationshipMemoryVersion:
+        """The named version, which the aggregate's pointer guarantees exists.
+
+        Raises rather than answering `None`: the SQL repository reads this row
+        with `.one()`, and a fake that shrugged at a dangling current-version
+        pointer would hide exactly the inconsistency that read exists to catch.
+        """
+        version = next(
+            (
+                held
+                for held in self._world.relationship_memory_versions
+                if held.memory_version_id == version_id and held.principal_id == principal_id
+            ),
+            None,
+        )
+        if version is None:
+            raise RelationshipMemoryError("a memory names a version this Principal does not hold")
+        return version
+
+    def _current(
+        self, memory: RelationshipMemory
+    ) -> tuple[RelationshipMemory, RelationshipMemoryVersion]:
+        return memory, self._own_version(memory.principal_id, memory.current_version_id)
+
+    def _replace(self, memory: RelationshipMemory, successor: RelationshipMemory) -> None:
+        held = self._world.relationship_memories
+        held[held.index(memory)] = successor
+
+    # --- writes -----------------------------------------------------------
+
+    def replay_for(
+        self, idempotency_key: str, payload_digest: str, *, principal_id: str
+    ) -> MemoryReceipt | None:
+        self._world.fail("relationship_memory.replay_for")
+        held = self._world.relationship_memory_keys.get((principal_id, idempotency_key))
+        if held is None:
+            return None
+        if held.payload_sha256 != payload_digest:
+            raise MemoryConflictError("this idempotency key is bound to a different request")
+        return self._receipt_for(held, idempotency_key, principal_id=principal_id)
+
+    def _receipt_for(
+        self, submission: _MemorySubmission, idempotency_key: str, *, principal_id: str
+    ) -> MemoryReceipt:
+        """The receipt a bound key answers with, rebuilt from the rows it names."""
+        version = self._own_version(principal_id, submission.memory_version_id)
+        return MemoryReceipt(
+            memory_id=submission.memory_id,
+            memory_version_id=submission.memory_version_id,
+            version_number=version.version_number,
+            aggregate_version=submission.aggregate_version,
+            lifecycle_state=submission.lifecycle_state,
+            idempotency_key=idempotency_key,
+            statement_sha256=version.statement_sha256,
+            issued_at=submission.server_received_at,
+            created=False,
+        )
+
+    def admit(self, request: MemoryWriteRequest) -> MemoryAdmission:
+        self._world.fail("relationship_memory.admit")
+        held = self._world.relationship_memory_keys.get(
+            (request.principal_id, request.idempotency_key)
+        )
+        if held is not None:
+            # The *refusal* is reproduced here and the mechanism is not. The
+            # server has a unique index and this class has a dict, so a key
+            # bound to a different request is answered as the port documents
+            # `admit` answers one rather than as the integrity error a second
+            # insert would raise, and a matching key returns the receipt it is
+            # bound to — which is what the port's first sentence promises. The
+            # claim about the constraint itself belongs to `tests/database`.
+            if held.payload_sha256 != request.payload_digest:
+                raise MemoryConflictError("this idempotency key is bound to a different request")
+            return MemoryAdmission(
+                receipt=self._receipt_for(
+                    held, request.idempotency_key, principal_id=request.principal_id
+                ),
+                created=False,
+            )
+        if request.operation is MemoryOperation.CREATE:
+            return self._create(request)
+        return self._mutate(request)
+
+    def _write_version(
+        self,
+        request: MemoryWriteRequest,
+        *,
+        memory_id: str,
+        version_number: int,
+        prior_version_id: str | None,
+        memory_kind: MemoryKind,
+    ) -> None:
+        self._world.relationship_memory_versions.append(
+            RelationshipMemoryVersion(
+                memory_version_id=request.memory_version_id,
+                memory_id=memory_id,
+                principal_id=request.principal_id,
+                version_number=version_number,
+                statement=str(request.statement),
+                statement_sha256=str(request.statement_sha256),
+                structured_value=request.structured_value,
+                memory_kind=memory_kind,
+                authority=request.authority,
+                classification=request.classification,
+                cloud_eligible=False,
+                created_by_actor=request.created_by_actor,
+                observed_at=request.observed_at,
+                effective_from=request.effective_from,
+                effective_to=request.effective_to,
+                recorded_at=request.server_received_at,
+                prior_version_id=prior_version_id,
+                correction_reason=request.correction_reason,
+                proposal_id=request.proposal_id,
+                review_case_id=request.review_case_id,
+                idempotency_key=request.idempotency_key,
+                correlation_id=request.correlation_id,
+            )
+        )
+        for link in request.context_links:
+            self._world.relationship_memory_links.append(
+                MemoryContextLink(
+                    context_link_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_CONTEXT_LINK),
+                    memory_version_id=request.memory_version_id,
+                    principal_id=request.principal_id,
+                    target_type=ContextLinkTargetType(link["target_type"]),
+                    target_id=link["target_id"],
+                    role=ContextLinkRole(link["role"]),
+                    authority=ContextLinkAuthority.USER_CONFIRMED,
+                    created_at=request.server_received_at,
+                )
+            )
+
+    def _record_submission(
+        self,
+        request: MemoryWriteRequest,
+        *,
+        memory_id: str,
+        memory_version_id: str,
+        aggregate_version: int,
+        lifecycle: MemoryLifecycle,
+    ) -> None:
+        self._world.relationship_memory_keys[(request.principal_id, request.idempotency_key)] = (
+            _MemorySubmission(
+                payload_sha256=request.payload_digest,
+                memory_id=memory_id,
+                memory_version_id=memory_version_id,
+                aggregate_version=aggregate_version,
+                lifecycle_state=lifecycle,
+                server_received_at=request.server_received_at,
+            )
+        )
+
+    def _create(self, request: MemoryWriteRequest) -> MemoryAdmission:
+        subject_entity_id = request.subject_entity_id
+        memory_kind = request.memory_kind
+        if subject_entity_id is None or memory_kind is None:
+            # `MemoryWriteRequest.__post_init__` refuses both already, so this
+            # is a narrowing rather than a second rule — and it raises for the
+            # reason the SQL repository's twin does: an assertion disappears
+            # under `-O`, and a create reaching here without a subject would
+            # then store an aggregate with none.
+            raise RelationshipMemoryError("a memory creation names its subject and kind")
+        entity_type = self._require_writable_subject(request.principal_id, subject_entity_id)
+        check_kind_permits_subject(memory_kind, entity_type)
+        self._require_own_context_targets(request.principal_id, request.context_links)
+        memory_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY)
+        self._world.relationship_memories.append(
+            RelationshipMemory(
+                memory_id=memory_id,
+                principal_id=request.principal_id,
+                subject_entity_id=subject_entity_id,
+                memory_kind=memory_kind,
+                lifecycle_state=MemoryLifecycle.ACTIVE,
+                current_version_id=request.memory_version_id,
+                current_version_number=1,
+                version=1,
+                pinned=request.pinned,
+                created_at=request.server_received_at,
+                updated_at=request.server_received_at,
+                archived_at=None,
+            )
+        )
+        self._write_version(
+            request,
+            memory_id=memory_id,
+            version_number=1,
+            prior_version_id=None,
+            memory_kind=memory_kind,
+        )
+        self._record_submission(
+            request,
+            memory_id=memory_id,
+            memory_version_id=request.memory_version_id,
+            aggregate_version=1,
+            lifecycle=MemoryLifecycle.ACTIVE,
+        )
+        return MemoryAdmission(
+            receipt=MemoryReceipt(
+                memory_id=memory_id,
+                memory_version_id=request.memory_version_id,
+                version_number=1,
+                aggregate_version=1,
+                lifecycle_state=MemoryLifecycle.ACTIVE,
+                idempotency_key=request.idempotency_key,
+                statement_sha256=str(request.statement_sha256),
+                issued_at=request.server_received_at,
+                created=True,
+            ),
+            created=True,
+        )
+
+    def _mutate(self, request: MemoryWriteRequest) -> MemoryAdmission:
+        """Revise, archive or restore, with the version check before every write.
+
+        The SQL repository's `UPDATE … WHERE version = expected` is both the
+        concurrency control and the existence check, and its row count is read
+        before anything else is written. That ordering is the behaviour, not an
+        implementation detail, so it is reproduced here: a stale expectation
+        raises with no successor version inserted and no submission recorded,
+        and the world is left exactly as it was found.
+        """
+        memory_id = str(request.memory_id)
+        current = self._own_memory(request.principal_id, memory_id)
+        if current is None:
+            raise UnknownScopeError("a memory write names a memory outside this scope")
+        if request.operation is MemoryOperation.RESTORE:
+            # Checked on restore and not on archive, the asymmetry the SQL
+            # repository explains: returning a memory to the current set against
+            # an identity that has since been merged away would put a live note
+            # on a person the user did not choose, while withdrawing one from a
+            # merged-away subject is always safe.
+            self._require_writable_subject(request.principal_id, current.subject_entity_id)
+
+        revising = request.operation is MemoryOperation.REVISE
+        memory_kind = request.memory_kind or current.memory_kind
+        if revising:
+            entity_type = self._require_writable_subject(
+                request.principal_id, current.subject_entity_id
+            )
+            check_kind_permits_subject(memory_kind, entity_type)
+            self._require_own_context_targets(request.principal_id, request.context_links)
+
+        lifecycle = {
+            MemoryOperation.REVISE: current.lifecycle_state,
+            MemoryOperation.ARCHIVE: MemoryLifecycle.ARCHIVED,
+            MemoryOperation.RESTORE: MemoryLifecycle.ACTIVE,
+        }[request.operation]
+        if current.version != request.expected_version:
+            raise StaleMemoryVersionError("the expected memory version is stale")
+
+        next_version = current.version + 1
+        next_number = current.current_version_number + (1 if revising else 0)
+        self._replace(
+            current,
+            replace(
+                current,
+                version=next_version,
+                lifecycle_state=lifecycle,
+                updated_at=request.server_received_at,
+                archived_at=(
+                    request.server_received_at if lifecycle is MemoryLifecycle.ARCHIVED else None
+                ),
+                current_version_id=(
+                    request.memory_version_id if revising else current.current_version_id
+                ),
+                current_version_number=next_number,
+                memory_kind=memory_kind if revising else current.memory_kind,
+                # Absent keeps, explicit `False` unpins — which is what the SQL
+                # repository does, writing `pinned` only when the request states
+                # one. This read `request.pinned if revising else current.pinned`
+                # and so wrote `None` onto a `bool` field the moment a wording
+                # correction said nothing about the pin: the fake unpinned by
+                # accident where the server carried the value forward, so a test
+                # driven through it would have proved the opposite of production.
+                pinned=(
+                    request.pinned if revising and request.pinned is not None else current.pinned
+                ),
+            ),
+        )
+        if revising:
+            self._write_version(
+                request,
+                memory_id=memory_id,
+                version_number=next_number,
+                prior_version_id=current.current_version_id,
+                memory_kind=memory_kind,
+            )
+            recorded_version_id = request.memory_version_id
+        else:
+            # Archive and restore write no statement, so the submission names
+            # the version that is still current — which is what makes a replayed
+            # archive return the receipt the original returned rather than one
+            # for a version that was never written.
+            recorded_version_id = current.current_version_id
+        self._record_submission(
+            request,
+            memory_id=memory_id,
+            memory_version_id=recorded_version_id,
+            aggregate_version=next_version,
+            lifecycle=lifecycle,
+        )
+        return MemoryAdmission(
+            receipt=MemoryReceipt(
+                memory_id=memory_id,
+                memory_version_id=recorded_version_id,
+                version_number=next_number,
+                aggregate_version=next_version,
+                lifecycle_state=lifecycle,
+                idempotency_key=request.idempotency_key,
+                statement_sha256=self._own_version(
+                    request.principal_id, recorded_version_id
+                ).statement_sha256,
+                issued_at=request.server_received_at,
+                created=True,
+            ),
+            created=True,
+        )
+
+    # --- reads ------------------------------------------------------------
+
+    def detail(self, memory_id: str, *, principal_id: str) -> MemoryDetail | None:
+        self._world.fail("relationship_memory.detail")
+        validate_identifier(memory_id, IdKind.RELATIONSHIP_MEMORY)
+        memory = self._own_memory(principal_id, memory_id)
+        if memory is None:
+            return None
+        subject = self._own_entity(principal_id, memory.subject_entity_id)
+        return MemoryDetail(
+            memory=memory,
+            current_version=self._own_version(principal_id, memory.current_version_id),
+            context_links=tuple(
+                link
+                for link in self._world.relationship_memory_links
+                if link.principal_id == principal_id
+                and link.memory_version_id == memory.current_version_id
+            ),
+            # Always zero, and stated rather than hidden: this fake holds no
+            # `relationship_memory_evidence_links`, because nothing an
+            # application use case can call writes one — the direct user path
+            # cites no evidence. A test about the count belongs where the rows
+            # exist.
+            evidence_count=0,
+            canonical_entity_id=None if subject is None else subject.superseded_by_entity_id,
+        )
+
+    def page_for_entity(
+        self,
+        subject_entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        kinds: frozenset[MemoryKind] | None = None,
+        lifecycle: MemoryLifecycle = MemoryLifecycle.ACTIVE,
+        context_entity_id: str | None = None,
+        as_of: datetime | None = None,
+        after_memory_id: str | None = None,
+        include_restricted: bool = False,
+    ) -> MemoryPage:
+        self._world.fail("relationship_memory.page_for_entity")
+        validate_identifier(subject_entity_id, IdKind.ENTITY)
+        if limit < 1:
+            raise ValueError("a memory page contains at least one memory")
+        scoped = None
+        if context_entity_id is not None:
+            validate_identifier(context_entity_id, IdKind.ENTITY)
+            scoped = {
+                link.memory_version_id
+                for link in self._world.relationship_memory_links
+                if link.principal_id == principal_id
+                and link.target_type is ContextLinkTargetType.ENTITY
+                and link.target_id == context_entity_id
+            }
+        rows = [
+            self._current(memory)
+            for memory in self._world.relationship_memories
+            if memory.principal_id == principal_id
+            and memory.subject_entity_id == subject_entity_id
+            and memory.lifecycle_state is lifecycle
+            and (not kinds or memory.memory_kind in kinds)
+            and (scoped is None or memory.current_version_id in scoped)
+        ]
+        if as_of is not None:
+            rows = [
+                (memory, version)
+                for memory, version in rows
+                if (version.effective_from is None or version.effective_from <= as_of)
+                and (version.effective_to is None or version.effective_to >= as_of)
+            ]
+        # **The keyset is the whole sort key.** This read orders pinned memories
+        # first, so a cursor compared on `memory_id` alone would name a position
+        # in a *different* ordering than the one being paged and would make
+        # unpinned rows with lower identifiers unreachable. `not pinned` sorts
+        # ascending in the same direction as the ORDER BY, so the comparison is
+        # one ordinary tuple comparison rather than an OR of two cases.
+        rows.sort(key=lambda row: (not row[0].pinned, row[0].memory_id))
+        if after_memory_id is not None:
+            validate_identifier(after_memory_id, IdKind.RELATIONSHIP_MEMORY)
+            located = self._own_memory(principal_id, after_memory_id)
+            # Refused rather than silently restarted: a cursor naming a memory
+            # this Principal cannot read is not a position in their ordering,
+            # and an empty page is indistinguishable from having reached the end.
+            if located is None:
+                raise UnknownScopeError("a memory cursor names a memory in this scope")
+            cursor = (not located.pinned, after_memory_id)
+            rows = [row for row in rows if (not row[0].pinned, row[0].memory_id) > cursor]
+        return _memory_page(rows[: limit + 1], limit=limit, include_restricted=include_restricted)
+
+    def search(
+        self,
+        query: str,
+        *,
+        principal_id: str,
+        limit: int,
+        subject_entity_id: str | None = None,
+        kinds: frozenset[MemoryKind] | None = None,
+        after_memory_id: str | None = None,
+    ) -> MemoryPage:
+        self._world.fail("relationship_memory.search")
+        if limit < 1:
+            raise ValueError("a memory page contains at least one memory")
+        _refuse_websearch_control(query)
+        wanted = _memory_tokens(query)
+        if subject_entity_id is not None:
+            validate_identifier(subject_entity_id, IdKind.ENTITY)
+        if after_memory_id is not None:
+            validate_identifier(after_memory_id, IdKind.RELATIONSHIP_MEMORY)
+        rows = [
+            self._current(memory)
+            for memory in self._world.relationship_memories
+            if memory.principal_id == principal_id
+            and memory.lifecycle_state is MemoryLifecycle.ACTIVE
+            and (subject_entity_id is None or memory.subject_entity_id == subject_entity_id)
+            and (not kinds or memory.memory_kind in kinds)
+            and (after_memory_id is None or memory.memory_id > after_memory_id)
+        ]
+        # **The exclusion is a predicate, not a post-filter.** A restricted
+        # memory is never selected, so it cannot reach a count, a truncation
+        # flag or a cursor — which is what stops a caller learning one exists by
+        # probing terms and watching the page shape change.
+        rows = [
+            (memory, version)
+            for memory, version in rows
+            if version.classification is not Classification.RESTRICTED_LOCAL
+            and wanted
+            and wanted <= _memory_tokens(version.statement)
+        ]
+        rows.sort(key=lambda row: row[0].memory_id)
+        # `include_restricted=False` and no withheld count: the restricted rows
+        # were never selected, so zero is the only honest number here.
+        return _memory_page(rows[: limit + 1], limit=limit, include_restricted=False)
+
+    def history(
+        self, memory_id: str, *, principal_id: str, limit: int, after_version_id: str | None = None
+    ) -> tuple[tuple[RelationshipMemoryVersion, ...], bool]:
+        self._world.fail("relationship_memory.history")
+        validate_identifier(memory_id, IdKind.RELATIONSHIP_MEMORY)
+        if limit < 1:
+            raise ValueError("a history page contains at least one version")
+        if self._own_memory(principal_id, memory_id) is None:
+            return (), False
+        versions = sorted(
+            (
+                version
+                for version in self._world.relationship_memory_versions
+                if version.principal_id == principal_id and version.memory_id == memory_id
+            ),
+            key=lambda version: version.version_number,
+        )
+        if after_version_id is not None:
+            validate_identifier(after_version_id, IdKind.RELATIONSHIP_MEMORY_VERSION)
+            position = next(
+                (
+                    version.version_number
+                    for version in versions
+                    if version.memory_version_id == after_version_id
+                ),
+                None,
+            )
+            if position is None:
+                raise UnknownScopeError("a history cursor names a version of this memory")
+            versions = [version for version in versions if version.version_number > position]
+        return tuple(versions[:limit]), len(versions) > limit
+
+    def summaries_for_context(
+        self, subject_entity_id: str, *, principal_id: str, limit: int
+    ) -> tuple[tuple[MemoryDetail, ...], bool, int]:
+        self._world.fail("relationship_memory.summaries_for_context")
+        validate_identifier(subject_entity_id, IdKind.ENTITY)
+        if limit < 1:
+            raise ValueError("a context card carries at least one memory")
+        rows = sorted(
+            (
+                self._current(memory)
+                for memory in self._world.relationship_memories
+                if memory.principal_id == principal_id
+                and memory.subject_entity_id == subject_entity_id
+                and memory.lifecycle_state is MemoryLifecycle.ACTIVE
+            ),
+            key=lambda row: (not row[0].pinned, row[0].memory_id),
+        )
+        truncated = len(rows) > limit
+        kept = rows[:limit]
+        # Restricted memories are withheld from the card and *counted*, the
+        # opposite of what `search` does and right for the opposite reason: a
+        # card is one entity the caller already named and already reads, so
+        # "some are withheld here" discloses no existence the caller did not
+        # have, while a search count would let a term probe find one.
+        withheld = sum(
+            1 for _, version in kept if version.classification is Classification.RESTRICTED_LOCAL
+        )
+        summaries = tuple(
+            MemoryDetail(memory=memory, current_version=version)
+            for memory, version in kept
+            if version.classification is not Classification.RESTRICTED_LOCAL
+        )
+        return summaries, truncated, withheld
+
+
+def _memory_page(
+    rows: list[tuple[RelationshipMemory, RelationshipMemoryVersion]],
+    *,
+    limit: int,
+    include_restricted: bool,
+) -> MemoryPage:
+    """One page, with the overflow row read for truncation and then dropped.
+
+    `rows` is the `limit + 1` slice the reads take, so truncation is decided the
+    way the SQL repository decides it — by whether a row beyond the bound
+    existed — rather than by counting what survived the withholding, which would
+    make a fully-withheld page look like the end of the collection.
+
+    The facts record is built from the same `version` the withholding test read,
+    exactly as `_page` in the SQL repository builds it from the same joined row.
+    A double that filled it from anywhere else would let the FAST tier agree with
+    a production path that disagreed with itself.
+    """
+    truncated = len(rows) > limit
+    withheld = 0
+    memories: list[RelationshipMemory] = []
+    facts: dict[str, MemoryListingFacts] = {}
+    for memory, version in rows[:limit]:
+        if not include_restricted and version.classification is Classification.RESTRICTED_LOCAL:
+            withheld += 1
+            continue
+        memories.append(memory)
+        facts[memory.memory_id] = MemoryListingFacts(
+            statement=version.statement,
+            authority=version.authority,
+            classification=version.classification,
+        )
+    return MemoryPage(
+        memories=tuple(memories),
+        listing_facts=facts,
+        is_truncated=truncated,
+        withheld_by_policy=withheld,
+    )
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -3502,6 +4265,19 @@ class FakeUnitOfWork(UnitOfWork):
     def entities(self) -> EntitiesRepository:
         """The relationship-intelligence entity plane over this `World`."""
         return _Entities(self._world)
+
+    @property
+    def relationship_memory(self) -> RelationshipMemoryRepository:
+        """The Relationship Memory plane over this `World` (WP-RM-01).
+
+        Composed unconditionally, which is what makes the plane reachable in the
+        FAST tier at all: the base class's own property raises
+        `NotImplementedError`, so a unit of work that did not override it turns
+        every memory handler into a crash rather than an answer, and
+        `ApplicationService` reads `relationship_memory_enabled` to decide
+        whether to reach for it.
+        """
+        return _RelationshipMemories(self._world)
 
     @property
     def audit(self) -> AuditSink:
@@ -3641,6 +4417,7 @@ def build_service(
     limits: EffectiveLimits = DEFAULT_LIMITS,
     managed_store: ManagedByteStore | None = None,
     relationship_intelligence_enabled: bool = True,
+    relationship_memory_enabled: bool = True,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -3674,6 +4451,17 @@ def build_service(
         # explicitly and says so — `tests/contract/test_mcp_transport` is the one
         # that does, against a real child process.
         relationship_intelligence_enabled=relationship_intelligence_enabled,
+        # Enabled by the same default reasoning again, and requiring the switch
+        # above rather than standing alone: `ApplicationService` refuses the
+        # eight `relationship_memory.` names unless *both* are on, because a
+        # memory's subject is an Entity whose ownership the memory repository
+        # proves by reading the entity partition. A build serving memories
+        # without the plane that owns their subjects would be serving writes it
+        # cannot validate, so a test that turns the entity plane off gets the
+        # memory plane off with it and does not have to say so twice.
+        relationship_memory_enabled=(
+            relationship_intelligence_enabled and relationship_memory_enabled
+        ),
     )
 
 

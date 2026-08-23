@@ -235,6 +235,34 @@ class IdKind(StrEnum):
     ENTITY_OBSERVATION = "eobs"
     ENTITY_PROPOSAL = "eprp"
     ENTITY_MERGE = "emrg"
+    #: Relationship Memory: durable, entity-bound knowledge the user meant to
+    #: keep. Seven prefixes rather than a reuse of the entity plane's or the
+    #: capture plane's, on the argument `CAPTURE_VERSION` makes against reusing
+    #: `VERSION`: a stored reference and an audit row have to say which record
+    #: they name, and `eobs` already names a source-bound observation while
+    #: `cap`/`capver` already name the user's unstructured text.
+    #:
+    #: `RELATIONSHIP_MEMORY` names the stable aggregate and
+    #: `RELATIONSHIP_MEMORY_VERSION` one immutable statement of it — two rather
+    #: than one because a correction appends rather than overwrites, so a
+    #: reference has to say whether it means the memory or the wording it had.
+    #: The two link prefixes are separate from `CONTEXT_LINK` (`clink`), which
+    #: names the capture plane's own link record, and from each other because
+    #: "where this applies" and "what this rests on" are different questions.
+    #: The proposal pair is separate from `PROPOSAL` (`prop`) for the same
+    #: reason: that one names a capture-plane extraction proposal.
+    #:
+    #: `RELATIONSHIP_MEMORY_SUBMISSION` names one admitted write, and its unique
+    #: `(principal_id, idempotency_key)` is the idempotency mechanism — the
+    #: shape `capture_submissions` and `managed_document_submissions` both use,
+    #: reused here rather than reinvented.
+    RELATIONSHIP_MEMORY = "mem"
+    RELATIONSHIP_MEMORY_VERSION = "memver"
+    RELATIONSHIP_MEMORY_CONTEXT_LINK = "mctx"
+    RELATIONSHIP_MEMORY_EVIDENCE_LINK = "mevd"
+    RELATIONSHIP_MEMORY_SUBMISSION = "memsub"
+    RELATIONSHIP_MEMORY_PROPOSAL = "mprop"
+    RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE = "mpev"
 
 
 class InvalidIdentifierError(ValueError):

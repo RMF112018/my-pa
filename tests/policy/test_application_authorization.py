@@ -52,6 +52,7 @@ from tests.conftest import (
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    ArchiveRelationshipMemory,
     BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -62,6 +63,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateManagedDocument,
     CreateProject,
+    CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
     DecideReviewCase,
@@ -77,6 +79,8 @@ from my_pa.application.commands import (
     GetGoodNotesWork,
     GetLatestIntelligenceArtifact,
     GetPulse,
+    GetRelationshipMemory,
+    GetRelationshipMemoryHistory,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -85,6 +89,7 @@ from my_pa.application.commands import (
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
+    ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
     ListSources,
@@ -103,14 +108,17 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveIntelligenceSet,
     RestoreManagedDocument,
+    RestoreRelationshipMemory,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
+    ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
     SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchRelationshipMemories,
     SearchTasks,
     SubmitGoodNotesProposal,
     TransitionTask,
@@ -408,6 +416,42 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.ENTITIES_GET: GetEntity(entity_id=issue_identifier(IdKind.ENTITY)),
         Capability.ENTITIES_RESOLVE: ResolveEntity(reference="synthetic"),
         Capability.ENTITIES_CONTEXT: GetEntityContext(entity_id=issue_identifier(IdKind.ENTITY)),
+        # The Relationship Memory plane. Every one names a well-formed identifier
+        # of the right kind, so the only thing wrong in a denial test is the
+        # authority -- a malformed subject would be refused as an invalid request
+        # and would prove nothing about the policy path. `expected_version` is 1
+        # and the keys are distinct per capability for the same reason.
+        Capability.RELATIONSHIP_MEMORY_CREATE: CreateRelationshipMemory(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            statement="A synthetic note.",
+            idempotency_key="policy-memory-create",
+        ),
+        Capability.RELATIONSHIP_MEMORY_GET: GetRelationshipMemory(
+            memory_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY)
+        ),
+        Capability.RELATIONSHIP_MEMORY_LIST: ListRelationshipMemories(
+            entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        Capability.RELATIONSHIP_MEMORY_SEARCH: SearchRelationshipMemories(query="synthetic"),
+        Capability.RELATIONSHIP_MEMORY_HISTORY: GetRelationshipMemoryHistory(
+            memory_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY)
+        ),
+        Capability.RELATIONSHIP_MEMORY_REVISE: ReviseRelationshipMemory(
+            memory_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY),
+            expected_version=1,
+            statement="A synthetic correction.",
+            idempotency_key="policy-memory-revise",
+        ),
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE: ArchiveRelationshipMemory(
+            memory_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY),
+            expected_version=1,
+            idempotency_key="policy-memory-archive",
+        ),
+        Capability.RELATIONSHIP_MEMORY_RESTORE: RestoreRelationshipMemory(
+            memory_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY),
+            expected_version=1,
+            idempotency_key="policy-memory-restore",
+        ),
         Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(
             entity_id=issue_identifier(IdKind.ENTITY)
         ),
@@ -651,6 +695,20 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        # The Relationship Memory plane names an Entity, not a source. A memory
+        # is the product's own knowledge under ADR-003 -- written by the
+        # Principal about a person, never read out of a source root -- so its
+        # rows carry no `source_id` and no `enrollment_id` for a scope to be
+        # compared against, exactly as a capture's and a managed document's do
+        # not. All eight sit in `domain.policy.decision._SCOPELESS`.
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_GET,
+        Capability.RELATIONSHIP_MEMORY_LIST,
+        Capability.RELATIONSHIP_MEMORY_SEARCH,
+        Capability.RELATIONSHIP_MEMORY_HISTORY,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
     }
 ]
 
@@ -765,6 +823,20 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        # The Relationship Memory plane names an Entity, not a source. A memory
+        # is the product's own knowledge under ADR-003 -- written by the
+        # Principal about a person, never read out of a source root -- so its
+        # rows carry no `source_id` and no `enrollment_id` for a scope to be
+        # compared against, exactly as a capture's and a managed document's do
+        # not. All eight sit in `domain.policy.decision._SCOPELESS`.
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_GET,
+        Capability.RELATIONSHIP_MEMORY_LIST,
+        Capability.RELATIONSHIP_MEMORY_SEARCH,
+        Capability.RELATIONSHIP_MEMORY_HISTORY,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

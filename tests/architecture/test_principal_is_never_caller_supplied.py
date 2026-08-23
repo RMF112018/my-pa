@@ -247,6 +247,73 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # is of a row this Principal owns. `decide_proposal` then refuses a mismatch
     # again at the write, which is where the registry's own rule wants it.
     "application/entity_governance.py": (("held", "principal_id"),),
+    # WP-29's Relationship Memory service. Its three commands are internal
+    # dataclasses whose docstrings each say "with the Principal already
+    # resolved", and the transport-facing commands the normalizer builds carry
+    # no `principal_id` field at all — so there is nothing a caller could have
+    # supplied for these three reads to be confused with. The service copies the
+    # resolved value onto the `MemoryWriteRequest` it hands the repository, and
+    # the fourth read is that request's own field, used to scope the replay
+    # lookup so a foreign idempotency key answers as absent rather than
+    # returning another Principal's receipt.
+    "application/relationship_memory.py": (
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("request", "principal_id"),
+    ),
+    # The context card's own invariant, and it reads both values *in order to
+    # refuse a mismatch*: a card memory pairs a stored memory with a stored
+    # version of itself, and `__post_init__` raises when the two halves do not
+    # belong to one Principal. Neither value is caller input — both come off
+    # rows a partition-scoped read returned — and the check is the reason the
+    # pairing cannot be assembled across partitions by a later caller.
+    "domain/relationship/context_card.py": (
+        ("current_version", "principal_id"),
+        ("memory", "principal_id"),
+    ),
+    # WP-29's memory repository. The thirteen `request.principal_id` reads are
+    # the resolved Principal the service put on the `MemoryWriteRequest`, and
+    # every one of them is an argument to `_mine` or `_bound` — that is, it is
+    # read in order to *constrain* a statement to that partition or to stamp a
+    # row with it, never to trust it. The `row` and `link` reads are stored
+    # column values being mapped back onto domain records, from statements that
+    # were already scoped by those same calls.
+    "infrastructure/persistence/relationship_memory.py": (
+        ("link", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+    ),
+    # The same plane's review and promotion path. All nine reads are of the
+    # `ReviewDecisionRequest.principal_id` the authenticated Review capability
+    # resolved, and eight of them are arguments to `_mine`, `_bound` or the
+    # subject re-validation those two scope — read to constrain a statement to
+    # the partition or to stamp a row with it. The ninth echoes it back onto the
+    # returned `ReviewDecision`, which is the same value the caller was already
+    # authenticated as and carries no partition decision of its own.
+    "infrastructure/persistence/relationship_memory_review.py": (
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+    ),
     "application/goodnotes.py": (
         ("page", "principal_id"),
         ("page", "principal_id"),
@@ -452,8 +519,15 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("values", "principal_id"),
     ),
     # The request Principal is produced by the authenticated Review capability;
-    # both the dispatch probe and the selected repository reapply the partition.
-    "infrastructure/persistence/unit_of_work.py": (("request", "principal_id"),),
+    # every dispatch probe and the selected repository reapply the partition.
+    # Two reads, one per probe: the canonical Review surface now routes three
+    # subject kinds, and each router asks its own plane whether the case is
+    # theirs *within this Principal's partition* — which is also what makes a
+    # foreign case answer "no such case" rather than "not yours".
+    "infrastructure/persistence/unit_of_work.py": (
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+    ),
     "application/situation_service.py": (
         ("cmd", "principal_id"),
         ("cmd", "principal_id"),

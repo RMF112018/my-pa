@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the sixty-five capabilities.
+the seventy-three capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -561,8 +561,23 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     )
     audit = SqlAlchemyAuditSink(audit_engine)
 
+    # The same conjunction `ApplicationService.available_capabilities` applies,
+    # spelled once here so the review surface turns on with the plane's own
+    # capability names rather than separately. A memory binds its subject to an
+    # Entity, so the memory switch alone does not compose the plane — and a
+    # review surface that offered a memory case in a build whose
+    # `relationship_memory.` names are withheld would be the one route into the
+    # plane that the manifest denies exists.
+    relationship_memory_composed = (
+        settings.relationship_intelligence_enabled and settings.relationship_memory_enabled
+    )
+
     def unit_of_work() -> UnitOfWork:
-        return SqlAlchemyUnitOfWork(work_engine, audit=audit)
+        return SqlAlchemyUnitOfWork(
+            work_engine,
+            audit=audit,
+            relationship_memory_enabled=relationship_memory_composed,
+        )
 
     def task_management_unit_of_work() -> SqlAlchemyTaskManagementUnitOfWork:
         return SqlAlchemyTaskManagementUnitOfWork(work_engine)
@@ -600,6 +615,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             task_management_unit_of_work=task_management_unit_of_work,
             commitment_management_unit_of_work=commitment_management_unit_of_work,
             relationship_intelligence_enabled=settings.relationship_intelligence_enabled,
+            relationship_memory_enabled=settings.relationship_memory_enabled,
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

@@ -36,8 +36,15 @@ GOVERNANCE_REVISION: Final = "d2b8f5c04e71"
 #: The unresolved-mention capability admission, between governance and head.
 QUEUE_REVISION: Final = "e4d7b2f9a316"
 MENTION_REVISION: Final = "f3a8c1d7e592"
-HEAD_REVISION: Final = INTELLIGENCE_REVISION
-CURRENT_SCHEMA_HEAD: Final = "a4d9e7c2b615"
+#: The Work task and commitment contracts, which stack on the intelligence
+#: plane and carry the head until the Relationship Memory plane stacks on them.
+WORK_REVISION: Final = "a4d9e7c2b615"
+#: The Relationship Memory plane, which is where `upgrade head` now lands.
+#: `WORK_REVISION` above was head until this revision stacked on it;
+#: naming both keeps the chain assertion below a statement about the order
+#: rather than about whichever revision happens to be last.
+MEMORY_REVISION: Final = "f1c6b904a2d7"
+HEAD_REVISION: Final = MEMORY_REVISION
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_d9c4e1a7b628_widen_goodnotes_entity_kind_meeting_agenda.py"
 )
@@ -112,8 +119,10 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(GOVERNANCE_REVISION).down_revision == CAPABILITY_REVISION
     assert script.get_revision(QUEUE_REVISION).down_revision == GOVERNANCE_REVISION
     assert script.get_revision(MENTION_REVISION).down_revision == QUEUE_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == MENTION_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 66
+    assert script.get_revision(INTELLIGENCE_REVISION).down_revision == MENTION_REVISION
+    assert script.get_revision(WORK_REVISION).down_revision == INTELLIGENCE_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == WORK_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 67
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -154,7 +163,7 @@ def test_empty_database_reaches_the_new_head(disposable_database: str) -> None:
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == CURRENT_SCHEMA_HEAD
+            assert revision == HEAD_REVISION
         definition = _kind_check(engine, "goodnotes_entity_association_kind_is_known")
         assert definition is not None
         assert "MEETING" in definition

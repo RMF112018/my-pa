@@ -57,6 +57,7 @@ from typing import Any, Final
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    ArchiveRelationshipMemory,
     BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -67,6 +68,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateManagedDocument,
     CreateProject,
+    CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
     DecideReviewCase,
@@ -82,6 +84,8 @@ from my_pa.application.commands import (
     GetGoodNotesWork,
     GetLatestIntelligenceArtifact,
     GetPulse,
+    GetRelationshipMemory,
+    GetRelationshipMemoryHistory,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -90,6 +94,7 @@ from my_pa.application.commands import (
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
+    ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
     ListSources,
@@ -109,14 +114,17 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveIntelligenceSet,
     RestoreManagedDocument,
+    RestoreRelationshipMemory,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
+    ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
     SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchRelationshipMemories,
     SearchTasks,
     SubmitGoodNotesProposal,
     TransitionTask,
@@ -140,6 +148,7 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
+from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -736,6 +745,114 @@ def _list_unresolved_mentions(payload: Mapping[str, Any]) -> Command:
     return ListUnresolvedMentions(**payload)
 
 
+#: The Relationship Memory times a caller may supply, and the field each is
+#: reported under when it is not a moment. Separate from `_CAPTURE_MOMENTS`
+#: because the two planes carry different fields, and one shared mapping would
+#: convert a key on a command that has no such field.
+_MEMORY_MOMENTS: Mapping[str, SafeDetail] = MappingProxyType(
+    {
+        "observed_at": SafeDetail.OBSERVED_AT,
+        "effective_from": SafeDetail.EFFECTIVE_FROM,
+        "effective_to": SafeDetail.EFFECTIVE_TO,
+        "as_of": SafeDetail.AS_OF,
+    }
+)
+
+
+def _memory_moments(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve a memory's optional times from RFC 3339 strings to datetimes.
+
+    Shape conversion only, exactly as `_moments` is for the capture plane: JSON
+    has no datetime and the command refuses anything that is not one. An absent
+    key stays absent and a null stays null — an unknown moment is a real answer
+    here, and filling one in from the request clock would fabricate a fact about
+    the world out of a fact about this process.
+    """
+    converted = dict(payload)
+    for name, detail in _MEMORY_MOMENTS.items():
+        supplied = converted.get(name)
+        if supplied is None:
+            continue
+        if not isinstance(supplied, str):
+            raise InvalidRequestError(detail)
+        try:
+            converted[name] = datetime.fromisoformat(supplied)
+        except ValueError:
+            pass
+        else:
+            continue
+        # Outside the handler: the original renders the rejected value.
+        raise InvalidRequestError(detail)
+    return converted
+
+
+def _memory_vocabulary(payload: dict[str, Any]) -> dict[str, Any]:
+    """Closed-vocabulary strings as the enum members the commands declare.
+
+    JSON has no enum and no tuple. The commands hold `MemoryKind` and
+    `MemoryLifecycle` so the published MCP schema names the members a caller may
+    use, and this is where a caller's string becomes one — the same conversion
+    `_fetch_source` performs for `Representation`.
+
+    A value outside the vocabulary is left exactly as it arrived rather than
+    refused here, so the command reports it under its own field name. Converting
+    would need a second copy of each vocabulary's error mapping, and refusing
+    here would report the wrong field for a payload that got two things wrong.
+    """
+    for name, vocabulary in (("kind", MemoryKind), ("lifecycle", MemoryLifecycle)):
+        value = payload.get(name)
+        if isinstance(value, str):
+            try:
+                payload[name] = vocabulary(value)
+            except ValueError:
+                continue
+    kinds = payload.get("kinds")
+    if isinstance(kinds, list):
+        converted: list[Any] = []
+        for entry in kinds:
+            try:
+                converted.append(MemoryKind(entry) if isinstance(entry, str) else entry)
+            except ValueError:
+                converted.append(entry)
+        payload["kinds"] = tuple(converted)
+    links = payload.get("context_links")
+    if isinstance(links, list):
+        payload["context_links"] = tuple(links)
+    return payload
+
+
+def _create_relationship_memory(payload: Mapping[str, Any]) -> Command:
+    return CreateRelationshipMemory(**_memory_vocabulary(_memory_moments(payload)))
+
+
+def _get_relationship_memory(payload: Mapping[str, Any]) -> Command:
+    return GetRelationshipMemory(**payload)
+
+
+def _list_relationship_memories(payload: Mapping[str, Any]) -> Command:
+    return ListRelationshipMemories(**_memory_vocabulary(_memory_moments(payload)))
+
+
+def _search_relationship_memories(payload: Mapping[str, Any]) -> Command:
+    return SearchRelationshipMemories(**_memory_vocabulary(dict(payload)))
+
+
+def _get_relationship_memory_history(payload: Mapping[str, Any]) -> Command:
+    return GetRelationshipMemoryHistory(**payload)
+
+
+def _revise_relationship_memory(payload: Mapping[str, Any]) -> Command:
+    return ReviseRelationshipMemory(**_memory_vocabulary(_memory_moments(payload)))
+
+
+def _archive_relationship_memory(payload: Mapping[str, Any]) -> Command:
+    return ArchiveRelationshipMemory(**payload)
+
+
+def _restore_relationship_memory(payload: Mapping[str, Any]) -> Command:
+    return RestoreRelationshipMemory(**payload)
+
+
 def _get_goodnotes_content(payload: Mapping[str, Any]) -> Command:
     if "path" in payload or "principal_id" in payload:
         raise InvalidRequestError(SafeDetail.RUN_ID)
@@ -1051,6 +1168,14 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_CONTEXT: _get_entity_context,
         Capability.ENTITIES_RELATIONSHIPS: _get_entity_relationships,
         Capability.ENTITIES_UNRESOLVED_MENTIONS: _list_unresolved_mentions,
+        Capability.RELATIONSHIP_MEMORY_CREATE: _create_relationship_memory,
+        Capability.RELATIONSHIP_MEMORY_GET: _get_relationship_memory,
+        Capability.RELATIONSHIP_MEMORY_LIST: _list_relationship_memories,
+        Capability.RELATIONSHIP_MEMORY_SEARCH: _search_relationship_memories,
+        Capability.RELATIONSHIP_MEMORY_HISTORY: _get_relationship_memory_history,
+        Capability.RELATIONSHIP_MEMORY_REVISE: _revise_relationship_memory,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE: _archive_relationship_memory,
+        Capability.RELATIONSHIP_MEMORY_RESTORE: _restore_relationship_memory,
     }
 )
 
@@ -1060,7 +1185,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the sixty-five names nothing.
+    not one of the seventy-three names nothing.
     """
     try:
         return Capability(capability)

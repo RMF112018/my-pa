@@ -50,6 +50,7 @@ from datetime import datetime
 
 from my_pa.application.commands import (
     ArchiveManagedDocument,
+    ArchiveRelationshipMemory,
     BeginIntelligenceCycle,
     BulkConfirmTasks,
     BulkPreviewTasks,
@@ -60,6 +61,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateManagedDocument,
     CreateProject,
+    CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
     DecideReviewCase,
@@ -75,6 +77,8 @@ from my_pa.application.commands import (
     GetGoodNotesWork,
     GetLatestIntelligenceArtifact,
     GetPulse,
+    GetRelationshipMemory,
+    GetRelationshipMemoryHistory,
     GetSourceMetadata,
     GetSourceStatus,
     GetTaskHistory,
@@ -83,6 +87,7 @@ from my_pa.application.commands import (
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
+    ListRelationshipMemories,
     ListReviewCases,
     ListSituations,
     ListSources,
@@ -101,14 +106,17 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveIntelligenceSet,
     RestoreManagedDocument,
+    RestoreRelationshipMemory,
     RevealSubject,
     ReviseCapture,
     ReviseManagedDocument,
+    ReviseRelationshipMemory,
     SearchCaptures,
     SearchCommitments,
     SearchEntities,
     SearchIntelligenceArtifacts,
     SearchKnowledge,
+    SearchRelationshipMemories,
     SearchTasks,
     SubmitGoodNotesProposal,
     TransitionTask,
@@ -300,6 +308,28 @@ def _requested_scope(
             | GetEntityContext()
             | GetEntityRelationships()
             | ListUnresolvedMentions()
+            # A Relationship Memory names an Entity, not a source. It is the
+            # product's own knowledge under ADR-003 — written by the Principal
+            # about a person, never read out of a source root — so its rows carry
+            # no `source_id` and no `enrollment_id` for a scope to be compared
+            # against, exactly as a capture's and a managed document's do not.
+            # The empty set here is a measurement, and
+            # `domain.policy.decision._SCOPELESS` is where it is read as one; a
+            # capability missing from *both* is denied instead, with nothing to
+            # say the mapping was never made.
+            #
+            # This match has no default arm, so a command omitted here returns
+            # `None` and `authorize` fails on `len(None)` — an `internal_error`
+            # with no field named, which is how these eight were caught. Adding a
+            # capability means adding it here.
+            | CreateRelationshipMemory()
+            | GetRelationshipMemory()
+            | ListRelationshipMemories()
+            | SearchRelationshipMemories()
+            | GetRelationshipMemoryHistory()
+            | ReviseRelationshipMemory()
+            | ArchiveRelationshipMemory()
+            | RestoreRelationshipMemory()
         ):
             return frozenset()
         case CreateCapture():

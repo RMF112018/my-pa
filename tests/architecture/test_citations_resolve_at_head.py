@@ -82,8 +82,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: Top-level directories holding repository-authored prose.
-SEARCHED_ROOTS = ("apps", "docs", "migrations", "ops", "src", "tests")
+#: Top-level directories holding repository-authored prose. `evidence/` is here
+#: because an acceptance matrix is prose a reviewer reads *instead of* the code,
+#: so a citation that rotted in one is read as fact rather than followed; it was
+#: outside this sweep until a reviewer found a stale fact in
+#: `evidence/acceptance/RELATIONSHIP-MEMORY-RM-AC-20260822.md` that no test held.
+SEARCHED_ROOTS = ("apps", "docs", "evidence", "migrations", "ops", "src", "tests")
 
 #: Repository-root files that carry citations.
 SEARCHED_ROOT_FILES = ("AGENTS.md", "CONTRIBUTING.md", "README.md", "SECURITY.md")
@@ -133,7 +137,11 @@ _HEADING = re.compile(r"^#{1,6}\s")
 #: The fewest citations of each kind before this guard is deciding anything. A
 #: sweep whose extractor silently returned nothing would satisfy every rule.
 #:
-#: Measured at this head over 327 files: **51 explicit and 9 bare, 60 in all**.
+#: Measured at this head over 920 files — the tree has grown by two merges of
+#: `main` and by admitting `evidence/` since the sweep that set these floors —
+#: **131 explicit and 20 bare, 151 in all**. `evidence/` contributes none of
+#: them today, which is what makes admitting it a control rather than a
+#: correction: the documents carry no line citation to be wrong yet.
 #: The reviewer's universe was 58 real citations with 14 defective, and neither
 #: number is reproduced exactly here, which is expected — a universe is a
 #: definition, and this one is written down in the four rules below rather than

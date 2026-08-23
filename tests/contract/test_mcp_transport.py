@@ -471,14 +471,21 @@ def _child_tool_list(**settings: str) -> tuple[list[str], bytes]:
 #: without editing this file — and asserted non-empty below, because an empty set
 #: would make both halves of the claim vacuous.
 #:
-#: Two families now. `documents.` needs a managed byte store. `entities.` needs
-#: the relationship plane switched on, and that switch is the whole of
+#: Three families now. `documents.` needs a managed byte store. `entities.`
+#: needs the relationship plane switched on, and that switch is the whole of
 #: `D-RI-01`: `adapters.mcp.remote` derives the remote tool profile from the
 #: capability set with no per-capability exclusion list, so "this build serves
 #: it" and "a remote client can reach it" are one decision. This test is where
 #: that decision is proved — against a real child process, in the transport an
 #: operator actually runs, rather than against a code path.
-_COMPOSED_PREFIXES: Final = ("documents.", "entities.")
+#:
+#: `relationship_memory.` joins them on its own switch, and needs the
+#: `entities.` one as well: a memory's subject is an Entity whose ownership the
+#: memory repository proves by reading the entity partition, so a build serving
+#: memories without the plane that owns their subjects would be serving writes
+#: it cannot validate. Two switches rather than one is what makes the family
+#: withheld from the unconfigured child below.
+_COMPOSED_PREFIXES: Final = ("documents.", "entities.", "relationship_memory.")
 
 _COMPOSED_CAPABILITIES: Final = frozenset(
     capability for capability in Capability if capability.value.startswith(_COMPOSED_PREFIXES)
@@ -491,8 +498,9 @@ def test_a_real_child_process_publishes_only_what_it_was_composed_with() -> None
     **Two children, and the difference between them is one environment
     variable.**
 
-    * *Unconfigured* — no `MY_PA_MANAGED_DOCUMENT_ROOT`, so no byte store is
-      composed and the `documents.` names are withheld. This is the state every
+    * *Unconfigured* — no `MY_PA_MANAGED_DOCUMENT_ROOT` and neither relationship
+      switch, so no byte store is composed and the `documents.`, `entities.` and
+      `relationship_memory.` names are all withheld. This is the state every
       process this build has run in; what WP-28 changed is that capabilities now
       exist which a process can lack the composition for, so "the tool list is
       the capability set" stopped being true and "the tool list is what this
@@ -504,7 +512,7 @@ def test_a_real_child_process_publishes_only_what_it_was_composed_with() -> None
 
     Both children keep the unreachable database URL this module uses
     deliberately: neither composition reads a row. The *third* case — a process
-    with a managed root, publishing all sixty-two — does read one, because the
+    with a managed root, publishing all seventy — does read one, because the
     store is constructed with the configured source roots to refuse an
     overlapping root, so it is proved in
     `test_a_child_with_a_managed_root_publishes_every_capability` against a real
@@ -542,6 +550,12 @@ def test_a_child_with_a_managed_root_publishes_every_capability(tmp_path: Path) 
         MY_PA_DATABASE_URL=os.environ["MY_PA_DATABASE_URL"],
         MY_PA_MANAGED_DOCUMENT_ROOT=str(root),
         MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED="true",
+        # Both relationship switches, because the memory plane needs the entity
+        # plane under it and "every capability" is the claim this test makes:
+        # narrowing the claim to the sixty-two a memory-less build publishes
+        # would leave the eight `relationship_memory.` names proved reachable in
+        # no composed process at all.
+        MY_PA_RELATIONSHIP_MEMORY_ENABLED="true",
     )
     assert composed == [capability.value for capability in Capability]
     assert {capability.value for capability in _COMPOSED_CAPABILITIES} <= set(composed)

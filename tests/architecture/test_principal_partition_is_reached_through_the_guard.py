@@ -138,6 +138,19 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         "infrastructure/persistence/managed_documents.py",
         "infrastructure/persistence/worker_health.py",
         "infrastructure/persistence/relationships.py",
+        # WP-29's Relationship Memory plane. Every statement it builds over the
+        # eight memory tables — and over `knowledge.entities`, which it reads to
+        # prove same-Principal ownership of a memory's subject before the insert
+        # — composes `_mine` or `_bound`, and those two are one-line wrappers
+        # over `partition_criterion` and `principal_bound_values` respectively.
+        "infrastructure/persistence/relationship_memory.py",
+        # The Relationship Memory review and promotion plane. Every statement it
+        # builds — the case listing, the dispatch probe, the decision append, the
+        # proposal stamp, the promoted aggregate and version, the evidence copy,
+        # and the `knowledge.entities` read that re-proves the subject is this
+        # Principal's before a promotion writes anything — composes the same
+        # `_mine`/`_bound` wrappers `relationship_memory.py` uses.
+        "infrastructure/persistence/relationship_memory_review.py",
         # The evidence traversal. Every one of its six statements is rooted at a
         # partitioned table — `captures`, `capture_versions`, `capture_assertions`
         # or `capture_assertion_spans` — and constrained through `principal_scoped`
@@ -342,6 +355,54 @@ PER_MODULE_ONLY: Final = {
         "every read is principal_scoped and every insert is principal_bound_values; "
         "run and artifact updates use partition_criterion. Helper mappers consume "
         "already-scoped rows."
+    ),
+    "infrastructure/persistence/relationship_memory.py": (
+        "every statement naming one of the eight memory tables, or `entities` on "
+        "the ownership-proving path, composes `_mine` or `_bound` — one-line "
+        "wrappers over partition_criterion and principal_bound_values — and a "
+        "walk of the module's query statements finds no exception. It is "
+        "per-module rather than statement-level only because this plane has no "
+        "bespoke statement-level scan of its own yet; writing one is the work "
+        "this entry represents, not a hole it is covering."
+    ),
+    "infrastructure/persistence/relationship_memory_review.py": (
+        "eleven statements of fourteen — every write, and every read of a "
+        "proposal, an aggregate, a version, an evidence row or the `entities` "
+        "row that re-proves the promoted subject — compose `_mine` or `_bound`, "
+        "the same one-line wrappers over partition_criterion and "
+        "principal_bound_values that the plane it promotes into uses. **Three do "
+        "not**, and the sibling entry above deliberately claims more than this "
+        "one: all three are reads of `relationship_memory_review_decisions` "
+        "keyed on `review_case_id` alone. Two are the `latest_sequence` and "
+        "`latest_disposition` correlated subqueries in "
+        "`relationship_memory_review_cases`, which `.correlate()` to the "
+        "`_mine`-scoped proposals select they hang off, so they can only be "
+        "evaluated against rows that predicate already admitted. The third is "
+        "the decision-chain read in `decide_relationship_memory_review`, which "
+        "runs after the `_mine`-scoped `FOR UPDATE` proposal read in the same "
+        "transaction has already raised `ReviewNotFoundError` for a case the "
+        "caller does not own. **What isolates each of the three is a scoped "
+        "statement it is downstream of, and nothing else.** The two subqueries "
+        "are isolated by `.correlate()`: they are evaluated per candidate row of "
+        "the `_mine`-scoped proposals select, so they can only see decisions "
+        "belonging to a case that predicate already admitted. The third is "
+        "isolated by transaction order: the `_mine`-scoped `FOR UPDATE` read "
+        "runs first in the same transaction and refuses a case the caller does "
+        "not own, so the decision-chain read is unreachable for one. Neither "
+        "protection comes from the key, and the earlier version of this entry "
+        "said it did while conceding in the same paragraph that it does not. "
+        "`review_case_id` is issued by `issue_identifier` and is generated "
+        "unique, but the schema does not enforce that — "
+        "`relationship_memory_proposals` carries no `UniqueConstraint` on the "
+        "column — and the column carries no Principal predicate of its own. "
+        "Forcing a collision shows the difference: with two Principals holding "
+        "the same `review_case_id`, A's disposition surfaces on B's "
+        "`_mine`-scoped case list and B's own decision is refused by a decision "
+        "row B does not own. That residual is unreachable rather than defended "
+        "— no `src/` path inserts a proposal, only two test modules do — and it "
+        "is written down here because unreachable and prevented are different "
+        "claims. Per-module for the same reason its sibling is: this plane has "
+        "no bespoke statement-level scan yet."
     ),
 }
 

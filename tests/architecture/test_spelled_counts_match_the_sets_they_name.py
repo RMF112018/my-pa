@@ -312,6 +312,26 @@ _ORDINAL_UNITS = (
     "sixty-eighth",
     "sixty-ninth",
     "seventieth",
+    # The seventies, added when the Relationship Memory plane admitted eight
+    # `relationship_memory.*` capabilities and the public set reached seventy, so
+    # `a seventy-first capability` became the ordinal a correct claim would use.
+    # This boundary announced itself in both the ways the four above did at once:
+    # the green-half plant raised `IndexError` on index seventy-one, and
+    # `tests/contract/test_http_transport.py` — whose prose already said
+    # `seventy-first` — was reported as claiming *one*, because the longest-match
+    # scan could find no compound ordinal here and fell back to the bare `first`
+    # inside it. A false finding rather than a false pass, which is what the
+    # density of this tuple buys.
+    "seventy-first",
+    "seventy-second",
+    "seventy-third",
+    "seventy-fourth",
+    "seventy-fifth",
+    "seventy-sixth",
+    "seventy-seventh",
+    "seventy-eighth",
+    "seventy-ninth",
+    "eightieth",
 )
 
 
@@ -827,8 +847,9 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "**fifty-three**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
-        "`documents.` and six `entities.` names it withholds — not the size of "
-        "`Capability`, which the same block states correctly as sixty-five",
+        "`documents.`, six `entities.` and eight `relationship_memory.` names it "
+        "withholds — not the size of `Capability`, which the same block states "
+        "correctly as seventy-three",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
@@ -839,10 +860,11 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
     (
         "README.md",
         "fifty-three tools",
-        "A default process publishes fifty-three tools",
+        "process publishes fifty-three tools",
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
-        "from `Capability`, which the same bullet states correctly as sixty-five",
+        "from `Capability`, which the same bullet states correctly as "
+        "seventy-three",
     ),
     # --- the Intelligence Artifact plane, newly swept --------------------------
     #

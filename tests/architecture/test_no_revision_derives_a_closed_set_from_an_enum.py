@@ -189,6 +189,7 @@ _EMISSION_CALLABLES: Final = (
     "_historical_wp7_tables",
     "_historical_wp8_tables",
     "_historical_wp27_tables",
+    "_historical_relationship_memory_tables",
 )
 _EMISSION_LIST: Final = "_TABLES"
 
@@ -485,6 +486,122 @@ FROZEN: Final[dict[str, dict[str, tuple[str, ...]]]] = {
         ),
         "a_managed_document_transition_is_known": ("archived", "restored"),
     },
+    # WP-29's Relationship Memory plane. Eighteen closed sets across the eight
+    # tables that revision creates, all frozen in the revision itself. The kind
+    # vocabulary appears three times — on the pointer row, on the immutable
+    # version, and on the proposal — because each of the three carries the kind
+    # independently and each is emitted by this revision; freezing all three
+    # separately is what keeps a member added to `domain.relationship.memory`
+    # from moving any of them. `a_memory_proposal_names_its_result_exactly_when_
+    # accepted` is deliberately absent: it is a conditional pairing rule that
+    # happens to name two of the states, not a closed set over a vocabulary, and
+    # `test_a_frozen_revision_freezes_structurally` reads this mapping as the
+    # exact set of names the revision declares frozen.
+    "f1c6b904a2d7": {
+        "a_memory_kind_is_known": (
+            "communication_preference",
+            "concern",
+            "follow_up_context",
+            "general_note",
+            "important_date",
+            "interest",
+            "personal_detail",
+            "sensitivity",
+            "user_pinned_context",
+            "working_preference",
+        ),
+        "a_memory_lifecycle_state_is_known": ("active", "archived"),
+        "a_memory_version_kind_is_known": (
+            "communication_preference",
+            "concern",
+            "follow_up_context",
+            "general_note",
+            "important_date",
+            "interest",
+            "personal_detail",
+            "sensitivity",
+            "user_pinned_context",
+            "working_preference",
+        ),
+        "a_memory_authority_is_known": (
+            "public_assertion",
+            "source_backed_assertion",
+            "user_authored_private_note",
+            "user_confirmed_assertion",
+        ),
+        "a_memory_classification_is_known": (
+            "private_local",
+            "restricted_local",
+            "synthetic_test",
+        ),
+        "a_memory_actor_class_is_known": (
+            "review_promotion",
+            "system_deterministic",
+            "user",
+        ),
+        "a_memory_submission_operation_is_known": (
+            "archive",
+            "create",
+            "restore",
+            "revise",
+        ),
+        "a_memory_submission_lifecycle_state_is_known": ("active", "archived"),
+        "a_memory_context_target_type_is_known": (
+            "commitment",
+            "entity",
+            "situation",
+            "task",
+        ),
+        "a_memory_context_role_is_known": ("applies_in", "arose_from", "related_to"),
+        "a_memory_context_authority_is_known": (
+            "deterministic",
+            "review_accepted",
+            "user_confirmed",
+        ),
+        "a_memory_evidence_role_is_known": ("counterevidence", "direct", "supporting"),
+        "a_memory_proposal_kind_is_known": (
+            "communication_preference",
+            "concern",
+            "follow_up_context",
+            "general_note",
+            "important_date",
+            "interest",
+            "personal_detail",
+            "sensitivity",
+            "user_pinned_context",
+            "working_preference",
+        ),
+        "a_memory_proposal_state_is_known": (
+            "accepted",
+            "corrected_accepted",
+            "deferred",
+            "invalidated",
+            "needs_review",
+            "proposed",
+            "rejected",
+            "superseded",
+        ),
+        "a_memory_proposal_method_is_known": ("deterministic", "local_model", "rule"),
+        "a_memory_proposal_classification_is_known": (
+            "private_local",
+            "restricted_local",
+            "synthetic_test",
+        ),
+        "a_memory_proposal_evidence_role_is_known": (
+            "counterevidence",
+            "direct",
+            "supporting",
+        ),
+        "a_memory_review_disposition_is_known": (
+            "accept",
+            "correct_and_accept",
+            "defer",
+            "escalate",
+            "mark_unresolved",
+            "reject",
+            "reprocess",
+        ),
+    },
 }
 
 
@@ -620,8 +737,8 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 66
-    assert len({revision for revision, _ in revisions}) == 66
+    assert len(revisions) == 67
+    assert len({revision for revision, _ in revisions}) == 67
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

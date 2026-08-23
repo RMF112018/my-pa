@@ -266,6 +266,20 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     64: "Sixty-four",
     65: "Sixty-five",
     66: "Sixty-six",
+    67: "Sixty-seven",
+    68: "Sixty-eight",
+    69: "Sixty-nine",
+    70: "Seventy",
+    71: "Seventy-one",
+    72: "Seventy-two",
+    73: "Seventy-three",
+    74: "Seventy-four",
+    75: "Seventy-five",
+    76: "Seventy-six",
+    77: "Seventy-seven",
+    78: "Seventy-eight",
+    79: "Seventy-nine",
+    80: "Eighty",
 }
 
 
@@ -380,27 +394,27 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
 
 
 def test_current_state_docs_derive_the_default_capability_split() -> None:
-    """Bind the default 53/65 and withheld 12/65 claims to runtime wiring."""
+    """Bind the default 53/73 and withheld 20/73 claims to runtime wiring."""
     total = len(Capability)
     withheld_families = {
         capability
         for capability in _HANDLERS
-        if capability.value.startswith(("documents.", "entities."))
+        if capability.value.startswith(("documents.", "entities.", "relationship_memory."))
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert default == 53 and total == 65 and withheld == 12
+    assert default == 53 and total == 73 and withheld == 20
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "sixty-five capabilities" in system_context
+    assert "seventy-three capabilities" in system_context
     assert "exposes fifty-three of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "sixty-five capabilities" in module_boundaries
+    assert "seventy-three capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

@@ -62,8 +62,12 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
 
-#: Top-level directories holding repository-authored prose and code.
-SEARCHED_ROOTS = ("apps", "docs", "migrations", "ops", "src", "tests")
+#: Top-level directories holding repository-authored prose and code. `evidence/`
+#: is here for the reason it is in `test_citations_resolve_at_head.py`: an
+#: acceptance or closeout document is prose a reviewer reads instead of the code,
+#: and a transcript inside one asserting `head` over a database's own revision is
+#: the same false claim wherever it is written.
+SEARCHED_ROOTS = ("apps", "docs", "evidence", "migrations", "ops", "src", "tests")
 
 #: Repository-root files that carry command transcripts.
 SEARCHED_ROOT_FILES = ("AGENTS.md", "CONTRIBUTING.md", "README.md", "SECURITY.md")
@@ -95,10 +99,15 @@ _SELECT = re.compile(r"\bselect\b", re.IGNORECASE)
 #: keyword optional matches every word in the region, and the regions this rule
 #: reads are not all SQL: `database_revisions` in `apps/cli/health.py` qualifies as a
 #: revision-reading query while being English prose, because it names the table
-#: and the verb. Measured over all 14805 regions of the searched corpus, an
-#: optional-`AS` branch finds one such word — `head` in the prose of
+#: and the verb. Measured over all 14805 regions the corpus then held, an
+#: optional-`AS` branch found one such word — `head` in the prose of
 #: `tests/schema/test_head_round_trip.py`, a region one `SELECT` away from being
-#: read — and this branch finds none. So an implicit alias is required to sit
+#: read — and this branch found none. Re-measured at this head over the 74156
+#: regions the corpus holds with `evidence/` admitted — the figure
+#: `sum(len(regions_in(path)) for path in searched_files())` prints, which is the
+#: same walk this module runs — neither branch finds one; that makes the loose
+#: branch currently unlucky rather than safe, which is why the positional one is
+#: still what ships. So an implicit alias is required to sit
 #: where an alias sits: after something an expression can end with, and before
 #: the comma, the `FROM`, or the end of the select list.
 _ALIAS = re.compile(
@@ -117,11 +126,15 @@ _FENCE = re.compile(r"^```[^\n]*\n(.*?)^```", re.MULTILINE | re.DOTALL)
 #: region extractor that silently returned nothing would satisfy the rule below
 #: over an empty set, which is the failure mode that let six planted violations
 #: through a guard in this campaign. Measured over the same universe this rule
-#: walks: **four** — `apps/cli/health.py`'s docstring, the two `psql` blocks in
+#: walks: **twenty-three**, of which four are the original ones — `apps/cli/
+#: health.py`'s docstring, the two `psql` blocks in
 #: `ops/runbooks/postgres-operations.md`, and the `SELECT` in
-#: `src/my_pa/infrastructure/migration/binding.py`. The floor is set just under
-#: it, so a rehearsal query removed by a later package does not redden this rule
-#: while losing the extractor still does.
+#: `src/my_pa/infrastructure/migration/binding.py` — and the remaining nineteen
+#: are the `alembic_version` reads the schema-tier round-trip modules make.
+#: `evidence/` contributes none. The floor is left just under the original four
+#: rather than raised to the measurement, so a rehearsal query removed by a
+#: later package does not redden this rule while losing the extractor still
+#: does.
 FEWEST_QUERIES = 3
 
 

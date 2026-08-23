@@ -229,6 +229,18 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "intelligence_commit_receipts",
         "intelligence_pipeline_dependencies",
         "intelligence_provenance_refs",
+        # The Relationship Memory plane, stacked above the report plane by
+        # `f1c6b904a2d7`. Named here for the same reason: a downgrade to the
+        # extraction revision unwinds it too, and an unnamed table would turn
+        # the equality below into a subset check.
+        "relationship_memories",
+        "relationship_memory_versions",
+        "relationship_memory_submissions",
+        "relationship_memory_context_links",
+        "relationship_memory_evidence_links",
+        "relationship_memory_proposals",
+        "relationship_memory_proposal_evidence",
+        "relationship_memory_review_decisions",
     }
 )
 

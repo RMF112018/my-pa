@@ -178,6 +178,25 @@ class SafeDetail(StrEnum):
     STRUCTURED_CONTENT = "structured_content"
     BODY_MARKDOWN = "body_markdown"
     ADVISORY_DIGEST = "advisory_digest"
+    #: The Relationship Memory plane. Field *names* only, as every member here
+    #: is: `STATEMENT` names the field a malformed note arrived in and never
+    #: carries the note, which is the whole reason this enum is a closed token
+    #: set rather than a formatted message.
+    MEMORY_ID = "memory_id"
+    MEMORY_KIND = "memory_kind"
+    SUBJECT_ENTITY_ID = "subject_entity_id"
+    STATEMENT = "statement"
+    STRUCTURED_VALUE = "structured_value"
+    CONTEXT_LINKS = "context_links"
+    PINNED = "pinned"
+    LIFECYCLE = "lifecycle"
+    KINDS = "kinds"
+    AS_OF = "as_of"
+    EFFECTIVE_FROM = "effective_from"
+    EFFECTIVE_TO = "effective_to"
+    CORRECTION_REASON = "correction_reason"
+    INCLUDE_STATEMENT = "include_statement"
+    OBSERVED_AT = "observed_at"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

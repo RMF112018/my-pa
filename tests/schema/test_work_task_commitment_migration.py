@@ -19,6 +19,11 @@ from my_pa.infrastructure.persistence.tables import task_bulk_operations
 ROOT = Path(__file__).resolve().parents[2]
 REVISION = "a4d9e7c2b615"
 PREVIOUS = "e9b2c4d7a150"
+#: The Relationship Memory plane, which stacked on this revision rather than
+#: forking beside it. This revision was head when it merged and is not now, so
+#: the edge is asserted in both directions below and the head is asserted once,
+#: which is what "single head" was there to say.
+SUCCESSOR = "f1c6b904a2d7"
 REVISION_PATH = (
     ROOT
     / "migrations"
@@ -27,10 +32,11 @@ REVISION_PATH = (
 )
 
 
-def test_work_revision_is_the_single_head_after_the_approved_predecessor() -> None:
+def test_work_revision_sits_on_the_single_head_chain_after_its_predecessor() -> None:
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_heads() == [REVISION]
+    assert script.get_heads() == [SUCCESSOR]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
+    assert script.get_revision(SUCCESSOR).down_revision == REVISION
 
 
 def test_bulk_metadata_matches_the_persisted_preview_and_confirmation_contract() -> None:

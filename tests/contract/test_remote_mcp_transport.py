@@ -84,13 +84,59 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
     tools = {
         tool.name: tool for tool in published_tools(build_service(scene.world, scene.providers))
     }
-    read = tools[Capability.CAPABILITIES_GET.value]
-    write = tools[Capability.CAPTURE_CREATE.value]
-    assert read.annotations is not None and read.annotations.read_only_hint is True
-    assert write.annotations is not None and write.annotations.read_only_hint is False
-    for tool in (read, write):
+    writes = {
+        Capability.SOURCES_ENROLL,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.REVIEW_DECIDE,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_CONFIRM,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_UPDATE,
+        Capability.COMMITMENTS_CLOSE,
+        Capability.CONTEXT_FEEDBACK,
+        Capability.GOODNOTES_PROPOSE,
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
+    }
+    destructive_writes = {
+        Capability.CAPTURE_REVISE,
+        Capability.REVIEW_DECIDE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_CONFIRM,
+        Capability.COMMITMENTS_UPDATE,
+        Capability.COMMITMENTS_CLOSE,
+        Capability.CONTEXT_FEEDBACK,
+        Capability.REPORTS_COMMIT,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
+    }
+    for capability in Capability:
+        tool = tools.get(capability.value)
+        if tool is None:
+            continue
         assert tool.annotations is not None
-        assert tool.annotations.destructive_hint is False
+        assert tool.annotations.read_only_hint is (capability not in writes)
+        assert tool.annotations.destructive_hint is (capability in destructive_writes)
         assert tool.annotations.open_world_hint is False
 
 

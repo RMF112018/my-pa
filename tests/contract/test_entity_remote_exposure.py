@@ -38,12 +38,7 @@ from tests.conftest import FakeProviders, World, build_service
 from my_pa.adapters.mcp.remote import remote_tool_names
 from my_pa.adapters.mcp.server import published_tools
 from my_pa.application.service import ApplicationService
-from my_pa.domain.identity.operation import (
-    Capability,
-    is_operator_only,
-    is_write_capability,
-    permitted_purposes,
-)
+from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 
 ENTITY_CAPABILITIES: Final[frozenset[str]] = frozenset(
@@ -106,16 +101,18 @@ def test_a_build_with_the_plane_exposes_all_six_as_reads() -> None:
 def test_none_of_the_six_is_classified_as_a_write() -> None:
     """The classification the remote profile actually runs on.
 
-    `remote_tool_names` decides read-versus-write through the domain's derived
-    `is_write_capability` classification. `entity_read` must remain read-only:
-    this plane has no write capability, so a write purpose here would be a grant
-    nothing needs.
+    `remote_tool_names` decides read-versus-write by intersecting a capability's
+    permitted purposes with `_WRITE_PURPOSES`. `entity_read` is not among them
+    and must not become one: this plane has no write capability, so a write
+    purpose here would be a grant nothing needs.
     """
+    from my_pa.adapters.mcp.remote import _WRITE_PURPOSES
+
     for capability in Capability:
         if capability.value not in ENTITY_CAPABILITIES:
             continue
         assert permitted_purposes(capability) == frozenset({Purpose.ENTITY_READ})
-        assert not is_write_capability(capability)
+        assert not permitted_purposes(capability) & _WRITE_PURPOSES
 
 
 def test_none_of_the_six_is_operator_only() -> None:

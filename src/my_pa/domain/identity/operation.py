@@ -19,6 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from enum import StrEnum
 from types import MappingProxyType
+from typing import Final
 
 from my_pa.domain.identity.purpose import Purpose
 
@@ -26,6 +27,7 @@ __all__ = [
     "AuthorizedCapability",
     "Capability",
     "NativeSourceCapability",
+    "is_destructive_capability",
     "is_operator_only",
     "is_write_capability",
     "permitted_purposes",
@@ -753,23 +755,57 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
     }
 )
 
-# Purposes whose successful operations can change product-owned state. This is
-# also the source for MCP safety annotations and the remote read-only profile;
-# keeping it beside the capability-to-purpose policy prevents those two public
-# descriptions from drifting apart.
-_WRITE_PURPOSES = frozenset(
+# Public capabilities that can change product-owned state. This is operation
+# truth rather than an authorization-purpose shortcut: for example,
+# `tasks.bulk_preview` is authorized under a write purpose but changes nothing.
+_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
-        Purpose.BOUNDED_ENROLLMENT,
-        Purpose.CAPTURE_AUTHORING,
-        Purpose.REVIEW_DISPOSITION,
-        Purpose.DOCUMENT_AUTHORING,
-        Purpose.CONTINUITY_AUTHORING,
-        Purpose.TASK_AUTHORING,
-        Purpose.COMMITMENT_AUTHORING,
-        Purpose.CONTEXT_PREFERENCE,
-        Purpose.GOODNOTES_PROPOSAL,
-        Purpose.REPORT_AUTHORING,
-        Purpose.RELATIONSHIP_MEMORY_AUTHORING,
+        Capability.SOURCES_ENROLL,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.REVIEW_DECIDE,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_CONFIRM,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_UPDATE,
+        Capability.COMMITMENTS_CLOSE,
+        Capability.CONTEXT_FEEDBACK,
+        Capability.GOODNOTES_PROPOSE,
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
+    }
+)
+
+# Writes that only add a new durable record and do not replace, transition,
+# supersede, archive, restore, promote, or otherwise change an existing state.
+_ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.SOURCES_ENROLL,
+        Capability.CAPTURE_CREATE,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
+        Capability.DOCUMENTS_CREATE,
+        Capability.TASKS_CREATE,
+        Capability.COMMITMENTS_CREATE,
+        Capability.GOODNOTES_PROPOSE,
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.RELATIONSHIP_MEMORY_CREATE,
     }
 )
 
@@ -779,9 +815,14 @@ def is_operator_only(capability: AuthorizedCapability) -> bool:
     return capability in _OPERATOR_ONLY
 
 
-def is_write_capability(capability: AuthorizedCapability) -> bool:
-    """Return whether invoking `capability` can change product-owned state."""
-    return bool(permitted_purposes(capability) & _WRITE_PURPOSES)
+def is_write_capability(capability: Capability) -> bool:
+    """Return whether a public capability can change product-owned state."""
+    return capability in _WRITE_CAPABILITIES
+
+
+def is_destructive_capability(capability: Capability) -> bool:
+    """Return whether a public write can make a non-additive state change."""
+    return capability in _WRITE_CAPABILITIES - _ADDITIVE_WRITE_CAPABILITIES
 
 
 def permitted_purposes(capability: AuthorizedCapability) -> frozenset[Purpose]:

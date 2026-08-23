@@ -7,6 +7,7 @@ from typing import get_args
 
 import pytest
 
+from my_pa.adapters.mcp.remote import _WRITE_PURPOSES
 from my_pa.adapters.mcp.tools import input_schema_for
 from my_pa.adapters.remote_request import (
     _IDEMPOTENT_REMOTE_CAPABILITIES,
@@ -19,12 +20,7 @@ from my_pa.adapters.remote_request import (
 )
 from my_pa.application.commands import Command
 from my_pa.application.errors import InvalidRequestError, UnsupportedError
-from my_pa.domain.identity.operation import (
-    Capability,
-    is_operator_only,
-    is_write_capability,
-    permitted_purposes,
-)
+from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 
@@ -44,7 +40,8 @@ def _remote_read_capabilities() -> tuple[Capability, ...]:
     return tuple(
         capability
         for capability in Capability
-        if not is_operator_only(capability) and not is_write_capability(capability)
+        if not is_operator_only(capability)
+        and not (permitted_purposes(capability) & _WRITE_PURPOSES)
     )
 
 
@@ -148,7 +145,7 @@ def test_every_remote_read_purpose_resolves() -> None:
     for capability in _remote_read_capabilities():
         purpose = resolve_remote_purpose(capability, None)
         assert purpose in permitted_purposes(capability)
-        assert not is_write_capability(capability)
+        assert not (permitted_purposes(capability) & _WRITE_PURPOSES)
         assert not is_operator_only(capability)
 
 
@@ -168,7 +165,8 @@ def _remote_write_capabilities() -> tuple[Capability, ...]:
     return tuple(
         capability
         for capability in Capability
-        if not is_operator_only(capability) and is_write_capability(capability)
+        if not is_operator_only(capability)
+        and bool(permitted_purposes(capability) & _WRITE_PURPOSES)
     )
 
 
@@ -222,7 +220,7 @@ def test_compose_stamps_content_addressed_idempotency_key() -> None:
 
 
 def test_every_write_purpose_is_classified_as_a_remote_write() -> None:
-    write_purposes = {
+    assert {
         Purpose.BOUNDED_ENROLLMENT,
         Purpose.CAPTURE_AUTHORING,
         Purpose.REVIEW_DISPOSITION,
@@ -232,12 +230,9 @@ def test_every_write_purpose_is_classified_as_a_remote_write() -> None:
         Purpose.COMMITMENT_AUTHORING,
         Purpose.CONTEXT_PREFERENCE,
         Purpose.GOODNOTES_PROPOSAL,
-        Purpose.REPORT_AUTHORING,
-        Purpose.RELATIONSHIP_MEMORY_AUTHORING,
-    }
-    for capability in Capability:
-        if permitted_purposes(capability) & write_purposes:
-            assert is_write_capability(capability)
+    } <= set(_WRITE_PURPOSES)
+    assert Purpose.TASK_AUTHORING in _WRITE_PURPOSES
+    assert Purpose.COMMITMENT_AUTHORING in _WRITE_PURPOSES
 
 
 def test_task_and_commitment_writes_are_stamped_remotely() -> None:

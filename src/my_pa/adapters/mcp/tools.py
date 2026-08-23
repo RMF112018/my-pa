@@ -29,9 +29,9 @@ it as an accepted property would advertise a field every request carrying it is
 refused for.
 
 **This publishes safety metadata, not authority.** A tool's description is the
-command's own docstring summary. Its read-only annotation is derived from the
-domain's capability-to-purpose policy through `is_write_capability`, so the
-client-facing classification cannot drift into a second list. Which purposes
+command's own docstring summary. Its read-only and destructive annotations are
+derived from the domain's explicit public-capability classifications, so a
+write-authorized preview is not falsely described as a mutation. Which purposes
 may invoke a capability and whether it is operator-only remain decided behind
 `invoke`; annotations never grant authority or replace confirmation.
 
@@ -55,7 +55,11 @@ from mcp.types import Tool, ToolAnnotations
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.commands import Command
 from my_pa.contracts.v1.envelope import RequestMetadata
-from my_pa.domain.identity.operation import Capability, is_write_capability
+from my_pa.domain.identity.operation import (
+    Capability,
+    is_destructive_capability,
+    is_write_capability,
+)
 
 __all__ = ["TOOLS", "input_schema_for", "payload_schema_for"]
 
@@ -264,7 +268,7 @@ def _tools() -> tuple[Tool, ...]:
             input_schema=input_schema_for(_COMMANDS[capability]),
             annotations=ToolAnnotations(
                 read_only_hint=not is_write_capability(capability),
-                destructive_hint=False,
+                destructive_hint=is_destructive_capability(capability),
                 open_world_hint=False,
             ),
         )

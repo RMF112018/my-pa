@@ -22,7 +22,7 @@ from my_pa.adapters.normalization import MAX_REQUEST_BYTES
 from my_pa.application.service import ApplicationService
 from my_pa.domain.capture.submission import CaptureTransport
 from my_pa.domain.documents.managed import MAX_MANAGED_DOCUMENT_BYTES
-from my_pa.domain.identity.operation import Capability, is_operator_only, is_write_capability
+from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 
@@ -41,6 +41,22 @@ READINESS_PATH: Final = "/readyz"
 # Base64 plus the response envelope must fit without making the legal maximum
 # managed-document read impossible. This is still a finite transport ceiling.
 MAX_REMOTE_RESULT_BYTES: Final = (MAX_MANAGED_DOCUMENT_BYTES * 4 // 3) + (1 << 20)
+
+_WRITE_PURPOSES: Final = frozenset(
+    {
+        Purpose.BOUNDED_ENROLLMENT,
+        Purpose.CAPTURE_AUTHORING,
+        Purpose.REVIEW_DISPOSITION,
+        Purpose.DOCUMENT_AUTHORING,
+        Purpose.CONTINUITY_AUTHORING,
+        Purpose.TASK_AUTHORING,
+        Purpose.COMMITMENT_AUTHORING,
+        Purpose.CONTEXT_PREFERENCE,
+        Purpose.GOODNOTES_PROPOSAL,
+        Purpose.REPORT_AUTHORING,
+        Purpose.RELATIONSHIP_MEMORY_AUTHORING,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -149,7 +165,8 @@ def remote_tool_names(service: ApplicationService, *, writes_enabled: bool) -> f
     for capability in Capability:
         if capability.value not in composed or is_operator_only(capability):
             continue
-        if writes_enabled or not is_write_capability(capability):
+        is_write = bool(permitted_purposes(capability) & _WRITE_PURPOSES)
+        if writes_enabled or not is_write:
             names.add(capability.value)
     return frozenset(names)
 

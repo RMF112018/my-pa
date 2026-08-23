@@ -150,8 +150,8 @@ can enforce the same pre-DSM boundary is required before deployment continues.
 
 The script derives the current network ID, Synology bridge name, and subnet
 from the exact internal Compose-owned data plane. Built-in FORWARD order is
-read from `iptables-save -t filter`. `DEFAULT_FORWARD` is obsolete on this
-DSM and is not accepted. Admission means exact four-rule `MY_PA_DATA_PLANE`
+read from `iptables-save -t filter`. `DEFAULT_FORWARD` is not an accepted
+enforcement location for this gate. Admission means exact four-rule `MY_PA_DATA_PLANE`
 contents, FORWARD jumps `MY_PA_DATA_PLANE` then `FORWARD_FIREWALL`, and no
 source-only data-plane RETURN in `FORWARD_FIREWALL`. `plan` is read-only;
 `apply` is idempotent and requires the exact confirmation value; `remove`

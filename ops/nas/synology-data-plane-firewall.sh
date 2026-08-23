@@ -100,6 +100,7 @@ negated_ingress="-A $enforcement_chain ! -i $bridge -o $bridge -j DROP"
 my_pa_jump="-A FORWARD -j $enforcement_chain"
 firewall_jump="-A FORWARD -j FORWARD_FIREWALL"
 default_jump="-A FORWARD -j DEFAULT_FORWARD"
+redirected_jump="-A DEFAULT_FORWARD -j $enforcement_chain"
 
 filter_table() {
   "$iptables_save_bin" -t filter || {
@@ -115,6 +116,39 @@ forward_appends() {
 chain_appends() {
   printf '%s\n' "$1" | awk -v chain="$enforcement_chain" \
     '$1 == "-A" && $2 == chain {print}'
+}
+
+default_forward_appends() {
+  printf '%s\n' "$1" | awk '$1 == "-A" && $2 == "DEFAULT_FORWARD" {print}'
+}
+
+external_reference_count_from_save() {
+  printf '%s\n' "$1" | awk -v chain="$enforcement_chain" '
+    $1 == "-A" && $2 != chain && ($(NF - 1) == "-j" || $(NF - 1) == "-g") && \
+      $NF == chain {count++}
+    END {print count + 0}
+  '
+}
+
+default_forward_reference_count_from_save() {
+  printf '%s\n' "$1" | awk -v chain="$enforcement_chain" '
+    $1 == "-A" && $2 == "DEFAULT_FORWARD" && \
+      ($(NF - 1) == "-j" || $(NF - 1) == "-g") && $NF == chain {count++}
+    END {print count + 0}
+  '
+}
+
+other_external_reference_count_from_save() {
+  printf '%s\n' "$1" | awk -v chain="$enforcement_chain" '
+    $1 == "-A" && $2 != chain && $2 != "DEFAULT_FORWARD" && \
+      ($(NF - 1) == "-j" || $(NF - 1) == "-g") && $NF == chain {count++}
+    END {print count + 0}
+  '
+}
+
+redirected_default_forward_is_exact() {
+  dump=$("$iptables_bin" -S DEFAULT_FORWARD 2>/dev/null) || return 1
+  [ "$(default_forward_appends "$dump")" = "$redirected_jump" ]
 }
 
 forward_firewall_rules() {
@@ -255,15 +289,25 @@ assert_no_my_pa_forward_jump() {
   }
 }
 
+assert_no_my_pa_external_reference() {
+  save=$(filter_table) || return 1
+  reference_count=$(external_reference_count_from_save "$save")
+  [ "$reference_count" -eq 0 ] || {
+    echo "refusing to mutate MY_PA_DATA_PLANE while an external reference exists" >&2
+    return 1
+  }
+}
+
 owned_chain_absent() {
   save=$(filter_table) || {
     echo "iptables-save inspection failed; cannot prove MY_PA_DATA_PLANE absence" >&2
     return 1
   }
-  printf '%s\n' "$save" | awk -v chain="$enforcement_chain" -v jump="$my_pa_jump" '
+  printf '%s\n' "$save" | awk -v chain="$enforcement_chain" '
     $0 ~ "^:" chain "( |$)" {found=1}
     $1 == "-A" && $2 == chain {found=1}
-    $0 == jump {found=1}
+    $1 == "-A" && $2 != chain && ($(NF - 1) == "-j" || $(NF - 1) == "-g") && \
+      $NF == chain {found=1}
     END {exit found ? 1 : 0}
   ' || {
     echo "MY_PA_DATA_PLANE is still present in the filter table" >&2
@@ -302,7 +346,7 @@ chain_declared_in_save() {
 }
 
 delete_owned_chain() {
-  assert_no_my_pa_forward_jump || return 1
+  assert_no_my_pa_external_reference || return 1
   "$iptables_bin" -F "$enforcement_chain" || return 1
   "$iptables_bin" -X "$enforcement_chain" || return 1
   owned_chain_absent
@@ -440,16 +484,35 @@ rollback_unverified_forward_jump() {
     rollback_failed "MY_PA FORWARD jump deletion failed"
     return 1
   fi
-  jump_count=$(my_pa_forward_jump_count) || {
-    rollback_failed "FORWARD inspection failed after jump deletion"
+  save=$(filter_table) || {
+    rollback_failed "filter-table inspection failed after jump deletion"
     return 1
   }
+  forwards=$(forward_appends "$save")
+  jump_count=$(printf '%s\n' "$forwards" | awk -v exact="$my_pa_jump" \
+    '$0 == exact {count++} END {print count + 0}')
   [ "$jump_count" -eq 0 ] || {
     rollback_failed "MY_PA FORWARD jump remains after deletion"
     return 1
   }
-  prove_legacy_forward || {
+  default_references=$(default_forward_reference_count_from_save "$save")
+  [ "$default_references" -eq 0 ] || {
+    rollback_failed "DEFAULT_FORWARD still references MY_PA_DATA_PLANE"
+    return 1
+  }
+  other_references=$(other_external_reference_count_from_save "$save")
+  [ "$other_references" -eq 0 ] || {
+    rollback_failed "another filter chain still references MY_PA_DATA_PLANE"
+    return 1
+  }
+  first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
+  forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
+  [ "$first" = "$firewall_jump" ] && [ "$forward_count" -eq 1 ] || {
     rollback_failed "legacy DSM-first FORWARD restoration could not be verified"
+    return 1
+  }
+  chain_declared_in_save "$save" || {
+    rollback_failed "MY_PA_DATA_PLANE disappeared before owned-chain cleanup"
     return 1
   }
 }
@@ -629,7 +692,11 @@ case "$action" in
           forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
           if [ "$first" = "$firewall_jump" ] && [ "$second" = "$default_jump" ] && \
              [ "$forward_count" -eq 2 ]; then
-            rollback_redirected_forward_jump
+            if redirected_default_forward_is_exact; then
+              rollback_redirected_forward_jump
+              exit 1
+            fi
+            rollback_inserted_forward_jump
             exit 1
           fi
           if [ "$first" != "$my_pa_jump" ] || [ "$second" != "$firewall_jump" ] || \

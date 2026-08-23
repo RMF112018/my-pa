@@ -134,12 +134,16 @@ class _McpEndpoint:
                 return
             if resolved.allowed_capabilities is not None and not resolved.allowed_capabilities:
                 scope_value = " ".join(sorted(self.required_scopes))
+                metadata_url = _metadata_url(self.resource)
                 response = JSONResponse(
                     {"error": "insufficient_scope"},
                     status_code=403,
                     headers={
                         "WWW-Authenticate": (
-                            f'Bearer error="insufficient_scope", scope="{scope_value}"'
+                            f'Bearer resource_metadata="{metadata_url}", '
+                            'error="insufficient_scope", '
+                            'error_description="No approved MCP capability grant is active", '
+                            f'scope="{scope_value}"'
                         )
                     },
                 )
@@ -216,6 +220,7 @@ def create_remote_mcp_app(
         service,
         enabled=serving,
         access_for_request=access_for_request,
+        oauth_scopes=scopes,
         max_concurrent_calls=max_concurrent_calls,
         call_timeout_seconds=call_timeout_seconds,
         max_result_bytes=MAX_REMOTE_RESULT_BYTES,

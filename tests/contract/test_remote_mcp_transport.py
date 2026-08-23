@@ -26,6 +26,7 @@ from tests.contract.test_transport_parity import payloads_for
 import my_pa.adapters.mcp.remote as remote_module
 import my_pa.infrastructure.gsqs_routellm_transport as routellm
 from my_pa.adapters.mcp.remote import RemoteAccessContext, create_remote_mcp_app, remote_tool_names
+from my_pa.adapters.mcp.server import published_tools
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES
 from my_pa.adapters.remote_request import SERVER_OWNED_REMOTE_FIELDS
 from my_pa.domain.identity.operation import Capability
@@ -79,6 +80,67 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.SOURCES_ENROLL.value not in enabled
 
 
+def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) -> None:
+    tools = {
+        tool.name: tool for tool in published_tools(build_service(scene.world, scene.providers))
+    }
+    writes = {
+        Capability.SOURCES_ENROLL,
+        Capability.CAPTURE_CREATE,
+        Capability.CAPTURE_REVISE,
+        Capability.REVIEW_DECIDE,
+        Capability.CONTINUITY_PROJECTS_CREATE,
+        Capability.CONTINUITY_SITUATIONS_CREATE,
+        Capability.CONTINUITY_TASKS_CREATE,
+        Capability.DOCUMENTS_CREATE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
+        Capability.TASKS_CREATE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_PREVIEW,
+        Capability.TASKS_BULK_CONFIRM,
+        Capability.COMMITMENTS_CREATE,
+        Capability.COMMITMENTS_UPDATE,
+        Capability.COMMITMENTS_CLOSE,
+        Capability.CONTEXT_FEEDBACK,
+        Capability.GOODNOTES_PROPOSE,
+        Capability.REPORTS_BEGIN_CYCLE,
+        Capability.REPORTS_COMMIT,
+        Capability.REPORTS_RECORD_RUN_STATE,
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
+    }
+    destructive_writes = {
+        Capability.CAPTURE_REVISE,
+        Capability.REVIEW_DECIDE,
+        Capability.DOCUMENTS_REVISE,
+        Capability.DOCUMENTS_ARCHIVE,
+        Capability.DOCUMENTS_RESTORE,
+        Capability.TASKS_UPDATE,
+        Capability.TASKS_TRANSITION,
+        Capability.TASKS_BULK_CONFIRM,
+        Capability.COMMITMENTS_UPDATE,
+        Capability.COMMITMENTS_CLOSE,
+        Capability.CONTEXT_FEEDBACK,
+        Capability.REPORTS_COMMIT,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
+    }
+    for capability in Capability:
+        tool = tools.get(capability.value)
+        if tool is None:
+            continue
+        assert tool.annotations is not None
+        assert tool.annotations.read_only_hint is (capability not in writes)
+        assert tool.annotations.destructive_hint is (capability in destructive_writes)
+        assert tool.annotations.open_world_hint is False
+
+
 @pytest.mark.anyio
 async def test_streamable_http_initializes_lists_and_invokes(scene: Scene) -> None:
     service = build_service(scene.world, scene.providers)
@@ -118,6 +180,13 @@ async def test_streamable_http_initializes_lists_and_invokes(scene: Scene) -> No
         tool for tool in listed.tools if tool.name == Capability.CAPABILITIES_GET.value
     )
     assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(capability_tool.input_schema["properties"])
+    assert capability_tool.annotations is not None
+    assert capability_tool.annotations.read_only_hint is True
+    assert capability_tool.annotations.destructive_hint is False
+    assert capability_tool.annotations.open_world_hint is False
+    assert capability_tool.meta == {
+        "securitySchemes": [{"type": "oauth2", "scopes": ["my-pa.read"]}]
+    }
     assert json.loads(result.content[0].text)["error"] is None
     assert forged.is_error is True
     assert json.loads(forged.content[0].text)["code"] == "invalid_request"
@@ -206,7 +275,9 @@ async def test_authenticated_client_without_grants_gets_insufficient_scope(scene
     assert refused.status_code == 403
     assert refused.json() == {"error": "insufficient_scope"}
     assert refused.headers["WWW-Authenticate"] == (
-        'Bearer error="insufficient_scope", scope="my-pa.read"'
+        'Bearer resource_metadata="https://mcp.example.invalid/'
+        '.well-known/oauth-protected-resource", error="insufficient_scope", '
+        'error_description="No approved MCP capability grant is active", scope="my-pa.read"'
     )
 
 

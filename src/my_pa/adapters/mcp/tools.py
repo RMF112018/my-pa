@@ -28,11 +28,13 @@ names it again — `RequestMetadata` would receive the argument twice. Publishin
 it as an accepted property would advertise a field every request carrying it is
 refused for.
 
-**Nothing here reads an authorization rule.** A tool's description is the
-command's own docstring summary, which is public documentation. Which purposes
-may invoke a capability, and whether it is operator-only, are decided behind
-`invoke`; a transport that published them would be a transport holding a copy of
-a policy, and the copy is what goes stale.
+**This publishes safety metadata, not authority.** A tool's description is the
+command's own docstring summary. Its read-only and destructive annotations are
+derived from the domain's explicit public-capability classifications, so a
+preview that persists a ledger receipt is not falsely described as read-only.
+Which purposes
+may invoke a capability and whether it is operator-only remain decided behind
+`invoke`; annotations never grant authority or replace confirmation.
 
 The list is built at import so that a build whose capability set and command set
 disagree fails when the process is composed rather than when a client asks. A
@@ -49,12 +51,16 @@ from enum import StrEnum
 from types import MappingProxyType, UnionType
 from typing import Any, Final, Union, get_args, get_origin, get_type_hints
 
-from mcp.types import Tool
+from mcp.types import Tool, ToolAnnotations
 
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.commands import Command
 from my_pa.contracts.v1.envelope import RequestMetadata
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import (
+    Capability,
+    is_destructive_capability,
+    is_write_capability,
+)
 
 __all__ = ["TOOLS", "input_schema_for", "payload_schema_for"]
 
@@ -261,6 +267,11 @@ def _tools() -> tuple[Tool, ...]:
             name=capability.value,
             description=_summary(_COMMANDS[capability]),
             input_schema=input_schema_for(_COMMANDS[capability]),
+            annotations=ToolAnnotations(
+                read_only_hint=not is_write_capability(capability),
+                destructive_hint=is_destructive_capability(capability),
+                open_world_hint=False,
+            ),
         )
         for capability in _COMMANDS
     )

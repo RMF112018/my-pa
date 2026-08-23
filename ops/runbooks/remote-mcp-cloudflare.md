@@ -5,6 +5,102 @@ an outbound-only named Cloudflare Tunnel. It does not deploy automatically and
 does not authorize production activation. The default Compose stack publishes
 no NAS port; PostgreSQL remains on an existing private Docker network.
 
+## Supported clients and shared contract
+
+`my-pa` exposes one canonical MCP server, not one implementation per model
+vendor. The local stdio composition remains available to the existing ChatLLM
+workflow, and the separately enabled remote process exposes the same tool names,
+schemas, results, annotations, and application authorization through stateless
+Streamable HTTP at `https://<stable-hostname>/mcp`.
+
+| Capability | ChatLLM | ChatGPT |
+|---|---|---|
+| Intentionally supported client | Yes | Yes |
+| MCP server and tool contract | Shared | Shared |
+| Transport | Existing stdio or remote Streamable HTTP | Remote Streamable HTTP or an operator-configured Secure MCP Tunnel |
+| Client registration | Existing DCR client | DCR connector instance |
+| User authentication | Existing origin OAuth 2.1 flow when remote | Origin OAuth 2.1 authorization code + PKCE S256 |
+| Refresh tokens | Existing per-client setting; off by default | Per-client setting; enable before code exchange when durable linking is required |
+| Authorization | Existing Principal, scope, purpose, capability-grant, and write gates | The same gates; DCR registration alone grants no tool |
+
+ChatGPT uses Dynamic Client Registration here. Current OpenAI guidance prefers
+Client ID Metadata Documents (CIMD) when an authorization server supports them,
+but explicitly continues to support DCR. The repository-owned origin does not
+fetch remote client metadata or JWKS and the admitted NAS topology gives the MCP
+process no such egress. Adding CIMD would therefore widen the network and
+authorization-server design. DCR is the smallest supported choice: ChatGPT
+registers one public PKCE client for the connector instance, and the operator
+then approves only that durable client through explicit grants. Do not create or
+hardcode an invented OpenAI client ID or secret.
+
+The remote tool list includes accurate MCP safety annotations and an OAuth
+`securitySchemes` declaration in tool `_meta`. These are client hints only.
+Bearer validation, exact resource binding, durable client state, scope/grant
+intersection, application policy, and the independent write switches remain
+authoritative.
+
+Normative interoperability references:
+
+- [Build an MCP server](https://developers.openai.com/plugins/build/mcp-server)
+- [Connect and test your plugin](https://developers.openai.com/plugins/deploy/connect-chatgpt)
+- [Authentication](https://developers.openai.com/plugins/build/auth)
+- [Building MCP servers for plugins and API integrations](https://developers.openai.com/api/docs/mcp)
+
+## Connect ChatGPT in developer mode
+
+This repository does not activate a public endpoint, create a ChatGPT
+connection, or configure a Secure MCP Tunnel. After separately authorized
+deployment and private readiness checks:
+
+1. Confirm `MY_PA_REMOTE_MCP_ENABLED=true`, an exact stable HTTPS
+   `MY_PA_OAUTH_AUDIENCE=https://<stable-hostname>/mcp`, matching
+   `MY_PA_OAUTH_AUTHORIZATION_SERVER=https://<stable-hostname>`,
+   `MY_PA_REMOTE_MCP_PUBLIC_HOST=<stable-hostname>`, intended
+   `MY_PA_OAUTH_SCOPES`, and a generated owner-held
+   `MY_PA_OAUTH_OPERATOR_SECRET`. Never place the secret in Git, a URL, or logs.
+2. Validate the public endpoint with MCP Inspector using Streamable HTTP and the
+   complete `/mcp` URL. Verify protected-resource discovery, DCR, PKCE S256,
+   initialization, tool discovery, one read call, invalid-token refusal, and
+   grant enforcement.
+3. In ChatGPT, open **Settings → Security and login** and enable **Developer
+   mode**. Availability depends on account and workspace policy.
+4. Open ChatGPT Plugins, select the plus button, provide a user-facing name and
+   description, and enter `https://<stable-hostname>/mcp`. For an approved
+   private-network alternative, select an already configured Secure MCP Tunnel;
+   this repository does not create one.
+5. ChatGPT performs DCR and opens the origin authorization page. Record the
+   public client ID shown on that page. Before approving, use the operator CLI
+   to grant only the required capabilities to that exact ID. Start with a
+   bounded read grant such as `capabilities.get` using the commands below.
+6. If durable linking is required, enable refresh for that exact client before
+   approving. Merely requesting `refresh_token` during DCR does not override the
+   repository's default-off refresh policy.
+7. Enter the owner-held operator secret on the origin page and approve. ChatGPT
+   completes the authorization-code + PKCE exchange. Review the discovered tool
+   list, start a new chat with the connection enabled, call
+   `capabilities.get`, and confirm mutation tools remain absent unless separately
+   and intentionally granted and enabled.
+
+Example bounded approval, using only public identifiers and no secret values:
+
+```bash
+python apps/cli/remote_mcp.py grant \
+  --oauth-client-id "$CHATGPT_OAUTH_CLIENT_ID" --scope my-pa.read \
+  --capability capabilities.get --purpose status_observation \
+  --resource "$MY_PA_OAUTH_AUDIENCE"
+python apps/cli/remote_mcp.py set-client-refresh \
+  --oauth-client-id "$CHATGPT_OAUTH_CLIENT_ID" --refresh-enabled
+```
+
+Omit the second command when interactive reauthorization is acceptable. To
+withdraw the connection, revoke the exact client. Refresh-token rotation,
+replay-family revocation, one-hour access tokens, and 30-day idle/90-day
+absolute refresh-family limits remain those of ADR-009.
+
+ChatGPT UI validation is an external operator step. A local or CI protocol test
+must be reported separately and must not be described as a successful ChatGPT
+workspace connection.
+
 ## Operator values and secrets
 
 Choose the stable MCP hostname, Cloudflare account/tunnel UUID, exact NAS paths,

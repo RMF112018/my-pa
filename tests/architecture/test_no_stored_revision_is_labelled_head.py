@@ -102,10 +102,12 @@ _SELECT = re.compile(r"\bselect\b", re.IGNORECASE)
 #: and the verb. Measured over all 14805 regions the corpus then held, an
 #: optional-`AS` branch found one such word — `head` in the prose of
 #: `tests/schema/test_head_round_trip.py`, a region one `SELECT` away from being
-#: read — and this branch found none. Re-measured over the 74104 regions the
-#: corpus holds now, with `evidence/` admitted, neither branch finds one; that
-#: makes the loose branch currently unlucky rather than safe, which is why the
-#: positional one is still what ships. So an implicit alias is required to sit
+#: read — and this branch found none. Re-measured at this head over the 74156
+#: regions the corpus holds with `evidence/` admitted — the figure
+#: `sum(len(regions_in(path)) for path in searched_files())` prints, which is the
+#: same walk this module runs — neither branch finds one; that makes the loose
+#: branch currently unlucky rather than safe, which is why the positional one is
+#: still what ships. So an implicit alias is required to sit
 #: where an alias sits: after something an expression can end with, and before
 #: the comma, the `FROM`, or the end of the select list.
 _ALIAS = re.compile(

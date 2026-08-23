@@ -366,12 +366,27 @@ PER_MODULE_ONLY: Final = {
         "this entry represents, not a hole it is covering."
     ),
     "infrastructure/persistence/relationship_memory_review.py": (
-        "every statement naming a memory proposal, decision, aggregate, version "
-        "or evidence table, and the `entities` read that re-proves the promoted "
-        "subject, composes `_mine` or `_bound` — the same one-line wrappers over "
-        "partition_criterion and principal_bound_values that the plane it "
-        "promotes into uses. Per-module for the same reason its sibling is: this "
-        "plane has no bespoke statement-level scan yet."
+        "eleven statements of fourteen — every write, and every read of a "
+        "proposal, an aggregate, a version, an evidence row or the `entities` "
+        "row that re-proves the promoted subject — compose `_mine` or `_bound`, "
+        "the same one-line wrappers over partition_criterion and "
+        "principal_bound_values that the plane it promotes into uses. **Three do "
+        "not**, and the sibling entry above deliberately claims more than this "
+        "one: all three are reads of `relationship_memory_review_decisions` "
+        "keyed on `review_case_id` alone. Two are the `latest_sequence` and "
+        "`latest_disposition` correlated subqueries in "
+        "`relationship_memory_review_cases`, which `.correlate()` to the "
+        "`_mine`-scoped proposals select they hang off, so they can only be "
+        "evaluated against rows that predicate already admitted. The third is "
+        "the decision-chain read in `decide_relationship_memory_review`, which "
+        "runs after the `_mine`-scoped `FOR UPDATE` proposal read in the same "
+        "transaction has already raised `ReviewNotFoundError` for a case the "
+        "caller does not own. Isolation rests on those two `_mine` reads and not "
+        "on the key: `review_case_id` is issued by `issue_identifier` and is "
+        "unique, so it narrows to one Principal's case or to nothing, but it "
+        "carries no Principal predicate of its own and a reader should not read "
+        "one into it. Per-module for the same reason its sibling is: this plane "
+        "has no bespoke statement-level scan yet."
     ),
 }
 

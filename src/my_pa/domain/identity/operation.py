@@ -27,6 +27,7 @@ __all__ = [
     "Capability",
     "NativeSourceCapability",
     "is_operator_only",
+    "is_write_capability",
     "permitted_purposes",
 ]
 
@@ -752,10 +753,35 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
     }
 )
 
+# Purposes whose successful operations can change product-owned state. This is
+# also the source for MCP safety annotations and the remote read-only profile;
+# keeping it beside the capability-to-purpose policy prevents those two public
+# descriptions from drifting apart.
+_WRITE_PURPOSES = frozenset(
+    {
+        Purpose.BOUNDED_ENROLLMENT,
+        Purpose.CAPTURE_AUTHORING,
+        Purpose.REVIEW_DISPOSITION,
+        Purpose.DOCUMENT_AUTHORING,
+        Purpose.CONTINUITY_AUTHORING,
+        Purpose.TASK_AUTHORING,
+        Purpose.COMMITMENT_AUTHORING,
+        Purpose.CONTEXT_PREFERENCE,
+        Purpose.GOODNOTES_PROPOSAL,
+        Purpose.REPORT_AUTHORING,
+        Purpose.RELATIONSHIP_MEMORY_AUTHORING,
+    }
+)
+
 
 def is_operator_only(capability: AuthorizedCapability) -> bool:
     """Return whether `capability` requires an authenticated operator."""
     return capability in _OPERATOR_ONLY
+
+
+def is_write_capability(capability: AuthorizedCapability) -> bool:
+    """Return whether invoking `capability` can change product-owned state."""
+    return bool(permitted_purposes(capability) & _WRITE_PURPOSES)
 
 
 def permitted_purposes(capability: AuthorizedCapability) -> frozenset[Purpose]:

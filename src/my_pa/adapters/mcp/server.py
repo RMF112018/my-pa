@@ -348,10 +348,16 @@ def published_tools(service: ApplicationService) -> tuple[Tool, ...]:
     return tuple(tool for tool in TOOLS if tool.name in available)
 
 
-def _remote_tool(tool: Tool) -> Tool:
-    """A canonical schema view with server-owned envelope fields removed."""
+def _remote_tool(tool: Tool, *, oauth_scopes: frozenset[str]) -> Tool:
+    """Remote schema and OAuth metadata over the canonical tool contract."""
     schema = remote_tool_schema(tool.input_schema)
-    return tool.model_copy(update={"inputSchema": schema, "input_schema": schema})
+    meta = dict(tool.meta or {})
+    # `mcp==2.0` carries extension metadata through `_meta`. OpenAI clients use
+    # this declaration with protected-resource discovery; it is descriptive
+    # only, while bearer, scope, grant, and capability enforcement remain at
+    # the origin and application boundaries.
+    meta["securitySchemes"] = [{"type": "oauth2", "scopes": sorted(oauth_scopes)}]
+    return tool.model_copy(update={"inputSchema": schema, "input_schema": schema, "meta": meta})
 
 
 def create_mcp_server(
@@ -360,6 +366,7 @@ def create_mcp_server(
     principal: Principal | None = None,
     enabled: bool = True,
     access_for_request: Callable[[ServerRequestContext[object]], McpAccess | None] | None = None,
+    oauth_scopes: frozenset[str] = frozenset(),
     max_concurrent_calls: int | None = None,
     call_timeout_seconds: float | None = None,
     max_result_bytes: int | None = None,
@@ -412,7 +419,7 @@ def create_mcp_server(
         if access.allowed_tools is not None:
             tools = tuple(tool for tool in tools if tool.name in access.allowed_tools)
         if access.transport is CaptureTransport.REMOTE_CLIENT:
-            tools = tuple(_remote_tool(tool) for tool in tools)
+            tools = tuple(_remote_tool(tool, oauth_scopes=oauth_scopes) for tool in tools)
         return ListToolsResult(tools=list(tools))
 
     async def _call_tool(

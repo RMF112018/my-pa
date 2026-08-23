@@ -141,20 +141,82 @@ unset MY_PA_CONFIRM_FIREWALL_MUTATION
 ops/nas/synology-data-plane-firewall.sh check
 ```
 
+The preserved bounded DSM observation established this legitimate baseline:
+
+```text
+FORWARD
+  -j FORWARD_FIREWALL
+  -j DEFAULT_FORWARD
+
+DEFAULT_FORWARD
+  -j DOCKER-USER
+  -j DOCKER-ISOLATION-STAGE-1
+```
+
+That baseline is DSM/Docker infrastructure, not MY-PA enforcement. On the
+observed host, requesting `iptables -I FORWARD 1 -j MY_PA_DATA_PLANE` produced
+this redirected shape instead of a rule at the head of built-in `FORWARD`:
+
+```text
+FORWARD
+  -j FORWARD_FIREWALL
+  -j DEFAULT_FORWARD
+
+DEFAULT_FORWARD
+  -j MY_PA_DATA_PLANE
+  -j DOCKER-USER
+  -j DOCKER-ISOLATION-STAGE-1
+```
+
+The script recognizes that redirection only when both chains and all three
+`DEFAULT_FORWARD` jumps match exactly. It then withdraws only the exact
+`MY_PA_DATA_PLANE` attachment, reports
+`UNSUPPORTED_DSM_FORWARD_REDIRECTION`, and proves restoration of the complete
+Docker-bearing baseline. Successful rollback retains `FORWARD_FIREWALL`,
+`DEFAULT_FORWARD`, `DOCKER-USER`, and `DOCKER-ISOLATION-STAGE-1`; none is owned
+or deleted by this script. Generic `DEFAULT_FORWARD` content, additional or
+duplicate MY-PA references, a goto in place of the expected jump, or any other
+topology is foreign or ambiguous and is not attributed to MY-PA. Do not retry,
+accept `DEFAULT_FORWARD` as enforcement, or edit the check; a reviewed platform
+mechanism that can enforce the same pre-DSM boundary is required before
+deployment continues.
+
 The script derives the current network ID, Synology bridge name, and subnet
-from the exact internal Compose-owned data plane. Built-in FORWARD order is
-read from `iptables-save -t filter`. `DEFAULT_FORWARD` is obsolete on this
-DSM and is not accepted. Admission means exact four-rule `MY_PA_DATA_PLANE`
-contents, FORWARD jumps `MY_PA_DATA_PLANE` then `FORWARD_FIREWALL`, and no
-source-only data-plane RETURN in `FORWARD_FIREWALL`. `plan` is read-only;
-`apply` is idempotent and requires the exact confirmation value; `remove`
-restores the legacy source-only RETURN before withdrawing the MY_PA jump,
-then deletes only the verified repository-owned chain. `remove` also resumes
-missing-jump cleanup and empty unreferenced `-X`; `apply` still populates an
-empty unreferenced chain; proven `legacy` with the chain absent is already
-removed. Foreign or duplicate
-state is refused. The rule set is runtime firewall state, not a DSM profile
-mutation. A DSM firewall reload or NAS reboot can remove it, so re-run
+from the exact internal Compose-owned data plane. Built-in and user-chain rules
+are read from `iptables-save -t filter`. Before `check` treats enforcement as
+effective, or any mutating path treats `MY_PA_DATA_PLANE` as owned, the script
+enumerates every exact jump and goto to that chain across the filter table.
+Only one supported attachment is allowed: the exact direct FORWARD jump in the
+accepted direct topology, or the exact redirected DEFAULT_FORWARD jump in the
+Docker-bearing topology above. A reference from any other chain, any goto,
+both supported references at once, or multiple references fails closed.
+`check` and `plan` do not mutate; `apply`, `remove`, empty-chain restoration,
+and cleanup do not populate, detach, flush, or delete the chain when initial
+ownership is foreign or ambiguous.
+
+`DEFAULT_FORWARD` is not an accepted enforcement location for this gate.
+Admission means exact four-rule `MY_PA_DATA_PLANE` contents, FORWARD jumps
+`MY_PA_DATA_PLANE` then `FORWARD_FIREWALL`, and no source-only data-plane RETURN
+in `FORWARD_FIREWALL`. `apply` is idempotent and requires the exact confirmation
+value; `remove` restores the legacy source-only RETURN before withdrawing an
+exactly owned attachment, then re-enumerates the whole filter table. If any
+reference remains, it retains the chain contents and refuses cleanup. Only a
+zero-reference proof immediately before flush permits `-F`; the script then
+proves the chain empty and repeats the zero-reference proof immediately before
+`-X`. Empty-chain deletion also repeats the proof before deletion. `remove`
+resumes missing-attachment cleanup; `apply` may populate only an empty,
+unreferenced chain; a proven baseline with the chain absent is already removed.
+
+These checks narrow but cannot eliminate races between separate iptables
+inspection and mutation commands; they do not claim atomic ownership or
+cleanup. A newly appearing reference is detected at the next proof and blocks
+the next destructive step. Operators must treat any rollback or cleanup
+failure as retained state requiring inspection, never as successful removal.
+The topology contract comes from the preserved bounded DSM observation; this
+corrective change did not repeat a live probe or mutate a live firewall.
+
+The rule set is runtime firewall state, not a DSM profile mutation. A DSM
+firewall reload or NAS reboot can remove it, so re-run
 `apply` before lifecycle recovery. Database operations, six-service
 start/restart, and health fail closed when `check` does not pass. Do not add a
 broad subnet rule to `INPUT_FIREWALL`, disable DSM firewall, wire Docker

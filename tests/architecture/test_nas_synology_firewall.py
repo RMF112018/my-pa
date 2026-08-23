@@ -27,6 +27,8 @@ set -eu
 state_dir=${FAKE_FW_STATE:?}
 printf '%s\n' "$*" >> "${state_dir}/calls"
 forward=$(cat "${state_dir}/forward")
+default_forward=$(cat "${state_dir}/default_forward")
+foreign_reference=$(cat "${state_dir}/foreign_reference")
 chain=$(cat "${state_dir}/chain")
 broad=$(cat "${state_dir}/broad")
 drop=$(cat "${state_dir}/drop")
@@ -90,6 +92,52 @@ emit_forward() {
   esac
 }
 
+emit_default_forward() {
+  case "$default_forward" in
+    absent) ;;
+    docker)
+      printf '%s\n' '-A DEFAULT_FORWARD -j DOCKER-USER' \
+        '-A DEFAULT_FORWARD -j DOCKER-ISOLATION-STAGE-1'
+      ;;
+    redirected)
+      printf '%s\n' '-A DEFAULT_FORWARD -j MY_PA_DATA_PLANE' \
+        '-A DEFAULT_FORWARD -j DOCKER-USER' \
+        '-A DEFAULT_FORWARD -j DOCKER-ISOLATION-STAGE-1'
+      ;;
+    redirected_foreign)
+      printf '%s\n' '-A DEFAULT_FORWARD -j MY_PA_DATA_PLANE' \
+        '-A DEFAULT_FORWARD -j DOCKER-USER' \
+        '-A DEFAULT_FORWARD -j DOCKER-ISOLATION-STAGE-1' \
+        '-A DEFAULT_FORWARD -j FOREIGN_TARGET'
+      ;;
+  esac
+}
+
+emit_foreign_reference() {
+  case "$foreign_reference" in
+    absent) ;;
+    jump)
+      printf '%s\n' \
+        '-A FOREIGN_CHAIN -p tcp -j MY_PA_DATA_PLANE -m comment --comment after-target'
+      ;;
+    goto) printf '%s\n' '-A FOREIGN_CHAIN -g MY_PA_DATA_PLANE' ;;
+    multiple)
+      printf '%s\n' '-A FOREIGN_CHAIN -j MY_PA_DATA_PLANE' \
+        '-A SECOND_FOREIGN -g MY_PA_DATA_PLANE'
+      ;;
+  esac
+}
+
+has_external_reference() {
+  case "$forward" in
+    effective|after_dsm|duplicate|extra) return 0 ;;
+  esac
+  case "$default_forward" in
+    redirected|redirected_foreign) return 0 ;;
+  esac
+  [ "$foreign_reference" != absent ]
+}
+
 emit_firewall() {
   printf '%s\n' '-N FORWARD_FIREWALL'
   printf '%s\n' '-A FORWARD_FIREWALL -m state --state RELATED,ESTABLISHED -j ACCEPT'
@@ -115,10 +163,19 @@ emit_firewall() {
 
 if [ "${FAKE_TOOL:-iptables}" = save ]; then
   printf '%s\n' '*filter' ':FORWARD ACCEPT [0:0]' ':FORWARD_FIREWALL - [0:0]'
+  if [ "$default_forward" != absent ]; then
+    printf '%s\n' ':DEFAULT_FORWARD - [0:0]'
+  fi
+  if [ "$foreign_reference" != absent ]; then
+    printf '%s\n' ':FOREIGN_CHAIN - [0:0]'
+    [ "$foreign_reference" != multiple ] || printf '%s\n' ':SECOND_FOREIGN - [0:0]'
+  fi
   if [ "$chain" != missing ] || [ -f "$chain_file" ]; then
     printf '%s\n' ':MY_PA_DATA_PLANE - [0:0]'
   fi
   emit_forward
+  emit_default_forward
+  emit_foreign_reference
   emit_firewall | awk '$1 == "-A"'
   if [ "$chain" != missing ] || [ -f "$chain_file" ]; then
     emit_chain_lines
@@ -128,6 +185,15 @@ if [ "${FAKE_TOOL:-iptables}" = save ]; then
 fi
 
 case "$*" in
+  "-S FORWARD")
+    printf '%s\n' '-P FORWARD ACCEPT'
+    emit_forward
+    ;;
+  "-S DEFAULT_FORWARD")
+    [ "$default_forward" != absent ] || exit 1
+    printf '%s\n' '-N DEFAULT_FORWARD'
+    emit_default_forward
+    ;;
   "-S MY_PA_DATA_PLANE")
     [ "$chain" != missing ] || [ -f "$chain_file" ] || exit 1
     printf '%s\n' '-N MY_PA_DATA_PLANE'
@@ -163,7 +229,16 @@ case "$*" in
     ;;
   "-I FORWARD 1 -j MY_PA_DATA_PLANE")
     if [ "${FAKE_JUMP_FAIL:-0}" = 1 ]; then exit 1; fi
-    if [ "${FAKE_JUMP_VERIFY_FAIL:-0}" = 1 ]; then
+    if [ "${FAKE_JUMP_VERIFY_FAIL:-0}" = redirect-foreign ]; then
+      printf '%s\n' default_forward > "${state_dir}/forward"
+      printf '%s\n' redirected_foreign > "${state_dir}/default_forward"
+    elif [ "$forward" = default_forward ] && [ "$default_forward" = docker ]; then
+      printf '%s\n' default_forward > "${state_dir}/forward"
+      printf '%s\n' redirected > "${state_dir}/default_forward"
+    elif [ "${FAKE_JUMP_VERIFY_FAIL:-0}" = redirect ]; then
+      printf '%s\n' default_forward > "${state_dir}/forward"
+      printf '%s\n' redirected > "${state_dir}/default_forward"
+    elif [ "${FAKE_JUMP_VERIFY_FAIL:-0}" = 1 ]; then
       printf '%s\n' after_dsm > "${state_dir}/forward"
     else
       printf '%s\n' effective > "${state_dir}/forward"
@@ -171,7 +246,32 @@ case "$*" in
     ;;
   "-D FORWARD -j MY_PA_DATA_PLANE")
     [ "${FAKE_JUMP_DELETE_FAIL:-0}" = 1 ] && exit 1
-    printf '%s\n' legacy > "${state_dir}/forward"
+    case "${FAKE_JUMP_DELETE_MODE:-correct}" in
+      correct)
+        if [ "$forward" = default_forward ] && \
+           [ "$default_forward" = redirected ]; then
+          printf '%s\n' default_forward > "${state_dir}/forward"
+          printf '%s\n' docker > "${state_dir}/default_forward"
+        else
+          printf '%s\n' legacy > "${state_dir}/forward"
+          printf '%s\n' absent > "${state_dir}/default_forward"
+        fi
+        ;;
+      nested-remains) ;;
+      outer-restored-nested-remains)
+        printf '%s\n' legacy > "${state_dir}/forward"
+        ;;
+      outer-remains)
+        printf '%s\n' default_forward > "${state_dir}/forward"
+        printf '%s\n' absent > "${state_dir}/default_forward"
+        ;;
+      other-reference-remains)
+        printf '%s\n' default_forward > "${state_dir}/forward"
+        printf '%s\n' docker > "${state_dir}/default_forward"
+        printf '%s\n' jump > "${state_dir}/foreign_reference"
+        ;;
+      *) exit 1 ;;
+    esac
     ;;
   "-C FORWARD_FIREWALL -s {SUBNET} -j RETURN")
     [ "$broad" = present ]
@@ -189,6 +289,7 @@ case "$*" in
     ;;
   "-X MY_PA_DATA_PLANE")
     [ "${FAKE_X_FAIL:-0}" = 1 ] && exit 1
+    ! has_external_reference || exit 1
     rm -f "$chain_file"
     printf '%s\n' missing > "${state_dir}/chain"
     ;;
@@ -221,6 +322,22 @@ if [ -f "$calls" ] && grep -q -- '-I FORWARD 1 -j MY_PA_DATA_PLANE' "$calls"; th
 fi
 if [ -f "$calls" ] && grep -q -- '-D FORWARD -j MY_PA_DATA_PLANE' "$calls"; then
   after_delete=1
+fi
+if [ "${FAKE_INJECT_REFERENCE_AFTER_ROLLBACK_PROOF:-0}" = 1 ] && \
+   [ "$after_delete" -eq 1 ]; then
+  if [ -f "${state_dir}/rollback_proof_seen" ]; then
+    printf '%s\n' jump > "${state_dir}/foreign_reference"
+  else
+    : > "${state_dir}/rollback_proof_seen"
+  fi
+fi
+if [ "${FAKE_INJECT_REFERENCE_AFTER_FLUSH_PROOF:-0}" = 1 ] && \
+   [ -f "$calls" ] && grep -q -- '-F MY_PA_DATA_PLANE' "$calls"; then
+  if [ -f "${state_dir}/flush_proof_seen" ]; then
+    printf '%s\n' goto > "${state_dir}/foreign_reference"
+  else
+    : > "${state_dir}/flush_proof_seen"
+  fi
 fi
 if [ -f "$calls" ] && grep -q -- '-X MY_PA_DATA_PLANE' "$calls"; then
   after_x=1
@@ -295,6 +412,9 @@ def _environment(
     root_uid: int = 0,
     jump_fail: str = "0",
     jump_verify_fail: str = "0",
+    jump_delete_mode: str = "correct",
+    default_forward: str | None = None,
+    foreign_reference: str | bool = False,
     drop: str = "unique",
 ) -> tuple[dict[str, str], Path, Path]:
     tools = tmp_path / "bin"
@@ -302,6 +422,17 @@ def _environment(
     state = tmp_path / "fw-state"
     state.mkdir(parents=True)
     (state / "forward").write_text(forward + "\n", encoding="utf-8")
+    if default_forward is None:
+        default_forward = "docker" if forward == "default_forward" else "absent"
+    (state / "default_forward").write_text(default_forward + "\n", encoding="utf-8")
+    foreign_reference_state = (
+        "jump"
+        if foreign_reference is True
+        else "absent"
+        if foreign_reference is False
+        else foreign_reference
+    )
+    (state / "foreign_reference").write_text(foreign_reference_state + "\n", encoding="utf-8")
     (state / "chain").write_text(chain + "\n", encoding="utf-8")
     (state / "broad").write_text(broad + "\n", encoding="utf-8")
     (state / "drop").write_text(drop + "\n", encoding="utf-8")
@@ -353,7 +484,10 @@ def _environment(
             "FAKE_FW_STATE": str(state),
             "FAKE_JUMP_FAIL": jump_fail,
             "FAKE_JUMP_VERIFY_FAIL": jump_verify_fail,
+            "FAKE_JUMP_DELETE_MODE": jump_delete_mode,
             "FAKE_JUMP_DELETE_FAIL": "0",
+            "FAKE_INJECT_REFERENCE_AFTER_ROLLBACK_PROOF": "0",
+            "FAKE_INJECT_REFERENCE_AFTER_FLUSH_PROOF": "0",
             "FAKE_FW_S_FAIL": "0",
             "FAKE_APPEND_FAIL": "",
             "FAKE_F_FAIL": "0",
@@ -451,11 +585,11 @@ def test_apply_check_idempotence_and_exact_remove(tmp_path: Path) -> None:
 @pytest.mark.parametrize(
     ("forward", "chain", "broad", "needle"),
     [
-        ("after_dsm", "exact", "absent", "my-pa-after-dsm"),
-        ("default_forward", "missing", "present", "default-forward"),
+        ("after_dsm", "exact", "absent", "foreign-external-reference"),
+        ("default_forward", "missing", "present", "dsm-baseline"),
         ("policy_only", "missing", "present", "policy-accept-only"),
-        ("duplicate", "exact", "absent", "duplicate-jump"),
-        ("extra", "exact", "absent", "extra-forward"),
+        ("duplicate", "exact", "absent", "foreign-external-reference"),
+        ("extra", "exact", "absent", "foreign-external-reference"),
         ("effective", "missing", "absent", "missing-chain"),
         ("effective", "foreign", "absent", "foreign-chain"),
         ("effective", "partial", "absent", "partial-chain"),
@@ -483,8 +617,13 @@ def test_check_and_apply_refuse_abnormal_states(
         return
     applied = _run("apply", environment)
     assert applied.returncode != 0
-    assert "explicit removal" in applied.stderr or needle in applied.stderr
-    assert "-I FORWARD 1" not in calls.read_text(encoding="utf-8")
+    assert (
+        "explicit removal" in applied.stderr
+        or needle in applied.stderr
+        or "UNSUPPORTED_DSM_FORWARD_REDIRECTION" in applied.stderr
+    )
+    if needle != "dsm-baseline":
+        assert "-I FORWARD 1" not in calls.read_text(encoding="utf-8")
 
 
 def test_forward_firewall_inspection_failure_fails_closed(tmp_path: Path) -> None:
@@ -640,7 +779,7 @@ def test_referenced_empty_append_failure_is_never_reached(tmp_path: Path) -> Non
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
 
 
-def test_jump_deletion_failure_after_verify_failure_is_rollback_failed(
+def test_ambiguous_post_insert_topology_skips_unverified_jump_deletion(
     tmp_path: Path,
 ) -> None:
     environment, state, calls = _environment(tmp_path, jump_verify_fail="1")
@@ -655,13 +794,14 @@ def test_jump_deletion_failure_after_verify_failure_is_rollback_failed(
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
     recorded = _recorded(calls)
     assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "foreign or ambiguous" in result.stderr
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
     assert "-X MY_PA_DATA_PLANE" not in recorded
     assert "-F MY_PA_DATA_PLANE" not in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
 
 
-def test_cleanup_failure_after_jump_removed_is_rollback_failed(tmp_path: Path) -> None:
+def test_ambiguous_post_insert_topology_skips_chain_cleanup(tmp_path: Path) -> None:
     environment, state, calls = _environment(tmp_path, jump_verify_fail="1")
     environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
     environment["FAKE_X_FAIL"] = "1"
@@ -670,12 +810,13 @@ def test_cleanup_failure_after_jump_removed_is_rollback_failed(tmp_path: Path) -
     assert "ROLLBACK_FAILED" in result.stderr
     assert "rollback succeeded" not in result.stderr
     assert "rolled back" not in result.stderr
-    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
-    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+    assert "foreign or ambiguous" in result.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "after_dsm"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
     recorded = _recorded(calls)
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
-    assert "-F MY_PA_DATA_PLANE" in recorded
-    assert "-X MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
 
 
@@ -700,7 +841,7 @@ def test_r1_001_dsm_established_cannot_precede_my_pa(tmp_path: Path) -> None:
     )
     result = _run("check", environment)
     assert result.returncode != 0
-    assert "my-pa-after-dsm" in result.stderr
+    assert "foreign-external-reference" in result.stderr
     source = SCRIPT.read_text(encoding="utf-8")
     assert '-I FORWARD 1 -j "$enforcement_chain"' in source
     assert "my-pa-after-dsm" in source
@@ -744,20 +885,206 @@ def test_jump_insert_failure_cleans_created_chain(tmp_path: Path) -> None:
     assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
 
 
-def test_failed_jump_install_rolls_back_owned_chain(tmp_path: Path) -> None:
+def test_ambiguous_jump_install_retains_chain_without_unverified_rollback(
+    tmp_path: Path,
+) -> None:
     environment, state, calls = _environment(tmp_path, jump_verify_fail="1")
     environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
     result = _run("apply", environment)
     assert result.returncode != 0
+    assert "rollback succeeded" not in result.stderr
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "foreign or ambiguous" in result.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "after_dsm"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = calls.read_text(encoding="utf-8")
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+    assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
+
+
+def test_dsm_default_forward_redirection_is_named_and_rolled_back(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path, forward="default_forward")
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "UNSUPPORTED_DSM_FORWARD_REDIRECTION" in result.stderr
     assert "rollback succeeded" in result.stderr
     assert "ROLLBACK_FAILED" not in result.stderr
-    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "default_forward"
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "docker"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
-    recorded = calls.read_text(encoding="utf-8")
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "present"
+    recorded = _recorded(calls)
     assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
     assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
     assert "-X MY_PA_DATA_PLANE" in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
+
+
+@pytest.mark.parametrize("delete_mode", ["nested-remains", "outer-restored-nested-remains"])
+def test_redirected_delete_success_with_nested_reference_is_rollback_failed(
+    tmp_path: Path, delete_mode: str
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path,
+        forward="default_forward",
+        jump_delete_mode=delete_mode,
+    )
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "an external MY_PA_DATA_PLANE reference remains" in result.stderr
+    assert "rollback succeeded" not in result.stderr
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "redirected"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = _recorded(calls)
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+
+
+def test_redirected_delete_with_outer_topology_remaining_is_rollback_failed(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path,
+        forward="default_forward",
+        jump_delete_mode="outer-remains",
+    )
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "exact accepted baseline restoration could not be verified" in result.stderr
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "absent"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = _recorded(calls)
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+
+
+def test_redirected_delete_with_other_reference_remaining_is_rollback_failed(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path,
+        forward="default_forward",
+        jump_delete_mode="other-reference-remains",
+    )
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "an external MY_PA_DATA_PLANE reference remains" in result.stderr
+    assert state.joinpath("foreign_reference").read_text(encoding="utf-8").strip() == "jump"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = _recorded(calls)
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+
+
+def test_preexisting_docker_default_forward_redirect_is_rolled_back_to_exact_baseline(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="default_forward", default_forward="docker"
+    )
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "UNSUPPORTED_DSM_FORWARD_REDIRECTION" in result.stderr
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "docker"
+    assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in _recorded(calls)
+
+
+def test_foreign_default_forward_content_is_not_named_as_owned_redirection(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path,
+        forward="default_forward",
+        jump_verify_fail="redirect-foreign",
+        jump_delete_mode="nested-remains",
+    )
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "UNSUPPORTED_DSM_FORWARD_REDIRECTION" not in result.stderr
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == (
+        "redirected_foreign"
+    )
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    assert "-X MY_PA_DATA_PLANE" not in _recorded(calls)
+
+
+def test_preexisting_foreign_default_forward_content_is_classified_foreign(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path,
+        forward="default_forward",
+        default_forward="redirected_foreign",
+        chain="exact",
+    )
+    result = _run("check", environment)
+    assert result.returncode != 0
+    assert "foreign-external-reference" in result.stderr
+    assert "dsm-redirected-my-pa" not in result.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == (
+        "redirected_foreign"
+    )
+
+
+def test_redirected_delete_command_failure_retains_owned_chain(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path, forward="default_forward")
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    environment["FAKE_JUMP_DELETE_FAIL"] = "1"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "redirected"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = _recorded(calls)
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+
+
+def test_redirected_cleanup_delete_failure_is_explicit(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path, forward="default_forward")
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    environment["FAKE_X_FAIL"] = "1"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "owned chain cleanup after jump rollback" in result.stderr
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "docker"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+    recorded = _recorded(calls)
+    assert "-F MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
+
+
+def test_reference_appearing_after_rollback_proof_prevents_chain_cleanup(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(tmp_path, forward="default_forward")
+    environment["MY_PA_CONFIRM_FIREWALL_MUTATION"] = "my-pa-nas-contract_data-plane"
+    environment["FAKE_INJECT_REFERENCE_AFTER_ROLLBACK_PROOF"] = "1"
+    result = _run("apply", environment)
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "owned chain cleanup after jump rollback" in result.stderr
+    assert state.joinpath("foreign_reference").read_text(encoding="utf-8").strip() == "jump"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = _recorded(calls)
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
 
 
 def test_remove_refuses_foreign_chain(tmp_path: Path) -> None:
@@ -913,22 +1240,23 @@ def _confirm(environment: dict[str, str]) -> dict[str, str]:
     return environment
 
 
-def test_r3_t1_post_insert_save_fail_rolls_back_when_verified(tmp_path: Path) -> None:
+def test_r3_t1_post_insert_save_fail_retains_unverified_state(tmp_path: Path) -> None:
     environment, state, calls = _environment(tmp_path)
     _confirm(environment)
     environment["FAKE_FILTER_SAVE_FAIL_MODE"] = "once-after-insert"
     result = _run("apply", environment)
     assert result.returncode != 0
-    assert "rollback succeeded" in result.stderr
-    assert "ROLLBACK_FAILED" not in result.stderr
+    assert "rollback succeeded" not in result.stderr
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert "post-insert filter topology is unreadable" in result.stderr
     assert "firewall enforcement admitted" not in result.stdout
-    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
-    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
     recorded = _recorded(calls)
     assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
-    assert "-F MY_PA_DATA_PLANE" in recorded
-    assert "-X MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
     assert f"-D FORWARD_FIREWALL -s {SUBNET} -j RETURN" not in recorded
 
 
@@ -944,11 +1272,12 @@ def test_r3_t2_post_insert_save_fail_then_unreadable_rollback_is_failed(
     assert "rollback succeeded" not in result.stderr
     assert "rolled back" not in result.stderr
     assert "firewall enforcement admitted" not in result.stdout
-    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "legacy"
+    assert "post-insert filter topology is unreadable" in result.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
     recorded = _recorded(calls)
     assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
     assert "-F MY_PA_DATA_PLANE" not in recorded
     assert "-X MY_PA_DATA_PLANE" not in recorded
 
@@ -969,7 +1298,8 @@ def test_r3_t3_post_insert_save_fail_then_jump_delete_fail_skips_chain_cleanup(
     assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
     recorded = _recorded(calls)
     assert "-I FORWARD 1 -j MY_PA_DATA_PLANE" in recorded
-    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "post-insert filter topology is unreadable" in result.stderr
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
     assert "-F MY_PA_DATA_PLANE" not in recorded
     assert "-X MY_PA_DATA_PLANE" not in recorded
 
@@ -1109,7 +1439,7 @@ def test_r3_t9_empty_cleanup_ambiguity_refuses_delete(
     assert "-X MY_PA_DATA_PLANE" not in _recorded(calls)
 
 
-def test_r3_apply_still_activates_missing_jump_and_populates_empty(
+def test_r3_t7_apply_still_activates_missing_jump_and_populates_empty(
     tmp_path: Path,
 ) -> None:
     environment, state, _calls = _environment(
@@ -1182,3 +1512,184 @@ def test_r3_post_broad_delete_save_fail_does_not_undo_jump(tmp_path: Path) -> No
     assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
     assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "effective"
     assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "absent"
+
+
+def test_r4_t10_dsm_baseline_plan_and_check_are_read_only(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path, forward="default_forward")
+    planned = _run("plan", environment)
+    assert planned.returncode == 0
+    assert "dsm-baseline" in planned.stdout
+    checked = _run("check", environment)
+    assert checked.returncode != 0
+    assert "dsm-baseline" in checked.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "docker"
+
+
+def test_r4_t11_dsm_redirect_rollback_removes_created_chain(tmp_path: Path) -> None:
+    environment, state, calls = _environment(tmp_path, forward="default_forward")
+    result = _run("apply", _confirm(environment))
+    assert result.returncode != 0
+    assert "UNSUPPORTED_DSM_FORWARD_REDIRECTION" in result.stderr
+    assert "rollback succeeded" in result.stderr
+    assert state.joinpath("forward").read_text(encoding="utf-8").strip() == "default_forward"
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "docker"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    recorded = _recorded(calls)
+    assert recorded.index("-I FORWARD 1") < recorded.index("-D FORWARD -j")
+    assert recorded.index("-D FORWARD -j") < recorded.index("-X MY_PA_DATA_PLANE")
+
+
+def test_r4_t12_dsm_redirect_rollback_restores_preexisting_empty_chain(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(tmp_path, forward="default_forward", chain="empty")
+    result = _run("apply", _confirm(environment))
+    assert result.returncode != 0
+    assert "UNSUPPORTED_DSM_FORWARD_REDIRECTION" in result.stderr
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "docker"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+    recorded = _recorded(calls)
+    assert "-F MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+
+
+def test_r4_t13_remove_exact_dsm_redirect_restores_docker_baseline(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path,
+        forward="default_forward",
+        default_forward="redirected",
+        chain="exact",
+        broad="absent",
+    )
+    result = _run("remove", _confirm(environment))
+    assert result.returncode == 0, result.stderr
+    assert state.joinpath("default_forward").read_text(encoding="utf-8").strip() == "docker"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "present"
+    recorded = _recorded(calls)
+    restore = next(
+        rule
+        for rule in recorded.splitlines()
+        if rule.startswith("-I FORWARD_FIREWALL ") and rule.endswith(f" -s {SUBNET} -j RETURN")
+    )
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-F MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
+    assert recorded.index(restore) < recorded.index("-D FORWARD -j MY_PA_DATA_PLANE")
+
+
+def test_r4_t14_remove_dsm_missing_attachment_cleans_populated_chain(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="default_forward", chain="exact", broad="absent"
+    )
+    result = _run("remove", _confirm(environment))
+    assert result.returncode == 0, result.stderr
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    assert state.joinpath("broad").read_text(encoding="utf-8").strip() == "present"
+    recorded = _recorded(calls)
+    restore = next(
+        rule
+        for rule in recorded.splitlines()
+        if rule.startswith("-I FORWARD_FIREWALL ") and rule.endswith(f" -s {SUBNET} -j RETURN")
+    )
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-F MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
+    assert recorded.index(restore) < recorded.index("-F MY_PA_DATA_PLANE")
+
+
+def test_r4_t15_remove_dsm_baseline_cleans_empty_chain_only(tmp_path: Path) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="default_forward", chain="empty", broad="present"
+    )
+    result = _run("remove", _confirm(environment))
+    assert result.returncode == 0, result.stderr
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "missing"
+    recorded = _recorded(calls)
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" not in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" in recorded
+
+
+@pytest.mark.parametrize("action", ["check", "apply", "remove"])
+def test_r4_t16_foreign_jump_to_empty_chain_is_never_mutated(tmp_path: Path, action: str) -> None:
+    environment, state, calls = _environment(
+        tmp_path,
+        chain="empty",
+        foreign_reference="jump",
+    )
+    result = _run(action, _confirm(environment))
+    assert result.returncode != 0
+    assert "foreign-external-reference" in result.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+
+
+@pytest.mark.parametrize("action", ["check", "apply", "remove"])
+def test_r4_t17_foreign_goto_to_populated_chain_is_never_mutated(
+    tmp_path: Path, action: str
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path,
+        chain="exact",
+        foreign_reference="goto",
+    )
+    result = _run(action, _confirm(environment))
+    assert result.returncode != 0
+    assert "foreign-external-reference" in result.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+
+
+@pytest.mark.parametrize("action", ["check", "apply", "remove"])
+def test_r4_t18_multiple_foreign_jump_and_goto_references_are_never_mutated(
+    tmp_path: Path, action: str
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path,
+        chain="exact",
+        foreign_reference="multiple",
+    )
+    result = _run(action, _confirm(environment))
+    assert result.returncode != 0
+    assert "foreign-external-reference" in result.stderr
+    _assert_no_enforcement_mutation(calls)
+    assert state.joinpath("foreign_reference").read_text(encoding="utf-8").strip() == "multiple"
+
+
+def test_r4_t19_reference_race_after_flush_proof_prevents_chain_delete(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(
+        tmp_path, forward="effective", chain="exact", broad="absent"
+    )
+    environment["FAKE_INJECT_REFERENCE_AFTER_FLUSH_PROOF"] = "1"
+    result = _run("remove", _confirm(environment))
+    assert result.returncode != 0
+    assert "REMOVE_CLEANUP_PENDING" in result.stderr
+    assert state.joinpath("foreign_reference").read_text(encoding="utf-8").strip() == "goto"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "empty"
+    recorded = _recorded(calls)
+    assert "-F MY_PA_DATA_PLANE" in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded
+
+
+def test_r4_t20_reference_race_after_redirect_rollback_proof_prevents_cleanup(
+    tmp_path: Path,
+) -> None:
+    environment, state, calls = _environment(tmp_path, forward="default_forward")
+    environment["FAKE_INJECT_REFERENCE_AFTER_ROLLBACK_PROOF"] = "1"
+    result = _run("apply", _confirm(environment))
+    assert result.returncode != 0
+    assert "ROLLBACK_FAILED" in result.stderr
+    assert state.joinpath("foreign_reference").read_text(encoding="utf-8").strip() == "jump"
+    assert state.joinpath("chain").read_text(encoding="utf-8").strip() == "exact"
+    recorded = _recorded(calls)
+    assert "-D FORWARD -j MY_PA_DATA_PLANE" in recorded
+    assert "-F MY_PA_DATA_PLANE" not in recorded
+    assert "-X MY_PA_DATA_PLANE" not in recorded

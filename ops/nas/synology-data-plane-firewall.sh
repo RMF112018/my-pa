@@ -100,6 +100,18 @@ negated_ingress="-A $enforcement_chain ! -i $bridge -o $bridge -j DROP"
 my_pa_jump="-A FORWARD -j $enforcement_chain"
 firewall_jump="-A FORWARD -j FORWARD_FIREWALL"
 default_jump="-A FORWARD -j DEFAULT_FORWARD"
+redirected_jump="-A DEFAULT_FORWARD -j $enforcement_chain"
+docker_user_jump="-A DEFAULT_FORWARD -j DOCKER-USER"
+docker_isolation_jump="-A DEFAULT_FORWARD -j DOCKER-ISOLATION-STAGE-1"
+legacy_forward_baseline=$(printf '%s\n' "$firewall_jump")
+direct_forward_topology=$(printf '%s\n' "$my_pa_jump" "$firewall_jump")
+dsm_forward_topology=$(printf '%s\n' "$firewall_jump" "$default_jump")
+dsm_default_baseline=$(printf '%s\n' "$docker_user_jump" "$docker_isolation_jump")
+dsm_default_redirected=$(
+  printf '%s\n' "$redirected_jump" "$docker_user_jump" "$docker_isolation_jump"
+)
+direct_reference_record=$(printf 'FORWARD\tjump\t%s\n' "$my_pa_jump")
+redirected_reference_record=$(printf 'DEFAULT_FORWARD\tjump\t%s\n' "$redirected_jump")
 
 filter_table() {
   "$iptables_save_bin" -t filter || {
@@ -115,6 +127,76 @@ forward_appends() {
 chain_appends() {
   printf '%s\n' "$1" | awk -v chain="$enforcement_chain" \
     '$1 == "-A" && $2 == chain {print}'
+}
+
+default_forward_appends() {
+  printf '%s\n' "$1" | awk '$1 == "-A" && $2 == "DEFAULT_FORWARD" {print}'
+}
+
+external_references_from_save() {
+  printf '%s\n' "$1" | awk -v chain="$enforcement_chain" '
+    $1 == "-A" && $2 != chain {
+      for (i = 3; i < NF; i++) {
+        if (($i == "-j" || $i == "-g") && $(i + 1) == chain) {
+          kind = ($i == "-j" ? "jump" : "goto")
+          print $2 "\t" kind "\t" $0
+          break
+        }
+      }
+    }
+  '
+}
+
+external_reference_count_from_save() {
+  external_references_from_save "$1" | awk 'NF {count++} END {print count + 0}'
+}
+
+reference_ownership_from_save() {
+  references=$(external_references_from_save "$1")
+  forwards=$(forward_appends "$1")
+  defaults=$(default_forward_appends "$1")
+  if [ -z "$references" ]; then
+    echo NONE
+  elif [ "$references" = "$direct_reference_record" ] && \
+       [ "$forwards" = "$direct_forward_topology" ] && [ -z "$defaults" ]; then
+    echo DIRECT_ALLOWED
+  elif [ "$references" = "$redirected_reference_record" ] && \
+       [ "$forwards" = "$dsm_forward_topology" ] && \
+       [ "$defaults" = "$dsm_default_redirected" ]; then
+    echo DSM_REDIRECTED_ALLOWED
+  else
+    echo FOREIGN_OR_AMBIGUOUS
+  fi
+}
+
+topology_class_from_save() {
+  forwards=$(forward_appends "$1")
+  defaults=$(default_forward_appends "$1")
+  ownership=$(reference_ownership_from_save "$1")
+  case "$ownership" in
+    DIRECT_ALLOWED)
+      echo LEGACY_ACCEPTED_DIRECT
+      ;;
+    DSM_REDIRECTED_ALLOWED)
+      echo DSM_REDIRECTED_MY_PA
+      ;;
+    NONE)
+      if [ "$forwards" = "$legacy_forward_baseline" ] && [ -z "$defaults" ]; then
+        echo LEGACY_ACCEPTED_BASELINE
+      elif [ "$forwards" = "$dsm_forward_topology" ] && \
+           [ "$defaults" = "$dsm_default_baseline" ]; then
+        echo DSM_ACCEPTED_BASELINE
+      else
+        echo FOREIGN_OR_AMBIGUOUS
+      fi
+      ;;
+    *) echo FOREIGN_OR_AMBIGUOUS ;;
+  esac
+}
+
+topology_class() {
+  save=$(filter_table) || return 1
+  topology_class_from_save "$save"
 }
 
 forward_firewall_rules() {
@@ -177,6 +259,8 @@ chain_classification() {
 
 enforcement_state() {
   save=$(filter_table) || return 1
+  ownership=$(reference_ownership_from_save "$save")
+  topology=$(topology_class_from_save "$save")
   forwards=$(forward_appends "$save")
   forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
   my_pa_jumps=$(printf '%s\n' "$forwards" | awk -v exact="$my_pa_jump" \
@@ -188,8 +272,29 @@ enforcement_state() {
   chain_state=$(chain_classification)
   broad_count=$(broad_return_count) || return 1
 
+  if [ "$ownership" = FOREIGN_OR_AMBIGUOUS ]; then
+    echo foreign-external-reference
+    return 0
+  fi
   if [ "$broad_count" -gt 1 ]; then
     echo duplicate-broad-return
+    return 0
+  fi
+  if [ "$topology" = DSM_REDIRECTED_MY_PA ]; then
+    case "$chain_state" in
+      exact) echo dsm-redirected-my-pa ;;
+      empty) echo dsm-referenced-empty-chain ;;
+      missing) echo dsm-missing-chain ;;
+      *) echo "$chain_state" ;;
+    esac
+    return 0
+  fi
+  if [ "$topology" = DSM_ACCEPTED_BASELINE ]; then
+    case "$chain_state" in
+      missing|empty) echo dsm-baseline ;;
+      exact) echo dsm-missing-attachment ;;
+      *) echo "$chain_state" ;;
+    esac
     return 0
   fi
   if [ "$default_jumps" -gt 0 ]; then
@@ -239,7 +344,7 @@ enforcement_state() {
 }
 
 populate_enforcement_chain() {
-  assert_no_my_pa_forward_jump || return 1
+  assert_no_my_pa_external_reference || return 1
   "$iptables_bin" -A "$enforcement_chain" \
     -s "$subnet" -d "$subnet" -i "$bridge" -o "$bridge" -j ACCEPT || return 1
   "$iptables_bin" -A "$enforcement_chain" -i "$bridge" -j DROP || return 1
@@ -255,20 +360,45 @@ assert_no_my_pa_forward_jump() {
   }
 }
 
+assert_no_my_pa_external_reference() {
+  save=$(filter_table) || return 1
+  reference_count=$(external_reference_count_from_save "$save")
+  [ "$reference_count" -eq 0 ] || {
+    echo "refusing to mutate MY_PA_DATA_PLANE while an external reference exists" >&2
+    return 1
+  }
+}
+
+assert_direct_owned_reference() {
+  save=$(filter_table) || return 1
+  [ "$(topology_class_from_save "$save")" = LEGACY_ACCEPTED_DIRECT ] || {
+    echo "refusing mutation: direct MY_PA_DATA_PLANE ownership is not exact" >&2
+    return 1
+  }
+}
+
+assert_owned_chain_empty() {
+  save=$(filter_table) || return 1
+  chain_declared_in_save "$save" || {
+    echo "MY_PA_DATA_PLANE disappeared while verifying empty contents" >&2
+    return 1
+  }
+  [ -z "$(chain_appends "$save")" ] || {
+    echo "MY_PA_DATA_PLANE is not empty after flush" >&2
+    return 1
+  }
+}
+
 owned_chain_absent() {
   save=$(filter_table) || {
     echo "iptables-save inspection failed; cannot prove MY_PA_DATA_PLANE absence" >&2
     return 1
   }
-  printf '%s\n' "$save" | awk -v chain="$enforcement_chain" -v jump="$my_pa_jump" '
-    $0 ~ "^:" chain "( |$)" {found=1}
-    $1 == "-A" && $2 == chain {found=1}
-    $0 == jump {found=1}
-    END {exit found ? 1 : 0}
-  ' || {
+  if chain_declared_in_save "$save" || \
+     [ -n "$(external_references_from_save "$save")" ]; then
     echo "MY_PA_DATA_PLANE is still present in the filter table" >&2
     return 1
-  }
+  fi
 }
 
 prove_legacy_forward() {
@@ -302,8 +432,10 @@ chain_declared_in_save() {
 }
 
 delete_owned_chain() {
-  assert_no_my_pa_forward_jump || return 1
+  assert_no_my_pa_external_reference || return 1
   "$iptables_bin" -F "$enforcement_chain" || return 1
+  assert_owned_chain_empty || return 1
+  assert_no_my_pa_external_reference || return 1
   "$iptables_bin" -X "$enforcement_chain" || return 1
   owned_chain_absent
 }
@@ -325,26 +457,34 @@ cleanup_owned_after_verified_jump_rollback() {
   esac
 }
 
-rollback_inserted_forward_jump() {
-  if ! rollback_unverified_forward_jump; then
+rollback_redirected_forward_jump() {
+  if ! rollback_unverified_forward_jump DSM_ACCEPTED_BASELINE; then
     return 1
   fi
   if ! cleanup_owned_after_verified_jump_rollback; then
     return 1
   fi
-  echo "Synology data-plane firewall admission failed; inserted jump rollback succeeded" >&2
+  echo "UNSUPPORTED_DSM_FORWARD_REDIRECTION: iptables redirected the requested FORWARD jump into DEFAULT_FORWARD; rollback succeeded" >&2
   return 1
 }
 
 remove_unreferenced_owned_chain() {
-  assert_no_my_pa_forward_jump || {
-    postcondition_unverified "cannot prove MY_PA FORWARD jump absence before chain deletion"
+  assert_no_my_pa_external_reference || {
+    postcondition_unverified "cannot prove whole-filter MY_PA reference absence before chain deletion"
     return 1
   }
   if ! "$iptables_bin" -F "$enforcement_chain"; then
     echo "MY_PA_DATA_PLANE flush failed" >&2
     return 1
   fi
+  assert_owned_chain_empty || {
+    remove_cleanup_pending "cannot prove MY_PA_DATA_PLANE empty after flush"
+    return 1
+  }
+  assert_no_my_pa_external_reference || {
+    remove_cleanup_pending "an external reference appeared before chain deletion"
+    return 1
+  }
   if ! "$iptables_bin" -X "$enforcement_chain"; then
     remove_cleanup_pending "empty MY_PA_DATA_PLANE remains after flush"
     return 1
@@ -367,16 +507,16 @@ prove_empty_cleanup_identity() {
     '$0 == exact {count++} END {print count + 0}')
   default_jumps=$(printf '%s\n' "$forwards" | awk -v exact="$default_jump" \
     '$0 == exact {count++} END {print count + 0}')
-  [ "$first" = "$firewall_jump" ] && [ "$forward_count" -eq 1 ] || {
-    echo "refusing empty MY_PA_DATA_PLANE delete: FORWARD identity is not DSM-only" >&2
+  topology=$(topology_class_from_save "$save")
+  case "$topology" in
+    LEGACY_ACCEPTED_BASELINE|DSM_ACCEPTED_BASELINE) ;;
+    *)
+    echo "refusing empty MY_PA_DATA_PLANE delete: topology is not an accepted baseline" >&2
     return 1
-  }
+    ;;
+  esac
   [ "$my_pa_jumps" -eq 0 ] || {
     echo "refusing empty MY_PA_DATA_PLANE delete: FORWARD jump is present" >&2
-    return 1
-  }
-  [ "$default_jumps" -eq 0 ] || {
-    echo "refusing empty MY_PA_DATA_PLANE delete: DEFAULT_FORWARD is present" >&2
     return 1
   }
   chain_declared_in_save "$save" || {
@@ -424,27 +564,54 @@ attest_legacy_restored() {
   }
 }
 
+attest_dsm_restored() {
+  save=$(filter_table) || {
+    postcondition_unverified "cannot inspect restored DSM topology"
+    return 1
+  }
+  [ "$(topology_class_from_save "$save")" = DSM_ACCEPTED_BASELINE ] || {
+    postcondition_unverified "cannot prove exact Docker-bearing DSM baseline"
+    return 1
+  }
+  remaining=$(broad_return_count) || return 1
+  [ "$remaining" -eq 1 ] || {
+    echo "legacy source-only data-plane RETURN is not present after DSM remove" >&2
+    return 1
+  }
+  owned_chain_absent || {
+    postcondition_unverified "cannot prove MY_PA_DATA_PLANE absence"
+    return 1
+  }
+}
+
 rollback_unverified_forward_jump() {
+  expected_topology=$1
   if ! "$iptables_bin" -D FORWARD -j "$enforcement_chain"; then
     rollback_failed "MY_PA FORWARD jump deletion failed"
     return 1
   fi
-  jump_count=$(my_pa_forward_jump_count) || {
-    rollback_failed "FORWARD inspection failed after jump deletion"
+  save=$(filter_table) || {
+    rollback_failed "filter-table inspection failed after jump deletion"
     return 1
   }
-  [ "$jump_count" -eq 0 ] || {
-    rollback_failed "MY_PA FORWARD jump remains after deletion"
+  references=$(external_references_from_save "$save")
+  [ -z "$references" ] || {
+    rollback_failed "an external MY_PA_DATA_PLANE reference remains after deletion"
     return 1
   }
-  prove_legacy_forward || {
-    rollback_failed "legacy DSM-first FORWARD restoration could not be verified"
+  restored_topology=$(topology_class_from_save "$save")
+  [ "$restored_topology" = "$expected_topology" ] || {
+    rollback_failed "exact accepted baseline restoration could not be verified"
+    return 1
+  }
+  chain_declared_in_save "$save" || {
+    rollback_failed "MY_PA_DATA_PLANE disappeared before owned-chain cleanup"
     return 1
   }
 }
 
 restore_empty_owned_chain() {
-  assert_no_my_pa_forward_jump || return 1
+  assert_no_my_pa_external_reference || return 1
   "$iptables_bin" -F "$enforcement_chain" || return 1
   [ "$(chain_classification)" = empty ] || {
     echo "failed to restore empty MY_PA_DATA_PLANE" >&2
@@ -510,12 +677,12 @@ case "$action" in
     state=$(enforcement_state) || exit 1
     case "$state" in
       effective) ;;
-      legacy|missing-jump|broad-return)
+      legacy|missing-jump|broad-return|dsm-baseline|dsm-missing-attachment)
         population_mode=none
         chain_state=$(chain_classification)
         case "$chain_state" in
           missing)
-            assert_no_my_pa_forward_jump || exit 1
+            assert_no_my_pa_external_reference || exit 1
             "$iptables_bin" -N "$enforcement_chain" || {
               echo "failed to create MY_PA_DATA_PLANE" >&2
               exit 1
@@ -543,7 +710,7 @@ case "$action" in
             fi
             ;;
           empty)
-            assert_no_my_pa_forward_jump || exit 1
+            assert_no_my_pa_external_reference || exit 1
             population_mode=emptied
             if ! populate_enforcement_chain; then
               if ! restore_empty_owned_chain; then
@@ -586,10 +753,14 @@ case "$action" in
         first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
         forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
         if [ "$first" != "$my_pa_jump" ]; then
-          [ "$first" = "$firewall_jump" ] && [ "$forward_count" -eq 1 ] || {
+          preinsert_topology=$(topology_class_from_save "$save")
+          case "$preinsert_topology" in
+            LEGACY_ACCEPTED_BASELINE|DSM_ACCEPTED_BASELINE) ;;
+            *)
             echo "Synology FORWARD chain identity mismatch" >&2
             exit 1
-          }
+            ;;
+          esac
           if ! "$iptables_bin" -I FORWARD 1 -j "$enforcement_chain"; then
             echo "failed to insert MY_PA_DATA_PLANE FORWARD jump" >&2
             case "$population_mode" in
@@ -609,16 +780,20 @@ case "$action" in
             exit 1
           fi
           if ! save=$(filter_table); then
-            rollback_inserted_forward_jump
+            rollback_failed "post-insert filter topology is unreadable; refusing unverified attachment deletion"
             exit 1
           fi
           forwards=$(forward_appends "$save")
           first=$(printf '%s\n' "$forwards" | awk 'NF {print; exit}')
           second=$(printf '%s\n' "$forwards" | awk 'NF {n++; if (n == 2) {print; exit}}')
           forward_count=$(printf '%s\n' "$forwards" | awk 'NF {n++} END {print n + 0}')
-          if [ "$first" != "$my_pa_jump" ] || [ "$second" != "$firewall_jump" ] || \
-             [ "$forward_count" -ne 2 ]; then
-            rollback_inserted_forward_jump
+          postinsert_topology=$(topology_class_from_save "$save")
+          if [ "$postinsert_topology" = DSM_REDIRECTED_MY_PA ]; then
+            rollback_redirected_forward_jump
+            exit 1
+          fi
+          if [ "$postinsert_topology" != LEGACY_ACCEPTED_DIRECT ]; then
+            rollback_failed "post-insert topology is foreign or ambiguous; refusing unverified attachment deletion"
             exit 1
           fi
         fi
@@ -667,6 +842,7 @@ case "$action" in
     state=$(enforcement_state) || exit 1
     case "$state" in
       effective|broad-return)
+        assert_direct_owned_reference || exit 1
         [ "$(chain_classification)" = exact ] || {
           echo "refusing to delete foreign MY_PA_DATA_PLANE contents" >&2
           exit 1
@@ -683,6 +859,7 @@ case "$action" in
           echo "MY_PA_DATA_PLANE FORWARD jump identity mismatch" >&2
           exit 1
         }
+        assert_direct_owned_reference || exit 1
         "$iptables_bin" -D FORWARD -j "$enforcement_chain" || {
           echo "failed to remove MY_PA_DATA_PLANE FORWARD jump" >&2
           exit 1
@@ -700,6 +877,51 @@ case "$action" in
         }
         remove_unreferenced_owned_chain || exit 1
         attest_legacy_restored || exit 1
+        ;;
+      dsm-redirected-my-pa)
+        [ "$(chain_classification)" = exact ] || {
+          echo "refusing to delete foreign MY_PA_DATA_PLANE contents" >&2
+          exit 1
+        }
+        [ "$(topology_class)" = DSM_REDIRECTED_MY_PA ] || exit 1
+        restore_legacy_broad_return || exit 1
+        "$iptables_bin" -D FORWARD -j "$enforcement_chain" || {
+          echo "failed to remove redirected MY_PA_DATA_PLANE attachment" >&2
+          exit 1
+        }
+        save=$(filter_table) || {
+          remove_cleanup_pending "cannot inspect DSM topology after attachment deletion"
+          exit 1
+        }
+        [ "$(topology_class_from_save "$save")" = DSM_ACCEPTED_BASELINE ] || {
+          remove_cleanup_pending "exact Docker-bearing DSM baseline was not restored"
+          exit 1
+        }
+        remove_unreferenced_owned_chain || exit 1
+        attest_dsm_restored || exit 1
+        ;;
+      dsm-missing-attachment)
+        [ "$(chain_classification)" = exact ] || {
+          echo "refusing to delete foreign MY_PA_DATA_PLANE contents" >&2
+          exit 1
+        }
+        [ "$(topology_class)" = DSM_ACCEPTED_BASELINE ] || exit 1
+        restore_legacy_broad_return || exit 1
+        remove_unreferenced_owned_chain || exit 1
+        attest_dsm_restored || exit 1
+        ;;
+      dsm-baseline)
+        save=$(filter_table) || exit 1
+        [ "$(topology_class_from_save "$save")" = DSM_ACCEPTED_BASELINE ] || exit 1
+        if chain_declared_in_save "$save"; then
+          prove_empty_cleanup_identity || exit 1
+          assert_no_my_pa_external_reference || exit 1
+          "$iptables_bin" -X "$enforcement_chain" || {
+            remove_cleanup_pending "empty MY_PA_DATA_PLANE delete failed"
+            exit 1
+          }
+        fi
+        attest_dsm_restored || exit 1
         ;;
       missing-jump)
         [ "$(chain_classification)" = exact ] || {
@@ -760,6 +982,7 @@ case "$action" in
         }
         if chain_declared_in_save "$save"; then
           prove_empty_cleanup_identity || exit 1
+          assert_no_my_pa_external_reference || exit 1
           if ! "$iptables_bin" -X "$enforcement_chain"; then
             remove_cleanup_pending "empty MY_PA_DATA_PLANE delete failed"
             exit 1

@@ -436,6 +436,7 @@ class RemoteEvalService:
         case_id: str,
         callback: Callable[[], T],
     ) -> T:
+        """Phase A helper. MCP transport confirmation uses wrap_eval_asgi_send."""
         attempt_id = self.record_outbound_attempt(
             session_id, repetition=repetition, case_id=case_id
         )
@@ -448,6 +449,18 @@ class RemoteEvalService:
                 session_id=session_id, attempt_id=attempt_id
             )
             return result
+
+    def confirm_disclosed_to_transport(self, session_id: str, attempt_id: str) -> None:
+        """Record DISCLOSED_TO_TRANSPORT. Does not capture or advance session state."""
+
+        self._disclosure.confirm_disclosed_to_transport(
+            session_id=session_id, attempt_id=attempt_id
+        )
+
+    def confirm_not_disclosed(self, session_id: str, attempt_id: str) -> None:
+        """Record NOT_DISCLOSED. Does not capture or advance session state."""
+
+        self._disclosure.confirm_not_disclosed(session_id=session_id, attempt_id=attempt_id)
 
     def evaluation_case_state(self, session_id: str, ordinal: int) -> EvaluationCaseState:
         self._require_enabled()

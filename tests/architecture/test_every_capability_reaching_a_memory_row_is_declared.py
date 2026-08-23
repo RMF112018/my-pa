@@ -1,10 +1,10 @@
-"""Which capabilities can reach a relationship-memory row, derived rather than listed.
+"""Which capabilities reach a relationship-memory row, and which rows, derived.
 
 `evidence/acceptance/RELATIONSHIP-MEMORY-RM-AC-20260822.md`'s `RM-API-AC-002`
 carries the criterion "each capability has a grant boundary appropriate to the
 rows it reaches". A grant boundary is only appropriate to a reach someone has
-measured, and that row got the reach wrong twice in a row, in prose, at two
-successive heads.
+measured, and that row got the reach wrong in prose three times running, at
+three successive heads, each time caught by a different independent review.
 
 The first version named the eight `relationship_memory.*` capabilities and
 stopped, so `entities.context` — which puts every carried memory's `statement`
@@ -14,26 +14,35 @@ correction added `entities.context` and `review.decide` and then asserted that
 three: `review.list` reads `relationship_memory_proposals` and correlates two
 subqueries over `relationship_memory_review_decisions`, so a `capture_review`
 grant learns a `subject_entity_id`, a `proposed_kind` and — after promotion — an
-`accepted_memory_id`, for a subject the grant never named. The same correction
-also said of `review.decide` that "it reads no memory row" while it reads four
-of the eight tables, and left `relationship_memory_evidence_links` off
-`_promote`'s write list.
+`accepted_memory_id`, for a subject the grant never named.
 
-Three false enumerations, one criterion, zero tests. **So the enumeration is not
-prose here.** This module derives the answer from the source and compares it to
-a declaration, and the acceptance row cites it by name rather than asserting the
-same thing a fourth time. The declared set is a literal because a declaration is
-the thing under review; everything it is measured against is derived.
+**The third failure is what gave this module its present shape.** The commit
+that fixed the second derived *which capabilities* reach a memory row — the walk
+below — and left *which tables each one reaches* beside it as prose. That prose
+was wrong in the sentence announcing the fix. It said `review.decide` "reads four
+of the eight" and, "on promotion, writes three". It reads three and writes five:
+the fourth read was `relationship_memory_proposals` counted twice, `_copy_evidence`'s
+own read of `relationship_memory_proposal_evidence` went unnamed, and `_promote`'s
+three writes were quoted as the capability's when `insert(relationship_memory_review_decisions)`
+and `update(relationship_memory_proposals)` fire on *every* disposition, promotion
+or not.
 
-Five claims, separated because they fail for different reasons:
+Three false enumerations of the capabilities, a fourth of their tables, one
+criterion. **So neither enumeration is prose here.** This module derives both
+from the source, compares each to a declaration, *and parses `RM-API-AC-002` for
+its own digits* so the row cannot restate a number the walk contradicts. The
+declared sets are literals because a declaration is the thing under review;
+everything they are measured against is derived.
+
+Nine claims, separated because they fail for different reasons:
 
 1. **The eight tables are the schema's, not this file's.** They are read off the
    `Table` objects in `infrastructure.persistence.tables`, and the count is
    asserted, so a ninth memory table cannot join the plane without being seen.
-2. **Only the declared modules issue SQL against them.** Exact set equality, so
-   a third module that starts building a statement over a memory table has to be
-   argued about here. This is the claim that keeps the walk below cheap: the
-   whole memory-touching surface of `src/` is two files.
+2. **Only the declared modules name one.** Exact set equality, so a third module
+   that starts building a statement over a memory table has to be argued about
+   here. This is the claim that keeps the walk below cheap: the whole
+   memory-touching surface of `src/` is two files.
 3. **The capability set is derived by a reachability walk and matches the
    declaration.** Exact set equality over `Capability` members, so a capability
    that starts reaching a memory row either updates the declaration or reddens.
@@ -41,11 +50,34 @@ Five claims, separated because they fail for different reasons:
    derived off the enum's own `relationship_memory.` prefix; the residue is the
    part `RM-API-AC-002` has to disclose, and each entry says what it discloses
    and under which purpose.
-5. **The walk has no blind spot on the names that matter.** The walk types call
-   receivers from annotations, and an untyped receiver is a place a reach could
-   hide. So every call in a module holding a port reference whose method name is
-   one of the port methods that reach memory must resolve to a type. Zero do not
-   today; a first one reddens rather than silently narrowing claim 3.
+5. **Each capability's *tables* are derived too, split into reads and writes.**
+   The same walk, carrying a table set along its edges instead of only a boolean,
+   with `select` told apart from `insert`/`update`/`delete` by the statement
+   constructor at the root of the expression the table name sits in. Exact set
+   equality against `DECLARED_TABLE_REACH`, which is what a changed reach has to
+   be re-argued against.
+6. **Every mention of a memory table lands in one of those two sets.** A name
+   that appears outside any statement chain is counted as a read — the
+   conservative direction — *and* has to be in `UNCLASSIFIED_TABLE_MENTIONS` with
+   a reason, so a statement shape this derivation cannot read is a redness rather
+   than a silent omission.
+7. **`RM-API-AC-002`'s own "N of the eight (…)" claims are checked against the
+   walk**, count and membership both, for every capability the row has to
+   disclose. Prose failed three times; it is now parsed.
+   `test_claimed_test_counts_match_collection.py` is the precedent, and its
+   lesson is taken with it: the pattern that matches
+   nothing passes everything, so the parse asserts it found claims, asserts both
+   verbs appear, and asserts every capability beyond the eight carries one.
+8. **The port crossings that reach memory are the two planes**, which is
+   anti-vacuity for claim 9 and a statement worth making on its own.
+9. **The walk's demonstrated blind spots are closed or declared.** Four of them,
+   each found by an independent review constructing a reach that slipped past the
+   walk *and* past the untyped-receiver sweep: an unannotated receiver at a call
+   site (`UNTYPED_PORT_CALL_SITES`), a port method referenced without being called
+   — `functools.partial`, a callback, an assignment (`UNCALLED_PORT_METHOD_REFERENCES`),
+   a call dispatched through a subscript (`DISPATCH_THROUGH_A_SUBSCRIPT`), and a
+   table reached as `tables.<name>` rather than by a bare imported name, which
+   claim 2 now sees.
 
 **Why a walk and not a grep.** The reach is four hops long and no hop is
 spelled: `ApplicationService._entities_context` constructs an
@@ -61,8 +93,33 @@ body, a `self._x` assigned in `__init__` from an annotated parameter, a local
 assigned from a constructor call, and a property's return annotation. Where the
 receiver types to an abstract port, every implementation of that port is
 followed — which is how `unit_of_work.reviews.cases(...)` reaches `_Reviews`.
-This over-approximates towards *more* reach, never less, and claim 5 is what
+This over-approximates towards *more* reach, never less, and claim 9 is what
 says the approximation is not silently going the other way.
+
+**A derived table set is a bound, not an itinerary.** It says which of the eight
+a capability's code path *can* touch, unioned over every branch. `relationship_memory.archive`
+writes no statement, but it shares `_insert_version` with `revise`, so
+`relationship_memory_versions` and `relationship_memory_context_links` are in its
+write set. That is the right side to err on for a disclosure claim and the wrong
+side for a description of one request, and `RM-API-AC-002` says which it is
+making.
+
+**What is still open, stated because the row may claim only what is bound.**
+Four escapes are closed above; these are not. A *call* whose receiver this walk
+cannot type is caught only inside a module that imports `contracts.ports`, so a
+module reaching a repository handed to it by some other route is unswept. An
+uncalled reference to a port method whose receiver types to something *other*
+than a port implementation is allowed through, which is what lets `receipt.history`
+sit in a declaration rather than in the sweep — a genuine port hidden behind a
+misleading annotation would ride out on the same rule. A statement built by a
+helper that takes the table as a *parameter* would attribute the table to the
+helper and the operation to whatever the helper does, which is correct, but a
+helper that took the *operation* as a parameter too would not classify. And
+`_memory_bindings` reads three import spellings; a fourth (a table fetched out of
+`metadata.tables["…"]` by string) would be invisible to every claim here. None of
+these exists today. Each is a way the derived sets could be narrower than the
+truth without anything reddening, and `RM-API-AC-002` therefore cites this module
+for what it derives rather than for completeness.
 
 Nothing here opens a connection, reaches a source, or touches a database. It
 parses the source tree and imports the table declarations for their names.
@@ -72,10 +129,12 @@ from __future__ import annotations
 
 import ast
 import collections
+import re
 from functools import cache
 from pathlib import Path
 from typing import Final
 
+import pytest
 from sqlalchemy import Table
 
 from my_pa.domain.identity.operation import Capability, permitted_purposes
@@ -98,6 +157,14 @@ PORTS: Final = PACKAGE / "contracts" / "ports.py"
 #: rather than imported, so a capability wired to a handler is visible here even
 #: if importing the service in this tier were ever to become expensive.
 SERVICE: Final = PACKAGE / "application" / "service.py"
+
+#: The acceptance package, parsed for the digits `RM-API-AC-002` states about the
+#: rows each capability reaches. Claim 7 is the whole reason this path is here: a
+#: number in that row has been wrong three times and checked by nothing.
+ACCEPTANCE: Final = ROOT / "evidence" / "acceptance" / "RELATIONSHIP-MEMORY-RM-AC-20260822.md"
+
+#: The row whose digits are bound.
+ROW: Final = "RM-API-AC-002"
 
 #: The prefix the memory plane's table names share. Stops one letter short of
 #: `relationship_memory_` on purpose, because `relationship_memories` is one of
@@ -166,14 +233,230 @@ BEYOND_THE_EIGHT: Final = {
         "`RM-API-AC-011` and `RM-API-AC-018` carry."
     ),
     Capability.REVIEW_DECIDE: (
-        "purpose `review_disposition`. Reads `relationship_memory_proposals` "
-        "twice (the case test and the `FOR UPDATE` read), "
-        "`relationship_memory_review_decisions` for the chain and "
-        "`relationship_memory_proposal_evidence` for the count; writes "
-        "`relationship_memories`, `relationship_memory_versions` and "
-        "`relationship_memory_evidence_links` on promotion. Bounded by what "
+        "purpose `review_disposition`. Reads three of the eight — "
+        "`relationship_memory_proposals` (the case test and again under "
+        "`FOR UPDATE`), `relationship_memory_review_decisions` for the chain, and "
+        "`relationship_memory_proposal_evidence` in both `_promote`'s count and "
+        "`_copy_evidence`'s own select — and writes five. Three of those five are "
+        "the promotion (`relationship_memories`, `relationship_memory_versions`, "
+        "`relationship_memory_evidence_links`); the other two, "
+        "`relationship_memory_review_decisions` and `relationship_memory_proposals`, "
+        "are written on *every* disposition, including a reject. Bounded by what "
         "`_promotion_authority` can author and by the plane composition; "
         "`RM-API-AC-011` carries the promotion path."
+    ),
+}
+
+#: Per capability, the memory tables it can read and the ones it can write.
+#:
+#: The declaration claim 5 is measured against, and the reason it exists rather
+#: than a count: the row's third false enumeration got the *count* of
+#: `review.decide`'s reads wrong by naming the same table twice, so a number on
+#: its own would have absorbed the defect. Membership is what is declared; the
+#: count follows from it.
+#:
+#: A capability's set is the union over every branch its handler can reach, which
+#: is a bound and not an itinerary — see this module's docstring on
+#: `relationship_memory.archive`.
+DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str]]]] = {
+    Capability.RELATIONSHIP_MEMORY_CREATE: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_submissions",
+                "relationship_memory_versions",
+            }
+        ),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_submissions",
+                "relationship_memory_versions",
+            }
+        ),
+    ),
+    Capability.RELATIONSHIP_MEMORY_REVISE: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_evidence_links",
+                "relationship_memory_submissions",
+                "relationship_memory_versions",
+            }
+        ),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_submissions",
+                "relationship_memory_versions",
+            }
+        ),
+    ),
+    Capability.RELATIONSHIP_MEMORY_ARCHIVE: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_submissions",
+                "relationship_memory_versions",
+            }
+        ),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_submissions",
+                "relationship_memory_versions",
+            }
+        ),
+    ),
+    Capability.RELATIONSHIP_MEMORY_RESTORE: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_submissions",
+                "relationship_memory_versions",
+            }
+        ),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_submissions",
+                "relationship_memory_versions",
+            }
+        ),
+    ),
+    Capability.RELATIONSHIP_MEMORY_GET: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_evidence_links",
+                "relationship_memory_versions",
+            }
+        ),
+        frozenset(),
+    ),
+    Capability.RELATIONSHIP_MEMORY_LIST: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_versions",
+            }
+        ),
+        frozenset(),
+    ),
+    Capability.RELATIONSHIP_MEMORY_SEARCH: (
+        frozenset({"relationship_memories", "relationship_memory_versions"}),
+        frozenset(),
+    ),
+    Capability.RELATIONSHIP_MEMORY_HISTORY: (
+        frozenset({"relationship_memories", "relationship_memory_versions"}),
+        frozenset(),
+    ),
+    Capability.ENTITIES_CONTEXT: (
+        frozenset({"relationship_memories", "relationship_memory_versions"}),
+        frozenset(),
+    ),
+    Capability.REVIEW_LIST: (
+        frozenset({"relationship_memory_proposals", "relationship_memory_review_decisions"}),
+        frozenset(),
+    ),
+    Capability.REVIEW_DECIDE: (
+        frozenset(
+            {
+                "relationship_memory_proposal_evidence",
+                "relationship_memory_proposals",
+                "relationship_memory_review_decisions",
+            }
+        ),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_evidence_links",
+                "relationship_memory_proposals",
+                "relationship_memory_review_decisions",
+                "relationship_memory_versions",
+            }
+        ),
+    ),
+}
+
+#: Where a memory table is named outside any statement this derivation can read.
+#:
+#: Each of these binds a table or a column expression to a local for a statement
+#: built further down, so the operation is decided somewhere the name is not.
+#: They are folded into the *read* set — the conservative direction — and listed
+#: here as well, because a statement shape this walk cannot classify is exactly
+#: how a write would come to be reported as a read.
+UNCLASSIFIED_TABLE_MENTIONS: Final[dict[tuple[str, str, str], str]] = {
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "page_for_entity",
+        "current = relationship_memory_versions.alias('current')",
+    ): "the version alias the page joins; the join is in the `select` below it",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "page_for_entity",
+        "rank: ColumnElement[bool] = not_(relationship_memories.c.pinned)",
+    ): "a sort key held in a local for the `order_by` below it, annotated because "
+    "the declared SQLAlchemy floor cannot infer it",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "search",
+        "current = relationship_memory_versions.alias('current')",
+    ): "the same alias, for the search page",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "search",
+        "vector = func.to_tsvector(text(f\"'{_SEARCH_CONFIG}'\"), current.c.statement_text)",
+    ): "the tsvector over the aliased version's statement, matched in the `select` below it",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "summaries_for_context",
+        "current = relationship_memory_versions.alias('current')",
+    ): "the same alias, for the context card",
+}
+
+#: Calls dispatched through a subscript, in a module that holds a port.
+#:
+#: `_edges()` cannot follow one: the call's `func` is a `Subscript`, so there is
+#: no name to look up and no receiver to type, and a reach behind one would be
+#: absent from the derived answer with nothing to say so. **This is the
+#: codebase's own dominant dispatch idiom**, which is why it is declared with a
+#: reason each rather than assumed not to happen.
+DISPATCH_THROUGH_A_SUBSCRIPT: Final[dict[tuple[str, str], str]] = {
+    ("my_pa.application.service", "_HANDLERS[command.capability]"): (
+        "the capability registry, and the one subscript this module does resolve — "
+        "by reading the table rather than the call. `_handlers()` parses `_HANDLERS` "
+        "out of the source and maps every capability to the `(class, method)` it "
+        "dispatches to, which is where the walk starts."
+    ),
+    ("my_pa.infrastructure.persistence.entity", "_DIRECTIONS[direction]"): (
+        "three lambdas over `entity_relationships`, selected by an edge direction. "
+        "It reaches no memory table — `entity.py` names none of the eight — and it "
+        "returns a predicate rather than calling a repository."
+    ),
+}
+
+#: References to a memory-reaching port method that are not calls of it.
+#:
+#: `functools.partial(repository.summaries_for_context, …)`, a callback handed to
+#: a registry, `handler = repository.cases` — each reaches a memory row through a
+#: name `_edges()` never sees in call position. Sweeping for the *name* rather
+#: than for the call catches all three, at the price of one collision, which is
+#: what this declaration holds.
+UNCALLED_PORT_METHOD_REFERENCES: Final[dict[tuple[str, str], str]] = {
+    ("my_pa.application.service", "receipt.history"): (
+        "not a port method. `receipt` is bound from `conflict.receipt` on a caught "
+        "conflict, which this walk cannot type, and `history` there is the task "
+        "write receipt's own history field. It collides with "
+        "`RelationshipMemoryRepository.history`, with which it shares nothing but "
+        "the word."
     ),
 }
 
@@ -256,24 +539,98 @@ def test_the_memory_plane_declares_exactly_eight_tables() -> None:
 # --- claim 2: which modules issue SQL against them ---------------------------
 
 
+def _dotted(node: ast.expr) -> str | None:
+    """`a.b.c` for a pure name/attribute chain, or `None` for anything else."""
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted(node.value)
+        return None if prefix is None else f"{prefix}.{node.attr}"
+    return None
+
+
+def _table_expressions(
+    node: ast.AST, names: dict[str, frozenset[str]]
+) -> list[tuple[ast.expr, frozenset[str]]]:
+    """Every expression inside `node` that this walk reads as a memory table."""
+    found: list[tuple[ast.expr, frozenset[str]]] = []
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Name | ast.Attribute):
+            continue
+        key = _dotted(child)
+        if key is not None and key in names:
+            found.append((child, names[key]))
+    return found
+
+
 @cache
-def _memory_bindings() -> dict[Path, frozenset[str]]:
-    """Per module, the local names bound to one of the eight table objects."""
+def _memory_bindings() -> dict[Path, dict[str, frozenset[str]]]:
+    """Per module, every expression this walk reads as one of the eight tables.
+
+    Three spellings, because for a while only the first was recognised and the
+    other two were demonstrated escapes:
+
+    * `from …tables import relationship_memories` binds a bare name. This was
+      the whole of it, and it is the spelling both persistence modules use.
+    * `from . import tables`, or `import ….tables as t`, binds the *module*, and
+      `tables.relationship_memories` then reaches a row through an attribute no
+      bare-name scan sees. Applied to an already-declared module it changes
+      nothing; applied to a **new** one it let a module join the plane without
+      appearing in the census below, which is the claim that keeps the walk
+      cheap.
+    * A module-level aggregate — `_MEMORY_COLUMNS` — carries the table into
+      every statement that splats it, which is how `detail` and `history` name
+      their columns and how `page_for_entity` names none of them directly.
+
+    A fourth spelling, a table fetched out of `metadata.tables[…]` by string,
+    would still be invisible. It does not occur, and this module's docstring says
+    so rather than leaving it implied.
+    """
     tables = memory_tables()
-    found: dict[Path, frozenset[str]] = {}
+    found: dict[Path, dict[str, frozenset[str]]] = {}
     for path, tree in _sources():
         if path == DECLARATIONS:
             continue
-        bound = {
-            alias.asname or alias.name
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and (node.module or "").endswith("tables")
-            for alias in node.names
-            if alias.name in tables
-        }
-        if bound:
-            found[path] = frozenset(bound)
+        names: dict[str, frozenset[str]] = {}
+        for node in ast.walk(tree):
+            if isinstance(node, ast.ImportFrom):
+                for alias in node.names:
+                    if (node.module or "").endswith("tables") and alias.name in tables:
+                        names[alias.asname or alias.name] = frozenset({alias.name})
+                    elif alias.name == "tables":
+                        local = alias.asname or alias.name
+                        names.update({f"{local}.{table}": frozenset({table}) for table in tables})
+            elif isinstance(node, ast.Import):
+                for alias in node.names:
+                    if alias.name.endswith(".tables"):
+                        local = alias.asname or alias.name
+                        names.update({f"{local}.{table}": frozenset({table}) for table in tables})
+        for statement in tree.body:
+            target = _assigned_name(statement)
+            value = getattr(statement, "value", None)
+            if target is None or value is None:
+                continue
+            carried = frozenset[str]().union(
+                *(tables for _child, tables in _table_expressions(value, names))
+            )
+            if carried:
+                names[target] = carried
+        found[path] = names
     return found
+
+
+def _assigned_name(statement: ast.stmt) -> str | None:
+    """The single bare name a statement assigns to, or `None`."""
+    targets = (
+        statement.targets
+        if isinstance(statement, ast.Assign)
+        else [statement.target]
+        if isinstance(statement, ast.AnnAssign)
+        else []
+    )
+    if len(targets) != 1 or not isinstance(targets[0], ast.Name):
+        return None
+    return targets[0].id
 
 
 def test_only_the_declared_modules_issue_sql_against_a_memory_table() -> None:
@@ -282,8 +639,17 @@ def test_only_the_declared_modules_issue_sql_against_a_memory_table() -> None:
     Two modules is what makes claim 3 a call-graph walk rather than a grep over
     six thousand lines of service: everything that touches a memory row bottoms
     out in one of these files, so the walk only has to find the callers.
+
+    The census is over modules that *name* a table, not over modules that import
+    one: `from . import tables` imports the whole declaration module, so an
+    import-shaped census would have counted a module that never touched a memory
+    row, and — worse — a bare-name census missed one that did.
     """
-    naming = frozenset(_relative(path) for path in _memory_bindings())
+    naming = frozenset(
+        _relative(path)
+        for path, tree in _sources()
+        if path != DECLARATIONS and _table_expressions(tree, _memory_bindings().get(path, {}))
+    )
     assert naming == MEMORY_SQL_MODULES, (
         f"{sorted(naming ^ MEMORY_SQL_MODULES)} builds statements over a memory table "
         "but is not declared, or is declared and no longer does. A third module on this "
@@ -332,9 +698,9 @@ def _annotated(node: ast.expr | None) -> str | None:
 def _classes() -> dict[str, tuple[Path, ast.ClassDef]]:
     """Module-level classes by bare name, first definition wins.
 
-    Bare names because an annotation gives a bare name; a handful of names are
-    defined twice across the tree (`Disposition`, `EntityType` and nine others,
-    domain models mirrored by adapters), and none of them is a repository or an
+    Bare names because an annotation gives a bare name; twelve names are defined
+    twice across the tree (`Disposition`, `EntityType` and ten others, domain
+    models mirrored by adapters), and none of them is a repository or an
     application service, so the collision cannot merge a memory-reaching node
     into an unrelated one.
     """
@@ -383,15 +749,33 @@ def _module_functions() -> dict[tuple[str, str], ast.FunctionDef | ast.AsyncFunc
 
 @cache
 def _imported_names() -> dict[str, dict[str, tuple[str, str]]]:
-    """Per module, `local name -> (source module, original name)` for absolute imports."""
+    """Per module, `local name -> (source module, original name)`.
+
+    Absolute imports, plus module-level assignment aliases. An aliased *import*
+    (`import … as x`) was followed from the start; an aliased *assignment*
+    (`_aliased = relationship_memory_review_cases`) was not, and a call through
+    the second name resolved to no edge at all — a reach that reddened nothing
+    because the walk simply did not see the call.
+    """
     found: dict[str, dict[str, tuple[str, str]]] = {}
     for path, tree in _sources():
-        found[_module_name(path)] = {
+        module = _module_name(path)
+        bound = {
             alias.asname or alias.name: (node.module, alias.name)
             for node in ast.walk(tree)
             if isinstance(node, ast.ImportFrom) and node.module and node.level == 0
             for alias in node.names
         }
+        for statement in tree.body:
+            target = _assigned_name(statement)
+            value = getattr(statement, "value", None)
+            if target is None or not isinstance(value, ast.Name):
+                continue
+            if value.id in bound:
+                bound[target] = bound[value.id]
+            elif (module, value.id) in _module_functions():
+                bound[target] = (module, value.id)
+        found[module] = bound
     return found
 
 
@@ -553,16 +937,11 @@ def _edges() -> dict[Node, frozenset[Node]]:
 
 @cache
 def _directly_naming_a_memory_table() -> frozenset[Node]:
-    bindings = _memory_bindings()
-    found: set[Node] = set()
-    for node, (path, _enclosing, function) in _nodes().items():
-        bound = bindings.get(path)
-        if bound is None:
-            continue
-        named = {name.id for name in ast.walk(function) if isinstance(name, ast.Name)}
-        if named & bound:
-            found.add(node)
-    return frozenset(found)
+    return frozenset(
+        node
+        for node, (path, _enclosing, function) in _nodes().items()
+        if _table_expressions(function, _memory_bindings().get(path, {}))
+    )
 
 
 @cache
@@ -679,8 +1058,11 @@ def test_every_capability_that_reaches_a_memory_row_is_declared() -> None:
     assert derived == DECLARED, (
         f"{sorted(capability.value for capability in derived ^ DECLARED)} reaches a "
         "relationship-memory table without being declared, or is declared and no "
-        "longer reaches one. Update `DECLARED`, `BEYOND_THE_EIGHT` and "
-        "`RM-API-AC-002` together — the acceptance row cites this test by name"
+        "longer reaches one. If the code moved, update `DECLARED`, "
+        "`BEYOND_THE_EIGHT`, `DECLARED_TABLE_REACH` and `RM-API-AC-002` together — "
+        "the acceptance row cites this test by name. If the code did not move, this "
+        "is not a finding about the code; it is this walk failing, and the repair is "
+        "in the walk"
     )
 
 
@@ -709,7 +1091,389 @@ def test_every_capability_beyond_the_eight_says_what_it_discloses() -> None:
         )
 
 
-# --- claim 5: the walk has no blind spot on the names that matter ------------
+# --- claims 5 and 6: which tables, and read or written -----------------------
+#
+# The same nodes and the same edges, carrying a pair of table sets instead of a
+# boolean. A table name is attributed to the statement it sits in, and the
+# statement's operation is read off the constructor at the root of the
+# expression chain — `select(...).select_from(t).where(_mine(t, p))` is one
+# chain rooted at `select`, so both mentions of `t` are reads, and
+# `insert(t).values(_bound(t, p, {...}))` is one chain rooted at `insert`.
+# Attributing by chain root rather than by nearest call is what makes
+# `_mine`/`_bound` — the partition wrappers every statement here goes through —
+# transparent instead of opaque.
+
+#: What each statement constructor does to a row. `select` is the only read, and
+#: the split is the whole content of claim 5: `RM-API-AC-002` has to disclose
+#: what a grant can *learn* separately from what it can *change*.
+STATEMENT_CONSTRUCTORS: Final = {
+    "select": "read",
+    "insert": "write",
+    "update": "write",
+    "delete": "write",
+}
+
+
+def _chain_root(call: ast.Call, statements: dict[str, str]) -> str | None:
+    """The constructor a call's expression chain is rooted at, if any.
+
+    `select(a).where(b).limit(c)` is a `Call` whose `func` is an `Attribute` on a
+    `Call` whose `func` is an `Attribute` on `select(a)`, so the root is found by
+    walking down the `func` side. Where the chain is rooted at a *name* instead —
+    `statement = select(...)` and then `statement.order_by(...)`, which both
+    persistence modules do — the name is looked up in the statement locals this
+    function is given.
+    """
+    function = call.func
+    if isinstance(function, ast.Name):
+        return function.id if function.id in STATEMENT_CONSTRUCTORS else None
+    if isinstance(function, ast.Attribute):
+        if isinstance(function.value, ast.Call):
+            return _chain_root(function.value, statements)
+        if isinstance(function.value, ast.Name):
+            return statements.get(function.value.id)
+    return None
+
+
+def _statement_locals(function: ast.FunctionDef | ast.AsyncFunctionDef) -> dict[str, str]:
+    """Locals holding a half-built statement, as `name -> constructor`."""
+    found: dict[str, str] = {}
+    for statement in ast.walk(function):
+        target = _assigned_name(statement)
+        value = getattr(statement, "value", None)
+        if target is None or not isinstance(value, ast.Call):
+            continue
+        root = _chain_root(value, found)
+        if root is not None:
+            found[target] = root
+    return found
+
+
+def _local_table_names(
+    function: ast.FunctionDef | ast.AsyncFunctionDef, names: dict[str, frozenset[str]]
+) -> dict[str, frozenset[str]]:
+    """`names`, plus the locals a function aliases a memory table under.
+
+    `current = relationship_memory_versions.alias("current")` is the only shape
+    that occurs, and it occurs three times; without it every predicate written
+    against the alias would be attributed to no table at all.
+    """
+    found = dict(names)
+    for statement in ast.walk(function):
+        target = _assigned_name(statement)
+        value = getattr(statement, "value", None)
+        if target is None or not isinstance(value, ast.Call):
+            continue
+        if not isinstance(value.func, ast.Attribute) or value.func.attr not in {
+            "alias",
+            "join",
+            "outerjoin",
+        }:
+            continue
+        carried = frozenset[str]().union(
+            *(tables for _child, tables in _table_expressions(value, found))
+        )
+        if carried:
+            found[target] = carried
+    return found
+
+
+#: `(reads, writes, unclassified)`, where `unclassified` names the enclosing
+#: statement so a shape this derivation cannot read is legible.
+TableReach = tuple[frozenset[str], frozenset[str], frozenset[tuple[str, str, str]]]
+
+
+@cache
+def _direct_table_reach() -> dict[Node, TableReach]:
+    """Per function, the memory tables its own statements read and write."""
+    found: dict[Node, TableReach] = {}
+    for node, (path, _enclosing, function) in _nodes().items():
+        names = _local_table_names(function, _memory_bindings().get(path, {}))
+        mentions = _table_expressions(function, names)
+        if not mentions:
+            continue
+        statements = _statement_locals(function)
+        parents = {
+            child: parent for parent in ast.walk(function) for child in ast.iter_child_nodes(parent)
+        }
+        reads: set[str] = set()
+        writes: set[str] = set()
+        unclassified: set[tuple[str, str, str]] = set()
+        for child, tables in mentions:
+            if isinstance(child.ctx, ast.Store | ast.Del):
+                continue
+            operation = None
+            cursor: ast.AST = child
+            while cursor in parents:
+                cursor = parents[cursor]
+                if isinstance(cursor, ast.Call):
+                    root = _chain_root(cursor, statements)
+                    if root is not None:
+                        operation = STATEMENT_CONSTRUCTORS[root]
+                        break
+            if operation == "read":
+                reads |= tables
+            elif operation == "write":
+                writes |= tables
+            else:
+                # Conservative: an unreadable shape is a read, never a silent
+                # absence. It is registered as well, because a *write* misread as
+                # a read is the failure this direction cannot catch on its own.
+                reads |= tables
+                unclassified.add(
+                    (_relative(path), function.name, _enclosing_statement(child, parents))
+                )
+        found[node] = (frozenset(reads), frozenset(writes), frozenset(unclassified))
+    return found
+
+
+def _enclosing_statement(node: ast.AST, parents: dict[ast.AST, ast.AST]) -> str:
+    """The source of the smallest statement holding `node`, for a legible registry."""
+    cursor = node
+    while cursor in parents and not isinstance(cursor, ast.stmt):
+        cursor = parents[cursor]
+    return ast.unparse(cursor)
+
+
+@cache
+def _reachable_from(node: Node) -> frozenset[Node]:
+    """`node` and everything it can call, transitively."""
+    edges = _edges()
+    seen = {node}
+    pending = [node]
+    while pending:
+        for callee in edges.get(pending.pop(), frozenset()):
+            if callee not in seen:
+                seen.add(callee)
+                pending.append(callee)
+    return frozenset(seen)
+
+
+@cache
+def capability_table_reach() -> dict[Capability, tuple[frozenset[str], frozenset[str]]]:
+    """The derived answer `RM-API-AC-002` needs: which rows, and read or written."""
+    direct = _direct_table_reach()
+    found: dict[Capability, tuple[frozenset[str], frozenset[str]]] = {}
+    for capability, (owner, method) in _handlers().items():
+        reached = _reachable_from(("C", owner, method))
+        reads = frozenset[str]().union(*(direct[node][0] for node in reached if node in direct))
+        writes = frozenset[str]().union(*(direct[node][1] for node in reached if node in direct))
+        if reads or writes:
+            found[capability] = (reads, writes)
+    return found
+
+
+def test_every_capability_reaches_exactly_the_tables_it_declares() -> None:
+    """The derived table sets, against the declaration `RM-API-AC-002` restates.
+
+    Exact set equality per capability and in both directions, for the reason the
+    row's own history gives: a capability that starts reading a new memory table
+    discloses something new under a purpose already granted, and a capability
+    that stops leaves the row describing a reach the code no longer has.
+
+    Membership rather than a count, because the defect this replaces was a count.
+    "It reads four of the eight" was arrived at by counting
+    `relationship_memory_proposals` twice and missing
+    `relationship_memory_proposal_evidence` once; the two errors nearly cancelled
+    and a bare number would have hidden the fact that they had not.
+    """
+    derived = capability_table_reach()
+    assert set(derived) == set(DECLARED_TABLE_REACH), (
+        f"{sorted(capability.value for capability in set(derived) ^ set(DECLARED_TABLE_REACH))} "
+        "reaches a memory table without a declared table set, or declares one and "
+        "reaches nothing"
+    )
+    wrong = [
+        f"{capability.value} reads {sorted(derived[capability][0])} and writes "
+        f"{sorted(derived[capability][1])}; it is declared to read "
+        f"{sorted(DECLARED_TABLE_REACH[capability][0])} and write "
+        f"{sorted(DECLARED_TABLE_REACH[capability][1])}"
+        for capability in sorted(derived, key=lambda member: member.value)
+        if derived[capability] != DECLARED_TABLE_REACH[capability]
+    ]
+    assert not wrong, (
+        "the tables these capabilities reach are not the tables declared for them. "
+        "Update `DECLARED_TABLE_REACH` and the matching `RM-API-AC-002` sentence "
+        "together, or repair the walk if the code did not move:\n" + "\n".join(wrong)
+    )
+
+
+def test_the_table_derivation_reads_every_statement_shape_it_meets() -> None:
+    """Anti-vacuity for claim 5, and the registry of what it could not classify.
+
+    Three floors. Both persistence modules must be represented, or the split is
+    measuring one plane; every one of the eight must be reached by something, or
+    a table is being disclosed by a claim that never mentions it; and the
+    unclassified mentions must be exactly the declared ones, because those are
+    the places a write could be reported as a read.
+    """
+    direct = _direct_table_reach()
+    assert direct, "no function names a memory table in a statement; the derivation went empty"
+    reads = frozenset[str]().union(*(entry[0] for entry in direct.values()))
+    writes = frozenset[str]().union(*(entry[1] for entry in direct.values()))
+    assert reads | writes == memory_tables(), (
+        f"{sorted(memory_tables() - (reads | writes))} is one of the eight and no "
+        "derived statement reads or writes it; the derivation is not seeing the plane"
+    )
+    assert writes, "nothing writes a memory table; `insert`/`update` are not being seen"
+    unclassified = frozenset[tuple[str, str, str]]().union(*(entry[2] for entry in direct.values()))
+    assert unclassified == frozenset(UNCLASSIFIED_TABLE_MENTIONS), (
+        f"{sorted(unclassified ^ frozenset(UNCLASSIFIED_TABLE_MENTIONS))} names a memory "
+        "table outside any statement this derivation can read. It has been counted as a "
+        "read; if it is a write, the derived set is wrong in the direction that matters"
+    )
+
+
+# --- claim 7: the acceptance row's own digits --------------------------------
+#
+# `test_claimed_test_counts_match_collection.py` is the precedent: parse a
+# document's figures and check them against a derived truth. Its lesson is taken
+# with its idiom — a pattern that stops matching is a guard that passes over
+# nothing, which happened there twice — so the parse asserts what it found before
+# anything asserts that what it found is right.
+
+#: `` `review.decide` reads three of the eight (`a`, `b`, `c`) ``. The count is
+#: spelled rather than in digits because the row's prose is spelled throughout,
+#: and the tables are carried in the same clause rather than somewhere in the
+#: surrounding paragraph: the defect being closed was a *correct* count beside a
+#: wrong membership, and a pattern that read only the number would have passed it.
+#:
+#: The capability is optional because the second half of a reach is written with
+#: the subject elided — "reads two of the eight (…) and writes none of the
+#: eight" — and requiring the name would have bound the read of every capability
+#: here and the write of none. That is the precedent module's own lesson about
+#: punctuation, in a different costume: a pattern that insists on one spelling
+#: silently guards the sentences written the other way. An elided subject carries
+#: over from the claim before it, and an elided subject with nothing before it is
+#: a failure rather than a skip.
+TABLE_SET_CLAIM: Final = re.compile(
+    r"(?:`(?P<capability>[a-z_]+(?:\.[a-z_]+)+)`\s+)?(?P<verb>reads|writes)\s+"
+    r"(?P<count>[a-z]+)\s+of the eight(?:\s*\((?P<tables>[^)]*)\))?"
+)
+
+#: The row spells its numbers, and only these can be meant by "of the eight".
+_SPELLED: Final = {
+    "none": 0,
+    "one": 1,
+    "two": 2,
+    "three": 3,
+    "four": 4,
+    "five": 5,
+    "six": 6,
+    "seven": 7,
+    "eight": 8,
+}
+
+_BACKTICKED_TABLE: Final = re.compile(r"`(relationship_memor\w+)`")
+
+
+@cache
+def _acceptance_row() -> tuple[str, int]:
+    """The `RM-API-AC-002` row and its line number, so a failure can be found."""
+    text = ACCEPTANCE.read_text(encoding="utf-8")
+    rows = [
+        (line, number)
+        for number, line in enumerate(text.splitlines(), start=1)
+        if line.startswith(f"| {ROW} ")
+    ]
+    assert len(rows) == 1, (
+        f"{ACCEPTANCE.name} holds {len(rows)} rows starting `| {ROW} `; this guard "
+        "reads exactly one"
+    )
+    return rows[0]
+
+
+def _row_claims() -> list[tuple[str, str, str, str | None]]:
+    """`(capability, verb, count word, table list)` for every claim in the row.
+
+    An elided subject takes the capability of the claim before it, which is what
+    "reads two of the eight and writes none of the eight" means to a reader. One
+    with nothing before it is carried through as the empty string so the check
+    below fails on it by name rather than being quietly dropped here.
+    """
+    row, _line = _acceptance_row()
+    found: list[tuple[str, str, str, str | None]] = []
+    subject = ""
+    for match in TABLE_SET_CLAIM.finditer(row):
+        subject = match.group("capability") or subject
+        found.append((subject, match.group("verb"), match.group("count"), match.group("tables")))
+    return found
+
+
+def test_the_acceptance_row_states_a_table_set_for_every_capability_it_discloses() -> None:
+    """Anti-vacuity for claim 7, then the coverage requirement, both derived.
+
+    A regular expression that matched nothing would make the parametrized check
+    below a guard over an empty list, which is the exact failure the precedent
+    module records twice. So: claims exist, both verbs appear, and — the part
+    that is derived rather than a floor — every capability in
+    `BEYOND_THE_EIGHT` carries both. Those three are what the row exists to
+    disclose, and they are the three whose prose has been wrong.
+    """
+    claims = _row_claims()
+    _row, line = _acceptance_row()
+    assert claims, (
+        f"no `` `capability` reads|writes N of the eight `` claim found at "
+        f"{ACCEPTANCE.name}:{line}; either the row changed shape or this pattern went "
+        "stale, and a stale pattern here checks nothing at all"
+    )
+    assert {verb for _capability, verb, _count, _tables in claims} == {"reads", "writes"}, (
+        f"{ACCEPTANCE.name}:{line} states only "
+        f"{sorted({verb for _c, verb, _n, _t in claims})}; a reach is two claims"
+    )
+    stated = {(capability, verb) for capability, verb, _count, _tables in claims}
+    required = {
+        (capability.value, verb) for capability in BEYOND_THE_EIGHT for verb in ("reads", "writes")
+    }
+    assert required <= stated, (
+        f"{sorted(required - stated)} is a capability `RM-API-AC-002` has to disclose "
+        "and the row states no table set for it. The three outside the eight are the "
+        "disclosure; leaving one's reach in unparsed prose is how it was wrong three times"
+    )
+
+
+@pytest.mark.parametrize(("capability", "verb", "count", "tables"), _row_claims())
+def test_every_table_set_the_acceptance_row_claims_matches_the_walk(
+    capability: str, verb: str, count: str, tables: str | None
+) -> None:
+    """One claim in the row, against the walk. Count and membership both."""
+    _row, line = _acceptance_row()
+    members = {member.value: member for member in Capability}
+    assert capability in members, (
+        f"{ACCEPTANCE.name}:{line} states a table set for `{capability}`, which is no "
+        "capability this build publishes"
+    )
+    assert count in _SPELLED, (
+        f"{ACCEPTANCE.name}:{line} spells `{capability}`'s {verb} count as {count!r}, "
+        f"which this guard cannot read. Spell it as one of {sorted(_SPELLED)}"
+    )
+    claimed = _SPELLED[count]
+    reads, writes = capability_table_reach().get(members[capability], (frozenset(), frozenset()))
+    derived = reads if verb == "reads" else writes
+    assert claimed == len(derived), (
+        f"{ACCEPTANCE.name}:{line} says `{capability}` {verb} {count} of the eight; the "
+        f"walk derives {len(derived)} ({sorted(derived)}). Correct the row rather than "
+        "this test"
+    )
+    if claimed == 0:
+        assert tables is None, (
+            f"{ACCEPTANCE.name}:{line} says `{capability}` {verb} none of the eight and "
+            f"then lists {tables!r}"
+        )
+        return
+    assert tables is not None, (
+        f"{ACCEPTANCE.name}:{line} says `{capability}` {verb} {count} of the eight and "
+        f"names none of them. Put the {claimed} in parentheses after the count — the "
+        "count was right and the membership wrong the last time this row was corrected"
+    )
+    named = frozenset(_BACKTICKED_TABLE.findall(tables))
+    assert named == derived, (
+        f"{ACCEPTANCE.name}:{line} says `{capability}` {verb} {sorted(named)}; the walk "
+        f"derives {sorted(derived)}. Correct the row rather than this test"
+    )
+
+
+# --- claim 9: the walk has no blind spot on the names that matter ------------
 
 
 @cache
@@ -736,21 +1500,55 @@ def _memory_reaching_port_methods() -> dict[str, frozenset[str]]:
     return found
 
 
+def _package(path: Path) -> str:
+    """The package a relative import inside `path` is relative to."""
+    module = _module_name(path)
+    return module if path.name == "__init__.py" else module.rpartition(".")[0]
+
+
+def _import_targets(path: Path, node: ast.Import | ast.ImportFrom) -> frozenset[str]:
+    """Every dotted module an import statement names, absolute or relative.
+
+    `from my_pa.contracts.ports import X`, `from my_pa.contracts import ports`,
+    `import my_pa.contracts.ports`, `from ..contracts import ports` and
+    `from .ports import X` all name the same module and are all returned as
+    `my_pa.contracts.ports`. The first spelling was the only one recognised, and
+    an independent review reached a repository from a module using the second.
+    """
+    if isinstance(node, ast.Import):
+        return frozenset(alias.name for alias in node.names)
+    if node.level:
+        parts = _package(path).split(".")
+        base = ".".join(parts[: max(len(parts) - node.level + 1, 0)])
+        if node.module:
+            base = f"{base}.{node.module}" if base else node.module
+    else:
+        base = node.module or ""
+    return frozenset({base}) | {f"{base}.{alias.name}" for alias in node.names}
+
+
 @cache
 def _port_holding_modules() -> frozenset[str]:
-    """Modules importing from `contracts.ports` — the only ones holding a repository.
+    """Modules naming `contracts.ports` in an import — the ones holding a repository.
 
     The sweep is scoped to these because the port method names include `search`,
     `get` and `history`, which every dictionary and regular expression in the
     tree also answers to. Scoping by *who could hold a port* rather than by
     which names look distinctive keeps the population derived: a module that
     starts holding a port joins the sweep by importing one.
+
+    Scoped by the module an import *names*, not by the exact string
+    `from my_pa.contracts.ports import …`. `from my_pa.contracts import ports`
+    reaches the same protocols and, before this, joined no sweep at all — a
+    helper taking a repository as an unannotated parameter was invisible to the
+    one claim that says the walk is not silently narrow.
     """
     return frozenset(
         _module_name(path)
         for path, tree in _sources()
         for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module == "my_pa.contracts.ports"
+        if isinstance(node, ast.Import | ast.ImportFrom)
+        and "my_pa.contracts.ports" in _import_targets(path, node)
     )
 
 
@@ -808,4 +1606,76 @@ def test_no_call_to_a_memory_reaching_port_method_has_an_untyped_receiver() -> N
         f"{sorted(untyped - UNTYPED_PORT_CALL_SITES)} call a port method that reaches a "
         "memory row through a receiver this walk cannot type, so the derived capability "
         "set may be narrower than the truth. Annotate the receiver"
+    )
+
+
+def test_no_reference_to_a_memory_reaching_port_method_escapes_uncalled() -> None:
+    """A port method handed around as a value, which no call-site sweep can see.
+
+    `functools.partial(repository.summaries_for_context, …)`, a callback put in a
+    registry, `handler = repository.cases` — each reaches a memory row, and in
+    none of them is the method ever the `func` of a `Call`, so `_edges()` records
+    no edge and the sibling sweep above finds no call site. An independent review
+    built one and watched every test here stay green.
+
+    Swept by *name* rather than by shape, so `partial` is not privileged over the
+    next construct that takes a callable. The price is one collision with a data
+    attribute of the same name, and the price is paid in a declaration that says
+    which one and why rather than in a narrower rule.
+    """
+    names = {method for methods in _memory_reaching_port_methods().values() for method in methods}
+    ports = frozenset[str]().union(
+        *(_implementations(port) for port in _memory_reaching_port_methods())
+    )
+    holders = _port_holding_modules()
+    escaping: set[tuple[str, str]] = set()
+    for _node, (path, enclosing, function) in _nodes().items():
+        module = _module_name(path)
+        if module not in holders:
+            continue
+        known = _environment(enclosing, function)
+        called = {id(call.func) for call in ast.walk(function) if isinstance(call, ast.Call)}
+        for reference in ast.walk(function):
+            if not isinstance(reference, ast.Attribute) or reference.attr not in names:
+                continue
+            if id(reference) in called:
+                continue
+            owner = _expression_type(reference.value, known)
+            if owner is None or owner in ports:
+                escaping.add((module, ast.unparse(reference)))
+    assert escaping == frozenset(UNCALLED_PORT_METHOD_REFERENCES), (
+        f"{sorted(escaping ^ frozenset(UNCALLED_PORT_METHOD_REFERENCES))} names a port "
+        "method that reaches a memory row without calling it, so the walk records no "
+        "edge and the derived capability set may be narrower than the truth. Call it "
+        "through a name this walk can follow, or declare why it is not one"
+    )
+
+
+def test_no_dispatch_through_a_subscript_hides_a_memory_reach() -> None:
+    """The codebase's own dispatch idiom, declared rather than assumed away.
+
+    `_HANDLERS[command.capability](…)` is how this application routes every
+    request, and `_edges()` cannot follow it: the call's `func` is a `Subscript`,
+    which has neither a name to resolve nor a receiver to type. A second table of
+    callables — `_MEMORY_READS["ctx"](repository, …)` — would reach memory rows
+    and appear in no derived set, and an independent review demonstrated exactly
+    that.
+
+    Two exist, both declared with what they dispatch to. The claim is not that
+    the idiom is absent; it is that each use of it has been read.
+    """
+    holders = _port_holding_modules()
+    found: set[tuple[str, str]] = set()
+    for _node, (path, _enclosing, function) in _nodes().items():
+        module = _module_name(path)
+        if module not in holders and _relative(path) not in MEMORY_SQL_MODULES:
+            continue
+        for call in ast.walk(function):
+            if isinstance(call, ast.Call) and isinstance(call.func, ast.Subscript):
+                found.add((module, ast.unparse(call.func)))
+    assert found == frozenset(DISPATCH_THROUGH_A_SUBSCRIPT), (
+        f"{sorted(found ^ frozenset(DISPATCH_THROUGH_A_SUBSCRIPT))} dispatches a call "
+        "through a subscript in a module that holds a port or builds memory SQL. This "
+        "walk follows no such call, so anything it reaches is missing from the derived "
+        "sets. Say what it dispatches to, or route it through a name"
     )

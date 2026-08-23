@@ -98,9 +98,11 @@ Ten claims, separated because they fail for different reasons:
    are parsed against it.** Claims 5 and 7 bound a union; this one bounds the
    itinerary. The same walk is re-run once per member of the enum the guards
    branch on, evaluating each `if` against that member, and the enum itself is
-   discovered from the guards rather than named here. A guard that mentions the
+   discovered from the guards rather than named here. An `if` that mentions the
    axis and that this evaluation cannot read is a redness
-   (`UNREADABLE_BRANCH_GUARDS`), never a quiet union.
+   (`UNREADABLE_BRANCH_GUARDS`), never a quiet union — an `if` and nothing else,
+   and a guard it reads *wrongly* is neither, which the open list below now says
+   rather than implies.
 
 **Why a walk and not a grep.** The reach is four hops long and no hop is
 spelled: `ApplicationService._entities_context` constructs an
@@ -145,7 +147,9 @@ the ones there are:
 
 * A *call* whose receiver this walk cannot type is caught only inside a module
   that imports `contracts.ports`, so a module reaching a repository handed to it
-  by some other route is unswept.
+  by some other route is unswept. **This is the sharpest of the ones nothing
+  covers**, which is the rank `RM-API-AC-002` gives it; the sharpest full stop is
+  the seventh below, and it is the only one on this list held by a test.
 * An uncalled reference to a port method whose receiver types to something
   *other* than a port implementation is allowed through, which is what lets
   `receipt.history` sit in a declaration rather than in the sweep — a genuine
@@ -155,8 +159,9 @@ the ones there are:
   correct; a helper that took the *operation* as a parameter too would not
   classify, and would land in `UNCLASSIFIED_TABLE_MENTIONS` as a read.
 * A `getattr` whose attribute name is *computed* rather than a literal cannot be
-  read at all. Four exist and each is declared with what it looks up, so the
-  claim is that they have been read — not that a fifth could not hide a reach.
+  read at all. Five exist and each is declared with what it looks up, so the
+  claim is that they have been read — not that a sixth could not hide a reach.
+  This bullet said four for as long as there were five.
 * Claim 10 splits on an enum member and assumes one member flows down the whole
   path. Nothing in the package passes an axis member as a call argument, and
   `test_the_branch_split_reads_every_guard_it_meets` asserts that; a call that
@@ -166,13 +171,69 @@ the ones there are:
   one — `stored_state is not None`, where `stored_state` came out of a
   member-keyed map. A guard on a value derived some other way (a boolean set in
   an earlier branch, say) reads as unknown, and unknown means both branches are
-  unioned, which is claim 5's answer rather than claim 10's. That is the
-  conservative direction for a bound and the wrong one for an itinerary, so it is
-  the escape on this list that matters most to `RM-API-AC-002`.
+  unioned, which is claim 5's answer rather than claim 10's: the conservative
+  direction for a bound and the wrong one for an itinerary. This bullet used to
+  end by calling that the escape here that matters most to `RM-API-AC-002`. It is
+  not, and the bullet below is why — the derived-value shape has a second mode,
+  and that mode is neither unknown nor conservative.
+* **A guard this evaluation decides *wrongly*, which every sentence above assumes
+  cannot happen.** The `nulls` state `_evaluate_guard` consults for
+  `stored_state is not None` is seeded where a local is assigned from the
+  member-keyed subscript, and is never invalidated when that local is reassigned.
+  So `stored_state = _STORED_STATE[request.disposition]` followed by
+  `if stored_state is None: stored_state = MemoryProposalState.NEEDS_REVIEW`
+  leaves the guard below it reading `False` for `mark_unresolved` while it is
+  `True` at runtime, and the pruned branch's `update(relationship_memory_proposals)`
+  drops out of the itinerary. The answer is confident, so it is not `None` and
+  never reaches `UNREADABLE_BRANCH_GUARDS`; it is *narrowing*, so the "unknown
+  unions both branches" argument does not reach it either. An independent review
+  wrote those two lines and left all forty tests in this module green, alongside
+  all twenty-four then in `tests/database/test_relationship_memory_review.py` —
+  the stray UPDATE stamps `needs_review`, which is the state that module reads
+  back and accepts. **This is the escape on the list that matters most to
+  `RM-API-AC-002`, and it is the only one on the list a test holds.** Nothing in
+  this module can hold it, because everything here reads the same source the
+  claim is about; what holds it is
+  `tests/database/test_relationship_memory_review.py::test_every_disposition_writes_exactly_the_memory_tables_it_is_declared_to`,
+  which drives every member of the axis enum against a real server and reads the
+  memory-plane tables off the statements the server is actually sent.
+  Two weaker relatives are open and uncovered. A `match` on the axis is unioned
+  across every one of its cases with no evaluation at all, and
+  `_guard_names_the_axis` is consulted only inside the `ast.If` arm of the branch
+  walk — so a `match`, a ternary, or `request.disposition.value == "accept"` (a
+  comparison against the member's *string* rather than against the member) reads
+  as unknown **and** never reaches `UNREADABLE_BRANCH_GUARDS` to say that it did.
+  Those are the conservative direction, and they are silent about being in it,
+  which is the half of the previous bullet's claim that survives.
 
 Each is a way the derived sets could be narrower, or less specific, than the
-truth without anything reddening, and `RM-API-AC-002` therefore cites this module
-for what it derives rather than for completeness.
+truth without anything reddening — the seventh by being wrong rather than by
+being coarse — and `RM-API-AC-002` therefore cites this module for what it
+derives rather than for completeness.
+
+**What the declarations cost, written down rather than left to be discovered.**
+`UNCLASSIFIED_TABLE_MENTIONS`, `UNREADABLE_BRANCH_GUARDS`,
+`DISPATCH_THROUGH_A_SUBSCRIPT` and `DYNAMIC_ATTRIBUTE_LOOKUPS` are keyed on the
+*unparsed source* of the construct each declares, so renaming a local, a table
+binding or a dispatch table reddens them and the repair is to re-key the entry
+rather than to widen the rule. That is a real cost and it is deliberate. Keying
+them on `(module, function)` and a count would survive the rename — and would
+also survive a declared construct being *replaced* by a different one in the same
+place, which is the only thing these four actually claim: that each declared text
+has been read. The rename cost is paid loudly, by whoever renames; the
+replacement cost would be paid silently, by whoever replaces. They stay keyed on
+the text, and a rename here is a re-declaration and not a finding.
+
+`UNCALLED_PORT_METHOD_REFERENCES` carries a different cost, and a worse one,
+because it scales with the port surface rather than with this plane. It sweeps by
+bare method *name* over every module that imports `contracts.ports`, which is
+most of the application layer, so adding a `get`, a `list` or a `search` to
+`ReviewRepository` would pull in every same-named attribute in all of them at
+once and the declaration would have to absorb the lot. The narrower rule that
+would avoid it — sweep only receivers that type to a port — drops the receiver
+this walk *cannot* type, which is the escape the sweep exists for. So the cost
+stands. What is corrected is the claim beside it: its own note said the price is
+"one collision", and one is this head's count rather than the rule's bound.
 
 Nothing here opens a connection, reaches a source, or touches a database. It
 parses the source tree and imports the table declarations for their names.
@@ -594,8 +655,13 @@ DISPATCH_THROUGH_A_SUBSCRIPT: Final[dict[tuple[str, str], str]] = {
 #: `functools.partial(repository.summaries_for_context, …)`, a callback handed to
 #: a registry, `handler = repository.cases` — each reaches a memory row through a
 #: name `_edges()` never sees in call position. Sweeping for the *name* rather
-#: than for the call catches all three, at the price of one collision, which is
-#: what this declaration holds.
+#: than for the call catches all three, at the price of one collision at this
+#: head, which is what this declaration holds. **One is a measurement and not a
+#: bound.** The sweep runs over every module that imports `contracts.ports`, so
+#: the price is however many same-named attributes those modules happen to hold,
+#: and a `get`, a `list` or a `search` added to `ReviewRepository` would collect
+#: dozens at a stroke. The module docstring says why the narrower rule that would
+#: avoid that is not available.
 UNCALLED_PORT_METHOD_REFERENCES: Final[dict[tuple[str, str], str]] = {
     ("my_pa.application.service", "receipt.history"): (
         "not a port method. `receipt` is bound from `conflict.receipt` on a caught "
@@ -776,9 +842,15 @@ def _memory_bindings() -> dict[Path, dict[str, frozenset[str]]]:
       every statement that splats it, which is how `detail` and `history` name
       their columns and how `page_for_entity` names none of them directly.
 
-    A fourth spelling, a table fetched out of `metadata.tables[…]` by string,
-    would still be invisible. It does not occur, and this module's docstring says
-    so rather than leaving it implied.
+    A fourth spelling, a table fetched out of `metadata.tables[…]` by string, is
+    invisible *to this function* — there is no `Table` object in the expression
+    for it to bind. It is not an open escape, and this paragraph said it was for
+    exactly one commit: the string is what
+    `test_no_string_constant_names_a_memory_table_outside_the_declarations`
+    sweeps, and that sweep is why the module docstring stopped carrying the
+    spelling on its open list. The commit that closed it corrected the docstring
+    and left the sibling here saying the opposite, which is the species of defect
+    this whole module is a response to, one file in from the document it polices.
     """
     tables = memory_tables()
     found: dict[Path, dict[str, frozenset[str]]] = {}
@@ -1657,8 +1729,11 @@ EnumLiteral = tuple[str, str, frozenset[str]]
 def _enum_literals() -> dict[str, dict[str, EnumLiteral]]:
     """Per module, every module-level name bound to a literal over one enum.
 
-    Thirty-odd of these exist across the package and this function finds them by
-    shape. `_ACCEPTING` and `_STORED_STATE` are two of them and are named nowhere
+    Found by shape, and deliberately not counted: this docstring said "thirty-odd
+    of these exist" against a measurement of fifty-five, and a figure here would
+    be one more number in prose bound to nothing — which is the defect the rest
+    of this module exists to have caught.
+    `_ACCEPTING` and `_STORED_STATE` are two of them and are named nowhere
     in this module: a guard is read by resolving whatever name it references, so
     renaming either one changes nothing here and deleting one changes the derived
     answer rather than hiding a change to it.
@@ -1722,9 +1797,28 @@ def _evaluate_guard(
     membership of a literal collection, identity against one member, `is
     None`/`is not None` on a local pulled out of a member-keyed mapping, and the
     boolean combinations of those. Anything else is `None`, and `None` unions the
-    branches — so an unreadable guard costs precision, never soundness, and
-    `UNREADABLE_BRANCH_GUARDS` is where the ones that mention the axis are made
-    to be visible.
+    branches, which costs precision and not soundness;
+    `UNREADABLE_BRANCH_GUARDS` is where the ones that mention the axis in an `if`
+    are made to be visible.
+
+    **The third shape is the exception, and this docstring used to say there was
+    none.** It read "an unreadable guard costs precision, never soundness", which
+    is true of every `None` this function returns and false of the one answer it
+    gets confidently wrong. `nulls` is seeded by the branch walk where a local is
+    assigned from a member-keyed subscript, and it is not invalidated when that
+    local is reassigned — so
+
+        stored_state = _STORED_STATE[request.disposition]
+        if stored_state is None:
+            stored_state = MemoryProposalState.NEEDS_REVIEW
+        if stored_state is not None:        # always true at runtime
+
+    has this function answer `False` for `mark_unresolved` to a guard that is
+    `True`, pruning a branch that runs. That is *narrowing*, not conservative,
+    and it is invisible: the answer is not `None`, so it never reaches the
+    registry. The module docstring's seventh open escape is this, and what holds
+    it is a database test that reads the statements the server is sent rather
+    than anything that reads this source.
     """
     if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
         inner = _evaluate_guard(test.operand, enum, member, known=known, module=module, nulls=nulls)
@@ -2342,11 +2436,31 @@ def test_the_acceptance_row_states_a_write_set_for_every_branch() -> None:
     so a disposition added to `Disposition` puts an unstated branch in this set
     and reddens the build. That is the property the previous correction lacked —
     it stated a quantifier over branches, and nothing anywhere counted them.
+
+    **The population it is satisfied by is the acceptance row alone**, which
+    `RM-API-AC-002` says of it and this test did not do. It read
+    `_all_branch_claims()`, which spans the row *and* `BEYOND_THE_EIGHT`'s reason
+    strings, and the `review.decide` reason states the `reject` and
+    `mark_unresolved` branches itself — so deleting the `mark_unresolved`
+    sentence from the row, or spelling its count in digits, or writing `of the 8`,
+    each left this green while the row no longer made the claim the row is cited
+    for. Its sibling
+    `test_the_acceptance_row_states_a_table_set_for_every_capability_it_discloses`
+    already restricted itself to `_documents()[0]`, and the two now agree.
+
+    A branch claim written *inside* a reason string is still parsed and still
+    checked against the split by
+    `test_every_branch_table_set_a_document_claims_matches_the_walk`, because that
+    one is parametrized over both documents. It is checked when present and not
+    required to be present, and that asymmetry is deliberate rather than an
+    omission: the row is the disclosure `RM-API-AC-002` is cited for, and a reason
+    string that chose to say less would be saying less about a claim the row is
+    already required to make in full.
     """
-    _row, line = _acceptance_row()
+    label, text, _default = _documents()[0]
     stated = {
         (capability, member)
-        for _l, capability, member, verb, _n, _t, _q in _all_branch_claims()
+        for _l, capability, member, verb, _n, _t, _q in _branch_claims_in(label, text)
         if verb == "writes"
     }
     required = {
@@ -2358,9 +2472,11 @@ def test_the_acceptance_row_states_a_write_set_for_every_branch() -> None:
     assert required, "no capability branches its writes; claim 10's population went empty"
     assert required <= stated, (
         f"{sorted(required - stated)} is a branch whose write set differs from its "
-        f"siblings' and {ACCEPTANCE.name}:{line} states nothing for it. The union is a "
+        f"siblings' and {label} states nothing for it. The union is a "
         "bound; a sentence about one disposition is a claim about one branch, and this "
-        "row has already shipped one of those that was false"
+        "row has already shipped one of those that was false. A reason string in "
+        "`BEYOND_THE_EIGHT` stating the same branch does not satisfy this: the row is "
+        "what `RM-API-AC-002` is cited for"
     )
 
 
@@ -2724,9 +2840,10 @@ def test_no_attribute_named_by_a_string_hides_a_memory_reach() -> None:
 
     A *literal* name that a memory-reaching port declares is a redness with no
     registry entry available: the repair is to call the method. A *computed* name
-    cannot be read at all, and the four that exist are declared with what they
+    cannot be read at all, and the five that exist are declared with what they
     look up, so the claim about them is that they have been read rather than that
-    a fifth could not hide a reach.
+    a sixth could not hide a reach. This docstring and the module docstring both
+    said four while `DYNAMIC_ATTRIBUTE_LOOKUPS` held five.
     """
     names = {method for methods in _memory_reaching_port_methods().values() for method in methods}
     assert names, "no port method reaches a memory row; the crossing map went empty"

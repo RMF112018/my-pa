@@ -6,7 +6,7 @@ source-, rule- or model-derived candidate becomes memory only when a reviewer
 decides so (`RM-AC-005`, `RM-AC-016`, `RM-API-AC-011`, `RM-API-AC-012`,
 `RM-P-AC-008`).
 
-Five claims carry this path and each is asserted against the server rather than
+Six claims carry this path and each is asserted against the server rather than
 against the code that usually calls it:
 
 * **A proposal is not memory.** Its invisibility to `page_for_entity` and
@@ -26,6 +26,19 @@ against the code that usually calls it:
   nothing" are different claims.
 * **A foreign proposal is invisible and undecidable**, and the two answers are
   the same one an absent identifier gets.
+* **Every disposition writes exactly the memory-plane tables its branch is
+  declared to write**, measured from the SQL the server is actually sent rather
+  than from a count of rows or from a reading of the source. This is the only
+  claim in the memory plane that is checked against the wire, and it exists
+  because the check next to it is not: `RM-API-AC-002`'s per-branch sentences
+  are held by an AST walk in
+  `tests/architecture/test_every_capability_reaching_a_memory_row_is_declared.py`,
+  and an AST walk can be confidently *wrong* about a branch without going quiet.
+  An independent review demonstrated that — two plausible lines in
+  `decide_relationship_memory_review` made `mark_unresolved` issue the proposal
+  UPDATE while every one of that module's forty tests, and every one of the
+  twenty-four here, stayed green. The population is `Disposition`'s own members,
+  so a disposition the router grows arrives here unstated.
 
 Everything is synthetic: two invented Principals, invented entities, invented
 notes. The database is created and dropped by this module's own fixture and is
@@ -34,7 +47,9 @@ never the configured one.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -42,7 +57,7 @@ from typing import Any, Final
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, Engine, Row, insert, select, text
+from sqlalchemy import Connection, Engine, Row, event, insert, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
@@ -802,6 +817,188 @@ def test_a_disposition_with_no_route_is_unsupported(
 
     with two_principals.connect() as connection:
         assert _counts(connection) == before
+
+
+# --- what each disposition sends to the server --------------------------------
+#
+# The claim `RM-API-AC-002` makes per branch — "`review.decide` on
+# `mark_unresolved` writes one of the eight" — is derived by an AST walk in
+# `tests/architecture/test_every_capability_reaching_a_memory_row_is_declared.py`,
+# and that walk binds the row to itself. What it cannot do is notice that it is
+# wrong: it evaluates a guard on a value pulled out of a member-keyed mapping by
+# remembering which members the mapping sends to `None`, and it does not
+# invalidate that memory when the local is reassigned. Two lines —
+#
+#     stored_state = _STORED_STATE[request.disposition]
+#     if stored_state is None:
+#         stored_state = MemoryProposalState.NEEDS_REVIEW
+#     if stored_state is not None:        # always true at runtime
+#
+# — leave the walk deciding the second guard `False` for `mark_unresolved`, so
+# the derived itinerary still says one table while the server is sent an UPDATE
+# on a second. Every architecture test stayed green under exactly that edit, and
+# so did every test in this module, because the stray UPDATE writes
+# `needs_review` and the assertion that reads the stored state back accepts it.
+#
+# So the itinerary is measured once where nothing is parsed and nothing is
+# inferred: from the statements PostgreSQL is handed.
+
+
+@contextmanager
+def _statements_sent_to(engine: Engine) -> Iterator[list[str]]:
+    """Every SQL statement the server is sent over `engine` inside the block.
+
+    `before_cursor_execute` fires on the compiled statement on its way out, so
+    what is collected is what the driver sends and not what a reading of the
+    persistence module predicts it will send. The listener is removed on the way
+    out, because an engine here is shared with the fixtures that seeded it.
+    """
+    seen: list[str] = []
+
+    def record(
+        _connection: object,
+        _cursor: object,
+        statement: str,
+        _parameters: object,
+        _context: object,
+        _executemany: bool,
+    ) -> None:
+        seen.append(statement)
+
+    event.listen(engine, "before_cursor_execute", record)
+    try:
+        yield seen
+    finally:
+        event.remove(engine, "before_cursor_execute", record)
+
+
+#: `INSERT INTO knowledge.relationship_memory_versions (…)`, and the two other
+#: verbs that change a row. Matched on the plane's shared table prefix rather
+#: than on a list of the eight, and stopping a letter short of
+#: `relationship_memory_` so `relationship_memories` is included: the assertion
+#: below is an equality, so a name outside the expectation fails by appearing.
+_WRITE_STATEMENT: Final = re.compile(
+    r"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM)\s+(?:\w+\.)?(relationship_memor\w*)",
+    re.IGNORECASE,
+)
+
+
+def _memory_tables_written(statements: list[str]) -> frozenset[str]:
+    """The memory-plane tables `statements` change, read off the SQL itself."""
+    return frozenset(
+        name.lower() for statement in statements for name in _WRITE_STATEMENT.findall(statement)
+    )
+
+
+#: Per disposition, the memory-plane tables a decision on a memory case makes
+#: the server change.
+#:
+#: Stated here and compared to the wire, which is the whole point: this is the
+#: one place the per-branch claim is not derived from the same source the claim
+#: is about. The test parametrizes over `Disposition` itself and asserts this
+#: mapping covers it, so a disposition added to the router arrives unstated
+#: rather than unmeasured.
+#:
+#: An empty set means the router refuses the disposition before its first
+#: statement, and the test requires the refusal and the emptiness together —
+#: writing nothing because the request raised and writing nothing because the
+#: branch had nothing to write are different facts, and one standing in for the
+#: other is how a route could be removed without notice.
+_TABLES_WRITTEN_PER_DISPOSITION: Final[dict[Disposition, frozenset[str]]] = {
+    Disposition.ACCEPT: frozenset(
+        {
+            "relationship_memories",
+            "relationship_memory_versions",
+            "relationship_memory_evidence_links",
+            "relationship_memory_review_decisions",
+            "relationship_memory_proposals",
+        }
+    ),
+    Disposition.CORRECT_AND_ACCEPT: frozenset(
+        {
+            "relationship_memories",
+            "relationship_memory_versions",
+            "relationship_memory_evidence_links",
+            "relationship_memory_review_decisions",
+            "relationship_memory_proposals",
+        }
+    ),
+    Disposition.REJECT: frozenset(
+        {"relationship_memory_review_decisions", "relationship_memory_proposals"}
+    ),
+    Disposition.DEFER: frozenset(
+        {"relationship_memory_review_decisions", "relationship_memory_proposals"}
+    ),
+    Disposition.MARK_UNRESOLVED: frozenset({"relationship_memory_review_decisions"}),
+    Disposition.REPROCESS: frozenset(),
+    Disposition.ESCALATE: frozenset(),
+}
+
+
+@pytest.mark.parametrize("disposition", list(Disposition), ids=lambda member: member.value)
+def test_every_disposition_writes_exactly_the_memory_tables_it_is_declared_to(
+    two_principals: Engine, disposition: Disposition
+) -> None:
+    """One decision, and the tables its statements actually change.
+
+    The proposal carries one piece of evidence, which is what puts
+    `relationship_memory_evidence_links` in the two accepting branches; an
+    evidence-free acceptance writes four of these five and is held next door by
+    `test_an_acceptance_with_no_evidence_is_confirmed_rather_than_source_backed`.
+
+    Statements rather than row counts, because a row count cannot tell an UPDATE
+    that changes nothing from an UPDATE that was never sent — and the branch this
+    exists to hold, `mark_unresolved`, is exactly the one whose escape looks like
+    a no-op UPDATE stamping the state it already had.
+    """
+    assert set(_TABLES_WRITTEN_PER_DISPOSITION) == set(Disposition), (
+        f"{sorted(set(Disposition) ^ set(_TABLES_WRITTEN_PER_DISPOSITION))} is a "
+        "disposition the router publishes with no declared write set here, or a write "
+        "set for a disposition that no longer exists. `RM-API-AC-002` states one "
+        "sentence per member and this is the measurement behind them"
+    )
+    expected = _TABLES_WRITTEN_PER_DISPOSITION[disposition]
+
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(connection)
+
+    refused = False
+    with _statements_sent_to(two_principals) as statements:
+        try:
+            with two_principals.begin() as connection:
+                decide_relationship_memory_review(
+                    connection,
+                    _decision(
+                        review_case_id,
+                        disposition,
+                        corrected_value=(
+                            CORRECTED_NOTE
+                            if disposition is Disposition.CORRECT_AND_ACCEPT
+                            else None
+                        ),
+                    ),
+                )
+        except ReviewUnsupportedError:
+            refused = True
+
+    assert statements, (
+        "no statement reached the server at all; the listener is not attached and this "
+        "test is measuring nothing"
+    )
+    written = _memory_tables_written(statements)
+    assert written == expected, (
+        f"deciding `{disposition.value}` sends the server statements that write "
+        f"{sorted(written)}; it is declared to write {sorted(expected)}. If the router "
+        "moved, `RM-API-AC-002`'s sentence for this branch and the architecture guard's "
+        "`DECLARED_BRANCH_WRITES` move with it"
+    )
+    assert refused == (not expected), (
+        f"deciding `{disposition.value}` "
+        + ("raised" if refused else "did not raise")
+        + f" `ReviewUnsupportedError` and writes {sorted(written)}. A disposition with no "
+        "route writes nothing because it is refused; a disposition with a route writes "
+        "what its branch declares"
+    )
 
 
 # --- conflict, staleness, and a subject that moved ----------------------------

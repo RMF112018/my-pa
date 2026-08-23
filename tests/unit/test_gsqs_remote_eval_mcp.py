@@ -16,7 +16,8 @@ from subprocess import run
 import httpx2
 from mcp.types import CallToolResult, ImageContent
 
-from my_pa.adapters.mcp.gsqs_remote_eval import (
+from my_pa.adapters.gsqs_remote_eval_mcp import (
+    DEFAULT_EVAL_RESOURCE,
     EVAL_TOOL_NEXT,
     EVAL_TOOL_STATUS,
     EVAL_TOOL_SUBMIT,
@@ -29,10 +30,14 @@ from my_pa.adapters.mcp.gsqs_remote_eval import (
 )
 from my_pa.application.goodnotes_gsqs_remote_eval import RemoteEvalService
 from my_pa.application.goodnotes_gsqs_remote_eval_contracts import (
+    ERROR_FORBIDDEN_SCOPE,
     ERROR_NO_ACTIVE_SESSION,
     ERROR_SESSION_NOT_IN_PROGRESS,
     EVENT_OUTBOUND_ATTEMPT_STARTED,
     RemoteEvalError,
+)
+from my_pa.infrastructure.security.gsqs_remote_eval_authentication import (
+    GsqsRemoteEvalAuthenticationError,
 )
 from tests.conftest import _staged_gray_png
 from tests.unit.test_goodnotes_gsqs_remote_eval_state import (
@@ -43,7 +48,7 @@ from tests.unit.test_goodnotes_gsqs_remote_eval_state import (
     _request,
 )
 
-ADAPTER = Path("src/my_pa/adapters/mcp/gsqs_remote_eval.py")
+ADAPTER = Path("src/my_pa/adapters/gsqs_remote_eval_mcp.py")
 ENTRYPOINT = Path("apps/gsqs_remote_eval.py")
 PRODUCTION_TOOL_NAMES = ("goodnotes.propose", "goodnotes.work", "goodnotes.content")
 
@@ -62,6 +67,18 @@ class FakeAuthenticator:
         if authorization_header != self._authorization:
             raise RemoteEvalError("UNAUTHENTICATED", "unauthenticated")
         return FakePrincipal(self._principal_id)
+
+
+class ForbiddenScopeAuthenticator:
+    def authenticate(self, authorization_header: str | None) -> FakePrincipal:
+        _ = authorization_header
+        raise RemoteEvalError(ERROR_FORBIDDEN_SCOPE, "insufficient scope")
+
+
+class ForbiddenScopeAuthErrorAuthenticator:
+    def authenticate(self, authorization_header: str | None) -> FakePrincipal:
+        _ = authorization_header
+        raise GsqsRemoteEvalAuthenticationError("FORBIDDEN_SCOPE")
 
 
 class FakeRasterReader:
@@ -110,6 +127,31 @@ def test_tools_list_is_exactly_the_three_eval_names() -> None:
         assert production not in names
 
 
+def test_eval_tools_restore_annotations_and_keep_oauth_meta() -> None:
+    tools = {tool.name: tool for tool in gsqs_eval_tools()}
+    status = tools[EVAL_TOOL_STATUS].annotations
+    nxt = tools[EVAL_TOOL_NEXT].annotations
+    submit = tools[EVAL_TOOL_SUBMIT].annotations
+    assert status is not None
+    assert nxt is not None
+    assert submit is not None
+    assert status.read_only_hint is True
+    assert status.destructive_hint is False
+    assert status.open_world_hint is False
+    assert nxt.read_only_hint is False
+    assert nxt.destructive_hint is False
+    assert nxt.open_world_hint is False
+    assert submit.read_only_hint is False
+    assert submit.destructive_hint is False
+    assert submit.open_world_hint is False
+    for tool in tools.values():
+        meta = tool.meta or {}
+        schemes = meta.get("securitySchemes")
+        assert isinstance(schemes, list)
+        assert schemes[0]["type"] == "oauth2"
+        assert "my-pa.gsqs.evaluate" in schemes[0]["scopes"]
+
+
 def test_input_schemas_forbid_additional_properties() -> None:
     tools = {tool.name: tool for tool in gsqs_eval_tools()}
     for name in (EVAL_TOOL_STATUS, EVAL_TOOL_NEXT, EVAL_TOOL_SUBMIT):
@@ -136,21 +178,23 @@ def test_adapter_and_entrypoint_do_not_import_production_tools() -> None:
             elif isinstance(node, ast.ImportFrom) and node.module:
                 imported.add(node.module)
         assert "my_pa.adapters.mcp.tools" not in imported
-        assert not any(name.startswith("my_pa.adapters.mcp.tools") for name in imported)
+        assert "my_pa.adapters.mcp" not in imported
+        assert not any(
+            name == "my_pa.adapters.mcp" or name.startswith("my_pa.adapters.mcp.")
+            for name in imported
+        )
         assert "my_pa.application.service" not in imported
 
 
 def test_importing_the_adapter_does_not_load_production_tools() -> None:
     script = """
-import importlib.util
 import sys
-from pathlib import Path
+sys.modules.pop("my_pa.adapters.mcp", None)
 sys.modules.pop("my_pa.adapters.mcp.tools", None)
-path = Path("src/my_pa/adapters/mcp/gsqs_remote_eval.py")
-spec = importlib.util.spec_from_file_location("gsqs_remote_eval_isolated", path)
-module = importlib.util.module_from_spec(spec)
-assert spec.loader is not None
-spec.loader.exec_module(module)
+sys.modules.pop("my_pa.adapters.mcp.server", None)
+sys.modules.pop("my_pa.adapters.mcp.remote", None)
+import my_pa.adapters.gsqs_remote_eval_mcp as module
+assert "my_pa.adapters.mcp" not in sys.modules
 assert "my_pa.adapters.mcp.tools" not in sys.modules
 assert "published_tools" not in module.__dict__
 """
@@ -302,6 +346,65 @@ def test_principal_mismatch_is_forbidden() -> None:
     )
     assert result.is_error is True
     assert _error_code(result) == "FORBIDDEN_SCOPE"
+
+
+EXPECTED_RESOURCE_METADATA = (
+    f"{DEFAULT_EVAL_RESOURCE.removesuffix('/mcp').rstrip('/')}"
+    "/.well-known/oauth-protected-resource/mcp"
+)
+
+
+def _mcp_auth_status(authenticator: object, *, authorization: str | None) -> tuple[int, str]:
+    service, store, _clock, _staging, _disclosure = _harness()
+    app = create_gsqs_remote_eval_app(
+        authenticator=authenticator,
+        service=service,
+        store=store,
+        raster_reader=FakeRasterReader(_png()),
+        allowed_hosts=("testserver",),
+        enabled=True,
+    )
+
+    async def _exercise() -> tuple[int, str]:
+        headers = {} if authorization is None else {"Authorization": authorization}
+        async with (
+            app.router.lifespan_context(app),
+            httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app),
+                base_url="http://testserver",
+                headers=headers,
+            ) as client,
+        ):
+            response = await client.post(
+                "/mcp",
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            )
+        return response.status_code, response.headers.get("www-authenticate", "")
+
+    return asyncio.run(_exercise())
+
+
+def test_mcp_auth_challenge_is_401_unauthenticated_and_403_forbidden_scope() -> None:
+    unauthenticated_status, unauthenticated_challenge = _mcp_auth_status(
+        FakeAuthenticator(), authorization=None
+    )
+    assert unauthenticated_status == 401
+    assert EXPECTED_RESOURCE_METADATA in unauthenticated_challenge
+    assert "insufficient_scope" not in unauthenticated_challenge
+
+    remote_eval_status, remote_eval_challenge = _mcp_auth_status(
+        ForbiddenScopeAuthenticator(), authorization="Bearer synthetic"
+    )
+    assert remote_eval_status == 403
+    assert EXPECTED_RESOURCE_METADATA in remote_eval_challenge
+    assert 'error="insufficient_scope"' in remote_eval_challenge
+
+    auth_error_status, auth_error_challenge = _mcp_auth_status(
+        ForbiddenScopeAuthErrorAuthenticator(), authorization="Bearer synthetic"
+    )
+    assert auth_error_status == 403
+    assert EXPECTED_RESOURCE_METADATA in auth_error_challenge
+    assert 'error="insufficient_scope"' in auth_error_challenge
 
 
 def test_enabled_false_returns_404_for_mcp() -> None:

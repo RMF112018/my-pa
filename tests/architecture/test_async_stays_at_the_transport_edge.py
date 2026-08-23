@@ -6,8 +6,9 @@ in this system that must be `async def`, and `D-27` admits them as a bounded
 edge rather than as the start of an asynchronous application.
 
 "Bounded" is the part a comment cannot hold. These rules parse the tree and say
-where a coroutine may exist: **inside `adapters/mcp` or the exact origin OAuth
-HTTP adapter and nowhere else in `src/`**, and nowhere at all in `apps/`, which
+where a coroutine may exist: **inside `adapters/mcp`, the exact origin OAuth
+HTTP adapter, or the isolated GSQS remote-eval Streamable HTTP adapter, and
+nowhere else in `src/`**, and nowhere at all in `apps/`, which
 is where a composition root would otherwise acquire an event loop of its own.
 `serve_stdio` is an ordinary `def` precisely so that no caller ever sees one,
 and `test_the_mcp_entry_points_are_synchronous`
@@ -31,9 +32,11 @@ APPS = ROOT / "apps"
 
 #: The one package a coroutine may live in. `module-boundaries.md` section 5.7
 #: puts transport concerns in a transport adapter, and the concurrency the SDK
-#: brings is one.
+#: brings is one. The isolated GSQS remote-eval Streamable HTTP adapter is a
+#: second MCP SDK edge, not a member of the production `adapters/mcp` package.
 ASYNC_SUBTREE = PACKAGE / "adapters" / "mcp"
 OAUTH_ADAPTER = PACKAGE / "adapters" / "http" / "oauth.py"
+EVAL_MCP_ADAPTER = PACKAGE / "adapters" / "gsqs_remote_eval_mcp.py"
 
 #: Every node that makes a module asynchronous. `AsyncFunctionDef` is the
 #: coroutine, and the other three are the statements that can only appear inside
@@ -61,7 +64,11 @@ def test_there_is_async_to_confine() -> None:
 
 @pytest.mark.parametrize(
     "path",
-    [p for p in _modules(PACKAGE) if not p.is_relative_to(ASYNC_SUBTREE) and p != OAUTH_ADAPTER],
+    [
+        p
+        for p in _modules(PACKAGE)
+        if not p.is_relative_to(ASYNC_SUBTREE) and p != OAUTH_ADAPTER and p != EVAL_MCP_ADAPTER
+    ],
     ids=lambda p: str(p.name),
 )
 def test_no_module_outside_the_mcp_adapter_is_asynchronous(path: Path) -> None:
@@ -75,7 +82,8 @@ def test_no_module_outside_the_mcp_adapter_is_asynchronous(path: Path) -> None:
     found = sorted(set(_async_nodes(path)))
     assert not found, (
         f"{path.relative_to(PACKAGE)} contains {found}; `D-27` confines async to "
-        "the MCP SDK edge and the exact origin OAuth HTTP adapter"
+        "the MCP SDK edge, the exact origin OAuth HTTP adapter, and the isolated "
+        "GSQS remote-eval Streamable HTTP adapter"
     )
 
 
@@ -113,6 +121,14 @@ def test_the_origin_oauth_async_surface_is_exact_and_bounded() -> None:
     assert found.count("AsyncFunctionDef") == 8, found
     assert found.count("Await") == 13, found
     assert found.count("AsyncWith") == 0, found
+    assert found.count("AsyncFor") == 0, found
+
+
+def test_the_eval_mcp_async_surface_is_exact_and_bounded() -> None:
+    found = _async_nodes(EVAL_MCP_ADAPTER)
+    assert found.count("AsyncFunctionDef") == 9, found
+    assert found.count("Await") == 9, found
+    assert found.count("AsyncWith") == 2, found
     assert found.count("AsyncFor") == 0, found
 
 

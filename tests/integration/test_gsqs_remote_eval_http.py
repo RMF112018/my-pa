@@ -6,19 +6,31 @@ Synthetic Partition-B PNGs only. No ChatLLM, no Phase C, no network.
 
 from __future__ import annotations
 
+import base64
+import hashlib
+from collections.abc import Iterator
+from contextlib import contextmanager
+from datetime import UTC, datetime
 from hashlib import sha256
 from pathlib import Path
+from urllib.parse import parse_qs, urlsplit
 
 import httpx2
 import pytest
+from sqlalchemy import Connection, create_engine
+from sqlalchemy.engine import Engine
+from sqlalchemy.pool import StaticPool
 
 import my_pa.infrastructure.gsqs_routellm_transport as routellm
 from my_pa.adapters.gsqs_remote_eval_mcp import (
+    DEFAULT_EVAL_RESOURCE,
+    EVAL_OAUTH_SCOPE,
     EVAL_TOOL_NEXT,
     EVAL_TOOL_STATUS,
     EVAL_TOOL_SUBMIT,
     create_gsqs_remote_eval_app,
 )
+from my_pa.adapters.http.oauth import build_origin_oauth_routes
 from my_pa.application.goodnotes_gsqs_remote_eval_contracts import (
     CASES_PER_REPETITION,
     ERROR_CAPTURE_CONFLICT,
@@ -31,6 +43,12 @@ from my_pa.application.goodnotes_gsqs_remote_eval_contracts import (
     REPETITIONS_REQUIRED,
     RemoteEvalSessionState,
 )
+from my_pa.infrastructure.persistence.remote_identity import REMOTE_IDENTITY_METADATA
+from my_pa.infrastructure.security.gsqs_remote_eval_authentication import (
+    GsqsRemoteEvalAuthenticationError,
+    GsqsRemoteEvalAuthenticator,
+)
+from my_pa.infrastructure.security.origin_authorization import OriginOAuthServer
 from tests.integration.gsqs_remote_eval_harness import (
     ALLOWED_HOSTS,
     AUTHORIZATION_SERVERS,
@@ -385,3 +403,178 @@ async def test_219_remote_protocol_next_submit_pairs(tmp_path: Path, no_external
     assert events.count(EVENT_OUTBOUND_ATTEMPT_STARTED) == 219
     assert events.count(EVENT_DISCLOSED_TO_TRANSPORT) == 219
     assert capture_path(state_root, session_id, 3, 73, "syn-b-073").is_file()
+
+
+EVAL_ISSUER = "https://my-pa-gsqs.bobby-fetting.me"
+EVAL_OPERATOR_SECRET = "s" * 43
+CHATLLM_REDIRECT = "https://abacus.ai/oauth/callback"
+PKCE_VERIFIER = "v" * 43
+PKCE_CHALLENGE = (
+    base64.urlsafe_b64encode(hashlib.sha256(PKCE_VERIFIER.encode()).digest()).rstrip(b"=").decode()
+)
+OAUTH_ROUTE_PATHS = (
+    "/.well-known/oauth-authorization-server",
+    "/oauth/register",
+    "/oauth/authorize",
+    "/oauth/token",
+    "/oauth/revoke",
+)
+
+
+@pytest.fixture
+def eval_identity_engine() -> Iterator[Engine]:
+    engine = create_engine(
+        "sqlite://",
+        connect_args={"check_same_thread": False},
+        poolclass=StaticPool,
+    )
+    with engine.begin() as connection:
+        connection.exec_driver_sql("ATTACH DATABASE ':memory:' AS identity")
+        REMOTE_IDENTITY_METADATA.create_all(connection)
+    yield engine
+    engine.dispose()
+
+
+def _eval_oauth_app(
+    tmp_path: Path, engine: Engine
+) -> tuple[object, OriginOAuthServer, GsqsRemoteEvalAuthenticator]:
+    @contextmanager
+    def connections() -> Iterator[Connection]:
+        with engine.begin() as connection:
+            yield connection
+
+    authorization_server = OriginOAuthServer(
+        connections=connections,
+        issuer=EVAL_ISSUER,
+        resource=DEFAULT_EVAL_RESOURCE,
+        supported_scopes=frozenset({EVAL_OAUTH_SCOPE}),
+        now=lambda: datetime(2026, 8, 23, 12, tzinfo=UTC),
+    )
+    authenticator = GsqsRemoteEvalAuthenticator(
+        token_context=authorization_server.introspect,
+        connections=connections,
+        required_resource=DEFAULT_EVAL_RESOURCE,
+        required_scope=EVAL_OAUTH_SCOPE,
+    )
+    service, _store, _state_root = empty_eval_service(tmp_path)
+    app = create_gsqs_remote_eval_app(
+        authenticator,
+        service,
+        enabled=True,
+        allowed_hosts=ALLOWED_HOSTS,
+        allowed_origins=(),
+        resource=DEFAULT_EVAL_RESOURCE,
+        authorization_servers=(EVAL_ISSUER,),
+        scopes=frozenset({EVAL_OAUTH_SCOPE}),
+        extra_routes=build_origin_oauth_routes(
+            authorization_server, operator_secret=EVAL_OPERATOR_SECRET
+        ),
+    )
+    return app, authorization_server, authenticator
+
+
+async def test_enabled_eval_app_exposes_origin_oauth_http_routes(
+    tmp_path: Path, no_external_io: None, eval_identity_engine: Engine
+) -> None:
+    app, _server, _authenticator = _eval_oauth_app(tmp_path, eval_identity_engine)
+    paths = {getattr(route, "path", None) for route in app.routes}
+    for path in OAUTH_ROUTE_PATHS:
+        assert path in paths
+    methods_by_path = {
+        getattr(route, "path", None): set(getattr(route, "methods", ()) or ())
+        for route in app.routes
+    }
+    assert "GET" in methods_by_path["/.well-known/oauth-authorization-server"]
+    assert "POST" in methods_by_path["/oauth/register"]
+    assert {"GET", "POST"} <= methods_by_path["/oauth/authorize"]
+    assert "POST" in methods_by_path["/oauth/token"]
+    assert "POST" in methods_by_path["/oauth/revoke"]
+
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
+        ) as client,
+    ):
+        metadata = await client.get("/.well-known/oauth-authorization-server")
+        register = await client.post("/oauth/register", content=b"{")
+        authorize = await client.get("/oauth/authorize")
+        token = await client.post("/oauth/token", data={"grant_type": "authorization_code"})
+        revoke = await client.post("/oauth/revoke", data={"token": "not-a-live-token"})
+    assert metadata.status_code == 200
+    document = metadata.json()
+    assert document["issuer"] == EVAL_ISSUER
+    assert document["scopes_supported"] == [EVAL_OAUTH_SCOPE]
+    assert "my-pa.read" not in document["scopes_supported"]
+    assert register.status_code == 400
+    assert authorize.status_code == 400
+    assert token.status_code == 400
+    assert revoke.status_code == 200
+    assert EVAL_OPERATOR_SECRET not in metadata.text
+
+
+async def test_eval_dcr_pkce_issues_token_for_eval_resource_and_scope(
+    tmp_path: Path, no_external_io: None, eval_identity_engine: Engine
+) -> None:
+    app, _server, authenticator = _eval_oauth_app(tmp_path, eval_identity_engine)
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app), base_url="http://testserver"
+        ) as client,
+    ):
+        registered = await client.post(
+            "/oauth/register",
+            json={
+                "client_name": "ChatLLM",
+                "redirect_uris": [CHATLLM_REDIRECT],
+                "grant_types": ["authorization_code", "refresh_token"],
+                "response_types": ["code"],
+                "token_endpoint_auth_method": "none",
+                "scope": EVAL_OAUTH_SCOPE,
+            },
+        )
+        assert registered.status_code == 201
+        client_id = str(registered.json()["client_id"])
+        authorization = {
+            "response_type": "code",
+            "client_id": client_id,
+            "redirect_uri": CHATLLM_REDIRECT,
+            "scope": EVAL_OAUTH_SCOPE,
+            "state": "eval-synthetic-state",
+            "code_challenge": PKCE_CHALLENGE,
+            "code_challenge_method": "S256",
+            "resource": DEFAULT_EVAL_RESOURCE,
+        }
+        consent = await client.get("/oauth/authorize", params=authorization)
+        assert consent.status_code == 200
+        approved = await client.post(
+            "/oauth/authorize",
+            data={**authorization, "operator_secret": EVAL_OPERATOR_SECRET, "decision": "approve"},
+        )
+        assert approved.status_code == 303
+        query = parse_qs(urlsplit(approved.headers["location"]).query)
+        issued = await client.post(
+            "/oauth/token",
+            data={
+                "grant_type": "authorization_code",
+                "code": query["code"][0],
+                "client_id": client_id,
+                "redirect_uri": CHATLLM_REDIRECT,
+                "code_verifier": PKCE_VERIFIER,
+                "resource": DEFAULT_EVAL_RESOURCE,
+            },
+        )
+        assert issued.status_code == 200
+        tokens = issued.json()
+        access_token = str(tokens["access_token"])
+        principal = authenticator.authenticate(f"Bearer {access_token}")
+        assert principal.resource == DEFAULT_EVAL_RESOURCE
+        assert EVAL_OAUTH_SCOPE in principal.scopes
+        revoked = await client.post("/oauth/revoke", data={"token": access_token})
+        assert revoked.status_code == 200
+    assert EVAL_OPERATOR_SECRET not in registered.text
+    assert EVAL_OPERATOR_SECRET not in approved.headers.get("location", "")
+    with pytest.raises(GsqsRemoteEvalAuthenticationError) as error:
+        authenticator.authenticate(f"Bearer {access_token}")
+    assert error.value.code == "UNAUTHENTICATED"

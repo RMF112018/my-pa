@@ -7,11 +7,13 @@ from pathlib import Path
 import pytest
 
 from my_pa.bootstrap.settings import ENV_PREFIX, Settings, SettingsError, load_settings
+from my_pa.contracts.oauth import valid_operator_secret
 
 DATABASE_URL = f"{ENV_PREFIX}DATABASE_URL"
 _A_URL = "postgresql+psycopg://someone@db.invalid:5432/somewhere"
 PUBLIC_ORIGIN = "https://my-pa-gsqs.bobby-fetting.me"
 AUDIENCE = f"{PUBLIC_ORIGIN}/mcp"
+EVAL_OPERATOR_SECRET = "s" * 43
 
 
 def _environment(**overrides: str) -> dict[str, str]:
@@ -24,6 +26,7 @@ def _enabled(**overrides: str) -> dict[str, str]:
         f"{ENV_PREFIX}GSQS_REMOTE_EVAL_ENABLED": "true",
         f"{ENV_PREFIX}GSQS_REMOTE_EVAL_PUBLIC_ORIGIN": PUBLIC_ORIGIN,
         f"{ENV_PREFIX}GSQS_REMOTE_EVAL_STATE_ROOT": "gsqs-eval-state-root-synthetic",
+        f"{ENV_PREFIX}GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET": EVAL_OPERATOR_SECRET,
     }
     values.update(overrides)
     return values
@@ -43,6 +46,7 @@ def test_gsqs_remote_eval_defaults_are_disabled_and_empty_state_root() -> None:
     assert settings.gsqs_remote_eval_oauth_scope == "my-pa.gsqs.evaluate"
     assert settings.gsqs_remote_eval_allowed_origins == ""
     assert settings.gsqs_remote_eval_oauth_audience == AUDIENCE
+    assert settings.gsqs_remote_eval_oauth_operator_secret == ""
     assert "/srv" not in settings.gsqs_remote_eval_state_root
     assert Settings(database_url=_A_URL).gsqs_remote_eval_enabled is False
 
@@ -50,6 +54,7 @@ def test_gsqs_remote_eval_defaults_are_disabled_and_empty_state_root() -> None:
 def test_disabled_eval_does_not_require_oauth_operator_secret() -> None:
     settings = load_settings(_environment())
     assert settings.oauth_operator_secret == ""
+    assert settings.gsqs_remote_eval_oauth_operator_secret == ""
     assert settings.remote_mcp_enabled is False
 
 
@@ -59,7 +64,35 @@ def test_enabled_eval_does_not_require_production_oauth_operator_secret(tmp_path
     )
     assert settings.gsqs_remote_eval_enabled is True
     assert settings.oauth_operator_secret == ""
+    assert valid_operator_secret(settings.gsqs_remote_eval_oauth_operator_secret)
     assert settings.remote_mcp_enabled is False
+    assert EVAL_OPERATOR_SECRET not in repr(settings)
+    assert Settings.model_fields["gsqs_remote_eval_oauth_operator_secret"].repr is False
+
+
+def test_enabled_without_eval_oauth_operator_secret_fails_closed(tmp_path: Path) -> None:
+    with pytest.raises(SettingsError, match="GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET"):
+        load_settings(
+            _enabled(
+                **{
+                    f"{ENV_PREFIX}GSQS_REMOTE_EVAL_STATE_ROOT": str(tmp_path),
+                    f"{ENV_PREFIX}GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET": "",
+                }
+            )
+        )
+
+
+def test_eval_operator_secret_must_not_equal_production_secret(tmp_path: Path) -> None:
+    with pytest.raises(SettingsError, match="must not equal"):
+        load_settings(
+            _enabled(
+                **{
+                    f"{ENV_PREFIX}GSQS_REMOTE_EVAL_STATE_ROOT": str(tmp_path),
+                    f"{ENV_PREFIX}GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET": EVAL_OPERATOR_SECRET,
+                    f"{ENV_PREFIX}OAUTH_OPERATOR_SECRET": EVAL_OPERATOR_SECRET,
+                }
+            )
+        )
 
 
 def test_enabled_without_public_origin_fails_closed() -> None:

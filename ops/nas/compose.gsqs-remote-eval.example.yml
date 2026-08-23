@@ -9,6 +9,8 @@
 # - does not mount a source raster-root beyond the sealed Phase A spool
 # - does not connect ChatLLM, Cloudflare, DNS, NAS live, or OAuth clients
 # - defaults MY_PA_GSQS_REMOTE_EVAL_ENABLED=false
+# - names MY_PA_GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET as a required env-file
+#   key when enabled; the example value is empty and is not a live secret
 #
 # Intended state root (operator-created host directory, not a Settings default):
 #   /srv/my-pa/gsqs-remote-eval
@@ -33,6 +35,7 @@ services:
       MY_PA_GSQS_REMOTE_EVAL_PUBLIC_ORIGIN: ""
       MY_PA_GSQS_REMOTE_EVAL_OAUTH_AUDIENCE: "https://my-pa-gsqs.bobby-fetting.me/mcp"
       MY_PA_GSQS_REMOTE_EVAL_OAUTH_SCOPE: "my-pa.gsqs.evaluate"
+      MY_PA_GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET: ""
       MY_PA_GSQS_REMOTE_EVAL_ALLOWED_ORIGINS: ""
       MY_PA_GSQS_REMOTE_EVAL_MAX_CONCURRENCY: "1"
       MY_PA_AUTH_MODE: local_operator

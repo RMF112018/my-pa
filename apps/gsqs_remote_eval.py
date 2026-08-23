@@ -13,13 +13,17 @@ root, concurrency 1, no wildcard origins). The intended NAS state root is
 ``/srv/my-pa/gsqs-remote-eval``; Settings leaves that path empty so tests cannot
 inherit it. Tests override to a temporary directory and must never use ``/srv``.
 
-**Token introspection.** When enabled, the process reuses origin OAuth
-introspection (``OriginOAuthServer.introspect``) against the evaluation resource
-``https://my-pa-gsqs.bobby-fetting.me/mcp`` and scope ``my-pa.gsqs.evaluate``.
-That composition does not mint live clients and does not run a database
-migration. If token_context cannot be composed, the process fails closed with a
-message that names the gap and never echoes secrets. Tests inject authenticator
-and ``RemoteEvalService`` through ``build_eval_app_from_settings``.
+**Token introspection and DCR/PKCE.** When enabled, the process composes
+``OriginOAuthServer`` for the evaluation resource
+``https://my-pa-gsqs.bobby-fetting.me/mcp`` and scope ``my-pa.gsqs.evaluate``,
+uses ``.introspect`` for bearer authentication, and mounts the origin OAuth
+HTTP routes (register, authorize, token, revoke, authorization-server metadata)
+so ChatLLM can complete DCR+PKCE against this audience. Production MCP cannot
+issue eval tokens: authorize rejects ``resource != self.resource``. Composition
+does not mint live clients and does not run a database migration. If the
+authenticator cannot be composed, the process fails closed with a message that
+names the gap and never echoes secrets. Tests inject authenticator and
+``RemoteEvalService`` through ``build_eval_app_from_settings``.
 """
 
 from __future__ import annotations
@@ -27,7 +31,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -35,6 +39,7 @@ from typing import Final
 import uvicorn
 from sqlalchemy.engine import Engine
 from starlette.applications import Starlette
+from starlette.routing import BaseRoute
 
 from my_pa.adapters.gsqs_remote_eval_mcp import (
     DEFAULT_EVAL_RESOURCE,
@@ -42,6 +47,7 @@ from my_pa.adapters.gsqs_remote_eval_mcp import (
     GsqsEvalPrincipal,
     create_gsqs_remote_eval_app,
 )
+from my_pa.adapters.http.oauth import build_origin_oauth_routes
 from my_pa.application.goodnotes_gsqs_remote_eval import RemoteEvalService
 from my_pa.application.goodnotes_gsqs_remote_eval_contracts import (
     ERROR_UNAUTHENTICATED,
@@ -165,11 +171,15 @@ def compose_eval_service(settings: Settings) -> RemoteEvalService:
     )
 
 
-def compose_eval_authenticator(settings: Settings) -> tuple[GsqsEvalAuthenticator, Engine]:
-    """Build origin introspection for the evaluation resource, or fail closed.
+def compose_eval_authenticator(
+    settings: Settings,
+) -> tuple[GsqsEvalAuthenticator, Engine, OriginOAuthServer]:
+    """Build origin OAuth for the evaluation resource, or fail closed.
 
-    Construction does not register live clients and does not migrate. Engine
-    callers own ``dispose()``.
+    Construction does not register live clients and does not migrate. The
+    returned ``OriginOAuthServer`` is the same instance used for introspection
+    so DCR/PKCE can issue tokens for this audience. Engine callers own
+    ``dispose()``.
     """
     engine: Engine | None = None
     message = ""
@@ -192,7 +202,7 @@ def compose_eval_authenticator(settings: Settings) -> tuple[GsqsEvalAuthenticato
             required_resource=settings.gsqs_remote_eval_oauth_audience.strip(),
             required_scope=settings.gsqs_remote_eval_oauth_scope.strip(),
         )
-        return _EvalAuthenticatorAdapter(authenticator), engine
+        return _EvalAuthenticatorAdapter(authenticator), engine, authorization_server
     except Exception:
         if engine is not None:
             engine.dispose()
@@ -208,6 +218,7 @@ def build_eval_app_from_settings(
     bind_host: str = HOST,
     bind_port: int | None = None,
     readiness: Callable[[], bool] | None = None,
+    extra_routes: Sequence[BaseRoute] = (),
 ) -> Starlette:
     """Compose the isolated eval ASGI app from validated Settings.
 
@@ -254,6 +265,7 @@ def build_eval_app_from_settings(
         max_image_bytes=settings.gsqs_remote_eval_max_image_bytes,
         max_result_bytes=settings.gsqs_remote_eval_max_result_bytes,
         readiness=readiness,
+        extra_routes=extra_routes,
     )
 
 
@@ -265,7 +277,7 @@ def main(argv: list[str] | None = None) -> int:
     engine: Engine | None = None
     try:
         if settings.gsqs_remote_eval_enabled:
-            authenticator, engine = compose_eval_authenticator(settings)
+            authenticator, engine, authorization_server = compose_eval_authenticator(settings)
             service = compose_eval_service(settings)
             app = build_eval_app_from_settings(
                 settings,
@@ -273,6 +285,10 @@ def main(argv: list[str] | None = None) -> int:
                 service=service,
                 bind_host=host,
                 bind_port=port,
+                extra_routes=build_origin_oauth_routes(
+                    authorization_server,
+                    operator_secret=settings.gsqs_remote_eval_oauth_operator_secret,
+                ),
             )
         else:
             app = build_eval_app_from_settings(

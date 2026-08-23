@@ -76,6 +76,7 @@ def _enabled(tmp_path: Path, **overrides: str) -> dict[str, str]:
         f"{ENV_PREFIX}GSQS_REMOTE_EVAL_PUBLIC_ORIGIN": PUBLIC_ORIGIN,
         f"{ENV_PREFIX}GSQS_REMOTE_EVAL_STATE_ROOT": str(tmp_path),
         f"{ENV_PREFIX}GSQS_REMOTE_EVAL_ALLOWED_ORIGINS": "https://chatllm.example.invalid",
+        f"{ENV_PREFIX}GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET": "s" * 43,
     }
     values.update(overrides)
     return values
@@ -330,3 +331,23 @@ def test_compose_eval_authenticator_fails_closed_without_echoing_secrets(
     assert "super-secret-value" not in rendered
     assert "password=" not in rendered
     assert "cannot be composed" in rendered
+
+
+def test_enabled_app_prepends_extra_routes(tmp_path: Path) -> None:
+    from starlette.responses import JSONResponse
+    from starlette.routing import Route
+
+    async def extra(_request: object) -> JSONResponse:
+        return JSONResponse({"extra": True})
+
+    settings = load_settings(_enabled(tmp_path))
+    app = build_eval_app_from_settings(
+        settings,
+        authenticator=FakeAuthenticator(),
+        service=FakeService(),
+        extra_routes=[Route("/oauth/register", extra, methods=["POST"])],
+    )
+    paths = [getattr(route, "path", "") for route in app.routes]
+    assert paths[0] == "/oauth/register"
+    assert "/mcp" in paths
+    assert "/.well-known/oauth-protected-resource" in paths

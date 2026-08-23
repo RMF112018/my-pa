@@ -237,17 +237,20 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
     """One setting can carry a credential; a second one arriving is a decision.
 
     `database_url` is exempt because a PostgreSQL URL is where a password
-    belongs when the environment supplies one. The origin OAuth operator secret
-    is the one deliberately admitted approval credential; both fields are
-    hidden from repr. Every other field must stay plainly non-secret.
+    belongs when the environment supplies one. The origin OAuth operator secrets
+    are the deliberately admitted approval credentials (production remote MCP
+    and isolated GSQS remote-eval); those fields are hidden from repr. Every
+    other field must stay plainly non-secret.
     """
     tokens = ("password", "secret", "token", "key", "credential", "dsn", "url", "path")
+    admitted = {"database_url", "oauth_operator_secret", "gsqs_remote_eval_oauth_operator_secret"}
     for name in Settings.model_fields:
-        if name in {"database_url", "oauth_operator_secret"}:
+        if name in admitted:
             continue
         for token in tokens:
             assert token not in name, f"settings field {name!r} looks secret-bearing"
     assert Settings.model_fields["oauth_operator_secret"].repr is False
+    assert Settings.model_fields["gsqs_remote_eval_oauth_operator_secret"].repr is False
 
 
 def test_an_absent_database_url_is_refused_rather_than_defaulted() -> None:

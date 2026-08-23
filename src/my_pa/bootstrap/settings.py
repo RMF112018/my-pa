@@ -5,11 +5,11 @@ out-of-range value raises rather than falling back to a default, so a typo in a
 security-relevant name cannot silently leave the safe setting in place.
 
 No secret is committed. `database_url` and the origin OAuth operator approval
-secret are the two settings whose values may carry credentials; neither has a
-usable default. The messages this module composes never echo either value, and
-both fields are `repr=False` so their values do not ride out in `repr(settings)`
-either — the channel that mattered most, because pytest
-prints the `repr` of a failing assertion's operands.
+secrets (production remote MCP and isolated GSQS remote-eval) are the settings
+whose values may carry credentials; none has a usable default. The messages this
+module composes never echo those values, and the fields are `repr=False` so they
+do not ride out in `repr(settings)` either — the channel that mattered most,
+because pytest prints the `repr` of a failing assertion's operands.
 
 Two channels were open here and are named rather than left to be found. The first
 is closed. Pydantic's own `ValidationError` renders `input_value=`, and for a
@@ -32,7 +32,7 @@ reading `str(exc)`, because reading only the top-level message is what let this
 survive a review.
 
 The second channel is open by design: `model_dump` and `model_dump_json` return
-both credential-bearing fields. They are asked for explicitly rather than
+those credential-bearing fields. They are asked for explicitly rather than
 reached by accident, and callers must not log their output. `repr`, `str` and the
 exception chain are the paths something reaches without meaning to, and those are
 the ones closed.
@@ -408,7 +408,9 @@ class Settings(StrictModel):
     #: **Live OAuth secrets are not required to parse Settings while disabled.**
     #: The evaluation audience defaults to the public resource URL; it is not a
     #: credential. Production `oauth_operator_secret` remains the remote-MCP
-    #: secret and is not reused here.
+    #: secret and is not reused here. Enabling requires a dedicated
+    #: `gsqs_remote_eval_oauth_operator_secret`; it must not equal the
+    #: production secret when both are set.
     gsqs_remote_eval_enabled: bool = False
     gsqs_remote_eval_public_origin: str = ""
     gsqs_remote_eval_port: int = Field(default=8767, ge=1, le=65535)
@@ -421,6 +423,7 @@ class Settings(StrictModel):
     gsqs_remote_eval_oauth_scope: str = "my-pa.gsqs.evaluate"
     gsqs_remote_eval_allowed_origins: str = ""
     gsqs_remote_eval_oauth_audience: str = "https://my-pa-gsqs.bobby-fetting.me/mcp"
+    gsqs_remote_eval_oauth_operator_secret: str = Field(default="", repr=False)
     #: Legacy Entra verifier inputs remain available only to the dormant
     #: `auth_mode=entra` path. Remote MCP never reads them.
     oauth_issuer: str = Field(default="", repr=False)
@@ -598,8 +601,20 @@ class Settings(StrictModel):
             )
         if not self.gsqs_remote_eval_oauth_scope.strip():
             raise SettingsError("GSQS remote-eval OAuth scope is required")
+        eval_secret = self.gsqs_remote_eval_oauth_operator_secret
+        production_secret = self.oauth_operator_secret
+        if eval_secret and production_secret and eval_secret == production_secret:
+            raise SettingsError(
+                "GSQS remote-eval OAuth operator secret must not equal the "
+                "production OAuth operator secret"
+            )
         if not self.gsqs_remote_eval_enabled:
             return
+        if not valid_operator_secret(eval_secret):
+            raise SettingsError(
+                "GSQS remote-eval requires MY_PA_GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET "
+                "as a generated URL-safe operator secret"
+            )
         if not public_origin:
             raise SettingsError(
                 "GSQS remote-eval requires MY_PA_GSQS_REMOTE_EVAL_PUBLIC_ORIGIN as an "

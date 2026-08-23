@@ -43,7 +43,7 @@ from mcp.types import PaginatedRequestParams as ListToolsParams
 from starlette.applications import Starlette
 from starlette.requests import Request
 from starlette.responses import JSONResponse
-from starlette.routing import Route
+from starlette.routing import BaseRoute, Route
 from starlette.types import Receive, Scope, Send
 
 from my_pa import __version__
@@ -851,11 +851,15 @@ def create_gsqs_remote_eval_app(
     store: RemoteEvalStore | None = None,
     raster_reader: GsqsEvalRasterReader | None = None,
     call_timeout_seconds: float = 30.0,
+    extra_routes: Sequence[BaseRoute] = (),
 ) -> Starlette:
     """Compose ``/mcp`` for the isolated eval process.
 
     Host/Origin are parameterized; Worker F will pass Settings. Wildcard
     origins are refused. Concurrent MCP calls are fixed at 1.
+    ``extra_routes`` is prepended the same way production MCP prepends
+    ``additional_routes`` (origin OAuth DCR/PKCE). This adapter does not import
+    the production tool registry.
     """
 
     if not allowed_hosts:
@@ -891,7 +895,7 @@ def create_gsqs_remote_eval_app(
         )
 
     metadata_path = "/.well-known/oauth-protected-resource"
-    routes: list[Route] = [
+    public_routes: list[BaseRoute] = [
         Route(HEALTH_PATH, health, methods=["GET"]),
         Route(READINESS_PATH, ready, methods=["GET"]),
         Route(metadata_path, protected_resource, methods=["GET"]),
@@ -903,8 +907,13 @@ def create_gsqs_remote_eval_app(
         async def disabled_mcp(_request: Request) -> JSONResponse:
             return JSONResponse({"error": "not_found"}, status_code=404)
 
-        routes.insert(0, Route(MCP_PATH, disabled_mcp, methods=["GET", "POST", "DELETE"]))
-        return Starlette(routes=routes)
+        return Starlette(
+            routes=[
+                *extra_routes,
+                Route(MCP_PATH, disabled_mcp, methods=["GET", "POST", "DELETE"]),
+                *public_routes,
+            ]
+        )
 
     if service is None:
         raise ValueError("enabled eval MCP requires a RemoteEvalService")
@@ -941,22 +950,25 @@ def create_gsqs_remote_eval_app(
         async with manager.run():
             yield
 
-    routes.insert(
-        0,
-        Route(
-            MCP_PATH,
-            _EvalMcpEndpoint(
-                manager,
-                authenticator,
-                resource,
-                request_slots,
-                authentication_slots,
-                call_timeout_seconds,
-                True,
-                service,
-                scopes,
+    return Starlette(
+        routes=[
+            *extra_routes,
+            Route(
+                MCP_PATH,
+                _EvalMcpEndpoint(
+                    manager,
+                    authenticator,
+                    resource,
+                    request_slots,
+                    authentication_slots,
+                    call_timeout_seconds,
+                    True,
+                    service,
+                    scopes,
+                ),
+                methods=["GET", "POST", "DELETE"],
             ),
-            methods=["GET", "POST", "DELETE"],
-        ),
+            *public_routes,
+        ],
+        lifespan=lifespan,
     )
-    return Starlette(routes=routes, lifespan=lifespan)

@@ -383,8 +383,11 @@ PER_MODULE_ONLY: Final = {
         "transaction has already raised `ReviewNotFoundError` for a case the "
         "caller does not own. Isolation rests on those two `_mine` reads and not "
         "on the key: `review_case_id` is issued by `issue_identifier` and is "
-        "unique, so it narrows to one Principal's case or to nothing, but it "
-        "carries no Principal predicate of its own and a reader should not read "
+        "generated unique, but the schema does not enforce that — "
+        "`relationship_memory_proposals` carries no `UniqueConstraint` on the "
+        "column — so what narrows a case to one Principal or to nothing is the "
+        "generator's property and not the table's, and the column carries no "
+        "Principal predicate of its own either. A reader should not read either "
         "one into it. Per-module for the same reason its sibling is: this plane "
         "has no bespoke statement-level scan yet."
     ),

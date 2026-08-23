@@ -23,18 +23,30 @@ was wrong in the sentence announcing the fix. It said `review.decide` "reads fou
 of the eight" and, "on promotion, writes three". It reads three and writes five:
 the fourth read was `relationship_memory_proposals` counted twice, `_copy_evidence`'s
 own read of `relationship_memory_proposal_evidence` went unnamed, and `_promote`'s
-three writes were quoted as the capability's when `insert(relationship_memory_review_decisions)`
-and `update(relationship_memory_proposals)` fire on *every* disposition, promotion
-or not.
+three writes were quoted as the capability's when two more are issued outside the
+promotion branch.
 
-Three false enumerations of the capabilities, a fourth of their tables, one
-criterion. **So neither enumeration is prose here.** This module derives both
-from the source, compares each to a declaration, *and parses `RM-API-AC-002` for
-its own digits* so the row cannot restate a number the walk contradicts. The
-declared sets are literals because a declaration is the thing under review;
-everything they are measured against is derived.
+**The fourth failure moved the unchecked claim from the digits to the
+quantifier.** The commit that added the table derivation said, in the sentence
+announcing it, that those two non-promotion writes fire "on *every* disposition,
+a reject included", and that a grant "writes two memory-plane tables whatever it
+decides". False for one branch of five: `_STORED_STATE[Disposition.MARK_UNRESOLVED]`
+is `None` and the `update(relationship_memory_proposals)` is guarded by
+`if stored_state is not None`, so `mark_unresolved` writes one table where a
+reject writes two. The derivation could not catch it and was not asked to: a
+derived table set is a union over branches — a bound, not an itinerary — and the
+sentence made a per-branch claim about it. The digits were bound and the
+quantifier beside them was not.
 
-Nine claims, separated because they fail for different reasons:
+Three false enumerations of the capabilities, a fourth of their tables, a fifth
+of their branches, one criterion. **So none of it is prose here.** This module
+derives the capabilities, their tables *and* the per-branch split, compares each
+to a declaration, *and parses `RM-API-AC-002` for its own digits* so the row
+cannot restate a claim the walk contradicts. The declared sets are literals
+because a declaration is the thing under review; everything they are measured
+against is derived.
+
+Ten claims, separated because they fail for different reasons:
 
 1. **The eight tables are the schema's, not this file's.** They are read off the
    `Table` objects in `infrastructure.persistence.tables`, and the count is
@@ -70,14 +82,25 @@ Nine claims, separated because they fail for different reasons:
    verbs appear, and asserts every capability beyond the eight carries one.
 8. **The port crossings that reach memory are the two planes**, which is
    anti-vacuity for claim 9 and a statement worth making on its own.
-9. **The walk's demonstrated blind spots are closed or declared.** Four of them,
+9. **The walk's demonstrated blind spots are closed or declared.** Seven of them,
    each found by an independent review constructing a reach that slipped past the
    walk *and* past the untyped-receiver sweep: an unannotated receiver at a call
    site (`UNTYPED_PORT_CALL_SITES`), a port method referenced without being called
    — `functools.partial`, a callback, an assignment (`UNCALLED_PORT_METHOD_REFERENCES`),
-   a call dispatched through a subscript (`DISPATCH_THROUGH_A_SUBSCRIPT`), and a
+   a call dispatched through a subscript (`DISPATCH_THROUGH_A_SUBSCRIPT`), a
    table reached as `tables.<name>` rather than by a bare imported name, which
-   claim 2 now sees.
+   claim 2 now sees, a method named by a string through `getattr`
+   (`DYNAMIC_ATTRIBUTE_LOOKUPS`), a table named inside a SQL string rather than by
+   a `Table` object (`RAW_SQL_TABLE_MENTIONS`), and a *relative* import of a
+   memory-reaching function, which `_imported_names()` used to drop on the floor
+   while `_import_targets()` resolved it — an inconsistency, now gone.
+10. **What each *branch* writes is derived, and the row's per-branch sentences
+   are parsed against it.** Claims 5 and 7 bound a union; this one bounds the
+   itinerary. The same walk is re-run once per member of the enum the guards
+   branch on, evaluating each `if` against that member, and the enum itself is
+   discovered from the guards rather than named here. A guard that mentions the
+   axis and that this evaluation cannot read is a redness
+   (`UNREADABLE_BRANCH_GUARDS`), never a quiet union.
 
 **Why a walk and not a grep.** The reach is four hops long and no hop is
 spelled: `ApplicationService._entities_context` constructs an
@@ -96,28 +119,58 @@ followed — which is how `unit_of_work.reviews.cases(...)` reaches `_Reviews`.
 This over-approximates towards *more* reach, never less, and claim 9 is what
 says the approximation is not silently going the other way.
 
-**A derived table set is a bound, not an itinerary.** It says which of the eight
-a capability's code path *can* touch, unioned over every branch. `relationship_memory.archive`
-writes no statement, but it shares `_insert_version` with `revise`, so
-`relationship_memory_versions` and `relationship_memory_context_links` are in its
-write set. That is the right side to err on for a disclosure claim and the wrong
-side for a description of one request, and `RM-API-AC-002` says which it is
-making.
+**A derived table set is a bound, not an itinerary.** Claims 5, 6 and 7 say which
+of the eight a capability's code path *can* touch, unioned over every branch.
+`relationship_memory.archive` writes no statement, but it shares `_insert_version`
+with `revise`, so `relationship_memory_versions` and
+`relationship_memory_context_links` are in its write set. That is the right side
+to err on for a disclosure claim and the wrong side for a description of one
+request. Claim 10 is the itinerary, per branch of the axis the code branches on,
+and `RM-API-AC-002` has to say which of the two any given sentence is making —
+because the fourth failure above was a sentence that said the second while the
+guard checked the first.
 
-**What is still open, stated because the row may claim only what is bound.**
-Four escapes are closed above; these are not. A *call* whose receiver this walk
-cannot type is caught only inside a module that imports `contracts.ports`, so a
-module reaching a repository handed to it by some other route is unswept. An
-uncalled reference to a port method whose receiver types to something *other*
-than a port implementation is allowed through, which is what lets `receipt.history`
-sit in a declaration rather than in the sweep — a genuine port hidden behind a
-misleading annotation would ride out on the same rule. A statement built by a
-helper that takes the table as a *parameter* would attribute the table to the
-helper and the operation to whatever the helper does, which is correct, but a
-helper that took the *operation* as a parameter too would not classify. And
-`_memory_bindings` reads three import spellings; a fourth (a table fetched out of
-`metadata.tables["…"]` by string) would be invisible to every claim here. None of
-these exists today. Each is a way the derived sets could be narrower than the
+**What is still open — the ones known, which is a weaker sentence than the one
+this paragraph used to make.** It said "four escapes are closed above; these are
+not" and listed four, and a later review demonstrated three more that left every
+test here green. Those three are now closed: a method named by a *string* through
+`getattr` (claim 9 sweeps `getattr` and declares the four dynamic lookups that do
+exist), a table named inside a SQL *string* rather than by a `Table` object
+(claim 9 sweeps every non-docstring string constant in the package, which also
+closes the `metadata.tables["…"]` spelling this paragraph used to list as open),
+and a *relative* import of a memory-reaching function, which `_imported_names()`
+dropped while `_import_targets()` resolved it — the two now resolve imports the
+same way. What remains open is this, and the list is the ones found rather than
+the ones there are:
+
+* A *call* whose receiver this walk cannot type is caught only inside a module
+  that imports `contracts.ports`, so a module reaching a repository handed to it
+  by some other route is unswept.
+* An uncalled reference to a port method whose receiver types to something
+  *other* than a port implementation is allowed through, which is what lets
+  `receipt.history` sit in a declaration rather than in the sweep — a genuine
+  port hidden behind a misleading annotation would ride out on the same rule.
+* A statement built by a helper that takes the table as a *parameter* attributes
+  the table to the helper and the operation to whatever the helper does, which is
+  correct; a helper that took the *operation* as a parameter too would not
+  classify, and would land in `UNCLASSIFIED_TABLE_MENTIONS` as a read.
+* A `getattr` whose attribute name is *computed* rather than a literal cannot be
+  read at all. Four exist and each is declared with what it looks up, so the
+  claim is that they have been read — not that a fifth could not hide a reach.
+* Claim 10 splits on an enum member and assumes one member flows down the whole
+  path. Nothing in the package passes an axis member as a call argument, and
+  `test_the_branch_split_reads_every_guard_it_meets` asserts that; a call that
+  started to would make the split describe the caller's branch rather than the
+  callee's.
+* Claim 10 reads a guard on an axis member, and a guard on a value *derived* from
+  one — `stored_state is not None`, where `stored_state` came out of a
+  member-keyed map. A guard on a value derived some other way (a boolean set in
+  an earlier branch, say) reads as unknown, and unknown means both branches are
+  unioned, which is claim 5's answer rather than claim 10's. That is the
+  conservative direction for a bound and the wrong one for an itinerary, so it is
+  the escape on this list that matters most to `RM-API-AC-002`.
+
+Each is a way the derived sets could be narrower, or less specific, than the
 truth without anything reddening, and `RM-API-AC-002` therefore cites this module
 for what it derives rather than for completeness.
 
@@ -212,20 +265,30 @@ DECLARED: Final = frozenset(
 #: under a purpose issued for something else. This is the part of
 #: `RM-API-AC-002` that is a disclosure rather than a design, so each entry says
 #: the purpose, the rows and the fields rather than only the name.
+#:
+#: **Every table set stated here is parsed and checked, by the same functions
+#: that parse `RM-API-AC-002`.** These strings used to be the one place in this
+#: module where a derived fact was restated in unchecked prose — and the
+#: `review.decide` entry restated the false quantifier that blocked the fourth
+#: correction, one file further in than the row it was policing. An enumeration
+#: in a reason is written in the `N of the eight (…)` form on purpose: that form
+#: is what `_claims_in()` reads, and anything written another way is prose again.
 BEYOND_THE_EIGHT: Final = {
     Capability.ENTITIES_CONTEXT: (
-        "purpose `entity_read`. Reads `relationship_memories` joined to "
-        "`relationship_memory_versions` through `summaries_for_context`, and "
-        "carries each surviving memory's `statement` verbatim on the card — so "
-        "an `entity_read` grant does return memory text. Bounded by the "
+        "purpose `entity_read`. `entities.context` reads two of the eight "
+        "(`relationship_memories`, `relationship_memory_versions`) through "
+        "`summaries_for_context` and writes none of the eight, and it carries "
+        "each surviving memory's `statement` verbatim on the card — so an "
+        "`entity_read` grant does return memory text. Bounded by the "
         "classification filter, the 25-memory card limit and `_mine`, not by "
         "the purpose name; `RM-API-AC-013` carries the card's own bound."
     ),
     Capability.REVIEW_LIST: (
-        "purpose `capture_review`. `relationship_memory_review_cases` selects "
-        "`relationship_memory_proposals` with two correlated subqueries over "
-        "`relationship_memory_review_decisions`, so the listing discloses a "
-        "`subject_entity_id`, a `proposed_kind` and, once promoted, an "
+        "purpose `capture_review`. `review.list` reads two of the eight "
+        "(`relationship_memory_proposals`, `relationship_memory_review_decisions`) "
+        "and writes none of the eight: `relationship_memory_review_cases` selects "
+        "the first with two correlated subqueries over the second, so the listing "
+        "discloses a `subject_entity_id`, a `proposed_kind` and, once promoted, an "
         "`accepted_memory_id` and `accepted_memory_version_id` — for a subject "
         "the grant never named. It carries no statement text: "
         "`RelationshipMemoryReviewCase` has no statement field. Gated by the "
@@ -233,16 +296,22 @@ BEYOND_THE_EIGHT: Final = {
         "`RM-API-AC-011` and `RM-API-AC-018` carry."
     ),
     Capability.REVIEW_DECIDE: (
-        "purpose `review_disposition`. Reads three of the eight — "
-        "`relationship_memory_proposals` (the case test and again under "
-        "`FOR UPDATE`), `relationship_memory_review_decisions` for the chain, and "
-        "`relationship_memory_proposal_evidence` in both `_promote`'s count and "
-        "`_copy_evidence`'s own select — and writes five. Three of those five are "
-        "the promotion (`relationship_memories`, `relationship_memory_versions`, "
-        "`relationship_memory_evidence_links`); the other two, "
-        "`relationship_memory_review_decisions` and `relationship_memory_proposals`, "
-        "are written on *every* disposition, including a reject. Bounded by what "
-        "`_promotion_authority` can author and by the plane composition; "
+        "purpose `review_disposition`, and it reads as well as writes. "
+        "`review.decide` reads three of the eight "
+        "(`relationship_memory_proposals`, `relationship_memory_review_decisions`, "
+        "`relationship_memory_proposal_evidence`) and writes five of the eight "
+        "(`relationship_memories`, `relationship_memory_versions`, "
+        "`relationship_memory_evidence_links`, "
+        "`relationship_memory_review_decisions`, `relationship_memory_proposals`). "
+        "**That five is a union over branches and no request writes it.** This "
+        "string previously said the two non-promotion writes happen on every "
+        "disposition; they do not, and claim 10 is what now says so. "
+        "`review.decide` on `reject` writes two of the eight "
+        "(`relationship_memory_review_decisions`, `relationship_memory_proposals`), "
+        "while `review.decide` on `mark_unresolved` writes one of the eight "
+        "(`relationship_memory_review_decisions`) — `_STORED_STATE` maps that one "
+        "disposition to `None` and the proposal UPDATE is guarded on it. Bounded "
+        "by what `_promotion_authority` can author and by the plane composition; "
         "`RM-API-AC-011` carries the promotion path."
     ),
 }
@@ -422,6 +491,83 @@ UNCLASSIFIED_TABLE_MENTIONS: Final[dict[tuple[str, str, str], str]] = {
     ): "the same alias, for the context card",
 }
 
+#: The enums whose members the walk splits a capability's writes by.
+#:
+#: A *declaration*, and the only thing about claim 10 that is written down: the
+#: axis is discovered by `_branch_axes()` from the guards the code actually
+#: branches on, and this is what that discovery is compared to. Every population
+#: underneath it is the enum's own — the members come off the `class Disposition`
+#: body, not off a list here, so a ninth disposition joins the split by existing
+#: and a disposition that no literal happens to mention is still one of them.
+DECLARED_BRANCH_AXES: Final = frozenset({"Disposition"})
+
+#: Per axis, per capability, per member: the memory tables that member's branch
+#: can write. Only the capabilities whose write set actually *varies* by member
+#: are here; for every other one the split is uniform and claim 5's set is the
+#: whole answer, which `test_the_branch_split_reads_every_guard_it_meets`
+#: asserts rather than assumes.
+#:
+#: This is the itinerary `DECLARED_TABLE_REACH` deliberately is not. The union of
+#: the rows below is that declaration's write set, and the difference between
+#: them is exactly the false sentence this claim exists to have caught: five
+#: tables is what `review.decide` can write, one table is what `mark_unresolved`
+#: does write, and the row is now required to say both.
+DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str]]]]] = {
+    "Disposition": {
+        Capability.REVIEW_DECIDE: {
+            "accept": frozenset(
+                {
+                    "relationship_memories",
+                    "relationship_memory_evidence_links",
+                    "relationship_memory_proposals",
+                    "relationship_memory_review_decisions",
+                    "relationship_memory_versions",
+                }
+            ),
+            "correct_and_accept": frozenset(
+                {
+                    "relationship_memories",
+                    "relationship_memory_evidence_links",
+                    "relationship_memory_proposals",
+                    "relationship_memory_review_decisions",
+                    "relationship_memory_versions",
+                }
+            ),
+            "reject": frozenset(
+                {"relationship_memory_proposals", "relationship_memory_review_decisions"}
+            ),
+            "defer": frozenset(
+                {"relationship_memory_proposals", "relationship_memory_review_decisions"}
+            ),
+            "mark_unresolved": frozenset({"relationship_memory_review_decisions"}),
+            "reprocess": frozenset(),
+            "escalate": frozenset(),
+        }
+    }
+}
+
+#: Guards that name the branch axis and that claim 10's evaluation cannot read.
+#:
+#: An unreadable guard is unioned over both of its branches, which turns claim
+#: 10's itinerary back into claim 5's bound *for that branch* without saying so —
+#: so each one is declared here with why reading it would change nothing, in the
+#: same shape and for the same reason as `UNCLASSIFIED_TABLE_MENTIONS`. Only
+#: guards inside a function that reaches a memory row are collected; the capture
+#: and GoodNotes review planes branch on the same enum and reach none of the
+#: eight, so their guards are not this row's business.
+UNREADABLE_BRANCH_GUARDS: Final[dict[tuple[str, str, str], str]] = {
+    (
+        "my_pa.infrastructure.persistence.relationship_memory_review",
+        "decide_relationship_memory_review",
+        "any((Disposition(row.disposition) in _ACCEPTING for row in decisions))",
+    ): "the terminal-acceptance test, and the one place `_ACCEPTING` is asked about a "
+    "disposition that is *not* the request's — it reads the dispositions already on "
+    "the decision chain. Reading it against the requested member would be wrong, not "
+    "merely imprecise; it raises on the true branch, so leaving it unread costs the "
+    "split nothing",
+}
+
+
 #: Calls dispatched through a subscript, in a module that holds a port.
 #:
 #: `_edges()` cannot follow one: the call's `func` is a `Subscript`, so there is
@@ -466,6 +612,54 @@ UNCALLED_PORT_METHOD_REFERENCES: Final[dict[tuple[str, str], str]] = {
 #: narrower than the truth without saying so, and the honest repair is an
 #: annotation rather than a line in this registry.
 UNTYPED_PORT_CALL_SITES: Final[frozenset[tuple[str, str]]] = frozenset()
+
+#: Attribute lookups by name rather than by syntax, in a module that holds a port
+#: or builds memory SQL.
+#:
+#: `getattr(repository, "summaries_for_context")(…)` reaches a memory row through
+#: a *string*. It is not an `Attribute`, so neither sibling sweep sees it, and it
+#: is not a `Name` either, so `_edges()` records nothing — an independent review
+#: built one inside the declared population and watched every one of the
+#: eighteen tests this module then held stay green. A literal name that matches a
+#: memory-reaching port method is therefore a redness, and a *computed* name is
+#: declared with what it looks up: those cannot be read at all, and the claim
+#: about them is only that each has been.
+DYNAMIC_ATTRIBUTE_LOOKUPS: Final[dict[tuple[str, str], str]] = {
+    ("my_pa.application.context.providers", "getattr(continuity, method_name, None)"): (
+        "`method_name` comes from the three-tuple `listers` immediately above it — "
+        "`commitments`, `decisions`, `tasks` — none of which is a method of any port "
+        "that reaches a memory row, and the receiver is the continuity projection "
+        "rather than a repository."
+    ),
+    ("my_pa.application.context.providers", "getattr(record, id_attr)"): (
+        "the identifier field of a continuity record, named by the same `listers` "
+        "tuple. It reads a value off a row, not a method off a port."
+    ),
+    ("my_pa.application.context.providers", "getattr(record, text_attr, '')"): (
+        "the label field of the same continuity record, from the same tuple."
+    ),
+    ("my_pa.application.service", "getattr(command, field_name)"): (
+        "the task-update command's optional fields, named by the literal tuple "
+        "immediately above it. A command is a dataclass of values; it holds no port."
+    ),
+    ("my_pa.infrastructure.persistence.relationship_memory", "getattr(self._row, f'v_{name}')"): (
+        "`_VersionRow.__getattr__`, which re-labels one already-fetched SQLAlchemy "
+        "`Row` so `_to_version` can read it. The receiver is a row, the lookup issues "
+        "no statement, and the module it sits in is already declared as one of the "
+        "two that build memory SQL."
+    ),
+}
+
+#: Memory table names appearing inside a string constant anywhere in the package.
+#:
+#: Empty, and asserted empty. `_memory_bindings()` reads `Table` *objects* through
+#: three import spellings, so `connection.execute(text("SELECT … FROM "
+#: "relationship_memory_versions"))` reaches a memory row past every claim here —
+#: as would `metadata.tables["relationship_memories"]`, which this module's
+#: docstring used to list as an open escape. Both are strings, and a string is
+#: what this sweep reads. Docstrings are excluded because four of them discuss the
+#: tables by name, which is the documentation working rather than a reach.
+RAW_SQL_TABLE_MENTIONS: Final[frozenset[tuple[str, int, str]]] = frozenset()
 
 
 # --- the source tree, parsed once --------------------------------------------
@@ -751,21 +945,35 @@ def _module_functions() -> dict[tuple[str, str], ast.FunctionDef | ast.AsyncFunc
 def _imported_names() -> dict[str, dict[str, tuple[str, str]]]:
     """Per module, `local name -> (source module, original name)`.
 
-    Absolute imports, plus module-level assignment aliases. An aliased *import*
-    (`import … as x`) was followed from the start; an aliased *assignment*
-    (`_aliased = relationship_memory_review_cases`) was not, and a call through
-    the second name resolved to no edge at all — a reach that reddened nothing
-    because the walk simply did not see the call.
+    Every `from … import …`, relative or absolute, plus module-level assignment
+    aliases. An aliased *import* (`import … as x`) was followed from the start; an
+    aliased *assignment* (`_aliased = relationship_memory_review_cases`) was not,
+    and a call through the second name resolved to no edge at all — a reach that
+    reddened nothing because the walk simply did not see the call.
+
+    **Relative imports resolve here the same way they resolve in
+    `_import_targets()`.** They did not: this function filtered on
+    `node.level == 0` and dropped `from .relationship_memory_review import …` on
+    the floor, so a call through a relatively imported memory-reaching function
+    produced no edge and no complaint, while the sibling that scopes the
+    blind-spot sweep handled the same statement correctly. There are no relative
+    imports in `src/my_pa` today and nothing enforces that — no `TID` rule in
+    ruff's `select`, no architecture test — so the inconsistency was one import
+    statement away from mattering. Making the two agree costs one call and closes
+    it without a new rule about how imports may be spelled.
     """
     found: dict[str, dict[str, tuple[str, str]]] = {}
     for path, tree in _sources():
         module = _module_name(path)
-        bound = {
-            alias.asname or alias.name: (node.module, alias.name)
-            for node in ast.walk(tree)
-            if isinstance(node, ast.ImportFrom) and node.module and node.level == 0
-            for alias in node.names
-        }
+        bound: dict[str, tuple[str, str]] = {}
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom):
+                continue
+            source = _import_source(path, node)
+            if source is None:
+                continue
+            for alias in node.names:
+                bound[alias.asname or alias.name] = (source, alias.name)
         for statement in tree.body:
             target = _assigned_name(statement)
             value = getattr(statement, "value", None)
@@ -907,6 +1115,33 @@ def _expression_type(node: ast.expr, known: dict[str, str]) -> str | None:
     return None
 
 
+def _callees(call: ast.Call, module: str, known: dict[str, str]) -> frozenset[Node]:
+    """The nodes one call site can reach, over everything this walk can resolve.
+
+    Shared with claim 10, which walks the same edges a statement at a time so it
+    can tell which branch a call sits in — the whole-function edge map below
+    cannot, because it has thrown the branch away by the time it is built.
+    """
+    called = call.func
+    if isinstance(called, ast.Name):
+        if (module, called.id) in _module_functions():
+            return frozenset({("M", module, called.id)})
+        imported = _imported_names()[module].get(called.id)
+        if imported is not None and imported in _module_functions():
+            return frozenset({("M", imported[0], imported[1])})
+        return frozenset()
+    if isinstance(called, ast.Attribute):
+        owner = _expression_type(called.value, known)
+        if owner is None:
+            return frozenset()
+        return frozenset(
+            ("C", implementation, called.attr)
+            for implementation in _implementations(owner)
+            if ("C", implementation, called.attr) in _nodes()
+        )
+    return frozenset()
+
+
 @cache
 def _edges() -> dict[Node, frozenset[Node]]:
     """Caller to callee, over everything this walk can resolve."""
@@ -915,23 +1150,8 @@ def _edges() -> dict[Node, frozenset[Node]]:
         module = _module_name(path)
         known = _environment(enclosing, function)
         for call in ast.walk(function):
-            if not isinstance(call, ast.Call):
-                continue
-            called = call.func
-            if isinstance(called, ast.Name):
-                if (module, called.id) in _module_functions():
-                    found[node].add(("M", module, called.id))
-                    continue
-                imported = _imported_names()[module].get(called.id)
-                if imported is not None and imported in _module_functions():
-                    found[node].add(("M", imported[0], imported[1]))
-            elif isinstance(called, ast.Attribute):
-                owner = _expression_type(called.value, known)
-                if owner is None:
-                    continue
-                for implementation in _implementations(owner):
-                    if ("C", implementation, called.attr) in _nodes():
-                        found[node].add(("C", implementation, called.attr))
+            if isinstance(call, ast.Call):
+                found[node] |= _callees(call, module, known)
     return {caller: frozenset(callees) for caller, callees in found.items()}
 
 
@@ -1324,6 +1544,581 @@ def test_the_table_derivation_reads_every_statement_shape_it_meets() -> None:
     )
 
 
+# --- claim 10: what each branch writes ---------------------------------------
+#
+# Claims 5 and 6 union a capability's writes over every branch its handler can
+# reach. That is the right answer to "what may this grant change" and the wrong
+# answer to "what does a reject change", and `RM-API-AC-002` has now been wrong
+# about the second while the first was checked.
+#
+# So the same walk runs again, once per member of the enum the guards branch on,
+# with two differences. It walks statements in order instead of `ast.walk`-ing a
+# whole function, so a write inside `if disposition in _ACCEPTING:` is attributed
+# to that branch and a statement after `if …: raise` is attributed to the branch
+# that did not raise. And it evaluates each `if` against the member, so a branch
+# that cannot be taken contributes nothing.
+#
+# The axis is discovered, not named: `_branch_axes()` finds every enum whose
+# members the guards on a memory-reaching path actually mention, splits by each,
+# and keeps the ones that change an answer. `DECLARED_BRANCH_AXES` is what that
+# discovery is compared to.
+
+#: The bases a class carries when its members can be a branch axis.
+_ENUM_BASES: Final = frozenset({"Enum", "StrEnum", "IntEnum"})
+
+
+@cache
+def _enum_members(name: str) -> tuple[tuple[str, str], ...] | None:
+    """`((MEMBER, "value"), …)` for an enum class in the tree, or `None`.
+
+    Read off the class body, so the population is the enum's own. A member the
+    guards never mention is still a member, which is the whole point: the false
+    sentence this claim replaces was true of four dispositions out of five, and a
+    population drawn from the literals the guards happen to name would have
+    contained all five anyway — by luck, this time.
+    """
+    entry = _classes().get(name)
+    if entry is None:
+        return None
+    node = entry[1]
+    bases = {
+        base.attr if isinstance(base, ast.Attribute) else getattr(base, "id", None)
+        for base in node.bases
+    }
+    if not bases & _ENUM_BASES:
+        return None
+    found = tuple(
+        (statement.targets[0].id, statement.value.value)
+        for statement in node.body
+        if isinstance(statement, ast.Assign)
+        and len(statement.targets) == 1
+        and isinstance(statement.targets[0], ast.Name)
+        and isinstance(statement.value, ast.Constant)
+        and isinstance(statement.value.value, str)
+    )
+    return found or None
+
+
+def _member_collection(node: ast.expr) -> tuple[str, frozenset[str]] | None:
+    """`(enum, {MEMBER, …})` for a literal collection of one enum's members."""
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"frozenset", "set", "tuple", "list"}
+    ):
+        if not node.args:
+            return None
+        node = node.args[0]
+    if not isinstance(node, ast.Set | ast.List | ast.Tuple):
+        return None
+    enum: str | None = None
+    members: set[str] = set()
+    for element in node.elts:
+        if not (isinstance(element, ast.Attribute) and isinstance(element.value, ast.Name)):
+            return None
+        if enum is not None and element.value.id != enum:
+            return None
+        enum = element.value.id
+        members.add(element.attr)
+    if enum is None or _enum_members(enum) is None:
+        return None
+    return enum, frozenset(members)
+
+
+def _member_mapping(node: ast.expr) -> tuple[str, frozenset[str]] | None:
+    """`(enum, {MEMBER whose value is literally `None`, …})` for a member-keyed dict.
+
+    Only "is the value `None`" is carried, because that is the one thing a guard
+    downstream can ask about a value pulled out of such a map without this walk
+    having to model the value itself — and it is what `_STORED_STATE` is for.
+    """
+    if not isinstance(node, ast.Dict):
+        return None
+    enum: str | None = None
+    nulls: set[str] = set()
+    for key, value in zip(node.keys, node.values, strict=True):
+        if not (isinstance(key, ast.Attribute) and isinstance(key.value, ast.Name)):
+            return None
+        if enum is not None and key.value.id != enum:
+            return None
+        enum = key.value.id
+        if isinstance(value, ast.Constant) and value.value is None:
+            nulls.add(key.attr)
+    if enum is None or _enum_members(enum) is None:
+        return None
+    return enum, frozenset(nulls)
+
+
+#: `("collection" | "mapping", enum, members)`.
+EnumLiteral = tuple[str, str, frozenset[str]]
+
+
+@cache
+def _enum_literals() -> dict[str, dict[str, EnumLiteral]]:
+    """Per module, every module-level name bound to a literal over one enum.
+
+    Thirty-odd of these exist across the package and this function finds them by
+    shape. `_ACCEPTING` and `_STORED_STATE` are two of them and are named nowhere
+    in this module: a guard is read by resolving whatever name it references, so
+    renaming either one changes nothing here and deleting one changes the derived
+    answer rather than hiding a change to it.
+    """
+    found: dict[str, dict[str, EnumLiteral]] = {}
+    for path, tree in _sources():
+        bound: dict[str, EnumLiteral] = {}
+        for statement in tree.body:
+            target = _assigned_name(statement)
+            value = getattr(statement, "value", None)
+            if target is None or value is None:
+                continue
+            collection = _member_collection(value)
+            if collection is not None:
+                bound[target] = ("collection", *collection)
+                continue
+            mapping = _member_mapping(value)
+            if mapping is not None:
+                bound[target] = ("mapping", *mapping)
+        found[_module_name(path)] = bound
+    return found
+
+
+def _resolve_literal(module: str, name: str) -> EnumLiteral | None:
+    """A name in `module`, resolved to an enum literal here or where it came from."""
+    local = _enum_literals().get(module, {}).get(name)
+    if local is not None:
+        return local
+    imported = _imported_names().get(module, {}).get(name)
+    if imported is None:
+        return None
+    return _enum_literals().get(imported[0], {}).get(imported[1])
+
+
+def _axis_expression(node: ast.expr, enum: str, known: dict[str, str]) -> bool:
+    """Whether `node` is a name or attribute this walk types to `enum`.
+
+    A `Call` is excluded deliberately. `Disposition(row.disposition)` types to
+    `Disposition` and is a *different* disposition — the one already on the
+    decision chain — so treating it as the request's would not be imprecise, it
+    would be wrong. Excluding calls leaves that guard unreadable, which is a
+    declared redness rather than a silent misreading.
+    """
+    if isinstance(node, ast.Call) or not isinstance(node, ast.Name | ast.Attribute):
+        return False
+    return _expression_type(node, known) == enum
+
+
+def _evaluate_guard(
+    test: ast.expr,
+    enum: str,
+    member: str,
+    *,
+    known: dict[str, str],
+    module: str,
+    nulls: dict[str, frozenset[str]],
+) -> bool | None:
+    """`test` decided for one member of `enum`, or `None` where it cannot be.
+
+    Four shapes, which is every shape the guards on a memory-reaching path use:
+    membership of a literal collection, identity against one member, `is
+    None`/`is not None` on a local pulled out of a member-keyed mapping, and the
+    boolean combinations of those. Anything else is `None`, and `None` unions the
+    branches — so an unreadable guard costs precision, never soundness, and
+    `UNREADABLE_BRANCH_GUARDS` is where the ones that mention the axis are made
+    to be visible.
+    """
+    if isinstance(test, ast.UnaryOp) and isinstance(test.op, ast.Not):
+        inner = _evaluate_guard(test.operand, enum, member, known=known, module=module, nulls=nulls)
+        return None if inner is None else not inner
+    if isinstance(test, ast.BoolOp):
+        values = [
+            _evaluate_guard(value, enum, member, known=known, module=module, nulls=nulls)
+            for value in test.values
+        ]
+        if isinstance(test.op, ast.And):
+            if any(value is False for value in values):
+                return False
+            return True if all(value is True for value in values) else None
+        if any(value is True for value in values):
+            return True
+        return False if all(value is False for value in values) else None
+    if not isinstance(test, ast.Compare) or len(test.ops) != 1:
+        return None
+    operator = test.ops[0]
+    right = test.comparators[0]
+    if isinstance(operator, ast.In | ast.NotIn):
+        if not _axis_expression(test.left, enum, known):
+            return None
+        collection = _member_collection(right)
+        if collection is None and isinstance(right, ast.Name):
+            resolved = _resolve_literal(module, right.id)
+            if resolved is not None and resolved[0] == "collection":
+                collection = (resolved[1], resolved[2])
+        if collection is None or collection[0] != enum:
+            return None
+        inside = member in collection[1]
+        return inside if isinstance(operator, ast.In) else not inside
+    if not isinstance(operator, ast.Is | ast.IsNot | ast.Eq | ast.NotEq):
+        return None
+    affirmative = isinstance(operator, ast.Is | ast.Eq)
+    if isinstance(right, ast.Constant) and right.value is None:
+        if not isinstance(test.left, ast.Name) or test.left.id not in nulls:
+            return None
+        is_null = member in nulls[test.left.id]
+        return is_null if affirmative else not is_null
+    if isinstance(right, ast.Attribute) and isinstance(right.value, ast.Name):
+        if right.value.id != enum or not _axis_expression(test.left, enum, known):
+            return None
+        same = member == right.attr
+        return same if affirmative else not same
+    return None
+
+
+def _guard_names_the_axis(test: ast.expr, enum: str, module: str) -> bool:
+    """Whether a guard mentions the axis at all, directly or through a literal."""
+    for node in ast.walk(test):
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            if node.value.id == enum:
+                return True
+        elif isinstance(node, ast.Name):
+            resolved = _resolve_literal(module, node.id)
+            if resolved is not None and resolved[1] == enum:
+                return True
+    return False
+
+
+def _writes_in(
+    node: ast.AST,
+    names: dict[str, frozenset[str]],
+    statements: dict[str, str],
+    parents: dict[ast.AST, ast.AST],
+) -> frozenset[str]:
+    """The memory tables `node`'s own statements write, by claim 5's rule.
+
+    The same classification `_direct_table_reach` performs, applied to one
+    statement rather than to a whole function, and against the same
+    function-wide parent map so the two cannot disagree about a chain root.
+    """
+    found: set[str] = set()
+    for child, tables in _table_expressions(node, names):
+        if isinstance(child.ctx, ast.Store | ast.Del):
+            continue
+        cursor: ast.AST = child
+        while cursor in parents:
+            cursor = parents[cursor]
+            if isinstance(cursor, ast.Call):
+                root = _chain_root(cursor, statements)
+                if root is not None:
+                    if STATEMENT_CONSTRUCTORS[root] == "write":
+                        found |= tables
+                    break
+    return frozenset(found)
+
+
+#: `(module, function, the guard's source)`.
+Guard = tuple[str, str, str]
+
+
+@cache
+def _branch_scan(enum: str, member: str) -> tuple[dict[Node, frozenset[str]], frozenset[Guard]]:
+    """Per function, the memory tables one member of `enum` can make it write.
+
+    Computed for every node the handlers reach, with the call graph followed a
+    statement at a time so a callee inherits the branch it was called from.
+    `_promote` writes three tables unconditionally *within itself*; it is the call
+    site that is guarded, and that is a fact this walk can only see by keeping the
+    statements in order.
+    """
+    memo: dict[Node, frozenset[str]] = {}
+    unreadable: set[Guard] = set()
+
+    def visit(node: Node, stack: frozenset[Node]) -> frozenset[str]:
+        if node in memo:
+            return memo[node]
+        if node in stack:
+            return frozenset()
+        entry = _nodes().get(node)
+        if entry is None:
+            return frozenset()
+        path, enclosing, function = entry
+        module = _module_name(path)
+        known = _environment(enclosing, function)
+        names = _local_table_names(function, _memory_bindings().get(path, {}))
+        statements = _statement_locals(function)
+        parents = {
+            child: parent for parent in ast.walk(function) for child in ast.iter_child_nodes(parent)
+        }
+        deeper = stack | {node}
+        collected = node in reaching_nodes()
+
+        def expression(source: ast.AST | None) -> frozenset[str]:
+            if source is None:
+                return frozenset()
+            found = set(_writes_in(source, names, statements, parents))
+            for call in ast.walk(source):
+                if isinstance(call, ast.Call):
+                    for callee in _callees(call, module, known):
+                        found |= visit(callee, deeper)
+            return frozenset(found)
+
+        def block(
+            body: list[ast.stmt], nulls: dict[str, frozenset[str]]
+        ) -> tuple[frozenset[str], bool]:
+            nulls = dict(nulls)
+            found: set[str] = set()
+            alive = True
+            for statement in body:
+                if not alive:
+                    break
+                if isinstance(statement, ast.If):
+                    found |= expression(statement.test)
+                    decided = _evaluate_guard(
+                        statement.test, enum, member, known=known, module=module, nulls=nulls
+                    )
+                    if (
+                        decided is None
+                        and collected
+                        and _guard_names_the_axis(statement.test, enum, module)
+                    ):
+                        unreadable.add((module, function.name, ast.unparse(statement.test)))
+                    if decided is True:
+                        taken, alive = block(statement.body, nulls)
+                        found |= taken
+                    elif decided is False:
+                        taken, alive = block(statement.orelse, nulls)
+                        found |= taken
+                    else:
+                        yes, yes_alive = block(statement.body, nulls)
+                        no, no_alive = block(statement.orelse, nulls)
+                        found |= yes | no
+                        alive = yes_alive or no_alive
+                    continue
+                if isinstance(statement, ast.Try | ast.TryStar):
+                    for part in (statement.body, statement.orelse, statement.finalbody):
+                        found |= block(part, nulls)[0]
+                    for handler in statement.handlers:
+                        found |= block(handler.body, nulls)[0]
+                    continue
+                if isinstance(statement, ast.With | ast.AsyncWith):
+                    for item in statement.items:
+                        found |= expression(item.context_expr)
+                    found |= block(statement.body, nulls)[0]
+                    continue
+                if isinstance(statement, ast.For | ast.AsyncFor):
+                    found |= expression(statement.iter)
+                    found |= block(statement.body, nulls)[0]
+                    found |= block(statement.orelse, nulls)[0]
+                    continue
+                if isinstance(statement, ast.While):
+                    found |= expression(statement.test)
+                    found |= block(statement.body, nulls)[0]
+                    found |= block(statement.orelse, nulls)[0]
+                    continue
+                if isinstance(statement, ast.Match):
+                    found |= expression(statement.subject)
+                    for case in statement.cases:
+                        found |= block(case.body, nulls)[0]
+                    continue
+                if isinstance(statement, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+                    # A nested `def` is walked as part of its enclosing function,
+                    # for the reason the header above `_edges()` gives, and it
+                    # cannot end the enclosing function's flow.
+                    found |= block(statement.body, nulls)[0]
+                    continue
+                target = _assigned_name(statement)
+                value = getattr(statement, "value", None)
+                if (
+                    target is not None
+                    and isinstance(value, ast.Subscript)
+                    and isinstance(value.value, ast.Name)
+                ):
+                    resolved = _resolve_literal(module, value.value.id)
+                    if (
+                        resolved is not None
+                        and resolved[0] == "mapping"
+                        and resolved[1] == enum
+                        and _axis_expression(value.slice, enum, known)
+                    ):
+                        nulls[target] = resolved[2]
+                found |= expression(statement)
+                if isinstance(statement, ast.Raise | ast.Return):
+                    alive = False
+            return frozenset(found), alive
+
+        memo[node] = frozenset()
+        result = block(function.body, {})[0]
+        memo[node] = result
+        return result
+
+    for owner, method in _handlers().values():
+        visit(("C", owner, method), frozenset())
+    return memo, frozenset(unreadable)
+
+
+@cache
+def branch_writes(enum: str) -> dict[Capability, dict[str, frozenset[str]]]:
+    """Per capability, per member of `enum`, the memory tables that branch writes."""
+    members = _enum_members(enum) or ()
+    found: dict[Capability, dict[str, frozenset[str]]] = {}
+    for capability, (owner, method) in _handlers().items():
+        split = {
+            value: _branch_scan(enum, name)[0].get(("C", owner, method), frozenset())
+            for name, value in members
+        }
+        if any(split.values()):
+            found[capability] = split
+    return found
+
+
+@cache
+def _branch_axes() -> frozenset[str]:
+    """The enums a guard on a memory-reaching path branches an answer on.
+
+    Discovery in two steps, both derived. Every enum whose members a guard
+    mentions anywhere the walk reaches a memory row is a candidate — two are, and
+    only one of them changes an answer. An enum whose split is uniform for every
+    capability is telling this claim nothing that claim 5 did not already say, so
+    it is not an axis.
+    """
+    candidates: set[str] = set()
+    for node in reaching_nodes():
+        entry = _nodes().get(node)
+        if entry is None:
+            continue
+        path, _enclosing, function = entry
+        module = _module_name(path)
+        for statement in ast.walk(function):
+            if not isinstance(statement, ast.If):
+                continue
+            for child in ast.walk(statement.test):
+                if isinstance(child, ast.Attribute) and isinstance(child.value, ast.Name):
+                    if _enum_members(child.value.id) is not None:
+                        candidates.add(child.value.id)
+                elif isinstance(child, ast.Name):
+                    resolved = _resolve_literal(module, child.id)
+                    if resolved is not None:
+                        candidates.add(resolved[1])
+    return frozenset(
+        enum
+        for enum in candidates
+        if any(len(set(split.values())) > 1 for split in branch_writes(enum).values())
+    )
+
+
+@cache
+def branching_capabilities(enum: str) -> frozenset[Capability]:
+    """The capabilities whose write set is not the same on every branch of `enum`."""
+    return frozenset(
+        capability
+        for capability, split in branch_writes(enum).items()
+        if len(set(split.values())) > 1
+    )
+
+
+def test_the_walk_branches_on_the_axis_it_is_declared_to() -> None:
+    """The axis is discovered from the guards, and this is the comparison.
+
+    Two enums reach a guard on a memory-reaching path and one of them decides
+    nothing, so the discovery is doing work rather than restating a name. If the
+    code stops branching on `Disposition`, or starts branching on something else,
+    this is where it is argued about — and `RM-API-AC-002`'s per-branch sentences
+    move with it.
+    """
+    axes = _branch_axes()
+    assert axes == DECLARED_BRANCH_AXES, (
+        f"the walk now splits an answer on {sorted(axes)}, not {sorted(DECLARED_BRANCH_AXES)}. "
+        "A new axis is a new way one grant's branches differ from each other, which is "
+        "what `RM-API-AC-002` has to disclose per branch"
+    )
+    for axis in axes:
+        members = _enum_members(axis)
+        assert members, f"{axis} is a declared branch axis with no members to split on"
+
+
+def test_the_branch_split_reads_every_guard_it_meets() -> None:
+    """Anti-vacuity for claim 10, in the four places it can go quiet.
+
+    The split must find a capability whose branches differ, or it is claim 5 run
+    seven times. Its union must be claim 5's own write set, or a branch has been
+    lost rather than separated — this is the check that would catch the walk
+    silently dropping the promotion. Every guard that names the axis and cannot be
+    read must be declared, because an unread guard unions its branches and quietly
+    turns an itinerary back into a bound. And no call may hand an axis member to a
+    callee, because the split assumes the member in a callee's guards is the one
+    the caller was asked about.
+    """
+    for axis in DECLARED_BRANCH_AXES:
+        branching = branching_capabilities(axis)
+        declared = frozenset(DECLARED_BRANCH_WRITES.get(axis, {}))
+        assert branching == declared, (
+            f"{sorted(capability.value for capability in branching ^ declared)} writes "
+            f"different tables on different {axis} branches without a declared split, or "
+            "declares one and no longer branches"
+        )
+        assert branching, f"no capability's writes differ by {axis}; the split found nothing"
+        for capability, split in branch_writes(axis).items():
+            union = frozenset[str]().union(*split.values())
+            declared = DECLARED_TABLE_REACH[capability][1]
+            assert union == declared, (
+                f"{capability.value}'s {axis} branches write {sorted(union)} between them, "
+                f"but claim 5 derives {sorted(declared)} for it. A branch has been lost, "
+                "not separated, and the per-branch claims below are measuring a shorter walk"
+            )
+        unreadable = frozenset[Guard]().union(
+            *(_branch_scan(axis, name)[1] for name, _value in _enum_members(axis) or ())
+        )
+        assert unreadable == frozenset(UNREADABLE_BRANCH_GUARDS), (
+            f"{sorted(unreadable ^ frozenset(UNREADABLE_BRANCH_GUARDS))} guards a "
+            f"memory-reaching path on {axis} in a shape this split cannot read, so its "
+            "branches are unioned and the per-branch claim over it is a bound wearing an "
+            "itinerary's words"
+        )
+    handed_on = {
+        (_module_name(path), ast.unparse(call))
+        for path, tree in _sources()
+        for call in ast.walk(tree)
+        if isinstance(call, ast.Call)
+        for argument in [*call.args, *(keyword.value for keyword in call.keywords)]
+        if isinstance(argument, ast.Attribute)
+        and isinstance(argument.value, ast.Name)
+        and argument.value.id in DECLARED_BRANCH_AXES
+    }
+    assert not handed_on, (
+        f"{sorted(handed_on)} passes a branch-axis member as an argument. The split "
+        "assumes the member a callee's guards ask about is the one the capability was "
+        "asked about, and a member handed in at a call site breaks that"
+    )
+
+
+@pytest.mark.parametrize("axis", sorted(DECLARED_BRANCH_AXES))
+def test_every_branch_writes_exactly_the_tables_it_declares(axis: str) -> None:
+    """The derived per-branch write sets, against the declaration the row restates.
+
+    Exact set equality per member and in both directions. A branch that starts
+    writing a table writes it under a grant already issued for the branches beside
+    it, which is the disclosure `RM-API-AC-002` is for; a branch that stops leaves
+    the row describing a write the code no longer performs.
+    """
+    derived = {
+        capability: split
+        for capability, split in branch_writes(axis).items()
+        if capability in branching_capabilities(axis)
+    }
+    declared = DECLARED_BRANCH_WRITES.get(axis, {})
+    wrong = [
+        f"{capability.value} on {member} writes {sorted(derived[capability][member])}; it is "
+        f"declared to write {sorted(declared[capability].get(member, frozenset()))}"
+        for capability in sorted(derived, key=lambda member: member.value)
+        for member in sorted(set(derived[capability]) | set(declared.get(capability, {})))
+        if derived[capability].get(member, frozenset())
+        != declared.get(capability, {}).get(member, frozenset())
+    ]
+    assert not wrong, (
+        f"the tables these {axis} branches write are not the tables declared for them. "
+        "Update `DECLARED_BRANCH_WRITES` and the matching `RM-API-AC-002` sentences "
+        "together, or repair the split if the code did not move:\n" + "\n".join(wrong)
+    )
+
+
 # --- claim 7: the acceptance row's own digits --------------------------------
 #
 # `test_claimed_test_counts_match_collection.py` is the precedent: parse a
@@ -1333,22 +2128,49 @@ def test_the_table_derivation_reads_every_statement_shape_it_meets() -> None:
 # anything asserts that what it found is right.
 
 #: `` `review.decide` reads three of the eight (`a`, `b`, `c`) ``. The count is
-#: spelled rather than in digits because the row's prose is spelled throughout,
-#: and the tables are carried in the same clause rather than somewhere in the
-#: surrounding paragraph: the defect being closed was a *correct* count beside a
-#: wrong membership, and a pattern that read only the number would have passed it.
+#: spelled rather than in digits because the prose is spelled throughout, and the
+#: tables are carried in the same clause rather than somewhere in the surrounding
+#: paragraph: the defect being closed was a *correct* count beside a wrong
+#: membership, and a pattern that read only the number would have passed it.
+#:
+#: **`of the eight` ends on a word boundary.** Without one it also matched the
+#: first eight letters of "of the eighteen", a phrase this acceptance package
+#: uses of its own criteria. That phrase is outside the parsed row today, so the
+#: bug cost nothing and would have cost a loud false failure rather than a silent
+#: pass — but "the row happens not to say eighteen" is not a property anyone is
+#: maintaining.
 #:
 #: The capability is optional because the second half of a reach is written with
 #: the subject elided — "reads two of the eight (…) and writes none of the
 #: eight" — and requiring the name would have bound the read of every capability
 #: here and the write of none. That is the precedent module's own lesson about
 #: punctuation, in a different costume: a pattern that insists on one spelling
-#: silently guards the sentences written the other way. An elided subject carries
-#: over from the claim before it, and an elided subject with nothing before it is
-#: a failure rather than a skip.
+#: silently guards the sentences written the other way.
+#:
+#: **Only the `writes` half may elide.** The carry-over used to apply to either
+#: verb, so a stray `reads` anywhere later in a very long row was attributed to
+#: whichever capability was named last and reported as a claim that sentence had
+#: never made — a failure message naming text that does not exist is worse than
+#: no message, because it sends the reader to the wrong place. A `reads` with no
+#: subject of its own now belongs to the document's default subject, which for
+#: `RM-API-AC-002` is nothing, and every message quotes the text it matched.
 TABLE_SET_CLAIM: Final = re.compile(
     r"(?:`(?P<capability>[a-z_]+(?:\.[a-z_]+)+)`\s+)?(?P<verb>reads|writes)\s+"
-    r"(?P<count>[a-z]+)\s+of the eight(?:\s*\((?P<tables>[^)]*)\))?"
+    r"(?P<count>[a-z]+)\s+of the eight\b(?:\s*\((?P<tables>[^)]*)\))?"
+)
+
+#: `` `review.decide` on `mark_unresolved` writes one of the eight (`a`) ``.
+#:
+#: Claim 10's sentence, and the subject is never optional in it: a per-branch
+#: claim that borrowed its capability from the sentence before it would be the
+#: elision defect again, in the one place the row has already been wrong about a
+#: branch. Matched *before* `TABLE_SET_CLAIM` and cut out of the text, so
+#: "writes one of the eight" inside a branch claim is not also read as a claim
+#: about the capability's whole reach — which it would contradict, and should.
+BRANCH_WRITE_CLAIM: Final = re.compile(
+    r"`(?P<capability>[a-z_]+(?:\.[a-z_]+)+)`\s+on\s+`(?P<member>[a-z_]+)`\s+"
+    r"(?P<verb>reads|writes)\s+(?P<count>[a-z]+)\s+of the eight\b"
+    r"(?:\s*\((?P<tables>[^)]*)\))?"
 )
 
 #: The row spells its numbers, and only these can be meant by "of the eight".
@@ -1383,21 +2205,85 @@ def _acceptance_row() -> tuple[str, int]:
     return rows[0]
 
 
-def _row_claims() -> list[tuple[str, str, str, str | None]]:
-    """`(capability, verb, count word, table list)` for every claim in the row.
+def _documents() -> list[tuple[str, str, str]]:
+    """`(label, text, default subject)` for everything parsed for a table set.
 
-    An elided subject takes the capability of the claim before it, which is what
-    "reads two of the eight and writes none of the eight" means to a reader. One
-    with nothing before it is carried through as the empty string so the check
-    below fails on it by name rather than being quietly dropped here.
+    Two sources, because `BEYOND_THE_EIGHT`'s reason strings were the second
+    place this repository restated a derived enumeration in unchecked prose — and
+    the `review.decide` reason restated the exact false quantifier that blocked
+    the correction the row was making. A guard that polices a document and not
+    itself has moved the defect one file, not closed it. The reasons default to
+    the capability they are keyed by, since a reader has that from the key; the
+    row defaults to nothing, so an unattributed claim there fails by name.
     """
-    row, _line = _acceptance_row()
-    found: list[tuple[str, str, str, str | None]] = []
-    subject = ""
-    for match in TABLE_SET_CLAIM.finditer(row):
-        subject = match.group("capability") or subject
-        found.append((subject, match.group("verb"), match.group("count"), match.group("tables")))
+    row, line = _acceptance_row()
+    return [
+        (f"{ACCEPTANCE.name}:{line}", row, ""),
+        *(
+            (f"BEYOND_THE_EIGHT[{capability.value}]", reason, capability.value)
+            for capability, reason in BEYOND_THE_EIGHT.items()
+        ),
+    ]
+
+
+#: `(label, capability, verb, count word, table list, the text matched)`.
+Claim = tuple[str, str, str, str, str | None, str]
+
+#: `(label, capability, member, verb, count word, table list, the text matched)`.
+BranchClaim = tuple[str, str, str, str, str, str | None, str]
+
+
+def _branch_claims_in(label: str, text: str) -> list[BranchClaim]:
+    """`(label, capability, member, verb, count, tables, quoted)` for claim 10's sentences."""
+    return [
+        (
+            label,
+            match.group("capability"),
+            match.group("member"),
+            match.group("verb"),
+            match.group("count"),
+            match.group("tables"),
+            match.group(0),
+        )
+        for match in BRANCH_WRITE_CLAIM.finditer(text)
+    ]
+
+
+def _claims_in(label: str, text: str, default: str) -> list[Claim]:
+    """`(label, capability, verb, count, tables, quoted)` for every table-set claim.
+
+    Branch claims are cut out first — replaced by blanks rather than deleted, so
+    nothing either side of one is joined into a phrase that was never written.
+    An elided subject on a `writes` takes the capability of the claim before it,
+    which is what "reads two of the eight and writes none of the eight" means to
+    a reader; an elided subject on a `reads` takes the document's default, which
+    for the acceptance row is the empty string, so it fails below by name.
+    """
+    text = BRANCH_WRITE_CLAIM.sub(lambda match: " " * len(match.group(0)), text)
+    found: list[Claim] = []
+    carried = default
+    for match in TABLE_SET_CLAIM.finditer(text):
+        explicit = match.group("capability")
+        verb = match.group("verb")
+        if explicit is not None:
+            carried = explicit
+            subject = explicit
+        else:
+            subject = carried if verb == "writes" else default
+        found.append(
+            (label, subject, verb, match.group("count"), match.group("tables"), match.group(0))
+        )
     return found
+
+
+def _all_claims() -> list[Claim]:
+    return [claim for document in _documents() for claim in _claims_in(*document)]
+
+
+def _all_branch_claims() -> list[BranchClaim]:
+    return [
+        claim for label, text, _default in _documents() for claim in _branch_claims_in(label, text)
+    ]
 
 
 def test_the_acceptance_row_states_a_table_set_for_every_capability_it_discloses() -> None:
@@ -1407,70 +2293,204 @@ def test_the_acceptance_row_states_a_table_set_for_every_capability_it_discloses
     below a guard over an empty list, which is the exact failure the precedent
     module records twice. So: claims exist, both verbs appear, and — the part
     that is derived rather than a floor — every capability in
-    `BEYOND_THE_EIGHT` carries both. Those three are what the row exists to
-    disclose, and they are the three whose prose has been wrong.
+    `BEYOND_THE_EIGHT` carries both, in the row *and* in its own reason string.
+    Those three are what the row exists to disclose, and they are the three whose
+    prose has been wrong.
     """
-    claims = _row_claims()
     _row, line = _acceptance_row()
-    assert claims, (
-        f"no `` `capability` reads|writes N of the eight `` claim found at "
-        f"{ACCEPTANCE.name}:{line}; either the row changed shape or this pattern went "
-        "stale, and a stale pattern here checks nothing at all"
-    )
-    assert {verb for _capability, verb, _count, _tables in claims} == {"reads", "writes"}, (
-        f"{ACCEPTANCE.name}:{line} states only "
-        f"{sorted({verb for _c, verb, _n, _t in claims})}; a reach is two claims"
-    )
-    stated = {(capability, verb) for capability, verb, _count, _tables in claims}
+    for label, text, default in _documents():
+        claims = _claims_in(label, text, default)
+        assert claims, (
+            f"no `` `capability` reads|writes N of the eight `` claim found in {label}; "
+            "either it changed shape or this pattern went stale, and a stale pattern here "
+            "checks nothing at all"
+        )
+        assert {verb for _l, _c, verb, _n, _t, _q in claims} == {"reads", "writes"}, (
+            f"{label} states only {sorted({verb for _l, _c, verb, _n, _t, _q in claims})}; "
+            "a reach is two claims"
+        )
+    row_claims = _claims_in(*_documents()[0])
+    stated = {(capability, verb) for _l, capability, verb, _n, _t, _q in row_claims}
     required = {
         (capability.value, verb) for capability in BEYOND_THE_EIGHT for verb in ("reads", "writes")
     }
     assert required <= stated, (
         f"{sorted(required - stated)} is a capability `RM-API-AC-002` has to disclose "
-        "and the row states no table set for it. The three outside the eight are the "
-        "disclosure; leaving one's reach in unparsed prose is how it was wrong three times"
+        f"and {ACCEPTANCE.name}:{line} states no table set for it. The three outside the "
+        "eight are the disclosure; leaving one's reach in unparsed prose is how it was "
+        "wrong three times"
+    )
+    for capability, reason in BEYOND_THE_EIGHT.items():
+        label = f"BEYOND_THE_EIGHT[{capability.value}]"
+        own = {
+            verb
+            for _l, subject, verb, _n, _t, _q in _claims_in(label, reason, capability.value)
+            if subject == capability.value
+        }
+        assert own == {"reads", "writes"}, (
+            f"{label} states {sorted(own)} for its own capability; a reason that names a "
+            "table set states both halves of it, in the form this module parses, or states "
+            "neither and leaves the enumeration to the row"
+        )
+
+
+def test_the_acceptance_row_states_a_write_set_for_every_branch() -> None:
+    """Claim 10's coverage requirement, with the population taken from the code.
+
+    Not a floor and not a list: the capabilities come from
+    `branching_capabilities()` and the members off the axis enum's own class body,
+    so a disposition added to `Disposition` puts an unstated branch in this set
+    and reddens the build. That is the property the previous correction lacked —
+    it stated a quantifier over branches, and nothing anywhere counted them.
+    """
+    _row, line = _acceptance_row()
+    stated = {
+        (capability, member)
+        for _l, capability, member, verb, _n, _t, _q in _all_branch_claims()
+        if verb == "writes"
+    }
+    required = {
+        (capability.value, value)
+        for axis in DECLARED_BRANCH_AXES
+        for capability in branching_capabilities(axis)
+        for _name, value in _enum_members(axis) or ()
+    }
+    assert required, "no capability branches its writes; claim 10's population went empty"
+    assert required <= stated, (
+        f"{sorted(required - stated)} is a branch whose write set differs from its "
+        f"siblings' and {ACCEPTANCE.name}:{line} states nothing for it. The union is a "
+        "bound; a sentence about one disposition is a claim about one branch, and this "
+        "row has already shipped one of those that was false"
     )
 
 
-@pytest.mark.parametrize(("capability", "verb", "count", "tables"), _row_claims())
-def test_every_table_set_the_acceptance_row_claims_matches_the_walk(
-    capability: str, verb: str, count: str, tables: str | None
+@pytest.mark.parametrize(
+    ("label", "capability", "verb", "count", "tables", "quoted"), _all_claims()
+)
+def test_every_table_set_a_document_claims_matches_the_walk(
+    label: str, capability: str, verb: str, count: str, tables: str | None, quoted: str
 ) -> None:
-    """One claim in the row, against the walk. Count and membership both."""
-    _row, line = _acceptance_row()
+    """One claim, against the walk. Count and membership both.
+
+    Every message quotes what was matched, so a claim this parse read differently
+    from the way a human reads it sends the reader to the text rather than to a
+    sentence the document does not contain.
+    """
     members = {member.value: member for member in Capability}
     assert capability in members, (
-        f"{ACCEPTANCE.name}:{line} states a table set for `{capability}`, which is no "
-        "capability this build publishes"
+        f"{label} states a table set for `{capability}`, which is no capability this "
+        f"build publishes. The claim read was {quoted!r}"
     )
     assert count in _SPELLED, (
-        f"{ACCEPTANCE.name}:{line} spells `{capability}`'s {verb} count as {count!r}, "
-        f"which this guard cannot read. Spell it as one of {sorted(_SPELLED)}"
+        f"{label} spells `{capability}`'s {verb} count as {count!r}, which this guard "
+        f"cannot read. Spell it as one of {sorted(_SPELLED)}. The claim read was {quoted!r}"
     )
     claimed = _SPELLED[count]
     reads, writes = capability_table_reach().get(members[capability], (frozenset(), frozenset()))
     derived = reads if verb == "reads" else writes
     assert claimed == len(derived), (
-        f"{ACCEPTANCE.name}:{line} says `{capability}` {verb} {count} of the eight; the "
-        f"walk derives {len(derived)} ({sorted(derived)}). Correct the row rather than "
-        "this test"
+        f"{label} says `{capability}` {verb} {count} of the eight; the walk derives "
+        f"{len(derived)} ({sorted(derived)}). Correct the document rather than this test. "
+        f"The claim read was {quoted!r}"
     )
     if claimed == 0:
         assert tables is None, (
-            f"{ACCEPTANCE.name}:{line} says `{capability}` {verb} none of the eight and "
-            f"then lists {tables!r}"
+            f"{label} says `{capability}` {verb} none of the eight and then lists "
+            f"{tables!r}. The claim read was {quoted!r}"
         )
         return
     assert tables is not None, (
-        f"{ACCEPTANCE.name}:{line} says `{capability}` {verb} {count} of the eight and "
-        f"names none of them. Put the {claimed} in parentheses after the count — the "
-        "count was right and the membership wrong the last time this row was corrected"
+        f"{label} says `{capability}` {verb} {count} of the eight and names none of them. "
+        f"Put the {claimed} in parentheses after the count — the count was right and the "
+        f"membership wrong the last time this row was corrected. The claim read was {quoted!r}"
     )
     named = frozenset(_BACKTICKED_TABLE.findall(tables))
     assert named == derived, (
-        f"{ACCEPTANCE.name}:{line} says `{capability}` {verb} {sorted(named)}; the walk "
-        f"derives {sorted(derived)}. Correct the row rather than this test"
+        f"{label} says `{capability}` {verb} {sorted(named)}; the walk derives "
+        f"{sorted(derived)}. Correct the document rather than this test. The claim read "
+        f"was {quoted!r}"
     )
+
+
+@pytest.mark.parametrize(
+    ("label", "capability", "member", "verb", "count", "tables", "quoted"), _all_branch_claims()
+)
+def test_every_branch_table_set_a_document_claims_matches_the_walk(
+    label: str,
+    capability: str,
+    member: str,
+    verb: str,
+    count: str,
+    tables: str | None,
+    quoted: str,
+) -> None:
+    """One per-branch claim, against the split. Member, count and membership."""
+    published = {published.value: published for published in Capability}
+    assert capability in published, (
+        f"{label} states a per-branch table set for `{capability}`, which is no capability "
+        f"this build publishes. The claim read was {quoted!r}"
+    )
+    assert verb == "writes", (
+        f"{label} states what `{capability}` {verb} on `{member}`; claim 10 derives writes "
+        f"per branch and not reads, so this sentence is bound by nothing. The claim read "
+        f"was {quoted!r}"
+    )
+    axis = next(
+        (
+            axis
+            for axis in DECLARED_BRANCH_AXES
+            if member in {value for _name, value in _enum_members(axis) or ()}
+        ),
+        None,
+    )
+    assert axis is not None, (
+        f"{label} states a table set for `{capability}` on `{member}`, which is no member "
+        f"of any declared branch axis ({sorted(DECLARED_BRANCH_AXES)}). The claim read was "
+        f"{quoted!r}"
+    )
+    assert count in _SPELLED, (
+        f"{label} spells the `{member}` branch's count as {count!r}, which this guard "
+        f"cannot read. Spell it as one of {sorted(_SPELLED)}. The claim read was {quoted!r}"
+    )
+    claimed = _SPELLED[count]
+    derived = branch_writes(axis).get(published[capability], {}).get(member, frozenset())
+    assert claimed == len(derived), (
+        f"{label} says `{capability}` on `{member}` writes {count} of the eight; the split "
+        f"derives {len(derived)} ({sorted(derived)}). Correct the document rather than this "
+        f"test. The claim read was {quoted!r}"
+    )
+    if claimed == 0:
+        assert tables is None, (
+            f"{label} says `{capability}` on `{member}` writes none of the eight and then "
+            f"lists {tables!r}. The claim read was {quoted!r}"
+        )
+        return
+    assert tables is not None, (
+        f"{label} says `{capability}` on `{member}` writes {count} of the eight and names "
+        f"none of them. The claim read was {quoted!r}"
+    )
+    named = frozenset(_BACKTICKED_TABLE.findall(tables))
+    assert named == derived, (
+        f"{label} says `{capability}` on `{member}` writes {sorted(named)}; the split "
+        f"derives {sorted(derived)}. Correct the document rather than this test. The claim "
+        f"read was {quoted!r}"
+    )
+
+
+def test_no_reason_names_a_memory_table_outside_the_reach_it_describes() -> None:
+    """Every table a reason names, in or out of a parsed claim, is one it reaches.
+
+    The claims above bind the enumerations; this binds the prose around them, so a
+    reason cannot name `relationship_memory_submissions` in a sentence about
+    `review.decide` and have the count beside it still add up.
+    """
+    for capability, reason in BEYOND_THE_EIGHT.items():
+        reads, writes = capability_table_reach().get(capability, (frozenset(), frozenset()))
+        named = frozenset(_BACKTICKED_TABLE.findall(reason)) & memory_tables()
+        assert named <= reads | writes, (
+            f"BEYOND_THE_EIGHT[{capability.value}] names "
+            f"{sorted(named - (reads | writes))}, which the walk says it never reaches"
+        )
 
 
 # --- claim 9: the walk has no blind spot on the names that matter ------------
@@ -1506,6 +2526,23 @@ def _package(path: Path) -> str:
     return module if path.name == "__init__.py" else module.rpartition(".")[0]
 
 
+def _import_source(path: Path, node: ast.ImportFrom) -> str | None:
+    """The one module a `from … import …` draws its names out of, absolute.
+
+    `from my_pa.contracts.ports import X` and `from ..contracts.ports import X`
+    both answer `my_pa.contracts.ports`. This is the resolution `_import_targets`
+    does for the sweep's population, lifted out so `_imported_names` cannot drift
+    from it again.
+    """
+    if node.level == 0:
+        return node.module
+    parts = _package(path).split(".")
+    base = ".".join(parts[: max(len(parts) - node.level + 1, 0)])
+    if node.module:
+        return f"{base}.{node.module}" if base else node.module
+    return base or None
+
+
 def _import_targets(path: Path, node: ast.Import | ast.ImportFrom) -> frozenset[str]:
     """Every dotted module an import statement names, absolute or relative.
 
@@ -1517,13 +2554,7 @@ def _import_targets(path: Path, node: ast.Import | ast.ImportFrom) -> frozenset[
     """
     if isinstance(node, ast.Import):
         return frozenset(alias.name for alias in node.names)
-    if node.level:
-        parts = _package(path).split(".")
-        base = ".".join(parts[: max(len(parts) - node.level + 1, 0)])
-        if node.module:
-            base = f"{base}.{node.module}" if base else node.module
-    else:
-        base = node.module or ""
+    base = _import_source(path, node) or ""
     return frozenset({base}) | {f"{base}.{alias.name}" for alias in node.names}
 
 
@@ -1678,4 +2709,104 @@ def test_no_dispatch_through_a_subscript_hides_a_memory_reach() -> None:
         "through a subscript in a module that holds a port or builds memory SQL. This "
         "walk follows no such call, so anything it reaches is missing from the derived "
         "sets. Say what it dispatches to, or route it through a name"
+    )
+
+
+def test_no_attribute_named_by_a_string_hides_a_memory_reach() -> None:
+    """`getattr(repository, "summaries_for_context")` — a reach spelled as data.
+
+    Neither sibling sweep above can see one. It is not an `Attribute`, so the
+    uncalled-reference sweep finds no name; its `func` is `getattr` rather than
+    the method, so `_edges()` records no edge and the untyped-receiver sweep has
+    no receiver to fail to type. An independent review built one inside a
+    port-importing module — inside the declared population, past every claim —
+    and watched every one of the eighteen tests this module then held stay green.
+
+    A *literal* name that a memory-reaching port declares is a redness with no
+    registry entry available: the repair is to call the method. A *computed* name
+    cannot be read at all, and the four that exist are declared with what they
+    look up, so the claim about them is that they have been read rather than that
+    a fifth could not hide a reach.
+    """
+    names = {method for methods in _memory_reaching_port_methods().values() for method in methods}
+    assert names, "no port method reaches a memory row; the crossing map went empty"
+    holders = _port_holding_modules()
+    found: set[tuple[str, str]] = set()
+    for _node, (path, _enclosing, function) in _nodes().items():
+        module = _module_name(path)
+        if module not in holders and _relative(path) not in MEMORY_SQL_MODULES:
+            continue
+        for call in ast.walk(function):
+            if not isinstance(call, ast.Call):
+                continue
+            if not (isinstance(call.func, ast.Name) and call.func.id == "getattr"):
+                continue
+            if len(call.args) < 2:
+                continue
+            attribute = call.args[1]
+            if (
+                isinstance(attribute, ast.Constant)
+                and isinstance(attribute.value, str)
+                and attribute.value not in names
+            ):
+                continue
+            found.add((module, ast.unparse(call)))
+    assert found == frozenset(DYNAMIC_ATTRIBUTE_LOOKUPS), (
+        f"{sorted(found ^ frozenset(DYNAMIC_ATTRIBUTE_LOOKUPS))} names an attribute with a "
+        "string in a module that holds a port or builds memory SQL. If the name is a port "
+        "method that reaches a memory row, call it through a name this walk can follow; if "
+        "it is computed, say what it can look up"
+    )
+
+
+def _docstrings(tree: ast.Module) -> frozenset[int]:
+    """The identity of every docstring node, which discusses tables rather than reaching one."""
+    return frozenset(
+        id(node.body[0].value)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Module | ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef)
+        and node.body
+        and isinstance(node.body[0], ast.Expr)
+        and isinstance(node.body[0].value, ast.Constant)
+        and isinstance(node.body[0].value.value, str)
+    )
+
+
+def test_no_string_constant_names_a_memory_table_outside_the_declarations() -> None:
+    """A table reached by its name rather than by its `Table` object.
+
+    `connection.execute(text("SELECT statement_text FROM relationship_memory_versions"))`
+    reads a memory row, and every claim in this module is blind to it: there is no
+    `Table` object for `_memory_bindings()` to bind, so the module does not join
+    claim 2's census, no function joins the reaching set, and no capability's
+    derived table set moves. An independent review wrote one and every one of the
+    eighteen tests this module then held stayed green.
+    `metadata.tables["relationship_memories"]` — the fourth import spelling this
+    module's docstring used to carry as an open escape — is the same hole with
+    different punctuation, and the same sweep closes it.
+
+    The population is every string constant in the package, matched on the
+    schema's own table names at word boundaries, which is why an index name like
+    `relationship_memories_by_subject` is not a hit and `FROM relationship_memories`
+    is. `tables.py` is excluded, as it is from claim 2, because declaring a table
+    means naming it; docstrings are excluded because four of them discuss the
+    tables by name, and prose about a table is the documentation working.
+    """
+    tables = memory_tables()
+    pattern = re.compile(r"(?<!\w)(" + "|".join(sorted(tables)) + r")(?!\w)")
+    found: set[tuple[str, int, str]] = set()
+    for path, tree in _sources():
+        if path == DECLARATIONS:
+            continue
+        docstrings = _docstrings(tree)
+        for node in ast.walk(tree):
+            if not (isinstance(node, ast.Constant) and isinstance(node.value, str)):
+                continue
+            if id(node) in docstrings or not pattern.search(node.value):
+                continue
+            found.add((_relative(path), node.lineno, node.value[:120]))
+    assert found == RAW_SQL_TABLE_MENTIONS, (
+        f"{sorted(found ^ RAW_SQL_TABLE_MENTIONS)} names one of the eight inside a string. "
+        "If it is SQL, the statement reaches a memory row past every claim in this module; "
+        "build it from the `Table` object instead"
     )

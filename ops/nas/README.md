@@ -86,8 +86,15 @@ data-plane same-bridge/subnet 4-tuple (P1), then DROPs every other packet with
 that bridge as in-interface (P2) or out-interface (P3), then RETURNs unrelated
 forwarding to DSM. Built-in FORWARD order is inspected through `iptables-save
 -t filter` because `iptables -S/-L/-C FORWARD` is unreliable on this DSM.
-`DEFAULT_FORWARD` is not an accepted equivalent, Docker isolation stays unwired,
-and a leftover source-only data-plane RETURN in `FORWARD_FIREWALL` is refused.
+The observed DSM baseline routes FORWARD through `FORWARD_FIREWALL` and then
+`DEFAULT_FORWARD`, whose exact baseline retains `DOCKER-USER` and
+`DOCKER-ISOLATION-STAGE-1`. `DEFAULT_FORWARD` is not an accepted enforcement
+equivalent. An exact redirected MY-PA jump there is detected only beside those
+two Docker jumps and is rolled back to the complete baseline; generic or
+foreign content fails closed. Whole-filter exact jump/goto enumeration guards
+check, apply, remove, restoration, flush, and delete, and an externally
+referenced owned chain is never flushed. A leftover source-only data-plane
+RETURN in `FORWARD_FIREWALL` is refused.
 Read-only `plan`/`check` are separate from explicitly confirmed, idempotent
 `apply` and exact `remove`. `remove` resumes missing-jump and empty
 unreferenced-chain cleanup; `apply` still populates an empty unreferenced

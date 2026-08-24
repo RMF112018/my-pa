@@ -98,9 +98,12 @@ __all__ = [
     "PromotionCall",
     "PromotionCommand",
     "PromotionError",
+    "PromotionTarget",
+    "StaleTargetVersionError",
     "UnpromotableProposalError",
     "evidence_links_for",
     "promotion_for",
+    "target_of",
 ]
 
 
@@ -131,6 +134,18 @@ type PromotionCommand = (
 
 class PromotionError(EntityGovernanceError):
     """A proposal was asked what it promotes to and has no answer."""
+
+
+class StaleTargetVersionError(PromotionError):
+    """The record this proposal changes has moved since the proposal was filed.
+
+    Section 27: "stale target version prevents promotion". A separate error
+    from `UnpromotableProposalError` because it means something different to
+    whoever is holding the review case -- the proposal is promotable, the world
+    changed, and the answer is to look again rather than to give up on the kind.
+    Named after the proposal's own `expected_target_version`, which is the only
+    version a proposal is allowed to state.
+    """
 
 
 class UnpromotableProposalError(PromotionError):
@@ -393,3 +408,87 @@ def evidence_links_for(
         )
         for observation_id in proposal.observation_ids
     )
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionTarget:
+    """The one existing record a proposal's kind changes, and where it is named.
+
+    `EntityProposal.expected_target_version` says "the version of the one record
+    this proposal changes"; this says *which* record that is. The two halves
+    were separated because the record carries a number and nothing carried the
+    referent, so a promoter had to know per kind what the number was about --
+    and a promoter that guessed would check a version against the wrong row.
+
+    `payload_field` is the name the target's identifier arrives under in the
+    proposal's own payload, which is the canonical command's field name, which
+    is the same name at every layer for the reason the module docstring gives.
+    """
+
+    family: MutationRecordFamily
+    payload_field: str
+
+
+#: Which existing record each kind changes, for the ten kinds that change one.
+#:
+#: The five absences are the creating kinds -- `create_entity`, `bind_identifier`,
+#: `record_alias`, `record_assignment`, `record_relationship` -- and they are the
+#: reason `expected_target_version` is nullable. A creation has no record to have
+#: read a version of; the *parents* it attaches to have versions, and those are
+#: read fresh at promotion rather than carried from proposal time, because a
+#: version read when a proposal was filed and replayed when a reviewer accepted
+#: it days later is a stale-write check that has stopped checking.
+#:
+#: `resolve_mention`'s target is the observation, and the version is its
+#: `resolution_version` -- the number `ResolveUnresolvedMention` expects and the
+#: one `entity_resolution_decisions` sequences by.
+#:
+#: `merge_entities` and `split_identity` are absent for the reason they are
+#: absent from `_PROMOTION_BY_KIND`, and a table naming a target for them would
+#: be this module describing a mutation it refuses to route.
+_TARGET_BY_KIND: Final[Mapping[EntityProposalKind, PromotionTarget]] = MappingProxyType(
+    {
+        EntityProposalKind.UPDATE_ENTITY: PromotionTarget(MutationRecordFamily.ENTITY, "entity_id"),
+        EntityProposalKind.RETIRE_IDENTIFIER: PromotionTarget(
+            MutationRecordFamily.IDENTIFIER, "identifier_id"
+        ),
+        EntityProposalKind.SUPERSEDE_IDENTIFIER: PromotionTarget(
+            MutationRecordFamily.IDENTIFIER, "identifier_id"
+        ),
+        EntityProposalKind.RETIRE_ALIAS: PromotionTarget(MutationRecordFamily.ALIAS, "alias_id"),
+        EntityProposalKind.SUPERSEDE_ALIAS: PromotionTarget(MutationRecordFamily.ALIAS, "alias_id"),
+        EntityProposalKind.REVISE_ASSIGNMENT: PromotionTarget(
+            MutationRecordFamily.ASSIGNMENT, "assignment_id"
+        ),
+        EntityProposalKind.END_ASSIGNMENT: PromotionTarget(
+            MutationRecordFamily.ASSIGNMENT, "assignment_id"
+        ),
+        EntityProposalKind.REVISE_RELATIONSHIP: PromotionTarget(
+            MutationRecordFamily.RELATIONSHIP, "relationship_id"
+        ),
+        EntityProposalKind.END_RELATIONSHIP: PromotionTarget(
+            MutationRecordFamily.RELATIONSHIP, "relationship_id"
+        ),
+        EntityProposalKind.RESOLVE_MENTION: PromotionTarget(
+            MutationRecordFamily.OBSERVATION, "observation_id"
+        ),
+    }
+)
+
+
+def target_of(proposal: EntityProposal) -> tuple[PromotionTarget, str] | None:
+    """The record this proposal changes and its identifier, or `None` for a creation.
+
+    Returns the identifier out of the payload rather than leaving the caller to
+    read it, so that "which field names the target" is answered once. A kind
+    that changes an existing record whose payload does not name it would be a
+    schema and a target table disagreeing, and that is a defect here rather than
+    a `KeyError` at a promoter.
+    """
+    target = _TARGET_BY_KIND.get(proposal.kind)
+    if target is None:
+        return None
+    named = proposal.payload.as_mapping().get(target.payload_field)
+    if not isinstance(named, str):
+        raise UnpromotableProposalError("a proposal names the record it changes")
+    return target, named

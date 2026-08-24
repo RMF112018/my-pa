@@ -76,9 +76,7 @@ from my_pa.domain.relationship.entity import (
     IdentifierState,
 )
 from my_pa.domain.relationship.governance import (
-    ActorClass,
     EvidenceRole,
-    MutationAuthority,
     MutationRecordFamily,
 )
 from my_pa.infrastructure.persistence.principal_scope import (
@@ -171,26 +169,41 @@ def _bound(table: Table, principal_id: str, **values: object) -> dict[str, objec
     return principal_bound_values(dict(values), table, capture_context(principal_id))
 
 
-#: What every write on this path carries, and the one value each may hold.
-#:
-#: `USER_CONFIRMED_ASSERTION` because these capabilities are reached only by a
-#: request an authenticated Principal made, naming the version it read: the user
-#: was asked and answered. `SYSTEM_DETERMINISTIC` is what an inference-driven
-#: writer would carry and is deliberately unreachable from here, because
-#: `MutationAuthority` records that it "may never, by itself, create or merge an
-#: identity" -- and a create is one of the capabilities this path serves.
-#:
-#: Hard-coded rather than taken from the request, which has no field for it, for
-#: the reason `RelationshipMemoryService` hard-codes `MemoryActorClass.USER`: an
-#: authority a caller could state is an authority a caller could raise.
 #: SQLSTATE for a unique violation, which is the one `IntegrityError` this
 #: module's ledger insert is entitled to interpret. Restated here rather than
 #: imported from the driver, so the persistence layer's error classification
 #: does not become a reason for every reader of this file to import psycopg.
 _UNIQUE_VIOLATION = "23505"
 
-_AUTHORITY = MutationAuthority.USER_CONFIRMED_ASSERTION
-_ACTOR_CLASS = ActorClass.USER
+#: What a write on this path carries when nothing says otherwise, and what it
+#: meant when it was the only value one could carry.
+#:
+#: `USER_CONFIRMED_ASSERTION` because these capabilities are ordinarily reached
+#: by a request an authenticated Principal made, naming the version it read: the
+#: user was asked and answered. `SYSTEM_DETERMINISTIC` is what an
+#: inference-driven writer would carry and is unreachable here, because
+#: `MutationAuthority` records that it "may never, by itself, create or merge an
+#: identity" -- and a create is one of the capabilities this path serves; the
+#: request refuses it outright rather than leaving the refusal to this module.
+#:
+#: **These are now the defaults rather than the only values, and `WP-RI-B-05` is
+#: the change.** They were two module constants here, and the reason given was
+#: that an authority a caller could state is an authority a caller could raise.
+#: That reason still holds and is still enforced -- no transport command carries
+#: either field, and a proposal payload naming one is refused by
+#: `FORBIDDEN_PAYLOAD_FIELDS` -- but the premise it rested on, that the request
+#: "has no field for it", stopped being true when review promotion had to
+#: execute: a fact a reviewer accepted from a source or a local model recorded
+#: as `user_confirmed_assertion` is a record claiming the user asserted what
+#: somebody else did.
+#:
+#: So the writers below read `request.authority` and `request.actor_class`, and
+#: the two constants moved to `domain.relationship.governance` as
+#: `DEFAULT_MUTATION_AUTHORITY` and `DEFAULT_MUTATION_ACTOR_CLASS`, which is
+#: where `EntityWriteRequest` declares them as its field defaults. They were not
+#: left here as aliases beside the readers: a constant nothing reads is a claim
+#: nothing checks, and two spellings of one default are two things that can
+#: drift apart.
 
 #: Which fact column of `entity_fact_evidence_links` each record family fills.
 _EVIDENCE_TARGET_COLUMN: Mapping[MutationRecordFamily, str] = {
@@ -1013,6 +1026,19 @@ def _record_evidence(
     proved by walking the span to the capture that owns it, and a span behind
     another Principal's capture answers exactly what a span that does not exist
     answers.
+
+    **The shape is checked before the walk, and `WP-RI-B-05` added that line.**
+    PR #154's fifth non-blocking observation is exactly this omission, and
+    Phase B touches the invariant: `EntitiesRepository.record_proposal_evidence_link`
+    is a second writer of capture-span evidence, so the plane now has three of
+    them and two spellings of the same precondition. `persistence.entity`'s
+    `_link_evidence` has always validated its reference before the read; this
+    one did not, and relied on the transport command's `_entity_evidence` --
+    which is real but is a boundary that an in-process caller of
+    `EntityAuthoringService` does not have to cross. A malformed reference
+    reaching the query is answered "outside this scope", which is a statement
+    about a Principal's partition made about a value that could never have been
+    in anybody's.
     """
     if not request.evidence:
         return ()
@@ -1020,6 +1046,7 @@ def _record_evidence(
     target_id = outcome.record_id
     link_ids: list[str] = []
     for reference, link_id in zip(request.evidence, request.minted_evidence_link_ids, strict=True):
+        validate_identifier(reference, IdKind.SPAN)
         owned = connection.execute(
             select(capture_spans.c.span_id)
             .select_from(
@@ -1049,7 +1076,7 @@ def _record_evidence(
                     # attaches, and a role a writer could choose would let one
                     # file its own objection alongside its own assertion.
                     role=EvidenceRole.DIRECT.value,
-                    authority=_AUTHORITY.value,
+                    authority=request.authority.value,
                     created_at=request.server_received_at,
                 )
             )
@@ -1089,7 +1116,7 @@ def _record_mutation(
                     record_id=outcome.record_id,
                     prior_version=outcome.prior_version,
                     new_version=outcome.new_version,
-                    authority=_AUTHORITY.value,
+                    authority=request.authority.value,
                     # `null()` rather than `None`: a `None` handed to a JSONB
                     # column is the JSON value `null`, not SQL NULL, and
                     # `a_mutation_before_state_is_an_object` refuses it --
@@ -1103,7 +1130,7 @@ def _record_mutation(
                     correlation_id=request.correlation_id,
                     audit_id=request.audit_id,
                     receipt_id=None,
-                    actor_class=_ACTOR_CLASS.value,
+                    actor_class=request.actor_class.value,
                     recorded_at=request.server_received_at,
                 )
             )

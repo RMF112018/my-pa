@@ -59,7 +59,8 @@ from my_pa.domain.relationship.proposal_payload import (
     dedupe_digest,
     schema_for,
 )
-from tests.conftest import FakeUnitOfWork, World
+from tests.conftest import World
+from tests.unit.entity_proposal_fakes import ProposalEntities
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 OTHER: Final = "prn_bbbb0002bbbb0002bbbb0002"
@@ -82,8 +83,16 @@ ALIAS_PAYLOAD: Final[dict[str, str | bool]] = {
 }
 
 
-def _entities(world: World):  # noqa: ANN202
-    return FakeUnitOfWork(world).entities
+def _entities(world: World) -> ProposalEntities:
+    """The entity plane over this `World`, with the proposal-plane methods.
+
+    `ProposalEntities` rather than `FakeUnitOfWork(world).entities`, and the
+    reason is stated in that module: `tests/conftest.py` is frozen for
+    `WP-RI-B-05`, so the four methods the proposal and promotion paths need had
+    to be written beside it instead of in it. Both share one `World`, so a test
+    that stages rows through either sees them through the other.
+    """
+    return ProposalEntities(world)
 
 
 @pytest.fixture

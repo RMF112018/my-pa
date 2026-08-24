@@ -271,6 +271,16 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # methods refuse a record whose `principal_id` is not the acting Principal's
     # before any statement runs, and the mappers read a column out of a statement
     # `_mine` already scoped.
+    #
+    # WP-RI-B-05 adds one of each and nothing new in kind. The second `link`
+    # read is `record_proposal_evidence_link` refusing an
+    # `EntityProposalEvidenceLink` whose `principal_id` is not the acting
+    # Principal's -- the same `if X.principal_id != principal_id: raise` the
+    # canonical evidence link, the observation and the proposal already perform,
+    # made before the statement that would otherwise report it as a foreign-key
+    # violation naming a constraint. The ninth `row` read is
+    # `_row_to_proposal_evidence_link` stamping the column back onto the record
+    # it builds from a row a `_mine`-scoped statement returned.
     "infrastructure/persistence/entity.py": (
         ("alias", "principal_id"),
         ("assignment", "principal_id"),
@@ -282,6 +292,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("entity", "principal_id"),
         ("event", "principal_id"),
         ("identifier", "principal_id"),
+        ("link", "principal_id"),
         ("link", "principal_id"),
         ("observation", "principal_id"),
         ("operation", "principal_id"),
@@ -310,6 +321,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("row", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),

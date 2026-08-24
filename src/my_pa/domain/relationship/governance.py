@@ -56,6 +56,8 @@ from my_pa.domain.relationship.proposal_payload import (
 
 __all__ = [
     "ACCEPTED_PROPOSAL_STATES",
+    "DEFAULT_MUTATION_ACTOR_CLASS",
+    "DEFAULT_MUTATION_AUTHORITY",
     "EDGE_WHITESPACE",
     "ENTITY_CHANGE_REASON_LIMIT",
     "IDENTITY_CORRECTION_PROPOSAL_KINDS",
@@ -65,6 +67,7 @@ __all__ = [
     "OPEN_EQUIVALENT_PROPOSAL_STATES",
     "PRODUCT_OWNED_CAPTURE_SOURCE_ID",
     "PROPOSAL_METHOD_VERSION_LIMIT",
+    "UNDECIDED_PROPOSAL_STATES",
     "ActorClass",
     "EntityFactEvidenceLink",
     "EntityGovernanceError",
@@ -92,7 +95,9 @@ __all__ = [
     "ReviewRequirement",
     "StaleResolutionVersionError",
     "capture_origin_triple",
+    "initial_state_for",
     "origin_of",
+    "requirement_for",
 ]
 
 #: How long a disclosed mention name may be. Stated here and repeated as a CHECK
@@ -459,6 +464,24 @@ class ActorClass(StrEnum):
     SYSTEM_DETERMINISTIC = "system_deterministic"
 
 
+#: What a governed entity write carries when nothing on the path says otherwise.
+#:
+#: Declared here, in the module that owns both vocabularies, because three
+#: records in `contracts.ports` and two writers in `infrastructure.persistence`
+#: all have to agree on it and a default spelled at each of them is five things
+#: that can drift. `infrastructure.persistence.entity_authoring` held these as
+#: two private constants until `WP-RI-B-05`; its comment block records why they
+#: moved and which half of its reasoning stopped being true.
+#:
+#: A *default* rather than the only value: review promotion executes an accepted
+#: proposal through the same services a user's own write goes through, and a
+#: promoted source or local-model conclusion recorded as
+#: `user_confirmed_assertion` would claim the user asserted what somebody else
+#: did. The pair moves together -- see `contracts.ports._check_write_authority`.
+DEFAULT_MUTATION_AUTHORITY: Final = MutationAuthority.USER_CONFIRMED_ASSERTION
+DEFAULT_MUTATION_ACTOR_CLASS: Final = ActorClass.USER
+
+
 class EntityProposalState(StrEnum):
     """Where a proposal stands.
 
@@ -512,6 +535,28 @@ OPEN_EQUIVALENT_PROPOSAL_STATES: Final[frozenset[EntityProposalState]] = frozens
         EntityProposalState.NEEDS_REVIEW,
         EntityProposalState.DEFERRED,
     }
+)
+
+#: The states in which nothing has decided a proposal yet, and it is therefore
+#: still available to be decided for the first time.
+#:
+#: Two, and `DEFERRED` is deliberately not one of them although
+#: `OPEN_EQUIVALENT_PROPOSAL_STATES` holds it: a deferred proposal *was* decided
+#: -- somebody looked at it and pushed it out -- and the two sets answer
+#: different questions. This one answers "may a decision be recorded against
+#: this row", which is the predicate `SqlEntityRepository.decide_proposal` puts
+#: inside its guarded `UPDATE`; that one answers "would a second identical
+#: proposal be a duplicate". Routing a deferral back to a reviewer is the Review
+#: plane's disposition and will widen this set when it lands, together with the
+#: predicate, exactly as `WP-RI-B-05` widened both from `PROPOSED` alone.
+#:
+#: A tuple rather than a module-level `frozenset` for `_DECIDED_PROPOSAL_STATES`'
+#: measured reason: the enum-derivation guard reports any revision whose CHECK
+#: vocabulary equals a live closed set exactly, and these two values are what a
+#: `state IN (...)` predicate on this table would spell.
+UNDECIDED_PROPOSAL_STATES: Final = (
+    EntityProposalState.PROPOSED,
+    EntityProposalState.NEEDS_REVIEW,
 )
 
 #: The states in which a reviewer has made the call, and the record therefore
@@ -673,6 +718,38 @@ def requirement_for(kind: EntityProposalKind) -> ReviewRequirement:
     in if it were a column.
     """
     return _REQUIREMENT_BY_KIND[kind]
+
+
+def initial_state_for(kind: EntityProposalKind) -> EntityProposalState:
+    """The state a newly recorded proposal of `kind` is written in.
+
+    **Derived from the requirement, and that is the whole of it.** `WP-RI-B-05`
+    added `NEEDS_REVIEW` to this plane precisely so that "a person has to look
+    at this" could be a state rather than a fact a reader had to recompute, and
+    then wrote `PROPOSED` for all seventeen kinds anyway, because widening
+    `EntityProposal.is_open` without widening the repository's `UPDATE`
+    predicate would have made the record claim a decision was available that the
+    server refused. Both are widened now, and this is where the claim is made.
+
+    So a queue filtered to `NEEDS_REVIEW` is the reviewer's queue and a queue
+    filtered to `PROPOSED` is what a configured threshold may act on -- and
+    neither reader has to hold a copy of `_REQUIREMENT_BY_KIND` to tell them
+    apart. A kind added to that mapping gets its initial state from the same
+    rule on the same day; there is no second table to forget.
+
+    `REQUIRES_OPERATOR` lands in `NEEDS_REVIEW` beside `REQUIRES_REVIEW` rather
+    than in a state of its own, because the *state* says a person must look and
+    the *requirement* says which person may act -- and `_decide` reads the
+    requirement, not the state, when it refuses a merge to a caller declaring no
+    operator authority. A third open state would put that rule in two places.
+
+    Both answers are in `UNDECIDED_PROPOSAL_STATES`, and a test holds that over
+    every kind: a proposal that arrived already decided is the failure this
+    whole plane exists to prevent.
+    """
+    if requirement_for(kind) is ReviewRequirement.MAY_BE_ACCEPTED_AUTOMATICALLY:
+        return EntityProposalState.PROPOSED
+    return EntityProposalState.NEEDS_REVIEW
 
 
 @dataclass(frozen=True, slots=True)
@@ -895,6 +972,15 @@ class EntityProposal:
     accepted_record_version: int | None = None
     invalidated_reason: str | None = None
     superseded_at: datetime | None = None
+    #: The proposal that replaced this one, when a reprocess produced a
+    #: successor against current evidence. Nullable in both directions: a
+    #: proposal can be superseded with nothing to point at -- a merge preview
+    #: invalidating what it made unanswerable, say -- and a successor pointer
+    #: without supersession would be a live proposal claiming to have been
+    #: replaced. `WP-RI-B-05` adds the column and the writer
+    #: (`EntitiesRepository.supersede_proposal`); the `reprocess` disposition
+    #: that mints the successor is the Review plane's.
+    superseded_by_proposal_id: str | None = None
     decided_by: str | None = None
     decided_at: datetime | None = None
     decision_reason: str | None = None
@@ -1002,6 +1088,17 @@ class EntityProposal:
             ensure_utc(self.superseded_at)
             if self.superseded_at < self.proposed_at:
                 raise ValueError("a proposal cannot be superseded before it was proposed")
+        # One direction, like the accepted-record rule above and for the same
+        # reason: a successor pointer on a live proposal would say it had been
+        # replaced while it was still awaiting a decision, but a proposal may be
+        # superseded by something that is not another proposal and then has
+        # nothing to name.
+        if self.superseded_by_proposal_id is not None:
+            validate_identifier(self.superseded_by_proposal_id, IdKind.ENTITY_PROPOSAL)
+            if self.state is not EntityProposalState.SUPERSEDED:
+                raise ValueError("only a superseded proposal names its successor")
+            if self.superseded_by_proposal_id == self.proposal_id:
+                raise ValueError("a proposal is not its own successor")
 
     @property
     def requirement(self) -> ReviewRequirement:
@@ -1012,20 +1109,27 @@ class EntityProposal:
     def is_open(self) -> bool:
         """Whether this proposal is still awaiting its first decision.
 
-        `PROPOSED` alone, and deliberately narrower than both of the new states
-        that read as open. It stays narrow because `EntitiesRepository.decide_proposal`
+        `UNDECIDED_PROPOSAL_STATES`, which is `PROPOSED` and `NEEDS_REVIEW`.
+        This was `PROPOSED` alone at `WP-RI-B-05`'s first commit, and the reason
+        recorded for the narrowness was that `EntitiesRepository.decide_proposal`
         settles a decision at the server with `state = 'proposed'` inside the
-        UPDATE predicate: widening this property without widening that predicate
-        would make the record say a decision was available that the database
-        would then refuse, and the caller would see a scope error rather than
-        the refusal it actually hit. Whoever writes `NEEDS_REVIEW` and routes a
-        deferral back to a reviewer widens both together.
+        `UPDATE` predicate -- so widening the property alone would make the
+        record claim a decision was available that the database would refuse,
+        and the caller would see a scope error rather than the refusal it hit.
+        That reason was right and is why both moved together: `initial_state_for`
+        now writes `NEEDS_REVIEW` for every kind a person has to look at, the
+        predicate names the same tuple this property reads, and neither can be
+        widened without the other because there is only one set.
+
+        `DEFERRED` is still absent, and that is not an oversight: a deferred
+        proposal was decided once. Routing a deferral back is the Review plane's
+        disposition and widens the same tuple when it lands.
 
         Distinct from `OPEN_EQUIVALENT_PROPOSAL_STATES`, which answers a
         different question -- whether a *second identical proposal* would be a
         duplicate -- and answers it for a deferred proposal too.
         """
-        return self.state is EntityProposalState.PROPOSED
+        return self.state in UNDECIDED_PROPOSAL_STATES
 
 
 @dataclass(frozen=True, slots=True)

@@ -84,7 +84,7 @@ write.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime
@@ -123,6 +123,7 @@ from my_pa.contracts.ports import (
     UnknownScopeError,
 )
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.authoring import (
     ConflictedIdentifierError,
@@ -152,6 +153,8 @@ from my_pa.domain.relationship.entity import (
     descriptor_key,
 )
 from my_pa.domain.relationship.governance import (
+    ACCEPTED_PROPOSAL_STATES,
+    UNDECIDED_PROPOSAL_STATES,
     ActorClass,
     EntityFactEvidenceLink,
     EntityMergeRecord,
@@ -159,6 +162,7 @@ from my_pa.domain.relationship.governance import (
     EntityMutationEvent,
     EntityObservation,
     EntityProposal,
+    EntityProposalEvidenceLink,
     EntityProposalKind,
     EntityProposalMethod,
     EntityProposalPayload,
@@ -200,6 +204,9 @@ from my_pa.infrastructure.persistence.principal_scope import (
     principal_bound_values,
 )
 from my_pa.infrastructure.persistence.tables import (
+    capture_spans,
+    capture_versions,
+    captures,
     entities,
     entity_aliases,
     entity_assignments,
@@ -211,6 +218,7 @@ from my_pa.infrastructure.persistence.tables import (
     entity_merge_records,
     entity_mutation_events,
     entity_observations,
+    entity_proposal_evidence_links,
     entity_proposals,
     entity_relationships,
     entity_resolution_decisions,
@@ -1691,7 +1699,7 @@ class SqlEntityRepository(EntitiesRepository):
                         relationship_id=relationship_id,
                         entity_observation_id=reference,
                         role=EvidenceRole.DIRECT.value,
-                        authority=MutationAuthority.USER_CONFIRMED_ASSERTION.value,
+                        authority=request.authority.value,
                     )
                 )
             )
@@ -1711,11 +1719,19 @@ class SqlEntityRepository(EntitiesRepository):
     ) -> DirectedReceipt:
         """Append the ledger row that *is* this plane's receipt, and return it.
 
-        `authority` is `user_confirmed_assertion` and `actor_class` is `user`,
-        both constants: this is the capability path, and the only thing that
-        reaches it is a Principal that authenticated and asked. A model-derived
-        change goes through `entity_proposals` and arrives, if a reviewer accepts
-        it, as `review_accepted` from a different writer.
+        **`authority` and `actor_class` are read off the request, and this
+        docstring used to predict exactly that.** It said the two were constants
+        because "the only thing that reaches it is a Principal that
+        authenticated and asked", and that a model-derived change "arrives, if a
+        reviewer accepts it, as `review_accepted` from a different writer".
+        `WP-RI-B-05` made the second half false in the way that matters: review
+        promotion executes an accepted proposal through `EntityDirectedService`,
+        which is *this* writer, so a second writer would have been a second copy
+        of this transaction. The pair is on the request instead, defaulting to
+        `user_confirmed_assertion`/`user`, and `_check_write_authority` keeps
+        the halves consistent so `review_accepted` cannot be stamped by anything
+        that is not a review promotion. What has not changed is that no caller
+        can supply either: the transport commands have no such field.
 
         `receipt_id` is left null. The ledger row is the receipt on this plane --
         it carries the digest, the key, the before and after state and the audit
@@ -1747,7 +1763,7 @@ class SqlEntityRepository(EntitiesRepository):
                         record_id=record_id,
                         prior_version=prior_version,
                         new_version=new_version,
-                        authority=MutationAuthority.USER_CONFIRMED_ASSERTION.value,
+                        authority=request.authority.value,
                         before_state=null() if before_state is None else before_state,
                         after_state=after_state,
                         reason=request.reason,
@@ -1756,7 +1772,7 @@ class SqlEntityRepository(EntitiesRepository):
                         correlation_id=request.correlation_id,
                         audit_id=request.audit_id,
                         receipt_id=None,
-                        actor_class=ActorClass.USER.value,
+                        actor_class=request.actor_class.value,
                         recorded_at=request.server_received_at,
                     )
                 )
@@ -2173,6 +2189,7 @@ class SqlEntityRepository(EntitiesRepository):
                     accepted_record_version=proposal.accepted_record_version,
                     invalidated_reason=proposal.invalidated_reason,
                     superseded_at=proposal.superseded_at,
+                    superseded_by_proposal_id=proposal.superseded_by_proposal_id,
                     decided_by=proposal.decided_by,
                     decided_at=proposal.decided_at,
                     decision_reason=proposal.decision_reason,
@@ -2209,19 +2226,27 @@ class SqlEntityRepository(EntitiesRepository):
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if proposal.principal_id != principal_id:
             raise ValueError("a proposal belongs to the acting Principal")
-        # `state = 'proposed'` is part of the predicate, not a check made before
-        # it. A decision is a one-time act: without this, deciding an already
-        # decided proposal overwrites `decided_by`, `decided_at` and the reason,
-        # so the record of who made the call and why is replaced by whoever
-        # called last -- and a rejected merge could be re-accepted with no trace
-        # that it had ever been refused. Two concurrent deciders now settle at
-        # the database rather than by arrival order.
+        # The undecided states are part of the predicate, not a check made
+        # before it. A decision is a one-time act: without this, deciding an
+        # already decided proposal overwrites `decided_by`, `decided_at` and the
+        # reason, so the record of who made the call and why is replaced by
+        # whoever called last -- and a rejected merge could be re-accepted with
+        # no trace that it had ever been refused. Two concurrent deciders settle
+        # at the database rather than by arrival order.
+        #
+        # `UNDECIDED_PROPOSAL_STATES` rather than the `proposed` literal this
+        # carried at `WP-RI-B-05`'s first commit, and the set is read from the
+        # domain rather than spelled: it is the same set `EntityProposal.is_open`
+        # returns, so the record cannot claim a decision is available that this
+        # statement refuses, and widening one is widening the other. `deferred`
+        # is deliberately outside it -- a deferred proposal was decided once,
+        # and routing it back to a reviewer is the Review plane's disposition.
         result = self._connection.execute(
             update(entity_proposals)
             .where(
                 _mine(entity_proposals, principal_id),
                 entity_proposals.c.proposal_id == proposal.proposal_id,
-                entity_proposals.c.state == EntityProposalState.PROPOSED.value,
+                entity_proposals.c.state.in_([state.value for state in UNDECIDED_PROPOSAL_STATES]),
             )
             .values(
                 state=proposal.state.value,
@@ -2235,6 +2260,208 @@ class SqlEntityRepository(EntitiesRepository):
             # from "already decided" would tell a caller that a proposal they
             # cannot see exists.
             raise UnknownScopeError("a decision names an open proposal in this scope")
+
+    def record_proposal_promotion(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        record_family: MutationRecordFamily,
+        record_id: str,
+        record_version: int,
+    ) -> None:
+        """Name the canonical record an accepted proposal became. See the port.
+
+        Guarded on `accepted_record_id IS NULL` as well as on the accepted
+        states, so this is an append rather than a re-point: a proposal already
+        naming a record is one whose promotion already happened, and overwriting
+        the name would leave the first canonical row with no proposal claiming
+        it and the second claiming an acceptance it did not cause.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(proposal_id, IdKind.ENTITY_PROPOSAL)
+        if record_version < 1:
+            raise ValueError("a promoted record version starts at one")
+        result = self._connection.execute(
+            update(entity_proposals)
+            .where(
+                _mine(entity_proposals, principal_id),
+                entity_proposals.c.proposal_id == proposal_id,
+                entity_proposals.c.state.in_([state.value for state in ACCEPTED_PROPOSAL_STATES]),
+                entity_proposals.c.accepted_record_id.is_(None),
+            )
+            .values(
+                accepted_record_type=record_family.value,
+                accepted_record_id=record_id,
+                accepted_record_version=record_version,
+            )
+        )
+        if result.rowcount == 0:
+            raise UnknownScopeError("a promotion names an accepted proposal in this scope")
+
+    def supersede_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        successor_proposal_id: str,
+        at: datetime,
+    ) -> bool:
+        """Retire one undecided proposal in favour of its successor. See the port.
+
+        Returns whether a row moved rather than raising, because "this proposal
+        was decided while the reprocess was in flight" is the outcome section 27
+        requires -- a stale reprocess creates nothing -- and not an error about
+        scope. A proposal that is not this Principal's answers the same way a
+        decided one does, for the reason `decide_proposal` gives.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(proposal_id, IdKind.ENTITY_PROPOSAL)
+        validate_identifier(successor_proposal_id, IdKind.ENTITY_PROPOSAL)
+        if successor_proposal_id == proposal_id:
+            raise ValueError("a proposal is not its own successor")
+        result = self._connection.execute(
+            update(entity_proposals)
+            .where(
+                _mine(entity_proposals, principal_id),
+                entity_proposals.c.proposal_id == proposal_id,
+                entity_proposals.c.state.in_([state.value for state in UNDECIDED_PROPOSAL_STATES]),
+            )
+            .values(
+                state=EntityProposalState.SUPERSEDED.value,
+                superseded_at=ensure_utc(at),
+                superseded_by_proposal_id=successor_proposal_id,
+            )
+        )
+        return bool(result.rowcount)
+
+    def proposal_by_dedupe(
+        self,
+        principal_id: str,
+        dedupe_sha256: str,
+        states: Iterable[EntityProposalState],
+    ) -> EntityProposal | None:
+        """The proposal this digest already has in one of `states`. See the port.
+
+        The columns `an_open_equivalent_proposal_is_raised_once` is already over,
+        read in one statement. Ordered by identifier so that a partition holding
+        more than one -- which the partial unique makes impossible for the open
+        states and possible for any set a caller passes -- answers the same way
+        twice rather than by physical order.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        wanted = [state.value for state in states]
+        if not wanted:
+            return None
+        row = self._connection.execute(
+            select(entity_proposals)
+            .where(
+                _mine(entity_proposals, principal_id),
+                entity_proposals.c.dedupe_sha256 == dedupe_sha256,
+                entity_proposals.c.state.in_(wanted),
+            )
+            .order_by(entity_proposals.c.proposal_id)
+            .limit(1)
+        ).one_or_none()
+        return None if row is None else _row_to_proposal(row)
+
+    def record_proposal_evidence_link(
+        self, principal_id: str, link: EntityProposalEvidenceLink
+    ) -> None:
+        """Bind one proposal to a single record it rests on. See the port.
+
+        Three ownership questions and three different answers, which is the
+        shape `record_fact_evidence_link` and `_record_evidence` already have
+        between them. The proposal and the observation carry composite
+        `(id, principal_id)` foreign keys, so the schema refuses a foreign one
+        -- and both are checked here first anyway, because a foreign key
+        violation names a constraint where a refusal can name the scope. A
+        capture span carries no Principal partition at all, so it is walked to
+        the capture that owns it. A span behind another Principal's capture
+        answers exactly what an absent span answers.
+
+        **The walk reaches the partition through `_mine` on both joined tables**
+        rather than through the hand-written `captures.owner_principal_id`
+        comparison `entity_authoring._record_evidence` uses. The two say the
+        same thing about `captures`; `_mine` additionally constrains
+        `capture_versions`, which is partitioned too, and takes the column name
+        and the partition vocabulary from the table rather than restating them
+        -- which is the drift `principal_scope` exists to remove, and is why
+        this site needs no entry in the architecture guard's registry of
+        hand-written comparisons.
+
+        `knowledge_id` names no table in this declaration and therefore has no
+        ownership to prove here. That residual is the table's own and is stated
+        on it; admitting the column without a writer would have left even the
+        shape unchecked, and `EntityProposalEvidenceLink` checks that much.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if link.principal_id != principal_id:
+            raise ValueError("proposal evidence belongs to the acting Principal")
+        held = self._connection.execute(
+            select(entity_proposals.c.proposal_id).where(
+                _mine(entity_proposals, principal_id),
+                entity_proposals.c.proposal_id == link.proposal_id,
+            )
+        ).first()
+        if held is None:
+            raise UnknownScopeError("proposal evidence names a proposal in this scope")
+        if link.entity_observation_id is not None:
+            owned = self._connection.execute(
+                select(entity_observations.c.observation_id).where(
+                    _mine(entity_observations, principal_id),
+                    entity_observations.c.observation_id == link.entity_observation_id,
+                )
+            ).first()
+            if owned is None:
+                raise UnknownScopeError("proposal evidence cites a record outside this scope")
+        if link.capture_span_id is not None:
+            spanned = self._connection.execute(
+                select(capture_spans.c.span_id)
+                .select_from(
+                    capture_spans.join(
+                        capture_versions,
+                        capture_versions.c.version_id == capture_spans.c.version_id,
+                    ).join(captures, captures.c.capture_id == capture_versions.c.capture_id)
+                )
+                .where(
+                    capture_spans.c.span_id == link.capture_span_id,
+                    _mine(captures, principal_id),
+                    _mine(capture_versions, principal_id),
+                )
+            ).first()
+            if spanned is None:
+                raise UnknownScopeError("proposal evidence cites a record outside this scope")
+        self._connection.execute(
+            insert(entity_proposal_evidence_links).values(
+                _bound(
+                    entity_proposal_evidence_links,
+                    principal_id,
+                    proposal_id=link.proposal_id,
+                    sequence=link.sequence,
+                    role=link.role.value,
+                    entity_observation_id=link.entity_observation_id,
+                    capture_span_id=link.capture_span_id,
+                    knowledge_id=link.knowledge_id,
+                    created_at=link.created_at,
+                )
+            )
+        )
+
+    def proposal_evidence_links(
+        self, principal_id: str, proposal_id: str
+    ) -> list[EntityProposalEvidenceLink]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(proposal_id, IdKind.ENTITY_PROPOSAL)
+        rows = self._connection.execute(
+            select(entity_proposal_evidence_links)
+            .where(
+                _mine(entity_proposal_evidence_links, principal_id),
+                entity_proposal_evidence_links.c.proposal_id == proposal_id,
+            )
+            .order_by(entity_proposal_evidence_links.c.sequence)
+        ).all()
+        return [_row_to_proposal_evidence_link(row) for row in rows]
 
     def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
@@ -3247,6 +3474,19 @@ def _row_to_fact_evidence_link(row: Row[Any]) -> EntityFactEvidenceLink:
     )
 
 
+def _row_to_proposal_evidence_link(row: Row[Any]) -> EntityProposalEvidenceLink:
+    return EntityProposalEvidenceLink(
+        proposal_id=str(row.proposal_id),
+        principal_id=str(row.principal_id),
+        sequence=int(row.sequence),
+        role=EvidenceRole(str(row.role)),
+        created_at=row.created_at,
+        entity_observation_id=_text_or_none(row.entity_observation_id),
+        capture_span_id=_text_or_none(row.capture_span_id),
+        knowledge_id=_text_or_none(row.knowledge_id),
+    )
+
+
 def _row_to_proposal(row: Row[Any]) -> EntityProposal:
     payload = row.payload if isinstance(row.payload, dict) else {}
     observation_ids = row.observation_ids if isinstance(row.observation_ids, list) else []
@@ -3283,6 +3523,7 @@ def _row_to_proposal(row: Row[Any]) -> EntityProposal:
         accepted_record_version=row.accepted_record_version,
         invalidated_reason=_text_or_none(row.invalidated_reason),
         superseded_at=row.superseded_at,
+        superseded_by_proposal_id=_text_or_none(row.superseded_by_proposal_id),
         decided_by=_text_or_none(row.decided_by),
         decided_at=row.decided_at,
         decision_reason=_text_or_none(row.decision_reason),

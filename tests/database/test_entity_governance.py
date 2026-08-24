@@ -506,7 +506,11 @@ def test_a_proposal_round_trips_with_its_payload(two_principals: Engine) -> None
         held = SqlEntityRepository(connection).proposal(PRINCIPAL_A, proposal_id)
     assert held is not None
     assert held.kind is EntityProposalKind.MERGE_ENTITIES
-    assert held.state is EntityProposalState.PROPOSED
+    # `needs_review` and not `proposed`, since `WP-RI-B-05` made the initial
+    # state derive from the kind's review requirement: a merge is
+    # `REQUIRES_OPERATOR`, so a person has to look at it and the state says so
+    # rather than leaving a reader to recompute it from the kind.
+    assert held.state is EntityProposalState.NEEDS_REVIEW
     assert held.payload.as_mapping() == {
         "retained_entity_id": ALICE,
         "merged_entity_id": ALICE_TWO,
@@ -770,10 +774,13 @@ def test_the_repository_refuses_to_decide_a_proposal_a_second_time(
 
     `EntityGovernanceService` already refuses with `ProposalNotOpenError`, and
     that check reads the proposal and then writes — two statements, so two
-    callers can both read "open" and both write. The repository's `UPDATE` now
-    carries `state = 'proposed'` in its own predicate, which is where that race
-    is actually settled. Driven through `SqlEntityRepository` directly, because
-    going through the service would prove only the service's check.
+    callers can both read "open" and both write. The repository's `UPDATE`
+    carries the undecided states in its own predicate, which is where that race
+    is actually settled. (It carried the `proposed` literal until `WP-RI-B-05`
+    began writing `needs_review`; both are undecided and the predicate names the
+    set the record's own `is_open` reads, so the two cannot disagree.) Driven
+    through `SqlEntityRepository` directly, because going through the service
+    would prove only the service's check.
 
     What the second write would otherwise do is replace `decided_by`,
     `decided_at` and the reason: the record of who decided and why becomes
@@ -1108,7 +1115,7 @@ def test_the_proposal_queue_does_not_list_another_principals_proposals(
         repository = SqlEntityRepository(connection)
         mine = repository.proposals(PRINCIPAL_A)
         theirs = repository.proposals(PRINCIPAL_B)
-        mine_open = repository.proposals(PRINCIPAL_A, EntityProposalState.PROPOSED)
+        mine_open = repository.proposals(PRINCIPAL_A, EntityProposalState.NEEDS_REVIEW)
     assert [item.proposal_id for item in mine] == [a_proposal]
     assert [item.proposal_id for item in theirs] == [b_proposal], (
         "the staged foreign row went missing"
@@ -1121,7 +1128,7 @@ def test_a_decision_cannot_reach_another_principals_proposal(
 ) -> None:
     """`decide_proposal` settles at the database, and its partition is part of that.
 
-    The UPDATE already carries `state = 'proposed'` so a decision happens once.
+    The UPDATE already carries the undecided states so a decision happens once.
     The partition is the other half: `proposal_id` is a global primary key, so
     without it A's decision matches B's open proposal exactly and accepts it --
     B's merge authorised by A's operator, recorded as B's own decision, with
@@ -1151,7 +1158,7 @@ def test_a_decision_cannot_reach_another_principals_proposal(
     with two_principals.connect() as connection:
         held = SqlEntityRepository(connection).proposal(PRINCIPAL_B, b_proposal)
     assert held is not None
-    assert held.state is EntityProposalState.PROPOSED
+    assert held.state is EntityProposalState.NEEDS_REVIEW
     assert held.decided_by is None
     assert held.decision_reason is None
 

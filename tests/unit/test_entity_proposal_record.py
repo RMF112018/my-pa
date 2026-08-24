@@ -15,11 +15,16 @@ from typing import Final
 
 import pytest
 
+from my_pa.domain.common.identifiers import InvalidIdentifierError
 from my_pa.domain.relationship.governance import (
+    UNDECIDED_PROPOSAL_STATES,
     EntityProposal,
     EntityProposalMethod,
     EntityProposalState,
     MutationRecordFamily,
+    ReviewRequirement,
+    initial_state_for,
+    requirement_for,
 )
 from my_pa.domain.relationship.proposal_payload import (
     EntityProposalKind,
@@ -31,6 +36,7 @@ PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 PROPOSAL: Final = "eprp_aaaa0001aaaa0001"
 ALICE: Final = "ent_aaaa0001aaaa0001"
 ALICE_TWO: Final = "ent_bbbb0002bbbb0002"
+SUCCESSOR: Final = "eprp_bbbb0002bbbb0002"
 WHEN: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
 LATER: Final = WHEN + timedelta(hours=1)
 
@@ -217,10 +223,21 @@ def test_a_proposal_is_not_superseded_before_it_was_proposed() -> None:
         a_proposal(state=EntityProposalState.SUPERSEDED, superseded_at=WHEN - timedelta(hours=1))
 
 
-def test_only_proposed_reads_as_open() -> None:
-    """Narrow deliberately: the repository's own decide predicate names one state."""
+def test_both_undecided_states_read_as_open() -> None:
+    """`WP-RI-B-05` widened this, and widened the repository's predicate with it.
+
+    This asserted that `NEEDS_REVIEW` was *not* open, and the reason recorded
+    for the narrowness was `SqlEntityRepository.decide_proposal`'s
+    `state = 'proposed'` predicate: a record claiming a decision was available
+    that the server refused would surface as a scope error rather than as the
+    refusal the caller hit. The predicate now names `UNDECIDED_PROPOSAL_STATES`,
+    the same tuple this property reads, so the two cannot disagree — and nothing
+    would write `needs_review` at all if they still did.
+
+    `DEFERRED` stays outside both, and that is asserted beside them below.
+    """
     assert a_proposal().is_open is True
-    assert a_proposal(state=EntityProposalState.NEEDS_REVIEW).is_open is False
+    assert a_proposal(state=EntityProposalState.NEEDS_REVIEW).is_open is True
 
 
 # --- the record a proposal became ---------------------------------------------
@@ -296,3 +313,127 @@ def test_an_expected_target_version_is_positive() -> None:
 def test_a_creating_kind_may_leave_the_expected_target_version_unset() -> None:
     """There is no record to have a version yet; the parents are read at promotion."""
     assert a_proposal().expected_target_version is None
+
+
+# --- the initial state, and what "open" means after WP-RI-B-05 ---------------
+
+
+@pytest.mark.parametrize("kind", list(EntityProposalKind), ids=lambda kind: kind.value)
+def test_every_kind_is_first_written_in_a_state_nothing_has_decided(
+    kind: EntityProposalKind,
+) -> None:
+    """Over all seventeen kinds, because this is what makes `NEEDS_REVIEW` safe.
+
+    `initial_state_for` derives the initial state from the kind's review
+    requirement, so a producer's proposal lands on the reviewer's queue rather
+    than in the pile a configured threshold may act on. The property that makes
+    that a widening of the queue and not of authority is this one: whatever the
+    requirement, the state is one nothing has decided.
+    """
+    assert initial_state_for(kind) in UNDECIDED_PROPOSAL_STATES
+
+
+@pytest.mark.parametrize("kind", list(EntityProposalKind), ids=lambda kind: kind.value)
+def test_the_initial_state_says_exactly_what_the_requirement_says(
+    kind: EntityProposalKind,
+) -> None:
+    """The derivation, stated as the equivalence rather than as a second table.
+
+    A kind a person has to look at is written `needs_review`; a kind a
+    configured threshold may accept is written `proposed`. Asserting the
+    equivalence rather than seventeen expected values is what makes a kind added
+    to `_REQUIREMENT_BY_KIND` covered on the day it is added.
+    """
+    needs_a_person = requirement_for(kind) is not ReviewRequirement.MAY_BE_ACCEPTED_AUTOMATICALLY
+    assert (initial_state_for(kind) is EntityProposalState.NEEDS_REVIEW) is needs_a_person
+
+
+def test_a_merge_is_written_needs_review_and_still_requires_the_operator() -> None:
+    """`REQUIRES_OPERATOR` shares the state and keeps its own rule.
+
+    The state says a person must look; the requirement says which person may
+    act. Collapsing them into a third state would put the operator rule in two
+    places, and `EntityGovernanceService._decide` reads the requirement.
+    """
+    assert initial_state_for(EntityProposalKind.MERGE_ENTITIES) is (
+        EntityProposalState.NEEDS_REVIEW
+    )
+    assert requirement_for(EntityProposalKind.MERGE_ENTITIES) is (
+        ReviewRequirement.REQUIRES_OPERATOR
+    )
+
+
+@pytest.mark.parametrize("state", list(EntityProposalState), ids=lambda state: state.value)
+def test_a_proposal_is_open_exactly_in_the_two_undecided_states(
+    state: EntityProposalState,
+) -> None:
+    """`is_open` and the repository's `UPDATE` predicate read one set.
+
+    Parametrised over all eight rather than asserting the two, so a ninth state
+    is answered here rather than defaulting to "not open" unnoticed. `DEFERRED`
+    is deliberately not open: a deferred proposal was decided once, and routing
+    it back to a reviewer is a disposition the Review plane owns.
+    """
+    proposal = a_proposal(**_decided_fields(state))
+    assert proposal.is_open is (state in UNDECIDED_PROPOSAL_STATES)
+
+
+def _decided_fields(state: EntityProposalState) -> dict[str, object]:
+    """The other columns each state forces, so a record in it can exist at all."""
+    fields: dict[str, object] = {"state": state}
+    if state in (
+        EntityProposalState.ACCEPTED,
+        EntityProposalState.CORRECTED_ACCEPTED,
+        EntityProposalState.REJECTED,
+        EntityProposalState.DEFERRED,
+        EntityProposalState.INVALIDATED,
+    ):
+        fields |= {"decided_by": "reviewer", "decided_at": LATER}
+    if state is EntityProposalState.INVALIDATED:
+        fields |= {"invalidated_reason": "the basis failed"}
+    if state is EntityProposalState.SUPERSEDED:
+        fields |= {"superseded_at": LATER}
+    return fields
+
+
+# --- the successor pointer ----------------------------------------------------
+
+
+def test_only_a_superseded_proposal_names_its_successor() -> None:
+    """A live proposal claiming to have been replaced is a false record."""
+    with pytest.raises(ValueError, match="only a superseded proposal"):
+        a_proposal(superseded_by_proposal_id=SUCCESSOR)
+
+
+def test_a_superseded_proposal_may_name_its_successor() -> None:
+    superseded = a_proposal(
+        state=EntityProposalState.SUPERSEDED,
+        superseded_at=LATER,
+        superseded_by_proposal_id=SUCCESSOR,
+    )
+    assert superseded.superseded_by_proposal_id == SUCCESSOR
+
+
+def test_a_superseded_proposal_need_not_name_a_successor() -> None:
+    """The other direction is open: not everything that overtakes a proposal is one."""
+    assert (
+        a_proposal(state=EntityProposalState.SUPERSEDED, superseded_at=LATER)
+    ).superseded_by_proposal_id is None
+
+
+def test_a_proposal_is_not_its_own_successor() -> None:
+    with pytest.raises(ValueError, match="not its own successor"):
+        a_proposal(
+            state=EntityProposalState.SUPERSEDED,
+            superseded_at=LATER,
+            superseded_by_proposal_id=PROPOSAL,
+        )
+
+
+def test_a_successor_is_named_as_a_proposal_identifier() -> None:
+    with pytest.raises(InvalidIdentifierError):
+        a_proposal(
+            state=EntityProposalState.SUPERSEDED,
+            superseded_at=LATER,
+            superseded_by_proposal_id=ALICE,
+        )

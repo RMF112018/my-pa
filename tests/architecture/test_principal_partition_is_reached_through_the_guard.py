@@ -983,6 +983,13 @@ _ENTITY_PLANE_MODULES: Final = (
 #: compared against the Principal already stamped on the write request; that
 #: comparison is registered in `HAND_WRITTEN_COMPARISONS` above, so removing it
 #: reddens there rather than passing quietly here.
+#:
+#: **It stayed one entry through `WP-RI-B-05`, which added a second span walk.**
+#: `EntitiesRepository.record_proposal_evidence_link` proves the same thing
+#: about the same table for a *proposal's* evidence, and reaches the partition
+#: through `_mine` on both joined tables instead — so it is guarded rather than
+#: registered. Two spellings of one precondition were enough; three would have
+#: been a pattern.
 _UNGUARDED_ENTITY_PLANE_STATEMENTS: Final = frozenset({"entity_authoring.py:_record_evidence"})
 
 

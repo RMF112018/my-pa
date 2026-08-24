@@ -44,30 +44,97 @@ capability ever reached the applying code. The proposal methods here were called
 by tests and by nothing else, so this closes an unpublished path before it is
 published rather than withdrawing behaviour a caller could invoke.
 
-**Promotion of the ordinary kinds is elsewhere, and deliberately.**
-`application.entity_promotion` holds the routing from an accepted proposal to
-the canonical Phase A command that performs its mutation, and the Review path
-deciding the case is what executes it. This module holds no authoring service
-and no directed-write service, so "accepting a proposal cannot itself write a
-canonical record" is a property of what it can reach rather than a rule it
-promises to follow.
+**Promotion of the ordinary kinds is routed elsewhere and executed here, and
+the division is deliberate.** `application.entity_promotion` answers *which*
+canonical command an accepted proposal becomes, which record it changes, and
+what evidence links have to follow it onto the fact it produces; that module
+imports nothing that can reach a repository, so the routing cannot quietly
+become the write. `accept` is where the write happens, through
+`EntityAuthoringService`, `EntityDirectedService` and this module's own
+`resolve_mention` -- the same three services a user's own request reaches, so
+every protection they hold is inherited rather than reimplemented: Principal
+isolation, the guarded `UPDATE` that enforces expected version, the active
+partial uniques, evidence validation, the idempotency store, the mutation
+ledger and the plane's stable errors.
+
+**This module used to hold no authoring service, and that sentence was the
+guard.** `WP-RI-B-05`'s first commit recorded it in as many words: "accepting a
+proposal cannot itself write a canonical record" was a property of what this
+module could reach. Making promotion execute changed that, and the honest
+statement of what replaced it is narrower and stronger:
+
+* *producing* still cannot reach a canonical write. `propose` and the five
+  helpers it delegates to touch `record_proposal`,
+  `record_proposal_evidence_link` and three reads, and nothing else;
+  `tests/architecture/test_derivation_proposes_and_never_promotes` reads that
+  off the source, and additionally requires the allowlist it measures against
+  to be disjoint from every repository method that writes canonical fact.
+* *accepting* can, and only through a service that requires a decided proposal
+  in this Principal's partition and a `PromotionContext` the transport supplies.
+* *identity correction* still cannot, from either. `merge_entities` and
+  `split_identity` are refused by `promotion_for` and absent from its table, and
+  `redirect_entity`/`record_merge` appear nowhere in this module -- which is the
+  structural form of section 15 and is separately asserted.
+
+**Promoted authority is `review_accepted` under `review_promotion`.** A promoted
+alias recorded as `user_confirmed_assertion` would say the user asserted what a
+source or a local model asserted; section 14 forbids exactly that, and the pair
+travels on the write request so no writer has to be trusted to choose it.
+`resolve_mention` derived the same pair from its `actor_class` before any of
+this existed and is unchanged -- it is the precedent, not an exception.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime
 from hashlib import sha256
+from typing import Any
 
-from my_pa.contracts.ports import EntitiesRepository, SourceRepository
+from my_pa.application.commands import (
+    AddEntityAlias,
+    BindEntityIdentifier,
+    CreateEntity,
+    CreateEntityAssignment,
+    CreateEntityRelationship,
+    EndEntityAssignment,
+    EndEntityRelationship,
+    ResolveUnresolvedMention,
+    RetireEntityAlias,
+    RetireEntityIdentifier,
+    ReviseEntityAssignment,
+    ReviseEntityRelationship,
+    SupersedeEntityAlias,
+    SupersedeEntityIdentifier,
+    UpdateEntity,
+)
+from my_pa.application.entity_authoring import EntityAuthoringService
+from my_pa.application.entity_directed import EntityDirectedService
+from my_pa.application.entity_promotion import (
+    PromotionCall,
+    PromotionCommand,
+    StaleTargetVersionError,
+    UnpromotableProposalError,
+    evidence_links_for,
+    promotion_for,
+    target_of,
+)
+from my_pa.contracts.ports import (
+    DirectedReceipt,
+    EntitiesRepository,
+    EntityMutationAdmission,
+    SourceRepository,
+)
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import (
+    IDENTITY_CORRECTION_PROPOSAL_KINDS,
     OPEN_EQUIVALENT_PROPOSAL_STATES,
+    UNDECIDED_PROPOSAL_STATES,
     ActorClass,
     EntityFactEvidenceLink,
     EntityGovernanceError,
@@ -76,6 +143,7 @@ from my_pa.domain.relationship.governance import (
     EntityMutationEvent,
     EntityObservation,
     EntityProposal,
+    EntityProposalEvidenceLink,
     EntityProposalKind,
     EntityProposalMethod,
     EntityProposalPayload,
@@ -94,6 +162,7 @@ from my_pa.domain.relationship.governance import (
     ReviewRequirement,
     StaleResolutionVersionError,
     capture_origin_triple,
+    initial_state_for,
     origin_of,
 )
 from my_pa.domain.relationship.normalization import NormalizationError, normalize_name
@@ -103,12 +172,15 @@ from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
     "EntityGovernanceService",
+    "InvalidPromotionError",
     "MentionResolution",
     "ObservationAdmission",
     "ObserveCommand",
+    "PromotionContext",
     "ProposalAdmission",
     "ProposalNotOpenError",
     "ProposalSuppressedError",
+    "ProposedEvidence",
     "QuarantinedObservationError",
     "ResolutionNotPermittedError",
     "ResolveMentionCommand",
@@ -191,11 +263,95 @@ class ProposalNotOpenError(Exception):
     """
 
 
+class InvalidPromotionError(EntityGovernanceError):
+    """An acceptance asked to be promoted and this module cannot carry it out.
+
+    Distinct from `entity_promotion.PromotionError` and its two subclasses,
+    which say something about the *proposal*: that it names no canonical
+    mutation, or that the record it changes has moved. This one says something
+    about the *request to promote* -- a context missing the one thing a kind
+    needs, most concretely a `resolve_mention` promotion with no fresh
+    resolution to veto the binding with. Telling the two apart matters because
+    only one of them is fixed by looking at the world again.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class ProposedEvidence:
+    """One exact record a producer offers in support of, or against, a proposal.
+
+    A carrier rather than `EntityProposalEvidenceLink` itself, and the two
+    fields it does *not* have are the reason: the proposal identifier is minted
+    by `propose` after this is handed over, and `sequence` is the server's
+    ordering. A producer that could choose either could file evidence against a
+    proposal it did not make, or renumber somebody else's citation.
+
+    `role` is the producer's to state, because a producer that read an
+    observation contradicting its own candidate has said something worth
+    recording and `EvidenceRole.COUNTEREVIDENCE` is where it goes. The record
+    still refuses more or fewer than one named target.
+    """
+
+    role: EvidenceRole
+    entity_observation_id: str | None = None
+    capture_span_id: str | None = None
+    knowledge_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionContext:
+    """What only the promoting transaction can supply, handed to `accept`.
+
+    Absent from `PromotionCall` on purpose -- `entity_promotion`'s own docstring
+    argues it, and the argument is that these belong to the moment of promotion
+    rather than to the proposal. An idempotency key derived from the proposal
+    would make a reviewer's second, corrected decision replay the first one's
+    receipt; a correlation and an audit identifier belong to the request that is
+    happening now.
+
+    `resolve` is the fresh resolution `resolve_mention` runs *inside* this
+    transaction, and it is required only for that one kind. It is a veto rather
+    than a licence: it can refuse a binding against the state that exists now --
+    a conflicted identifier, a historical match -- and it cannot license one. A
+    `resolve_mention` promotion arriving without it is refused rather than
+    performed unchecked, which is why the field is optional and its absence is
+    an error rather than a default.
+
+    Passing this to `accept` is what makes promotion happen; omitting it records
+    the acceptance and writes no canonical record, which is the behaviour every
+    caller had before promotion could execute.
+    """
+
+    correlation_id: str
+    audit_id: str
+    idempotency_key: str
+    at: datetime
+    resolve: _FreshResolution | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PromotedRecord:
+    """The canonical record one promotion produced, as the proposal will name it."""
+
+    record_family: MutationRecordFamily
+    record_id: str
+    record_version: int
+
+
 class EntityGovernanceService:
     """Records observations, proposes changes, and applies decided ones."""
 
     def __init__(self, entities: EntitiesRepository) -> None:
         self._entities = entities
+        # Constructed rather than injected, because both are stateless routers
+        # that take their repository per call -- there is no wiring for a
+        # composition root to get wrong, and a constructor argument would make
+        # every existing `EntityGovernanceService(unit_of_work.entities)` call
+        # site have to know about promotion. They are held privately: nothing
+        # outside `_execute` reaches either, and `propose` cannot reach them at
+        # all, which the architecture guard reads off the source.
+        self._authoring = EntityAuthoringService()
+        self._directed = EntityDirectedService()
 
     # --- observation ------------------------------------------------------
 
@@ -248,6 +404,7 @@ class EntityGovernanceService:
         method: EntityProposalMethod,
         method_version: str,
         at: datetime,
+        evidence: Sequence[ProposedEvidence] = (),
         model_id: str | None = None,
         model_version: str | None = None,
         expected_target_version: int | None = None,
@@ -308,7 +465,12 @@ class EntityGovernanceService:
             proposal_id=issue_identifier(IdKind.ENTITY_PROPOSAL),
             principal_id=principal_id,
             kind=kind,
-            state=EntityProposalState.PROPOSED,
+            # Derived from the kind's review requirement rather than written as
+            # one literal for all seventeen. `initial_state_for` argues it; what
+            # matters here is that this is still a *server* decision with no
+            # parameter behind it, and that both answers it can give are states
+            # nothing has decided.
+            state=initial_state_for(kind),
             payload=checked,
             observation_ids=observation_ids,
             proposed_at=ensure_utc(at),
@@ -321,7 +483,57 @@ class EntityGovernanceService:
             expected_target_version=expected_target_version,
         )
         self._entities.record_proposal(principal_id, proposal)
+        self._record_evidence(principal_id, proposal, evidence, at=proposal.proposed_at)
         return _admission(proposal, created=True)
+
+    def _record_evidence(
+        self,
+        principal_id: str,
+        proposal: EntityProposal,
+        evidence: Sequence[ProposedEvidence],
+        *,
+        at: datetime,
+    ) -> None:
+        """Write the exact records this proposal rests on, in the order it cited them.
+
+        **Two sources, one table, and the numbering says which came first.**
+        Every observation on `observation_ids` becomes a `DIRECT` link, because
+        a producer citing an observation for its own candidate is saying "this
+        is why" — the same role, for the same reason, that the canonical write
+        path gives the evidence a caller attaches to its own write. Anything the
+        producer states explicitly follows, keeping the role it stated, which is
+        how a capture span, a knowledge record or a piece of counterevidence
+        gets cited at all: `observation_ids` is a JSONB array of one identifier
+        kind and can carry none of the three.
+
+        The array is still written and is not replaced here. Dropping it is not
+        an additive migration and every other writer of it belongs to Phase A;
+        the table's own docstring records that the two surfaces coexist until
+        those writers move.
+
+        Each link is admitted by the repository against this Principal's
+        partition before it is written — a foreign observation and an absent one
+        answer alike — so a producer cannot cite its way into another
+        partition's evidence.
+        """
+        cited = [
+            ProposedEvidence(role=EvidenceRole.DIRECT, entity_observation_id=observation_id)
+            for observation_id in proposal.observation_ids
+        ]
+        for sequence, offered in enumerate([*cited, *evidence], start=1):
+            self._entities.record_proposal_evidence_link(
+                principal_id,
+                EntityProposalEvidenceLink(
+                    proposal_id=proposal.proposal_id,
+                    principal_id=principal_id,
+                    sequence=sequence,
+                    role=offered.role,
+                    created_at=at,
+                    entity_observation_id=offered.entity_observation_id,
+                    capture_span_id=offered.capture_span_id,
+                    knowledge_id=offered.knowledge_id,
+                ),
+            )
 
     def _admit_evidence(self, principal_id: str, observation_ids: tuple[str, ...]) -> None:
         """Refuse a citation this Principal cannot make. See `propose`."""
@@ -371,25 +583,44 @@ class EntityGovernanceService:
     def _open_equivalent(self, principal_id: str, digest: str) -> EntityProposal | None:
         """The open proposal this digest already has, if any.
 
-        Read state by state rather than through one predicate, because
-        `EntitiesRepository.proposals` filters by a single state and
-        `OPEN_EQUIVALENT_PROPOSAL_STATES` names three. A repository read keyed on
-        `(principal_id, dedupe_sha256)` — the columns the partial unique index is
-        already over — would answer this in one statement; it does not exist yet,
-        and adding it is a port change. The index is the authority either way:
-        this read is what turns a would-be integrity error into the open proposal
-        the producer was going to be told about.
+        One read, keyed on `(principal_id, dedupe_sha256)` — the columns
+        `an_open_equivalent_proposal_is_raised_once` is already over. This was a
+        loop over `proposals(principal_id, state)` for each of the three
+        open-equivalent states with the digests compared in Python, which was
+        correct and was a scan of every open proposal on every create; the
+        repository read that replaced it changes the shape and not the answer.
+
+        The states are passed rather than known by the port, so widening
+        `OPEN_EQUIVALENT_PROPOSAL_STATES` is a change here and not a change to
+        the port. The index remains the authority either way: this read is what
+        turns a would-be integrity error into the open proposal the producer was
+        going to be told about.
         """
-        for state in sorted(OPEN_EQUIVALENT_PROPOSAL_STATES):
-            for held in self._entities.proposals(principal_id, state):
-                if held.dedupe_sha256 == digest:
-                    return held
-        return None
+        return self._entities.proposal_by_dedupe(
+            principal_id, digest, sorted(OPEN_EQUIVALENT_PROPOSAL_STATES)
+        )
 
     def open_proposals(self, principal_id: str) -> list[EntityProposal]:
-        """Everything awaiting a decision."""
+        """Everything awaiting a decision, in both of the states that means.
+
+        Two reads rather than one, because `EntitiesRepository.proposals`
+        filters by a single state and `UNDECIDED_PROPOSAL_STATES` names two
+        since `initial_state_for` began writing `NEEDS_REVIEW`. Reading only
+        `proposed` would have made this method answer "everything awaiting a
+        decision" with the subset of it that no person has to look at — the
+        opposite of the queue a reviewer wants — and the states are what tells
+        those two queues apart.
+
+        Sorted by identifier so the concatenation of two partitioned reads is
+        one stable order rather than one order per state.
+        """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
-        return self._entities.proposals(principal_id, state=EntityProposalState.PROPOSED)
+        held = [
+            proposal
+            for state in UNDECIDED_PROPOSAL_STATES
+            for proposal in self._entities.proposals(principal_id, state=state)
+        ]
+        return sorted(held, key=lambda proposal: proposal.proposal_id)
 
     def reject(
         self,
@@ -425,8 +656,9 @@ class EntityGovernanceService:
         decided_at: datetime,
         reason: str,
         has_operator_authority: bool = False,
+        promotion: PromotionContext | None = None,
     ) -> EntityProposal:
-        """Record that a proposal was accepted. Mutates nothing else.
+        """Record that a proposal was accepted, and carry it out if asked to.
 
         `has_operator_authority` is a parameter the caller must pass rather than
         anything this module can infer. A `REQUIRES_OPERATOR` proposal — today, a
@@ -435,8 +667,38 @@ class EntityGovernanceService:
         identity-correction intent, and the identity change it asks for is a
         separate act under a separate capability. See the module docstring for
         the division and for what this method used to do instead.
+
+        **The decision is claimed before anything is written, and the order is
+        the whole safety argument.** `_decide`'s guarded `UPDATE` is what makes
+        deciding a one-time act; running it first means two reviewers racing on
+        one proposal produce one decision and one promotion, and the loser
+        writes nothing at all. Promoting first and deciding afterwards would let
+        both write a canonical record and only then discover that one of them
+        had no acceptance behind it.
+
+        **`promotion` is what makes the acceptance execute.** Omitting it
+        records the decision and writes no canonical record, which is what every
+        caller got before promotion could execute and is still the right answer
+        for a caller that only wants the decision. Supplying it routes the
+        proposal through `entity_promotion` to the canonical Phase A service
+        that performs its kind, under `review_accepted`/`review_promotion`, and
+        then names the record it produced on the proposal.
+
+        **An identity correction is not promoted, and supplying a context does
+        not change that.** `merge_entities` and `split_identity` are refused by
+        the routing and are skipped here before it is consulted, so a reviewer
+        holding a promotion context still cannot reach a merge: section 15's
+        division is a property of the kind rather than of what the caller asked
+        for. The acceptance is recorded exactly as it was.
+
+        **Everything a promotion writes is in this transaction.** The canonical
+        write, the evidence links that follow the proposal onto the fact, and
+        the `accepted_record_*` naming are three statements after the decision,
+        and any of them failing takes the decision with it — so an acceptance
+        that names no record is one nobody made, rather than one that half
+        happened.
         """
-        return self._decide(
+        decided = self._decide(
             principal_id,
             proposal_id,
             state=EntityProposalState.ACCEPTED,
@@ -444,6 +706,24 @@ class EntityGovernanceService:
             decided_at=decided_at,
             reason=reason,
             has_operator_authority=has_operator_authority,
+        )
+        if promotion is None or decided.kind in IDENTITY_CORRECTION_PROPOSAL_KINDS:
+            return decided
+        promoted = self._promote(
+            decided, principal_id=principal_id, decided_by=decided_by, promotion=promotion
+        )
+        self._entities.record_proposal_promotion(
+            principal_id,
+            decided.proposal_id,
+            record_family=promoted.record_family,
+            record_id=promoted.record_id,
+            record_version=promoted.record_version,
+        )
+        return replace(
+            decided,
+            accepted_record_type=promoted.record_family,
+            accepted_record_id=promoted.record_id,
+            accepted_record_version=promoted.record_version,
         )
 
     def _decide(
@@ -501,6 +781,434 @@ class EntityGovernanceService:
         # here and why it moved.
         self._entities.decide_proposal(principal_id, decided)
         return decided
+
+    # --- promotion: carrying out what a reviewer accepted --------------------
+
+    def _promote(
+        self,
+        proposal: EntityProposal,
+        *,
+        principal_id: str,
+        decided_by: str,
+        promotion: PromotionContext,
+    ) -> _PromotedRecord:
+        """Execute one accepted proposal through the service that owns its mutation.
+
+        Four steps and no fifth. `promotion_for` says which canonical command
+        this is and refuses anything that is not an accepted ordinary kind;
+        `_promotion_arguments` supplies the versions and the key that only this
+        moment can; the command's own constructor re-checks every value it was
+        handed; `_execute` hands it to the canonical service. Nothing here
+        decides what a duplicate is, what a stale version is, or whether an
+        entity may be written — those live where they already lived.
+
+        **The evidence follows the fact.** `evidence_links_for` builds the links
+        that carry the proposal's cited observations onto the record it became,
+        which is section 14's "evidence links must survive promotion", and they
+        are written after the canonical write because the record they point at
+        has to exist first. The `OBSERVATION` family is skipped rather than
+        linked: a `resolve_mention` promotion's subject *is* an observation, and
+        that decision's evidence is written by `resolve_mention` itself onto
+        `entity_resolution_decisions.evidence_link_ids`.
+        """
+        call = promotion_for(proposal)
+        arguments = self._promotion_arguments(principal_id, proposal, call, promotion=promotion)
+        promoted = self._execute(
+            call.command(**arguments),
+            principal_id=principal_id,
+            decided_by=decided_by,
+            promotion=promotion,
+        )
+        if promoted.record_family is not MutationRecordFamily.OBSERVATION:
+            for link in evidence_links_for(
+                proposal,
+                principal_id=principal_id,
+                record_family=promoted.record_family,
+                record_id=promoted.record_id,
+                at=promotion.at,
+            ):
+                self._entities.record_fact_evidence_link(principal_id, link)
+        return promoted
+
+    def _promotion_arguments(
+        self,
+        principal_id: str,
+        proposal: EntityProposal,
+        call: PromotionCall,
+        *,
+        promotion: PromotionContext,
+    ) -> dict[str, Any]:
+        """The proposal's own fields, plus the versions and the key it may not carry.
+
+        **Every expected version is read now, and none is replayed from proposal
+        time.** A version a producer read when it filed a candidate and a
+        reviewer accepted a week later is a stale-write check that has stopped
+        checking: it would either refuse every promotion of an entity anybody
+        else touched in between, or — if the record had moved back — pass while
+        checking nothing. So the current version of each record the command
+        expects is read inside this transaction, and the guarded `UPDATE` in the
+        repository is still what settles a writer racing this one.
+
+        **`expected_target_version` is the reviewer's stale check, and it is
+        checked here rather than passed through.** Section 27: a stale target
+        version prevents promotion. When the proposal states one it must equal
+        the current version of the record its kind changes, and promotion is
+        refused otherwise — which is a different answer from the canonical
+        service's, and a better one, because it names the proposal's own
+        expectation rather than a version the caller never chose. When the
+        proposal states none the check has nothing to compare: `entity_proposals`
+        makes the column nullable, `entities.proposals.create` publishes it as
+        optional, and a creating kind has no record to have read a version of.
+
+        **Which expectation is about which record is derived, not tabulated.**
+        The names are read off the command's own fields, so a command that grows
+        or loses one is answered here without a second table having to be
+        edited in step. `expected_version` is the only ambiguous one and its two
+        readings are exactly the two write planes: on the authoring plane the
+        entity is the aggregate and its version is what every operation expects,
+        including the child ones; on the directed plane it is the assignment's
+        or the edge's own. `AssignmentWriteRequest` and `EntityWriteRequest` say
+        so in those words, and `call.record_family` is what tells them apart.
+        """
+        arguments: dict[str, Any] = dict(call.fields)
+        arguments["idempotency_key"] = promotion.idempotency_key
+        target = target_of(proposal)
+        target_version: int | None = None
+        if target is not None:
+            record, record_id = target
+            target_version = self._current_version(
+                principal_id, record.family, record_id, arguments
+            )
+            if (
+                proposal.expected_target_version is not None
+                and proposal.expected_target_version != target_version
+            ):
+                raise StaleTargetVersionError(
+                    "the record this proposal changes has moved since it was proposed"
+                )
+        child_planes = (MutationRecordFamily.ASSIGNMENT, MutationRecordFamily.RELATIONSHIP)
+        for expectation in (
+            declared.name
+            for declared in fields(call.command)
+            if declared.name.startswith("expected_")
+        ):
+            if expectation == "expected_version":
+                arguments[expectation] = (
+                    target_version
+                    if call.record_family in child_planes
+                    else self._entity_version(principal_id, arguments["entity_id"])
+                )
+            elif expectation == "expected_entity_version":
+                arguments[expectation] = self._optional_entity_version(
+                    principal_id, arguments.get("entity_id")
+                )
+            elif expectation == "expected_scope_version":
+                arguments[expectation] = self._optional_entity_version(
+                    principal_id, arguments.get("scope_entity_id")
+                )
+            elif expectation == "expected_from_version":
+                arguments[expectation] = self._entity_version(
+                    principal_id, arguments["from_entity_id"]
+                )
+            elif expectation == "expected_to_version":
+                arguments[expectation] = self._entity_version(
+                    principal_id, arguments["to_entity_id"]
+                )
+            else:
+                # `expected_identifier_version`, `expected_alias_version` and
+                # `expected_resolution_version`: each is the version of the one
+                # record its kind changes, which is what `target_of` names.
+                arguments[expectation] = target_version
+        return arguments
+
+    def _current_version(
+        self,
+        principal_id: str,
+        family: MutationRecordFamily,
+        record_id: str,
+        arguments: Mapping[str, Any],
+    ) -> int:
+        """The version the record this proposal changes carries right now.
+
+        The parent entity is read from the payload for a child record rather
+        than from the child, because the schemas for those kinds name both and
+        a read that took the parent from the row would follow a redirect this
+        method has no disposition for.
+        """
+        if family is MutationRecordFamily.ENTITY:
+            return self._entity_version(principal_id, record_id)
+        if family is MutationRecordFamily.IDENTIFIER:
+            for identifier in self._entities.external_identifiers(
+                principal_id, arguments["entity_id"]
+            ):
+                if identifier.identifier_id == record_id:
+                    return identifier.version
+            raise UnpromotableProposalError("no such external identifier in this scope")
+        if family is MutationRecordFamily.ALIAS:
+            for alias in self._entities.aliases(principal_id, arguments["entity_id"]):
+                if alias.alias_id == record_id:
+                    return alias.version
+            raise UnpromotableProposalError("no such alias in this scope")
+        if family is MutationRecordFamily.ASSIGNMENT:
+            assignment = self._entities.assignment(principal_id, record_id)
+            if assignment is None:
+                raise UnpromotableProposalError("no such assignment in this scope")
+            return assignment.version
+        if family is MutationRecordFamily.RELATIONSHIP:
+            relationship = self._entities.relationship(principal_id, record_id)
+            if relationship is None:
+                raise UnpromotableProposalError("no such relationship in this scope")
+            return relationship.version
+        held = self._entities.observation(principal_id, record_id)
+        if held is None:
+            raise UnknownObservationError("no such observation in this scope")
+        return held.resolution_version
+
+    def _entity_version(self, principal_id: str, entity_id: object) -> int:
+        """The version of one entity this Principal holds, or a refusal naming the scope.
+
+        A foreign entity and an absent one answer alike, which is the rule the
+        rest of this plane follows and is why the read is Principal-scoped
+        rather than filtered afterwards.
+        """
+        if not isinstance(entity_id, str):
+            raise UnpromotableProposalError("a proposal names the entity it is about")
+        entity = self._entities.get(principal_id, entity_id)
+        if entity is None:
+            raise UnknownEntityError("no such entity in this scope")
+        return entity.version
+
+    def _optional_entity_version(self, principal_id: str, entity_id: object) -> int | None:
+        """`_entity_version`, or `None` where the command's field is optional."""
+        return None if entity_id is None else self._entity_version(principal_id, entity_id)
+
+    def _execute(
+        self,
+        command: PromotionCommand,
+        *,
+        principal_id: str,
+        decided_by: str,
+        promotion: PromotionContext,
+    ) -> _PromotedRecord:
+        """Hand one constructed command to the canonical service that performs it.
+
+        **Fifteen branches and no mutation logic in any of them.** Each one
+        forwards the command's fields to the service method whose capability
+        performs that kind, adds the Principal and the request identities, and
+        returns what the receipt says was written. That is deliberately the same
+        shape `application.service`'s handlers have — the alternative was a
+        promotion path that reached the repository directly, which is the second
+        copy of the mutation section 14 forbids.
+
+        **The authority pair is stamped once, here, and is the same for every
+        branch.** `review_accepted` under `review_promotion`: a reviewer
+        accepted somebody else's assertion, which is neither the user having
+        asserted it nor a conclusion that could be recomputed.
+
+        `resolve_mention` is this module's own method rather than one of the two
+        services, and it derived the same pair from `actor_class` before any of
+        this existed. It needs the fresh resolution the transport supplies,
+        because that veto runs against the state that exists now rather than the
+        state the queue was rendered from.
+        """
+        authoring: dict[str, Any] = {
+            "principal_id": principal_id,
+            "correlation_id": promotion.correlation_id,
+            "audit_id": promotion.audit_id,
+            "at": promotion.at,
+            "authority": MutationAuthority.REVIEW_ACCEPTED,
+            "actor_class": ActorClass.REVIEW_PROMOTION,
+        }
+        directed: dict[str, Any] = {
+            "principal_id": principal_id,
+            "audit_id": promotion.audit_id,
+            "at": promotion.at,
+            "authority": MutationAuthority.REVIEW_ACCEPTED,
+            "actor_class": ActorClass.REVIEW_PROMOTION,
+        }
+        match command:
+            case CreateEntity():
+                return _from_receipt(
+                    self._authoring.create(
+                        self._entities,
+                        entity_type=command.entity_type,
+                        display_name=command.display_name,
+                        # Always empty, and stated rather than forwarded.
+                        # `create_entity`'s payload schema admits neither field,
+                        # because a create carrying three aliases would put four
+                        # separate assertions, each resting on its own evidence,
+                        # under one reviewer's single accept.
+                        aliases=(),
+                        identifiers=(),
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case UpdateEntity():
+                return _from_receipt(
+                    self._authoring.update(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        display_name=command.display_name,
+                        canonical_name=command.canonical_name,
+                        status=command.status,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case BindEntityIdentifier():
+                return _from_receipt(
+                    self._authoring.bind_identifier(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        namespace=command.namespace,
+                        display_value=command.display_value,
+                        effective_from=command.effective_from,
+                        effective_to=command.effective_to,
+                        evidence=command.evidence,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case RetireEntityIdentifier():
+                return _from_receipt(
+                    self._authoring.retire_identifier(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        identifier_id=command.identifier_id,
+                        expected_identifier_version=command.expected_identifier_version,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case SupersedeEntityIdentifier():
+                return _from_receipt(
+                    self._authoring.supersede_identifier(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        identifier_id=command.identifier_id,
+                        expected_identifier_version=command.expected_identifier_version,
+                        namespace=command.namespace,
+                        display_value=command.display_value,
+                        effective_from=command.effective_from,
+                        effective_to=command.effective_to,
+                        evidence=command.evidence,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case AddEntityAlias():
+                return _from_receipt(
+                    self._authoring.add_alias(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        alias_type=command.alias_type,
+                        display_value=command.display_value,
+                        effective_from=command.effective_from,
+                        effective_to=command.effective_to,
+                        evidence=command.evidence,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case RetireEntityAlias():
+                return _from_receipt(
+                    self._authoring.retire_alias(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        alias_id=command.alias_id,
+                        expected_alias_version=command.expected_alias_version,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case SupersedeEntityAlias():
+                return _from_receipt(
+                    self._authoring.supersede_alias(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        alias_id=command.alias_id,
+                        expected_alias_version=command.expected_alias_version,
+                        alias_type=command.alias_type,
+                        display_value=command.display_value,
+                        effective_from=command.effective_from,
+                        effective_to=command.effective_to,
+                        evidence=command.evidence,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case CreateEntityAssignment():
+                return _from_directed(
+                    self._directed.create_assignment(self._entities, command, **directed)
+                )
+            case ReviseEntityAssignment():
+                return _from_directed(
+                    self._directed.revise_assignment(self._entities, command, **directed)
+                )
+            case EndEntityAssignment():
+                return _from_directed(
+                    self._directed.end_assignment(self._entities, command, **directed)
+                )
+            case CreateEntityRelationship():
+                return _from_directed(
+                    self._directed.create_relationship(self._entities, command, **directed)
+                )
+            case ReviseEntityRelationship():
+                return _from_directed(
+                    self._directed.revise_relationship(self._entities, command, **directed)
+                )
+            case EndEntityRelationship():
+                return _from_directed(
+                    self._directed.end_relationship(self._entities, command, **directed)
+                )
+            case ResolveUnresolvedMention():
+                if promotion.resolve is None:
+                    raise InvalidPromotionError(
+                        "promoting a mention resolution needs a fresh resolution to check it"
+                    )
+                outcome = self.resolve_mention(
+                    ResolveMentionCommand(
+                        principal_id=principal_id,
+                        observation_id=command.observation_id,
+                        expected_resolution_version=command.expected_resolution_version,
+                        disposition=command.disposition,
+                        idempotency_key=command.idempotency_key,
+                        entity_id=command.entity_id,
+                        expected_entity_version=command.expected_entity_version,
+                        entity_type=command.entity_type,
+                        canonical_name=command.canonical_name,
+                        display_name=command.display_name,
+                        rejected_entity_id=command.rejected_entity_id,
+                        reason=command.reason,
+                    ),
+                    resolve=promotion.resolve,
+                    at=promotion.at,
+                    correlation_id=promotion.correlation_id,
+                    audit_id=promotion.audit_id,
+                    decided_by=decided_by,
+                    actor_class=ActorClass.REVIEW_PROMOTION,
+                )
+                return _PromotedRecord(
+                    record_family=MutationRecordFamily.OBSERVATION,
+                    record_id=outcome.observation_id,
+                    record_version=outcome.resolution_version,
+                )
 
     def merge_lineage(
         self, principal_id: str, entity_id: str | None = None
@@ -1340,6 +2048,48 @@ _ACTOR_CLASS: Mapping[ObservationAuthority, ActorClass] = {
 #: built out of the observation and the refusals -- and building it here would
 #: put the resolver's own vocabulary in a module whose subject is governance.
 type _FreshResolution = Callable[[EntityObservation, frozenset[str], datetime], EntityResolution]
+
+
+def _from_receipt(admission: EntityMutationAdmission) -> _PromotedRecord:
+    """What one authoring-plane promotion produced, read off its receipt.
+
+    **The version is the child's where there is a child and the entity's
+    otherwise, and that is not a choice between two numbers that mean the same
+    thing.** `accepted_record_id` names the record the proposal became, so the
+    version beside it has to be that record's own — an alias promoted at the
+    entity's version would answer "what version of this alias did the review
+    produce" with a number about a different row. `EntityMutationReceipt`
+    carries both because the entity is the aggregate and every child write
+    advances it too; this reads the one the family names.
+
+    A replayed admission is not a special case here. It carries the same record
+    and the same version as the write it replays, which is the whole point of
+    an idempotency store, and a promotion answered from one has still named the
+    record its acceptance produced.
+    """
+    receipt = admission.receipt
+    if receipt.record_family is MutationRecordFamily.ENTITY:
+        return _PromotedRecord(
+            record_family=receipt.record_family,
+            record_id=receipt.record_id,
+            record_version=receipt.entity_version,
+        )
+    if receipt.child_version is None:
+        raise UnpromotableProposalError("a promoted child record carries its own version")
+    return _PromotedRecord(
+        record_family=receipt.record_family,
+        record_id=receipt.record_id,
+        record_version=receipt.child_version,
+    )
+
+
+def _from_directed(receipt: DirectedReceipt) -> _PromotedRecord:
+    """What one directed-plane promotion produced. `version` is the record's own."""
+    return _PromotedRecord(
+        record_family=receipt.record_family,
+        record_id=receipt.record_id,
+        record_version=receipt.version,
+    )
 
 
 def _observation_state(admission: ObservationAdmission) -> dict[str, object]:

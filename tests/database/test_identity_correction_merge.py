@@ -25,6 +25,7 @@ from alembic.config import Config
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.engine import make_url
 
+from my_pa.application.entity_governance import EntityGovernanceService
 from my_pa.application.errors import ConflictError, DeniedError, InvalidRequestError, NotFoundError
 from my_pa.application.identity_correction import (
     ConflictChoice,
@@ -760,6 +761,59 @@ def test_an_open_proposal_naming_the_merged_identity_is_invalidated(staged: Engi
     assert closed.decided_by == OPERATOR
     assert untouched is not None
     assert untouched.state is EntityProposalState.PROPOSED
+
+
+def test_a_needs_review_proposal_naming_the_merged_identity_is_invalidated(
+    staged: Engine,
+) -> None:
+    """The cross-wave case neither `WP-RI-B-05` nor `WP-RI-06` exercised alone.
+
+    The test above stages its proposal by constructing the record directly with
+    `state=PROPOSED`, so it kept passing when `initial_state_for` began deriving
+    the initial state from the kind's review requirement. This one files the
+    proposal the way a producer actually does -- through `propose`, with a kind
+    `requirement_for` says a person must look at -- so the row lands in
+    `needs_review`, which is the state a real review-requiring proposal is in
+    when an operator merges the entity it names.
+
+    That combination broke the merge outright: the planner selects on
+    `EntityProposal.is_open`, which includes `needs_review`, so it planned an
+    invalidation; `invalidate_proposal` still matched the `proposed` literal, so
+    the statement changed nothing and raised `UnknownScopeError` -- refusing the
+    whole merge with a message asserting the proposal was not open when it was.
+    Both sides read `UNDECIDED_PROPOSAL_STATES` now.
+    """
+    with staged.begin() as connection:
+        EntityGovernanceService(SqlEntityRepository(connection)).propose(
+            PRINCIPAL_A,
+            kind=EntityProposalKind.UPDATE_ENTITY,
+            payload={"entity_id": MERGED_ONE, "reason": "a synthetic correction"},
+            observation_ids=(),
+            proposed_by="synthetic-producer",
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="v1",
+            at=WHEN,
+        )
+    with staged.connect() as connection:
+        staged_proposal = SqlEntityRepository(connection).proposals(PRINCIPAL_A)[0]
+    assert staged_proposal.state is EntityProposalState.NEEDS_REVIEW, (
+        "the fixture is not staging the state this test exists to cover"
+    )
+    assert staged_proposal.is_open is True
+
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    assert _group(report, MergeFamily.ENTITY_PROPOSAL) == (FamilyDisposition.TRANSFORMED, 1)
+    with staged.begin() as connection:
+        _applied(connection, report)
+
+    with staged.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        closed = repository.proposal(PRINCIPAL_A, staged_proposal.proposal_id)
+    assert closed is not None
+    assert closed.state is EntityProposalState.INVALIDATED
+    assert closed.invalidated_reason is not None
+    assert closed.decided_by == OPERATOR
 
 
 def test_a_proposal_on_a_review_case_blocks_the_merge(staged: Engine) -> None:

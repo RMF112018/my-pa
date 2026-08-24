@@ -2766,6 +2766,30 @@ class SqlEntityRepository(EntitiesRepository):
         decided_by: str,
         decided_at: datetime,
     ) -> None:
+        """Close one open proposal a merge made unanswerable. See the port.
+
+        **`UNDECIDED_PROPOSAL_STATES`, and the set is derived twice over.**
+        This carried the `proposed` literal until `WP-RI-B-05` made
+        `initial_state_for` write `needs_review` for every kind a person has to
+        look at. `IdentityCorrectionService` plans an invalidation for every
+        proposal where `EntityProposal.is_open`, and `is_open` reads this same
+        tuple -- so the literal made a governed merge plan a change this
+        statement then matched zero rows for, and refuse the whole merge with a
+        message asserting the opposite of what was true. The two now read one
+        set and cannot drift.
+
+        **`DEFERRED` is deliberately outside it, and that is not the same
+        question as `OPEN_EQUIVALENT_PROPOSAL_STATES`.** That set answers
+        "would a second identical proposal be a duplicate" and holds `deferred`;
+        this statement writes `decided_by` and `decided_at`, and
+        `a_proposal_is_decided_exactly_when_something_decided_it` proves a
+        deferred row already carries a reviewer in exactly those columns.
+        Matching `deferred` here would overwrite the name and the moment of the
+        person who deferred it with the operator who ran the merge -- destroying
+        the record of who made that call, which is the harm `decide_proposal`'s
+        one-time predicate exists to prevent. A deferral is a decision; this
+        method closes proposals nobody has decided.
+        """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         validate_identifier(proposal_id, IdKind.ENTITY_PROPOSAL)
         result = self._connection.execute(
@@ -2773,7 +2797,7 @@ class SqlEntityRepository(EntitiesRepository):
             .where(
                 _mine(entity_proposals, principal_id),
                 entity_proposals.c.proposal_id == proposal_id,
-                entity_proposals.c.state == EntityProposalState.PROPOSED.value,
+                entity_proposals.c.state.in_([state.value for state in UNDECIDED_PROPOSAL_STATES]),
             )
             .values(
                 state=EntityProposalState.INVALIDATED.value,

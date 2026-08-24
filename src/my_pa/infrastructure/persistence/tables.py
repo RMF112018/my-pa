@@ -212,6 +212,13 @@ from my_pa.domain.relationship.governance import (
     ResolutionDisposition,
 )
 from my_pa.domain.relationship.identity import ResolutionAction
+from my_pa.domain.relationship.identity_correction import (
+    MAX_MERGED_AWAY_ENTITIES,
+    IdentityEffectFamily,
+    IdentityEffectKind,
+    IdentityOperationState,
+    IdentityOperationType,
+)
 from my_pa.domain.relationship.memory import (
     MAX_CORRECTION_REASON_CHARACTERS,
     MAX_STATEMENT_CHARACTERS,
@@ -8142,4 +8149,350 @@ relationship_memory_review_decisions = Table(
     ),
     UniqueConstraint("review_case_id", "sequence", name="one_memory_decision_per_review_sequence"),
     Index("relationship_memory_review_decisions_by_case", "review_case_id", "sequence"),
+)
+
+#: WP-RI-06: the expiring binding between an operator's approval and the world
+#: state the preview read.
+#:
+#: **A preview is stored because an apply has to be checkable against it.** The
+#: operator prompt makes `entities.merge.preview` persist what it looked at:
+#: which entities, at which versions, and a digest over both. Computed and
+#: discarded, the preview would be a report, and an apply arriving with "the
+#: same" identities at different versions would be indistinguishable from a
+#: replay of the one an operator actually read. That is the reason this
+#: capability is classified a write despite reading nothing canonical: it leaves
+#: a durable control row behind, and a classification derived from anything other
+#: than persistence behaviour would say otherwise.
+#:
+#: **`expires_at` is a stored column with a CHECK against `created_at`, and the
+#: fifteen minutes are written out here rather than derived.** The domain refuses
+#: any other value in `IdentityPreview`; this refuses it at the server, so a
+#: preview whose lifetime was extended around the repository is not storable
+#: either. The interval is spelled as a literal for the reason every closed set
+#: in this file's revisions is spelled as a literal: a constraint that read a
+#: Python constant would change meaning the day the constant did, against rows
+#: already stored under the old one.
+#:
+#: **`consumed_at` is what stops one approval producing two merges.** The
+#: repository claims it in the same transaction that writes the operation, so
+#: two concurrent applies against one preview serialise on this row rather than
+#: on the entities.
+#:
+#: No column here can hold narrative text. The reason a merge is being performed
+#: belongs to the operation that performs it; a preview is a binding, and a
+#: bounded prose column on a record whose subject is somebody's identity is where
+#: source text eventually lands.
+entity_identity_previews = Table(
+    "entity_identity_previews",
+    METADATA,
+    Column("preview_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("operation_type", Text, nullable=False),
+    Column("survivor_entity_id", Text, nullable=False),
+    Column("expected_survivor_version", Integer, nullable=False),
+    #: `[{"entity_id": …, "expected_version": …}, …]`. JSONB rather than a child
+    #: table because the set is bounded at ten, is written once, is never queried
+    #: by element, and dies with the preview fifteen minutes later -- a child
+    #: table would add a second row lifetime for a value with no independent
+    #: identity. The CHECK below bounds the array; the *pairing* of an entity to
+    #: the version it was read at is proved by `IdentityPreview`, and that split
+    #: is stated rather than implied.
+    Column("merged_away", JSONB, nullable=False),
+    Column("preview_digest", Text, nullable=False),
+    Column("conflict_digest", Text, nullable=False),
+    Column("created_by", Text, nullable=False),
+    Column("actor_class", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True)),
+    _is_identifier("preview_id", IdKind.ENTITY_IDENTITY_PREVIEW),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("survivor_entity_id", IdKind.ENTITY),
+    _one_of("operation_type", IdentityOperationType, name="a_preview_operation_type_is_known"),
+    _one_of("actor_class", ActorClass, name="a_preview_actor_class_is_known"),
+    CheckConstraint(
+        "preview_digest ~ '^[0-9a-f]{64}$'",
+        name="a_preview_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "conflict_digest ~ '^[0-9a-f]{64}$'",
+        name="a_preview_conflict_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "length(trim(created_by)) > 0",
+        name="a_preview_names_who_asked_for_it",
+    ),
+    CheckConstraint(
+        "expected_survivor_version >= 1",
+        name="a_preview_expects_a_survivor_version_that_could_exist",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(merged_away) = 'array' AND jsonb_array_length(merged_away) "
+        f"BETWEEN 1 AND {MAX_MERGED_AWAY_ENTITIES}",
+        name="a_preview_merges_away_a_bounded_set_of_entities",
+    ),
+    CheckConstraint(
+        "expires_at = created_at + INTERVAL '15 minutes'",
+        name="a_preview_expires_fifteen_minutes_after_it_was_created",
+    ),
+    CheckConstraint(
+        "consumed_at IS NULL OR consumed_at >= created_at",
+        name="a_preview_is_not_consumed_before_it_was_created",
+    ),
+    # The target of the operation table's composite reference, and the reason it
+    # can be composite at all. Declared for the reason
+    # `an_entity_is_identified_within_its_principal` is declared: a single-column
+    # reference spans every Principal, so an operation owned by one Principal
+    # could consume another's preview and the only thing between that and a
+    # merge would be a predicate the writer has to remember.
+    UniqueConstraint(
+        "preview_id",
+        "principal_id",
+        name="a_preview_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["survivor_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="a_preview_retains_an_entity_of_its_principal",
+    ),
+    Index("entity_identity_previews_by_principal", "principal_id"),
+)
+
+#: WP-RI-06: one admitted identity correction -- what was asked, under what
+#: authority, and how it ended.
+#:
+#: **`preview_digest` and `idempotency_key` are both columns and they are not the
+#: same mechanism.** The digest is a claim about the world (these entities held
+#: these versions); the key is a claim about the request (this is the call I made
+#: before). The frozen contract states it as a rule -- the preview token is not
+#: the mutation idempotency key -- and this table is where the rule is structural:
+#: `UNIQUE (principal_id, idempotency_key)` makes a replay find its own earlier
+#: row, `request_digest` is what tells a replay from a caller reusing one key for
+#: a different merge, and neither is `preview_digest`.
+#:
+#: The unique carries no `capability` column, unlike
+#: `one_entity_mutation_per_key_and_capability`. That key is shared by the whole
+#: entity plane and one idempotency key replayed against a different capability is
+#: a different request; this table is written by exactly one capability, and a
+#: constant column inside a unique index is a column that only looks like it is
+#: deciding something.
+#:
+#: **This table is not append-only, and the difference from the effects beside it
+#: is deliberate.** An operation is written before the work and updated when the
+#: work ends, which is what makes a crashed apply legible as `in_progress`
+#: instead of indistinguishable from a completed merge. The effects it produced
+#: are the append-only half, because those are evidence rather than status.
+entity_identity_operations = Table(
+    "entity_identity_operations",
+    METADATA,
+    Column("identity_operation_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("operation_type", Text, nullable=False),
+    Column("survivor_entity_id", Text, nullable=False),
+    Column("merged_entity_ids", JSONB, nullable=False),
+    Column("preview_id", Text, nullable=False),
+    Column("preview_digest", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("reason", Text),
+    Column("performed_by", Text, nullable=False),
+    Column("actor_class", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("receipt_id", Text),
+    Column("state", Text, nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("completed_at", DateTime(timezone=True)),
+    _is_identifier("identity_operation_id", IdKind.ENTITY_IDENTITY_OPERATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("survivor_entity_id", IdKind.ENTITY),
+    _is_identifier("preview_id", IdKind.ENTITY_IDENTITY_PREVIEW),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of("operation_type", IdentityOperationType, name="an_identity_operation_type_is_known"),
+    _one_of("state", IdentityOperationState, name="an_identity_operation_state_is_known"),
+    _one_of("actor_class", ActorClass, name="an_identity_operation_actor_class_is_known"),
+    CheckConstraint(
+        f"receipt_id IS NULL OR receipt_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="an_identity_operation_receipt_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "preview_digest ~ '^[0-9a-f]{64}$'",
+        name="an_identity_operation_preview_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="an_identity_operation_request_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="an_identity_operation_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "length(trim(performed_by)) > 0",
+        name="an_identity_operation_names_who_performed_it",
+    ),
+    CheckConstraint(
+        "reason IS NULL OR (length(trim(reason)) > 0 "
+        f"AND length(reason) <= {ENTITY_CHANGE_REASON_LIMIT})",
+        name="an_identity_operation_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(merged_entity_ids) = 'array' AND "
+        "jsonb_array_length(merged_entity_ids) "
+        f"BETWEEN 1 AND {MAX_MERGED_AWAY_ENTITIES}",
+        name="an_identity_operation_merges_away_a_bounded_set_of_entities",
+    ),
+    # Finished exactly when it has stopped being in progress, stated as an
+    # equivalence so that "still running" is a shape a reader can query for
+    # rather than the absence of one -- and so a crashed apply cannot be read as
+    # a completed merge by a retry that only looked at the state.
+    CheckConstraint(
+        "(state <> 'in_progress') = (completed_at IS NOT NULL)",
+        name="an_identity_operation_is_finished_exactly_when_it_names_an_end",
+    ),
+    CheckConstraint(
+        "completed_at IS NULL OR completed_at >= started_at",
+        name="an_identity_operation_does_not_end_before_it_started",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "idempotency_key",
+        name="one_identity_operation_per_principal_and_key",
+    ),
+    # The target of the effect ledger's composite reference, on the same argument
+    # the preview's identity unique carries: without it an effect row could name
+    # one Principal while the operation it records belongs to another.
+    UniqueConstraint(
+        "identity_operation_id",
+        "principal_id",
+        name="an_identity_operation_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["preview_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_identity_previews.preview_id",
+            f"{SCHEMA}.entity_identity_previews.principal_id",
+        ],
+        name="an_identity_operation_consumes_a_preview_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["survivor_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="an_identity_operation_retains_an_entity_of_its_principal",
+    ),
+    Index("entity_identity_operations_by_principal", "principal_id"),
+    Index("entity_identity_operations_by_preview", "preview_id"),
+)
+
+#: WP-RI-06: the append-only ledger a split has to invert a merge from.
+#:
+#: **Both states are NOT NULL, and that is the constraint the whole record is
+#: for.** The frozen contract calls recording only redirects "faking
+#: invertibility"; a row holding only the state after the change is the same
+#: failure one row at a time, because it says something happened and not what it
+#: was. No effect kind this plane declares creates or destroys a row -- every one
+#: of them transforms an existing one -- so requiring both states costs nothing
+#: that a real effect would have to omit, and admitting a nullable pair would let
+#: every other effect be written with half its evidence.
+#:
+#: **The digests are integrity, not identity.** `IdentityEffect` recomputes both
+#: on construction and refuses a row whose state and digest disagree, so a state
+#: edited without its digest cannot be read back into the domain. That is the
+#: half the trigger below cannot cover: the trigger refuses an `UPDATE` through
+#: the ordinary path, and the digest refuses a row that arrived some other way.
+#:
+#: **`UPDATE` and `DELETE` are refused by trigger, not by convention.** No CHECK
+#: can express "no UPDATE", and a rule enforced only by the current writer is a
+#: rule the next writer does not inherit. This is the mechanism `f1c6b904a2d7`
+#: installs on `relationship_memory_versions` and `2fe4e13fb449` reuses for
+#: `entity_mutation_events` and `entity_resolution_decisions`, reused here with
+#: its own function so that dropping one plane's trigger cannot silently disarm
+#: another's.
+#:
+#: `principal_id` is carried rather than reached through `identity_operation_id`.
+#: The composite foreign key makes an effect of one Principal's operation
+#: unstorable under another, and it keeps this table out of the unpartitioned
+#: residual `tests/architecture/test_user_owned_tables_are_partitioned.py`
+#: registers -- a ledger of what happened to somebody's identities is the last
+#: table that should be reachable by id alone.
+#:
+#: `record_id` carries no foreign key: it names a row in whichever of nine
+#: families `record_family` says, and no single reference can express that. What
+#: the server can still refuse is a value that is not an opaque identifier at
+#: all, which is `entity_mutation_events`' own rule for the same column shape.
+entity_identity_effects = Table(
+    "entity_identity_effects",
+    METADATA,
+    Column("effect_id", Text, primary_key=True),
+    Column("identity_operation_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("record_family", Text, nullable=False),
+    Column("record_id", Text, nullable=False),
+    Column("effect_kind", Text, nullable=False),
+    Column("before_state", JSONB, nullable=False),
+    Column("after_state", JSONB, nullable=False),
+    Column("before_sha256", Text, nullable=False),
+    Column("after_sha256", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("effect_id", IdKind.ENTITY_IDENTITY_EFFECT),
+    _is_identifier("identity_operation_id", IdKind.ENTITY_IDENTITY_OPERATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("record_family", IdentityEffectFamily, name="an_identity_effect_family_is_known"),
+    _one_of("effect_kind", IdentityEffectKind, name="an_identity_effect_kind_is_known"),
+    CheckConstraint(
+        f"record_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="an_identity_effect_record_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint("sequence >= 1", name="an_identity_effect_sequence_is_positive"),
+    CheckConstraint(
+        "jsonb_typeof(before_state) = 'object' AND before_state <> '{}'::jsonb",
+        name="an_identity_effect_before_state_says_something",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(after_state) = 'object' AND after_state <> '{}'::jsonb",
+        name="an_identity_effect_after_state_says_something",
+    ),
+    CheckConstraint(
+        "before_state <> after_state",
+        name="an_identity_effect_records_a_change",
+    ),
+    CheckConstraint(
+        "before_sha256 ~ '^[0-9a-f]{64}$'",
+        name="an_identity_effect_before_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "after_sha256 ~ '^[0-9a-f]{64}$'",
+        name="an_identity_effect_after_digest_is_a_sha256_digest",
+    ),
+    UniqueConstraint(
+        "identity_operation_id",
+        "sequence",
+        name="one_identity_effect_per_operation_and_sequence",
+    ),
+    # One effect per record per operation. Two rows about the same record would
+    # be a merge that transformed it twice, and the ledger could not say which
+    # state a split should restore -- which is the completeness the effect ledger
+    # exists to have. `sequence_effects` refuses the same pair before it numbers
+    # anything; this refuses it at the server.
+    UniqueConstraint(
+        "identity_operation_id",
+        "record_family",
+        "record_id",
+        name="one_identity_effect_per_operation_and_record",
+    ),
+    ForeignKeyConstraint(
+        ["identity_operation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_identity_operations.identity_operation_id",
+            f"{SCHEMA}.entity_identity_operations.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="an_identity_effect_records_an_operation_of_its_principal",
+    ),
+    Index("entity_identity_effects_by_principal", "principal_id"),
+    Index("entity_identity_effects_by_operation", "identity_operation_id", "sequence"),
 )

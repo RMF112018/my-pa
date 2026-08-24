@@ -143,6 +143,16 @@ def test_contract_prefixes_are_stable() -> None:
         "emut",
         "efev",
         "erdc",
+        # WP-RI-06's three identity-correction records: `eipv` the expiring
+        # binding between an operator's approval and the versions a preview read,
+        # `eiop` one admitted correction, and `eief` one append-only before/after
+        # row of what that correction did. Added with the tables that issue them,
+        # under the same rule -- a preview id and an operation id both cross the
+        # wire, since `entities.merge` is given the preview id its own preview
+        # returned.
+        "eipv",
+        "eiop",
+        "eief",
     }
 
 

@@ -647,6 +647,77 @@ EXPECTED_MODEL_FIELDS = {
             "review_case_id",
         }
     ),
+    "my_pa.domain.relationship.identity_correction.IdentityConflict": frozenset(
+        {
+            "kind",
+            "family",
+            "record_id",
+        }
+    ),
+    "my_pa.domain.relationship.identity_correction.IdentityPreview": frozenset(
+        {
+            "preview_id",
+            "principal_id",
+            "operation_type",
+            "survivor_entity_id",
+            "expected_survivor_version",
+            "merged_away",
+            "preview_digest",
+            "conflict_digest",
+            "created_by",
+            "actor_class",
+            "created_at",
+            "expires_at",
+            "consumed_at",
+        }
+    ),
+    "my_pa.domain.relationship.identity_correction.IdentityOperation": frozenset(
+        {
+            "identity_operation_id",
+            "principal_id",
+            "operation_type",
+            "survivor_entity_id",
+            "merged_entity_ids",
+            "preview_id",
+            "preview_digest",
+            "idempotency_key",
+            "request_digest",
+            "performed_by",
+            "actor_class",
+            "correlation_id",
+            "audit_id",
+            "state",
+            "started_at",
+            "reason",
+            "receipt_id",
+            "completed_at",
+        }
+    ),
+    "my_pa.domain.relationship.identity_correction.IdentityEffectDraft": frozenset(
+        {
+            "family",
+            "record_id",
+            "kind",
+            "before_state",
+            "after_state",
+        }
+    ),
+    "my_pa.domain.relationship.identity_correction.IdentityEffect": frozenset(
+        {
+            "effect_id",
+            "identity_operation_id",
+            "principal_id",
+            "sequence",
+            "family",
+            "record_id",
+            "kind",
+            "before_state",
+            "after_state",
+            "before_sha256",
+            "after_sha256",
+            "recorded_at",
+        }
+    ),
 }
 
 EXPECTED_TABLE_COLUMNS = {
@@ -1085,6 +1156,61 @@ EXPECTED_TABLE_COLUMNS = {
             "correlation_id",
         }
     ),
+    "entity_identity_previews": frozenset(
+        {
+            "preview_id",
+            "principal_id",
+            "operation_type",
+            "survivor_entity_id",
+            "expected_survivor_version",
+            "merged_away",
+            "preview_digest",
+            "conflict_digest",
+            "created_by",
+            "actor_class",
+            "created_at",
+            "expires_at",
+            "consumed_at",
+        }
+    ),
+    "entity_identity_operations": frozenset(
+        {
+            "identity_operation_id",
+            "principal_id",
+            "operation_type",
+            "survivor_entity_id",
+            "merged_entity_ids",
+            "preview_id",
+            "preview_digest",
+            "idempotency_key",
+            "request_digest",
+            "reason",
+            "performed_by",
+            "actor_class",
+            "correlation_id",
+            "audit_id",
+            "receipt_id",
+            "state",
+            "started_at",
+            "completed_at",
+        }
+    ),
+    "entity_identity_effects": frozenset(
+        {
+            "effect_id",
+            "identity_operation_id",
+            "principal_id",
+            "sequence",
+            "record_family",
+            "record_id",
+            "effect_kind",
+            "before_state",
+            "after_state",
+            "before_sha256",
+            "after_sha256",
+            "recorded_at",
+        }
+    ),
 }
 
 
@@ -1118,8 +1244,8 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 43
-    assert len(actual_table_columns) == 37
+    assert len(actual_model_fields) == 48
+    assert len(actual_table_columns) == 40
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

@@ -74,6 +74,20 @@ class ExternalIdentifierNamespace(StrEnum):
     APPLE_CONTACT_ID = "apple_contact_id"
     SOURCE_PARTICIPANT_ID = "source_participant_id"
     VENDOR_SYSTEM_ID = "vendor_system_id"
+    #: The two identities the WP-9 substrate issued before this plane existed.
+    #: They are namespaces rather than a column on `entities`, because that is
+    #: what they are: `relationship_people.person_id` and
+    #: `relationship_organizations.organization_id` are identities held by
+    #: another system -- the older plane -- and an entity that carries one is
+    #: making the same claim it makes when it carries an Entra object id.
+    #:
+    #: Recording them this way is what lets the two planes be reconciled without
+    #: either becoming canonical for the other, and it is why they are absent
+    #: from `CASE_FOLDED_NAMESPACES`: a `per_` or `org_` suffix is an opaque
+    #: server-issued string whose case is significant to the issuer, exactly
+    #: like a vendor system id.
+    LEGACY_RELATIONSHIP_PERSON_ID = "legacy_relationship_person_id"
+    LEGACY_RELATIONSHIP_ORGANIZATION_ID = "legacy_relationship_organization_id"
 
 
 class NormalizationError(ValueError):
@@ -93,10 +107,14 @@ class NormalizationError(ValueError):
 #: that the hexadecimal is case-insensitive on input.
 #:
 #: Everything else is absent on purpose: `TEAMS_USER_ID`, `OUTLOOK_CONTACT_ID`,
-#: `APPLE_CONTACT_ID`, `SOURCE_PARTICIPANT_ID` and `VENDOR_SYSTEM_ID` are opaque
-#: strings issued by systems whose case rules this product does not know, and
-#: folding an identifier whose issuer treats case as significant merges two
-#: records that the issuer keeps apart.
+#: `APPLE_CONTACT_ID`, `SOURCE_PARTICIPANT_ID`, `VENDOR_SYSTEM_ID` and the two
+#: `LEGACY_RELATIONSHIP_*` namespaces are opaque strings issued by systems whose
+#: case rules this product does not know, and folding an identifier whose issuer
+#: treats case as significant merges two records that the issuer keeps apart.
+#: The legacy pair is issued by this product's own older plane, which makes the
+#: point sharper rather than softer: `make_identifier` mints a mixed-case
+#: alphanumeric suffix, so folding one would collide two identifiers the issuer
+#: deliberately distinguishes.
 CASE_FOLDED_NAMESPACES: frozenset[ExternalIdentifierNamespace] = frozenset(
     {
         ExternalIdentifierNamespace.EMAIL,

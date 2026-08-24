@@ -67,7 +67,13 @@ WORK_REVISION = "a4d9e7c2b615"
 #: naming both keeps the chain assertion below a statement about the order
 #: rather than about whichever revision happens to be last.
 MEMORY_REVISION = "f1c6b904a2d7"
-HEAD_REVISION = MEMORY_REVISION
+#: The entity lifecycle and ledger revision (WP-RI-A-01), which is where
+#: `upgrade head` now lands. `MEMORY_REVISION` above was head until this one
+#: stacked on it; naming both keeps the chain assertion below a statement about
+#: the order rather than about whichever revision happens to be last.
+LIFECYCLE_REVISION = "2fe4e13fb449"
+PHASE_A_REVISION = "823e23b6cc63"
+HEAD_REVISION = PHASE_A_REVISION
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -164,8 +170,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(MENTION_REVISION).down_revision == QUEUE_REVISION
     assert script.get_revision(INTELLIGENCE_REVISION).down_revision == MENTION_REVISION
     assert script.get_revision(WORK_REVISION).down_revision == INTELLIGENCE_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == WORK_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 67
+    assert script.get_revision(MEMORY_REVISION).down_revision == WORK_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == LIFECYCLE_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 69
 
 
 @pytest.mark.database

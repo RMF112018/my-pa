@@ -69,8 +69,20 @@ GOVERNANCE_TABLES: Final = frozenset(
     {"entity_observations", "entity_proposals", "entity_merge_records"}
 )
 
+#: WP-RI-A-01's three lifecycle ledgers, on `2fe4e13fb449`. Kept separate from
+#: the two sets above for the reason `GOVERNANCE_TABLES` is kept separate from
+#: `NEW_TABLES`: they arrive on a different revision, and a downgrade to
+#: `PREVIOUS_REVISION` passes through all three.
+PHASE_A_TABLES: Final = frozenset(
+    {
+        "entity_mutation_events",
+        "entity_fact_evidence_links",
+        "entity_resolution_decisions",
+    }
+)
+
 #: Everything the entity plane adds between `PREVIOUS_REVISION` and head.
-PLANE_TABLES: Final = NEW_TABLES | GOVERNANCE_TABLES
+PLANE_TABLES: Final = NEW_TABLES | GOVERNANCE_TABLES | PHASE_A_TABLES
 
 #: A name distinct from every other database-tier fixture's disposable
 #: database, so this suite can run alongside them without one dropping the
@@ -483,6 +495,14 @@ def test_an_entity_identifier_must_carry_its_own_prefix(migrated_engine: Engine)
 
 @pytest.mark.database
 def test_the_same_external_identity_cannot_be_recorded_twice(migrated_engine: Engine) -> None:
+    """The rule survives; the constraint carrying it moved.
+
+    `9def3c2e63bb` created it as a total UNIQUE over
+    `(entity_id, namespace, normalized_value)`. `2fe4e13fb449` dropped that and
+    carries the same refusal on the partial unique over the *active* row, which
+    is what lets a retired binding and its replacement both be held --
+    `tests/schema/test_entity_lifecycle_migration.py` asserts that half.
+    """
     _seed_entity(migrated_engine, ENTITY_A, PRINCIPAL_A)
     statement = text(
         f"INSERT INTO {SCHEMA}.entity_external_identifiers "  # noqa: S608
@@ -500,9 +520,7 @@ def test_the_same_external_identity_cannot_be_recorded_twice(migrated_engine: En
             },
         )
     with (
-        pytest.raises(
-            IntegrityError, match="an_external_identifier_is_recorded_once_per_namespace"
-        ),
+        pytest.raises(IntegrityError, match="an_active_external_identifier_binding_is_unique"),
         migrated_engine.begin() as connection,
     ):
         connection.execute(
@@ -587,17 +605,30 @@ def test_an_assignment_naming_no_entity_is_refused(migrated_engine: Engine) -> N
 
 
 @pytest.mark.database
-def test_the_foreign_key_alone_admits_a_cross_principal_reference(
+def test_the_composite_foreign_key_refuses_a_cross_principal_reference(
     migrated_engine: Engine,
 ) -> None:
-    """Why `SqlEntityRepository` checks every entity reference itself.
+    """The Principal partition, held by the server rather than by the repository.
 
-    The foreign key spans every Principal, so the *server* accepts an assignment
-    whose subject belongs to someone else. Asserted rather than assumed, because
-    the repository's guard is only worth its cost if this is true.
+    **This test asserted the opposite until `2fe4e13fb449`.** The single-column
+    foreign key spans every Principal, so the server accepted an assignment whose
+    subject belonged to someone else, and the whole guard was
+    `SqlEntityRepository` checking each reference before writing it. That is a
+    guard a migration, a fixture, a backfill or a future writer does not
+    inherit. `an_assignment_names_an_entity_of_its_principal` is the composite
+    `(entity_id, principal_id)` reference that refuses it in the store.
+
+    The repository's own check is *not* redundant and stays. It answers with a
+    typed `UnknownScopeError` that does not disclose whether the other side
+    exists, where this answers with an integrity error; and the evidence columns
+    on `entity_fact_evidence_links` still carry no composite key, because
+    `capture_spans` has no Principal partition to compose with.
     """
     _seed_entity(migrated_engine, ENTITY_B, PRINCIPAL_B)
-    with migrated_engine.begin() as connection:
+    with (
+        pytest.raises(IntegrityError, match="an_assignment_names_an_entity_of_its_principal"),
+        migrated_engine.begin() as connection,
+    ):
         connection.execute(
             text(
                 f"INSERT INTO {SCHEMA}.entity_assignments "  # noqa: S608
@@ -610,14 +641,6 @@ def test_the_foreign_key_alone_admits_a_cross_principal_reference(
                 "principal_id": PRINCIPAL_A,
             },
         )
-    with migrated_engine.connect() as connection:
-        stored = connection.execute(
-            text(
-                f"SELECT principal_id FROM {SCHEMA}.entity_assignments "  # noqa: S608
-                "WHERE assignment_id = 'asn_aaaa0001aaaa0001'"
-            )
-        ).scalar_one()
-    assert stored == PRINCIPAL_A
 
 
 # --- the alias table -------------------------------------------------------
@@ -672,9 +695,10 @@ def test_two_entities_may_carry_the_same_alias(migrated_engine: Engine) -> None:
 
 @pytest.mark.database
 def test_one_entity_cannot_record_the_same_alias_twice(migrated_engine: Engine) -> None:
+    """The alias half of the move above, and the same reason for it."""
     _seed_entity(migrated_engine, ENTITY_A, PRINCIPAL_A)
     _seed_alias(migrated_engine, "eals_aaaa0001aaaa0001", ENTITY_A, "ali")
-    with pytest.raises(IntegrityError, match="an_alias_is_recorded_once_per_entity_and_type"):
+    with pytest.raises(IntegrityError, match="an_active_alias_is_unique_per_entity_and_type"):
         _seed_alias(migrated_engine, "eals_bbbb0002bbbb0002", ENTITY_A, "ali")
 
 

@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all seventy-three capabilities.
+`tests/contract/test_transport_parity.py` holds it over all ninety-five capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -163,22 +163,25 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build implements seventy-three, one
+same as the tools this build implements. The build implements ninety-five, one
 per capability name. A default process publishes **fifty-three**. That is the
-seventy-three, less the six `documents.` names, the six `entities.` names and the
-eight `relationship_memory.` names a default composition withholds.
+ninety-five, less the six `documents.` names, the twenty-eight `entities.` names
+and the eight `relationship_memory.` names a default composition withholds.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
 configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes those six, reaching fifty-nine of the seventy-three. The
-remaining fourteen are the six `entities.` names, which `D-RI-20` gates behind
-`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms, and the
-eight `relationship_memory.` names, which need that variable *and*
-`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all seventy-three has
-all three variables set. An operator who expects `documents.create`
+same child publishes those six, reaching fifty-nine of the ninety-five. The
+remaining thirty-six are the twenty-eight `entities.` names, which `D-RI-20`
+gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
+— and whose eighteen writes need
+`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it, so a process with
+the plane switch alone publishes sixty-nine — and the eight
+`relationship_memory.` names, which need the plane variable *and*
+`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all ninety-five has
+all four variables set. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -248,9 +251,9 @@ that names it again is refused.
 
 ## Calling a tool
 
-**Current-state correction (2026-08-12):** the tool list is derived from all
-**seventy-three** current capabilities, and the schema has **sixty-seven**
-revisions at head `f1c6b904a2d7`. `capabilities.get` also reports content-free
+**Current-state correction (2026-08-23):** the tool list is derived from all
+**ninety-five** current capabilities, and the schema has **sixty-nine**
+revisions at head `823e23b6cc63`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its
 stated head.
 

@@ -15,6 +15,7 @@ written and hidden later.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
@@ -22,7 +23,7 @@ from typing import Final
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, Insert, event, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
@@ -32,6 +33,7 @@ from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
+    AssignmentState,
     AssignmentType,
     Entity,
     EntityAlias,
@@ -41,6 +43,7 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    IdentifierState,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
 from my_pa.domain.relationship.resolution import (
@@ -75,6 +78,15 @@ BOB_TWO: Final = "ent_ffff0006ffff0006"
 FOREIGN_RELATIONSHIP: Final = "erel_bbbb0001bbbb01"
 
 WHEN: Final = datetime(2026, 8, 17, 12, tzinfo=UTC)
+
+#: Two later moments, and a version the child records do not share, so a joined
+#: read that answered with the *entity's* revision moment or the *entity's*
+#: version cannot pass by coincidence. A fixture where the two happen to agree
+#: proves nothing about which column was read.
+ENTITY_REVISED: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
+CHILD_REVISED: Final = datetime(2026, 8, 19, 12, tzinfo=UTC)
+ENTITY_VERSION: Final = 7
+CHILD_VERSION: Final = 3
 
 
 def _config() -> Config:
@@ -383,8 +395,12 @@ def test_binding_the_same_external_identity_twice_writes_one_row(
     """Idempotent against the natural key, whatever identifier the caller minted.
 
     Proved here rather than only against the fake, because the behaviour comes
-    from the `an_external_identifier_is_recorded_once_per_namespace` constraint
-    and `ON CONFLICT DO NOTHING`, neither of which a Python list has.
+    from a unique index and `ON CONFLICT DO NOTHING`, neither of which a Python
+    list has. Since `2fe4e13fb449` the index arbitrated is the *partial*
+    `an_active_external_identifier_binding_is_unique` rather than the total
+    unique the table was created with, so re-binding an address that is already
+    current is still one row while retiring one and recording its replacement is
+    two.
     """
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
@@ -434,6 +450,160 @@ def test_the_same_value_in_two_namespaces_is_two_identifiers(
     assert _row_count(migrated_engine, "entity_external_identifiers") == 2
 
 
+def test_binding_an_address_another_entity_currently_holds_is_refused(
+    migrated_engine: Engine,
+) -> None:
+    """The residue of arbitrating a *Principal*-wide index rather than an entity one.
+
+    `ON CONFLICT DO NOTHING` cannot say "do nothing only when the row that
+    conflicts is this entity's", and the conflicting row here is not: it is the
+    address's current claimant. Reporting that as a write that happened would be
+    the same class of silence as the joined-read defect above, so the repository
+    reads the holder back and refuses.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        repository.bind_identifier(
+            PRINCIPAL_A,
+            ALICE,
+            _an_email("xid_aaaa0001aaaa0001", ALICE, "shared@example.test", True),
+        )
+    with (
+        pytest.raises(ValueError, match="binds exactly one entity"),
+        migrated_engine.begin() as connection,
+    ):
+        SqlEntityRepository(connection).bind_identifier(
+            PRINCIPAL_A,
+            BOB,
+            _an_email("xid_bbbb0002bbbb0002", BOB, "shared@example.test", True),
+        )
+    assert _row_count(migrated_engine, "entity_external_identifiers") == 1
+
+
+def test_an_address_retired_from_an_entity_may_be_rebound_to_it(
+    migrated_engine: Engine,
+) -> None:
+    """Retire-and-replace on one entity, which the dropped total unique refused.
+
+    `an_external_identifier_is_recorded_once_per_namespace` was total over
+    `(entity_id, namespace, normalized_value)`, so recording that an address came
+    back required deleting the retired row that resolves the messages sent while
+    it was gone. Both rows are held, and the current one is the active one.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.bind_identifier(
+            PRINCIPAL_A,
+            ALICE,
+            replace(
+                _an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", True),
+                state=IdentifierState.RETIRED,
+                retired_at=WHEN,
+            ),
+        )
+        repository.bind_identifier(
+            PRINCIPAL_A,
+            ALICE,
+            _an_email("xid_bbbb0002bbbb0002", ALICE, "alice@example.test", True),
+        )
+    with migrated_engine.connect() as connection:
+        held = SqlEntityRepository(connection).external_identifiers(PRINCIPAL_A, ALICE)
+    assert {identifier.identifier_id: identifier.state for identifier in held} == {
+        "xid_aaaa0001aaaa0001": IdentifierState.RETIRED,
+        "xid_bbbb0002bbbb0002": IdentifierState.ACTIVE,
+    }
+
+
+def test_a_holder_retired_inside_the_read_back_window_is_bound_rather_than_raising(
+    migrated_engine: Engine,
+) -> None:
+    """The interleaving `bind_identifier`'s two statements leave open, forced.
+
+    Refusing a bind takes two statements — an `ON CONFLICT DO NOTHING` insert
+    and a read that names the holder it conflicted with — and this connection
+    runs at READ COMMITTED, so the second statement takes a snapshot the first
+    did not. Between them another session can retire the holder and commit. The
+    read then matches nothing, and `scalar_one` answered that with
+    `sqlalchemy.exc.NoResultFound`: an infrastructure exception crossing a port
+    whose contract is `ValueError`, raised on a bind that is not merely legal
+    but *correct*, because the address it names now belongs to nobody.
+
+    The interleaving is produced rather than waited for. A SQLAlchemy
+    `after_execute` listener on the binding connection fires once, on the insert
+    that was refused, and performs the retirement in a **separate committed
+    transaction** — which is what makes it visible to the next statement of the
+    connection under test and not to this one's own snapshot. Nothing about
+    `SqlEntityRepository` is stubbed: the statements it issues are the
+    statements that run, in the order it issues them, with a real commit landing
+    in the one window that matters.
+
+    What must come out of it is the state a serialized execution would have
+    reached — the retirement, then the bind — and both rows are asserted,
+    because a repository that swallowed the race and returned would leave `BOB`
+    with no binding at all while reporting one.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        repository.bind_identifier(
+            PRINCIPAL_A,
+            ALICE,
+            _an_email("xid_aaaa0001aaaa0001", ALICE, "shared@example.test", True),
+        )
+
+    retirements = 0
+
+    def _retire_the_holder(
+        connection: object,
+        clauseelement: object,
+        multiparams: object,
+        params: object,
+        execution_options: object,
+        result: object,
+    ) -> None:
+        nonlocal retirements
+        if retirements or not isinstance(clauseelement, Insert):
+            return
+        if clauseelement.table.name != "entity_external_identifiers":
+            return
+        retirements += 1
+        with migrated_engine.begin() as other_session:
+            other_session.execute(
+                text(
+                    f"UPDATE {SCHEMA}.entity_external_identifiers "  # noqa: S608 - fixed schema
+                    "SET state = 'retired', retired_at = now() "
+                    "WHERE identifier_id = 'xid_aaaa0001aaaa0001'"
+                )
+            )
+
+    with migrated_engine.begin() as connection:
+        event.listen(connection, "after_execute", _retire_the_holder)
+        try:
+            SqlEntityRepository(connection).bind_identifier(
+                PRINCIPAL_A,
+                BOB,
+                _an_email("xid_bbbb0002bbbb0002", BOB, "shared@example.test", True),
+            )
+        finally:
+            event.remove(connection, "after_execute", _retire_the_holder)
+
+    assert retirements == 1, "the race was never produced, so this test proved nothing"
+    with migrated_engine.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        assert {
+            identifier.identifier_id: identifier.state
+            for identifier in repository.external_identifiers(PRINCIPAL_A, ALICE)
+        } == {"xid_aaaa0001aaaa0001": IdentifierState.RETIRED}
+        assert {
+            identifier.identifier_id: identifier.state
+            for identifier in repository.external_identifiers(PRINCIPAL_A, BOB)
+        } == {"xid_bbbb0002bbbb0002": IdentifierState.ACTIVE}
+
+
 def test_an_assignment_reads_back_and_respects_active_only(migrated_engine: Engine) -> None:
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
@@ -441,9 +611,9 @@ def test_an_assignment_reads_back_and_respects_active_only(migrated_engine: Engi
         repository.create(
             PRINCIPAL_A, an_entity(TOWER, PRINCIPAL_A, "Alice Tower", EntityType.PROJECT)
         )
-        for assignment_id, status in (
-            ("asn_aaaa0001aaaa0001", "active"),
-            ("asn_bbbb0002bbbb0002", "ended"),
+        for assignment_id, state in (
+            ("asn_aaaa0001aaaa0001", AssignmentState.ACTIVE),
+            ("asn_bbbb0002bbbb0002", AssignmentState.ENDED),
         ):
             repository.record_assignment(
                 PRINCIPAL_A,
@@ -454,7 +624,7 @@ def test_an_assignment_reads_back_and_respects_active_only(migrated_engine: Engi
                     principal_id=PRINCIPAL_A,
                     scope_entity_id=TOWER,
                     role="project executive",
-                    status=status,
+                    state=state,
                 ),
             )
     with migrated_engine.connect() as connection:
@@ -548,11 +718,29 @@ def test_one_principal_may_hold_two_entities_with_the_same_name(
 
 # --- the joined resolution lookups, against real SQL ------------------------
 #
-# These four exist because `entities_by_identifier` and `entities_by_alias`
-# SELECT two tables that both declare `entity_id` and `principal_id`, and the
-# row mappers read those by attribute. Whether that resolves to the column the
-# mapper meant is a property of the driver and the statement, not of the Python
-# — so it is asserted here rather than reasoned about.
+# These exist because `entities_by_identifier` and `entities_by_alias` SELECT
+# two tables that both declare `entity_id`, `principal_id`, `updated_at` and
+# `version`, and the row mappers read those by attribute. Whether that resolves
+# to the column the mapper meant is a property of the driver and the statement,
+# not of the Python — so it is asserted here rather than reasoned about.
+#
+# **It did not resolve to the column the mapper meant.** A `Row` read by
+# attribute answers with the first column of that name in the statement, which
+# is the entity's, so every identifier and every alias hydrated by these two
+# reads carried the entity's version and the entity's revision moment. The first
+# two columns collide harmlessly — the join condition and the partition
+# predicate make them equal — and the last two do not, and nothing catches it:
+# both are the same type, so the record simply says something false. Every
+# fixture below therefore gives the entity and the child *different* values.
+
+
+def _a_revised_entity(entity_id: str, display_name: str = "Alice Synthetic") -> Entity:
+    """An entity that has been revised, so its version and moment are its own."""
+    return replace(
+        an_entity(entity_id, PRINCIPAL_A, display_name),
+        version=ENTITY_VERSION,
+        updated_at=ENTITY_REVISED,
+    )
 
 
 def _an_alias(alias_id: str, entity_id: str, name: str) -> EntityAlias:
@@ -581,11 +769,18 @@ def _an_email(
 
 
 def test_a_joined_identifier_lookup_hydrates_both_records(migrated_engine: Engine) -> None:
+    """Each record carries its *own* lifecycle, not the other one's."""
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
+        repository.create(PRINCIPAL_A, _a_revised_entity(ALICE))
         repository.bind_identifier(
-            PRINCIPAL_A, ALICE, _an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", True)
+            PRINCIPAL_A,
+            ALICE,
+            replace(
+                _an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", True),
+                version=CHILD_VERSION,
+                updated_at=CHILD_REVISED,
+            ),
         )
     with migrated_engine.connect() as connection:
         found = SqlEntityRepository(connection).entities_by_identifier(
@@ -595,26 +790,81 @@ def test_a_joined_identifier_lookup_hydrates_both_records(migrated_engine: Engin
     entity, identifier = found[0]
     assert entity.entity_id == ALICE
     assert entity.display_name == "Alice Synthetic"
+    assert entity.version == ENTITY_VERSION
+    assert entity.updated_at == ENTITY_REVISED
     assert identifier.identifier_id == "xid_aaaa0001aaaa0001"
     assert identifier.entity_id == ALICE
     assert identifier.verified is True
     assert identifier.namespace is ExternalIdentifierNamespace.EMAIL
+    assert identifier.version == CHILD_VERSION
+    assert identifier.updated_at == CHILD_REVISED
+
+
+def test_a_joined_identifier_lookup_reports_an_unrevised_binding_as_unrevised(
+    migrated_engine: Engine,
+) -> None:
+    """`updated_at` is `None` on a row nothing has revised, on this path too.
+
+    The invariant `ExternalIdentifier` states, asserted where it was false: the
+    entity's `updated_at` is not nullable, so a joined read that answered with
+    the entity's column could never say `None` and this record's own documented
+    shape was unreachable through the surface resolution actually uses.
+    """
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, _a_revised_entity(ALICE))
+        repository.bind_identifier(
+            PRINCIPAL_A, ALICE, _an_email("xid_aaaa0001aaaa0001", ALICE, "alice@example.test", True)
+        )
+    with migrated_engine.connect() as connection:
+        found = SqlEntityRepository(connection).entities_by_identifier(
+            PRINCIPAL_A, ExternalIdentifierNamespace.EMAIL, "alice@example.test"
+        )
+    _, identifier = found[0]
+    assert identifier.updated_at is None
+    assert identifier.version == 1
 
 
 def test_a_joined_alias_lookup_hydrates_both_records(migrated_engine: Engine) -> None:
+    """The same collision on the alias side, and the same two columns."""
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
-        repository.record_alias(PRINCIPAL_A, _an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
+        repository.create(PRINCIPAL_A, _a_revised_entity(ALICE))
+        repository.record_alias(
+            PRINCIPAL_A,
+            replace(
+                _an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali"),
+                version=CHILD_VERSION,
+                updated_at=CHILD_REVISED,
+            ),
+        )
     with migrated_engine.connect() as connection:
         found = SqlEntityRepository(connection).entities_by_alias(PRINCIPAL_A, "ali")
     assert len(found) == 1
     entity, alias = found[0]
     assert entity.entity_id == ALICE
     assert entity.display_name == "Alice Synthetic"
+    assert entity.version == ENTITY_VERSION
+    assert entity.updated_at == ENTITY_REVISED
     assert alias.alias_id == "eals_aaaa0001aaaa0001"
     assert alias.display_value == "Ali"
     assert alias.alias_type is AliasType.NICKNAME
+    assert alias.version == CHILD_VERSION
+    assert alias.updated_at == CHILD_REVISED
+
+
+def test_a_joined_alias_lookup_reports_an_unrevised_alias_as_unrevised(
+    migrated_engine: Engine,
+) -> None:
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, _a_revised_entity(ALICE))
+        repository.record_alias(PRINCIPAL_A, _an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
+    with migrated_engine.connect() as connection:
+        found = SqlEntityRepository(connection).entities_by_alias(PRINCIPAL_A, "ali")
+    _, alias = found[0]
+    assert alias.updated_at is None
+    assert alias.version == 1
 
 
 def test_a_joined_lookup_cannot_reach_another_principals_entity(
@@ -641,38 +891,56 @@ def test_a_joined_lookup_cannot_reach_another_principals_entity(
         assert repository.entities_by_canonical_name(PRINCIPAL_A, "bob synthetic") == []
 
 
-def _cross_partition_child(engine: Engine, table: str, columns: str, values: str) -> None:
-    """Write a child row whose partition disagrees with its parent entity's.
+def _refuse_cross_partition_child(
+    engine: Engine, table: str, columns: str, values: str, constraint: str
+) -> None:
+    """The server refuses a child row whose partition disagrees with its parent's.
 
-    No writer in this repository can produce one -- every write is `_bound` to
-    the acting Principal -- and no constraint forbids one either, because the
-    partition is a column on each table rather than a relationship between them.
-    So it is staged in raw SQL, which is exactly the shape a migration, a
-    backfill or a restore could leave behind.
+    **This helper wrote the row until `2fe4e13fb449`, and its docstring said no
+    constraint forbade one.** That was true and is not: the partition was a
+    column on each table rather than a relationship between them, so a migration,
+    a backfill or a restore could leave one behind and only the repository's own
+    predicate kept it from being read. The composite `(entity_id, principal_id)`
+    references make it unwritable, which is the guarantee the predicate was
+    standing in for.
+
+    Staged in raw SQL exactly as before, because that is still the shape a
+    backfill would take; what changed is the answer.
     """
-    with engine.begin() as connection:
+    with (
+        pytest.raises(IntegrityError, match=constraint),
+        engine.begin() as connection,
+    ):
         connection.execute(text(f"INSERT INTO {SCHEMA}.{table} ({columns}) VALUES ({values})"))  # noqa: S608
 
 
 def test_an_alias_lookup_applies_the_partition_to_the_alias_row_too(
     migrated_engine: Engine,
 ) -> None:
-    """The *second* side of the join, which the test above does not reach.
+    """The row the two sides disagree about, which the store now refuses outright.
 
-    That test stages a Principal-B alias on a Principal-B entity, which the
-    predicate on `entities` alone already excludes -- so deleting the predicate
-    on `entity_aliases` left it green. What isolates the second predicate is a
-    row the two sides disagree about: an alias stamped Principal B hanging off an
-    entity owned by Principal A. Then only the alias-side predicate can keep A's
-    own entity from being reached through a partition it does not own.
+    An alias stamped Principal B hanging off an entity owned by Principal A was
+    the case that isolated the alias-side partition predicate: the predicate on
+    `entities` alone already excludes a B alias on a B entity, so deleting the
+    one on `entity_aliases` left the sibling test green.
+
+    **Since `2fe4e13fb449` that row cannot be written at all.** The composite
+    reference makes the partition a relationship between the two tables rather
+    than a column on each, so the state this predicate defended against is no
+    longer reachable by a backfill or a restore either. Both halves are asserted:
+    the server refuses the write, and neither Principal reaches anything after
+    it. The repository predicate stays -- it is what answers a foreign row the
+    same way as an absent one rather than raising -- but it is now defence in
+    depth over a state the store will not hold.
     """
     with migrated_engine.begin() as connection:
         SqlEntityRepository(connection).create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
-    _cross_partition_child(
+    _refuse_cross_partition_child(
         migrated_engine,
         "entity_aliases",
         "alias_id, entity_id, alias_type, normalized_value, display_value, principal_id",
         f"'eals_cccc0003cccc0003', '{ALICE}', 'nickname', 'ali', 'Ali', '{PRINCIPAL_B}'",
+        "an_alias_names_an_entity_of_its_principal",
     )
     with migrated_engine.connect() as connection:
         repository = SqlEntityRepository(connection)
@@ -683,16 +951,17 @@ def test_an_alias_lookup_applies_the_partition_to_the_alias_row_too(
 def test_an_identifier_lookup_applies_the_partition_to_the_identifier_row_too(
     migrated_engine: Engine,
 ) -> None:
-    """The same isolation for `entities_by_identifier`, for the same reason."""
+    """The same refusal for `entities_by_identifier`, for the same reason."""
     with migrated_engine.begin() as connection:
         SqlEntityRepository(connection).create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
-    _cross_partition_child(
+    _refuse_cross_partition_child(
         migrated_engine,
         "entity_external_identifiers",
         "identifier_id, entity_id, namespace, normalized_value, display_value, "
         "verified, principal_id",
         f"'xid_cccc0003cccc0003', '{ALICE}', 'email', 'ali@example.test', "
         f"'ali@example.test', true, '{PRINCIPAL_B}'",
+        "an_external_identifier_binds_an_entity_of_its_principal",
     )
     with migrated_engine.connect() as connection:
         repository = SqlEntityRepository(connection)
@@ -837,19 +1106,39 @@ def test_resolution_refuses_two_people_who_share_a_name_over_real_sql(
 def test_resolution_stops_on_a_conflicted_identifier_over_real_sql(
     migrated_engine: Engine,
 ) -> None:
+    """Two entities claiming one address, in the shape that is still reachable.
+
+    **This test bound both rows as active until `2fe4e13fb449`.** The partial
+    unique `an_active_external_identifier_binding_is_unique` now refuses that
+    outright, and refusing it is the point: an active canonical binding names one
+    entity, so "two people are currently this address" is a state the store no
+    longer holds. What remains reachable, and must still be refused by the
+    resolver, is one *active* claimant and one *historical* one -- because
+    `entities_by_identifier` reads every state, deliberately, so a message from
+    four years ago still resolves to the person who sent it.
+
+    That is the harder case, not the easier one: a historical row that stopped
+    being consulted would silently promote the live claimant from a refusal to a
+    confident answer, which is exactly the `RI-RISK-001` failure.
+    """
     with migrated_engine.begin() as connection:
         repository = SqlEntityRepository(connection)
         repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A, "Alice Synthetic"))
         repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
-        for identifier_id, entity_id in (
-            ("xid_aaaa0001aaaa0001", ALICE),
-            ("xid_bbbb0002bbbb0002", BOB),
-        ):
-            repository.bind_identifier(
-                PRINCIPAL_A,
-                entity_id,
-                _an_email(identifier_id, entity_id, "shared@example.test", True),
-            )
+        repository.bind_identifier(
+            PRINCIPAL_A,
+            ALICE,
+            replace(
+                _an_email("xid_aaaa0001aaaa0001", ALICE, "shared@example.test", True),
+                state=IdentifierState.RETIRED,
+                retired_at=WHEN,
+            ),
+        )
+        repository.bind_identifier(
+            PRINCIPAL_A,
+            BOB,
+            _an_email("xid_bbbb0002bbbb0002", BOB, "shared@example.test", True),
+        )
     with migrated_engine.connect() as connection:
         answer = EntityResolutionService(SqlEntityRepository(connection)).resolve(
             PRINCIPAL_A,
@@ -1379,26 +1668,32 @@ def test_a_relationship_write_decides_a_collision_on_its_own_partitions_rows(
 def test_a_foreign_redirect_at_ones_own_entity_does_not_block_merging_it(
     two_principals: Engine,
 ) -> None:
-    """The inbound-pointer check is partitioned, so B's lineage cannot veto A's merge.
+    """A redirect cannot cross the partition, so B's lineage cannot veto A's merge.
 
     `redirect_entity` refuses to merge away an entity others already redirect
     *to*, because that leaves a two-hop chain ending on a `merged_redirect`. The
-    rows it looks at have to be A's: `superseded_by_entity_id` is a plain foreign
-    key with no partition behind it, so B can point one of B's own entities at
-    one of A's. Without the predicate that foreign pointer is read as A's own,
-    and a merge A is entitled to make is refused on evidence A cannot see -- an
-    unexplainable refusal sourced from another partition.
+    rows it looks at have to be A's, and the repository's predicate says so.
 
-    Staged with SQL rather than through the repository on purpose: the
-    repository is what refuses to write such a row, and the row this guards
-    against is the one that arrives some other way.
+    **What backed that predicate up changed with `2fe4e13fb449`.** This test
+    staged the foreign pointer in SQL, because `superseded_by_entity_id` was a
+    plain foreign key with no partition behind it and B really could point one of
+    B's entities at one of A's. `an_entity_redirects_within_its_principal` is the
+    composite reference that refuses it, so the row this guarded against can no
+    longer arrive from a backfill or a restore either.
+
+    Both halves are still asserted, and the second is the one that matters: the
+    server refuses the cross-partition redirect, and A's own merge -- which was
+    the thing a foreign pointer would have vetoed -- goes through.
     """
     bee = "ent_eeee0005eeee0005"
     with two_principals.begin() as connection:
         SqlEntityRepository(connection).create(
             PRINCIPAL_B, an_entity(bee, PRINCIPAL_B, "Bee Synthetic")
         )
-    with two_principals.begin() as connection:
+    with (
+        pytest.raises(IntegrityError, match="an_entity_redirects_within_its_principal"),
+        two_principals.begin() as connection,
+    ):
         connection.execute(
             text(
                 f"UPDATE {SCHEMA}.entities SET status = 'merged_redirect', "  # noqa: S608
@@ -1416,10 +1711,10 @@ def test_a_foreign_redirect_at_ones_own_entity_does_not_block_merging_it(
         assert merged is not None
         assert merged.status is EntityStatus.MERGED_REDIRECT
         assert merged.superseded_by_entity_id == ALICE
-        # B's pointer is untouched, and B still holds it.
+        # B's entity is untouched, still B's, and holds no redirect at all.
         theirs = repository.get(PRINCIPAL_B, bee)
         assert theirs is not None, "the staged foreign row went missing"
-        assert theirs.superseded_by_entity_id == ACME
+        assert theirs.superseded_by_entity_id is None
         assert repository.get(PRINCIPAL_A, bee) is None
 
 

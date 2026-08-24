@@ -263,6 +263,31 @@ class IdKind(StrEnum):
     RELATIONSHIP_MEMORY_SUBMISSION = "memsub"
     RELATIONSHIP_MEMORY_PROPOSAL = "mprop"
     RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE = "mpev"
+    #: WP-RI-A-01: the entity plane's lifecycle ledgers. Three prefixes rather
+    #: than a reuse of `ENTITY_PROPOSAL` or `AUDIT`, on the argument
+    #: `CAPTURE_VERSION` makes against reusing `VERSION`: a stored reference has
+    #: to say which record it names, and each of them names a different act.
+    #:
+    #: `ENTITY_MUTATION_EVENT` names one append-only row in the ordinary
+    #: mutation ledger -- what changed, under whose authority, and against which
+    #: idempotency key. It is not `AUDIT`: an audit row records that a
+    #: capability was invoked, and this one records what the invocation did to a
+    #: canonical record, so a reference carrying one prefix for both could not
+    #: say which half it meant.
+    #:
+    #: `ENTITY_FACT_EVIDENCE_LINK` names one binding between a canonical fact and
+    #: the single record that evidences it. It is deliberately not
+    #: `RELATIONSHIP_MEMORY_EVIDENCE_LINK`: that one binds a memory version, and
+    #: a link table whose two planes shared a prefix would make an orphaned row
+    #: unattributable to the plane that has to clean it up.
+    #:
+    #: `ENTITY_RESOLUTION_DECISION` names one append-only disposition of an
+    #: observation. It is not `IDENTITY_RESOLUTION` (`ires`), which names the
+    #: WP-9 substrate's person-merge resolution, and not `REVIEW_DECISION`
+    #: (`rdec`), which names a reviewer's disposition of a capture proposal.
+    ENTITY_MUTATION_EVENT = "emut"
+    ENTITY_FACT_EVIDENCE_LINK = "efev"
+    ENTITY_RESOLUTION_DECISION = "erdc"
 
 
 class InvalidIdentifierError(ValueError):

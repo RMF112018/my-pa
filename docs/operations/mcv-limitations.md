@@ -356,22 +356,26 @@ it adds no public capability and has not been exercised against live contacts,
 email, or calendar data.
 
 **That describes WP-9, and is no longer true of the plane.** Corrected
-2026-08-19: the Relationship Intelligence entity plane adds **six** public read
-capabilities — `entities.search`, `entities.get`, `entities.resolve`,
-`entities.context`, `entities.relationships`, `entities.unresolved_mentions` —
-and this document, whose job is
-stating what the build does not do, said nothing about them. What remains true,
-and is the limitation:
+2026-08-19 when it acquired public reads, and again after Phase A, which gave it
+writes: the Relationship Intelligence entity plane is twenty-eight `entities.`
+names now — ten reads and eighteen writes over identity, identifiers, aliases,
+assignments, directed edges, observations and mention resolution. This document,
+whose job is stating what the build does not do, said nothing about them. What
+remains true, and is the limitation:
 
-* **They are off by default.** A process that has not set
-  `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the six and
-  refuses each with `unsupported` on every transport.
-* **Nothing writes.** The plane has no write capability.
-  `src/my_pa/application/entity_governance.py` and
-  `src/my_pa/application/entity_reenrichment.py` — which hold every mutation,
-  including merge — are composed by no bootstrap, capability, script or worker,
-  so the review queue can be *read* and cannot be *worked*. An operator with a
-  proposal to decide has no supported action.
+* **They are off by default, and the writes are off twice.** A process that has
+  not set `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the
+  twenty-eight and refuses each with `unsupported` on every transport. A process
+  that has set it but not
+  `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` serves the reads and refuses
+  all eighteen writes the same way.
+* **Merge and proposal review still have no caller.**
+  `src/my_pa/application/entity_reenrichment.py` and the merge half of
+  `src/my_pa/application/entity_governance.py` are composed by no bootstrap,
+  capability, script or worker, so the review queue can be *read* and cannot be
+  *worked*. An operator with a proposal to decide has no supported action. What
+  changed in Phase A is the authoring, assignment, directed-edge and observation
+  halves, which do have callers; merge did not.
 * **No live personal data has reached it.** Every figure and every test is
   synthetic, and no connector writes an observation.
 * **Split does not exist**, so the "reversible merge/split" above overstates what

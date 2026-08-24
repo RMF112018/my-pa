@@ -49,9 +49,12 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from my_pa.application.commands import (
+    AddEntityAlias,
+    ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     BeginIntelligenceCycle,
+    BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
@@ -59,12 +62,17 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
+    CreateEntity,
+    CreateEntityAssignment,
+    CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAssignment,
+    EndEntityRelationship,
     EnrollSource,
     FetchSource,
     GetCapabilities,
@@ -84,6 +92,10 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAliases,
+    ListEntityAssignments,
+    ListEntityIdentifiers,
+    ListEntityObservations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -93,6 +105,7 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    ObserveEntityMention,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -105,10 +118,16 @@ from my_pa.application.commands import (
     RecordTask,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveUnresolvedMention,
+    RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAlias,
+    RetireEntityIdentifier,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAssignment,
+    ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
     SearchCaptures,
@@ -119,8 +138,11 @@ from my_pa.application.commands import (
     SearchRelationshipMemories,
     SearchTasks,
     SubmitGoodNotesProposal,
+    SupersedeEntityAlias,
+    SupersedeEntityIdentifier,
     TransitionTask,
     UpdateCommitment,
+    UpdateEntity,
     UpdateTask,
     WaitingOn,
 )
@@ -308,6 +330,45 @@ def _requested_scope(
             | GetEntityContext()
             | GetEntityRelationships()
             | ListUnresolvedMentions()
+            # The authoring half (`WP-RI-A-02`) makes the same measurement, and
+            # a write makes it more plainly than a read: it creates or corrects
+            # the Principal's own record of a person, and the row it writes
+            # carries no `source_id` and no `enrollment_id` at all.
+            | ListEntityIdentifiers()
+            | ListEntityAliases()
+            | CreateEntity()
+            | UpdateEntity()
+            | ArchiveEntity()
+            | RestoreEntity()
+            | BindEntityIdentifier()
+            | RetireEntityIdentifier()
+            | SupersedeEntityIdentifier()
+            | AddEntityAlias()
+            | RetireEntityAlias()
+            | SupersedeEntityAlias()
+            # The directed-relationship family names entities, not a source, and
+            # writing does not change that: an assignment and an edge carry no
+            # `source_id` and no `enrollment_id`, and the scope one of them *does*
+            # name is a scope Entity in the same partition rather than a grant.
+            # The empty set here is the same measurement the six reads make.
+            | ListEntityAssignments()
+            | CreateEntityAssignment()
+            | ReviseEntityAssignment()
+            | EndEntityAssignment()
+            | CreateEntityRelationship()
+            | ReviseEntityRelationship()
+            | EndEntityRelationship()
+            # WP-RI-A-04's three, and `entities.observe` is the one worth
+            # naming separately: it *carries* a `source_id`, and that is
+            # provenance written onto the observation rather than a scope the
+            # request holds. Deriving a requested scope from it would compare a
+            # caller's grant against a value the caller supplied, which is
+            # authorizing on the payload; and the same command may name a
+            # product-owned capture instead, which belongs to no configured
+            # source at all. The empty set is the measurement in both cases.
+            | ListEntityObservations()
+            | ObserveEntityMention()
+            | ResolveUnresolvedMention()
             # A Relationship Memory names an Entity, not a source. It is the
             # product's own knowledge under ADR-003 — written by the Principal
             # about a person, never read out of a source root — so its rows carry

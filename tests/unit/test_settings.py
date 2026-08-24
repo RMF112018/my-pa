@@ -522,3 +522,64 @@ def test_a_url_the_engine_cannot_parse_is_refused_without_naming_it() -> None:
     assert "SUPERSECRETVALUE" not in str(caught.value)
     assert "not-a-port" not in str(caught.value)
     assert url not in str(caught.value)
+
+
+# ---- the entity plane's two switches ---------------------------------------
+
+
+def test_the_entity_plane_and_its_write_half_are_both_off_by_default() -> None:
+    """Two switches, and neither is inferred from the other.
+
+    Stated as a default rather than as a rule, because the default is what a
+    process that was never configured gets: no entity plane, and no writes over
+    identity, without an operator having decided anything.
+    """
+    settings = load_settings({DATABASE_URL: _A_URL})
+    assert settings.relationship_intelligence_enabled is False
+    assert settings.relationship_intelligence_writes_enabled is False
+
+
+def test_the_write_switch_without_the_plane_refuses_to_start() -> None:
+    """Fail closed, and closed in the direction that says what was meant.
+
+    The two alternatives were serving the writes anyway — eighteen identity
+    writes on a process whose operator turned the plane off — or ignoring the
+    variable, which is the shape where an operator sets a switch, sees no error,
+    and believes a surface is gated when it is not. The message names both
+    settings and neither of their values.
+    """
+    with pytest.raises(SettingsError) as refused:
+        load_settings(
+            {
+                DATABASE_URL: _A_URL,
+                f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED": "true",
+            }
+        )
+    message = str(refused.value)
+    assert f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED" in message
+    assert f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED" in message
+
+
+def test_the_plane_without_the_write_switch_starts_and_stays_read_only() -> None:
+    """The composition an operator most likely wants, and the control for the two above."""
+    settings = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED": "true",
+        }
+    )
+    assert settings.relationship_intelligence_enabled is True
+    assert settings.relationship_intelligence_writes_enabled is False
+
+
+def test_both_switches_together_are_admitted() -> None:
+    """Non-vacuity: the refusal above is about one combination, not about the flag."""
+    settings = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED": "true",
+            f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED": "true",
+        }
+    )
+    assert settings.relationship_intelligence_enabled is True
+    assert settings.relationship_intelligence_writes_enabled is True

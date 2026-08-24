@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route seventy-three capability names and none of them mutates a
+  surface route ninety-five capability names and none of them mutates a
   source, and every capability driven over both transports is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -371,6 +371,38 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        # The authoring half (`WP-RI-A-02`) is scopeless more plainly still: it
+        # writes the Principal's own record of a person, and the row it writes
+        # carries no `source_id` and no `enrollment_id` for a scope to be
+        # compared against. All twelve are in
+        # `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_IDENTIFIERS_LIST,
+        Capability.ENTITIES_ALIASES_LIST,
+        Capability.ENTITIES_CREATE,
+        Capability.ENTITIES_UPDATE,
+        Capability.ENTITIES_ARCHIVE,
+        Capability.ENTITIES_RESTORE,
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE,
+        Capability.ENTITIES_ALIASES_ADD,
+        Capability.ENTITIES_ALIASES_RETIRE,
+        Capability.ENTITIES_ALIASES_SUPERSEDE,
+        # The directed-relationship family names entities, not a source, and
+        # writing does not change that (WP-RI-A-03): an assignment and an edge
+        # carry no `source_id` and no `enrollment_id`, and the scope one of them
+        # *does* name is another Entity in the same partition rather than a
+        # grant. All seven sit in `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_ASSIGNMENTS_LIST,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE,
+        Capability.ENTITIES_ASSIGNMENTS_END,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_REVISE,
+        Capability.ENTITIES_RELATIONSHIPS_END,
+        Capability.ENTITIES_OBSERVATIONS_LIST,
+        Capability.ENTITIES_OBSERVE,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
         # The Relationship Memory plane (WP-RM-01) joins them one step further
         # out: a memory names an Entity, and an Entity names no `src_…` and no
         # `enr_…`, so a memory request has no scope to state and there is none
@@ -605,6 +637,47 @@ TASK_MANAGEMENT_EXEMPTION = frozenset(
 #: for nothing. A future `relationship_memory.delete` is still caught here.
 RELATIONSHIP_MEMORY_EXEMPTION = frozenset({Capability.RELATIONSHIP_MEMORY_CREATE})
 
+#: The fifth exemption (`WP-RI-A-02`), and it is a pair rather than a family.
+#: `entities.create` and `entities.update` are the only two of the plane's ten
+#: writes the substring proxy refuses, and both are refused for the reason
+#: `capture.create` and `documents.create` are: what they write is a
+#: *product-owned* record — this Principal's own account of who a person is —
+#: which `ADR-003` makes a third authority class that is neither a source-system
+#: write nor a managed-document write. Nothing on this plane reaches a source
+#: system at all; the entity tables are the product's own custody, and
+#: `test_no_capability_over_either_transport_calls_anything_but_a_read` carries
+#: the property the proxy stands for by driving every capability against a
+#: recording provider.
+#:
+#: The other eight writes are *not* exempt and still pass the name check, which
+#: is the check working rather than an omission: `archive`, `restore`, `bind`,
+#: `retire` and `supersede` are all names the proxy admits, and the plane was
+#: named that way partly because those verbs say what the write does without
+#: claiming a mutation of anything outside it.
+ENTITY_AUTHORING_EXEMPTION = frozenset({Capability.ENTITIES_CREATE, Capability.ENTITIES_UPDATE})
+#: The directed-relationship exemption (WP-RI-A-03), and it is deliberately the
+#: pair of `create` names, the way `RELATIONSHIP_MEMORY_EXEMPTION` is a single
+#: name.
+#: `entities.assignments.create` and `entities.relationships.create` are the only
+#: two of the seven the substring proxy refuses, and they are refused for the
+#: reason `capture.create`, `documents.create` and `relationship_memory.create`
+#: are: an assignment and a directed edge are *product-owned* records under
+#: `ADR-003` -- the Principal's own statement about the Principal's own entities
+#: -- and writing one mutates no source. Their rows carry no `source_id`, and
+#: the plane reaches no `SourceProvider` at all.
+#:
+#: An extension of the registry the rule reads and not a relaxation of the rule.
+#: The other four writes -- two `revise` and two `end` -- pass the name check
+#: unaided, and a future `entities.assignments.delete` is still caught here. The
+#: property the proxy stands for is carried behaviourally for this plane by the
+#: recording-provider sweep, exactly as it is for `capture.*`.
+ENTITY_DIRECTED_EXEMPTION = frozenset(
+    {
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+    }
+)
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -625,6 +698,8 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | CONTINUITY_AUTHORING_EXEMPTION
         | TASK_MANAGEMENT_EXEMPTION
         | RELATIONSHIP_MEMORY_EXEMPTION
+        | ENTITY_AUTHORING_EXEMPTION
+        | ENTITY_DIRECTED_EXEMPTION
     )
     checked = [c for c in Capability if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

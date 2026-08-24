@@ -50,6 +50,7 @@ from typing import Final
 from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
+    AssignmentState,
     AssignmentType,
     Entity,
     EntityAlias,
@@ -59,6 +60,7 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    RelationshipState,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
 
@@ -416,10 +418,18 @@ CORPUS_ASSIGNMENTS: Final[tuple[Assignment, ...]] = (
         effective_to=AFTER,
     ),
     # **Liveness is the only thing excluding this row.** Its window is open and
-    # began in the past, so every date rule admits it; only `status` says it is
-    # over. Priya's row above is `status="active"` with expired dates, which is
-    # the mirror — so before this one, deleting the status flag changed no
-    # measurement and the corpus could not see the guard it was cited for.
+    # began in the past, so every date rule admits it; only `state` says it is
+    # over. Priya's row above is `AssignmentState.ACTIVE` with expired dates,
+    # which is the mirror — so before this one, deleting the liveness flag
+    # changed no measurement and the corpus could not see the guard it was cited
+    # for.
+    #
+    # `ENDED` rather than the free-text `"cancelled"` this row carried until
+    # WP-RI-A-01 closed the vocabulary. The corpus is measuring that a
+    # not-live assignment does not corroborate, and the *specific* string was
+    # never what it measured; a value outside the closed set is now refused by
+    # both the record and the server, so the fixture states the member that
+    # means what the row meant.
     Assignment(
         assignment_id="asn_iris0008cancelled",
         entity_id=IRIS_BELL_CANCELLED,
@@ -427,7 +437,7 @@ CORPUS_ASSIGNMENTS: Final[tuple[Assignment, ...]] = (
         principal_id=PRINCIPAL_A,
         scope_entity_id=TOWER_PROJECT,
         effective_from=BEFORE,
-        status="cancelled",
+        state=AssignmentState.ENDED,
     ),
 )
 
@@ -478,7 +488,7 @@ CORPUS_RELATIONSHIPS: Final[tuple[EntityRelationship, ...]] = (
         principal_id=PRINCIPAL_A,
         effective_from=BEFORE,
         effective_to=MIDPOINT,
-        state="ended",
+        state=RelationshipState.ENDED,
         version=2,
     ),
     # The edge equivalent of Iris's assignment, and the reason Leo's row above
@@ -492,7 +502,7 @@ CORPUS_RELATIONSHIPS: Final[tuple[EntityRelationship, ...]] = (
         to_entity_id=TOWER_PROJECT,
         principal_id=PRINCIPAL_A,
         effective_from=BEFORE,
-        state="ended",
+        state=RelationshipState.ENDED,
         version=2,
     ),
 )

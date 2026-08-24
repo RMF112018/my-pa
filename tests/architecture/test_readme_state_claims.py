@@ -280,6 +280,32 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     78: "Seventy-eight",
     79: "Seventy-nine",
     80: "Eighty",
+    # The eighties and the nineties, extended each time the public capability
+    # set crossed a decade -- at `WP-RI-A-02`, and again when Phase A's three
+    # entity work packages integrated and it reached ninety-five. The map is
+    # extended rather than the assertion relaxed, for the reason it exists: a
+    # figure this test cannot spell is a figure it cannot check, and "extend the
+    # readable count vocabulary" is a refusal rather than a pass.
+    81: "Eighty-one",
+    82: "Eighty-two",
+    83: "Eighty-three",
+    84: "Eighty-four",
+    85: "Eighty-five",
+    86: "Eighty-six",
+    87: "Eighty-seven",
+    88: "Eighty-eight",
+    89: "Eighty-nine",
+    90: "Ninety",
+    91: "Ninety-one",
+    92: "Ninety-two",
+    93: "Ninety-three",
+    94: "Ninety-four",
+    95: "Ninety-five",
+    96: "Ninety-six",
+    97: "Ninety-seven",
+    98: "Ninety-eight",
+    99: "Ninety-nine",
+    100: "One hundred",
 }
 
 
@@ -394,7 +420,7 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
 
 
 def test_current_state_docs_derive_the_default_capability_split() -> None:
-    """Bind the default 53/73 and withheld 20/73 claims to runtime wiring."""
+    """Bind the default and withheld capability figures to runtime wiring."""
     total = len(Capability)
     withheld_families = {
         capability
@@ -403,18 +429,18 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert default == 53 and total == 73 and withheld == 20
+    assert default == 53 and total == 95 and withheld == 42
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "seventy-three capabilities" in system_context
+    assert "ninety-five capabilities" in system_context
     assert "exposes fifty-three of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "seventy-three capabilities" in module_boundaries
+    assert "ninety-five capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

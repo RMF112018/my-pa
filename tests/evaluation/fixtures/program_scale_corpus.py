@@ -61,6 +61,7 @@ from typing import Final
 from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
+    AssignmentState,
     AssignmentType,
     Entity,
     EntityAlias,
@@ -70,6 +71,8 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    IdentifierState,
+    RelationshipState,
 )
 from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
@@ -916,7 +919,7 @@ def _build() -> ProgramScaleCorpus:
                     role=_ROLES[(person.index + 3) % len(_ROLES)],
                     effective_from=ORIGIN,
                     effective_to=MIDPOINT,
-                    status="ended",
+                    state=AssignmentState.ENDED,
                 )
             )
             historical_employment_person_ids.append(person.entity_id)
@@ -1014,7 +1017,7 @@ def _build() -> ProgramScaleCorpus:
                     principal_id=PRINCIPAL_A,
                     effective_from=ORIGIN,
                     effective_to=MIDPOINT,
-                    state="ended",
+                    state=RelationshipState.ENDED,
                     version=2,
                 )
             )
@@ -1179,6 +1182,13 @@ def _build() -> ProgramScaleCorpus:
         second = person_by_index[recycled_base + offset * 2 + 1]
         address = f"rotation.{offset:03d}@reissued.test"
         normalized = normalize_identifier(ExternalIdentifierNamespace.EMAIL, address)
+        # The first holder's binding is RETIRED, not merely date-expired. Both
+        # facts are true of a reissued mailbox and they are not the same fact:
+        # the dates say when it was theirs, and the state says it is no longer
+        # the canonical binding. Since WP-RI-A-01 only the second is what frees
+        # the address for the next holder -- an active binding of one address
+        # names one entity per Principal -- and the row stays queryable, which is
+        # how a message sent before MIDPOINT still resolves to the first holder.
         identifiers.append(
             ExternalIdentifier(
                 identifier_id=mint.next("xid"),
@@ -1190,6 +1200,8 @@ def _build() -> ProgramScaleCorpus:
                 verified=True,
                 effective_from=ORIGIN,
                 effective_to=MIDPOINT,
+                state=IdentifierState.RETIRED,
+                retired_at=MIDPOINT,
             )
         )
         identifiers.append(
@@ -1223,7 +1235,19 @@ def _build() -> ProgramScaleCorpus:
         normalized = normalize_identifier(ExternalIdentifierNamespace.EMAIL, address)
         if offset >= CONFLICTED_ADDRESS_COUNT - CROSS_TYPE_CONFLICTS:
             claimants.append(organization_ids[offset % ORGANIZATIONS])
-        for claimant in claimants:
+        # **One active claimant and the rest retired**, which is the only shape
+        # this conflict can now take. Every claimant was active until
+        # WP-RI-A-01, and the partial unique refuses that: an *active* canonical
+        # binding names exactly one entity, so "two people are currently this
+        # address" is a state the store no longer holds.
+        #
+        # The hazard the case measures is untouched, and is arguably sharper.
+        # `entities_by_identifier` reads every state deliberately, so the
+        # address still reaches more than one entity and `resolve` must still
+        # refuse it -- and a retired row that stopped being consulted would
+        # promote the live claimant from a refusal to a confident wrong answer,
+        # which is the `RI-RISK-001` failure this corpus exists to detect.
+        for position, claimant in enumerate(claimants):
             identifiers.append(
                 ExternalIdentifier(
                     identifier_id=mint.next("xid"),
@@ -1233,6 +1257,8 @@ def _build() -> ProgramScaleCorpus:
                     display_value=address,
                     principal_id=PRINCIPAL_A,
                     verified=True,
+                    state=(IdentifierState.ACTIVE if position == 0 else IdentifierState.RETIRED),
+                    retired_at=None if position == 0 else MIDPOINT,
                 )
             )
         conflicted_addresses.append(

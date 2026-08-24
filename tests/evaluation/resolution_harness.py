@@ -32,8 +32,20 @@ from pathlib import Path
 from typing import Final
 
 from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
-from my_pa.contracts.ports import EntitiesRepository, EntitySummary
+from my_pa.contracts.ports import (
+    AssignmentWriteRequest,
+    DirectedReceipt,
+    EntitiesRepository,
+    EntityChildPage,
+    EntityMutationAdmission,
+    EntityMutationReceipt,
+    EntitySummary,
+    EntityWriteRequest,
+    RelationshipWriteRequest,
+)
 from my_pa.domain.relationship.entity import (
+    AliasState,
+    AliasType,
     Assignment,
     Entity,
     EntityAlias,
@@ -41,12 +53,18 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    IdentifierState,
 )
 from my_pa.domain.relationship.governance import (
+    EntityFactEvidenceLink,
     EntityMergeRecord,
+    EntityMutationEvent,
     EntityObservation,
     EntityProposal,
     EntityProposalState,
+    EntityResolutionDecision,
+    EvidenceRole,
+    ObservationState,
 )
 from my_pa.domain.relationship.resolution import (
     EntityResolution,
@@ -282,6 +300,61 @@ class _CorpusRepository(EntitiesRepository):
     def record_relationship(self, principal_id: str, rel: EntityRelationship) -> None:
         raise NotImplementedError("the evaluation corpus is frozen")
 
+    # --- the directed-relationship write path, which resolution does not use --
+    #
+    # Present because the port declares them, and refusing rather than
+    # answering for the reason the governance block below states: a corpus that
+    # could be written to could drift mid-run, and every figure in the report
+    # depends on the corpus being the one it names. The two *reads* refuse too,
+    # because resolution corroborates through `assignments`, not through the
+    # paged read the capability uses, and a harness that answered both would let
+    # a change in which one the resolver calls pass unnoticed.
+
+    def assignment(self, principal_id: str, assignment_id: str) -> Assignment | None:
+        raise NotImplementedError("resolution reads no assignment by identifier")
+
+    def relationship(self, principal_id: str, relationship_id: str) -> EntityRelationship | None:
+        raise NotImplementedError("resolution reads no edge by identifier")
+
+    def assignments_page(
+        self,
+        principal_id: str,
+        entity_id: str,
+        *,
+        active_only: bool,
+        limit: int,
+        after_assignment_id: str | None = None,
+    ) -> list[Assignment]:
+        raise NotImplementedError("resolution reads the assignment collection whole")
+
+    def directed_replay(
+        self,
+        capability: str,
+        idempotency_key: str,
+        payload_digest: str,
+        *,
+        principal_id: str,
+    ) -> DirectedReceipt | None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def create_assignment(self, request: AssignmentWriteRequest) -> DirectedReceipt:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def revise_assignment(self, request: AssignmentWriteRequest) -> DirectedReceipt:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def end_assignment(self, request: AssignmentWriteRequest) -> DirectedReceipt:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def create_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def revise_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def end_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
     # --- governance, which resolution does not use -------------------------
     #
     # Present because the port declares them and absent in substance because
@@ -302,8 +375,65 @@ class _CorpusRepository(EntitiesRepository):
     ) -> list[EntityObservation]:
         raise NotImplementedError("resolution reads no observation")
 
+    def observation(self, principal_id: str, observation_id: str) -> EntityObservation | None:
+        raise NotImplementedError("resolution reads no observation")
+
     def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
         raise NotImplementedError("the evaluation corpus is frozen")
+
+    # WP-RI-A-04's three ledgers refuse here for the reason every other write
+    # does: this corpus is frozen, and a resolver that started consulting the
+    # negative-evidence table would be silently measured against nothing.
+    # `refused_entity_ids` reaches the service on the *request* rather than
+    # through a read, so the calibration still exercises the withholding rule
+    # without this repository answering for it.
+
+    def record_mutation_event(self, principal_id: str, event: EntityMutationEvent) -> None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def mutation_event(
+        self, principal_id: str, *, capability: str, idempotency_key: str
+    ) -> EntityMutationEvent | None:
+        raise NotImplementedError("resolution replays no write")
+
+    def record_resolution_decision(
+        self, principal_id: str, decision: EntityResolutionDecision
+    ) -> None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def resolution_decisions(
+        self,
+        principal_id: str,
+        observation_id: str | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[EntityResolutionDecision]:
+        raise NotImplementedError("resolution reads no decision")
+
+    def decide_observation(
+        self,
+        principal_id: str,
+        observation_id: str,
+        *,
+        expected_resolution_version: int,
+        entity_id: str | None = None,
+        state: ObservationState | None = None,
+        state_reason: str | None = None,
+    ) -> bool:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def record_fact_evidence_link(self, principal_id: str, link: EntityFactEvidenceLink) -> None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def fact_evidence_links(
+        self,
+        principal_id: str,
+        *,
+        entity_observation_id: str | None = None,
+        role: EvidenceRole | None = None,
+        limit: int | None = None,
+    ) -> list[EntityFactEvidenceLink]:
+        raise NotImplementedError("resolution reads no evidence link")
 
     def record_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
         raise NotImplementedError("the evaluation corpus is frozen")
@@ -329,6 +459,53 @@ class _CorpusRepository(EntitiesRepository):
         self, principal_id: str, merged_entity_id: str, retained_entity_id: str
     ) -> None:
         raise NotImplementedError("the evaluation corpus is frozen")
+
+    # --- the governed write path (WP-RI-A-02), which resolution does not use --
+    #
+    # Refused rather than answered, on the argument the governance methods above
+    # make: a resolver that started writing, or that started paging identifiers
+    # and aliases instead of reading them whole, would be measured against
+    # nothing here and this corpus would report it fine. The two paged reads are
+    # deliberately among them: resolution reads each collection *whole* to
+    # decide whether an identifier is conflicted, and a page is the one shape
+    # that could let a conflict fall off the end and read as a clean match.
+
+    def admit_mutation(self, request: EntityWriteRequest) -> EntityMutationAdmission:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def mutation_replay_for(
+        self,
+        idempotency_key: str,
+        request_digest: str,
+        *,
+        principal_id: str,
+        capability: str,
+    ) -> EntityMutationReceipt | None:
+        raise NotImplementedError("the evaluation corpus is frozen")
+
+    def identifier_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        states: frozenset[IdentifierState] | None = None,
+        namespaces: frozenset[ExternalIdentifierNamespace] | None = None,
+        after_identifier_id: str | None = None,
+    ) -> EntityChildPage[ExternalIdentifier]:
+        raise NotImplementedError("resolution reads external identifiers whole")
+
+    def alias_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        states: frozenset[AliasState] | None = None,
+        alias_types: frozenset[AliasType] | None = None,
+        after_alias_id: str | None = None,
+    ) -> EntityChildPage[EntityAlias]:
+        raise NotImplementedError("resolution reads aliases whole")
 
 
 def build_repository() -> EntitiesRepository:

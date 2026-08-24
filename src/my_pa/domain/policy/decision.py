@@ -294,6 +294,51 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        # The authoring half (`WP-RI-A-02`), scopeless for the identical reason
+        # and named one at a time rather than by prefix. A write to this plane
+        # has *less* to compare a scope against than a read does, not more: it
+        # creates or corrects the Principal's own record of a person, and the
+        # row it writes carries no `source_id` and no `enrollment_id` for a
+        # requested scope to be checked against.
+        Capability.ENTITIES_IDENTIFIERS_LIST,
+        Capability.ENTITIES_ALIASES_LIST,
+        Capability.ENTITIES_CREATE,
+        Capability.ENTITIES_UPDATE,
+        Capability.ENTITIES_ARCHIVE,
+        Capability.ENTITIES_RESTORE,
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE,
+        Capability.ENTITIES_ALIASES_ADD,
+        Capability.ENTITIES_ALIASES_RETIRE,
+        Capability.ENTITIES_ALIASES_SUPERSEDE,
+        # The directed-relationship family is scopeless on exactly the same
+        # argument, and the argument does not change because these six write.
+        # An assignment and an edge carry no `source_id` and no `enrollment_id`
+        # -- they are the Principal's own statement about the Principal's own
+        # entities, and the scope they *do* name is a scope Entity, which is
+        # another row in the same partition rather than a grant. Requiring a
+        # source scope would make the whole family permanently unusable;
+        # accepting one would let a request name a grant this plane cannot hold
+        # and have it silently ignored.
+        Capability.ENTITIES_ASSIGNMENTS_LIST,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE,
+        Capability.ENTITIES_ASSIGNMENTS_END,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_REVISE,
+        Capability.ENTITIES_RELATIONSHIPS_END,
+        # WP-RI-A-04's three, here for the same reason and with one addition
+        # worth stating: `entities.observe` *carries* a `source_id`, and that
+        # is provenance written onto the row rather than a scope the request
+        # holds. Comparing a caller's grant against a value the caller supplied
+        # would be authorizing on the payload; and the same capability may name
+        # a product-owned capture instead, which belongs to no configured source
+        # at all (`ADR-003`), so a scope requirement would make that path
+        # permanently unusable rather than merely wrong.
+        Capability.ENTITIES_OBSERVATIONS_LIST,
+        Capability.ENTITIES_OBSERVE,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
     }
 )
 

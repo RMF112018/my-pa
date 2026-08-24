@@ -314,6 +314,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "relationship_memory_review_decisions",
         }
     ),
+    # WP-RI-A-01's entity lifecycle ledgers: the ordinary mutation ledger, the
+    # fact-to-evidence bindings, and the append-only resolution decisions. The
+    # same revision widens six existing entity tables, which this map does not
+    # read -- it names tables a revision *creates*.
+    "2fe4e13fb449": frozenset(
+        {
+            "entity_mutation_events",
+            "entity_fact_evidence_links",
+            "entity_resolution_decisions",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

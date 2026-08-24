@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-seventy-three capabilities. There are two ways to prove that and only one of them stays
+ninety-five capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -26,11 +26,13 @@ way to see what a transport *built* rather than what it returned — and compare
 as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
-**And the answers, over all seventy-three fully composed capabilities and ten
-refusals.** A default composition exposes fifty-three: the six managed-document
-names, the six Relationship Intelligence names and the eight Relationship Memory
-names are withheld without their explicit configuration, and this harness sets
-all of them. Each
+**And the answers, over every fully composed capability and ten refusals.** A
+default composition exposes fifty-three: the six managed-document names, the
+twenty-eight `entities.` names and the eight Relationship Memory names are
+withheld without their explicit configuration, and this harness sets all of
+them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
+second switch over the `entities.` family and withholds its eighteen writes on
+its own. Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
 `sources.enroll` alone would make the second and third callers idempotent
@@ -105,13 +107,21 @@ from my_pa.domain.intelligence.catalog import (
     IntelligenceStage,
 )
 from my_pa.domain.relationship.entity import (
+    AliasType,
+    Assignment,
+    AssignmentType,
     Entity,
+    EntityAlias,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+)
+from my_pa.domain.relationship.governance import (
+    EntityObservation,
+    ObservationKind,
 )
 from my_pa.domain.relationship.memory import (
     DIRECT_USER_AUTHORITY,
@@ -122,6 +132,7 @@ from my_pa.domain.relationship.memory import (
     MemoryOperation,
     statement_digest,
 )
+from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_ITEMS
 from my_pa.domain.source.registry import issue_identifier
 
@@ -186,6 +197,79 @@ def document(
 #: live address reaches a test.
 ENTITY_EMAIL = "parity.person@example.invalid"
 
+#: One recorded name form on the staged person, so the alias lifecycle
+#: capabilities (`WP-RI-A-02`) have something real to retire and supersede.
+#: Staged here rather than by each payload table for the reason the pair above
+#: is: a table that staged its own would name a different alias every time it
+#: was read, and every comparison would be measuring the staging.
+ENTITY_NICKNAME = "Parity Pal"
+
+
+def staged_archived_entity(scene: Scene) -> Entity:
+    """One entity already withdrawn, so `entities.restore` has something to restore.
+
+    Its name deliberately carries no `parity` token: `entities.search`'s payload
+    below queries that word, and a third match would make this staging visible
+    in an answer nobody asked it about -- which is the failure `staged_entities`
+    records for its own memoization, one row over.
+
+    **And its type is deliberately neither of `staged_entities`' two.** That
+    function memoizes on `{entity_type: entity}`, so a second `PERSON` in the
+    world replaces the first in its lookup and every later caller is handed
+    *this* row -- which carries no binding and no alias, and made
+    `staged_child_records` raise `StopIteration` two files away. A team is the
+    one shape that cannot collide with a person or an organization here.
+    """
+    principal_id = scene.principal.principal_id
+    held = next(
+        (
+            entity
+            for entity in scene.world.entities
+            if entity.principal_id == principal_id and entity.status is EntityStatus.ARCHIVED
+        ),
+        None,
+    )
+    if held is not None:
+        return held
+    return FakeUnitOfWork(scene.world).entities.create(
+        principal_id,
+        Entity(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            principal_id=principal_id,
+            entity_type=EntityType.TEAM_OR_GROUP,
+            canonical_name="withdrawn subject",
+            display_name="Withdrawn Subject",
+            status=EntityStatus.ARCHIVED,
+            archived_from_status=EntityStatus.ACTIVE,
+            created_at=WHEN,
+            updated_at=WHEN,
+            version=1,
+        ),
+    )
+
+
+def staged_child_records(scene: Scene) -> tuple[str, str]:
+    """The staged person's active binding and active alias, by identifier.
+
+    Read back out of the world rather than returned from `staged_entities`,
+    because the identifiers are minted inside that function and the payload
+    tables need them by name. Both are the *active* row, which is what the
+    lifecycle writes expect and what their `expected_…_version` of 1 describes.
+    """
+    person, _ = staged_entities(scene)
+    principal_id = scene.principal.principal_id
+    identifier = next(
+        held.identifier_id
+        for held in scene.world.entity_identifiers
+        if held.principal_id == principal_id and held.entity_id == person.entity_id
+    )
+    alias = next(
+        held.alias_id
+        for held in scene.world.entity_aliases
+        if held.principal_id == principal_id and held.entity_id == person.entity_id
+    )
+    return identifier, alias
+
 
 def staged_entities(scene: Scene) -> tuple[Entity, Entity]:
     """One person, one organization, and the edge between them.
@@ -231,6 +315,17 @@ def staged_entities(scene: Scene) -> tuple[Entity, Entity]:
             verified=True,
         ),
     )
+    entities.record_alias(
+        principal_id,
+        EntityAlias(
+            alias_id=issue_identifier(IdKind.ENTITY_ALIAS),
+            entity_id=person.entity_id,
+            alias_type=AliasType.NICKNAME,
+            normalized_value=ENTITY_NICKNAME.casefold(),
+            display_value=ENTITY_NICKNAME,
+            principal_id=principal_id,
+        ),
+    )
     entities.record_relationship(
         principal_id,
         EntityRelationship(
@@ -242,6 +337,76 @@ def staged_entities(scene: Scene) -> tuple[Entity, Entity]:
         ),
     )
     return person, organization
+
+
+def staged_assignment(scene: Scene, role: str) -> str:
+    """One assignment the staged person holds on the staged organization.
+
+    Written through the entity repository rather than pushed into `World`, on
+    `staged_entities`' terms, and memoized on `role` for `staged_memory`'s: a
+    payload table that staged a fresh assignment on every call would name a
+    different one each time it was read.
+
+    `role` is the memo key *and* the thing that makes two staged assignments two
+    rows. The active semantic unique folds role case- and whitespace-
+    insensitively, so two stagings that differed only in nothing would be one
+    assignment at the database and the second write would be refused. A caller
+    that needs a row to revise and a row to end therefore asks for two roles.
+    """
+    principal_id = scene.principal.principal_id
+    person, organization = staged_entities(scene)
+    held = next(
+        (
+            assignment
+            for assignment in scene.world.entity_assignments
+            if assignment.principal_id == principal_id and assignment.role == role
+        ),
+        None,
+    )
+    if held is not None:
+        return held.assignment_id
+    assignment = Assignment(
+        assignment_id=issue_identifier(IdKind.ASSIGNMENT),
+        entity_id=person.entity_id,
+        assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+        principal_id=principal_id,
+        scope_entity_id=organization.entity_id,
+        role=role,
+    )
+    FakeUnitOfWork(scene.world).entities.record_assignment(principal_id, assignment)
+    return assignment.assignment_id
+
+
+def staged_edge(scene: Scene, relationship_type: EntityRelationshipType) -> str:
+    """One directed edge from the staged person to the staged organization.
+
+    Memoized on the type, and the type is what makes two staged edges two rows:
+    the active semantic unique is `(from, type, to, scope)`, so two stagings of
+    the same type would be one edge and the second would be refused.
+    `WORKS_FOR` is deliberately not asked for here -- `staged_entities` already
+    writes it, and the reads above compare against it.
+    """
+    principal_id = scene.principal.principal_id
+    person, organization = staged_entities(scene)
+    held = next(
+        (
+            edge
+            for edge in scene.world.entity_relationships
+            if edge.principal_id == principal_id and edge.relationship_type is relationship_type
+        ),
+        None,
+    )
+    if held is not None:
+        return held.relationship_id
+    edge = EntityRelationship(
+        relationship_id=issue_identifier(IdKind.ENTITY_RELATIONSHIP),
+        from_entity_id=person.entity_id,
+        relationship_type=relationship_type,
+        to_entity_id=organization.entity_id,
+        principal_id=principal_id,
+    )
+    FakeUnitOfWork(scene.world).entities.record_relationship(principal_id, edge)
+    return edge.relationship_id
 
 
 def _entity(principal_id: str, entity_type: EntityType, display_name: str) -> Entity:
@@ -264,6 +429,54 @@ def _entity(principal_id: str, entity_type: EntityType, display_name: str) -> En
 #: that matched nothing would compare three empty pages — an agreement any
 #: three transports reach without doing the read.
 MEMORY_STATEMENT = "A parity memory about the staged person"
+
+
+#: The unresolved mention the entity-plane payload tables name. A fixed suffix
+#: rather than a minted identifier, for the reason `MEMORY_ID` is fixed: the
+#: payload table and the command table are compared to each other, and one that
+#: minted a fresh identifier on every call would be comparing two different
+#: requests.
+MENTION_ID = make_identifier(IdKind.ENTITY_OBSERVATION, "parityparitymention")
+
+
+def staged_mention(scene: Scene) -> str:
+    """One unresolved mention, recorded through the repository that owns it.
+
+    Written through `EntitiesRepository.record_observation` rather than pushed
+    into `World`, for the reason `staged_entities` and `staged_memory` are: a
+    row no writer could have produced is a row the reads were never asked about.
+
+    Memoized on `MENTION_ID` and left deliberately *unresolved* -- no
+    `entity_id` -- because that is what makes it a mention rather than a placed
+    observation, and it is what `entities.unresolved_mentions` and
+    `entities.unresolved_mentions.resolve` are both about.
+
+    `mention_display_name` is supplied, because the queue publishes that column
+    and only that column: a mention staged without one would make the read's
+    answer honest and its coverage empty.
+    """
+    principal_id = scene.principal.principal_id
+    entities = FakeUnitOfWork(scene.world).entities
+    held = entities.observation(principal_id, MENTION_ID)
+    if held is not None:
+        return held.observation_id
+    entities.record_observation(
+        principal_id,
+        EntityObservation(
+            observation_id=MENTION_ID,
+            principal_id=principal_id,
+            kind=ObservationKind.MESSAGE_PARTICIPANT,
+            observed_value="Parity Person",
+            normalized_value=normalize_name("Parity Person"),
+            mention_display_name="Parity Person",
+            source_id=scene.source.source_id,
+            source_object_id=make_identifier(IdKind.SOURCE_OBJECT, "parityparitymention"),
+            source_version_id=make_identifier(IdKind.VERSION, "parityparitymention"),
+            observed_at=WHEN,
+            recorded_at=WHEN,
+        ),
+    )
+    return MENTION_ID
 
 
 def staged_memory(scene: Scene, key: str = "parity-memory-staging-0001") -> str:
@@ -411,7 +624,18 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(scene)
+    identifier_id, alias_id = staged_child_records(scene)
+    archived = staged_archived_entity(scene)
     memory_id = staged_memory(scene)
+    # One staged record per directed write. Callers of this table drive the
+    # whole of it in one pass over one scene, and a revise takes a record to
+    # version two, so a revise and an end naming one row would leave the second
+    # meeting a stale expectation. The staged `works_for` edge is left alone --
+    # `entities.relationships` reads it.
+    revise_assignment = staged_assignment(scene, "Parity Revise Role")
+    end_assignment = staged_assignment(scene, "Parity End Role")
+    revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
+    end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -702,6 +926,201 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # The entity plane's authoring half (`WP-RI-A-02`). Every one of the
+        # twelve is executed here rather than refused, which is what makes this
+        # a comparison of answers rather than of refusals -- so each names the
+        # staged person, its staged binding or its staged alias, and each
+        # `expected_…_version` is 1, which is what a staged row holds.
+        #
+        # Every minted identifier in the answer is masked before comparison, so
+        # three transports each writing their own entity, alias or binding into
+        # their own copy of the world still agree: what is compared is the shape
+        # of the receipt, not which identifier the world happened to issue.
+        Capability.ENTITIES_IDENTIFIERS_LIST: {
+            "entity_id": person.entity_id,
+            "states": ["active"],
+            "page_size": 10,
+        },
+        Capability.ENTITIES_ALIASES_LIST: {
+            "entity_id": person.entity_id,
+            "states": ["active"],
+            "alias_types": ["nickname"],
+            "page_size": 10,
+        },
+        # A name no staged entity carries, so duplicate resolution admits it.
+        # A create naming "Parity Person" would be refused as ambiguous, which
+        # is the plane behaving correctly and this table measuring the wrong
+        # thing.
+        Capability.ENTITIES_CREATE: {
+            "entity_type": "person",
+            "display_name": "Parity Newcomer",
+            "aliases": [{"alias_type": "nickname", "display_value": "Newk"}],
+            "identifiers": [
+                {"namespace": "email", "display_value": "parity.newcomer@example.invalid"}
+            ],
+            "reason": "A synthetic creation.",
+            "idempotency_key": "parity-entity-create-0001",
+        },
+        Capability.ENTITIES_UPDATE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "display_name": "Parity Person",
+            "status": "inactive",
+            "reason": "A synthetic correction.",
+            "idempotency_key": "parity-entity-update-0001",
+        },
+        Capability.ENTITIES_ARCHIVE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "reason": "A synthetic withdrawal.",
+            "idempotency_key": "parity-entity-archive-0001",
+        },
+        # Restore names the *organization*, which this table archives nowhere --
+        # so it would be refused. It names the person after an archive instead,
+        # which is why `restore_subject` is staged archived by
+        # `staged_archived_entity` below.
+        Capability.ENTITIES_RESTORE: {
+            "entity_id": archived.entity_id,
+            "expected_version": archived.version,
+            "reason": "A synthetic restoration.",
+            "idempotency_key": "parity-entity-restore-0001",
+        },
+        Capability.ENTITIES_IDENTIFIERS_BIND: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "namespace": "teams_user_id",
+            "display_value": "parity-teams-user",
+            "effective_from": "2026-08-02T12:00:00Z",
+            "reason": "A synthetic binding.",
+            "idempotency_key": "parity-entity-bind-0001",
+        },
+        Capability.ENTITIES_IDENTIFIERS_RETIRE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "identifier_id": identifier_id,
+            "expected_identifier_version": 1,
+            "reason": "A synthetic retirement.",
+            "idempotency_key": "parity-entity-retire-identifier-0001",
+        },
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "identifier_id": identifier_id,
+            "expected_identifier_version": 1,
+            "namespace": "email",
+            "display_value": "parity.person.new@example.invalid",
+            "reason": "A synthetic replacement.",
+            "idempotency_key": "parity-entity-supersede-identifier-0001",
+        },
+        Capability.ENTITIES_ALIASES_ADD: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "alias_type": "initials",
+            "display_value": "PP",
+            "reason": "A synthetic addition.",
+            "idempotency_key": "parity-entity-add-alias-0001",
+        },
+        Capability.ENTITIES_ALIASES_RETIRE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "alias_id": alias_id,
+            "expected_alias_version": 1,
+            "reason": "A synthetic retirement.",
+            "idempotency_key": "parity-entity-retire-alias-0001",
+        },
+        Capability.ENTITIES_ALIASES_SUPERSEDE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "alias_id": alias_id,
+            "expected_alias_version": 1,
+            "alias_type": "nickname",
+            "display_value": "Parity Buddy",
+            "reason": "A synthetic correction.",
+            "idempotency_key": "parity-entity-supersede-alias-0001",
+        },
+        # The directed-relationship family (WP-RI-A-03). The payloads carry no
+        # marker for the reason the six reads above carry none: every field on
+        # them is an opaque identifier, a closed vocabulary member or a version,
+        # and the freest text a caller may send here -- a `role`, or the `reason`
+        # an `end` carries -- is a descriptor of the *record*, not a statement
+        # about the person.
+        #
+        # **Each of the six writes meets a record of its own.** They are driven
+        # in one pass over one scene, and a revise takes the version to two, so
+        # a revise and an end sharing a staged row would leave the second
+        # meeting a stale expectation and answering `conflict` -- a refusal the
+        # sweeps here would read as the plane declining to act.
+        Capability.ENTITIES_ASSIGNMENTS_LIST: {"entity_id": person.entity_id},
+        Capability.ENTITIES_ASSIGNMENTS_CREATE: {
+            "entity_id": person.entity_id,
+            "expected_entity_version": 1,
+            "assignment_type": "team_membership",
+            "idempotency_key": "parity-assignment-create-0001",
+        },
+        Capability.ENTITIES_ASSIGNMENTS_REVISE: {
+            "assignment_id": revise_assignment,
+            "expected_version": 1,
+            "role": "Synthetic Revised Role",
+            "idempotency_key": "parity-assignment-revise-0001",
+        },
+        Capability.ENTITIES_ASSIGNMENTS_END: {
+            "assignment_id": end_assignment,
+            "expected_version": 1,
+            "reason": "A synthetic withdrawal.",
+            "end_now": True,
+            "idempotency_key": "parity-assignment-end-0001",
+        },
+        Capability.ENTITIES_RELATIONSHIPS_CREATE: {
+            "from_entity_id": person.entity_id,
+            "expected_from_version": 1,
+            "relationship_type": "member_of",
+            "to_entity_id": organization.entity_id,
+            "expected_to_version": 1,
+            "idempotency_key": "parity-relationship-create-0001",
+        },
+        Capability.ENTITIES_RELATIONSHIPS_REVISE: {
+            "relationship_id": revise_edge,
+            "expected_version": 1,
+            "idempotency_key": "parity-relationship-revise-0001",
+        },
+        Capability.ENTITIES_RELATIONSHIPS_END: {
+            "relationship_id": end_edge,
+            "expected_version": 1,
+            "reason": "A synthetic withdrawal.",
+            "end_now": True,
+            "idempotency_key": "parity-relationship-end-0001",
+        },
+        # The observation log, unfiltered: the same table the queue reads,
+        # answering about everything rather than only what nothing has placed.
+        Capability.ENTITIES_OBSERVATIONS_LIST: {},
+        # `entities.observe` names a **product-owned capture** rather than a
+        # source object version, and that is the deliberate choice: the
+        # source-backed authority requires a source object this product has
+        # actually read, and staging one here would be staging a refusal this
+        # payload is not about. `user_authored_statement` is the authority a
+        # capture origin admits, and `user_statement` is the kind it requires.
+        Capability.ENTITIES_OBSERVE: {
+            "kind": "user_statement",
+            "authority": "user_authored_statement",
+            "observed_value": "Parity Person",
+            "mention_display_name": "Parity Person",
+            "capture_id": "cap_parityobserve01",
+            "capture_version_id": "capver_parityobserve01",
+            "observed_at": "2026-08-02T10:00:00Z",
+            "idempotency_key": "parity-entities-observe-0001",
+        },
+        # `defer` rather than a disposition that binds an identity: this table
+        # is about the request reaching the capability, and a binding would make
+        # the answer depend on what the resolver found rather than on the
+        # transport. The mention is the staged one, at the version it was
+        # written with.
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: {
+            "observation_id": staged_mention(scene),
+            "expected_resolution_version": 0,
+            "disposition": "defer",
+            "reason": "there is not enough identity evidence yet",
+            "idempotency_key": "parity-entities-resolve-0001",
+        },
         # The Relationship Memory plane (WP-RM-01). A memory names an Entity and
         # never a source, so `person`/`organization` are the only staged rows
         # these payloads reach for; the memory itself is `staged_memory`'s, so
@@ -889,7 +1308,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 74, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 96, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -1560,7 +1979,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: seventy-three capabilities answered from an empty world prove little."""
+    """Guard the matrix: ninety-five capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

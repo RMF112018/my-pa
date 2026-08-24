@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the seventy-three capabilities is addressable
+**Reachability.** Every one of the ninety-five capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a seventy-fourth capability added to the domain arrives as a
-failing row instead of as an untested one. Eight of the seventy-three answer a
+written here, so a ninety-sixth capability added to the domain arrives as a
+failing row instead of as an untested one. Eight of the ninety-five answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -63,16 +63,27 @@ from tests.conftest import (
     staged_search,
     staged_task,
 )
-from tests.contract.test_transport_parity import ENTITY_EMAIL, staged_entities
+from tests.contract.test_transport_parity import (
+    ENTITY_EMAIL,
+    staged_archived_entity,
+    staged_assignment,
+    staged_child_records,
+    staged_edge,
+    staged_entities,
+    staged_mention,
+)
 from tests.wire import Wire, serve
 
 from my_pa.adapters.http import create_http_app
 from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
+    AddEntityAlias,
+    ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     BeginIntelligenceCycle,
+    BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
@@ -80,12 +91,17 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
+    CreateEntity,
+    CreateEntityAssignment,
+    CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAssignment,
+    EndEntityRelationship,
     EnrollSource,
     FetchSource,
     GetCapabilities,
@@ -105,6 +121,10 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAliases,
+    ListEntityAssignments,
+    ListEntityIdentifiers,
+    ListEntityObservations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -114,6 +134,7 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    ObserveEntityMention,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -127,10 +148,16 @@ from my_pa.application.commands import (
     Representation,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveUnresolvedMention,
+    RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAlias,
+    RetireEntityIdentifier,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAssignment,
+    ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
     SearchCaptures,
@@ -141,8 +168,11 @@ from my_pa.application.commands import (
     SearchRelationshipMemories,
     SearchTasks,
     SubmitGoodNotesProposal,
+    SupersedeEntityAlias,
+    SupersedeEntityIdentifier,
     TransitionTask,
     UpdateCommitment,
+    UpdateEntity,
     UpdateTask,
     WaitingOn,
 )
@@ -167,6 +197,21 @@ from my_pa.domain.intelligence.catalog import (
     ProducerRunState,
     ResolverSetId,
     SourceLaneId,
+)
+from my_pa.domain.relationship.authoring import CallerNamespace
+from my_pa.domain.relationship.entity import (
+    AliasState,
+    AliasType,
+    AssignmentType,
+    EntityRelationshipType,
+    EntityStatus,
+    EntityType,
+    IdentifierState,
+)
+from my_pa.domain.relationship.governance import (
+    ObservationAuthority,
+    ObservationKind,
+    ResolutionDisposition,
 )
 from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
 from my_pa.domain.situation.continuity import (
@@ -308,7 +353,17 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     )
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
-    person, _organization = staged_entities(scene)
+    person, organization = staged_entities(scene)
+    identifier_id, alias_id = staged_child_records(scene)
+    archived = staged_archived_entity(scene)
+    # One staged record per directed write: this table is driven in one pass
+    # over one scene, and a revise takes a record to version two, so a revise
+    # and an end naming one row would leave the second meeting a stale
+    # expectation.
+    revise_assignment = staged_assignment(scene, "HTTP Revise Role")
+    end_assignment = staged_assignment(scene, "HTTP End Role")
+    revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
+    end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id},
@@ -580,6 +635,187 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
         # No arguments: the queue is every unplaced mention in the Principal's
         # own partition, so there is nothing to name.
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # The entity plane's authoring half (`WP-RI-A-02`), staged so each of the
+        # twelve answers rather than refuses: the subject is the same `person`
+        # the reads above name, the child records are its staged binding and
+        # alias, and the restore names the entity `staged_archived_entity` put
+        # into the world already withdrawn. `expected_version` is 1 throughout,
+        # which is what a staged row holds.
+        Capability.ENTITIES_IDENTIFIERS_LIST: {
+            "entity_id": person.entity_id,
+            "states": ["active"],
+            "page_size": 10,
+        },
+        Capability.ENTITIES_ALIASES_LIST: {
+            "entity_id": person.entity_id,
+            "states": ["active"],
+            "alias_types": ["nickname"],
+            "page_size": 10,
+        },
+        Capability.ENTITIES_CREATE: {
+            "entity_type": "person",
+            "display_name": "HTTP Newcomer",
+            "aliases": [{"alias_type": "nickname", "display_value": "Newk"}],
+            "identifiers": [
+                {"namespace": "email", "display_value": "http.newcomer@example.invalid"}
+            ],
+            "reason": "A synthetic creation.",
+            "idempotency_key": "http-entity-create-0001",
+        },
+        Capability.ENTITIES_UPDATE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "display_name": "Parity Person",
+            "status": "inactive",
+            "reason": "A synthetic correction.",
+            "idempotency_key": "http-entity-update-0001",
+        },
+        Capability.ENTITIES_ARCHIVE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "reason": "A synthetic withdrawal.",
+            "idempotency_key": "http-entity-archive-0001",
+        },
+        Capability.ENTITIES_RESTORE: {
+            "entity_id": archived.entity_id,
+            "expected_version": archived.version,
+            "reason": "A synthetic restoration.",
+            "idempotency_key": "http-entity-restore-0001",
+        },
+        Capability.ENTITIES_IDENTIFIERS_BIND: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "namespace": "teams_user_id",
+            "display_value": "http-teams-user",
+            "effective_from": "2026-08-02T12:00:00Z",
+            "reason": "A synthetic binding.",
+            "idempotency_key": "http-entity-bind-0001",
+        },
+        Capability.ENTITIES_IDENTIFIERS_RETIRE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "identifier_id": identifier_id,
+            "expected_identifier_version": 1,
+            "reason": "A synthetic retirement.",
+            "idempotency_key": "http-entity-retire-identifier-0001",
+        },
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "identifier_id": identifier_id,
+            "expected_identifier_version": 1,
+            "namespace": "email",
+            "display_value": "http.person.new@example.invalid",
+            "reason": "A synthetic replacement.",
+            "idempotency_key": "http-entity-supersede-identifier-0001",
+        },
+        Capability.ENTITIES_ALIASES_ADD: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "alias_type": "initials",
+            "display_value": "PP",
+            "reason": "A synthetic addition.",
+            "idempotency_key": "http-entity-add-alias-0001",
+        },
+        Capability.ENTITIES_ALIASES_RETIRE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "alias_id": alias_id,
+            "expected_alias_version": 1,
+            "reason": "A synthetic retirement.",
+            "idempotency_key": "http-entity-retire-alias-0001",
+        },
+        Capability.ENTITIES_ALIASES_SUPERSEDE: {
+            "entity_id": person.entity_id,
+            "expected_version": 1,
+            "alias_id": alias_id,
+            "expected_alias_version": 1,
+            "alias_type": "nickname",
+            "display_value": "HTTP Buddy",
+            "reason": "A synthetic correction.",
+            "idempotency_key": "http-entity-supersede-alias-0001",
+        },
+        # The directed-relationship family (WP-RI-A-03). The payloads carry no
+        # marker for the reason the six reads above carry none: every field on
+        # them is an opaque identifier, a closed vocabulary member or a version,
+        # and the freest text a caller may send here -- a `role`, or the `reason`
+        # an `end` carries -- is a descriptor of the *record*, not a statement
+        # about the person.
+        #
+        # **Each of the six writes meets a record of its own.** They are driven
+        # in one pass over one scene, and a revise takes the version to two, so
+        # a revise and an end sharing a staged row would leave the second
+        # meeting a stale expectation and answering `conflict` -- a refusal the
+        # sweeps here would read as the plane declining to act.
+        Capability.ENTITIES_ASSIGNMENTS_LIST: {"entity_id": person.entity_id},
+        Capability.ENTITIES_ASSIGNMENTS_CREATE: {
+            "entity_id": person.entity_id,
+            "expected_entity_version": 1,
+            "assignment_type": "team_membership",
+            "idempotency_key": "http-assignment-create-0001",
+        },
+        Capability.ENTITIES_ASSIGNMENTS_REVISE: {
+            "assignment_id": revise_assignment,
+            "expected_version": 1,
+            "role": "Synthetic Revised Role",
+            "idempotency_key": "http-assignment-revise-0001",
+        },
+        Capability.ENTITIES_ASSIGNMENTS_END: {
+            "assignment_id": end_assignment,
+            "expected_version": 1,
+            "reason": "A synthetic withdrawal.",
+            "end_now": True,
+            "idempotency_key": "http-assignment-end-0001",
+        },
+        Capability.ENTITIES_RELATIONSHIPS_CREATE: {
+            "from_entity_id": person.entity_id,
+            "expected_from_version": 1,
+            "relationship_type": "member_of",
+            "to_entity_id": organization.entity_id,
+            "expected_to_version": 1,
+            "idempotency_key": "http-relationship-create-0001",
+        },
+        Capability.ENTITIES_RELATIONSHIPS_REVISE: {
+            "relationship_id": revise_edge,
+            "expected_version": 1,
+            "idempotency_key": "http-relationship-revise-0001",
+        },
+        Capability.ENTITIES_RELATIONSHIPS_END: {
+            "relationship_id": end_edge,
+            "expected_version": 1,
+            "reason": "A synthetic withdrawal.",
+            "end_now": True,
+            "idempotency_key": "http-relationship-end-0001",
+        },
+        # The observation log. No arguments for the same reason: it answers
+        # about the Principal's own partition and there is nothing to name.
+        Capability.ENTITIES_OBSERVATIONS_LIST: {},
+        # `entities.observe` names a **product-owned capture** rather than a
+        # source object version. The source-backed authority requires a source
+        # object this product has actually read, which would be staging a
+        # refusal this payload is not about; `user_authored_statement` is the
+        # authority a capture origin admits and `user_statement` is the kind it
+        # requires.
+        Capability.ENTITIES_OBSERVE: {
+            "kind": "user_statement",
+            "authority": "user_authored_statement",
+            "observed_value": "Parity Person",
+            "mention_display_name": "Parity Person",
+            "capture_id": "cap_httpobserve0001",
+            "capture_version_id": "capver_httpobserve0001",
+            "observed_at": "2026-08-02T10:00:00Z",
+            "idempotency_key": "http-entities-observe-0001",
+        },
+        # `defer`, because a disposition that binds an identity would make this
+        # row's answer depend on what the resolver found rather than on the
+        # transport. The mention is the shared staged one.
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: {
+            "observation_id": staged_mention(scene),
+            "expected_resolution_version": 0,
+            "disposition": "defer",
+            "reason": "there is not enough identity evidence yet",
+            "idempotency_key": "http-entities-resolve-0001",
+        },
         # The Relationship Memory plane (WP-RM-01). A memory names an Entity, so
         # the subject is the same staged `person` the entity payloads name; the
         # memory itself is `MEMORY_ID`, a derived rather than minted identifier
@@ -694,7 +930,17 @@ def commands_for(
     )
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
-    person, _organization = staged_entities(scene)
+    person, organization = staged_entities(scene)
+    identifier_id, alias_id = staged_child_records(scene)
+    archived = staged_archived_entity(scene)
+    # The same staged rows the payload table names, for the reason `person` is
+    # the same one: two tables each staging their own would be comparing two
+    # different requests. `staged_assignment` and `staged_edge` are memoized per
+    # scene per key, so both tables reach the same rows.
+    revise_assignment = staged_assignment(scene, "HTTP Revise Role")
+    end_assignment = staged_assignment(scene, "HTTP End Role")
+    revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
+    end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
         Capability.CAPABILITIES_GET: GetCapabilities(),
         Capability.SOURCES_LIST: ListSources(source_id=scene.source.source_id),
@@ -946,6 +1192,166 @@ def commands_for(
             entity_id=person.entity_id, direction="any"
         ),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
+        # The entity plane's authoring half, written as the commands the payload
+        # table above must normalise to. The vocabulary members and the datetime
+        # are spelled here as domain values because that is what the caller's
+        # strings have to *become*.
+        Capability.ENTITIES_IDENTIFIERS_LIST: ListEntityIdentifiers(
+            entity_id=person.entity_id,
+            states=(IdentifierState.ACTIVE,),
+            page_size=10,
+        ),
+        Capability.ENTITIES_ALIASES_LIST: ListEntityAliases(
+            entity_id=person.entity_id,
+            states=(AliasState.ACTIVE,),
+            alias_types=(AliasType.NICKNAME,),
+            page_size=10,
+        ),
+        Capability.ENTITIES_CREATE: CreateEntity(
+            entity_type=EntityType.PERSON,
+            display_name="HTTP Newcomer",
+            aliases=({"alias_type": "nickname", "display_value": "Newk"},),
+            identifiers=({"namespace": "email", "display_value": "http.newcomer@example.invalid"},),
+            reason="A synthetic creation.",
+            idempotency_key="http-entity-create-0001",
+        ),
+        Capability.ENTITIES_UPDATE: UpdateEntity(
+            entity_id=person.entity_id,
+            expected_version=1,
+            display_name="Parity Person",
+            status=EntityStatus.INACTIVE,
+            reason="A synthetic correction.",
+            idempotency_key="http-entity-update-0001",
+        ),
+        Capability.ENTITIES_ARCHIVE: ArchiveEntity(
+            entity_id=person.entity_id,
+            expected_version=1,
+            reason="A synthetic withdrawal.",
+            idempotency_key="http-entity-archive-0001",
+        ),
+        Capability.ENTITIES_RESTORE: RestoreEntity(
+            entity_id=archived.entity_id,
+            expected_version=archived.version,
+            reason="A synthetic restoration.",
+            idempotency_key="http-entity-restore-0001",
+        ),
+        Capability.ENTITIES_IDENTIFIERS_BIND: BindEntityIdentifier(
+            entity_id=person.entity_id,
+            expected_version=1,
+            namespace=CallerNamespace.TEAMS_USER_ID,
+            display_value="http-teams-user",
+            effective_from=datetime(2026, 8, 2, 12, tzinfo=UTC),
+            reason="A synthetic binding.",
+            idempotency_key="http-entity-bind-0001",
+        ),
+        Capability.ENTITIES_IDENTIFIERS_RETIRE: RetireEntityIdentifier(
+            entity_id=person.entity_id,
+            expected_version=1,
+            identifier_id=identifier_id,
+            expected_identifier_version=1,
+            reason="A synthetic retirement.",
+            idempotency_key="http-entity-retire-identifier-0001",
+        ),
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE: SupersedeEntityIdentifier(
+            entity_id=person.entity_id,
+            expected_version=1,
+            identifier_id=identifier_id,
+            expected_identifier_version=1,
+            namespace=CallerNamespace.EMAIL,
+            display_value="http.person.new@example.invalid",
+            reason="A synthetic replacement.",
+            idempotency_key="http-entity-supersede-identifier-0001",
+        ),
+        Capability.ENTITIES_ALIASES_ADD: AddEntityAlias(
+            entity_id=person.entity_id,
+            expected_version=1,
+            alias_type=AliasType.INITIALS,
+            display_value="PP",
+            reason="A synthetic addition.",
+            idempotency_key="http-entity-add-alias-0001",
+        ),
+        Capability.ENTITIES_ALIASES_RETIRE: RetireEntityAlias(
+            entity_id=person.entity_id,
+            expected_version=1,
+            alias_id=alias_id,
+            expected_alias_version=1,
+            reason="A synthetic retirement.",
+            idempotency_key="http-entity-retire-alias-0001",
+        ),
+        Capability.ENTITIES_ALIASES_SUPERSEDE: SupersedeEntityAlias(
+            entity_id=person.entity_id,
+            expected_version=1,
+            alias_id=alias_id,
+            expected_alias_version=1,
+            alias_type=AliasType.NICKNAME,
+            display_value="HTTP Buddy",
+            reason="A synthetic correction.",
+            idempotency_key="http-entity-supersede-alias-0001",
+        ),
+        # The directed-relationship family, written as the commands the payload
+        # table above must normalise to. `assignment_type` and
+        # `relationship_type` are spelled here as domain members because that is
+        # what the caller's strings have to *become*: a normalisation that
+        # passed `"team_membership"` through unconverted would satisfy a
+        # comparison written in strings and fail this one.
+        Capability.ENTITIES_ASSIGNMENTS_LIST: ListEntityAssignments(entity_id=person.entity_id),
+        Capability.ENTITIES_ASSIGNMENTS_CREATE: CreateEntityAssignment(
+            entity_id=person.entity_id,
+            expected_entity_version=1,
+            assignment_type=AssignmentType.TEAM_MEMBERSHIP,
+            idempotency_key="http-assignment-create-0001",
+        ),
+        Capability.ENTITIES_ASSIGNMENTS_REVISE: ReviseEntityAssignment(
+            assignment_id=revise_assignment,
+            expected_version=1,
+            role="Synthetic Revised Role",
+            idempotency_key="http-assignment-revise-0001",
+        ),
+        Capability.ENTITIES_ASSIGNMENTS_END: EndEntityAssignment(
+            assignment_id=end_assignment,
+            expected_version=1,
+            reason="A synthetic withdrawal.",
+            end_now=True,
+            idempotency_key="http-assignment-end-0001",
+        ),
+        Capability.ENTITIES_RELATIONSHIPS_CREATE: CreateEntityRelationship(
+            from_entity_id=person.entity_id,
+            expected_from_version=1,
+            relationship_type=EntityRelationshipType.MEMBER_OF,
+            to_entity_id=organization.entity_id,
+            expected_to_version=1,
+            idempotency_key="http-relationship-create-0001",
+        ),
+        Capability.ENTITIES_RELATIONSHIPS_REVISE: ReviseEntityRelationship(
+            relationship_id=revise_edge,
+            expected_version=1,
+            idempotency_key="http-relationship-revise-0001",
+        ),
+        Capability.ENTITIES_RELATIONSHIPS_END: EndEntityRelationship(
+            relationship_id=end_edge,
+            expected_version=1,
+            reason="A synthetic withdrawal.",
+            end_now=True,
+            idempotency_key="http-relationship-end-0001",
+        ),
+        Capability.ENTITIES_OBSERVATIONS_LIST: ListEntityObservations(),
+        Capability.ENTITIES_OBSERVE: ObserveEntityMention(
+            kind=ObservationKind.USER_STATEMENT,
+            authority=ObservationAuthority.USER_AUTHORED_STATEMENT,
+            observed_value="Parity Person",
+            mention_display_name="Parity Person",
+            capture_id="cap_httpobserve0001",
+            capture_version_id="capver_httpobserve0001",
+            observed_at=datetime(2026, 8, 2, 10, tzinfo=UTC),
+            idempotency_key="http-entities-observe-0001",
+        ),
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: ResolveUnresolvedMention(
+            observation_id=staged_mention(scene),
+            expected_resolution_version=0,
+            disposition=ResolutionDisposition.DEFER,
+            reason="there is not enough identity evidence yet",
+            idempotency_key="http-entities-resolve-0001",
+        ),
         # The Relationship Memory plane, written as the commands the payload
         # table above must normalise to. The vocabulary members and the datetime
         # are spelled here as domain values because that is what the caller's
@@ -1036,6 +1442,11 @@ class RecordingService(ApplicationService):
             # answered `200` here while `capabilities.get` on the same process
             # reported it `not_implemented`, and this suite asserted the `200`.
             relationship_intelligence_enabled=True,
+            # And its write half, on exactly the same argument one line up: the
+            # eighteen `entities.` writes are withheld by a second switch, so a
+            # service composed with the plane and without this one would have
+            # this suite asserting reachability for names its own build refuses.
+            relationship_intelligence_writes_enabled=True,
         )
         self.envelopes: list[ResponseEnvelope] = []
 

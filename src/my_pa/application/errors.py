@@ -197,6 +197,109 @@ class SafeDetail(StrEnum):
     CORRECTION_REASON = "correction_reason"
     INCLUDE_STATEMENT = "include_statement"
     OBSERVED_AT = "observed_at"
+    #: The entity plane's authoring fields (WP-RI-A-02). Field *names* only, as
+    #: every member here is. `ENTITY_ID` is new and was overdue: `entities.get`
+    #: answered a missing entity with `TARGET_ID`, which is the generic token
+    #: and says nothing about which of a request's several identifiers was the
+    #: one that did not resolve. A write naming an entity, an identifier and a
+    #: cursor at once needs three tokens, not one repeated.
+    ENTITY_ID = "entity_id"
+    ENTITY_TYPE = "entity_type"
+    IDENTIFIER_ID = "identifier_id"
+    ALIAS_ID = "alias_id"
+    ALIAS_TYPE = "alias_type"
+    NAMESPACE = "namespace"
+    DISPLAY_NAME = "display_name"
+    DISPLAY_VALUE = "display_value"
+    CANONICAL_NAME = "canonical_name"
+    STATUS = "status"
+    REASON = "reason"
+    EVIDENCE = "evidence"
+    IDENTIFIERS = "identifiers"
+    ALIASES = "aliases"
+    STATES = "states"
+    NAMESPACES = "namespaces"
+    ALIAS_TYPES = "alias_types"
+    EXPECTED_IDENTIFIER_VERSION = "expected_identifier_version"
+    EXPECTED_ALIAS_VERSION = "expected_alias_version"
+    #: The completion contract's stable outcome codes, carried as details on the
+    #: eleven public error codes rather than as new members of `ErrorCode`.
+    #:
+    #: **Each names an outcome, and the public code alone cannot.** `conflict`
+    #: is one code covering a stale version, a spent idempotency key, a
+    #: duplicated fact and an address two entities claim — four different next
+    #: actions, and a caller told only `conflict` has to guess which. These
+    #: tokens are what the contract fixes, so they are what the token set
+    #: carries.
+    #:
+    #: They are deliberately distinct from the field names above.
+    #: `EXPECTED_VERSION` says the field was malformed; `STALE_VERSION` says it
+    #: was well-formed and no longer current. `IDEMPOTENCY_KEY` says the key was
+    #: malformed; `IDEMPOTENCY_CONFLICT` says it is bound to a different
+    #: request. Collapsing either pair would make a caller's own correctable
+    #: mistake indistinguishable from a state it has to re-read.
+    AMBIGUOUS_IDENTITY = "ambiguous_identity"
+    CONFLICTED_IDENTIFIER = "conflicted_identifier"
+    HISTORICAL_ENTITY = "historical_entity"
+    STALE_VERSION = "stale_version"
+    IDEMPOTENCY_CONFLICT = "idempotency_conflict"
+    DUPLICATE_FACT = "duplicate_fact"
+    EVIDENCE_INVALID = "evidence_invalid"
+    #: Not a conflict and not the caller's fault: a binding the store could not
+    #: settle against a concurrent retirement, which is `unavailable` and
+    #: retryable. Named so a caller can tell it from `CONFLICTED_IDENTIFIER`,
+    #: which is permanent and must not be retried.
+    CONCURRENT_RETIREMENT = "concurrent_retirement"
+    #: The entity plane's directed-relationship writes (WP-RI-A-03). Field
+    #: *names* only, as every member here is. Two of them are worth stating
+    #: plainly: `REASON` — declared with the authoring fields above and shared
+    #: with them — says the explanation attached to an `end` was refused and
+    #: never carries a word of it, and `EVIDENCE_REFS` says a cited reference
+    #: was refused without saying which one or whether it exists — which is the
+    #: same collapse `NotFoundError` makes, kept here so a caller cannot
+    #: subtract one answer from another to learn what another Principal holds.
+    #: `ENTITY_ID` is shared with the authoring block for the same reason and is
+    #: not redeclared: one token, one meaning, across all of `entities.`.
+    FROM_ENTITY_ID = "from_entity_id"
+    TO_ENTITY_ID = "to_entity_id"
+    SCOPE_ENTITY_ID = "scope_entity_id"
+    ASSIGNMENT_ID = "assignment_id"
+    ASSIGNMENT_TYPE = "assignment_type"
+    RELATIONSHIP_ID = "relationship_id"
+    RELATIONSHIP_TYPE = "relationship_type"
+    ROLE = "role"
+    DISCIPLINE = "discipline"
+    RESPONSIBILITY_CLASS = "responsibility_class"
+    EXPECTED_ENTITY_VERSION = "expected_entity_version"
+    EXPECTED_SCOPE_VERSION = "expected_scope_version"
+    EVIDENCE_REFS = "evidence_refs"
+    END_NOW = "end_now"
+    ACTIVE_ONLY = "active_only"
+    #: The observation and resolution surface (WP-RI-A-04). The field tokens
+    #: name a field and never carry its value -- `OBSERVED_VALUE` is the token
+    #: `observed_value`, which is what a caller needs in order to correct the
+    #: request, and the name or address it rejected stays where it was sent.
+    #: `ENTITY_ID`, `ENTITY_TYPE`, `CANONICAL_NAME` and `REASON` are declared
+    #: with the authoring fields above and shared with this surface rather than
+    #: redeclared: one token, one meaning, across all of `entities.`.
+    OBSERVATION_ID = "observation_id"
+    OBSERVATION_KIND = "observation_kind"
+    OBSERVATION_AUTHORITY = "observation_authority"
+    OBSERVED_VALUE = "observed_value"
+    MENTION_DISPLAY_NAME = "mention_display_name"
+    SOURCE_VERSION_ID = "source_version_id"
+    CAPTURE_VERSION_ID = "capture_version_id"
+    EXPECTED_RESOLUTION_VERSION = "expected_resolution_version"
+    REJECTED_ENTITY_ID = "rejected_entity_id"
+    #: The fifth verdict the Relationship Intelligence contract fixes as a
+    #: stable problem, beside the four the authoring block already declares
+    #: (`AMBIGUOUS_IDENTITY`, `CONFLICTED_IDENTIFIER`, `HISTORICAL_ENTITY` and
+    #: `EVIDENCE_INVALID`). It is a `safe_details` token over the existing
+    #: eleven `ErrorCode` members rather than a new member of that enum: the
+    #: code says what class of failure this is and the detail says which rule
+    #: refused, and a twelfth code would make every reader that switches on the
+    #: eleven wrong.
+    REVIEW_REQUIRED = "review_required"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

@@ -44,12 +44,14 @@ from my_pa.contracts.ports import EntitiesRepository
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.relationship.entity import (
+    AssignmentState,
     Entity,
     EntityAlias,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    RelationshipState,
 )
 from my_pa.domain.relationship.normalization import (
     NormalizationError,
@@ -110,6 +112,15 @@ class ResolutionRequest:
     scope_entity_id: str | None = None
     as_of: datetime | None = None
     at: datetime | None = None
+    #: Entities the user has already decided this reference does *not* name.
+    #:
+    #: Empty by default and never inferred: this is persisted negative identity
+    #: evidence, read out of `entity_fact_evidence_links` by the caller that
+    #: holds the observation, and a request that supplied it from anywhere else
+    #: would be a guess wearing a decision's clothes. What it does to the answer
+    #: is deliberately narrow -- see `_without_refused` -- because a refusal is
+    #: evidence against one pairing and evidence for nothing.
+    refused_entity_ids: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not self.raw_reference.strip():
@@ -126,6 +137,8 @@ class ResolutionRequest:
             ensure_utc(self.as_of)
         if self.at is not None:
             ensure_utc(self.at)
+        for entity_id in self.refused_entity_ids:
+            validate_identifier(entity_id, IdKind.ENTITY)
 
 
 def _is_effective(
@@ -202,16 +215,23 @@ def is_in_force(
     return effective_to is None
 
 
-#: The one `Assignment.status` that means the assignment still stands, matching
+#: The one `Assignment.state` that means the assignment still stands, matching
 #: the value `SqlEntityRepository.assignments` filters on for `active_only`.
-ACTIVE_ASSIGNMENT_STATUS: str = "active"
+#:
+#: Derived from the vocabulary rather than spelled, now that there is one to
+#: derive from. Until WP-RI-A-01 closed `state`, this constant was the *only*
+#: statement anywhere that `'active'` was the live value while the column
+#: admitted any text, so a row written around the repository with `'Active'`
+#: was silently excluded from every corroborating read. The column refuses that
+#: row now, and this stays because two readers still have to agree on which
+#: member means live.
+ACTIVE_ASSIGNMENT_STATUS: str = AssignmentState.ACTIVE.value
 
-#: The one `EntityRelationship.state` that means the edge still stands. `state`
-#: is free text on the record rather than a closed enum, so this names the value
-#: resolution treats as live instead of leaving every call site to spell it --
-#: and an unrecognised state reads as *not* live, which is the direction a
-#: corroborating signal should fail in.
-ACTIVE_RELATIONSHIP_STATE: str = "active"
+#: The one `EntityRelationship.state` that means the edge still stands, on the
+#: same argument and with the same history: an unrecognised state reads as *not*
+#: live, which is the direction a corroborating signal should fail in, and the
+#: column is now closed so an unrecognised one cannot be stored at all.
+ACTIVE_RELATIONSHIP_STATE: str = RelationshipState.ACTIVE.value
 
 
 @dataclass(frozen=True, slots=True)
@@ -280,16 +300,32 @@ class EntityResolutionService:
         self._entities = entities
 
     def resolve(self, principal_id: str, request: ResolutionRequest) -> EntityResolution:
-        """The one entry point. Never raises for "not found"; that is an answer."""
+        """The one entry point. Never raises for "not found"; that is an answer.
+
+        **The refusal filter is applied to the finished answer and to nothing
+        else.** The decision below it -- `_by_identifier`, `_by_name` and
+        `_name_outcome` -- is untouched by what the user has previously
+        refused, because folding a refusal into it would make a rejection into
+        a *positive* signal: exclude one of two same-named candidates before the
+        count is taken, and the survivor is suddenly a lone match that the
+        contextual rule can lift out of `AMBIGUOUS`. The user said who somebody
+        is not; that is not evidence of who they are.
+
+        So the answer is computed exactly as it would have been, and then the
+        refused pairings are removed from what it carries. See
+        `_without_refused` for what that can and cannot change.
+        """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         warnings: list[ResolutionWarning] = []
 
         if request.namespace is not None:
             resolved = self._by_identifier(principal_id, request, warnings)
             if resolved is not None:
-                return resolved
+                return _without_refused(resolved, request.refused_entity_ids)
 
-        return self._by_name(principal_id, request, warnings)
+        return _without_refused(
+            self._by_name(principal_id, request, warnings), request.refused_entity_ids
+        )
 
     # --- identifier resolution ------------------------------------------
 
@@ -662,7 +698,7 @@ class EntityResolutionService:
                 (
                     assignment.effective_from,
                     assignment.effective_to,
-                    assignment.status == ACTIVE_ASSIGNMENT_STATUS,
+                    assignment.state.value == ACTIVE_ASSIGNMENT_STATUS,
                 )
                 for assignment in self._entities.assignments(
                     principal_id, entity_id, active_only=False
@@ -690,7 +726,7 @@ class EntityResolutionService:
                 (
                     relationship.effective_from,
                     relationship.effective_to,
-                    relationship.state == ACTIVE_RELATIONSHIP_STATE,
+                    relationship.state.value == ACTIVE_RELATIONSHIP_STATE,
                 )
                 for relationship in self._entities.relationships(
                     principal_id, entity_id, direction="outgoing"
@@ -798,3 +834,53 @@ def _currency_warnings(subject: Entity | EntityStatus) -> list[ResolutionWarning
             ResolutionWarning.ENTITY_IS_NOT_CURRENT,
         ]
     return [ResolutionWarning.ENTITY_IS_NOT_CURRENT]
+
+
+def _without_refused(answer: EntityResolution, refused: frozenset[str]) -> EntityResolution:
+    """The same answer with pairings the user has already refused taken out of it.
+
+    **What this may do.** Remove refused candidates, so a known-bad pairing is
+    not offered again; turn an answer whose every candidate was refused into
+    `NOT_FOUND`; and turn a `CONFLICTED_IDENTIFIER` whose refusals leave fewer
+    than two claimants into `AMBIGUOUS`, because a conflict between one entity
+    and nobody is not a conflict and is certainly not a resolution.
+
+    **What this may not do, and the reason is the whole design.** It never
+    *improves* an outcome. Two same-named candidates with one refused stay
+    `AMBIGUOUS` on the survivor rather than becoming a resolution: the
+    refusal said who this is not, and `_name_outcome`'s rule is that a name is
+    never an identifier however few people carry it. Removing a rival is not
+    the caller supplying scope, so it does not narrow, and it never reaches
+    `RESOLVED_CONTEXTUAL` through the back door.
+
+    **Truncation is preserved rather than resolved away.** A `NOT_FOUND`
+    produced here can still carry `candidates_were_truncated`, and it means
+    exactly what it says: everything this answer could see was refused, and
+    there was more it could not see. The one caller that treats `NOT_FOUND` as
+    permission to create a new entity checks that flag as well, because "we
+    found nobody" and "we refused everybody we could look at" are different
+    facts and only the first one licenses a creation.
+    """
+    if not refused or not answer.candidates:
+        return answer
+    remaining = tuple(
+        candidate for candidate in answer.candidates if candidate.entity_id not in refused
+    )
+    if len(remaining) == len(answer.candidates):
+        return answer
+    warnings = (*answer.warnings, ResolutionWarning.A_REFUSED_PAIRING_WAS_WITHHELD)
+    if not remaining:
+        return EntityResolution(
+            outcome=ResolutionOutcome.NOT_FOUND,
+            warnings=warnings,
+            candidates_were_truncated=answer.candidates_were_truncated,
+        )
+    outcome = answer.outcome
+    if outcome is ResolutionOutcome.CONFLICTED_IDENTIFIER and len(remaining) < 2:
+        outcome = ResolutionOutcome.AMBIGUOUS
+    return EntityResolution(
+        outcome=outcome,
+        candidates=remaining,
+        warnings=warnings,
+        candidates_were_truncated=answer.candidates_were_truncated,
+    )

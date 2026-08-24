@@ -299,10 +299,18 @@ def _seed_proposal(engine: Engine, proposal_id: str, principal_id: str) -> None:
     _execute(
         engine,
         text(
+            # `method`, `method_version` and `dedupe_sha256` are `NOT NULL`
+            # since `c7a1f04b9e63` and are stated here rather than defaulted in
+            # that revision: a default would be a migration asserting on a
+            # writer's behalf what produced a proposal. The digest is a fixed
+            # synthetic value because nothing below reads it -- these tests are
+            # about the merge record's foreign keys, not about the encoding.
             f"INSERT INTO {SCHEMA}.entity_proposals "  # noqa: S608
             "(proposal_id, principal_id, kind, payload, observation_ids, proposed_at, "
-            "proposed_by) VALUES (:proposal_id, :principal_id, 'merge_entities', "
-            "'{}'::jsonb, '[]'::jsonb, now(), 'the operator')"
+            "proposed_by, method, method_version, dedupe_sha256) "
+            "VALUES (:proposal_id, :principal_id, 'merge_entities', "
+            "'{}'::jsonb, '[]'::jsonb, now(), 'the operator', 'rule', 'seed.1', "
+            "repeat('0', 64))"
         ),
         proposal_id=proposal_id,
         principal_id=principal_id,

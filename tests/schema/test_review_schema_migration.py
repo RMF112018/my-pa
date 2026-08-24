@@ -1384,6 +1384,15 @@ def test_the_frozen_literals_are_what_the_server_stores(
                     {"schema": SCHEMA, "tables": sorted(REVIEW_TABLES)},
                 ).all()
             }
+        # Eight at head since `a1f7d3c85e40`, not the seven `3c8f1e2a5b74`
+        # froze. **The capture plane still refuses `invalidate`** -- Manager
+        # ruling R-8 keeps that refusal, and `review.decide` on a capture case
+        # answers `unsupported` rather than writing this value. The constraint is
+        # widened anyway because the live declaration derives it from
+        # `Disposition`, which now spells eight, and a live declaration
+        # disagreeing with a migrated database is exactly the drift this module
+        # exists to catch. A dormant constraint that disagrees is still a
+        # constraint that disagrees.
         assert stored["review_disposition_is_known"] == frozenset(
             {
                 "accept",
@@ -1393,6 +1402,7 @@ def test_the_frozen_literals_are_what_the_server_stores(
                 "mark_unresolved",
                 "reprocess",
                 "escalate",
+                "invalidate",
             }
         )
         assert stored["assertion_state_is_known"] == frozenset(

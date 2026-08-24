@@ -43,6 +43,7 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifierNamespace,
 )
 from my_pa.domain.relationship.governance import (
+    UNDECIDED_PROPOSAL_STATES,
     EntityObservation,
     EntityProposalKind,
     EntityProposalMethod,
@@ -266,6 +267,28 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                     decision_reason="Refused by Cornelius Adeyemi-Blackwood",
                 ),
             )
+            # A third proposal, and it is here to make the open queue cover
+            # *both* undecided states rather than one. `record_alias` is the
+            # kind `requirement_for` admits to a configured threshold, so
+            # `initial_state_for` writes it `proposed`; the merge above is
+            # `requires_operator`, so it is written `needs_review`. A report
+            # that matched a single state literal listed one of these two and
+            # called it the queue, which is the defect this fixture now makes
+            # impossible to reintroduce quietly.
+            EntityGovernanceService(repository).propose(
+                PRINCIPAL_A,
+                kind=EntityProposalKind.RECORD_ALIAS,
+                payload={
+                    "entity_id": ALICE,
+                    "alias_type": "nickname",
+                    "display_value": "Ali",
+                },
+                observation_ids=(),
+                proposed_by="Ingrid Vasquez-Thorne",
+                method=EntityProposalMethod.DETERMINISTIC,
+                method_version="1",
+                at=WHEN,
+            )
         yield engine
     finally:
         engine.dispose()
@@ -280,32 +303,68 @@ def test_the_report_counts_the_plane(populated: Engine) -> None:
         "assignments": 1,
         "relationships": 0,
         "observations": 1,
-        "proposals": 2,
+        "proposals": 3,
         "merges": 0,
     }
     assert produced["entities_by_status"] == {"active": 2}
     assert produced["entities_by_type"] == {"person": 2}
     assert produced["observations_by_kind"] == {"message_participant": 1}
-    assert produced["proposals_by_state"] == {"proposed": 1, "rejected": 1}
+    # `needs_review` and not a second `proposed`: `initial_state_for` derives a
+    # proposal's initial state from its kind's review requirement, so the merge
+    # this fixture files is written in the state that says a person must look at
+    # it. The grouping is over the column, so it reddens if that stops holding.
+    assert produced["proposals_by_state"] == {
+        "needs_review": 1,
+        "proposed": 1,
+        "rejected": 1,
+    }
 
 
 def test_the_report_shows_the_unresolved_queue(populated: Engine) -> None:
     assert report(populated, PRINCIPAL_A)["unresolved_mentions"] == 1
 
 
-def test_the_report_lists_the_open_proposal_without_its_payload(populated: Engine) -> None:
+def test_the_report_lists_the_open_proposals_without_their_payloads(
+    populated: Engine,
+) -> None:
     """An operator sees that a decision is waiting, not what it would join."""
     open_proposals = report(populated, PRINCIPAL_A)["open_proposals"]
     assert isinstance(open_proposals, list)
-    assert len(open_proposals) == 1
-    # The identifier is checked for shape rather than against a literal: the
-    # server mints it now, so a literal here would be this test naming a value
+    assert len(open_proposals) == 2
+    # The identifiers are checked for shape rather than against literals: the
+    # server mints them now, so a literal here would be this test naming a value
     # only the server may choose. `validate_identifier` is the same check the
     # record applies, so a mint of the wrong kind still reddens.
-    validate_identifier(str(open_proposals[0]["proposal_id"]), IdKind.ENTITY_PROPOSAL)
-    assert open_proposals[0]["kind"] == "merge_entities"
-    assert "payload" not in open_proposals[0]
+    for listed in open_proposals:
+        validate_identifier(str(listed["proposal_id"]), IdKind.ENTITY_PROPOSAL)
+        assert "payload" not in listed
+    assert {listed["kind"] for listed in open_proposals} == {"merge_entities", "record_alias"}
     assert ALICE not in json.dumps(open_proposals)
+
+
+def test_the_open_queue_covers_both_states_that_mean_undecided(populated: Engine) -> None:
+    """The queue is the *population*, not one state literal that used to name it.
+
+    This is the regression `WP-RI-B-05` shipped and the corrective cycle caught.
+    `_open_proposals` matched `state = 'proposed'`, and `initial_state_for`
+    began writing `needs_review` for every kind a person has to look at -- so
+    the operator's report answered "what is waiting on me" with the subset that
+    was not, and a plane holding only review-requiring proposals reported an
+    empty queue. It under-reported in silence, which is why this asserts over
+    the states the listed rows actually carry rather than over a count: a report
+    that listed two rows in one state would satisfy the test above and still be
+    wrong.
+    """
+    listed = report(populated, PRINCIPAL_A)["open_proposals"]
+    with populated.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        held = [repository.proposal(PRINCIPAL_A, str(row["proposal_id"])) for row in listed]
+    assert all(proposal is not None for proposal in held)
+    states = {proposal.state for proposal in held if proposal is not None}
+    assert states == set(UNDECIDED_PROPOSAL_STATES)
+    # And every listed proposal is genuinely undecided, so the report cannot
+    # start listing decided rows and pass on the set assertion alone.
+    assert all(proposal.is_open for proposal in held if proposal is not None)
 
 
 def test_the_report_prints_no_personal_data(populated: Engine) -> None:

@@ -1116,10 +1116,23 @@ class EntityProposal:
         `UPDATE` predicate -- so widening the property alone would make the
         record claim a decision was available that the database would refuse,
         and the caller would see a scope error rather than the refusal it hit.
-        That reason was right and is why both moved together: `initial_state_for`
-        now writes `NEEDS_REVIEW` for every kind a person has to look at, the
-        predicate names the same tuple this property reads, and neither can be
-        widened without the other because there is only one set.
+        That reason was right, and it was applied to too small a population.
+        `initial_state_for` now writes `NEEDS_REVIEW` for every kind a person
+        has to look at, and `decide_proposal`'s predicate was widened with it --
+        but `invalidate_proposal`, which is the merge path's way of closing a
+        proposal an identity correction made unanswerable, kept the `proposed`
+        literal. It was not the predicate anybody was looking at, and a governed
+        merge naming an entity with a review-requiring proposal failed outright
+        as a result.
+
+        So the rule this property carries is about a *population*, not about one
+        statement: every statement that guards "has this been decided yet" reads
+        this tuple, and the two that do are `decide_proposal` and
+        `invalidate_proposal`. A third would have to read it too. `is_open` is
+        also what `IdentityCorrectionService` selects on when it plans which
+        proposals a merge must close, which is why a statement that disagrees
+        with this property does not merely refuse -- it refuses something the
+        planner already committed to.
 
         `DEFERRED` is still absent, and that is not an oversight: a deferred
         proposal was decided once. Routing a deferral back is the Review plane's

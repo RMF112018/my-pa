@@ -2085,9 +2085,20 @@ class EntitiesRepository(ABC):
         named stopped existing under that name. The reason is recorded because
         `EntityProposal` refuses an invalidated proposal that does not carry one.
 
-        `state = 'proposed'` is part of the predicate, on `decide_proposal`'s
-        argument: a proposal a reviewer decided between the preview and the apply
-        is not this merge's to close, and a rowcount of zero says so.
+        **The undecided states are part of the predicate**, on
+        `decide_proposal`'s argument: a proposal a reviewer decided between the
+        preview and the apply is not this merge's to close, and a rowcount of
+        zero says so.
+
+        That predicate was the `proposed` literal until `WP-RI-B-05` began
+        writing `needs_review` for every kind a person has to look at, which
+        made it refuse exactly the proposals a merge most often has to close.
+        It reads `UNDECIDED_PROPOSAL_STATES` now -- the same tuple
+        `EntityProposal.is_open` returns, which is what the planner selects on,
+        so the plan and the statement cannot disagree about which proposals are
+        open. `DEFERRED` stays outside it: a deferral is a decision, and this
+        statement overwrites `decided_by`, so matching a deferred row would
+        replace the deferring reviewer with the merging operator.
         """
         raise NotImplementedError
 

@@ -38,6 +38,7 @@ from my_pa.domain.relationship.governance import (
     EntityMergeRecord,
     EntityObservation,
     EntityProposalKind,
+    EntityProposalMethod,
     EntityProposalState,
     ObservationKind,
 )
@@ -462,6 +463,8 @@ def _propose(engine: Engine, kind: EntityProposalKind = EntityProposalKind.MERGE
             observation_ids=(),
             proposed_by="resolver",
             proposed_at=WHEN,
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="1",
         )
 
 
@@ -472,7 +475,7 @@ def test_a_proposal_round_trips_with_its_payload(two_principals: Engine) -> None
     assert held is not None
     assert held.kind is EntityProposalKind.MERGE_ENTITIES
     assert held.state is EntityProposalState.PROPOSED
-    assert dict(held.payload) == {
+    assert held.payload.as_mapping() == {
         "retained_entity_id": ALICE,
         "merged_entity_id": ALICE_TWO,
     }
@@ -773,10 +776,15 @@ def test_a_merge_record_cannot_cite_another_principals_proposal(
             PRINCIPAL_B,
             proposal_id="eprp_bbbb0002bbbb0002",
             kind=EntityProposalKind.MERGE_ENTITIES,
-            payload={"retained_entity_id": "ent_cccc0003cccc0003"},
+            payload={
+                "retained_entity_id": "ent_cccc0003cccc0003",
+                "merged_entity_id": "ent_dddd0004dddd0004",
+            },
             observation_ids=(),
             proposed_by="resolver",
             proposed_at=WHEN,
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="1",
         )
     with (
         pytest.raises(UnknownScopeError, match="cites a proposal"),
@@ -886,10 +894,12 @@ def _propose_for_b(engine: Engine) -> None:
             PRINCIPAL_B,
             proposal_id=B_PROPOSAL,
             kind=EntityProposalKind.MERGE_ENTITIES,
-            payload={"retained_entity_id": BEE_ONE},
+            payload={"retained_entity_id": BEE_ONE, "merged_entity_id": BEE_TWO},
             observation_ids=(),
             proposed_by="resolver",
             proposed_at=WHEN,
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="1",
         )
 
 
@@ -906,6 +916,8 @@ def _a_decided_merge_for_b(engine: Engine) -> None:
             observation_ids=(),
             proposed_by="resolver",
             proposed_at=WHEN,
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="1",
         )
     with engine.begin() as connection:
         EntityGovernanceService(SqlEntityRepository(connection)).accept(

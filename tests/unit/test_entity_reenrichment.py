@@ -32,10 +32,15 @@ from my_pa.domain.relationship.governance import (
     EntityObservation,
     EntityProposal,
     EntityProposalKind,
+    EntityProposalMethod,
     EntityProposalState,
     ObservationKind,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.relationship.proposal_payload import (
+    EntityProposalPayload,
+    dedupe_digest,
+)
 from my_pa.domain.relationship.resolution import EntityResolution
 from tests.conftest import FakeUnitOfWork, World
 
@@ -114,6 +119,10 @@ def _record_merge(entities, merged: str = ALICE_TWO, retained: str = ALICE) -> N
     # `proposal_id` against `entity_proposals` in SQL, and the in-memory double
     # now does the same — so a merge record citing a proposal nobody wrote is a
     # state the product cannot reach, and this helper must not build one.
+    payload = EntityProposalPayload.of(
+        EntityProposalKind.MERGE_ENTITIES,
+        {"retained_entity_id": retained, "merged_entity_id": merged},
+    )
     entities.record_proposal(
         PRINCIPAL,
         EntityProposal(
@@ -121,10 +130,13 @@ def _record_merge(entities, merged: str = ALICE_TWO, retained: str = ALICE) -> N
             principal_id=PRINCIPAL,
             kind=EntityProposalKind.MERGE_ENTITIES,
             state=EntityProposalState.PROPOSED,
-            payload={"retained_entity_id": retained, "merged_entity_id": merged},
+            payload=payload,
             observation_ids=(),
             proposed_by="resolver",
             proposed_at=WHEN,
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="1",
+            dedupe_sha256=dedupe_digest(payload),
         ),
     )
     entities.record_merge(
@@ -372,6 +384,8 @@ def test_an_accepted_merge_followed_by_re_enrichment_moves_the_evidence(
         observation_ids=(),
         proposed_by="resolver",
         proposed_at=WHEN,
+        method=EntityProposalMethod.DETERMINISTIC,
+        method_version="1",
     )
     governing.accept(
         PRINCIPAL,

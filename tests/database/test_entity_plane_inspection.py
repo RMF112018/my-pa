@@ -44,6 +44,7 @@ from my_pa.domain.relationship.entity import (
 from my_pa.domain.relationship.governance import (
     EntityObservation,
     EntityProposalKind,
+    EntityProposalMethod,
     EntityProposalState,
     ObservationKind,
 )
@@ -218,6 +219,8 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                 observation_ids=(),
                 proposed_by="Dana Whitfield",
                 proposed_at=WHEN,
+                method=EntityProposalMethod.DETERMINISTIC,
+                method_version="1",
             )
             # An assignment, so `role`, `discipline` and `responsibility_class`
             # are non-empty. Zero rows made three free-text columns unplantable:
@@ -243,10 +246,16 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                 PRINCIPAL_A,
                 proposal_id="eprp_bbbb0002bbbb0002",
                 kind=EntityProposalKind.RECORD_ALIAS,
-                payload={"entity_id": ALICE, "value": "Birgitta"},
+                payload={
+                    "entity_id": ALICE,
+                    "alias_type": "preferred_name",
+                    "display_value": "Birgitta",
+                },
                 observation_ids=(),
                 proposed_by="Ingrid Vasquez-Thorne",
                 proposed_at=WHEN,
+                method=EntityProposalMethod.DETERMINISTIC,
+                method_version="1",
             )
             repository.decide_proposal(
                 PRINCIPAL_A,

@@ -24,6 +24,16 @@ constructor before this module runs. There is nothing here that reads such a
 field and decides to ignore it, because a field that can be sent is a field a
 later change can start honouring.
 
+**The authority is a keyword-only argument of every method here, and it is not
+a widening of that rule.** `WP-RI-B-05` gave this service a second caller --
+review promotion, which executes an accepted proposal through these same
+methods and must record `review_accepted` under `review_promotion`, because a
+promoted source or local-model conclusion recorded as `user_confirmed_assertion`
+would claim the user asserted what somebody else did. The default is the direct
+path's pair, so every existing call means what it meant; what a *caller* may
+send is unchanged, because none of the transport commands has either field and
+`FORBIDDEN_PAYLOAD_FIELDS` refuses both names inside a proposal payload.
+
 **Normalization is a server act, and that is the whole reason `display_value`
 is the field a caller sends.** `normalize_name` is NFKD, combining-mark
 removal, punctuation-to-space, whitespace collapse and casefold; a caller that
@@ -63,6 +73,12 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifierNamespace,
     IdentifierState,
+)
+from my_pa.domain.relationship.governance import (
+    DEFAULT_MUTATION_ACTOR_CLASS,
+    DEFAULT_MUTATION_AUTHORITY,
+    ActorClass,
+    MutationAuthority,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
 from my_pa.domain.source.registry import issue_identifier
@@ -112,6 +128,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         """Bring one entity into existence, or refuse because one already exists.
 
@@ -183,6 +201,8 @@ class EntityAuthoringService:
             correlation_id=correlation_id,
             audit_id=audit_id,
             at=at,
+            authority=authority,
+            actor_class=actor_class,
             minted_entity_id=issue_identifier(IdKind.ENTITY),
             entity_type=entity_type,
             display_name=display_name,
@@ -230,6 +250,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         """Correct what one entity says about itself.
 
@@ -266,6 +288,8 @@ class EntityAuthoringService:
                 correlation_id=correlation_id,
                 audit_id=audit_id,
                 at=at,
+                authority=authority,
+                actor_class=actor_class,
                 display_name=display_name,
                 canonical_name=None if canonical_name is None else normalize_name(canonical_name),
                 status=status,
@@ -290,6 +314,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         """Withdraw one entity from current use. Reversible, and not a delete."""
         return self._transition(
@@ -304,6 +330,8 @@ class EntityAuthoringService:
             correlation_id=correlation_id,
             audit_id=audit_id,
             at=at,
+            authority=authority,
+            actor_class=actor_class,
         )
 
     def restore(
@@ -318,6 +346,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         """Return one archived entity to the status it was archived from.
 
@@ -339,6 +369,8 @@ class EntityAuthoringService:
             correlation_id=correlation_id,
             audit_id=audit_id,
             at=at,
+            authority=authority,
+            actor_class=actor_class,
         )
 
     def bind_identifier(
@@ -358,6 +390,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         """Record one external address as this entity's current identity.
 
@@ -387,6 +421,8 @@ class EntityAuthoringService:
                 correlation_id=correlation_id,
                 audit_id=audit_id,
                 at=at,
+                authority=authority,
+                actor_class=actor_class,
                 minted_child_id=issue_identifier(IdKind.EXTERNAL_IDENTIFIER),
                 namespace=namespace.namespace,
                 normalized_value=normalize_identifier(namespace.namespace, display_value),
@@ -412,6 +448,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         """Record that one binding no longer holds, keeping the row that resolves it.
 
@@ -437,6 +475,8 @@ class EntityAuthoringService:
                 correlation_id=correlation_id,
                 audit_id=audit_id,
                 at=at,
+                authority=authority,
+                actor_class=actor_class,
                 target_child_id=identifier_id,
                 target_child_version=expected_identifier_version,
                 reason=reason,
@@ -462,6 +502,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         """Replace one binding with another, atomically, and say which replaced which.
 
@@ -484,6 +526,8 @@ class EntityAuthoringService:
                 correlation_id=correlation_id,
                 audit_id=audit_id,
                 at=at,
+                authority=authority,
+                actor_class=actor_class,
                 minted_child_id=issue_identifier(IdKind.EXTERNAL_IDENTIFIER),
                 target_child_id=identifier_id,
                 target_child_version=expected_identifier_version,
@@ -514,6 +558,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         """Record one more name form this entity is referred to by.
 
@@ -536,6 +582,8 @@ class EntityAuthoringService:
                 correlation_id=correlation_id,
                 audit_id=audit_id,
                 at=at,
+                authority=authority,
+                actor_class=actor_class,
                 minted_child_id=issue_identifier(IdKind.ENTITY_ALIAS),
                 alias_type=alias_type,
                 normalized_value=normalize_name(display_value),
@@ -561,6 +609,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         """Record that one name form is no longer used, keeping it matchable."""
         return self._admit(
@@ -575,6 +625,8 @@ class EntityAuthoringService:
                 correlation_id=correlation_id,
                 audit_id=audit_id,
                 at=at,
+                authority=authority,
+                actor_class=actor_class,
                 target_child_id=alias_id,
                 target_child_version=expected_alias_version,
                 reason=reason,
@@ -600,6 +652,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         """Correct one recorded name form, and say which correction replaced which."""
         return self._admit(
@@ -614,6 +668,8 @@ class EntityAuthoringService:
                 correlation_id=correlation_id,
                 audit_id=audit_id,
                 at=at,
+                authority=authority,
+                actor_class=actor_class,
                 minted_child_id=issue_identifier(IdKind.ENTITY_ALIAS),
                 target_child_id=alias_id,
                 target_child_version=expected_alias_version,
@@ -643,6 +699,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> EntityMutationAdmission:
         return self._admit(
             repository,
@@ -656,6 +714,8 @@ class EntityAuthoringService:
                 correlation_id=correlation_id,
                 audit_id=audit_id,
                 at=at,
+                authority=authority,
+                actor_class=actor_class,
                 reason=reason,
             ),
         )
@@ -672,6 +732,8 @@ class EntityAuthoringService:
         correlation_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
         minted_entity_id: str | None = None,
         minted_child_id: str | None = None,
         entity_type: EntityType | None = None,
@@ -698,6 +760,16 @@ class EntityAuthoringService:
         at its replacement, so the replacement's identifier has to exist before
         either row is inserted -- and because a digest computed over minted
         values would make every retry a new key.
+
+        **`authority` and `actor_class` default to the direct path's pair and
+        are keyword-only.** They are parameters rather than constants because
+        `WP-RI-B-05` gave this service a second legitimate caller -- review
+        promotion, which executes an accepted proposal through these very
+        methods and must record `review_accepted` rather than pretend the user
+        authored the source's assertion. They are still not *caller* values: no
+        transport command carries either name, `FORBIDDEN_PAYLOAD_FIELDS`
+        refuses both inside a proposal payload, and `EntityWriteRequest` refuses
+        a pair whose two halves disagree.
         """
         return EntityWriteRequest(
             operation=operation,
@@ -707,6 +779,8 @@ class EntityAuthoringService:
             audit_id=audit_id,
             idempotency_key=idempotency_key,
             server_received_at=at,
+            authority=authority,
+            actor_class=actor_class,
             event_id=issue_identifier(IdKind.ENTITY_MUTATION_EVENT),
             entity_id=entity_id,
             expected_version=expected_version,

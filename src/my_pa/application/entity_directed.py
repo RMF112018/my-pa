@@ -7,12 +7,12 @@ which scope, which role, when it applies, why it ended) and this module supplies
 everything else from authenticated context and policy:
 
 * the owning Principal, from `Authorization` and never from a payload;
-* the mutation authority, which is always `user_confirmed_assertion` on this
-  path -- a public create or revise that could claim `review_accepted` would let
-  a caller manufacture a governed promotion out of a request, and one that could
-  claim `system_deterministic` would let it claim the write was recomputable
-  when a person chose it;
-* the actor class, which is always `user` for the same reason;
+* the mutation authority, which defaults to `user_confirmed_assertion` -- a
+  public create or revise that could claim `review_accepted` would let a caller
+  manufacture a governed promotion out of a request, and one that could claim
+  `system_deterministic` would let it claim the write was recomputable when a
+  person chose it, and `_check_write_authority` refuses the second outright;
+* the actor class, which moves with the authority and never independently;
 * the correlation identity, the receipt time, and the audit identity the
   authorization already issued;
 * every minted identifier, which the repository owns.
@@ -25,10 +25,18 @@ before this module runs. There is nothing here that reads such a field and
 decides to ignore it, because a field that can be sent is a field a later change
 can start honouring.
 
-**A model cannot reach these writes.** `entity_proposals` is where a source-,
-rule- or model-derived candidate lives until a reviewer decides, and acceptance
-goes through that path rather than through `create`. That separation is why
-`ActorClass.USER` is a constant here rather than a parameter.
+**A model cannot reach these writes, and `WP-RI-B-05` is where that sentence
+changed shape without changing meaning.** `entity_proposals` is still where a
+source-, rule- or model-derived candidate lives until a reviewer decides, and a
+producer still cannot reach `create`. What changed is that acceptance now
+*executes* through these same six methods rather than stopping at a routing
+table, so the authority is a keyword-only argument defaulting to the direct
+path's pair instead of a constant. The separation it used to express is
+unchanged and is held elsewhere: the transport commands carry no `authority` and
+no `actor_class` field, so nothing a caller sends can reach either parameter,
+and the only caller that passes anything but the default is the promotion path
+in `application.entity_governance`, which is reachable only from a recorded
+review decision.
 
 **Nothing here mints a reciprocal edge.** `works_for` does not imply `manages`.
 A plane that generated the inverse would be asserting a fact the user did not
@@ -61,6 +69,12 @@ from my_pa.domain.relationship.entity import (
     validate_directed_reason,
     validate_directed_text,
 )
+from my_pa.domain.relationship.governance import (
+    DEFAULT_MUTATION_ACTOR_CLASS,
+    DEFAULT_MUTATION_AUTHORITY,
+    ActorClass,
+    MutationAuthority,
+)
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = ["EntityDirectedService"]
@@ -86,6 +100,8 @@ class EntityDirectedService:
         principal_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> DirectedReceipt:
         """Admit one new assignment, or return the receipt this key already has."""
         request = AssignmentWriteRequest(
@@ -112,6 +128,8 @@ class EntityDirectedService:
             correlation_id=issue_identifier(IdKind.CORRELATION),
             audit_id=audit_id,
             server_received_at=at,
+            authority=authority,
+            actor_class=actor_class,
         )
         replayed = self._replay(
             repository, Capability.ENTITIES_ASSIGNMENTS_CREATE, request, principal_id=principal_id
@@ -126,6 +144,8 @@ class EntityDirectedService:
         principal_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> DirectedReceipt:
         """Append the descriptive change, or return the receipt this key already has."""
         request = AssignmentWriteRequest(
@@ -152,6 +172,8 @@ class EntityDirectedService:
             correlation_id=issue_identifier(IdKind.CORRELATION),
             audit_id=audit_id,
             server_received_at=at,
+            authority=authority,
+            actor_class=actor_class,
         )
         replayed = self._replay(
             repository, Capability.ENTITIES_ASSIGNMENTS_REVISE, request, principal_id=principal_id
@@ -166,6 +188,8 @@ class EntityDirectedService:
         principal_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> DirectedReceipt:
         """Withdraw one assignment from service, keeping the row and its history.
 
@@ -197,6 +221,8 @@ class EntityDirectedService:
             correlation_id=issue_identifier(IdKind.CORRELATION),
             audit_id=audit_id,
             server_received_at=at,
+            authority=authority,
+            actor_class=actor_class,
         )
         replayed = self._replay(
             repository, Capability.ENTITIES_ASSIGNMENTS_END, request, principal_id=principal_id
@@ -211,6 +237,8 @@ class EntityDirectedService:
         principal_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> DirectedReceipt:
         """Assert one directed edge, or return the receipt this key already has."""
         request = RelationshipWriteRequest(
@@ -234,6 +262,8 @@ class EntityDirectedService:
             correlation_id=issue_identifier(IdKind.CORRELATION),
             audit_id=audit_id,
             server_received_at=at,
+            authority=authority,
+            actor_class=actor_class,
         )
         replayed = self._replay(
             repository,
@@ -251,6 +281,8 @@ class EntityDirectedService:
         principal_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> DirectedReceipt:
         """Append the effective-window change, or return the receipt this key has."""
         request = RelationshipWriteRequest(
@@ -274,6 +306,8 @@ class EntityDirectedService:
             correlation_id=issue_identifier(IdKind.CORRELATION),
             audit_id=audit_id,
             server_received_at=at,
+            authority=authority,
+            actor_class=actor_class,
         )
         replayed = self._replay(
             repository,
@@ -291,6 +325,8 @@ class EntityDirectedService:
         principal_id: str,
         audit_id: str,
         at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
     ) -> DirectedReceipt:
         """Withdraw one directed edge, on `end_assignment`'s terms.
 
@@ -319,6 +355,8 @@ class EntityDirectedService:
             correlation_id=issue_identifier(IdKind.CORRELATION),
             audit_id=audit_id,
             server_received_at=at,
+            authority=authority,
+            actor_class=actor_class,
         )
         replayed = self._replay(
             repository, Capability.ENTITIES_RELATIONSHIPS_END, request, principal_id=principal_id

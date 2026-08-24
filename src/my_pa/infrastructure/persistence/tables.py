@@ -3453,7 +3453,9 @@ entity_observations = Table(
 #: call. `superseded` is deliberately not among them and carries `superseded_at`
 #: instead: a proposal a successor overtook was disposed of by nobody, and
 #: putting it in the decision columns would attach an actor to an event with
-#: none.
+#: none. `WP-RI-B-05` adds `superseded_by_proposal_id` beside it, so that the
+#: successor `review.decide`'s `reprocess` produces can be *named* rather than
+#: inferred from two rows carrying the same dedupe digest.
 #:
 #: `payload` is still JSONB and is no longer unstructured. WP-RI-06 stored
 #: caller-free string pairs and checked their shape where a proposal was
@@ -3493,6 +3495,7 @@ entity_proposals = Table(
     Column("accepted_record_version", Integer),
     Column("invalidated_reason", Text),
     Column("superseded_at", DateTime(timezone=True)),
+    Column("superseded_by_proposal_id", Text),
     Column("decided_by", Text),
     Column("decided_at", DateTime(timezone=True)),
     Column("decision_reason", Text),
@@ -3576,6 +3579,32 @@ entity_proposals = Table(
     CheckConstraint(
         "superseded_at IS NULL OR superseded_at >= proposed_at",
         name="a_proposal_is_not_superseded_before_it_was_proposed",
+    ),
+    # One direction, like the accepted-record rule above. A successor pointer on
+    # a proposal still awaiting a decision would say it had been replaced while
+    # it was still live; a superseded proposal with nothing to point at is the
+    # ordinary case where whatever overtook it was not another proposal.
+    CheckConstraint(
+        "superseded_by_proposal_id IS NULL OR state = 'superseded'",
+        name="only_a_superseded_proposal_names_its_successor",
+    ),
+    CheckConstraint(
+        "superseded_by_proposal_id IS NULL OR superseded_by_proposal_id <> proposal_id",
+        name="a_proposal_is_not_its_own_successor",
+    ),
+    # The successor is partitioned too, and the composite reference is what
+    # proves it: a predecessor pointing into another Principal's partition would
+    # present that Principal's proposal as this one's replacement. The reference
+    # also makes the identifier's *shape* structural, which is why this column
+    # carries no `_is_identifier` CHECK of its own -- an existing
+    # `entity_proposals.proposal_id` has already been through one.
+    ForeignKeyConstraint(
+        ["superseded_by_proposal_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_proposals.proposal_id",
+            f"{SCHEMA}.entity_proposals.principal_id",
+        ],
+        name="a_proposal_is_superseded_within_its_principal",
     ),
     CheckConstraint(
         "(state IN ('accepted', 'corrected_accepted', 'rejected', 'deferred', 'invalidated')) "

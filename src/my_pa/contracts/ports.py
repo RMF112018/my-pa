@@ -109,15 +109,20 @@ from my_pa.domain.relationship.entity import (
 )
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.relationship.governance import (
+    DEFAULT_MUTATION_ACTOR_CLASS,
+    DEFAULT_MUTATION_AUTHORITY,
     ENTITY_CHANGE_REASON_LIMIT,
+    ActorClass,
     EntityFactEvidenceLink,
     EntityMergeRecord,
     EntityMutationEvent,
     EntityObservation,
     EntityProposal,
+    EntityProposalEvidenceLink,
     EntityProposalState,
     EntityResolutionDecision,
     EvidenceRole,
+    MutationAuthority,
     MutationRecordFamily,
     ObservationState,
 )
@@ -428,16 +433,61 @@ class InitialIdentifier:
             raise ValueError("an initial external identifier carries both of its forms")
 
 
+def _check_write_authority(authority: MutationAuthority, actor_class: ActorClass) -> None:
+    """The one rule the three write requests share about the pair they carry.
+
+    **The two halves are checked against each other rather than each against a
+    list**, because either alone is satisfiable by a value that makes the other
+    a lie. `review_accepted` says a review case was dispositioned and
+    `review_promotion` says the act was that disposition being carried out; a
+    row claiming the first under `user` would attribute a source's conclusion to
+    the person who merely accepted it, and a row claiming `review_promotion`
+    under `user_confirmed_assertion` would say the user asserted what a promotion
+    executed. `MutationAuthority.SYSTEM_DETERMINISTIC` is refused outright on
+    these three requests: it "may never, by itself, create or merge an identity"
+    by its own definition, and every operation these requests carry is either an
+    identity assertion or a fact about one.
+
+    Stated once and called from three `__post_init__`s rather than written three
+    times, on `_directed_digest`'s argument: two copies of a rule are two things
+    that can start disagreeing.
+    """
+    if not isinstance(authority, MutationAuthority):
+        raise ValueError("an entity write names a known mutation authority")
+    if not isinstance(actor_class, ActorClass):
+        raise ValueError("an entity write names a known actor class")
+    if authority is MutationAuthority.SYSTEM_DETERMINISTIC:
+        raise ValueError("a governed entity write is not system-deterministic")
+    if (authority is MutationAuthority.REVIEW_ACCEPTED) is not (
+        actor_class is ActorClass.REVIEW_PROMOTION
+    ):
+        raise ValueError("review-accepted authority is carried by a review promotion, and only it")
+
+
 @dataclass(frozen=True, slots=True)
 class EntityWriteRequest:
     """One governed change to the entity plane, already normalized and stamped.
 
     **Nothing a caller may not choose has a field it could arrive in.** There is
-    no `principal_id` a transport controls, no `authority`, no `actor_class`, no
-    `version` and no `superseded_by_entity_id`: the first is the authenticated
-    partition the application supplies, and the rest are the server's. A payload
-    naming one is refused by the command constructor before this record is
-    built, because the command has no such field either.
+    no `principal_id` a transport controls, no `version` and no
+    `superseded_by_entity_id`: the first is the authenticated partition the
+    application supplies, and the rest are the server's. A payload naming one is
+    refused by the command constructor before this record is built, because the
+    command has no such field either.
+
+    **`authority` and `actor_class` are fields, and `WP-RI-B-05` is why.** This
+    record carried neither until review promotion had to execute: the writers
+    stamped `user_confirmed_assertion` from a module constant, so a fact a
+    reviewer accepted from a source or a local model would have been recorded as
+    one the user asserted, which section 14 forbids in as many words. They are
+    still not caller-supplied and cannot become so -- the transport commands
+    have no such field, `FORBIDDEN_PAYLOAD_FIELDS` refuses both names inside a
+    proposal payload, and the only two constructors of this record are
+    `application.entity_authoring` and the promotion path in
+    `application.entity_governance`. What changed is that the *server* now has
+    two honest values to choose between instead of one, and `__post_init__`
+    keeps the pair consistent: `review_accepted` appears exactly with
+    `review_promotion`, so neither half can be stamped without the other.
 
     `entity_id` is `None` exactly on a create, where `minted_entity_id` carries
     the identifier the server issued instead. `expected_version` is required for
@@ -492,12 +542,18 @@ class EntityWriteRequest:
     #: Minted link identifiers, one per evidence reference and in the same
     #: order. Excluded from the digest with every other minted identifier.
     minted_evidence_link_ids: tuple[str, ...] = ()
+    #: What admitted this change, and under whose class it is recorded. The
+    #: defaults are the direct authoring path's, so every existing construction
+    #: means what it meant before this pair existed.
+    authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY
+    actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.correlation_id, IdKind.CORRELATION)
         validate_identifier(self.audit_id, IdKind.AUDIT)
         validate_identifier(self.event_id, IdKind.ENTITY_MUTATION_EVENT)
+        _check_write_authority(self.authority, self.actor_class)
         creating = self.operation is EntityWriteOperation.CREATE
         if creating is (self.entity_id is not None):
             raise ValueError("an entity creation names no entity; every other operation does")
@@ -765,11 +821,21 @@ class AssignmentWriteRequest:
     correlation_id: str
     audit_id: str
     server_received_at: datetime
+    #: What admitted this change, and under whose class it is recorded. See
+    #: `EntityWriteRequest` for why the pair is a field rather than a constant
+    #: at the writer, and `_check_write_authority` for the rule between them.
+    #: Deliberately outside `payload_digest`: the digest is over what a *caller*
+    #: supplied, and this pair is chosen by the server from which path is
+    #: executing, so including it would make an idempotency key mean something
+    #: different depending on who replayed it.
+    authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY
+    actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.correlation_id, IdKind.CORRELATION)
         validate_identifier(self.audit_id, IdKind.AUDIT)
+        _check_write_authority(self.authority, self.actor_class)
         creating = self.operation is DirectedWriteOperation.CREATE
         if creating is (self.assignment_id is not None):
             raise ValueError("an assignment creation names no assignment; the others do")
@@ -871,11 +937,16 @@ class RelationshipWriteRequest:
     correlation_id: str
     audit_id: str
     server_received_at: datetime
+    #: `AssignmentWriteRequest`'s pair, on its terms and outside the digest for
+    #: the same reason.
+    authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY
+    actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.correlation_id, IdKind.CORRELATION)
         validate_identifier(self.audit_id, IdKind.AUDIT)
+        _check_write_authority(self.authority, self.actor_class)
         creating = self.operation is DirectedWriteOperation.CREATE
         if creating is (self.relationship_id is not None):
             raise ValueError("an edge creation names no edge; the others do")
@@ -1347,6 +1418,104 @@ class EntitiesRepository(ABC):
         self, principal_id: str, state: EntityProposalState | None = None
     ) -> list[EntityProposal]:
         """Proposals in this Principal's partition, optionally by state."""
+
+    def proposal_by_dedupe(
+        self,
+        principal_id: str,
+        dedupe_sha256: str,
+        states: Iterable[EntityProposalState],
+    ) -> EntityProposal | None:
+        """The proposal this Principal already has under `dedupe_sha256` in `states`.
+
+        The read the open-equivalent unique index is already over. `propose` did
+        this as one `proposals(principal_id, state)` call per open-equivalent
+        state and compared the digests in Python, which is correct -- the partial
+        unique is the authority either way -- and is a scan of every open
+        proposal on every create.
+
+        `states` is a parameter rather than `OPEN_EQUIVALENT_PROPOSAL_STATES`
+        read here, because a port that named the set would make widening the
+        set a change to the port. The caller that owns the rule passes it.
+
+        Non-abstract with a `NotImplementedError` default, on the terms the
+        identity-correction methods below are: this port has implementations
+        outside this package's own repository.
+        """
+        raise NotImplementedError
+
+    def record_proposal_evidence_link(
+        self, principal_id: str, link: EntityProposalEvidenceLink
+    ) -> None:
+        """Bind one proposal to a single record it rests on.
+
+        The writer `knowledge.entity_proposal_evidence_links` was created
+        without. `EntityProposal.observation_ids` can say "these observations
+        were cited"; it cannot cite the capture span a user's own note came
+        from, cannot cite a knowledge record, and cannot say that one of the
+        records it lists argues *against* the proposal.
+
+        **Same-Principal is proved before the write on the half the schema
+        cannot prove.** The proposal and the observation carry composite
+        `(id, principal_id)` foreign keys; `capture_spans` carries no principal
+        partition, so a span is walked to the capture that owns it, exactly as
+        `entity_fact_evidence_links`' writer does. A span behind another
+        Principal's capture answers what an absent span answers.
+        """
+        raise NotImplementedError
+
+    def proposal_evidence_links(
+        self, principal_id: str, proposal_id: str
+    ) -> list[EntityProposalEvidenceLink]:
+        """Everything one proposal rests on, in the order it was cited."""
+        raise NotImplementedError
+
+    def record_proposal_promotion(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        record_family: MutationRecordFamily,
+        record_id: str,
+        record_version: int,
+    ) -> None:
+        """Name the canonical record an accepted proposal became.
+
+        Separate from `decide_proposal` because the two happen at different
+        moments and one of them can fail: the decision is claimed first, under
+        the guarded `UPDATE` that makes deciding a one-time act, and the record
+        it produced can only be named once the canonical service has returned a
+        receipt. A single call that carried both would have to be issued *after*
+        the write, which would leave the window in which a second reviewer could
+        decide the same proposal and promote it again.
+
+        Refuses a proposal that is not accepted and refuses one already carrying
+        a record, so this cannot become a way to re-point an acceptance at a
+        different canonical row.
+        """
+        raise NotImplementedError
+
+    def supersede_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        successor_proposal_id: str,
+        at: datetime,
+    ) -> bool:
+        """Retire one undecided proposal in favour of the successor that replaced it.
+
+        Section 13's `reprocess`: "creates successor proposal against current
+        evidence/method; predecessor remains historical/superseded". This writes
+        the predecessor half. `WP-RI-B-05` provides it and deliberately does not
+        provide `reprocess` -- the disposition, the successor's production and
+        the review case are the Review plane's, and a repository method that
+        also minted the successor would be that plane living here.
+
+        Returns whether a row moved. `False` means the proposal was already
+        decided or superseded, which is what makes a stale reprocess create
+        nothing rather than overwrite a decision.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     def decide_proposal(self, principal_id: str, proposal: EntityProposal) -> None:

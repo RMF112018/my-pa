@@ -22,7 +22,7 @@ Four properties, read off the tree rather than trusted:
    `capture_review_decisions` before it writes, so promotion cannot happen
    without a review that happened.
 
-**And four more on the entity plane, added by `WP-RI-B-05`.** The same failure
+**And seven more on the entity plane, added by `WP-RI-B-05`.** The same failure
 mode arrives there through a different door: `entities.proposals.create` gives a
 source, rule or local-model producer a published way to write, and the thing
 that must stay impossible is for that producer to reach the mutation its own
@@ -41,6 +41,19 @@ proposal describes.
    correction.** `application/entity_promotion.py` imports nothing that could
    write, and its table holds no entry for `merge_entities` or `split_identity`
    — so the mutation removed from acceptance cannot return by being routed to.
+9. **A producer cannot reach the services that promote.** Promotion executes
+   through the canonical authoring and directed services, which
+   `EntityGovernanceService` therefore holds; `propose` and every helper it
+   delegates to reach neither. Property 7 used to say this module could not
+   write at all, and that is no longer true — this is what replaced it, and it
+   is the half that was ever load-bearing.
+10. **The producer allowlist cannot be widened into a canonical write.** The
+   calls property 5 admits are required disjoint from the twenty-three
+   `EntitiesRepository` methods that write canonical fact, so a future editor
+   adding a name to the allowlist cannot admit `admit_mutation` by accident.
+11. **Promotion stamps `review_accepted` under `review_promotion`**, and never
+   the direct path's `user_confirmed_assertion`. Section 14: a promoted source
+   or model conclusion recorded as one the user asserted is a false record.
 
 Nothing here opens a connection. It parses source.
 """
@@ -61,6 +74,7 @@ REPOSITORY: Final = PACKAGE / "infrastructure" / "persistence" / "situation_repo
 AUTHORING: Final = PACKAGE / "infrastructure" / "persistence" / "continuity_authoring.py"
 GOVERNANCE: Final = PACKAGE / "application" / "entity_governance.py"
 PROMOTION: Final = PACKAGE / "application" / "entity_promotion.py"
+DOMAIN_GOVERNANCE: Final = PACKAGE / "domain" / "relationship" / "governance.py"
 
 #: Statement builders that write. Named rather than inferred, because "does this
 #: expression write" is not decidable in general and these five are what this
@@ -79,6 +93,20 @@ def _function(tree: ast.Module, *, klass: str, name: str) -> ast.FunctionDef:
                 if isinstance(member, ast.FunctionDef) and member.name == name:
                     return member
     raise AssertionError(f"{klass}.{name} is not in the module; the guard is reading nothing")
+
+
+def _function_or_module_level(tree: ast.Module, name: str) -> ast.FunctionDef:
+    """One module-level function, wherever in `my_pa` it is declared.
+
+    `initial_state_for` lives in `domain.relationship.governance` rather than in
+    the module this guard's other assertions read, so the lookup falls through
+    to that module rather than the assertion being dropped.
+    """
+    for candidate in (tree, ast.parse(DOMAIN_GOVERNANCE.read_text(encoding="utf-8"))):
+        for node in candidate.body:
+            if isinstance(node, ast.FunctionDef) and node.name == name:
+                return node
+    raise AssertionError(f"{name} is declared nowhere the guard reads; it is reading nothing")
 
 
 def _called_names(node: ast.AST) -> set[str]:
@@ -213,12 +241,75 @@ def test_user_directed_task_authoring_is_not_review_promotion() -> None:
 #: pair `EntityGovernanceService._apply` used to call.
 IDENTITY_WRITES: Final = frozenset({"redirect_entity", "record_merge"})
 
-#: Every repository call a proposal producer is allowed to make. `record_proposal`
-#: is the only write; the other three are the reads that refuse -- evidence that
-#: is not this Principal's, evidence that is quarantined, and the open-equivalent
-#: proposal a duplicate is answered with.
+#: Every repository call a proposal producer is allowed to make.
+#:
+#: Two writes and three reads since `WP-RI-B-05`, and the widening is bounded by
+#: the assertion below rather than by this comment: `record_proposal` writes the
+#: request and `record_proposal_evidence_link` writes the exact records it rests
+#: on, both into the proposal's own tables. The reads are what refuse -- evidence
+#: that is not this Principal's, evidence that is quarantined, the negative
+#: identity evidence a repeated known-bad candidate is suppressed by, and the
+#: open-equivalent proposal a duplicate is answered with.
+#:
+#: `proposals` remains admitted although `_open_equivalent` now asks
+#: `proposal_by_dedupe` instead: it is a read either way, and removing a *read*
+#: from an allowlist tightens nothing.
 PRODUCER_REPOSITORY_CALLS: Final = frozenset(
-    {"record_proposal", "observation", "proposals", "fact_evidence_links"}
+    {
+        "record_proposal",
+        "record_proposal_evidence_link",
+        "observation",
+        "proposals",
+        "proposal_by_dedupe",
+        "fact_evidence_links",
+    }
+)
+
+#: Every `EntitiesRepository` call that writes a canonical entity fact, a
+#: mutation-ledger row, or a decision.
+#:
+#: Named exhaustively rather than inferred, and asserted disjoint from
+#: `PRODUCER_REPOSITORY_CALLS` below, so that widening the producer's allowlist
+#: cannot quietly admit one of these. This is what property 5 defends; the
+#: allowlist is only how it is measured.
+CANONICAL_REPOSITORY_WRITES: Final = frozenset(
+    {
+        "admit_mutation",
+        "bind_identifier",
+        "create",
+        "create_assignment",
+        "create_relationship",
+        "decide_observation",
+        "decide_proposal",
+        "end_assignment",
+        "end_relationship",
+        "link_observation",
+        "record_alias",
+        "record_assignment",
+        "record_fact_evidence_link",
+        "record_merge",
+        "record_mutation_event",
+        "record_proposal_promotion",
+        "record_relationship",
+        "record_resolution_decision",
+        "redirect_entity",
+        "reparent_entity_reference",
+        "revise_assignment",
+        "revise_relationship",
+        "supersede_child_record",
+    }
+)
+
+#: The private helpers `propose` delegates to. Walked with it, because a write
+#: moved one level down would otherwise be invisible to a scan of the entry
+#: point alone.
+PRODUCER_HELPERS: Final = (
+    "propose",
+    "_admit_evidence",
+    "_refuse_a_known_bad_proposal",
+    "_refused_pairings",
+    "_open_equivalent",
+    "_record_evidence",
 )
 
 
@@ -245,19 +336,85 @@ def _repository_calls(node: ast.AST) -> set[str]:
 def test_proposing_reaches_one_write_and_it_is_the_proposal_table() -> None:
     """Property 5. The producer path's whole reach, read off the source.
 
-    `propose` delegates three checks to private helpers, so the guard walks the
-    method *and* the helpers it calls: a write moved one level down would
-    otherwise be invisible to a scan of the entry point alone.
+    `propose` delegates four checks and one write to private helpers, so the
+    guard walks the method *and* the helpers it calls: a write moved one level
+    down would otherwise be invisible to a scan of the entry point alone.
     """
     tree = _module(GOVERNANCE)
     reached: set[str] = set()
-    for name in ("propose", "_admit_evidence", "_refuse_a_known_bad_proposal", "_open_equivalent"):
+    for name in PRODUCER_HELPERS:
         reached |= _repository_calls(_function(tree, klass="EntityGovernanceService", name=name))
     assert "record_proposal" in reached, "the guard is not reading a method that records anything"
     forbidden = sorted(reached - PRODUCER_REPOSITORY_CALLS)
     assert forbidden == [], (
         f"the producer path reaches {forbidden}. A producer that can reach a canonical write "
         "is a producer that can promote its own proposal without a review"
+    )
+    # And the allowlist itself cannot be widened into a canonical write. The
+    # assertion above measures the producer against a list; this one measures
+    # the list against the rule it exists to express.
+    admitted_canonical = sorted(PRODUCER_REPOSITORY_CALLS & CANONICAL_REPOSITORY_WRITES)
+    assert admitted_canonical == [], (
+        f"the producer allowlist admits {admitted_canonical}, which write canonical fact. "
+        "Every call a producer may make writes or reads the proposal plane only"
+    )
+    assert "record_proposal_evidence_link" in reached, (
+        "the producer no longer writes the evidence its proposal rests on; section 17's "
+        "evidence role and per-link Principal would be exercised by nothing again"
+    )
+
+
+def test_proposing_cannot_reach_the_services_that_promote() -> None:
+    """Property 5, third half — `WP-RI-B-05` gave this module two writing services.
+
+    `EntityGovernanceService` now holds an authoring service and a directed
+    service, because promoting an accepted proposal executes through the same
+    canonical services a user's own request reaches. The rule that used to be
+    "this module cannot reach a canonical write at all" is therefore narrower
+    now, and this is the narrow form: *producing* still cannot. Neither
+    `propose` nor any helper it delegates to touches `self._authoring` or
+    `self._directed`, so the two services are unreachable from the path a
+    source, rule or local-model producer can call.
+    """
+    tree = _module(GOVERNANCE)
+    for name in PRODUCER_HELPERS:
+        method = _function(tree, klass="EntityGovernanceService", name=name)
+        held = {
+            node.attr
+            for node in ast.walk(method)
+            if isinstance(node, ast.Attribute)
+            and isinstance(node.value, ast.Name)
+            and node.value.id == "self"
+        }
+        reached = sorted(held & {"_authoring", "_directed", "_promote", "_execute"})
+        assert reached == [], (
+            f"{name} reaches {reached}. A producer that can reach the promotion path is a "
+            "producer that can carry out its own proposal without a review"
+        )
+    # And the services really are there, so the assertion above is a distinction
+    # rather than a way of seeing nothing.
+    promote = _function(tree, klass="EntityGovernanceService", name="_execute")
+    promoting = ast.dump(promote)
+    assert "_authoring" in promoting and "_directed" in promoting
+
+
+def test_promotion_stamps_review_authority_and_never_the_users() -> None:
+    """Section 14's last paragraph, read off the module that executes promotion.
+
+    A promoted alias recorded as `user_confirmed_assertion` would say the user
+    asserted what a source or a local model asserted. `_execute` is the one
+    place the pair is chosen, so the literals are required to be there and the
+    direct path's are required not to be.
+    """
+    execute = ast.dump(
+        _function(_module(GOVERNANCE), klass="EntityGovernanceService", name="_execute")
+    )
+    assert "REVIEW_ACCEPTED" in execute
+    assert "REVIEW_PROMOTION" in execute
+    assert "USER_CONFIRMED_ASSERTION" not in execute, (
+        "the promotion path stamps the direct authoring path's authority. A promoted "
+        "source or model conclusion recorded as a user's own assertion is the record "
+        "section 14 forbids"
     )
 
 
@@ -267,10 +424,36 @@ def test_proposing_writes_the_proposed_literal_and_takes_no_state() -> None:
     The state is written as a literal, and there is no parameter through which a
     caller could supply one, so a proposal cannot arrive already accepted.
     """
-    propose = _function(_module(GOVERNANCE), klass="EntityGovernanceService", name="propose")
+    tree = _module(GOVERNANCE)
+    propose = _function(tree, klass="EntityGovernanceService", name="propose")
     source = ast.dump(propose)
-    assert "PROPOSED" in source
-    for decided in ("ACCEPTED", "CORRECTED_ACCEPTED", "REJECTED"):
+    # The literal moved to `initial_state_for`, because `WP-RI-B-05` made the
+    # initial state derive from the kind's review requirement rather than being
+    # one literal for all seventeen kinds. So the property is asserted over both
+    # halves -- `propose` calls the derivation and takes no state, and the
+    # derivation writes the two undecided literals and none of the decided ones
+    # -- which covers seventeen kinds where the original covered one literal.
+    assert "initial_state_for" in _called_names(propose), (
+        "propose no longer derives its state. A state written by hand is a state a "
+        "later edit can write as accepted"
+    )
+    initial = _function_or_module_level(tree, "initial_state_for")
+    # Read as member names rather than as substrings of the dump, because
+    # `MAY_BE_ACCEPTED_AUTOMATICALLY` -- the requirement this derives from --
+    # contains "ACCEPTED", and a substring scan would either fail on the correct
+    # source or have to be loosened until it saw nothing.
+    named = {
+        node.attr
+        for node in ast.walk(initial)
+        if isinstance(node, ast.Attribute)
+        and isinstance(node.value, ast.Name)
+        and node.value.id == "EntityProposalState"
+    }
+    assert named == {"PROPOSED", "NEEDS_REVIEW"}, (
+        f"initial_state_for can write {sorted(named)}. Every state a new proposal may be "
+        "written in is one nothing has decided"
+    )
+    for decided in ("ACCEPTED", "CORRECTED_ACCEPTED", "REJECTED", "DEFERRED", "INVALIDATED"):
         assert decided not in source, f"propose mentions {decided}"
     arguments = {argument.arg for argument in propose.args.kwonlyargs}
     for reserved in ("state", "decided_by", "decided_at", "proposal_id", "dedupe_sha256"):
@@ -367,7 +550,9 @@ def test_the_promotion_table_routes_no_identity_correction() -> None:
 
 
 @pytest.mark.parametrize(
-    "path", [DERIVATION, REPOSITORY, AUTHORING, GOVERNANCE, PROMOTION], ids=lambda p: p.name
+    "path",
+    [DERIVATION, REPOSITORY, AUTHORING, GOVERNANCE, PROMOTION, DOMAIN_GOVERNANCE],
+    ids=lambda p: p.name,
 )
 def test_the_modules_this_guard_reads_exist_and_parse(path: Path) -> None:
     """Guards every assertion above: a moved file would make them all vacuous."""

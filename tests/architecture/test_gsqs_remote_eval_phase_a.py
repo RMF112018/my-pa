@@ -161,7 +161,10 @@ def test_evaluator_digests_are_stable_and_exclude_remote_eval_modules() -> None:
     assert not any("goodnotes_gsqs_remote_eval" in name for name in names)
     assert "goodnotes_gsqs.py" in names
     prompt = ROOT / "ops" / "goodnotes" / "gsqs" / "b0" / "chatllm-remote-eval-prompt-v1.txt"
+    canary_prompt = ROOT / "ops" / "goodnotes" / "gsqs" / "b0"
+    canary_prompt = canary_prompt / "chatllm-remote-eval-visual-canary-prompt-v1.txt"
     assert prompt.resolve() not in resolved
+    assert canary_prompt.resolve() not in resolved
 
 
 def test_write_rasters_writes_only_pngs(tmp_path: Path) -> None:

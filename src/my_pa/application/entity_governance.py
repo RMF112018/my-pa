@@ -51,6 +51,8 @@ from my_pa.domain.relationship.governance import (
     EntityObservation,
     EntityProposal,
     EntityProposalKind,
+    EntityProposalMethod,
+    EntityProposalPayload,
     EntityProposalState,
     EntityResolutionDecision,
     EvidenceRole,
@@ -69,6 +71,7 @@ from my_pa.domain.relationship.governance import (
     origin_of,
 )
 from my_pa.domain.relationship.normalization import NormalizationError, normalize_name
+from my_pa.domain.relationship.proposal_payload import dedupe_digest
 from my_pa.domain.relationship.resolution import EntityResolution, ResolutionOutcome
 from my_pa.domain.source.registry import issue_identifier
 
@@ -199,27 +202,45 @@ class EntityGovernanceService:
         *,
         proposal_id: str,
         kind: EntityProposalKind,
-        payload: Mapping[str, str],
+        payload: Mapping[str, str | bool],
         observation_ids: tuple[str, ...],
         proposed_by: str,
         proposed_at: datetime,
+        method: EntityProposalMethod,
+        method_version: str,
+        model_id: str | None = None,
+        model_version: str | None = None,
+        expected_target_version: int | None = None,
     ) -> EntityProposal:
         """Record a proposed mutation. Applies nothing.
 
         Returns the proposal so a caller can read `requirement` and know what
         would have to happen next, rather than discovering it when `decide`
         refuses.
+
+        `method` and its version are arguments and the dedupe digest is not: a
+        caller that could name the digest could name one nothing else would
+        collide with, and open-equivalent dedupe would then be over a value the
+        proposer chose. It is derived from the kind and the payload here, which
+        is the only place both are known.
         """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
+        checked = EntityProposalPayload.of(kind, payload)
         proposal = EntityProposal(
             proposal_id=proposal_id,
             principal_id=principal_id,
             kind=kind,
             state=EntityProposalState.PROPOSED,
-            payload=tuple(sorted((str(k), str(v)) for k, v in payload.items())),
+            payload=checked,
             observation_ids=observation_ids,
             proposed_at=ensure_utc(proposed_at),
             proposed_by=proposed_by,
+            method=method,
+            method_version=method_version,
+            dedupe_sha256=dedupe_digest(checked),
+            model_id=model_id,
+            model_version=model_version,
+            expected_target_version=expected_target_version,
         )
         self._entities.record_proposal(principal_id, proposal)
         return proposal
@@ -322,6 +343,13 @@ class EntityGovernanceService:
             observation_ids=held.observation_ids,
             proposed_at=held.proposed_at,
             proposed_by=held.proposed_by,
+            method=held.method,
+            method_version=held.method_version,
+            dedupe_sha256=held.dedupe_sha256,
+            model_id=held.model_id,
+            model_version=held.model_version,
+            expected_target_version=held.expected_target_version,
+            review_case_id=held.review_case_id,
             decided_by=decided_by,
             decided_at=ensure_utc(decided_at),
             decision_reason=reason,
@@ -336,8 +364,8 @@ class EntityGovernanceService:
     def _apply(self, principal_id: str, proposal: EntityProposal, *, merge_id: str | None) -> None:
         """Perform what an accepted proposal asked for.
 
-        Only merges are applied here. The other five kinds name mutations whose
-        arguments are whole domain records rather than the string pairs a
+        Only merges are applied here. The other sixteen kinds name mutations
+        whose arguments are whole domain records rather than the flat fields a
         proposal payload carries, and reconstructing an `ExternalIdentifier` from
         flattened strings would be a second, weaker constructor for a type that
         already has one. Those kinds are recorded and decided here and applied by
@@ -346,9 +374,9 @@ class EntityGovernanceService:
         """
         if proposal.kind is not EntityProposalKind.MERGE_ENTITIES:
             return
-        payload = dict(proposal.payload)
-        merged = payload.get("merged_entity_id")
-        retained = payload.get("retained_entity_id")
+        payload = proposal.payload.as_mapping()
+        merged = str(payload.get("merged_entity_id", ""))
+        retained = str(payload.get("retained_entity_id", ""))
         if not merged or not retained:
             raise ValueError("a merge proposal names the entity kept and the entity merged away")
         if merge_id is None:

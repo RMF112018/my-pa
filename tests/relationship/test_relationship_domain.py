@@ -402,9 +402,45 @@ EXPECTED_MODEL_FIELDS = {
             "observation_ids",
             "proposed_at",
             "proposed_by",
+            "method",
+            "method_version",
+            "dedupe_sha256",
+            "model_id",
+            "model_version",
+            "expected_target_version",
+            "review_case_id",
+            "accepted_record_type",
+            "accepted_record_id",
+            "accepted_record_version",
+            "invalidated_reason",
+            "superseded_at",
             "decided_by",
             "decided_at",
             "decision_reason",
+        }
+    ),
+    "my_pa.domain.relationship.governance.EntityProposalEvidenceLink": frozenset(
+        {
+            "proposal_id",
+            "principal_id",
+            "sequence",
+            "role",
+            "created_at",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+        }
+    ),
+    "my_pa.domain.relationship.proposal_payload.EntityProposalPayload": frozenset(
+        {
+            "kind",
+            "values",
+        }
+    ),
+    "my_pa.domain.relationship.proposal_payload.PayloadSchema": frozenset(
+        {
+            "required",
+            "optional",
         }
     ),
     "my_pa.domain.relationship.governance.EntityMergeRecord": frozenset(
@@ -827,9 +863,33 @@ EXPECTED_TABLE_COLUMNS = {
             "observation_ids",
             "proposed_at",
             "proposed_by",
+            "method",
+            "method_version",
+            "dedupe_sha256",
+            "model_id",
+            "model_version",
+            "expected_target_version",
+            "review_case_id",
+            "accepted_record_type",
+            "accepted_record_id",
+            "accepted_record_version",
+            "invalidated_reason",
+            "superseded_at",
             "decided_by",
             "decided_at",
             "decision_reason",
+        }
+    ),
+    "entity_proposal_evidence_links": frozenset(
+        {
+            "proposal_id",
+            "sequence",
+            "principal_id",
+            "role",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+            "created_at",
         }
     ),
     "entity_merge_records": frozenset(
@@ -1118,8 +1178,8 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 43
-    assert len(actual_table_columns) == 37
+    assert len(actual_model_fields) == 46
+    assert len(actual_table_columns) == 38
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

@@ -200,8 +200,11 @@ from my_pa.domain.relationship.entity import (
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.relationship.governance import (
     ENTITY_CHANGE_REASON_LIMIT,
+    OPEN_EQUIVALENT_PROPOSAL_STATES,
+    PROPOSAL_METHOD_VERSION_LIMIT,
     ActorClass,
     EntityProposalKind,
+    EntityProposalMethod,
     EntityProposalState,
     EvidenceRole,
     MutationAuthority,
@@ -3434,12 +3437,32 @@ entity_observations = Table(
     Index("entity_observations_by_entity", "entity_id"),
 )
 
-#: WP-RI-06: one proposed mutation of the entity plane.
-#: `decided_by`/`decided_at` are NULL exactly while the proposal is open, and a
-#: CHECK says so: "nothing has decided this" is then a shape rather than a
-#: convention. `payload` is JSONB because a proposal is a request to call one of
-#: six repository writes and their argument shapes differ; the service that
-#: applies one is where the shape is checked.
+#: WP-RI-06, widened by WP-RI-B-05: one proposed mutation of the entity plane.
+#:
+#: `decided_by`/`decided_at` are NULL exactly while the proposal is undecided,
+#: and a CHECK says so: "nothing has decided this" is then a shape rather than a
+#: convention. Five states are decisions rather than two, because a deferral, an
+#: invalidation and a corrected acceptance are all a reviewer having made the
+#: call. `superseded` is deliberately not among them and carries `superseded_at`
+#: instead: a proposal a successor overtook was disposed of by nobody, and
+#: putting it in the decision columns would attach an actor to an event with
+#: none.
+#:
+#: `payload` is still JSONB and is no longer unstructured. WP-RI-06 stored
+#: caller-free string pairs and checked their shape where a proposal was
+#: applied; `entities.proposals.create` makes the payload a remote caller's
+#: mapping, so `EntityProposalPayload` checks the field set where the value is
+#: admitted. The column cannot express that -- a per-kind field set is not a
+#: CHECK -- which is why the constraints here cover the columns that *are*
+#: closed sets and the payload's own rule lives in the domain.
+#:
+#: **`(principal_id, dedupe_sha256)` is unique over the open-equivalent states
+#: only, and the partial predicate is the whole point.** A total unique would
+#: mean a proposal refused once could never be raised again on new evidence,
+#: which section 15.2 requires to be possible; no unique at all would let a
+#: producer put the same candidate in front of a reviewer on every run. The
+#: three states named are the ones nothing has finally disposed of, `deferred`
+#: among them -- otherwise re-filing would clear a deferral.
 entity_proposals = Table(
     "entity_proposals",
     METADATA,
@@ -3451,6 +3474,18 @@ entity_proposals = Table(
     Column("observation_ids", JSONB, nullable=False),
     Column("proposed_at", DateTime(timezone=True), nullable=False),
     Column("proposed_by", Text, nullable=False),
+    Column("method", Text, nullable=False),
+    Column("method_version", Text, nullable=False),
+    Column("dedupe_sha256", Text, nullable=False),
+    Column("model_id", Text),
+    Column("model_version", Text),
+    Column("expected_target_version", Integer),
+    Column("review_case_id", Text),
+    Column("accepted_record_type", Text),
+    Column("accepted_record_id", Text),
+    Column("accepted_record_version", Integer),
+    Column("invalidated_reason", Text),
+    Column("superseded_at", DateTime(timezone=True)),
     Column("decided_by", Text),
     Column("decided_at", DateTime(timezone=True)),
     Column("decision_reason", Text),
@@ -3458,12 +3493,86 @@ entity_proposals = Table(
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("kind", EntityProposalKind, name="a_proposal_kind_is_known"),
     _one_of("state", EntityProposalState, name="a_proposal_state_is_known"),
+    _one_of("method", EntityProposalMethod, name="a_proposal_method_is_known"),
+    _one_of(
+        "accepted_record_type",
+        MutationRecordFamily,
+        name="an_accepted_proposal_record_family_is_known",
+    ),
+    _matches(
+        "dedupe_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_proposal_dedupe_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        f"length(method_version) BETWEEN 1 AND {PROPOSAL_METHOD_VERSION_LIMIT} "
+        f"AND (model_id IS NULL OR length(model_id) "
+        f"BETWEEN 1 AND {PROPOSAL_METHOD_VERSION_LIMIT}) "
+        f"AND (model_version IS NULL OR length(model_version) "
+        f"BETWEEN 1 AND {PROPOSAL_METHOD_VERSION_LIMIT})",
+        name="proposal_method_and_model_versions_are_bounded_tokens",
+    ),
     CheckConstraint(
         "length(trim(proposed_by)) > 0",
         name="a_proposal_names_what_proposed_it",
     ),
+    # The rule `relationship_memory_proposals` states about the same pair, and
+    # the reason is section 21.4's: a deterministic proposal naming a model
+    # claims a model ran, and a model proposal naming none is a model conclusion
+    # filed under no authority a reviewer could weigh.
     CheckConstraint(
-        "(state IN ('accepted', 'rejected')) = (decided_by IS NOT NULL)",
+        "(method = 'local_model') = (model_id IS NOT NULL)",
+        name="a_model_proposal_names_its_model",
+    ),
+    CheckConstraint(
+        "(model_id IS NULL) = (model_version IS NULL)",
+        name="a_named_proposal_model_states_its_version",
+    ),
+    CheckConstraint(
+        "expected_target_version IS NULL OR expected_target_version > 0",
+        name="a_proposal_expected_target_version_is_positive",
+    ),
+    # One direction only. An accepted `merge_entities` proposal records reviewed
+    # intent and produces no canonical record -- identity mutation is a separate
+    # operator act -- so acceptance cannot imply a named record. A named record
+    # under any other state would be a promotion with no acceptance behind it.
+    CheckConstraint(
+        "accepted_record_id IS NULL OR state IN ('accepted', 'corrected_accepted')",
+        name="a_proposal_names_its_record_only_when_accepted",
+    ),
+    CheckConstraint(
+        "accepted_record_id IS NULL OR kind NOT IN ('merge_entities', 'split_identity')",
+        name="an_accepted_identity_correction_names_no_record",
+    ),
+    CheckConstraint(
+        "(accepted_record_type IS NULL) = (accepted_record_id IS NULL) "
+        "AND (accepted_record_id IS NULL) = (accepted_record_version IS NULL)",
+        name="an_accepted_proposal_record_is_named_in_full",
+    ),
+    CheckConstraint(
+        "accepted_record_version IS NULL OR accepted_record_version > 0",
+        name="an_accepted_proposal_record_version_is_positive",
+    ),
+    CheckConstraint(
+        "(state = 'invalidated') = (invalidated_reason IS NOT NULL)",
+        name="an_invalidated_proposal_records_why",
+    ),
+    CheckConstraint(
+        f"invalidated_reason IS NULL OR length(invalidated_reason) "
+        f"BETWEEN 1 AND {ENTITY_CHANGE_REASON_LIMIT}",
+        name="a_proposal_invalidation_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "(state = 'superseded') = (superseded_at IS NOT NULL)",
+        name="a_superseded_proposal_records_when",
+    ),
+    CheckConstraint(
+        "superseded_at IS NULL OR superseded_at >= proposed_at",
+        name="a_proposal_is_not_superseded_before_it_was_proposed",
+    ),
+    CheckConstraint(
+        "(state IN ('accepted', 'corrected_accepted', 'rejected', 'deferred', 'invalidated')) "
+        "= (decided_by IS NOT NULL)",
         name="a_proposal_is_decided_exactly_when_something_decided_it",
     ),
     CheckConstraint(
@@ -3483,6 +3592,85 @@ entity_proposals = Table(
     ),
     Index("entity_proposals_by_principal", "principal_id"),
     Index("entity_proposals_by_state", "principal_id", "state"),
+    Index(
+        "an_open_equivalent_proposal_is_raised_once",
+        "principal_id",
+        "dedupe_sha256",
+        unique=True,
+        postgresql_where=text(
+            "state IN ("
+            f"{_literals(frozenset(state.value for state in OPEN_EQUIVALENT_PROPOSAL_STATES))})"
+        ),
+    ),
+)
+
+#: WP-RI-B-05: one exact record a proposal rests on.
+#:
+#: The same one-evidence discipline `entity_fact_evidence_links` states for a
+#: canonical fact and `relationship_memory_proposal_evidence` states for a
+#: memory candidate, applied to the third subject that needed it. Three evidence
+#: kinds where `entity_proposals.observation_ids` holds one, and an
+#: `EvidenceRole` where it holds none -- a JSONB array of observation
+#: identifiers cannot cite the capture span a note came from, and cannot say
+#: that one of the records it lists argues *against* the proposal.
+#:
+#: **No `link_id`, and no `authority`.** This plane issues an identifier prefix
+#: when something has to point at the record: `entity_fact_evidence_links`
+#: carries one because `entity_resolution_decisions.evidence_link_ids` cites
+#: links by identifier, and nothing cites one of these. `(proposal_id, sequence)`
+#: is the ordering key `entity_resolution_decisions` already uses. `authority` is
+#: absent because a proposal has none -- that is what makes it a proposal --
+#: and the authority a promotion carries is recorded on the fact it produces.
+#:
+#: **Same-Principal is structural on one side and a stated residual on the
+#: other**, exactly as its sibling records: the proposal and the observation
+#: carry composite `(id, principal_id)` foreign keys, while `capture_spans` has
+#: no principal partition and `knowledge_id` names no table in this declaration,
+#: so those two are a check the writer must make.
+entity_proposal_evidence_links = Table(
+    "entity_proposal_evidence_links",
+    METADATA,
+    Column("proposal_id", Text, primary_key=True),
+    Column("sequence", Integer, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("entity_observation_id", Text),
+    Column("capture_span_id", Text),
+    Column("knowledge_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("proposal_id", IdKind.ENTITY_PROPOSAL),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("role", EvidenceRole, name="a_proposal_evidence_role_is_known"),
+    CheckConstraint(
+        "sequence > 0",
+        name="proposal_evidence_is_numbered_from_one",
+    ),
+    CheckConstraint(
+        "(entity_observation_id IS NOT NULL)::int "
+        "+ (capture_span_id IS NOT NULL)::int "
+        "+ (knowledge_id IS NOT NULL)::int = 1",
+        name="proposal_evidence_names_exactly_one_record",
+    ),
+    ForeignKeyConstraint(
+        ["proposal_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_proposals.proposal_id",
+            f"{SCHEMA}.entity_proposals.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="proposal_evidence_names_a_proposal_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_observation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_observations.observation_id",
+            f"{SCHEMA}.entity_observations.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="proposal_evidence_cites_an_observation_of_its_principal",
+    ),
+    Index("entity_proposal_evidence_links_by_principal", "principal_id"),
+    Index("entity_proposal_evidence_links_by_observation", "entity_observation_id"),
 )
 
 #: WP-RI-06: the lineage one accepted merge left behind (section 15.3).

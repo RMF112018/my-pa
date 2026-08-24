@@ -157,6 +157,8 @@ from my_pa.domain.relationship.governance import (
     EntityObservation,
     EntityProposal,
     EntityProposalKind,
+    EntityProposalMethod,
+    EntityProposalPayload,
     EntityProposalState,
     EntityResolutionDecision,
     EvidenceRole,
@@ -2136,10 +2138,26 @@ class SqlEntityRepository(EntitiesRepository):
                     proposal_id=proposal.proposal_id,
                     kind=proposal.kind.value,
                     state=proposal.state.value,
-                    payload=dict(proposal.payload),
+                    payload=proposal.payload.as_mapping(),
                     observation_ids=list(proposal.observation_ids),
                     proposed_at=proposal.proposed_at,
                     proposed_by=proposal.proposed_by,
+                    method=proposal.method.value,
+                    method_version=proposal.method_version,
+                    dedupe_sha256=proposal.dedupe_sha256,
+                    model_id=proposal.model_id,
+                    model_version=proposal.model_version,
+                    expected_target_version=proposal.expected_target_version,
+                    review_case_id=proposal.review_case_id,
+                    accepted_record_type=(
+                        None
+                        if proposal.accepted_record_type is None
+                        else proposal.accepted_record_type.value
+                    ),
+                    accepted_record_id=proposal.accepted_record_id,
+                    accepted_record_version=proposal.accepted_record_version,
+                    invalidated_reason=proposal.invalidated_reason,
+                    superseded_at=proposal.superseded_at,
                     decided_by=proposal.decided_by,
                     decided_at=proposal.decided_at,
                     decision_reason=proposal.decision_reason,
@@ -2738,19 +2756,55 @@ def _row_to_fact_evidence_link(row: Row[Any]) -> EntityFactEvidenceLink:
 def _row_to_proposal(row: Row[Any]) -> EntityProposal:
     payload = row.payload if isinstance(row.payload, dict) else {}
     observation_ids = row.observation_ids if isinstance(row.observation_ids, list) else []
+    kind = EntityProposalKind(str(row.kind))
     return EntityProposal(
         proposal_id=str(row.proposal_id),
         principal_id=str(row.principal_id),
-        kind=EntityProposalKind(str(row.kind)),
+        kind=kind,
         state=EntityProposalState(str(row.state)),
-        payload=tuple(sorted((str(k), str(v)) for k, v in payload.items())),
+        # `EntityProposalPayload.of` re-checks the field set on the way out as
+        # well as on the way in. A row written around this repository -- by a
+        # migration, or by a hand-run statement -- would otherwise arrive as a
+        # payload nothing had ever validated, and the field set is the whole of
+        # what stops a stored `principal_id` being read back as one.
+        payload=EntityProposalPayload.of(
+            kind, {str(name): _payload_value(value) for name, value in payload.items()}
+        ),
         observation_ids=tuple(str(item) for item in observation_ids),
         proposed_at=row.proposed_at,
         proposed_by=str(row.proposed_by),
+        method=EntityProposalMethod(str(row.method)),
+        method_version=str(row.method_version),
+        dedupe_sha256=str(row.dedupe_sha256),
+        model_id=_text_or_none(row.model_id),
+        model_version=_text_or_none(row.model_version),
+        expected_target_version=row.expected_target_version,
+        review_case_id=_text_or_none(row.review_case_id),
+        accepted_record_type=(
+            None
+            if row.accepted_record_type is None
+            else MutationRecordFamily(str(row.accepted_record_type))
+        ),
+        accepted_record_id=_text_or_none(row.accepted_record_id),
+        accepted_record_version=row.accepted_record_version,
+        invalidated_reason=_text_or_none(row.invalidated_reason),
+        superseded_at=row.superseded_at,
         decided_by=_text_or_none(row.decided_by),
         decided_at=row.decided_at,
         decision_reason=_text_or_none(row.decision_reason),
     )
+
+
+def _payload_value(value: object) -> str | bool:
+    """One stored payload value as the two shapes a payload admits.
+
+    JSONB round-trips a boolean as a boolean and everything else as whatever it
+    was written as. `bool` is checked first because `isinstance(True, int)` is
+    true in Python, so testing the other order would turn every flag into the
+    string `"True"` -- and a promoter reading that would see a set flag where a
+    cleared one was stored.
+    """
+    return value if isinstance(value, bool) else str(value)
 
 
 def _row_to_merge(row: Row[Any]) -> EntityMergeRecord:

@@ -26,12 +26,17 @@ from my_pa.domain.relationship.governance import (
     MENTION_DISPLAY_NAME_LIMIT,
     EntityObservation,
     EntityProposalKind,
+    EntityProposalMethod,
     EntityProposalState,
     ObservationKind,
     ReviewRequirement,
     requirement_for,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.relationship.proposal_payload import (
+    EntityProposalPayload,
+    dedupe_digest,
+)
 from tests.conftest import FakeUnitOfWork, World
 
 PRINCIPAL = "prn_aaaa0001aaaa0001aaaa0001"
@@ -237,6 +242,8 @@ def test_proposing_changes_nothing(world: World, governing: EntityGovernanceServ
         observation_ids=(),
         proposed_by="resolver",
         proposed_at=WHEN,
+        method=EntityProposalMethod.DETERMINISTIC,
+        method_version="1",
     )
     stored = _entities(world).get(PRINCIPAL, ALICE_TWO)
     assert stored is not None
@@ -252,10 +259,12 @@ def test_an_open_proposal_names_nobody_who_decided_it(
         PRINCIPAL,
         proposal_id="eprp_aaaa0001aaaa0001",
         kind=EntityProposalKind.RECORD_ALIAS,
-        payload={"alias": "Ali"},
+        payload={"entity_id": ALICE, "alias_type": "nickname", "display_value": "Ali"},
         observation_ids=(),
         proposed_by="extractor",
         proposed_at=WHEN,
+        method=EntityProposalMethod.DETERMINISTIC,
+        method_version="1",
     )
     assert proposal.state is EntityProposalState.PROPOSED
     assert proposal.decided_by is None
@@ -267,16 +276,23 @@ def test_a_proposal_cannot_name_a_decider_while_open() -> None:
     """The shape, not the convention: an undecided proposal has no actor to read."""
     from my_pa.domain.relationship.governance import EntityProposal
 
+    payload = EntityProposalPayload.of(
+        EntityProposalKind.RECORD_ALIAS,
+        {"entity_id": ALICE, "alias_type": "nickname", "display_value": "Ali"},
+    )
     with pytest.raises(ValueError, match="only a decided one"):
         EntityProposal(
             proposal_id="eprp_aaaa0001aaaa0001",
             principal_id=PRINCIPAL,
             kind=EntityProposalKind.RECORD_ALIAS,
             state=EntityProposalState.PROPOSED,
-            payload=(),
+            payload=payload,
             observation_ids=(),
             proposed_at=WHEN,
             proposed_by="extractor",
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="1",
+            dedupe_sha256=dedupe_digest(payload),
             decided_by="someone",
             decided_at=WHEN,
         )
@@ -306,6 +322,8 @@ def _staged_merge(world: World, governing: EntityGovernanceService) -> None:
         observation_ids=(),
         proposed_by="resolver",
         proposed_at=WHEN,
+        method=EntityProposalMethod.DETERMINISTIC,
+        method_version="1",
     )
 
 

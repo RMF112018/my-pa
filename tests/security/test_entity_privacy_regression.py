@@ -89,12 +89,14 @@ from my_pa.domain.relationship.governance import (
     EntityObservation,
     EntityProposal,
     EntityProposalKind,
+    EntityProposalMethod,
     EntityProposalState,
     ObservationAuthority,
     ObservationKind,
     ResolutionDisposition,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
+from my_pa.domain.relationship.proposal_payload import EntityProposalPayload, dedupe_digest
 from my_pa.domain.relationship.resolution import ResolutionOutcome
 
 WHEN: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
@@ -119,6 +121,16 @@ OWN_ENTITY: Final = "ent_mine0002mine00002"
 #: A second entity of my own, so a write of mine that has to name two of them
 #: does not have to borrow one of theirs.
 OWN_SECOND: Final = "ent_mine0003mine00003"
+
+#: The merge payload every staged proposal below carries. One value rather than
+#: one per site: these tests are about which Principal may read a proposal, and
+#: a payload that differed between them would vary something the assertions do
+#: not measure. It names entities of mine, because a payload naming a foreign
+#: entity would be testing the payload rather than the partition.
+_MERGE_PAYLOAD: Final = EntityProposalPayload.of(
+    EntityProposalKind.MERGE_ENTITIES,
+    {"retained_entity_id": OWN_ENTITY, "merged_entity_id": OWN_SECOND},
+)
 
 #: A display name that is also an instruction. If any of it reaches a tool
 #: description, a schema, or an unrelated payload, the entity plane is an
@@ -838,9 +850,12 @@ def test_a_collision_read_judges_only_this_principals_rows(staged: Scene, kind: 
             "proposal_id": identifier,
             "kind": EntityProposalKind.MERGE_ENTITIES,
             "state": EntityProposalState.PROPOSED,
-            "payload": (),
+            "payload": _MERGE_PAYLOAD,
             "observation_ids": (),
             "proposed_at": WHEN,
+            "method": EntityProposalMethod.DETERMINISTIC,
+            "method_version": "1",
+            "dedupe_sha256": dedupe_digest(_MERGE_PAYLOAD),
         }
         staged.world.entity_proposals.append(
             EntityProposal(**common, principal_id=theirs, proposed_by="their operator")  # type: ignore[arg-type]
@@ -912,10 +927,13 @@ def test_an_entity_merged_away_once_is_merged_away_for_everyone(staged: Scene) -
             principal_id=mine,
             kind=EntityProposalKind.MERGE_ENTITIES,
             state=EntityProposalState.ACCEPTED,
-            payload=(),
+            payload=_MERGE_PAYLOAD,
             observation_ids=(),
             proposed_at=WHEN,
             proposed_by="my operator",
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="1",
+            dedupe_sha256=dedupe_digest(_MERGE_PAYLOAD),
             decided_by="my operator",
             decided_at=WHEN,
             decision_reason="same person",
@@ -1069,10 +1087,13 @@ def test_an_identifier_another_principal_holds_is_unavailable(staged: Scene, kin
                     principal_id=mine,
                     kind=EntityProposalKind.MERGE_ENTITIES,
                     state=EntityProposalState.ACCEPTED,
-                    payload=(),
+                    payload=_MERGE_PAYLOAD,
                     observation_ids=(),
                     proposed_at=WHEN,
                     proposed_by="my operator",
+                    method=EntityProposalMethod.DETERMINISTIC,
+                    method_version="1",
+                    dedupe_sha256=dedupe_digest(_MERGE_PAYLOAD),
                     decided_by="my operator",
                     decided_at=WHEN,
                     decision_reason="same person",

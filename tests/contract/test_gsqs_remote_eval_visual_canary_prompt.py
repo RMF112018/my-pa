@@ -7,10 +7,10 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 FULL_PROMPT = ROOT / "ops/goodnotes/gsqs/b0/chatllm-remote-eval-prompt-v1.txt"
 CANARY_PROMPT = ROOT / "ops/goodnotes/gsqs/b0/chatllm-remote-eval-visual-canary-prompt-v1.txt"
+CANARY_PROMPT_V2 = ROOT / "ops/goodnotes/gsqs/b0/chatllm-remote-eval-visual-canary-prompt-v2.txt"
 
 
-def test_visual_canary_prompt_stops_after_one_successful_submit() -> None:
-    text = CANARY_PROMPT.read_text(encoding="utf-8")
+def _assert_single_case_visual_canary_prompt(text: str) -> None:
     assert "goodnotes.eval.status" in text
     assert "goodnotes.eval.next" in text
     assert "goodnotes.eval.submit" in text
@@ -23,6 +23,21 @@ def test_visual_canary_prompt_stops_after_one_successful_submit() -> None:
     assert "x_min" in text
     assert "expected token" not in text.lower()
     assert "gold" in text  # forbidden to infer/request gold, must mention the prohibition
+
+
+def test_visual_canary_prompt_stops_after_one_successful_submit() -> None:
+    _assert_single_case_visual_canary_prompt(CANARY_PROMPT.read_text(encoding="utf-8"))
+
+
+def test_visual_canary_prompt_v2_ordinary_visual_inspection_only() -> None:
+    text = CANARY_PROMPT_V2.read_text(encoding="utf-8")
+    _assert_single_case_visual_canary_prompt(text)
+    lower = text.lower()
+    assert "ordinary visual inspection" in lower
+    assert "do not parse png" in lower
+    assert "zlib" in lower
+    assert "do not write" in lower and "python" in lower
+    assert "pixels" in lower
 
 
 def test_full_run_frozen_prompt_is_unchanged_as_a_repetition_loop() -> None:

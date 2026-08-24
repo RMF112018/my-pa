@@ -338,20 +338,36 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("command", "principal_id"),
         ("held", "principal_id"),
     ),
-    # WP-29's Relationship Memory service. Its three commands are internal
-    # dataclasses whose docstrings each say "with the Principal already
-    # resolved", and the transport-facing commands the normalizer builds carry
-    # no `principal_id` field at all — so there is nothing a caller could have
-    # supplied for these three reads to be confused with. The service copies the
-    # resolved value onto the `MemoryWriteRequest` it hands the repository, and
-    # the fourth read is that request's own field, used to scope the replay
-    # lookup so a foreign idempotency key answers as absent rather than
-    # returning another Principal's receipt.
+    # WP-29's Relationship Memory service, and WP-RI-05's producer beside it.
+    # Every command in the module is an internal dataclass whose docstring says
+    # "with the Principal already resolved", and the transport-facing commands
+    # the normalizer builds carry no `principal_id` field at all — so there is
+    # nothing a caller could have supplied for any of these reads to be confused
+    # with. The direct path accounts for three: the service copies the resolved
+    # value onto the `MemoryWriteRequest` it hands the repository, and the
+    # `request` read is that request's own field, used to scope the replay lookup
+    # so a foreign idempotency key answers as absent rather than returning
+    # another Principal's receipt.
+    #
+    # `propose` accounts for the other three, and the first of them is the one
+    # this registry exists to distinguish: `subject.principal_id !=
+    # command.principal_id` reads the value **in order to refuse a mismatch**,
+    # against the entity a Principal-scoped read returned. That is the same
+    # posture `application/entity_governance.py` takes above — checked, never
+    # trusted — and it is why the `subject` read is registered beside it rather
+    # than treated as a second statement of ownership. The remaining two stamp
+    # the resolved Principal onto the proposal record and onto each of its
+    # evidence links, so a candidate cannot be recorded into a partition the
+    # acting Principal does not own.
     "application/relationship_memory.py": (
         ("command", "principal_id"),
         ("command", "principal_id"),
         ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
         ("request", "principal_id"),
+        ("subject", "principal_id"),
     ),
     # The context card's own invariant, and it reads both values *in order to
     # refuse a mismatch*: a card memory pairs a stored memory with a stored

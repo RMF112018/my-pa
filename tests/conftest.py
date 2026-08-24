@@ -4221,13 +4221,27 @@ class _Entities(EntitiesRepository):
                 return
         raise UnknownScopeError("a decision names an open proposal in this scope")
 
-    # --- the proposal plane's other four writers -----------------------------
+    # --- the proposal plane's other readers and writers ----------------------
     #
-    # Moved here from `tests/unit/entity_proposal_fakes.py`, which subclassed
-    # this fake only because this file was frozen for the worker that needed
-    # them. Each mirrors `SqlEntityRepository`, and the mirroring is the whole
-    # value of the fake: a unit test that proves a rule against a fake with no
-    # such rule proves the opposite of what the server does.
+    # Five moved here from `tests/unit/entity_proposal_fakes.py`, which
+    # subclassed this fake only because this file was frozen for the worker that
+    # needed them; `invalidate_proposal` is the sixth and was never faked
+    # anywhere. Each mirrors `SqlEntityRepository`, and the mirroring is the
+    # whole value of the fake: a unit test that proves a rule against a fake with
+    # no such rule proves the opposite of what the server does — and a port
+    # method with no fake at all is worse still, because the divergence has
+    # nowhere below the database tier to show up. `invalidate_proposal` is here
+    # for exactly that: its guarded `UPDATE` carried a stale one-state predicate
+    # to an integration head, catchable only against a real server.
+    #
+    # Two mirrorings are deliberately partial and are stated rather than
+    # implied. `record_proposal_evidence_link` checks the proposal and the
+    # observation against this partition but does not walk a `capture_span_id`
+    # to the capture that owns it, which the server does; `World` holds no
+    # capture-span plane to walk. `record_proposal_promotion` reaches the
+    # server's "a promoted record version starts at one" through
+    # `EntityProposal.__post_init__` rather than by restating it, so the refusal
+    # happens with a different message.
 
     def proposal_by_dedupe(
         self,
@@ -4324,6 +4338,8 @@ class _Entities(EntitiesRepository):
         flight: that is an answer about the world, not an error about scope.
         """
         self._world.fail("entities.supersede_proposal")
+        if successor_proposal_id == proposal_id:
+            raise ValueError("a proposal is not its own successor")
         for index, held in enumerate(self._world.entity_proposals):
             if held.proposal_id != proposal_id or held.principal_id != principal_id:
                 continue
@@ -4337,6 +4353,56 @@ class _Entities(EntitiesRepository):
             )
             return True
         return False
+
+    def invalidate_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        reason: str,
+        decided_by: str,
+        decided_at: datetime,
+    ) -> None:
+        """Close one open proposal a governed merge took the subject out from under.
+
+        **The merge's writer, and not the reviewer's**: `_Reviews.
+        invalidate_entity_proposal` is the disposition a person records on a
+        review case, and it writes `decision_reason` beside this column because
+        somebody decided something. Nobody decided anything here — the identity
+        the proposal named stopped existing under that name — so only
+        `invalidated_reason` is written, exactly as `SqlEntityRepository.
+        invalidate_proposal` does.
+
+        **`UNDECIDED_PROPOSAL_STATES` is the predicate, read from the domain
+        rather than restated**, and it is why this method is here at all. The
+        guarded `UPDATE` it mirrors carried the `proposed` literal until
+        `WP-RI-B-05` made `initial_state_for` write `needs_review`, and the
+        resulting mismatch — a merge planning an invalidation the statement then
+        matched zero rows for — reached an integration head because no fake on
+        this plane declared the method, so nothing below the database tier could
+        see it. A fake that mirrors the predicate is what makes the next such
+        divergence a FAST failure. `DEFERRED` stays outside it for the server's
+        own stated reason: this statement overwrites `decided_by`, and a deferred
+        proposal already names the reviewer who deferred it.
+
+        `UnknownScopeError` rather than a `False` return, because that is the
+        rowcount-zero answer the port gives.
+        """
+        self._world.fail("entities.invalidate_proposal")
+        for index, held in enumerate(self._world.entity_proposals):
+            if held.proposal_id != proposal_id or held.principal_id != principal_id:
+                continue
+            if held.state not in UNDECIDED_PROPOSAL_STATES:
+                break
+            self._world.entity_proposals[index] = replace(
+                held,
+                state=EntityProposalState.INVALIDATED,
+                invalidated_reason=reason,
+                decided_by=decided_by,
+                decided_at=ensure_utc(decided_at),
+            )
+            return
+        raise UnknownScopeError("an invalidation names an open proposal in this scope")
 
     def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
         self._world.fail("entities.record_merge")

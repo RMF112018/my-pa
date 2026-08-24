@@ -6,7 +6,7 @@ source-, rule- or model-derived candidate becomes memory only when a reviewer
 decides so (`RM-AC-005`, `RM-AC-016`, `RM-API-AC-011`, `RM-API-AC-012`,
 `RM-P-AC-008`).
 
-Seven claims carry this path and each is asserted against the server rather than
+Eight claims carry this path and each is asserted against the server rather than
 against the code that usually calls it:
 
 * **A proposal is not memory.** Its invisibility to `page_for_entity` and
@@ -39,8 +39,19 @@ against the code that usually calls it:
   UPDATE while every one of that module's forty tests, and every one of the
   twenty-four here, stayed green. The population is `Disposition`'s own members,
   so a disposition the router grows arrives here unstated.
-* **The producer writes a row this database takes.** The seventh claim, and the
-  newest: `RelationshipMemoryProposalService` fills the proposal columns, and the
+* **An invalidation is not a rejection.** The eighth claim, and the newest
+  (Manager ruling R-8, `WP-RI-B-05`). `invalidate` says the basis went away and
+  `reject` says the reviewer judged the claim wrong, so the two are driven side
+  by side and every trace a later suppression rule could key on — the stored
+  state, the candidate's `invalidated_reason`, the disposition on the decision
+  chain, the state the case presents — is asserted to differ. The structural half
+  is driven rather than read: every disposition with a route is decided against
+  the server on a candidate of its own, and exactly one is allowed to leave
+  `rejected` behind. The reason column's own CHECKs are asked directly, including
+  the two that were already there, because the change is additive and "it takes
+  what it took before" is a claim about the server.
+* **The producer writes a row this database takes.** The seventh claim:
+  `RelationshipMemoryProposalService` fills the proposal columns, and the
   last section drives it through an insert-only adapter so the conditional
   pairings the schema enforces — the model triple, the sensitivity floor — are
   checked against the service that fills them rather than against a fixture
@@ -113,6 +124,7 @@ from my_pa.infrastructure.persistence.relationship_memory_review import (
 from my_pa.infrastructure.persistence.tables import (
     relationship_memory_proposal_evidence,
     relationship_memory_proposals,
+    relationship_memory_review_decisions,
 )
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
@@ -151,6 +163,17 @@ CORRECTED_NOTE: Final = "Synthetic subject asked for weekly closeout updates in 
 #: A note the user writes themselves, sharing the proposal's search term so one
 #: `search` matches both and the two rows differ in nothing but authority.
 OWN_NOTE: Final = "Synthetic subject reads closeout mail on Fridays."
+
+#: The reason an invalidation states, and it is a statement about the *basis*
+#: rather than about the claim. A rejection's reason would be the opposite kind
+#: of sentence, which is the distinction `WP-RI-B-05` exists to keep.
+MOOT_BASIS: Final = "the source capture was retracted, so the basis no longer stands"
+
+#: The dispositions `ReviewDecisionRequest` refuses to be built without a reason
+#: for. Restated rather than imported from the request's own private class
+#: attribute, on `tests/unit/test_entity_proposal_review.py`'s precedent: a
+#: constant read out of the object under test agrees with it by construction.
+_REASON_REQUIRED: Final = frozenset({Disposition.ESCALATE, Disposition.INVALIDATE})
 
 WHEN: Final = datetime(2026, 8, 22, 12, tzinfo=UTC)
 LATER: Final = datetime(2026, 8, 22, 13, tzinfo=UTC)
@@ -331,8 +354,21 @@ def _decision(
     expected_review_version: int = 0,
     principal_id: str = PRINCIPAL_A,
     corrected_value: str | None = None,
+    reason: str | None = None,
     at: datetime = LATER,
 ) -> ReviewDecisionRequest:
+    """One request, with the reason the *request* refuses to be built without.
+
+    `ReviewDecisionRequest` requires a reason on `escalate` and `invalidate` and
+    refuses one on `accept`, `correct_and_accept` and `reprocess`, so a helper
+    that took no reason could not build half of `Disposition` and a helper that
+    always supplied one could not build the other half. `_REASON_REQUIRED`
+    restates the two, in the shape `tests/unit/test_entity_proposal_review.py`
+    restates its own: a test that imported the request's private class attribute
+    would agree with it by construction and prove nothing about it.
+    """
+    if reason is None and disposition in _REASON_REQUIRED:
+        reason = MOOT_BASIS
     return ReviewDecisionRequest(
         review_case_id=review_case_id,
         expected_review_version=expected_review_version,
@@ -343,6 +379,7 @@ def _decision(
         policy_version="policy-v1",
         decided_at=at,
         corrected_value=corrected_value,
+        reason=reason,
     )
 
 
@@ -372,6 +409,48 @@ def _proposal_row(connection: Connection, memory_proposal_id: str) -> Row[Any]:
             relationship_memory_proposals.c.memory_proposal_id == memory_proposal_id
         )
     ).one()
+
+
+def _ledger_rows(connection: Connection, review_case_id: str) -> list[Row[Any]]:
+    """One case's decision chain, oldest first."""
+    return list(
+        connection.execute(
+            select(relationship_memory_review_decisions)
+            .where(relationship_memory_review_decisions.c.review_case_id == review_case_id)
+            .order_by(relationship_memory_review_decisions.c.sequence)
+        ).all()
+    )
+
+
+def _ledger_insert(
+    memory_proposal_id: str,
+    review_case_id: str,
+    disposition: Disposition,
+    *,
+    reason: str | None = None,
+    corrected_statement: str | None = None,
+    sequence: int = 1,
+) -> Any:  # noqa: ANN401 - a SQLAlchemy Insert
+    """One ledger row built by hand, so the CHECKs are asked and not the writer.
+
+    `decide_relationship_memory_review` refuses several of these shapes before
+    the server sees them, and that refusal is the application's. What a CHECK
+    claims is that no row of that shape can exist at all, which is only checkable
+    by trying to insert one.
+    """
+    return insert(relationship_memory_review_decisions).values(
+        decision_id=issue_identifier(IdKind.REVIEW_DECISION),
+        memory_proposal_id=memory_proposal_id,
+        review_case_id=review_case_id,
+        principal_id=PRINCIPAL_A,
+        sequence=sequence,
+        disposition=disposition.value,
+        corrected_statement=corrected_statement,
+        reason=reason,
+        correlation_id=issue_identifier(IdKind.CORRELATION),
+        audit_id=issue_identifier(IdKind.AUDIT),
+        decided_at=LATER,
+    )
 
 
 # --- a proposal is not memory -------------------------------------------------
@@ -834,6 +913,14 @@ def test_mark_unresolved_leaves_the_stored_state_alone_and_says_so_on_the_case(
 def test_a_disposition_with_no_route_is_unsupported(
     two_principals: Engine, disposition: Disposition
 ) -> None:
+    """Two, not three: `invalidate` left this list under Manager ruling R-8.
+
+    `reprocess` still has no eligible route — nothing on this plane mints a
+    successor candidate against current evidence — and `escalate` still has no
+    ceiling to raise a memory case to. Both reasons are about this plane and
+    neither was the reason `invalidate` was refused, which was that the ledger
+    had no column for the reason the disposition requires.
+    """
     with two_principals.begin() as connection:
         _, review_case_id, _, _ = _open_proposal(connection)
         before = _counts(connection)
@@ -843,6 +930,357 @@ def test_a_disposition_with_no_route_is_unsupported(
 
     with two_principals.connect() as connection:
         assert _counts(connection) == before
+
+
+# --- invalidate: the basis went away, and it is not a rejection ---------------
+#
+# Manager ruling R-8. `invalidate` is a disposition `review.decide` publishes and
+# `relationship_memory.propose` is a subject kind this phase creates, so an
+# unreachable disposition here was a hole in this phase's own surface. The four
+# properties the ruling names are asserted separately below because they fail for
+# different reasons: the reason is recorded; no canonical record is created; the
+# lineage is retained; and — the one the ruling turns on — the act is *not* a
+# rejection and files no negative finding a later suppression rule could read.
+
+
+def test_an_invalidation_records_why_and_creates_no_canonical_record(
+    two_principals: Engine,
+) -> None:
+    """State, reason, and the three promotion tables untouched.
+
+    The reason is written twice and to two different records, which is deliberate
+    rather than duplication: `relationship_memory_review_decisions.reason` is the
+    reviewer's act, and `relationship_memory_proposals.invalidated_reason` is the
+    candidate's own record of why it stopped standing — the column
+    `RelationshipMemoryProposal` has always declared and that nothing wrote until
+    `WP-RI-B-05`. A state written with the reason dropped would record that a
+    basis failed without recording how.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+        before = _counts(connection)
+
+    with two_principals.begin() as connection:
+        decision = decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.INVALIDATE)
+        )
+
+    with two_principals.connect() as connection:
+        after = _counts(connection)
+        stamped = _proposal_row(connection, proposal_id)
+        ledger = _ledger_rows(connection, review_case_id)
+        page = SqlRelationshipMemoryRepository(connection).page_for_entity(
+            DANA, principal_id=PRINCIPAL_A, limit=10
+        )
+
+    assert decision.disposition is Disposition.INVALIDATE
+    assert decision.proposal_state is ProposalState.INVALIDATED
+    assert after == {
+        **before,
+        "relationship_memory_review_decisions": before["relationship_memory_review_decisions"] + 1,
+    }
+    assert page.memories == (), "an invalidation creates no memory"
+    assert stamped.state == MemoryProposalState.INVALIDATED.value
+    assert stamped.invalidated_reason == MOOT_BASIS
+    assert stamped.accepted_memory_id is None
+    assert stamped.accepted_memory_version_id is None
+    assert [(row.disposition, row.reason) for row in ledger] == [
+        (Disposition.INVALIDATE.value, MOOT_BASIS)
+    ]
+
+
+def test_an_invalidation_is_not_a_rejection_and_leaves_no_negative_finding(
+    two_principals: Engine,
+) -> None:
+    """The distinction Manager ruling R-8 turns on, asserted rather than argued.
+
+    `reject` means "I looked and judged this wrong" and is this plane's negative
+    finding about the claim: it is the signal a suppression rule reads back to
+    stop re-offering a known-bad candidate. `invalidate` means the basis went
+    away and judges the claim not at all. If a reviewer had to spend `reject` on
+    a moot candidate, the row left behind would be a negative finding nobody
+    made — so the two are compared side by side here, against a real server, and
+    every readable trace a suppression rule could key on is asserted to differ.
+
+    The last assertion is the structural one: exactly one disposition leaves
+    `rejected` behind. It is derived from the router's own map by driving every
+    member that has a route, so a later change sending `invalidate` to `rejected`
+    reddens here rather than quietly turning invalidations into refusals.
+    """
+    with two_principals.begin() as connection:
+        invalidated_id, invalidated_case, _, _ = _open_proposal(connection)
+        rejected_id, rejected_case, _, _ = _open_proposal(connection)
+
+    with two_principals.begin() as connection:
+        decide_relationship_memory_review(
+            connection, _decision(invalidated_case, Disposition.INVALIDATE)
+        )
+        decide_relationship_memory_review(
+            connection, _decision(rejected_case, Disposition.REJECT, reason="the claim is wrong")
+        )
+
+    with two_principals.connect() as connection:
+        invalidated = _proposal_row(connection, invalidated_id)
+        rejected = _proposal_row(connection, rejected_id)
+        invalidated_ledger = _ledger_rows(connection, invalidated_case)
+        rejected_ledger = _ledger_rows(connection, rejected_case)
+        cases = {
+            case.review_case_id: case
+            for case in relationship_memory_review_cases(
+                connection, principal_id=PRINCIPAL_A, limit=10
+            )
+        }
+
+    assert invalidated.state == MemoryProposalState.INVALIDATED.value
+    assert rejected.state == MemoryProposalState.REJECTED.value
+    assert invalidated.state != rejected.state, (
+        "an invalidated candidate and a rejected one are indistinguishable on the "
+        "column every later read of the proposal keys on"
+    )
+    assert invalidated.invalidated_reason == MOOT_BASIS
+    assert rejected.invalidated_reason is None, (
+        "a rejection is a finding about the claim and records no invalidation reason"
+    )
+    assert [row.disposition for row in invalidated_ledger] == [Disposition.INVALIDATE.value]
+    assert Disposition.REJECT.value not in {row.disposition for row in invalidated_ledger}, (
+        "an invalidation files a `reject` row, which is the false negative-evidence "
+        "signal this disposition exists to avoid"
+    )
+    assert [row.disposition for row in rejected_ledger] == [Disposition.REJECT.value]
+    assert cases[invalidated_case].proposal_state is ProposalState.INVALIDATED
+    assert cases[rejected_case].proposal_state is ProposalState.REJECTED
+
+
+def test_exactly_one_disposition_leaves_a_rejected_candidate_behind(
+    two_principals: Engine,
+) -> None:
+    """The structural half of the distinction, driven rather than read off a map.
+
+    `rejected` is the stored state a suppression rule would key on to stop
+    re-offering a known-bad candidate. Every disposition with a route is driven
+    against the server on a candidate of its own and the stored state is read
+    back, so the claim is about what the router *does* and not about what
+    `_STORED_STATE` says it does. If a later change sent `invalidate` to
+    `rejected` — the substitution Manager ruling R-8 refuses — this is what goes
+    red, and it goes red whether the change is made in the map or anywhere else
+    on the path.
+    """
+    stored: dict[str, set[str]] = {}
+    for disposition in Disposition:
+        with two_principals.begin() as connection:
+            proposal_id, review_case_id, _, _ = _open_proposal(connection)
+        try:
+            with two_principals.begin() as connection:
+                decide_relationship_memory_review(
+                    connection,
+                    _decision(
+                        review_case_id,
+                        disposition,
+                        corrected_value=(
+                            CORRECTED_NOTE
+                            if disposition is Disposition.CORRECT_AND_ACCEPT
+                            else None
+                        ),
+                    ),
+                )
+        except ReviewUnsupportedError:
+            continue
+        with two_principals.connect() as connection:
+            state = str(_proposal_row(connection, proposal_id).state)
+        stored.setdefault(state, set()).add(disposition.value)
+
+    assert stored[MemoryProposalState.REJECTED.value] == {Disposition.REJECT.value}, (
+        f"{sorted(stored[MemoryProposalState.REJECTED.value])} leave a `rejected` "
+        "candidate behind. Only a rejection may: `rejected` is this plane's negative "
+        "finding about the claim, and a second disposition arriving there makes a moot "
+        "basis indistinguishable from a refusal on every later read"
+    )
+    assert stored[MemoryProposalState.INVALIDATED.value] == {Disposition.INVALIDATE.value}
+
+
+def test_an_invalidated_case_keeps_its_candidate_evidence_and_decision_chain(
+    two_principals: Engine,
+) -> None:
+    """Retain lineage: nothing is deleted and the case stays readable.
+
+    The candidate row, the exact evidence it rested on and the decision that
+    closed it are all still there afterwards, and the case is still on the
+    canonical Review listing carrying the disposition and the review version. An
+    invalidation that removed the candidate would destroy the record of what was
+    proposed and on what, which is the opposite of what "the basis is moot"
+    means.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, observations, _ = _open_proposal(connection, evidence=2)
+
+    with two_principals.begin() as connection:
+        decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.INVALIDATE)
+        )
+
+    with two_principals.connect() as connection:
+        held = _proposal_row(connection, proposal_id)
+        evidence = connection.execute(
+            select(relationship_memory_proposal_evidence.c.entity_observation_id)
+            .where(relationship_memory_proposal_evidence.c.memory_proposal_id == proposal_id)
+            .order_by(relationship_memory_proposal_evidence.c.entity_observation_id)
+        ).scalars()
+        cases = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+
+    assert held.memory_proposal_id == proposal_id
+    assert held.proposed_statement == PROPOSED_NOTE
+    assert list(evidence) == sorted(observations)
+    assert [case.review_case_id for case in cases] == [review_case_id]
+    assert cases[0].latest_disposition is Disposition.INVALIDATE
+    assert cases[0].review_version == 1
+
+
+def test_an_accepted_case_cannot_then_be_invalidated(two_principals: Engine) -> None:
+    """The terminal-acceptance guard covers the new disposition too.
+
+    Worth asserting rather than assuming: an invalidation stamps the proposal's
+    state, and stamping `invalidated` over an accepted candidate would leave a
+    promoted memory whose proposal denies having produced it — and would have to
+    strip `accepted_memory_id` to satisfy the schema. The case is terminal, so
+    nothing of the sort happens.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+    with two_principals.begin() as connection:
+        decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.ACCEPT))
+    with two_principals.connect() as connection:
+        after_acceptance = _counts(connection)
+
+    with two_principals.begin() as connection, pytest.raises(ReviewConflictError):
+        decide_relationship_memory_review(
+            connection,
+            _decision(review_case_id, Disposition.INVALIDATE, expected_review_version=1),
+        )
+
+    with two_principals.connect() as connection:
+        stamped = _proposal_row(connection, proposal_id)
+        assert _counts(connection) == after_acceptance
+    assert stamped.state == MemoryProposalState.ACCEPTED.value
+    assert stamped.accepted_memory_id is not None
+    assert stamped.invalidated_reason is None
+
+
+# --- the reason column's own constraints --------------------------------------
+
+
+def test_the_ledger_refuses_an_invalidation_that_states_no_reason(
+    two_principals: Engine,
+) -> None:
+    """Asked of the server, not of the request that would have refused first.
+
+    `ReviewDecisionRequest` will not build an invalidation without a reason, but
+    a request object is not what a database enforces. The CHECK is what makes
+    "an invalidated candidate says why" true of every row that exists, including
+    rows a later writer inserts by some other route.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(_ledger_insert(proposal_id, review_case_id, Disposition.INVALIDATE))
+    assert "a_memory_invalidation_states_why" in str(refused.value)
+
+
+def test_the_ledger_refuses_a_reason_on_a_disposition_that_explains_nothing(
+    two_principals: Engine,
+) -> None:
+    """A reason explains a departure; an acceptance is not one.
+
+    The same sentence `entity_proposal_review_decisions` makes, and the reason it
+    matters here: a reason attached to an acceptance would attribute a refusal to
+    a decision nobody refused, which is the class of false record this ledger's
+    other CHECKs exist to refuse.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            _ledger_insert(proposal_id, review_case_id, Disposition.ACCEPT, reason=MOOT_BASIS)
+        )
+    assert "a_memory_review_reason_explains_a_departure" in str(refused.value)
+
+
+@pytest.mark.parametrize(("reason", "label"), [("   ", "blank"), ("m" * 501, "over the bound")])
+def test_the_ledger_refuses_a_reason_that_is_blank_or_unbounded(
+    two_principals: Engine, reason: str, label: str
+) -> None:
+    """`REVIEW_REASON_LIMIT` is 500, and a whitespace reason says nothing.
+
+    Both halves, because a bound that admitted `'   '` would let an invalidation
+    satisfy "states why" with no statement in it — which is the failure the
+    column was added to prevent, arrived at from the other side.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            _ledger_insert(proposal_id, review_case_id, Disposition.INVALIDATE, reason=reason)
+        )
+    assert "a_memory_review_reason_is_bounded" in str(refused.value), label
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    [Disposition.REJECT, Disposition.DEFER, Disposition.MARK_UNRESOLVED],
+)
+def test_the_reason_column_admits_and_still_permits_an_omitted_reason(
+    two_principals: Engine, disposition: Disposition
+) -> None:
+    """The additive half: what the ledger took before, it still takes.
+
+    The three dispositions section 13 gives a reason may state one and may leave
+    it out, exactly as they could before the column existed — every capture and
+    GoodNotes reviewer that ships today sends no reason on any of them, and a
+    column that made one mandatory would have been a regression dressed as a
+    constraint. Both rows are written and read back.
+    """
+    with two_principals.begin() as connection:
+        first_id, first_case, _, _ = _open_proposal(connection)
+        second_id, second_case, _, _ = _open_proposal(connection)
+
+    with two_principals.begin() as connection:
+        connection.execute(_ledger_insert(first_id, first_case, disposition, reason="stated"))
+        connection.execute(_ledger_insert(second_id, second_case, disposition))
+
+    with two_principals.connect() as connection:
+        stated = _ledger_rows(connection, first_case)
+        silent = _ledger_rows(connection, second_case)
+
+    assert [row.reason for row in stated] == ["stated"]
+    assert [row.reason for row in silent] == [None]
+
+
+def test_a_correction_still_matches_its_disposition_beside_the_new_column(
+    two_principals: Engine,
+) -> None:
+    """The CHECK that was already here is untouched, proved by asking it again.
+
+    `WP-RI-B-05` adds a column and three constraints to this table and relaxes
+    none. `a_memory_correction_matches_its_disposition` still refuses a
+    corrected statement on any disposition but `correct_and_accept`, including
+    the new one, so the additive claim is measured rather than asserted.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            _ledger_insert(
+                proposal_id,
+                review_case_id,
+                Disposition.INVALIDATE,
+                reason=MOOT_BASIS,
+                corrected_statement=CORRECTED_NOTE,
+            )
+        )
+    assert "a_memory_correction_matches_its_disposition" in str(refused.value)
 
 
 # --- what each disposition sends to the server --------------------------------
@@ -956,6 +1394,13 @@ _TABLES_WRITTEN_PER_DISPOSITION: Final[dict[Disposition, frozenset[str]]] = {
         {"relationship_memory_review_decisions", "relationship_memory_proposals"}
     ),
     Disposition.MARK_UNRESOLVED: frozenset({"relationship_memory_review_decisions"}),
+    #: `WP-RI-B-05`, Manager ruling R-8. `reject`'s two tables and none of the
+    #: three promotion tables, which is "invalidate creates no canonical record"
+    #: read off the wire. That it is not *the same act* as a reject is a claim
+    #: about the values written and is held next door.
+    Disposition.INVALIDATE: frozenset(
+        {"relationship_memory_review_decisions", "relationship_memory_proposals"}
+    ),
     Disposition.REPROCESS: frozenset(),
     Disposition.ESCALATE: frozenset(),
 }

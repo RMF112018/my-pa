@@ -601,6 +601,16 @@ DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str
                 {"relationship_memory_proposals", "relationship_memory_review_decisions"}
             ),
             "mark_unresolved": frozenset({"relationship_memory_review_decisions"}),
+            # `WP-RI-B-05`, Manager ruling R-8. The two tables `reject` writes,
+            # and the same two acts — append the decision, stamp the proposal —
+            # reaching no promotion table, which is "creates no canonical record"
+            # measured rather than asserted. What the two branches do *not* share
+            # is the state stamped and the reason recorded, and no table set can
+            # express that: `REV::test_an_invalidation_is_not_a_rejection_and_
+            # leaves_no_negative_finding` is what holds it.
+            "invalidate": frozenset(
+                {"relationship_memory_proposals", "relationship_memory_review_decisions"}
+            ),
             "reprocess": frozenset(),
             "escalate": frozenset(),
         }

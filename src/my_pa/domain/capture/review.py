@@ -50,6 +50,22 @@ later act that removes what a proposal rested on, has to be able to close a case
 without asserting that a reviewer refused it. It creates no canonical record, it
 requires a reason, and it keeps the case and its lineage.
 
+**It reaches the two proposal planes this phase owns and is refused by the two
+Phase A planes, and that division is a fact about storage rather than about the
+vocabulary.** An Entity proposal and a Relationship Memory candidate each record
+the state and the reason together, on a decision ledger carrying a bounded
+`reason` column and a CHECK that requires one of exactly this disposition. A
+capture proposal reaches `invalidated` only through
+`proposals.invalidate_proposal`, whose reason is a closed
+`ProposalQuarantineReason` describing an evidence fault the server found rather
+than prose a person wrote, so there is nowhere to put the reason this disposition
+requires; a GoodNotes region has no reason column at all. Both refuse it
+explicitly, which is honest where a `KeyError` would not be, and the refusal is
+load-bearing rather than incidental. `reject` is not the substitute it can look
+like on any of the four: it means "I looked and judged this wrong", it is what
+feeds suppression of repeated known-bad proposals, and spending it on a proposal
+whose basis is merely moot files a negative finding nobody made.
+
 **Declaring a disposition rather than omitting it is safe here, and it is not
 safe everywhere.** `ProposalState` is treated the same way and `ProposalMethod`
 deliberately is not: an unwritable `cloud_model` method would let a model output

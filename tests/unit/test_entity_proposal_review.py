@@ -47,7 +47,7 @@ from my_pa.application.entity_governance import (
     ReviewAuthorityError,
 )
 from my_pa.application.entity_promotion import StaleTargetVersionError
-from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.contracts.ports import ReviewDecisionRequest, UnknownScopeError
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
     CorrectionPatch,
@@ -1015,3 +1015,147 @@ def test_a_producer_capability_shares_no_purpose_with_deciding(
     single grant can produce a candidate and then decide it.
     """
     assert not (permitted_purposes(producing) & permitted_purposes(Capability.REVIEW_DECIDE))
+
+
+# --- the merge's invalidation, on the shared fake -----------------------------
+#
+# `EntitiesRepository.invalidate_proposal` is the *merge's* writer and is not the
+# reviewer's disposition tested above: a governed merge closes a proposal whose
+# subject stopped existing under that name, and nobody decided anything. Until
+# `WP-RI-B-05` no fake declared it at all, which is why the defect in its guarded
+# `UPDATE` — a predicate matching only `proposed`, while `initial_state_for` had
+# begun writing `needs_review` — was catchable at the database tier and nowhere
+# else, and reached an integration head. These tests exist so the predicate has a
+# home in the FAST tier: they drive the fake across every member of
+# `EntityProposalState`, so narrowing it back to one state, or widening it to
+# admit a decided proposal, reddens here.
+
+
+#: The states the server's `UPDATE` matches. Restated rather than imported from
+#: `UNDECIDED_PROPOSAL_STATES`, for the reason `_REASONED` above is restated: a
+#: test that reads the constant the code reads agrees with it by construction and
+#: measures nothing. Widening the domain tuple has to be restated here on purpose.
+_UNDECIDED: Final = frozenset({EntityProposalState.PROPOSED, EntityProposalState.NEEDS_REVIEW})
+
+#: What each state a proposal record can hold needs on it to be constructible.
+#: `EntityProposal.__post_init__` binds these pairings, so a state cannot be
+#: staged without the columns that state implies.
+_STATE_REQUIRES: Final[dict[EntityProposalState, dict[str, object]]] = {
+    EntityProposalState.PROPOSED: {},
+    EntityProposalState.NEEDS_REVIEW: {},
+    EntityProposalState.ACCEPTED: {"decided_by": "reviewer", "decided_at": LATER},
+    EntityProposalState.CORRECTED_ACCEPTED: {"decided_by": "reviewer", "decided_at": LATER},
+    EntityProposalState.REJECTED: {"decided_by": "reviewer", "decided_at": LATER},
+    EntityProposalState.DEFERRED: {"decided_by": "reviewer", "decided_at": LATER},
+    EntityProposalState.SUPERSEDED: {"superseded_at": LATER},
+    EntityProposalState.INVALIDATED: {
+        "decided_by": "reviewer",
+        "decided_at": LATER,
+        "invalidated_reason": "an earlier merge closed it",
+    },
+}
+
+
+def _stage_state(
+    entities: FakeEntities, world: World, proposal_id: str, state: EntityProposalState
+) -> None:
+    """Put the stored proposal into `state`, with whatever that state requires."""
+    held = entities.proposal(PRINCIPAL, proposal_id)
+    assert held is not None
+    for index, stored in enumerate(world.entity_proposals):
+        if stored.proposal_id == proposal_id:
+            world.entity_proposals[index] = replace(held, state=state, **_STATE_REQUIRES[state])
+            return
+    raise AssertionError("the fixture staged no proposal to move")
+
+
+@pytest.mark.parametrize("state", sorted(_UNDECIDED, key=lambda member: member.value))
+def test_the_merges_invalidation_closes_a_proposal_nobody_has_decided(
+    entities: FakeEntities,
+    governing: EntityGovernanceService,
+    world: World,
+    state: EntityProposalState,
+) -> None:
+    """Both undecided states, because the defect was a predicate holding only one.
+
+    `needs_review` is the member that matters: `initial_state_for` writes it for
+    every kind a person has to look at, so it is the state most proposals a merge
+    has to close are actually in, and a predicate naming `proposed` alone matched
+    none of them while the planner had already planned the change.
+    """
+    admitted = _staged(entities, governing)
+    _stage_state(entities, world, admitted.proposal_id, state)
+
+    entities.invalidate_proposal(
+        PRINCIPAL,
+        admitted.proposal_id,
+        reason="the subject was merged away",
+        decided_by="operator",
+        decided_at=LATER,
+    )
+
+    held = entities.proposal(PRINCIPAL, admitted.proposal_id)
+    assert held is not None
+    assert held.state is EntityProposalState.INVALIDATED
+    assert held.invalidated_reason == "the subject was merged away"
+    assert held.decided_by == "operator"
+    assert held.decided_at == LATER
+    assert held.decision_reason is None, (
+        "the merge's invalidation records a decision reason, which is the reviewer's "
+        "column: nobody decided this proposal, the identity it named stopped existing"
+    )
+    assert held.accepted_record_id is None
+
+
+@pytest.mark.parametrize(
+    "state",
+    sorted(set(EntityProposalState) - _UNDECIDED, key=lambda member: member.value),
+)
+def test_the_merges_invalidation_refuses_a_proposal_something_already_closed(
+    entities: FakeEntities,
+    governing: EntityGovernanceService,
+    world: World,
+    state: EntityProposalState,
+) -> None:
+    """Every state outside the undecided pair, and the row is left exactly as it was.
+
+    `DEFERRED` is the one worth naming: a deferral *is* a decision and the row
+    already carries the reviewer who took it, so matching it here would replace
+    that person with the operator who ran the merge — destroying the record of
+    who made the call, which is the harm the one-time predicate exists to
+    prevent.
+    """
+    admitted = _staged(entities, governing)
+    _stage_state(entities, world, admitted.proposal_id, state)
+    before = entities.proposal(PRINCIPAL, admitted.proposal_id)
+
+    with pytest.raises(UnknownScopeError):
+        entities.invalidate_proposal(
+            PRINCIPAL,
+            admitted.proposal_id,
+            reason="the subject was merged away",
+            decided_by="operator",
+            decided_at=LATER,
+        )
+
+    assert entities.proposal(PRINCIPAL, admitted.proposal_id) == before
+
+
+def test_the_merges_invalidation_never_reaches_another_principals_proposal(
+    entities: FakeEntities, governing: EntityGovernanceService
+) -> None:
+    """A foreign proposal answers exactly what an absent one answers."""
+    admitted = _staged(entities, governing)
+
+    with pytest.raises(UnknownScopeError):
+        entities.invalidate_proposal(
+            OTHER,
+            admitted.proposal_id,
+            reason="the subject was merged away",
+            decided_by="operator",
+            decided_at=LATER,
+        )
+
+    held = entities.proposal(PRINCIPAL, admitted.proposal_id)
+    assert held is not None
+    assert held.state is EntityProposalState.NEEDS_REVIEW

@@ -1187,6 +1187,7 @@ EXPECTED_TABLE_COLUMNS = {
             "sequence",
             "disposition",
             "corrected_statement",
+            "reason",
             "correlation_id",
             "audit_id",
             "decided_at",

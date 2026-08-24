@@ -2,7 +2,7 @@
 
 The entity plane has two switches. `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
 decides whether the plane exists at all, and
-`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` decides whether its eighteen
+`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` decides whether its twenty-one
 writes do. This file is about the second one, and it exists for the reason
 `_entity_plane`'s own docstring gives about the first: **a capability set is not
 a gate.**
@@ -24,12 +24,12 @@ these names is in a public enum.
 **Three states, and all three are asserted**, because a gate that refused in
 every state would satisfy a one-sided test:
 
-* plane off — all twenty-eight `entities.` names refuse, reads included;
-* plane on, writes off — the ten reads answer and the eighteen writes refuse;
-* plane on, writes on — all twenty-eight are served.
+* plane off — all thirty-one `entities.` names refuse, reads included;
+* plane on, writes off — the ten reads answer and the twenty-one writes refuse;
+* plane on, writes on — all thirty-one are served.
 
 The write population is derived from the purpose map rather than listed here, so
-a nineteenth write mapped to `entity_authoring` joins this sweep on arrival. It
+a twenty-second write mapped to `entity_authoring` joins this sweep on arrival. It
 is then compared against `_ENTITY_WRITE_CAPABILITIES`, which is the set the
 service actually subtracts, so the two statements of the same fact cannot drift.
 """

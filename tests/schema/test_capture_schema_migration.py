@@ -300,6 +300,13 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "entities.restore",
         "entities.unresolved_mentions.resolve",
         "entities.update",
+        # Phase B's four. `b64e29a0f7c1` is the forward `ALTER` that admits all
+        # of them, and it is one revision for two work packages for the reason
+        # `823e23b6cc63` was one for three.
+        "entities.merge",
+        "entities.merge.preview",
+        "entities.proposals.create",
+        "relationship_memory.propose",
     }
 )
 
@@ -1042,6 +1049,13 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # trigger cannot silently disarm the other's.
             "entity_mutation_events_are_append_only",
             "entity_resolution_decisions_are_append_only",
+            # And `WP-RI-B-06`'s effect ledger, on a trigger function of its own
+            # for the same reason: dropping one plane's trigger must not silently
+            # disarm another's. The operations table beside it is deliberately
+            # *not* append-only -- it goes `in_progress` to `completed`, which is
+            # what makes a crashed apply legible rather than indistinguishable
+            # from a finished one.
+            "entity_identity_effects_are_append_only",
             "goodnotes_page_versions_are_immutable",
             "goodnotes_region_proposals_are_immutable",
             "goodnotes_source_snapshots_are_immutable",

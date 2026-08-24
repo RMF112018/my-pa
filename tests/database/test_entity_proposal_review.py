@@ -46,7 +46,8 @@ from my_pa.application.entity_governance import (
     ProposalAdmission,
 )
 from my_pa.application.entity_promotion import StaleTargetVersionError
-from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
+from my_pa.bootstrap.settings import ENV_PREFIX, Settings, load_settings
 from my_pa.contracts.ports import ReviewDecisionRequest
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
@@ -625,3 +626,73 @@ def test_an_invalidation_records_its_reason_and_creates_no_canonical_record(
         # surface in the same statement rather than standing open behind it.
         assert case is not None
         assert case.proposal_state is ProposalState.INVALIDATED
+
+
+# --- the composition root, which is where this plane was dark ----------------
+
+
+def _composed(database_url: str, *, plane: bool) -> GatewayRuntime:
+    """One gateway runtime, built the way `apps/gateway.py` builds it."""
+    return build_gateway_runtime(
+        Settings(
+            database_url=database_url,
+            relationship_intelligence_enabled=plane,
+            relationship_intelligence_writes_enabled=plane,
+        )
+    )
+
+
+def test_a_real_build_reaches_the_entity_branch_of_the_shared_review_surface(
+    staged: Engine, disposable_database: str
+) -> None:
+    """`WP-RI-B-07`'s composition-root wiring, proved end to end and not by reading it.
+
+    **This is the failure this test exists for, and it was silent.**
+    `SqlAlchemyUnitOfWork.__init__` takes `relationship_intelligence_enabled` and
+    passes it to `_Reviews`; the composition root passed nothing, so it defaulted
+    closed and no Entity case reached `review.list` in any real build however the
+    flag was set. Nothing went red: every existing test of the Entity branch
+    constructs `_Reviews` directly with the switch on, which is exactly the shape
+    that cannot notice a composition root that never sets it.
+
+    So the unit of work here comes from `build_gateway_runtime`'s own factory,
+    through `ApplicationService`, and the assertion is that a staged case *is
+    listed* rather than that a field holds `True`. Reading the constructor would
+    reproduce the defect rather than catch it.
+    """
+    with staged.begin() as connection:
+        admitted = _propose(connection)
+
+    runtime = _composed(disposable_database, plane=True)
+    try:
+        with runtime.service._unit_of_work() as unit_of_work:
+            listed = unit_of_work.reviews.cases(limit=10, principal_id=PRINCIPAL_A)
+    finally:
+        runtime.close()
+
+    assert [case.proposal_id for case in listed] == [admitted.proposal_id]
+    assert listed[0].subject_kind is ReviewSubjectKind.ENTITY_PROPOSAL
+
+
+def test_a_real_build_without_the_plane_lists_no_entity_case(
+    staged: Engine, disposable_database: str
+) -> None:
+    """The control, and the reason the default is `False` rather than `True`.
+
+    An unwired switch defaulting *open* would put Entity cases in front of a
+    reviewer of a build that does not have the plane, which is the defect
+    `_Reviews`' own docstring records about the memory branch. So the direction
+    matters as much as the wiring: with the plane off, the same staged proposal
+    produces no case at all.
+    """
+    with staged.begin() as connection:
+        _propose(connection)
+
+    runtime = _composed(disposable_database, plane=False)
+    try:
+        with runtime.service._unit_of_work() as unit_of_work:
+            listed = unit_of_work.reviews.cases(limit=10, principal_id=PRINCIPAL_A)
+    finally:
+        runtime.close()
+
+    assert listed == ()

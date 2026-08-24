@@ -300,6 +300,37 @@ class SafeDetail(StrEnum):
     #: refused, and a twelfth code would make every reader that switches on the
     #: eleven wrong.
     REVIEW_REQUIRED = "review_required"
+    #: Governed identity correction (WP-RI-06). Four tokens over the existing
+    #: eleven `ErrorCode` members, declared on the same argument the completion
+    #: contract's outcome codes above are: the code says what class of failure
+    #: this is and the detail says which rule refused.
+    #:
+    #: `PREVIEW_EXPIRED` and `PREVIEW_STALE` are both `conflict` and are
+    #: deliberately different tokens, because the next action differs: an expired
+    #: preview needs a fresh one, and a stale one needs the operator to re-read
+    #: what changed before asking for a fresh one.
+    #:
+    #: **`PREVIEW_STALE` covers a mismatched digest as well as version drift,
+    #: and the collapse is deliberate.** A caller that could tell "your preview
+    #: is for different entities" from "your preview is for these entities at
+    #: different versions" learns which half of a forged token was wrong, which
+    #: is a probe. Both answers require the same thing -- ask for a new preview
+    #: and read it -- so one token is the whole of what a caller can act on.
+    #:
+    #: `OPERATOR_REQUIRED` is `denied` and says the acting context declared no
+    #: operator authority. It is distinct from `REVIEW_REQUIRED`: a reviewer who
+    #: may decide an identity-correction proposal still may not execute one, and
+    #: a caller told the wrong token would go and find a reviewer.
+    #:
+    #: `IDENTITY_CORRECTION_CONFLICT` is the blocking-conflict answer -- a
+    #: preview already consumed, or a record family this phase cannot transform
+    #: with reversible lineage. It names no record, because a merge blocker is a
+    #: statement about somebody's identity and the enumeration belongs in the
+    #: preview the operator asked for, not in an error a client logs.
+    PREVIEW_EXPIRED = "preview_expired"
+    PREVIEW_STALE = "preview_stale"
+    OPERATOR_REQUIRED = "operator_required"
+    IDENTITY_CORRECTION_CONFLICT = "identity_correction_conflict"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

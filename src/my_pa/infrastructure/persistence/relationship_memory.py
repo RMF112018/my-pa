@@ -101,6 +101,7 @@ from my_pa.infrastructure.persistence.tables import (
     relationship_memories,
     relationship_memory_context_links,
     relationship_memory_evidence_links,
+    relationship_memory_proposals,
     relationship_memory_submissions,
     relationship_memory_versions,
 )
@@ -932,6 +933,44 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             if row.v_classification != Classification.RESTRICTED_LOCAL.value
         )
         return summaries, truncated, withheld
+
+    def subject_entity_ids(
+        self, entity_ids: frozenset[str], *, principal_id: str
+    ) -> frozenset[str]:
+        """Which of these entities this plane holds a memory or a proposal about.
+
+        Both tables, because a candidate memory about an identity is as
+        unrecoverable through a governed merge as an accepted one: `WP-RI-08`
+        owns the origin-subject rules for either, and `WP-RI-06`'s effect ledger
+        has no family that could record what a merge did to one.
+
+        **Classification is not read, and that is the point.** Every other read
+        on this plane filters or counts restricted rows; this one asks a question
+        whose answer must be the same whether the memory is restricted or not,
+        because a merge preview that could distinguish them would be a probe.
+        What comes back is the subset of `entity_ids` this plane knows something
+        about -- no memory identifier, no count, no statement.
+        """
+        for entity_id in entity_ids:
+            validate_identifier(entity_id, IdKind.ENTITY)
+        if not entity_ids:
+            return frozenset()
+        # Sorted so two calls over the same set build the same statement.
+        named = sorted(entity_ids)
+        subjects = self._connection.execute(
+            select(relationship_memories.c.subject_entity_id)
+            .where(
+                _mine(relationship_memories, principal_id),
+                relationship_memories.c.subject_entity_id.in_(named),
+            )
+            .union(
+                select(relationship_memory_proposals.c.subject_entity_id).where(
+                    _mine(relationship_memory_proposals, principal_id),
+                    relationship_memory_proposals.c.subject_entity_id.in_(named),
+                )
+            )
+        ).all()
+        return frozenset(str(row[0]) for row in subjects)
 
 
 class _VersionRow:

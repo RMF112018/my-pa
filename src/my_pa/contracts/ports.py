@@ -128,6 +128,12 @@ from my_pa.domain.relationship.identity import (
     ResolutionAction,
     UnresolvedMention,
 )
+from my_pa.domain.relationship.identity_correction import (
+    IdentityEffect,
+    IdentityEffectFamily,
+    IdentityOperation,
+    IdentityPreview,
+)
 from my_pa.domain.relationship.memory import (
     MemoryActorClass,
     MemoryAdmission,
@@ -1749,6 +1755,260 @@ class EntitiesRepository(ABC):
     @abstractmethod
     def end_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
         """Move one directed edge to `ended`, on `end_assignment`'s terms."""
+
+    # --- governed identity correction (WP-RI-06) ----------------------------
+    #
+    # **These sixteen are declared with a default that raises rather than as
+    # `@abstractmethod`, and the reason is the one `UnitOfWork.continuity_read`
+    # and `UnitOfWork.worker_health` already state.** Identity correction is a
+    # bounded operator-only surface reached by `entities.merge.preview` and
+    # `entities.merge` alone. The older in-memory doubles implement the entity
+    # plane a resolver and a context card need and nothing else; making these
+    # abstract would make every one of them unconstructable in order to serve a
+    # path none of them reaches.
+    # The canonical PostgreSQL repository overrides every one of them, so the
+    # production composition is total, and a double that does not implement one
+    # fails loudly on the call rather than answering an empty result -- which is
+    # the difference between "this store does not serve merge" and "this merge
+    # found nothing to do".
+    #
+    # `principal_id` is the acting Principal on every one of them, on the terms
+    # this port's preamble states.
+
+    def assignments_scoped_by(
+        self, principal_id: str, scope_entity_id: str, *, limit: int | None = None
+    ) -> list[Assignment]:
+        """Assignments whose *scope* names one entity.
+
+        Separate from `assignments`, which reads the rows an entity *holds*. A
+        merge has to find both: an assignment of somebody else scoped to a
+        merged-away project is as materially affected as the project's own, and
+        a preview that read only the first would move an identity out from under
+        a row it never mentioned.
+        """
+        raise NotImplementedError
+
+    def relationships_scoped_by(
+        self, principal_id: str, scope_entity_id: str, *, limit: int | None = None
+    ) -> list[EntityRelationship]:
+        """Directed edges whose *scope* names one entity.
+
+        `relationships` reads `from` and `to`; `scope_entity_id` is the third
+        entity reference on the row and no existing read reaches it.
+        """
+        raise NotImplementedError
+
+    def resolution_decisions_naming(self, principal_id: str, entity_ids: frozenset[str]) -> int:
+        """How many resolution decisions name one of these entities.
+
+        **A count, not the rows, and that is a disclosure decision rather than a
+        convenience.** A merge preview reports what a merge would touch;
+        `entity_resolution_decisions` carries a reason a person wrote about why
+        one mention was or was not somebody, and the preview has no business
+        rendering those. What the operator needs is the fact that decisions
+        exist and that this merge leaves every one of them exactly as recorded.
+        """
+        raise NotImplementedError
+
+    def fact_evidence_links_naming(self, principal_id: str, entity_ids: frozenset[str]) -> int:
+        """How many evidence links name one of these entities directly.
+
+        A count for `resolution_decisions_naming`'s reason. These links are the
+        source-link family: they record which evidence supported which fact at
+        the moment it was recorded, and a merge does not rewrite them.
+        """
+        raise NotImplementedError
+
+    def reparent_entity_reference(
+        self,
+        principal_id: str,
+        *,
+        family: IdentityEffectFamily,
+        record_id: str,
+        from_entity_ids: frozenset[str],
+        to_entity_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Rewrite every reference this row makes to a merged-away entity.
+
+        One method over five families rather than one per family, and the shape
+        is what makes it correct rather than merely shorter. A directed edge can
+        name a merged-away entity in `from`, in `to` and in `scope` at once, and
+        the row's own CHECK forbids `from = to`: a per-column writer would need
+        three statements against a row whose intermediate states the server
+        refuses. This substitutes every reference in one `UPDATE`, so the row is
+        never momentarily illegal.
+
+        `from_entity_ids` is the whole merged-away set and not the single
+        identifier the caller happened to walk in on, for the same reason.
+
+        **The `WHERE` names the version and the references it expects to find.**
+        A row somebody else moved or revised between the preview's read and this
+        write matches nothing, and the method raises rather than reporting a
+        rewrite it did not perform -- which is the concurrency rule this plane
+        applies everywhere: no state-dependent write may silently
+        last-write-wins.
+
+        `expected_version` is the row's `version` for the four records that
+        carry one, and an observation's `resolution_version`. The first four are
+        advanced by one because their content changed; a rebinding does *not*
+        advance an observation's resolution version, because moving a mention to
+        the surviving identity is a consequence of a merge rather than a new
+        decision about what the mention referred to.
+
+        Admits `ALIAS`, `IDENTIFIER`, `ASSIGNMENT`, `RELATIONSHIP` and
+        `OBSERVATION`. `ENTITY` is refused: an entity's own identity is changed
+        by `redirect_entity`, and the other three families of
+        `IdentityEffectFamily` name records this method does not own.
+        """
+        raise NotImplementedError
+
+    def supersede_child_record(
+        self,
+        principal_id: str,
+        *,
+        family: IdentityEffectFamily,
+        record_id: str,
+        superseded_by_record_id: str | None,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Take one child row out of service, optionally naming what replaced it.
+
+        Two merge outcomes share one statement because they are one row change
+        with and without a successor. A row the survivor already held an
+        equivalent of is *coalesced*: it is superseded and
+        `superseded_by_record_id` names the counterpart, so a later inversion can
+        revive this row and know which row to stop treating as its replacement.
+        A directed edge whose two ends became the same entity is *superseded with
+        no successor*: it was folded into nothing, and the row's own
+        `from <> to` CHECK is why it cannot simply be reparented.
+
+        Nothing is deleted. Section 10.11's rule holds through a merge exactly as
+        it holds everywhere else, and a merged-away entity keeps every row it
+        ever held.
+
+        `expected_version` guards the write on `reparent_entity_reference`'s
+        terms and is advanced by one, because a row that left service changed.
+
+        Admits `ALIAS`, `IDENTIFIER`, `ASSIGNMENT` and `RELATIONSHIP` -- the four
+        families whose records carry a `state` and a successor column.
+        `OBSERVATION` is refused: an observation is rebound, never superseded,
+        because superseding it would change what a source said.
+        """
+        raise NotImplementedError
+
+    def invalidate_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        reason: str,
+        decided_by: str,
+        decided_at: datetime,
+    ) -> None:
+        """Close one open proposal whose subject an identity correction changed.
+
+        Separate from `decide_proposal`, which replaces a whole record a reviewer
+        decided and has no column for `invalidated_reason`. This is not a review
+        decision: nobody looked at the proposal and refused it, the identity it
+        named stopped existing under that name. The reason is recorded because
+        `EntityProposal` refuses an invalidated proposal that does not carry one.
+
+        `state = 'proposed'` is part of the predicate, on `decide_proposal`'s
+        argument: a proposal a reviewer decided between the preview and the apply
+        is not this merge's to close, and a rowcount of zero says so.
+        """
+        raise NotImplementedError
+
+    def record_identity_preview(self, principal_id: str, preview: IdentityPreview) -> None:
+        """Persist one merge preview as the binding an apply is checked against.
+
+        Takes the whole record, so the fifteen-minute expiry, the bounded
+        merged-away set and both digests have been through
+        `IdentityPreview.__post_init__` before a row exists.
+        """
+        raise NotImplementedError
+
+    def identity_preview(self, principal_id: str, preview_id: str) -> IdentityPreview | None:
+        """One preview in this Principal's partition, or `None`.
+
+        Foreign and absent are one answer, on this port's standing rule. A
+        preview names exact entity identifiers, and an error that distinguished
+        the two would let a caller enumerate another Principal's identities by
+        guessing preview identifiers.
+        """
+        raise NotImplementedError
+
+    def consume_identity_preview(self, principal_id: str, preview_id: str, *, at: datetime) -> bool:
+        """Claim one preview for exactly one operation, or answer `False`.
+
+        A guarded `UPDATE` with `consumed_at IS NULL` in the predicate, so two
+        applies racing on one preview settle at the database: one writes the
+        stamp and proceeds, the other matches no row and is refused. The claim
+        happens in the transaction that writes the operation, which is what makes
+        "a consumed preview cannot produce a materially different second
+        operation" a property of the schema rather than of call order.
+        """
+        raise NotImplementedError
+
+    def record_identity_operation(self, principal_id: str, operation: IdentityOperation) -> None:
+        """Open one identity operation before the work it records.
+
+        Written first for two reasons that are both structural.
+        `UNIQUE (principal_id, idempotency_key)` is what makes two concurrent
+        applies under one key serialise here rather than each perform a whole
+        merge and then discover the other; and the effect ledger's foreign key
+        means no effect can be stored until this row exists.
+        """
+        raise NotImplementedError
+
+    def complete_identity_operation(self, principal_id: str, operation: IdentityOperation) -> None:
+        """Settle one open operation at its outcome.
+
+        `state = 'in_progress'` is part of the predicate: an operation is settled
+        once, and a second settlement would overwrite the moment and the receipt
+        of the first.
+        """
+        raise NotImplementedError
+
+    def identity_operation_for_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> IdentityOperation | None:
+        """The operation this Principal's key is already bound to, or `None`.
+
+        Returns the record rather than a receipt, because the caller has to
+        compare `request_digest` itself: the same key carrying the same digest is
+        a retry and is answered with the first result, and the same key carrying
+        a different digest is a caller reusing a key for a different merge and is
+        refused. A lookup that decided that here would have to know what
+        "materially the same request" means, which is the application's question.
+        """
+        raise NotImplementedError
+
+    def record_identity_effects(
+        self, principal_id: str, effects: tuple[IdentityEffect, ...]
+    ) -> None:
+        """Append one operation's whole effect ledger.
+
+        The tuple rather than a row at a time, because the ledger is complete or
+        it is not evidence: `UNIQUE (operation_id, sequence)` and the append-only
+        trigger both assume the sequence arrives whole, and a writer that could
+        append one effect later could append it out of order.
+        """
+        raise NotImplementedError
+
+    def identity_effects(
+        self, principal_id: str, identity_operation_id: str
+    ) -> list[IdentityEffect]:
+        """One operation's effects, in sequence order.
+
+        Read back by an idempotent retry, which has to answer with the *prior*
+        result rather than with a fresh analysis of a world the first attempt
+        already changed.
+        """
+        raise NotImplementedError
 
 
 class PortError(Exception):
@@ -3719,6 +3979,37 @@ class RelationshipMemoryRepository(ABC):
         are different facts and a card that could not tell them apart would let a
         reader infer absence from a policy decision.
         """
+
+    def subject_entity_ids(
+        self, entity_ids: frozenset[str], *, principal_id: str
+    ) -> frozenset[str]:
+        """Which of these entities a memory or a memory proposal is about (WP-RI-06).
+
+        **Entity identifiers out, never memory identifiers, and never a count per
+        entity.** Restricted memory must not be distinguishable through a merge
+        preview, and a count would be exactly that channel: an operator who could
+        see "three memories" for one identity and "none" for another would learn
+        what this plane holds without being permitted to read it. Existence per
+        *entity* is the only thing a merge needs, because the whole Relationship
+        Memory family is refused as unsupported when any row names a merged-away
+        entity -- `WP-RI-08` owns origin-subject redistribution and `WP-RI-06`'s
+        effect ledger has no family that could record what a merge did to a
+        memory.
+
+        **On this port and not on `EntitiesRepository`**, although the question is
+        asked by the entity plane and the answer is entity identifiers. Every
+        statement over a memory table belongs to the two modules
+        `tests/architecture/test_every_capability_reaching_a_memory_row_is_declared.py`
+        enumerates, and a read of `relationship_memories` issued from the entity
+        repository would make a third -- which is exactly the reach that guard
+        exists to make visible rather than convenient.
+
+        Declared with a default that raises rather than as `@abstractmethod`, on
+        the terms `UnitOfWork.continuity_read` states: the older doubles implement
+        the plane the memory capabilities need and this is reached by one
+        operator-only path none of them serves.
+        """
+        raise NotImplementedError
 
 
 @dataclass(frozen=True, slots=True)

@@ -86,6 +86,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Final
 
@@ -94,6 +95,8 @@ from sqlalchemy import (
     Row,
     Select,
     Table,
+    case,
+    func,
     insert,
     null,
     or_,
@@ -169,6 +172,15 @@ from my_pa.domain.relationship.governance import (
     ObservationState,
     ResolutionDisposition,
 )
+from my_pa.domain.relationship.identity_correction import (
+    IdentityEffect,
+    IdentityEffectFamily,
+    IdentityEffectKind,
+    IdentityOperation,
+    IdentityOperationState,
+    IdentityOperationType,
+    IdentityPreview,
+)
 from my_pa.domain.relationship.normalization import (
     is_normalized_identifier,
     is_normalized_name,
@@ -193,6 +205,9 @@ from my_pa.infrastructure.persistence.tables import (
     entity_assignments,
     entity_external_identifiers,
     entity_fact_evidence_links,
+    entity_identity_effects,
+    entity_identity_operations,
+    entity_identity_previews,
     entity_merge_records,
     entity_mutation_events,
     entity_observations,
@@ -2357,6 +2372,361 @@ class SqlEntityRepository(EntitiesRepository):
         if result.rowcount == 0:
             raise UnknownScopeError("a redirect names an entity outside this scope")
 
+    # --- WP-RI-06: governed identity correction ------------------------------
+    #
+    # Sixteen methods behind two operator-only capabilities. The reads answer
+    # what a merge preview has to enumerate; the four writers perform the row
+    # changes a merge apply projected; the seven ledger methods store the
+    # binding, the operation and the evidence a later split has to invert from.
+    #
+    # None of them decides anything. Which rows reparent, which coalesce and
+    # which refuse the merge is `application.identity_correction`'s analysis,
+    # and a second copy of that reasoning here could disagree with it.
+
+    def assignments_scoped_by(
+        self, principal_id: str, scope_entity_id: str, *, limit: int | None = None
+    ) -> list[Assignment]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(scope_entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        statement = (
+            select(entity_assignments)
+            .where(
+                _mine(entity_assignments, principal_id),
+                entity_assignments.c.scope_entity_id == scope_entity_id,
+            )
+            .order_by(entity_assignments.c.assignment_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_assignment(row) for row in rows]
+
+    def relationships_scoped_by(
+        self, principal_id: str, scope_entity_id: str, *, limit: int | None = None
+    ) -> list[EntityRelationship]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(scope_entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        statement = (
+            select(entity_relationships)
+            .where(
+                _mine(entity_relationships, principal_id),
+                entity_relationships.c.scope_entity_id == scope_entity_id,
+            )
+            .order_by(entity_relationships.c.relationship_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_relationship(row) for row in rows]
+
+    def resolution_decisions_naming(self, principal_id: str, entity_ids: frozenset[str]) -> int:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        named = _validated_entity_set(entity_ids)
+        if not named:
+            return 0
+        counted = self._connection.execute(
+            select(func.count())
+            .select_from(entity_resolution_decisions)
+            .where(
+                _mine(entity_resolution_decisions, principal_id),
+                entity_resolution_decisions.c.entity_id.in_(named),
+            )
+        ).scalar_one()
+        return int(counted)
+
+    def fact_evidence_links_naming(self, principal_id: str, entity_ids: frozenset[str]) -> int:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        named = _validated_entity_set(entity_ids)
+        if not named:
+            return 0
+        counted = self._connection.execute(
+            select(func.count())
+            .select_from(entity_fact_evidence_links)
+            .where(
+                _mine(entity_fact_evidence_links, principal_id),
+                entity_fact_evidence_links.c.entity_id.in_(named),
+            )
+        ).scalar_one()
+        return int(counted)
+
+    def reparent_entity_reference(
+        self,
+        principal_id: str,
+        *,
+        family: IdentityEffectFamily,
+        record_id: str,
+        from_entity_ids: frozenset[str],
+        to_entity_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        subject = _reparentable(family)
+        validate_identifier(record_id, subject.id_kind)
+        self._require_own_entity(principal_id, to_entity_id)
+        named = _validated_entity_set(from_entity_ids)
+        if not named:
+            raise ValueError("a reparenting names the identities it moves a row off")
+        # Every entity reference the row makes, substituted in one statement.
+        # Three columns on a directed edge, and its own `from <> to` CHECK means
+        # a per-column writer would have to pass through a state the server
+        # refuses.
+        substituted: dict[str, Any] = {
+            column: case(
+                (subject.table.c[column].in_(named), to_entity_id),
+                else_=subject.table.c[column],
+            )
+            for column in subject.entity_columns
+        }
+        if subject.version_column == "version":
+            substituted["version"] = subject.table.c.version + 1
+            substituted["updated_at"] = at
+        result = self._connection.execute(
+            update(subject.table)
+            .where(
+                _mine(subject.table, principal_id),
+                subject.table.c[subject.id_column] == record_id,
+                subject.table.c[subject.version_column] == expected_version,
+                # The references the caller read are part of the predicate. A row
+                # somebody else already moved matches nothing, and this refuses
+                # rather than reporting a rewrite it did not perform.
+                or_(*(subject.table.c[column].in_(named) for column in subject.entity_columns)),
+            )
+            .values(**substituted)
+        )
+        if result.rowcount == 0:
+            raise UnknownScopeError("a reparenting names a record this merge read unchanged")
+
+    def supersede_child_record(
+        self,
+        principal_id: str,
+        *,
+        family: IdentityEffectFamily,
+        record_id: str,
+        superseded_by_record_id: str | None,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        subject, successor_column = _supersedable(family)
+        validate_identifier(record_id, subject.id_kind)
+        if superseded_by_record_id is not None:
+            validate_identifier(superseded_by_record_id, subject.id_kind)
+            if superseded_by_record_id == record_id:
+                raise ValueError("a record is not folded into itself")
+        superseded: dict[str, Any] = {
+            "state": _SUPERSEDED_STATE,
+            "version": subject.table.c.version + 1,
+            "updated_at": at,
+            successor_column: superseded_by_record_id,
+        }
+        result = self._connection.execute(
+            update(subject.table)
+            .where(
+                _mine(subject.table, principal_id),
+                subject.table.c[subject.id_column] == record_id,
+                subject.table.c.version == expected_version,
+            )
+            .values(**superseded)
+        )
+        if result.rowcount == 0:
+            raise UnknownScopeError("a supersession names a record this merge read unchanged")
+
+    def invalidate_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        reason: str,
+        decided_by: str,
+        decided_at: datetime,
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(proposal_id, IdKind.ENTITY_PROPOSAL)
+        result = self._connection.execute(
+            update(entity_proposals)
+            .where(
+                _mine(entity_proposals, principal_id),
+                entity_proposals.c.proposal_id == proposal_id,
+                entity_proposals.c.state == EntityProposalState.PROPOSED.value,
+            )
+            .values(
+                state=EntityProposalState.INVALIDATED.value,
+                invalidated_reason=reason,
+                decided_by=decided_by,
+                decided_at=decided_at,
+            )
+        )
+        if result.rowcount == 0:
+            raise UnknownScopeError("an invalidation names an open proposal in this scope")
+
+    def record_identity_preview(self, principal_id: str, preview: IdentityPreview) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if preview.principal_id != principal_id:
+            raise ValueError("a merge preview belongs to the acting Principal")
+        self._require_own_entities(
+            principal_id,
+            preview.survivor_entity_id,
+            *(entity_id for entity_id, _ in preview.merged_away),
+        )
+        self._connection.execute(
+            insert(entity_identity_previews).values(
+                _bound(
+                    entity_identity_previews,
+                    principal_id,
+                    preview_id=preview.preview_id,
+                    operation_type=preview.operation_type.value,
+                    survivor_entity_id=preview.survivor_entity_id,
+                    expected_survivor_version=preview.expected_survivor_version,
+                    merged_away=[
+                        {"entity_id": entity_id, "expected_version": expected_version}
+                        for entity_id, expected_version in preview.merged_away
+                    ],
+                    preview_digest=preview.preview_digest,
+                    conflict_digest=preview.conflict_digest,
+                    created_by=preview.created_by,
+                    actor_class=preview.actor_class.value,
+                    created_at=preview.created_at,
+                    expires_at=preview.expires_at,
+                    consumed_at=preview.consumed_at,
+                )
+            )
+        )
+
+    def identity_preview(self, principal_id: str, preview_id: str) -> IdentityPreview | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(preview_id, IdKind.ENTITY_IDENTITY_PREVIEW)
+        row = self._connection.execute(
+            select(entity_identity_previews).where(
+                _mine(entity_identity_previews, principal_id),
+                entity_identity_previews.c.preview_id == preview_id,
+            )
+        ).one_or_none()
+        return None if row is None else _row_to_identity_preview(row)
+
+    def consume_identity_preview(self, principal_id: str, preview_id: str, *, at: datetime) -> bool:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(preview_id, IdKind.ENTITY_IDENTITY_PREVIEW)
+        result = self._connection.execute(
+            update(entity_identity_previews)
+            .where(
+                _mine(entity_identity_previews, principal_id),
+                entity_identity_previews.c.preview_id == preview_id,
+                entity_identity_previews.c.consumed_at.is_(None),
+            )
+            .values(consumed_at=at)
+        )
+        return result.rowcount == 1
+
+    def record_identity_operation(self, principal_id: str, operation: IdentityOperation) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if operation.principal_id != principal_id:
+            raise ValueError("an identity operation belongs to the acting Principal")
+        self._connection.execute(
+            insert(entity_identity_operations).values(
+                _bound(
+                    entity_identity_operations,
+                    principal_id,
+                    identity_operation_id=operation.identity_operation_id,
+                    operation_type=operation.operation_type.value,
+                    survivor_entity_id=operation.survivor_entity_id,
+                    merged_entity_ids=list(operation.merged_entity_ids),
+                    preview_id=operation.preview_id,
+                    preview_digest=operation.preview_digest,
+                    idempotency_key=operation.idempotency_key,
+                    request_digest=operation.request_digest,
+                    reason=operation.reason,
+                    performed_by=operation.performed_by,
+                    actor_class=operation.actor_class.value,
+                    correlation_id=operation.correlation_id,
+                    audit_id=operation.audit_id,
+                    receipt_id=operation.receipt_id,
+                    state=operation.state.value,
+                    started_at=operation.started_at,
+                    completed_at=operation.completed_at,
+                )
+            )
+        )
+
+    def complete_identity_operation(self, principal_id: str, operation: IdentityOperation) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if operation.principal_id != principal_id:
+            raise ValueError("an identity operation belongs to the acting Principal")
+        result = self._connection.execute(
+            update(entity_identity_operations)
+            .where(
+                _mine(entity_identity_operations, principal_id),
+                entity_identity_operations.c.identity_operation_id
+                == operation.identity_operation_id,
+                entity_identity_operations.c.state == IdentityOperationState.IN_PROGRESS.value,
+            )
+            .values(
+                state=operation.state.value,
+                receipt_id=operation.receipt_id,
+                completed_at=operation.completed_at,
+            )
+        )
+        if result.rowcount == 0:
+            raise UnknownScopeError("a settlement names an open operation in this scope")
+
+    def identity_operation_for_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> IdentityOperation | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if not idempotency_key:
+            raise ValueError("an identity operation lookup carries an idempotency key")
+        row = self._connection.execute(
+            select(entity_identity_operations).where(
+                _mine(entity_identity_operations, principal_id),
+                entity_identity_operations.c.idempotency_key == idempotency_key,
+            )
+        ).one_or_none()
+        return None if row is None else _row_to_identity_operation(row)
+
+    def record_identity_effects(
+        self, principal_id: str, effects: tuple[IdentityEffect, ...]
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if not effects:
+            return
+        for effect in effects:
+            if effect.principal_id != principal_id:
+                raise ValueError("an identity effect belongs to the acting Principal")
+        self._connection.execute(
+            insert(entity_identity_effects),
+            [
+                _bound(
+                    entity_identity_effects,
+                    principal_id,
+                    effect_id=effect.effect_id,
+                    identity_operation_id=effect.identity_operation_id,
+                    sequence=effect.sequence,
+                    record_family=effect.family.value,
+                    record_id=effect.record_id,
+                    effect_kind=effect.kind.value,
+                    before_state=dict(effect.before_state),
+                    after_state=dict(effect.after_state),
+                    before_sha256=effect.before_sha256,
+                    after_sha256=effect.after_sha256,
+                    recorded_at=effect.recorded_at,
+                )
+                for effect in effects
+            ],
+        )
+
+    def identity_effects(
+        self, principal_id: str, identity_operation_id: str
+    ) -> list[IdentityEffect]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
+        rows = self._connection.execute(
+            select(entity_identity_effects)
+            .where(
+                _mine(entity_identity_effects, principal_id),
+                entity_identity_effects.c.identity_operation_id == identity_operation_id,
+            )
+            .order_by(entity_identity_effects.c.sequence)
+        ).all()
+        return [_row_to_identity_effect(row) for row in rows]
+
 
 #: The three directions `relationships` admits, as predicates. A mapping rather
 #: than an if-chain so an unknown direction is a refusal rather than a silent
@@ -2397,6 +2767,130 @@ _RELATIONSHIP_CAPABILITIES: Final[dict[DirectedWriteOperation, str]] = {
     DirectedWriteOperation.REVISE: Capability.ENTITIES_RELATIONSHIPS_REVISE.value,
     DirectedWriteOperation.END: Capability.ENTITIES_RELATIONSHIPS_END.value,
 }
+
+
+#: The one `state` value a coalesced or self-edged child row leaves service in.
+#:
+#: Spelled once rather than reached through four enums, because
+#: `AliasState.SUPERSEDED`, `IdentifierState.SUPERSEDED`,
+#: `AssignmentState.SUPERSEDED` and `RelationshipState.SUPERSEDED` are four
+#: deliberately separate vocabularies that happen to agree on this member, and a
+#: writer that picked one of them for all four would silently pick the wrong one
+#: the day any of them is widened independently -- which is the exact reason
+#: those enums were declared separately.
+_SUPERSEDED_STATE: Final = "superseded"
+
+
+@dataclass(frozen=True, slots=True)
+class _ChildSubject:
+    """Which table one identity effect names, and which of its columns say what.
+
+    A record rather than five branches, on `_DIRECTIONS`' argument: a family
+    this mapping does not carry is a refusal rather than a fall-through to
+    whichever table the last branch happened to name, and on this plane a
+    fall-through would write somebody's identity onto the wrong row.
+    """
+
+    table: Table
+    id_column: str
+    id_kind: IdKind
+    #: Every column on the row that names an entity. All of them are substituted
+    #: in one statement; see `reparent_entity_reference`.
+    entity_columns: tuple[str, ...]
+    #: The column an optimistic-concurrency guard reads. `version` for the four
+    #: records that carry one, and `resolution_version` for an observation --
+    #: which is not bumped by a rebinding, because moving a mention to the
+    #: surviving identity is a consequence of a merge and not a new decision
+    #: about what the mention referred to.
+    version_column: str
+    #: The column naming what replaced this row, where the family has one.
+    successor_column: str | None = None
+
+
+#: The five families whose rows a merge reparents, and the four of those whose
+#: rows it may also supersede. Declared once so the two writers cannot disagree
+#: about which table a family names.
+_CHILD_SUBJECTS: Final[dict[IdentityEffectFamily, _ChildSubject]] = {
+    IdentityEffectFamily.ALIAS: _ChildSubject(
+        table=entity_aliases,
+        id_column="alias_id",
+        id_kind=IdKind.ENTITY_ALIAS,
+        entity_columns=("entity_id",),
+        version_column="version",
+        successor_column="superseded_by_alias_id",
+    ),
+    IdentityEffectFamily.IDENTIFIER: _ChildSubject(
+        table=entity_external_identifiers,
+        id_column="identifier_id",
+        id_kind=IdKind.EXTERNAL_IDENTIFIER,
+        entity_columns=("entity_id",),
+        version_column="version",
+        successor_column="superseded_by_identifier_id",
+    ),
+    IdentityEffectFamily.ASSIGNMENT: _ChildSubject(
+        table=entity_assignments,
+        id_column="assignment_id",
+        id_kind=IdKind.ASSIGNMENT,
+        entity_columns=("entity_id", "scope_entity_id"),
+        version_column="version",
+        successor_column="superseded_by_assignment_id",
+    ),
+    IdentityEffectFamily.RELATIONSHIP: _ChildSubject(
+        table=entity_relationships,
+        id_column="relationship_id",
+        id_kind=IdKind.ENTITY_RELATIONSHIP,
+        entity_columns=("from_entity_id", "to_entity_id", "scope_entity_id"),
+        version_column="version",
+        successor_column="superseded_by_relationship_id",
+    ),
+    IdentityEffectFamily.OBSERVATION: _ChildSubject(
+        table=entity_observations,
+        id_column="observation_id",
+        id_kind=IdKind.ENTITY_OBSERVATION,
+        entity_columns=("entity_id",),
+        version_column="resolution_version",
+    ),
+}
+
+
+def _reparentable(family: IdentityEffectFamily) -> _ChildSubject:
+    """The table `family` names, or a refusal."""
+    subject = _CHILD_SUBJECTS.get(family)
+    if subject is None:
+        raise ValueError("a reparenting names a record family this repository owns")
+    return subject
+
+
+def _supersedable(family: IdentityEffectFamily) -> tuple[_ChildSubject, str]:
+    """The table `family` names and its successor column, or a refusal.
+
+    Returns the column beside the table rather than leaving the caller to read a
+    nullable attribute, because "this family may be superseded" and "this is the
+    column that says by what" are one fact and splitting them lets a writer
+    check the first and use the second.
+
+    An observation is rebound and never superseded: taking one out of service
+    would change what a source said, and section 21 asks a merge to leave source
+    evidence exactly as it was recorded.
+    """
+    subject = _reparentable(family)
+    if subject.successor_column is None:
+        raise ValueError("a supersession names a record family that records one")
+    return subject, subject.successor_column
+
+
+def _validated_entity_set(entity_ids: frozenset[str]) -> list[str]:
+    """`entity_ids` as a sorted list, every member checked as an entity identifier.
+
+    Sorted so two calls over the same set build the same statement, which is
+    what lets a query plan be read and compared. Checked because these values
+    reach an `IN` predicate: `validate_identifier` is the boundary that keeps an
+    opaque identifier opaque, and a set assembled somewhere else is exactly the
+    path that skips it.
+    """
+    for entity_id in entity_ids:
+        validate_identifier(entity_id, IdKind.ENTITY)
+    return sorted(entity_ids)
 
 
 def _constraint_name(error: IntegrityError) -> str | None:
@@ -2817,4 +3311,80 @@ def _row_to_merge(row: Row[Any]) -> EntityMergeRecord:
         decided_by=str(row.decided_by),
         reason=str(row.reason),
         decided_at=row.decided_at,
+    )
+
+
+def _row_to_identity_preview(row: Row[Any]) -> IdentityPreview:
+    """One stored merge binding, back through the record that refuses a bad one.
+
+    `merged_away` is rebuilt as the `(entity_id, expected_version)` pairs
+    `IdentityPreview` takes rather than as the two-key objects the column holds.
+    The column's CHECK bounds the array and its type and says nothing about the
+    shape of an element; the record is what proves each entity is paired with the
+    version it was read at, so a row written around this repository is refused
+    here rather than served as a binding nothing checked.
+    """
+    return IdentityPreview(
+        preview_id=str(row.preview_id),
+        principal_id=str(row.principal_id),
+        operation_type=IdentityOperationType(str(row.operation_type)),
+        survivor_entity_id=str(row.survivor_entity_id),
+        expected_survivor_version=int(row.expected_survivor_version),
+        merged_away=tuple(
+            (str(item["entity_id"]), int(item["expected_version"])) for item in row.merged_away
+        ),
+        preview_digest=str(row.preview_digest),
+        conflict_digest=str(row.conflict_digest),
+        created_by=str(row.created_by),
+        actor_class=ActorClass(str(row.actor_class)),
+        created_at=row.created_at,
+        expires_at=row.expires_at,
+        consumed_at=row.consumed_at,
+    )
+
+
+def _row_to_identity_operation(row: Row[Any]) -> IdentityOperation:
+    return IdentityOperation(
+        identity_operation_id=str(row.identity_operation_id),
+        principal_id=str(row.principal_id),
+        operation_type=IdentityOperationType(str(row.operation_type)),
+        survivor_entity_id=str(row.survivor_entity_id),
+        merged_entity_ids=tuple(str(entity_id) for entity_id in row.merged_entity_ids),
+        preview_id=str(row.preview_id),
+        preview_digest=str(row.preview_digest),
+        idempotency_key=str(row.idempotency_key),
+        request_digest=str(row.request_digest),
+        reason=_text_or_none(row.reason),
+        performed_by=str(row.performed_by),
+        actor_class=ActorClass(str(row.actor_class)),
+        correlation_id=str(row.correlation_id),
+        audit_id=str(row.audit_id),
+        receipt_id=_text_or_none(row.receipt_id),
+        state=IdentityOperationState(str(row.state)),
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+    )
+
+
+def _row_to_identity_effect(row: Row[Any]) -> IdentityEffect:
+    """One ledger row, back through the record that recomputes both digests.
+
+    The column names differ from the field names -- `record_family`/`effect_kind`
+    against `family`/`kind` -- because the table says which record it is about
+    and the record says which family it belongs to, and reading one as the other
+    is the mistake this mapper exists to make once rather than at every reader.
+    """
+    return IdentityEffect(
+        effect_id=str(row.effect_id),
+        identity_operation_id=str(row.identity_operation_id),
+        principal_id=str(row.principal_id),
+        sequence=int(row.sequence),
+        family=IdentityEffectFamily(str(row.record_family)),
+        record_id=str(row.record_id),
+        kind=IdentityEffectKind(str(row.effect_kind)),
+        before_state=row.before_state,
+        after_state=row.after_state,
+        before_sha256=str(row.before_sha256),
+        after_sha256=str(row.after_sha256),
+        recorded_at=row.recorded_at,
     )

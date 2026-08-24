@@ -57,8 +57,19 @@ version of it.
 **A second acceptance is refused, never duplicated.** Two independent guards:
 any stored accepting disposition makes the case terminal, and a proposal already
 carrying `accepted_memory_id` is refused even if its decision ledger were
-somehow empty. Reject, defer and mark-unresolved write a decision row and
-nothing else — no memory, no version, no evidence link.
+somehow empty. Reject, defer, mark-unresolved and invalidate write a decision row
+and nothing else — no memory, no version, no evidence link.
+
+**Invalidate is not reject, and the two are kept apart on purpose
+(`WP-RI-B-05`).** `reject` is the reviewer's own negative finding — "I looked and
+judged this wrong" — and it is the signal a suppression rule reads back to stop
+re-offering a known-bad candidate. `invalidate` says the basis went away:
+evidence retracted, subject archived, source superseded, and no judgement of the
+claim at all. Both create no memory and both keep the candidate, its evidence and
+its decision chain exactly where they are; what differs is the state each leaves
+(`rejected` against `invalidated`) and the reason each records. Substituting one
+for the other would file a negative finding nobody made, which is why the
+disposition was worth a column rather than a redirect.
 
 Every statement reaches the partition through `persistence.principal_scope`, via
 the same `_mine`/`_bound` one-line wrappers `relationship_memory.py` uses.
@@ -139,12 +150,26 @@ _ACCEPTING: frozenset[Disposition] = frozenset(
 #: it. The decision row is the record in that case, and the review case reads its
 #: state from the decision chain exactly as `goodnotes_review_cases` does, so
 #: nothing is lost but a denormalized copy.
+#:
+#: **`INVALIDATE` is the one member here that is not a judgement of the
+#: candidate**, and it takes `INVALIDATED` rather than `REJECTED` for a reason
+#: this map is the enforcement of. Exactly one disposition maps to `REJECTED`,
+#: and it is `REJECT`: a rejection is the reviewer's own negative finding about
+#: the claim, and it is the signal a later suppression rule reads back to stop
+#: re-offering a known-bad candidate. An invalidation says the *basis* went away
+#: — the evidence was retracted, the subject archived, the source superseded —
+#: and it judges the claim not at all. Sending both to one state would make a
+#: moot candidate indistinguishable from a refused one on every later read, so a
+#: reviewer forced to spend `reject` on a moot candidate would be writing a
+#: negative finding nobody made. That is the whole of the distinction, and it is
+#: held by `test_an_invalidation_is_not_a_rejection_and_leaves_no_negative_finding`.
 _STORED_STATE: dict[Disposition, MemoryProposalState | None] = {
     Disposition.ACCEPT: MemoryProposalState.ACCEPTED,
     Disposition.CORRECT_AND_ACCEPT: MemoryProposalState.CORRECTED_ACCEPTED,
     Disposition.REJECT: MemoryProposalState.REJECTED,
     Disposition.DEFER: MemoryProposalState.DEFERRED,
     Disposition.MARK_UNRESOLVED: None,
+    Disposition.INVALIDATE: MemoryProposalState.INVALIDATED,
 }
 
 #: The public review state each disposition presents on the shared surface.
@@ -154,6 +179,7 @@ _CASE_STATE: dict[Disposition, ProposalState] = {
     Disposition.REJECT: ProposalState.REJECTED,
     Disposition.DEFER: ProposalState.DEFERRED,
     Disposition.MARK_UNRESOLVED: ProposalState.UNRESOLVED,
+    Disposition.INVALIDATE: ProposalState.INVALIDATED,
 }
 
 
@@ -530,21 +556,26 @@ def decide_relationship_memory_review(
     current = len(decisions)
     if current != request.expected_review_version:
         raise ReviewConflictError("the expected review version is stale")
-    # `INVALIDATE` joins them, and for a reason of its own. The disposition
-    # requires a reason -- that is what separates "the ground moved" from "a
-    # reviewer refused this" -- and `relationship_memory_review_decisions` has no
-    # reason column at all: its only prose column is `corrected_statement`, which
-    # is the reviewer's replacement text and is bound to `correct_and_accept` by
-    # a CHECK. `MemoryProposalState.INVALIDATED` exists, so the *state* is
-    # writable; writing it with the reason dropped would record that a
-    # candidate's basis failed without recording how, which is the shape
-    # `EntityProposal` refuses outright. Giving this ledger a reason column is a
-    # schema change, and a plane that could not say why is not a plane that
-    # should say it.
+    # `INVALIDATE` used to be refused here, and for a reason of its own: the
+    # disposition requires a reason and this ledger had no column to put one in,
+    # so the state was writable and the reason was not -- and a state written
+    # with the reason dropped records that a candidate's basis failed without
+    # recording how, which is the shape `EntityProposal` refuses outright.
+    # `WP-RI-B-05` gives the ledger a bounded `reason` and the two CHECK
+    # sentences that bind it, so the objection is answered rather than argued
+    # around. `reject` was never the substitute it looked like: a rejection is
+    # this plane's negative finding about the claim, an invalidation is a
+    # statement about the basis, and `_STORED_STATE` is where the two are kept
+    # apart.
+    #
+    # The other two stay refused and their reasons are untouched: a reprocess
+    # has no eligible route here, because nothing on this plane mints a successor
+    # candidate against current evidence; and an escalation has no ceiling to
+    # raise a memory case to, because the memory plane declares no operator-only
+    # decision above `review.decide`.
     if request.disposition in {
         Disposition.REPROCESS,
         Disposition.ESCALATE,
-        Disposition.INVALIDATE,
     }:
         raise ReviewUnsupportedError("the requested disposition has no eligible route")
 
@@ -565,6 +596,7 @@ def decide_relationship_memory_review(
                     "sequence": sequence,
                     "disposition": request.disposition.value,
                     "corrected_statement": request.corrected_value,
+                    "reason": request.reason,
                     "correlation_id": request.correlation_id,
                     "audit_id": request.audit_id,
                     "decided_at": request.decided_at,
@@ -584,6 +616,18 @@ def decide_relationship_memory_review(
                 state=stored_state.value,
                 accepted_memory_id=None if promoted is None else promoted[0],
                 accepted_memory_version_id=None if promoted is None else promoted[1],
+                # The candidate's own record of why it stopped standing, on the
+                # row whose state it explains. `RelationshipMemoryProposal`
+                # declares the field and nothing wrote it until now; leaving it
+                # empty beside `state = 'invalidated'` would be the very
+                # "recorded that a basis failed without recording how" this
+                # disposition was refused for. Every other disposition writes
+                # `None` here, which is what the column already held: a reason
+                # attached to a reject would attribute an invalidation to a
+                # reviewer who made a finding instead.
+                invalidated_reason=(
+                    request.reason if request.disposition is Disposition.INVALIDATE else None
+                ),
             )
         )
     return ReviewDecision(

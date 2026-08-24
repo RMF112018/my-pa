@@ -8425,6 +8425,40 @@ relationship_memory_proposal_evidence = Table(
 #: `sequence` is the optimistic-concurrency control a reviewer states as
 #: `expected_review_version`, and the unique `(review_case_id, sequence)` is what
 #: makes a stale second decision the server's refusal rather than the writer's.
+#:
+#: **`reason` is `WP-RI-B-05`'s, and it is what makes `invalidate` recordable on
+#: this plane.** The disposition means "the basis is moot" -- evidence retracted,
+#: subject archived, source superseded -- and it is not `reject`, which means "I
+#: looked and judged this wrong" and is the plane's negative-evidence signal.
+#: Spending `reject` on a moot candidate would record a refusal nobody made, so
+#: the two have to be tellable apart in the ledger; a state written with the
+#: reason dropped would say a basis failed without saying how, which is the shape
+#: `EntityProposal` refuses outright. The column, the bound and the two CHECK
+#: sentences are `entity_proposal_review_decisions`' -- the same act on the
+#: sibling plane, named the same way rather than a second convention -- with the
+#: `a_memory_` prefix this table's other constraints already carry.
+#:
+#: **Four dispositions, where the entity plane names five, and the difference is
+#: this plane's own.** `entity_proposal_review_decisions` admits a reason on
+#: `escalate` because that plane routes an escalation -- `requirement_for` gives
+#: some Entity proposal kinds an operator ceiling to raise a case to. This one
+#: does not: the memory plane declares no operator-only decision above
+#: `review.decide`, `decide_relationship_memory_review` refuses `escalate`
+#: outright, and a reason column on this table admitting a disposition no writer
+#: can produce would describe a row that cannot exist. So the vocabulary here is
+#: what *this* table can hold, and `an_invalidation_states_why` narrows to the
+#: one disposition that requires one, rather than restating the pair.
+#:
+#: **There is a second reason the text must be this table's own rather than the
+#: contract's, and it is worth naming because it is a live hazard.**
+#: `f1c6b904a2d7` builds this table by copying the *live* declaration through
+#: `to_metadata`, so whatever is written here is what an already-merged revision
+#: emits on a fresh database. Written as the contract's five, the emitted
+#: vocabulary would be exactly `application.commands._REASONED_DISPOSITIONS` --
+#: which `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`
+#: reports, correctly, as a merged revision deriving a closed set from a Python
+#: set that can move under it. The four here are not any live set and nothing
+#: derives them. B7's migration requirement records both halves.
 relationship_memory_review_decisions = Table(
     "relationship_memory_review_decisions",
     METADATA,
@@ -8442,6 +8476,7 @@ relationship_memory_review_decisions = Table(
     Column("sequence", Integer, nullable=False),
     Column("disposition", Text, nullable=False),
     Column("corrected_statement", Text),
+    Column("reason", Text),
     Column("correlation_id", Text, nullable=False),
     Column("audit_id", Text, nullable=False),
     Column("decided_at", DateTime(timezone=True), nullable=False),
@@ -8462,6 +8497,18 @@ relationship_memory_review_decisions = Table(
         f"corrected_statement IS NULL OR length(corrected_statement) "
         f"BETWEEN 1 AND {MAX_STATEMENT_CHARACTERS}",
         name="a_memory_corrected_statement_is_bounded",
+    ),
+    CheckConstraint(
+        "reason IS NULL OR disposition IN ('reject', 'defer', 'mark_unresolved', 'invalidate')",
+        name="a_memory_review_reason_explains_a_departure",
+    ),
+    CheckConstraint(
+        "disposition <> 'invalidate' OR reason IS NOT NULL",
+        name="a_memory_invalidation_states_why",
+    ),
+    CheckConstraint(
+        f"reason IS NULL OR length(trim(reason)) BETWEEN 1 AND {REVIEW_REASON_LIMIT}",
+        name="a_memory_review_reason_is_bounded",
     ),
     UniqueConstraint("review_case_id", "sequence", name="one_memory_decision_per_review_sequence"),
     Index("relationship_memory_review_decisions_by_case", "review_case_id", "sequence"),

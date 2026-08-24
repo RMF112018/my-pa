@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 73
+    assert len(names) == len(Capability) == 95
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -118,6 +118,16 @@ def test_capability_names_match_the_published_contract() -> None:
         "entities.context",
         "entities.relationships",
         "entities.unresolved_mentions",
+        "entities.assignments.list",
+        "entities.assignments.create",
+        "entities.assignments.revise",
+        "entities.assignments.end",
+        "entities.relationships.create",
+        "entities.relationships.revise",
+        "entities.relationships.end",
+        "entities.observations.list",
+        "entities.observe",
+        "entities.unresolved_mentions.resolve",
         "goodnotes.propose",
         "reports.begin_cycle",
         "reports.commit",
@@ -135,6 +145,18 @@ def test_capability_names_match_the_published_contract() -> None:
         "relationship_memory.revise",
         "relationship_memory.archive",
         "relationship_memory.restore",
+        "entities.identifiers.list",
+        "entities.aliases.list",
+        "entities.create",
+        "entities.update",
+        "entities.archive",
+        "entities.restore",
+        "entities.identifiers.bind",
+        "entities.identifiers.retire",
+        "entities.identifiers.supersede",
+        "entities.aliases.add",
+        "entities.aliases.retire",
+        "entities.aliases.supersede",
     }
 
 

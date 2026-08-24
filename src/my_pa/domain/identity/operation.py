@@ -388,12 +388,16 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
-    # The relationship-intelligence entity plane (WP-RI-05). Six read
-    # capabilities over `knowledge.entities` and the tables around it.
+    # The relationship-intelligence entity plane. Twenty-eight `entities.` names
+    # over `knowledge.entities` and the tables around it, declared in four
+    # blocks by the package that added each: WP-RI-05's six reads here, then
+    # WP-RI-A-02's twelve, WP-RI-A-03's seven and WP-RI-A-04's three.
     # Alembic revision `c1a7e4b93d58` admits the first five and the
-    # `entity_read` purpose; the freeze is written before the members, because a
-    # member with no `ALTER` leaves every test green and is refused by the
-    # stored constraint on the first audited operation in the field.
+    # `entity_read` purpose, `e4d7b2f9a316` the sixth, and `823e23b6cc63` the
+    # remaining twenty-two together with `entity_authoring` and
+    # `entity_observation_ingest`; the freeze is written before the members,
+    # because a member with no `ALTER` leaves every test green and is refused by
+    # the stored constraint on the first audited operation in the field.
     #
     # `D-91`'s test, applied once for the family: would reuse widen the grant?
     # Yes, in both directions. `knowledge.search` is the extraction plane and
@@ -408,8 +412,10 @@ class Capability(StrEnum):
     # be *ambiguous on purpose*. `context` assembles a bounded card. `relationships`
     # walks one entity's typed edges to depth one. `unresolved_mentions` lists the
     # references nothing has placed, admitted later by `e4d7b2f9a316`. None of them
-    # writes: this plane has no write capability at all, which is why
-    # `_PERMITTED_PURPOSES` maps all six to a single read purpose.
+    # writes, which is why `_PERMITTED_PURPOSES` maps every one of them to a
+    # single read purpose. **The plane as a whole is no longer read-only** --
+    # the three blocks below add four further reads and eighteen writes, and
+    # each records what its own package changed and what it did not.
     #
     # Not operator-only: each reads the acting Principal's own partition and
     # grants no authority. Withholding from a process that has not enabled the
@@ -425,6 +431,134 @@ class Capability(StrEnum):
     #: returns: `entities.mentions` would read as every mention, and this answers
     #: only the unresolved ones, which is the whole of its use.
     ENTITIES_UNRESOLVED_MENTIONS = "entities.unresolved_mentions"
+    # WP-RI-A-02: the entity plane's authoring half, and the first block here to
+    # write anything. Two more reads and ten writes, and the comment above --
+    # "this plane has no write capability at all" -- was true of the reads-only
+    # build it was written for and is not true after this package. The reason it
+    # was true is worth keeping: nothing in this build could *author* an
+    # identity, so a write purpose would have been a purpose no capability
+    # permitted. There is one now, and it is
+    # `entity_authoring`.
+    #
+    # **The two new reads exist because the writes do.** A caller that may
+    # retire an identifier has to be able to see which identifiers there are and
+    # which of them are still active, and `entities.context` cannot answer that:
+    # it is one bounded card that truncates, and it discloses neither state nor
+    # a continuation for either collection. So `identifiers.list` and
+    # `aliases.list` are the paged, filterable reads the lifecycle writes are
+    # driven from. They map to `entity_read` with the other six, on the argument
+    # that module already makes for the family: they read the same rows under
+    # the same authority and a purpose apiece would separate nothing.
+    #
+    # **Ten writes rather than four, and the split is by what a grant reaches.**
+    # `create`/`update`/`archive`/`restore` change what an entity *is*;
+    # `identifiers.*` change which external addresses resolve to it, which is
+    # the half that decides whether a stranger's mail lands on this person; and
+    # `aliases.*` change what it may be called, which resolves nothing on its
+    # own because section 15.2 says names alone are insufficient. `bind`,
+    # `retire` and `supersede` are three rather than one for the reason
+    # `tasks.bulk_preview` and `tasks.bulk_confirm` are two: a grant issued to
+    # record a new address has no occasion to also withdraw the one that is
+    # there, and superseding is both at once and says so.
+    #
+    # `D-91`'s test, applied to the family: would reuse widen the grant? There
+    # is nothing to reuse -- no capability in this build writes
+    # `knowledge.entities` -- so the question is whether these should have been
+    # folded into `entities.update`. They should not: an update naming an
+    # `identifiers` array would make one grant reach identity bindings, and the
+    # whole argument for the split is that it must not.
+    #
+    # Not operator-only, on the argument the six reads make: each writes the
+    # acting Principal's own partition and none widens the scope a later request
+    # is evaluated against, which is the property that puts `sources.enroll`
+    # there. Withholding them from a build that has not enabled the plane is
+    # `_ENTITY_CAPABILITIES` in `application.service`.
+    ENTITIES_IDENTIFIERS_LIST = "entities.identifiers.list"
+    ENTITIES_ALIASES_LIST = "entities.aliases.list"
+    ENTITIES_CREATE = "entities.create"
+    ENTITIES_UPDATE = "entities.update"
+    ENTITIES_ARCHIVE = "entities.archive"
+    ENTITIES_RESTORE = "entities.restore"
+    ENTITIES_IDENTIFIERS_BIND = "entities.identifiers.bind"
+    ENTITIES_IDENTIFIERS_RETIRE = "entities.identifiers.retire"
+    ENTITIES_IDENTIFIERS_SUPERSEDE = "entities.identifiers.supersede"
+    ENTITIES_ALIASES_ADD = "entities.aliases.add"
+    ENTITIES_ALIASES_RETIRE = "entities.aliases.retire"
+    ENTITIES_ALIASES_SUPERSEDE = "entities.aliases.supersede"
+
+    # The directed-relationship write family (WP-RI-A-03). One read and six
+    # writes over the two tables that carry *directed* fact: `entity_assignments`
+    # and `entity_relationships`. Phase A's single revision `823e23b6cc63`
+    # carries the forward `ALTER` admitting all seven; the members were written
+    # here before it existed, for the reason the six reads above were, and the
+    # consequence was stated plainly at the time -- without that revision the
+    # stored `capability_is_known` CHECK refuses the audit row, so an end-to-end
+    # call fails at the audit sink rather than in this file.
+    #
+    # **Three segments rather than two, and only on this family.** Every earlier
+    # capability is `plane.verb`, and `entities.create` would have been that
+    # shape -- but it would also have been a lie about what it creates. The
+    # entity plane holds five record families and this package writes two of
+    # them, so the name has to say which; `entities.assignments.create` and
+    # `entities.relationships.create` are two different acts on two different
+    # tables with two different semantic identities, and a single
+    # `entities.create` covering both would be one grant reaching both. The
+    # middle segment is the record family, and it is the only thing that makes
+    # the pair distinguishable where grants are decided.
+    #
+    # `entities.assignments.list` is a read and takes `entity_read`, because it
+    # returns rows `entities.context` and `entities.relationships` already reach
+    # under that purpose. It is a capability of its own rather than a widening
+    # of `entities.relationships` on `D-91`'s test read the other way: an
+    # assignment is not an edge -- it binds one entity to a scope with a role,
+    # where an edge binds two entities -- so serving both from one name would
+    # make a caller that wanted one page of edges receive a second record family
+    # it did not ask for and cannot page independently.
+    #
+    # **The six writes are `revise`/`end`, never `update`/`delete`.** ADR-003
+    # clause 3's frame: an edit appends, and withdrawal is a lifecycle
+    # transition that keeps the row. There is no capability that destroys an
+    # assignment or an edge, for the reason there is no
+    # `relationship_memory.delete` -- and correction of what a record *means*
+    # (its type, its endpoints, its scope) is not an edit at all: it is `end`
+    # followed by `create`, because those fields are the record's identity and
+    # editing identity in place rewrites history rather than recording it.
+    #
+    # Not operator-only. These write canonical fact about the acting Principal's
+    # own entities and grant no authority -- none of them widens the scope a
+    # later request is evaluated against, which is the property that puts
+    # `sources.enroll` there. Withholding them from a build that has not enabled
+    # the plane is `_ENTITY_CAPABILITIES` in `application.service`.
+    ENTITIES_ASSIGNMENTS_LIST = "entities.assignments.list"
+    ENTITIES_ASSIGNMENTS_CREATE = "entities.assignments.create"
+    ENTITIES_ASSIGNMENTS_REVISE = "entities.assignments.revise"
+    ENTITIES_ASSIGNMENTS_END = "entities.assignments.end"
+    ENTITIES_RELATIONSHIPS_CREATE = "entities.relationships.create"
+    ENTITIES_RELATIONSHIPS_REVISE = "entities.relationships.revise"
+    ENTITIES_RELATIONSHIPS_END = "entities.relationships.end"
+
+    #: WP-RI-A-04. One read and two writes, the last of Phase A's four blocks.
+    #:
+    #: `entities.observations.list` is the second read of the observation table
+    #: and is not a widening of `entities.unresolved_mentions`: that one answers
+    #: "what could nobody place", and this one answers "what has this plane been
+    #: told, and what happened to it" -- including the mentions that *were*
+    #: placed, which the queue by definition never shows. Both withhold the
+    #: observed text; neither is a way to read it back.
+    #:
+    #: `entities.observe` records evidence and creates nothing. Its own name
+    #: rather than an `entities.create`, because those are different acts with
+    #: different authority: section 12.2 says a source record "does not become
+    #: the canonical person by itself", and a capability called `create` would
+    #: be the first half of building one that did.
+    #:
+    #: `entities.unresolved_mentions.resolve` decides one mention. Named as the
+    #: queue's own verb rather than `entities.link`, because four of its five
+    #: dispositions link nothing: three are refusals and one creates. A name
+    #: that promised a link would describe the minority of what it does.
+    ENTITIES_OBSERVATIONS_LIST = "entities.observations.list"
+    ENTITIES_OBSERVE = "entities.observe"
+    ENTITIES_UNRESOLVED_MENTIONS_RESOLVE = "entities.unresolved_mentions.resolve"
 
     # The Relationship Memory plane: durable, entity-bound knowledge the user
     # meant to keep. **A family of its own rather than an `entities.update`**,
@@ -710,6 +844,56 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ENTITIES_RESOLVE: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_CONTEXT: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_RELATIONSHIPS: frozenset({Purpose.ENTITY_READ}),
+        # WP-RI-A-02. The two paged child listings join the read purpose; the
+        # ten writes take the plane's new one. The argument for the split is
+        # beside `Purpose.ENTITY_AUTHORING` and is the one this module makes for
+        # every other plane that reads and writes the same rows.
+        Capability.ENTITIES_IDENTIFIERS_LIST: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_ALIASES_LIST: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_CREATE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_UPDATE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_ARCHIVE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_RESTORE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_IDENTIFIERS_BIND: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_IDENTIFIERS_RETIRE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_ALIASES_ADD: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_ALIASES_RETIRE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_ALIASES_SUPERSEDE: frozenset({Purpose.ENTITY_AUTHORING}),
+        # `entities.assignments.list` reuses `ENTITY_READ`, and the reuse widens
+        # nothing: it returns the assignment rows `entities.context` already
+        # assembles into a card and `entities.resolve` already corroborates
+        # against, for the same Principal over the same table. A read purpose of
+        # its own would map to exactly one capability and separate nothing.
+        Capability.ENTITIES_ASSIGNMENTS_LIST: frozenset({Purpose.ENTITY_READ}),
+        # The six directed writes, all under `ENTITY_AUTHORING` and none of them
+        # under `ENTITY_READ`. The separation is the rule `purpose.py` states
+        # for the capture plane: a purpose wide enough to cover writing and
+        # reading is a purpose that grants both, and a grant issued so an
+        # assistant may look up who someone reports to must not also let it
+        # assert that they do.
+        #
+        # **The `end` transitions travel with the writes rather than taking a
+        # purpose of their own**, exactly as `documents.archive` and
+        # `relationship_memory.archive` do. Ending an assignment is the same
+        # authority over the same row as revising it -- it is how a correction to
+        # a record's *identity* is expressed, since type, endpoints and scope are
+        # not editable in place -- so splitting it off would separate a pair of
+        # acts that are always held together.
+        Capability.ENTITIES_ASSIGNMENTS_CREATE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_ASSIGNMENTS_REVISE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_ASSIGNMENTS_END: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_RELATIONSHIPS_CREATE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_RELATIONSHIPS_REVISE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_RELATIONSHIPS_END: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_OBSERVATIONS_LIST: frozenset({Purpose.ENTITY_READ}),
+        # The two writes, each under exactly one purpose. `entities.observe` is
+        # deliberately *not* permitted under `ENTITY_AUTHORING`: an ingest path
+        # writes evidence continuously and must never be able to decide an
+        # identity, and a capability permitted under both purposes would be
+        # reachable by whichever grant a caller happened to hold.
+        Capability.ENTITIES_OBSERVE: frozenset({Purpose.ENTITY_OBSERVATION_INGEST}),
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: frozenset({Purpose.ENTITY_AUTHORING}),
         # The Relationship Memory pair, and neither is a reuse. `D-91`'s test
         # asks whether reuse would widen the grant, and here it plainly would in
         # both directions: `entity_read` is the identity plane — aliases,
@@ -787,6 +971,24 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
+        Capability.ENTITIES_CREATE,
+        Capability.ENTITIES_UPDATE,
+        Capability.ENTITIES_ARCHIVE,
+        Capability.ENTITIES_RESTORE,
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE,
+        Capability.ENTITIES_ALIASES_ADD,
+        Capability.ENTITIES_ALIASES_RETIRE,
+        Capability.ENTITIES_ALIASES_SUPERSEDE,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE,
+        Capability.ENTITIES_ASSIGNMENTS_END,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_REVISE,
+        Capability.ENTITIES_RELATIONSHIPS_END,
+        Capability.ENTITIES_OBSERVE,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
     }
 )
 
@@ -807,6 +1009,12 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_RECORD_RUN_STATE,
         Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.ENTITIES_CREATE,
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        Capability.ENTITIES_ALIASES_ADD,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        Capability.ENTITIES_OBSERVE,
     }
 )
 

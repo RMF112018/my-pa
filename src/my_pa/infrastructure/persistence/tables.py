@@ -183,20 +183,33 @@ from my_pa.domain.native_sources import (
 )
 from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
 from my_pa.domain.relationship.entity import (
+    ARCHIVABLE_STATUSES,
+    AliasState,
     AliasType,
+    AssignmentState,
     AssignmentType,
     EntityRelationshipType,
     EntityStatus,
     ExternalIdentifierNamespace,
+    IdentifierState,
+    RelationshipState,
 )
 from my_pa.domain.relationship.entity import (
     EntityType as RelationshipEntityType,
 )
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.relationship.governance import (
+    ENTITY_CHANGE_REASON_LIMIT,
+    ActorClass,
     EntityProposalKind,
     EntityProposalState,
+    EvidenceRole,
+    MutationAuthority,
+    MutationRecordFamily,
+    ObservationAuthority,
     ObservationKind,
+    ObservationState,
+    ResolutionDisposition,
 )
 from my_pa.domain.relationship.identity import ResolutionAction
 from my_pa.domain.relationship.memory import (
@@ -2820,10 +2833,20 @@ entities = Table(
         Text,
         ForeignKey(f"{SCHEMA}.entities.entity_id"),
     ),
+    Column("archived_from_status", Text),
     _is_identifier("entity_id", IdKind.ENTITY),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("entity_type", RelationshipEntityType, name="an_entity_type_is_known"),
     _one_of("status", EntityStatus, name="an_entity_status_is_known"),
+    _one_of(
+        "archived_from_status",
+        frozenset(member.value for member in ARCHIVABLE_STATUSES),
+        name="an_archived_from_status_is_known",
+    ),
+    CheckConstraint(
+        "(status = 'archived') = (archived_from_status IS NOT NULL)",
+        name="an_entity_records_the_status_it_was_archived_from",
+    ),
     CheckConstraint("version >= 1", name="an_entity_version_is_positive"),
     CheckConstraint(
         "(status = 'merged_redirect') = (superseded_by_entity_id IS NOT NULL)",
@@ -2841,15 +2864,39 @@ entities = Table(
         "length(trim(display_name)) > 0",
         name="an_entity_display_name_is_not_blank",
     ),
+    # The target every composite `(entity_id, principal_id)` reference on this
+    # plane points at, and the reason those references can exist at all. A plain
+    # `entity_id` foreign key is global: PostgreSQL accepts an assignment whose
+    # scope is another Principal's project, because the row it points at exists.
+    # This unique is what lets the server refuse that instead of leaving it to a
+    # check every writer has to remember.
+    UniqueConstraint(
+        "entity_id",
+        "principal_id",
+        name="an_entity_is_identified_within_its_principal",
+    ),
+    # A redirect stays inside the Principal that holds both ends, for the same
+    # reason: a merged-away entity pointing at another Principal's survivor would
+    # make one read cross the partition and disclose the other side's existence.
+    ForeignKeyConstraint(
+        ["superseded_by_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        name="an_entity_redirects_within_its_principal",
+    ),
     Index("entities_by_principal", "principal_id"),
     Index("entities_by_entity_type", "entity_type"),
     Index("entities_by_status", "status"),
 )
 
-#: WP-RI-01: an entity's identity in an external namespace.  The unique
-#: constraint on (entity_id, namespace, normalized_value) ensures the same
-#: external identity cannot be recorded twice for the same entity in the same
-#: namespace.
+#: WP-RI-01: an entity's identity in an external namespace.  Uniqueness is
+#: carried by `an_active_external_identifier_binding_is_unique` below and is
+#: partial: one address is the *current* identity of at most one entity per
+#: Principal, and any number of retired or superseded rows may hold the same
+#: value.  `2fe4e13fb449` dropped the total unique on
+#: `(entity_id, namespace, normalized_value)` this table was created with,
+#: because a total unique forces the plane to delete a retired binding in order
+#: to record its replacement -- which is the row that resolves a message sent
+#: before the address was reissued.
 entity_external_identifiers = Table(
     "entity_external_identifiers",
     METADATA,
@@ -2867,12 +2914,35 @@ entity_external_identifiers = Table(
     Column("effective_from", DateTime(timezone=True)),
     Column("effective_to", DateTime(timezone=True)),
     Column("principal_id", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("updated_at", DateTime(timezone=True)),
+    Column("retired_at", DateTime(timezone=True)),
+    Column(
+        "superseded_by_identifier_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_external_identifiers.identifier_id"),
+    ),
     _is_identifier("identifier_id", IdKind.EXTERNAL_IDENTIFIER),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of(
         "namespace",
         ExternalIdentifierNamespace,
         name="an_external_identifier_namespace_is_known",
+    ),
+    _one_of("state", IdentifierState, name="an_external_identifier_state_is_known"),
+    CheckConstraint("version >= 1", name="an_external_identifier_version_is_positive"),
+    CheckConstraint(
+        "retired_at IS NULL OR state <> 'active'",
+        name="an_external_identifier_is_retired_only_once_it_leaves_service",
+    ),
+    CheckConstraint(
+        "superseded_by_identifier_id IS NULL OR state = 'superseded'",
+        name="an_external_identifier_names_a_successor_only_when_superseded",
+    ),
+    CheckConstraint(
+        "superseded_by_identifier_id IS NULL OR superseded_by_identifier_id <> identifier_id",
+        name="an_external_identifier_does_not_supersede_itself",
     ),
     CheckConstraint(
         "length(trim(normalized_value)) > 0",
@@ -2887,10 +2957,23 @@ entity_external_identifiers = Table(
         name="an_external_identifier_ends_after_it_starts",
     ),
     UniqueConstraint(
-        "entity_id",
-        "namespace",
-        "normalized_value",
-        name="an_external_identifier_is_recorded_once_per_namespace",
+        "identifier_id",
+        "principal_id",
+        name="an_external_identifier_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="an_external_identifier_binds_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_identifier_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_external_identifiers.identifier_id",
+            f"{SCHEMA}.entity_external_identifiers.principal_id",
+        ],
+        name="an_external_identifier_is_superseded_within_its_principal",
     ),
     Index("entity_external_identifiers_by_principal", "principal_id"),
     Index(
@@ -2898,16 +2981,32 @@ entity_external_identifiers = Table(
         "namespace",
         "normalized_value",
     ),
+    # The canonical binding, and the one rule that stops a single address from
+    # being the *current* identity of two entities at once. Partial rather than
+    # total, because the historical rows are the point: a retired address still
+    # has to resolve a four-year-old message to the person who sent it, and a
+    # total unique would force the plane to delete it to record its replacement.
+    Index(
+        "an_active_external_identifier_binding_is_unique",
+        "principal_id",
+        "namespace",
+        "normalized_value",
+        unique=True,
+        postgresql_where=text("state = 'active'"),
+    ),
 )
 
 #: WP-RI-03: one recorded name form of an entity.  Resolution matches on
 #: aliases as well as on canonical names (specification section 15.1), so the
 #: index is on `(normalized_value)` rather than on the entity: the lookup goes
-#: from a name to the entities that carry it, not the other way round.  The
-#: unique constraint is per `(entity_id, alias_type, normalized_value)` so the
-#: same name may be held by two *different* entities -- two real people do share
-#: a name, and a schema that made that a conflict would force the false join
-#: this plane exists to avoid.
+#: from a name to the entities that carry it, not the other way round.
+#: Uniqueness is carried by `an_active_alias_is_unique_per_entity_and_type`
+#: below and is per entity, so the same name may be held by two *different*
+#: entities -- two real people do share a name, and a schema that made that a
+#: conflict would force the false join this plane exists to avoid.  It is also
+#: partial, for the reason `entity_external_identifiers` states: `2fe4e13fb449`
+#: dropped the total unique this table was created with so that a retired name
+#: form and its replacement can both be recorded.
 entity_aliases = Table(
     "entity_aliases",
     METADATA,
@@ -2924,9 +3023,32 @@ entity_aliases = Table(
     Column("effective_from", DateTime(timezone=True)),
     Column("effective_to", DateTime(timezone=True)),
     Column("principal_id", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("updated_at", DateTime(timezone=True)),
+    Column("retired_at", DateTime(timezone=True)),
+    Column(
+        "superseded_by_alias_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_aliases.alias_id"),
+    ),
     _is_identifier("alias_id", IdKind.ENTITY_ALIAS),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("alias_type", AliasType, name="an_alias_type_is_known"),
+    _one_of("state", AliasState, name="an_alias_state_is_known"),
+    CheckConstraint("version >= 1", name="an_alias_version_is_positive"),
+    CheckConstraint(
+        "retired_at IS NULL OR state <> 'active'",
+        name="an_alias_is_retired_only_once_it_leaves_service",
+    ),
+    CheckConstraint(
+        "superseded_by_alias_id IS NULL OR state = 'superseded'",
+        name="an_alias_names_a_successor_only_when_superseded",
+    ),
+    CheckConstraint(
+        "superseded_by_alias_id IS NULL OR superseded_by_alias_id <> alias_id",
+        name="an_alias_does_not_supersede_itself",
+    ),
     CheckConstraint(
         "length(trim(normalized_value)) > 0",
         name="an_alias_normalized_value_is_not_blank",
@@ -2940,13 +3062,39 @@ entity_aliases = Table(
         name="an_alias_ends_after_it_starts",
     ),
     UniqueConstraint(
-        "entity_id",
-        "alias_type",
-        "normalized_value",
-        name="an_alias_is_recorded_once_per_entity_and_type",
+        "alias_id",
+        "principal_id",
+        name="an_alias_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="an_alias_names_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_alias_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_aliases.alias_id",
+            f"{SCHEMA}.entity_aliases.principal_id",
+        ],
+        name="an_alias_is_superseded_within_its_principal",
     ),
     Index("entity_aliases_by_principal", "principal_id"),
     Index("entity_aliases_by_normalized_value", "normalized_value"),
+    # Per *entity*, deliberately: two different entities may both be actively
+    # called the same thing, because two real people do share a name. What this
+    # refuses is one entity carrying the same name form twice under one alias
+    # type, which is a duplicate rather than a fact.
+    Index(
+        "an_active_alias_is_unique_per_entity_and_type",
+        "principal_id",
+        "entity_id",
+        "alias_type",
+        "normalized_value",
+        unique=True,
+        postgresql_where=text("state = 'active'"),
+    ),
 )
 
 #: WP-RI-01: a typed assignment of an entity to a scope entity.  Employment,
@@ -2974,18 +3122,83 @@ entity_assignments = Table(
     Column("responsibility_class", Text),
     Column("effective_from", DateTime(timezone=True)),
     Column("effective_to", DateTime(timezone=True)),
-    Column("status", Text, nullable=False, server_default=text("'active'")),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
     Column("principal_id", Text, nullable=False),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("updated_at", DateTime(timezone=True)),
+    Column("ended_at", DateTime(timezone=True)),
+    Column(
+        "superseded_by_assignment_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_assignments.assignment_id"),
+    ),
     _is_identifier("assignment_id", IdKind.ASSIGNMENT),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("assignment_type", AssignmentType, name="an_assignment_type_is_known"),
+    _one_of("state", AssignmentState, name="an_assignment_state_is_known"),
     CheckConstraint(
         "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
         name="an_assignment_ends_after_it_starts",
     ),
+    CheckConstraint("version >= 1", name="an_assignment_version_is_positive"),
+    CheckConstraint(
+        "ended_at IS NULL OR state <> 'active'",
+        name="an_assignment_ends_only_once_it_leaves_service",
+    ),
+    CheckConstraint(
+        "superseded_by_assignment_id IS NULL OR state = 'superseded'",
+        name="an_assignment_names_a_successor_only_when_superseded",
+    ),
+    CheckConstraint(
+        "superseded_by_assignment_id IS NULL OR superseded_by_assignment_id <> assignment_id",
+        name="an_assignment_does_not_supersede_itself",
+    ),
+    UniqueConstraint(
+        "assignment_id",
+        "principal_id",
+        name="an_assignment_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="an_assignment_names_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["scope_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="SET NULL (scope_entity_id)",
+        name="an_assignment_is_scoped_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_assignment_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_assignments.assignment_id",
+            f"{SCHEMA}.entity_assignments.principal_id",
+        ],
+        name="an_assignment_is_superseded_within_its_principal",
+    ),
     Index("entity_assignments_by_principal", "principal_id"),
     Index("entity_assignments_by_entity_id", "entity_id"),
     Index("entity_assignments_by_scope_entity_id", "scope_entity_id"),
+    # The semantic unique: two *active* rows saying the same thing about the
+    # same person in the same scope are one assignment written twice. `role`,
+    # `discipline` and `responsibility_class` are free text, so the expression
+    # folds and trims them and treats NULL and the empty string alike -- without
+    # that, `Project Manager` and `project manager ` are two assignments and
+    # every read that counts them counts twice.
+    Index(
+        "an_active_assignment_is_recorded_once",
+        text("principal_id"),
+        text("entity_id"),
+        text("assignment_type"),
+        text("COALESCE(scope_entity_id, '')"),
+        text("COALESCE(lower(trim(role)), '')"),
+        text("COALESCE(lower(trim(discipline)), '')"),
+        text("COALESCE(lower(trim(responsibility_class)), '')"),
+        unique=True,
+        postgresql_where=text("state = 'active'"),
+    ),
 )
 
 #: WP-RI-01: a directed, typed relationship between two entities, optionally
@@ -3023,12 +3236,32 @@ entity_relationships = Table(
     Column("state", Text, nullable=False, server_default=text("'active'")),
     Column("version", Integer, nullable=False, server_default=text("1")),
     Column("principal_id", Text, nullable=False),
+    Column("updated_at", DateTime(timezone=True)),
+    Column("ended_at", DateTime(timezone=True)),
+    Column(
+        "superseded_by_relationship_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_relationships.relationship_id"),
+    ),
     _is_identifier("relationship_id", IdKind.ENTITY_RELATIONSHIP),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of(
         "relationship_type",
         EntityRelationshipType,
         name="an_entity_relationship_type_is_known",
+    ),
+    _one_of("state", RelationshipState, name="an_entity_relationship_state_is_known"),
+    CheckConstraint(
+        "ended_at IS NULL OR state <> 'active'",
+        name="an_entity_relationship_ends_only_once_it_leaves_service",
+    ),
+    CheckConstraint(
+        "superseded_by_relationship_id IS NULL OR state = 'superseded'",
+        name="an_entity_relationship_names_a_successor_only_when_superseded",
+    ),
+    CheckConstraint(
+        "superseded_by_relationship_id IS NULL OR superseded_by_relationship_id <> relationship_id",
+        name="an_entity_relationship_does_not_supersede_itself",
     ),
     CheckConstraint(
         "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
@@ -3039,9 +3272,53 @@ entity_relationships = Table(
         name="an_entity_relationship_connects_two_distinct_entities",
     ),
     CheckConstraint("version >= 1", name="an_entity_relationship_version_is_positive"),
+    UniqueConstraint(
+        "relationship_id",
+        "principal_id",
+        name="an_entity_relationship_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["from_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="an_entity_relationship_leaves_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["to_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="an_entity_relationship_reaches_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["scope_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="SET NULL (scope_entity_id)",
+        name="an_entity_relationship_is_scoped_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_relationship_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_relationships.relationship_id",
+            f"{SCHEMA}.entity_relationships.principal_id",
+        ],
+        name="an_entity_relationship_is_superseded_within_its_principal",
+    ),
     Index("entity_relationships_by_principal", "principal_id"),
     Index("entity_relationships_by_from_entity", "from_entity_id"),
     Index("entity_relationships_by_to_entity", "to_entity_id"),
+    # One active edge per `(from, type, to, scope)`. The same *pair* may still
+    # appear in both directions and under different types, which is what a
+    # directed model is for; what is refused is the same edge asserted twice.
+    Index(
+        "an_active_entity_relationship_is_recorded_once",
+        text("principal_id"),
+        text("from_entity_id"),
+        text("relationship_type"),
+        text("to_entity_id"),
+        text("COALESCE(scope_entity_id, '')"),
+        unique=True,
+        postgresql_where=text("state = 'active'"),
+    ),
 )
 
 #: WP-RI-06: one source-bound observation that may refer to an entity.
@@ -3075,9 +3352,44 @@ entity_observations = Table(
         Text,
         ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="SET NULL"),
     ),
+    Column("authority", Text, nullable=False, server_default=text("'source_observation'")),
+    Column("state", Text, nullable=False, server_default=text("'current'")),
+    Column("state_reason", Text),
+    Column(
+        "superseded_by_observation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_observations.observation_id"),
+    ),
+    # How many times this observation's resolution has been decided. It is the
+    # value `entity_resolution_decisions.expected_resolution_version` is checked
+    # against, and it lives here because the current value has to live on the
+    # thing being decided: two reviewers deciding the same unresolved mention
+    # would otherwise both write a decision, and the second would silently
+    # overwrite the first's conclusion.
+    Column("resolution_version", Integer, nullable=False, server_default=text("0")),
     _is_identifier("observation_id", IdKind.ENTITY_OBSERVATION),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("kind", ObservationKind, name="an_observation_kind_is_known"),
+    _one_of("authority", ObservationAuthority, name="an_observation_authority_is_known"),
+    _one_of("state", ObservationState, name="an_observation_state_is_known"),
+    CheckConstraint(
+        "state_reason IS NULL OR (state <> 'current' "
+        "AND length(trim(state_reason)) > 0 "
+        f"AND length(state_reason) <= {ENTITY_CHANGE_REASON_LIMIT})",
+        name="an_observation_state_reason_explains_a_departure_from_current",
+    ),
+    CheckConstraint(
+        "superseded_by_observation_id IS NULL OR state = 'superseded'",
+        name="an_observation_names_a_successor_only_when_superseded",
+    ),
+    CheckConstraint(
+        "superseded_by_observation_id IS NULL OR superseded_by_observation_id <> observation_id",
+        name="an_observation_does_not_supersede_itself",
+    ),
+    CheckConstraint(
+        "resolution_version >= 0",
+        name="an_observation_resolution_version_is_not_negative",
+    ),
     CheckConstraint(
         "length(trim(observed_value)) > 0",
         name="an_observation_records_what_was_observed",
@@ -3097,6 +3409,25 @@ entity_observations = Table(
         r"AND mention_display_name ~ '[^ \t\n\r\v\f]' "
         "AND length(mention_display_name) BETWEEN 1 AND 200)",
         name="a_disclosed_mention_name_is_bounded",
+    ),
+    UniqueConstraint(
+        "observation_id",
+        "principal_id",
+        name="an_observation_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="SET NULL (entity_id)",
+        name="an_observation_refers_to_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_observation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_observations.observation_id",
+            f"{SCHEMA}.entity_observations.principal_id",
+        ],
+        name="an_observation_is_superseded_within_its_principal",
     ),
     Index("entity_observations_by_principal", "principal_id"),
     Index("entity_observations_by_normalized_value", "principal_id", "normalized_value"),
@@ -3143,6 +3474,13 @@ entity_proposals = Table(
         "decided_at IS NULL OR decided_at >= proposed_at",
         name="a_proposal_is_not_decided_before_it_was_proposed",
     ),
+    # The composite identity `entity_merge_records` cites, so that a merge
+    # record and the proposal it says authorised it belong to one Principal.
+    UniqueConstraint(
+        "proposal_id",
+        "principal_id",
+        name="a_proposal_is_identified_within_its_principal",
+    ),
     Index("entity_proposals_by_principal", "principal_id"),
     Index("entity_proposals_by_state", "principal_id", "state"),
 )
@@ -3188,8 +3526,346 @@ entity_merge_records = Table(
     ),
     CheckConstraint("length(trim(decided_by)) > 0", name="a_merge_names_who_decided_it"),
     CheckConstraint("length(trim(reason)) > 0", name="a_merge_records_why_it_was_accepted"),
+    # Both entities and the proposal are named compositely, for the reason every
+    # other Entity-referencing column on this plane is: a single-column
+    # reference spans every Principal, so the server accepted a merge record
+    # owned by one Principal that merged away another Principal's entity, and
+    # only the repository's own predicate stood between that and a redirect
+    # across the partition. The single-column references stay alongside these --
+    # both are enforced, and dropping one would be churn.
+    ForeignKeyConstraint(
+        ["retained_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="a_merge_retains_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["merged_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="a_merge_merges_away_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["proposal_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_proposals.proposal_id",
+            f"{SCHEMA}.entity_proposals.principal_id",
+        ],
+        name="a_merge_cites_a_proposal_of_its_principal",
+    ),
     Index("entity_merge_records_by_principal", "principal_id"),
     Index("entity_merge_records_by_retained", "retained_entity_id"),
+)
+
+#: WP-RI-A-01: the ordinary mutation ledger for the entity plane. One
+#: append-only row per accepted change to a canonical record: what changed,
+#: which version it moved from and to, what admitted it, and under which
+#: idempotency key.
+#:
+#: **It is not `audit_events`, and the difference is what each one can answer.**
+#: An audit row says a capability was invoked by a Principal for a purpose, and
+#: it is written whether or not anything changed. This says what one invocation
+#: *did to a canonical record*, and it is written only when something did. A
+#: reader reconstructing how an entity came to say what it says needs the
+#: second; a reader auditing access needs the first. `audit_id` is carried so
+#: either can be reached from the other, and no capability is admitted here --
+#: this revision adds none.
+#:
+#: **`before_state` and `after_state` are evidence, not authority.** They are
+#: JSONB because a mutation ledger has to cover six record families whose shapes
+#: differ, and typing all six here would duplicate six declarations that already
+#: exist twelve hundred lines above. What that buys is recovery and review; what
+#: it must never become is the place a reader looks to learn what is *true*. The
+#: canonical fact is the row in the canonical table, and these two are a
+#: photograph of it.
+#:
+#: The `UNIQUE (principal_id, capability, idempotency_key)` is the idempotency
+#: mechanism, the same shape `capture_submissions` and
+#: `relationship_memory_submissions` use. `capability` is part of the key rather
+#: than assumed, because one key replayed against a *different* capability is a
+#: different request and answering it from this row would be wrong.
+entity_mutation_events = Table(
+    "entity_mutation_events",
+    METADATA,
+    Column("event_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("record_family", Text, nullable=False),
+    Column("record_id", Text, nullable=False),
+    Column("prior_version", Integer),
+    Column("new_version", Integer, nullable=False),
+    Column("authority", Text, nullable=False),
+    Column("before_state", JSONB),
+    Column("after_state", JSONB),
+    Column("reason", Text),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("receipt_id", Text),
+    Column("actor_class", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("event_id", IdKind.ENTITY_MUTATION_EVENT),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of("record_family", MutationRecordFamily, name="a_mutated_record_family_is_known"),
+    _one_of("authority", MutationAuthority, name="a_mutation_authority_is_known"),
+    _one_of("actor_class", ActorClass, name="a_mutation_actor_class_is_known"),
+    CheckConstraint(
+        "length(trim(capability)) > 0",
+        name="a_mutation_names_the_capability_that_made_it",
+    ),
+    # `record_id` carries no foreign key: it names a row in whichever of six
+    # tables `record_family` says, and no single reference can express that.
+    # What the server can still refuse is a value that is not an opaque
+    # identifier at all -- a path, a URL, a query string -- which is the
+    # `INV-PKL-005` shape rule applied where the kind is not knowable.
+    CheckConstraint(
+        f"record_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="a_mutated_record_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        f"receipt_id IS NULL OR receipt_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="a_mutation_receipt_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_mutation_request_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="a_mutation_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "reason IS NULL OR (length(trim(reason)) > 0 "
+        f"AND length(reason) <= {ENTITY_CHANGE_REASON_LIMIT})",
+        name="a_mutation_reason_is_bounded",
+    ),
+    CheckConstraint("new_version >= 1", name="a_mutation_new_version_is_positive"),
+    # A creation has no prior version; anything else moved from one. Stated as
+    # two rules rather than one so that "created" is a shape a reader can query
+    # for rather than a convention.
+    CheckConstraint(
+        "prior_version IS NULL OR (prior_version >= 1 AND new_version > prior_version)",
+        name="a_mutation_advances_the_version_it_names",
+    ),
+    CheckConstraint(
+        "before_state IS NULL OR jsonb_typeof(before_state) = 'object'",
+        name="a_mutation_before_state_is_an_object",
+    ),
+    CheckConstraint(
+        "after_state IS NULL OR jsonb_typeof(after_state) = 'object'",
+        name="a_mutation_after_state_is_an_object",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "capability",
+        "idempotency_key",
+        name="one_entity_mutation_per_key_and_capability",
+    ),
+    Index("entity_mutation_events_by_principal", "principal_id"),
+    Index("entity_mutation_events_by_record", "principal_id", "record_family", "record_id"),
+)
+
+#: WP-RI-A-01: one binding between a canonical fact and the single record that
+#: evidences it.
+#:
+#: **Exactly one target and exactly one evidence, checked by the server rather
+#: than by the writer's restraint.** A row naming two facts is a row whose
+#: subject is ambiguous; a row naming two evidence records is a row whose basis
+#: is. Both are states no later read could disentangle, and both are refused by
+#: a CHECK for the reason `relationship_memory_evidence_links` refuses them.
+#:
+#: **Same-Principal is proved by the application, and that is a stated
+#: residual.** The target columns carry composite `(id, principal_id)` foreign
+#: keys, so a fact belonging to another Principal is refused by the server. The
+#: *evidence* columns cannot be: `capture_spans` carries no principal partition
+#: at all (`tests/architecture/test_user_owned_tables_are_partitioned` records
+#: why), and `knowledge_id` names no table in this declaration. So one half is
+#: structural and the other half is a check the writer must make, and saying
+#: which is which is the difference between a known gap and a false claim.
+entity_fact_evidence_links = Table(
+    "entity_fact_evidence_links",
+    METADATA,
+    Column("link_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("entity_id", Text),
+    Column("identifier_id", Text),
+    Column("alias_id", Text),
+    Column("assignment_id", Text),
+    Column("relationship_id", Text),
+    Column("entity_observation_id", Text),
+    Column("capture_span_id", Text),
+    Column("knowledge_id", Text),
+    Column("role", Text, nullable=False),
+    Column("authority", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("link_id", IdKind.ENTITY_FACT_EVIDENCE_LINK),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("role", EvidenceRole, name="an_entity_evidence_role_is_known"),
+    _one_of("authority", MutationAuthority, name="an_entity_evidence_authority_is_known"),
+    CheckConstraint(
+        "(entity_id IS NOT NULL)::int "
+        "+ (identifier_id IS NOT NULL)::int "
+        "+ (alias_id IS NOT NULL)::int "
+        "+ (assignment_id IS NOT NULL)::int "
+        "+ (relationship_id IS NOT NULL)::int = 1",
+        name="entity_evidence_names_exactly_one_fact",
+    ),
+    CheckConstraint(
+        "(entity_observation_id IS NOT NULL)::int "
+        "+ (capture_span_id IS NOT NULL)::int "
+        "+ (knowledge_id IS NOT NULL)::int = 1",
+        name="entity_evidence_names_exactly_one_record",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="entity_evidence_names_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["identifier_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_external_identifiers.identifier_id",
+            f"{SCHEMA}.entity_external_identifiers.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="entity_evidence_names_an_identifier_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["alias_id", "principal_id"],
+        [f"{SCHEMA}.entity_aliases.alias_id", f"{SCHEMA}.entity_aliases.principal_id"],
+        ondelete="CASCADE",
+        name="entity_evidence_names_an_alias_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["assignment_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_assignments.assignment_id",
+            f"{SCHEMA}.entity_assignments.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="entity_evidence_names_an_assignment_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["relationship_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_relationships.relationship_id",
+            f"{SCHEMA}.entity_relationships.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="entity_evidence_names_a_relationship_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_observation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_observations.observation_id",
+            f"{SCHEMA}.entity_observations.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="entity_evidence_cites_an_observation_of_its_principal",
+    ),
+    Index("entity_fact_evidence_links_by_principal", "principal_id"),
+    Index("entity_fact_evidence_links_by_observation", "entity_observation_id"),
+)
+
+#: WP-RI-A-01: one append-only disposition of one observation.
+#:
+#: **Three of the five dispositions are refusals, and that is the design.**
+#: Section 15.2 requires an ambiguous mention to stay unresolved rather than be
+#: forced into the nearest person, so refusing has to be an ordinary recorded
+#: decision rather than the absence of one. A plane that could only record
+#: `link_existing` and `create_new` would make "we looked and declined to
+#: decide" indistinguishable from "nobody looked".
+#:
+#: `UNIQUE (observation_id, sequence)` orders the decisions about one
+#: observation, and `expected_resolution_version` is checked against
+#: `entity_observations.resolution_version` by the writer: two reviewers holding
+#: the same unresolved mention open both write a decision, and without the check
+#: the second silently overwrites the first's conclusion about who somebody is.
+entity_resolution_decisions = Table(
+    "entity_resolution_decisions",
+    METADATA,
+    Column("decision_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("observation_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("expected_resolution_version", Integer, nullable=False),
+    Column("disposition", Text, nullable=False),
+    Column("entity_id", Text),
+    Column("reason", Text),
+    Column("evidence_link_ids", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
+    Column("decided_by", Text, nullable=False),
+    Column("actor_class", Text, nullable=False),
+    Column("review_case_id", Text),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("receipt_id", Text),
+    Column("decided_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("decision_id", IdKind.ENTITY_RESOLUTION_DECISION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("observation_id", IdKind.ENTITY_OBSERVATION),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of("disposition", ResolutionDisposition, name="a_resolution_disposition_is_known"),
+    _one_of("actor_class", ActorClass, name="a_resolution_actor_class_is_known"),
+    CheckConstraint(
+        "review_case_id IS NULL OR review_case_id ~ '^rvw_" + _IDENTIFIER_SUFFIX + "$'",
+        name="a_resolution_review_case_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        f"receipt_id IS NULL OR receipt_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="a_resolution_receipt_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint("sequence >= 1", name="a_resolution_sequence_is_positive"),
+    CheckConstraint(
+        "expected_resolution_version >= 0",
+        name="a_resolution_expects_a_version_that_could_exist",
+    ),
+    # An entity is named exactly by the two dispositions that bind one, and by
+    # nothing else. A `reject` carrying an entity would be a decision whose
+    # subject contradicts its outcome, and a `link_existing` without one names
+    # nothing to link to.
+    CheckConstraint(
+        "(disposition IN ('link_existing', 'create_new')) = (entity_id IS NOT NULL)",
+        name="a_resolution_names_an_entity_exactly_when_it_binds_one",
+    ),
+    CheckConstraint(
+        "length(trim(decided_by)) > 0",
+        name="a_resolution_names_what_decided_it",
+    ),
+    CheckConstraint(
+        "reason IS NULL OR (length(trim(reason)) > 0 "
+        f"AND length(reason) <= {ENTITY_CHANGE_REASON_LIMIT})",
+        name="a_resolution_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(evidence_link_ids) = 'array'",
+        name="a_resolution_cites_evidence_as_an_array",
+    ),
+    UniqueConstraint(
+        "observation_id",
+        "sequence",
+        name="one_resolution_decision_per_observation_and_sequence",
+    ),
+    ForeignKeyConstraint(
+        ["observation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_observations.observation_id",
+            f"{SCHEMA}.entity_observations.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="a_resolution_decides_an_observation_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        name="a_resolution_binds_an_entity_of_its_principal",
+    ),
+    Index("entity_resolution_decisions_by_principal", "principal_id"),
+    Index("entity_resolution_decisions_by_observation", "observation_id"),
 )
 
 #: `pulse_items`: derived attention recommendations with a reason, a

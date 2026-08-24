@@ -240,4 +240,4 @@ def test_current_docs_name_the_inert_handoff_and_deferred_goodnotes_model_route(
         encoding="utf-8"
     )
     assert "set is thirty" in cli_source and "twelve since WP-6" not in cli_source
-    assert "seventy-three capabilities" in module_boundaries
+    assert "ninety-five capabilities" in module_boundaries

@@ -714,6 +714,17 @@ DYNAMIC_ATTRIBUTE_LOOKUPS: Final[dict[tuple[str, str], str]] = {
         "no statement, and the module it sits in is already declared as one of the "
         "two that build memory SQL."
     ),
+    (
+        "my_pa.infrastructure.persistence.entity",
+        "getattr(self._row, f'{_CHILD_PREFIX}{name}')",
+    ): (
+        "`_ChildRow.__getattr__`, the same mechanism one entry above and for the same "
+        "reason: the entity plane's two joined resolution lookups label their child "
+        "table's columns so `entities.version` cannot shadow the identifier's or the "
+        "alias's, and this reads one already-fetched `Row` back under those labels. The "
+        "receiver is a row, the lookup issues no statement, and the entity plane reaches "
+        "no memory table at all."
+    ),
 }
 
 #: Memory table names appearing inside a string constant anywhere in the package.

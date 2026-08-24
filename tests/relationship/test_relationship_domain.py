@@ -276,6 +276,7 @@ EXPECTED_MODEL_FIELDS = {
             "updated_at",
             "version",
             "superseded_by_entity_id",
+            "archived_from_status",
         }
     ),
     "my_pa.domain.relationship.entity.ExternalIdentifier": frozenset(
@@ -289,6 +290,11 @@ EXPECTED_MODEL_FIELDS = {
             "verified",
             "effective_from",
             "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_identifier_id",
         }
     ),
     "my_pa.domain.relationship.entity.EntityAlias": frozenset(
@@ -301,6 +307,11 @@ EXPECTED_MODEL_FIELDS = {
             "principal_id",
             "effective_from",
             "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_alias_id",
         }
     ),
     "my_pa.domain.relationship.entity.Assignment": frozenset(
@@ -315,7 +326,11 @@ EXPECTED_MODEL_FIELDS = {
             "responsibility_class",
             "effective_from",
             "effective_to",
-            "status",
+            "state",
+            "version",
+            "updated_at",
+            "ended_at",
+            "superseded_by_assignment_id",
         }
     ),
     "my_pa.domain.relationship.entity.EntityRelationship": frozenset(
@@ -330,6 +345,9 @@ EXPECTED_MODEL_FIELDS = {
             "effective_to",
             "state",
             "version",
+            "updated_at",
+            "ended_at",
+            "superseded_by_relationship_id",
         }
     ),
     # What a resolution attempt answers. Frozen here for a reason the durable
@@ -367,6 +385,11 @@ EXPECTED_MODEL_FIELDS = {
             "observed_at",
             "recorded_at",
             "entity_id",
+            "authority",
+            "state",
+            "state_reason",
+            "superseded_by_observation_id",
+            "resolution_version",
         }
     ),
     "my_pa.domain.relationship.governance.EntityProposal": frozenset(
@@ -393,6 +416,69 @@ EXPECTED_MODEL_FIELDS = {
             "proposal_id",
             "decided_by",
             "reason",
+            "decided_at",
+        }
+    ),
+    # WP-RI-A-04: the three ledger records, frozen here for the reason the
+    # governance records above are. `EntityFactEvidenceLink` is the one that
+    # matters most: it is the table that carries negative identity evidence, so
+    # a field added to it is a new input to whether a pairing is proposed again.
+    "my_pa.domain.relationship.governance.EntityMutationEvent": frozenset(
+        {
+            "event_id",
+            "principal_id",
+            "capability",
+            "record_family",
+            "record_id",
+            "prior_version",
+            "new_version",
+            "authority",
+            "before_state",
+            "after_state",
+            "reason",
+            "idempotency_key",
+            "request_digest",
+            "correlation_id",
+            "audit_id",
+            "receipt_id",
+            "actor_class",
+            "recorded_at",
+        }
+    ),
+    "my_pa.domain.relationship.governance.EntityFactEvidenceLink": frozenset(
+        {
+            "link_id",
+            "principal_id",
+            "entity_id",
+            "identifier_id",
+            "alias_id",
+            "assignment_id",
+            "relationship_id",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+            "role",
+            "authority",
+            "created_at",
+        }
+    ),
+    "my_pa.domain.relationship.governance.EntityResolutionDecision": frozenset(
+        {
+            "decision_id",
+            "principal_id",
+            "observation_id",
+            "sequence",
+            "expected_resolution_version",
+            "disposition",
+            "entity_id",
+            "reason",
+            "evidence_link_ids",
+            "decided_by",
+            "actor_class",
+            "review_case_id",
+            "correlation_id",
+            "audit_id",
+            "receipt_id",
             "decided_at",
         }
     ),
@@ -689,6 +775,7 @@ EXPECTED_TABLE_COLUMNS = {
             "updated_at",
             "version",
             "superseded_by_entity_id",
+            "archived_from_status",
         }
     ),
     "entity_external_identifiers": frozenset(
@@ -702,6 +789,11 @@ EXPECTED_TABLE_COLUMNS = {
             "effective_from",
             "effective_to",
             "principal_id",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_identifier_id",
         }
     ),
     "entity_observations": frozenset(
@@ -718,6 +810,11 @@ EXPECTED_TABLE_COLUMNS = {
             "observed_at",
             "recorded_at",
             "entity_id",
+            "authority",
+            "state",
+            "state_reason",
+            "superseded_by_observation_id",
+            "resolution_version",
         }
     ),
     "entity_proposals": frozenset(
@@ -757,6 +854,11 @@ EXPECTED_TABLE_COLUMNS = {
             "effective_from",
             "effective_to",
             "principal_id",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_alias_id",
         }
     ),
     "entity_assignments": frozenset(
@@ -770,8 +872,71 @@ EXPECTED_TABLE_COLUMNS = {
             "responsibility_class",
             "effective_from",
             "effective_to",
-            "status",
+            "state",
             "principal_id",
+            "version",
+            "updated_at",
+            "ended_at",
+            "superseded_by_assignment_id",
+        }
+    ),
+    "entity_mutation_events": frozenset(
+        {
+            "event_id",
+            "principal_id",
+            "capability",
+            "record_family",
+            "record_id",
+            "prior_version",
+            "new_version",
+            "authority",
+            "before_state",
+            "after_state",
+            "reason",
+            "idempotency_key",
+            "request_digest",
+            "correlation_id",
+            "audit_id",
+            "receipt_id",
+            "actor_class",
+            "recorded_at",
+        }
+    ),
+    "entity_fact_evidence_links": frozenset(
+        {
+            "link_id",
+            "principal_id",
+            "entity_id",
+            "identifier_id",
+            "alias_id",
+            "assignment_id",
+            "relationship_id",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+            "role",
+            "authority",
+            "created_at",
+        }
+    ),
+    "entity_resolution_decisions": frozenset(
+        {
+            "decision_id",
+            "principal_id",
+            "observation_id",
+            "sequence",
+            "expected_resolution_version",
+            "disposition",
+            "entity_id",
+            "reason",
+            "evidence_link_ids",
+            "decided_by",
+            "actor_class",
+            "review_case_id",
+            "correlation_id",
+            "audit_id",
+            "receipt_id",
+            "decided_at",
         }
     ),
     "entity_relationships": frozenset(
@@ -786,6 +951,9 @@ EXPECTED_TABLE_COLUMNS = {
             "state",
             "version",
             "principal_id",
+            "updated_at",
+            "ended_at",
+            "superseded_by_relationship_id",
         }
     ),
     "relationship_memories": frozenset(
@@ -950,8 +1118,8 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 40
-    assert len(actual_table_columns) == 34
+    assert len(actual_model_fields) == 43
+    assert len(actual_table_columns) == 37
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

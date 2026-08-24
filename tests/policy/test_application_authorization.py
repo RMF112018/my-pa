@@ -51,9 +51,12 @@ from tests.conftest import (
 )
 
 from my_pa.application.commands import (
+    AddEntityAlias,
+    ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     BeginIntelligenceCycle,
+    BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
@@ -61,12 +64,17 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
+    CreateEntity,
+    CreateEntityAssignment,
+    CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAssignment,
+    EndEntityRelationship,
     EnrollSource,
     FetchSource,
     GetCapabilities,
@@ -86,6 +94,10 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAliases,
+    ListEntityAssignments,
+    ListEntityIdentifiers,
+    ListEntityObservations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -95,6 +107,7 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    ObserveEntityMention,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -107,10 +120,16 @@ from my_pa.application.commands import (
     RecordTask,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveUnresolvedMention,
+    RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAlias,
+    RetireEntityIdentifier,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAssignment,
+    ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
     SearchCaptures,
@@ -121,8 +140,11 @@ from my_pa.application.commands import (
     SearchRelationshipMemories,
     SearchTasks,
     SubmitGoodNotesProposal,
+    SupersedeEntityAlias,
+    SupersedeEntityIdentifier,
     TransitionTask,
     UpdateCommitment,
+    UpdateEntity,
     UpdateTask,
     WaitingOn,
 )
@@ -148,6 +170,18 @@ from my_pa.domain.intelligence.catalog import (
     SourceLaneId,
 )
 from my_pa.domain.policy.decision import DenialReason
+from my_pa.domain.relationship.authoring import CallerNamespace
+from my_pa.domain.relationship.entity import (
+    AliasType,
+    AssignmentType,
+    EntityRelationshipType,
+    EntityType,
+)
+from my_pa.domain.relationship.governance import (
+    ObservationAuthority,
+    ObservationKind,
+    ResolutionDisposition,
+)
 from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import issue_identifier
@@ -456,6 +490,155 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             entity_id=issue_identifier(IdKind.ENTITY)
         ),
         Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
+        # The entity plane's authoring half (`WP-RI-A-02`). Every identifier is
+        # minted for the reason the reads above mint theirs, and every
+        # `expected_version` is 1: a denial test must fail on the authority and
+        # nothing else, so the request has to be well formed enough that a
+        # `conflict` or an `invalid_request` cannot stand in for a `denied`.
+        Capability.ENTITIES_IDENTIFIERS_LIST: ListEntityIdentifiers(
+            entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        Capability.ENTITIES_ALIASES_LIST: ListEntityAliases(
+            entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        Capability.ENTITIES_CREATE: CreateEntity(
+            entity_type=EntityType.PERSON,
+            display_name="Synthetic Person",
+            idempotency_key="policy-entity-create",
+        ),
+        Capability.ENTITIES_UPDATE: UpdateEntity(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_version=1,
+            reason="A synthetic correction.",
+            idempotency_key="policy-entity-update",
+            display_name="Synthetic Person",
+        ),
+        Capability.ENTITIES_ARCHIVE: ArchiveEntity(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_version=1,
+            reason="A synthetic withdrawal.",
+            idempotency_key="policy-entity-archive",
+        ),
+        Capability.ENTITIES_RESTORE: RestoreEntity(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_version=1,
+            reason="A synthetic restoration.",
+            idempotency_key="policy-entity-restore",
+        ),
+        Capability.ENTITIES_IDENTIFIERS_BIND: BindEntityIdentifier(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_version=1,
+            namespace=CallerNamespace.EMAIL,
+            display_value="synthetic@example.test",
+            idempotency_key="policy-entity-bind",
+        ),
+        Capability.ENTITIES_IDENTIFIERS_RETIRE: RetireEntityIdentifier(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_version=1,
+            identifier_id=issue_identifier(IdKind.EXTERNAL_IDENTIFIER),
+            expected_identifier_version=1,
+            reason="A synthetic retirement.",
+            idempotency_key="policy-entity-retire-identifier",
+        ),
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE: SupersedeEntityIdentifier(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_version=1,
+            identifier_id=issue_identifier(IdKind.EXTERNAL_IDENTIFIER),
+            expected_identifier_version=1,
+            namespace=CallerNamespace.EMAIL,
+            display_value="synthetic.new@example.test",
+            reason="A synthetic replacement.",
+            idempotency_key="policy-entity-supersede-identifier",
+        ),
+        Capability.ENTITIES_ALIASES_ADD: AddEntityAlias(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_version=1,
+            alias_type=AliasType.NICKNAME,
+            display_value="Synth",
+            idempotency_key="policy-entity-add-alias",
+        ),
+        Capability.ENTITIES_ALIASES_RETIRE: RetireEntityAlias(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_version=1,
+            alias_id=issue_identifier(IdKind.ENTITY_ALIAS),
+            expected_alias_version=1,
+            reason="A synthetic retirement.",
+            idempotency_key="policy-entity-retire-alias",
+        ),
+        Capability.ENTITIES_ALIASES_SUPERSEDE: SupersedeEntityAlias(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_version=1,
+            alias_id=issue_identifier(IdKind.ENTITY_ALIAS),
+            expected_alias_version=1,
+            alias_type=AliasType.NICKNAME,
+            display_value="Synthetic",
+            reason="A synthetic correction.",
+            idempotency_key="policy-entity-supersede-alias",
+        ),
+        Capability.ENTITIES_ASSIGNMENTS_LIST: ListEntityAssignments(
+            entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        Capability.ENTITIES_ASSIGNMENTS_CREATE: CreateEntityAssignment(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_entity_version=1,
+            assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+            idempotency_key="policy-assignment-create",
+        ),
+        Capability.ENTITIES_ASSIGNMENTS_REVISE: ReviseEntityAssignment(
+            assignment_id=issue_identifier(IdKind.ASSIGNMENT),
+            expected_version=1,
+            idempotency_key="policy-assignment-revise",
+            role="Synthetic Role",
+        ),
+        Capability.ENTITIES_ASSIGNMENTS_END: EndEntityAssignment(
+            assignment_id=issue_identifier(IdKind.ASSIGNMENT),
+            expected_version=1,
+            reason="A synthetic withdrawal.",
+            idempotency_key="policy-assignment-end",
+            end_now=True,
+        ),
+        Capability.ENTITIES_RELATIONSHIPS_CREATE: CreateEntityRelationship(
+            from_entity_id=issue_identifier(IdKind.ENTITY),
+            expected_from_version=1,
+            relationship_type=EntityRelationshipType.WORKS_FOR,
+            to_entity_id=issue_identifier(IdKind.ENTITY),
+            expected_to_version=1,
+            idempotency_key="policy-relationship-create",
+        ),
+        Capability.ENTITIES_RELATIONSHIPS_REVISE: ReviseEntityRelationship(
+            relationship_id=issue_identifier(IdKind.ENTITY_RELATIONSHIP),
+            expected_version=1,
+            idempotency_key="policy-relationship-revise",
+        ),
+        Capability.ENTITIES_RELATIONSHIPS_END: EndEntityRelationship(
+            relationship_id=issue_identifier(IdKind.ENTITY_RELATIONSHIP),
+            expected_version=1,
+            reason="A synthetic withdrawal.",
+            idempotency_key="policy-relationship-end",
+            end_now=True,
+        ),
+        Capability.ENTITIES_OBSERVATIONS_LIST: ListEntityObservations(),
+        Capability.ENTITIES_OBSERVE: ObserveEntityMention(
+            kind=ObservationKind.CONTACT_RECORD,
+            authority=ObservationAuthority.SOURCE_OBSERVATION,
+            observed_value="Alice Chen",
+            observed_at=WHEN,
+            idempotency_key="policy-entities-observe",
+            source_id=issue_identifier(IdKind.SOURCE),
+            source_object_id=issue_identifier(IdKind.SOURCE_OBJECT),
+            source_version_id=issue_identifier(IdKind.VERSION),
+        ),
+        # `defer` rather than `link_existing`, because this matrix is about
+        # authorization and a disposition that binds an identity would need a
+        # staged entity to bind to -- which would make a denial indistinguishable
+        # from a missing fixture.
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: ResolveUnresolvedMention(
+            observation_id=issue_identifier(IdKind.ENTITY_OBSERVATION),
+            expected_resolution_version=0,
+            disposition=ResolutionDisposition.DEFER,
+            idempotency_key="policy-entities-resolve",
+            reason="there is not enough identity evidence yet",
+        ),
     }
 
 
@@ -695,6 +878,36 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        # The authoring half (`WP-RI-A-02`) makes the same measurement more
+        # plainly than a read does: it writes the Principal's own record of a
+        # person, and the row it writes carries no `source_id` at all.
+        Capability.ENTITIES_IDENTIFIERS_LIST,
+        Capability.ENTITIES_ALIASES_LIST,
+        Capability.ENTITIES_CREATE,
+        Capability.ENTITIES_UPDATE,
+        Capability.ENTITIES_ARCHIVE,
+        Capability.ENTITIES_RESTORE,
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE,
+        Capability.ENTITIES_ALIASES_ADD,
+        Capability.ENTITIES_ALIASES_RETIRE,
+        Capability.ENTITIES_ALIASES_SUPERSEDE,
+        # The directed-relationship family names entities, not a source, and
+        # writing does not change that (WP-RI-A-03): an assignment and an edge
+        # carry no `source_id` and no `enrollment_id`, and the scope one of them
+        # *does* name is another Entity in the same partition rather than a
+        # grant. All seven sit in `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_ASSIGNMENTS_LIST,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE,
+        Capability.ENTITIES_ASSIGNMENTS_END,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_REVISE,
+        Capability.ENTITIES_RELATIONSHIPS_END,
+        Capability.ENTITIES_OBSERVATIONS_LIST,
+        Capability.ENTITIES_OBSERVE,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its
@@ -823,6 +1036,36 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        # The authoring half (`WP-RI-A-02`) makes the same measurement more
+        # plainly than a read does: it writes the Principal's own record of a
+        # person, and the row it writes carries no `source_id` at all.
+        Capability.ENTITIES_IDENTIFIERS_LIST,
+        Capability.ENTITIES_ALIASES_LIST,
+        Capability.ENTITIES_CREATE,
+        Capability.ENTITIES_UPDATE,
+        Capability.ENTITIES_ARCHIVE,
+        Capability.ENTITIES_RESTORE,
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE,
+        Capability.ENTITIES_ALIASES_ADD,
+        Capability.ENTITIES_ALIASES_RETIRE,
+        Capability.ENTITIES_ALIASES_SUPERSEDE,
+        # The directed-relationship family names entities, not a source, and
+        # writing does not change that (WP-RI-A-03): an assignment and an edge
+        # carry no `source_id` and no `enrollment_id`, and the scope one of them
+        # *does* name is another Entity in the same partition rather than a
+        # grant. All seven sit in `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_ASSIGNMENTS_LIST,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE,
+        Capability.ENTITIES_ASSIGNMENTS_END,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_REVISE,
+        Capability.ENTITIES_RELATIONSHIPS_END,
+        Capability.ENTITIES_OBSERVATIONS_LIST,
+        Capability.ENTITIES_OBSERVE,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its

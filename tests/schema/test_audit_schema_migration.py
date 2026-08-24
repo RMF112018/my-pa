@@ -219,6 +219,10 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "entity_observations",
         "entity_proposals",
         "entity_merge_records",
+        # WP-RI-A-01's entity lifecycle ledgers: `2fe4e13fb449`.
+        "entity_mutation_events",
+        "entity_fact_evidence_links",
+        "entity_resolution_decisions",
         # The Intelligence Artifact report plane, stacked above the entity plane
         # by `e9b2c4d7a150`. A downgrade to the extraction revision unwinds it
         # too, which is what a linear chain means; naming the tables here keeps

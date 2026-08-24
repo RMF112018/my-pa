@@ -118,10 +118,13 @@ from zoneinfo import ZoneInfo
 from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
+    AddEntityAlias,
+    ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
     ArchiveRelationshipMemory,
     BeginIntelligenceCycle,
+    BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
@@ -129,6 +132,9 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
+    CreateEntity,
+    CreateEntityAssignment,
+    CreateEntityRelationship,
     CreateManagedDocument,
     CreateManagedDocumentCommand,
     CreateProject,
@@ -136,6 +142,8 @@ from my_pa.application.commands import (
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAssignment,
+    EndEntityRelationship,
     EnrollSource,
     FetchSource,
     GetCapabilities,
@@ -155,6 +163,10 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAliases,
+    ListEntityAssignments,
+    ListEntityIdentifiers,
+    ListEntityObservations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListManagedDocumentsCommand,
@@ -165,6 +177,7 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    ObserveEntityMention,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -179,11 +192,17 @@ from my_pa.application.commands import (
     Representation,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveUnresolvedMention,
+    RestoreEntity,
     RestoreManagedDocument,
     RestoreManagedDocumentCommand,
     RestoreRelationshipMemory,
+    RetireEntityAlias,
+    RetireEntityIdentifier,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAssignment,
+    ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseManagedDocumentCommand,
     ReviseRelationshipMemory,
@@ -195,8 +214,11 @@ from my_pa.application.commands import (
     SearchRelationshipMemories,
     SearchTasks,
     SubmitGoodNotesProposal,
+    SupersedeEntityAlias,
+    SupersedeEntityIdentifier,
     TransitionTask,
     UpdateCommitment,
+    UpdateEntity,
     UpdateTask,
     WaitingOn,
 )
@@ -210,7 +232,18 @@ from my_pa.application.disclosure import (
     unenrolled_disclosure,
     with_corpus_caveat,
 )
+from my_pa.application.entity_authoring import EntityAuthoringService, NamedValue
 from my_pa.application.entity_context import EntityContextService
+from my_pa.application.entity_directed import EntityDirectedService
+from my_pa.application.entity_governance import (
+    EntityGovernanceService,
+    ObserveCommand,
+    QuarantinedObservationError,
+    ResolutionNotPermittedError,
+    ResolveMentionCommand,
+    UnknownEntityError,
+    UnknownObservationError,
+)
 from my_pa.application.entity_resolution import (
     ACTIVE_ASSIGNMENT_STATUS,
     ACTIVE_RELATIONSHIP_STATE,
@@ -266,6 +299,9 @@ from my_pa.contracts.ports import (
     CaptureAdmissionRequest,
     CaptureSearchOutcome,
     CaptureSearchRequest,
+    DirectedReceipt,
+    EntitiesRepository,
+    EntityMutationAdmission,
     EntitySummary,
     EvidenceUnavailableError,
     ManagedByteStore,
@@ -336,17 +372,39 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.policy.decision import POLICY_VERSION
+from my_pa.domain.relationship.authoring import (
+    AmbiguousEntityError,
+    ConflictedIdentifierError,
+    DuplicateEntityFactError,
+    EntityEvidenceError,
+    EntityIdempotencyConflictError,
+    HistoricalEntityError,
+    StaleEntityVersionError,
+    UnsettledBindingError,
+)
 from my_pa.domain.relationship.context_card import EntityContextCard
 from my_pa.domain.relationship.entity import (
     Assignment,
+    DirectedWriteError,
+    DuplicateDirectedFactError,
     Entity,
     EntityAlias,
     EntityRelationship,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    MergedEndpointError,
+    StaleDirectedVersionError,
 )
-from my_pa.domain.relationship.governance import EntityObservation
+from my_pa.domain.relationship.governance import (
+    ActorClass,
+    EntityMutationConflictError,
+    EntityObservation,
+    ObservationAuthorityError,
+    ObservationTimeError,
+    StaleResolutionVersionError,
+    origin_of,
+)
 from my_pa.domain.relationship.memory import (
     MemoryAdmission,
     MemoryBoundsError,
@@ -361,6 +419,7 @@ from my_pa.domain.relationship.memory import (
     RelationshipMemoryVersion,
     StaleMemoryVersionError,
 )
+from my_pa.domain.relationship.normalization import NormalizationError
 from my_pa.domain.relationship.resolution import EntityResolution
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -1336,6 +1395,238 @@ def _entity_translated() -> Iterator[None]:
 
 
 @contextmanager
+def _entity_authoring_translated() -> Iterator[None]:
+    """Classify what the entity plane's governed writes refuse (WP-RI-A-02).
+
+    Inside `_translated`, for the reason `_entity_translated` is: an
+    `UnknownScopeError` from this plane means "no such entity, identifier or
+    alias in this partition", and reporting `enrollment_id` for it would name a
+    field the request does not have and the plane does not model.
+
+    **Eight refusals, eight tokens, and the tokens are the contract's own.** The
+    public code alone cannot separate them -- a stale version, a spent
+    idempotency key, a duplicated fact and an address two entities claim are all
+    `conflict`, and a caller told only `conflict` has to guess which of four
+    different next actions applies. So each carries the stable code the
+    completion contract fixes, on the existing `safe_details` mechanism rather
+    than as a new `ErrorCode` member.
+
+    **`UnsettledBindingError` is `unavailable`, not `conflict`, and that is the
+    distinction this block exists for.** Both it and `ConflictedIdentifierError`
+    reach here as `ValueError` subclasses raised by the same method, differing
+    until now only by message. One is permanent -- an address that belongs to
+    somebody else, which no retry will free -- and the other is a bounded
+    retry-exhaustion against a concurrent retirement, where the address may
+    already be free. A caller told `conflict` for the second abandons a write
+    that would have succeeded; `unavailable` carries retry guidance and says so.
+
+    `NormalizationError` is `invalid_request` and names the field it arrived in:
+    a value that cannot be normalized is a value the caller can correct, and it
+    is refused before any row is read rather than stored in a form the
+    resolver's equality predicate could never match.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except UnknownScopeError:
+        failure = NotFoundError(SafeDetail.ENTITY_ID)
+    except StaleEntityVersionError:
+        failure = ConflictError(SafeDetail.STALE_VERSION)
+    except EntityIdempotencyConflictError:
+        failure = ConflictError(SafeDetail.IDEMPOTENCY_CONFLICT)
+    except ConflictedIdentifierError:
+        failure = ConflictError(SafeDetail.CONFLICTED_IDENTIFIER)
+    except UnsettledBindingError:
+        failure = UnavailableError(SafeDetail.CONCURRENT_RETIREMENT)
+    except HistoricalEntityError:
+        failure = ConflictError(SafeDetail.HISTORICAL_ENTITY)
+    except AmbiguousEntityError:
+        failure = AmbiguousRequestError(SafeDetail.AMBIGUOUS_IDENTITY)
+    except DuplicateEntityFactError:
+        failure = ConflictError(SafeDetail.DUPLICATE_FACT)
+    except EntityEvidenceError:
+        failure = InvalidRequestError(SafeDetail.EVIDENCE_INVALID)
+    except NormalizationError:
+        failure = InvalidRequestError(SafeDetail.DISPLAY_VALUE)
+    if failure is not None:
+        raise failure
+
+
+@contextmanager
+def _directed_translated() -> Iterator[None]:
+    """Classify what the entity plane's directed writes refuse.
+
+    Five refusals, four public codes, and none of them is decided here. A stale
+    expectation -- of the record's own version or of an endpoint's -- is
+    `conflict`, because the caller read something and the world moved. A
+    duplicate active semantic key is `conflict` for the same reason and names
+    the record family rather than the row, because naming the existing row would
+    disclose an identifier the request did not ask for. A merged-away endpoint is
+    `conflict` and names the field, so a caller learns *that* it must retarget
+    without the message carrying an identifier. Anything else this vocabulary
+    raises is a malformed request.
+
+    **The three stale cases share `EXPECTED_VERSION` deliberately.** A caller
+    that could tell "your assignment is stale" from "the scope entity is stale"
+    would learn, from a refusal, that the scope entity exists -- and it is the
+    one endpoint a caller may name without having read it. The detail names the
+    field the caller supplied and not which of them was wrong.
+
+    **`UnknownScopeError` is caught here rather than left to
+    `_entity_translated`.** That one answers `not_found` naming `cursor`, which
+    is right for the three paged reads it was written for and names a field a
+    write does not have. A directed write reaches it for three different reasons
+    -- an entity, an assignment or edge, or a cited observation outside this
+    partition -- and all three answer `not_found` naming `subject`: absent and
+    foreign are one answer, and *which* named thing was unreachable is itself
+    something a caller could subtract to learn what another Principal holds.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except UnknownScopeError:
+        failure = NotFoundError(SafeDetail.SUBJECT)
+    except StaleDirectedVersionError:
+        failure = ConflictError(SafeDetail.EXPECTED_VERSION)
+    except DuplicateDirectedFactError:
+        failure = ConflictError(SafeDetail.SUBJECT)
+    except MergedEndpointError:
+        failure = ConflictError(SafeDetail.ENTITY_ID)
+    except DirectedWriteError:
+        failure = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+    if failure is not None:
+        raise failure
+
+
+def _named_values(supplied: tuple[dict[str, str], ...], kind_field: str) -> tuple[NamedValue, ...]:
+    """The create command's alias and identifier objects as the use case takes them."""
+    return tuple(
+        NamedValue(kind=item[kind_field], value=item["display_value"]) for item in supplied
+    )
+
+
+def _lifecycle_identifier_view(identifier: ExternalIdentifier) -> dict[str, object]:
+    """One binding as `entities.identifiers.list` discloses it.
+
+    Wider than `_identifier_view`, which is the *context card's* shape: this read
+    exists so a caller can drive `retire` and `supersede`, and both of those need
+    the binding's own version and its state. A listing that withheld either would
+    publish a lifecycle a caller could see and not act on.
+    """
+    return {
+        **_identifier_view(identifier),
+        "state": identifier.state.value,
+        "version": identifier.version,
+        "retired_at": _moment_or_none(identifier.retired_at),
+        "updated_at": _moment_or_none(identifier.updated_at),
+        "superseded_by_identifier_id": identifier.superseded_by_identifier_id,
+    }
+
+
+def _lifecycle_alias_view(alias: EntityAlias) -> dict[str, object]:
+    """One recorded name form as `entities.aliases.list` discloses it."""
+    return {
+        **_alias_view(alias),
+        "state": alias.state.value,
+        "version": alias.version,
+        "retired_at": _moment_or_none(alias.retired_at),
+        "updated_at": _moment_or_none(alias.updated_at),
+        "superseded_by_alias_id": alias.superseded_by_alias_id,
+    }
+
+
+@contextmanager
+def _entity_governance_translated() -> Iterator[None]:
+    """Classify what the governed half of the entity plane refuses.
+
+    The contract fixes eight stable problems for this surface, and every one of
+    them is expressed as an existing `ErrorCode` plus a `safe_details` token
+    rather than as a new code. A twelfth `ErrorCode` member would make every
+    reader that switches on the eleven wrong about a plane it has never heard
+    of; the token says which rule refused and the code says what class of
+    failure it is, which is the division `safe_details` exists for.
+
+    * `ambiguous_identity` -> `ambiguous_request`. It is the one refusal whose
+      honest guidance is `after_explicit_choice`: somebody has to say which.
+    * `conflicted_identifier`, `historical_entity`, `review_required`,
+      `stale_version` and `idempotency_conflict` -> `conflict`. Each is a
+      disagreement with state the caller did not see, and `after_refresh` is
+      what a caller should actually do about all five.
+    * `evidence_invalid` -> `invalid_request`. The request contradicts itself
+      or names evidence that does not support what it asked for, and correcting
+      it is the caller's own move.
+    * `quarantined` -> `quarantined`, which already exists and already carries
+      `operator_review`.
+
+    A stale resolution version is reported as `expected_resolution_version` and
+    not as `expected_version`: the two are different fields on this surface -- a
+    mention carries a resolution version and an entity carries an aggregate one
+    -- and a caller told the wrong one would refresh the wrong record.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except StaleResolutionVersionError:
+        failure = ConflictError(SafeDetail.EXPECTED_RESOLUTION_VERSION)
+    except EntityMutationConflictError:
+        failure = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+    except QuarantinedObservationError:
+        failure = QuarantinedError(SafeDetail.OBSERVATION_ID)
+    except UnknownObservationError:
+        failure = NotFoundError(SafeDetail.OBSERVATION_ID)
+    except UnknownEntityError:
+        failure = NotFoundError(SafeDetail.ENTITY_ID)
+    except ResolutionNotPermittedError as refused:
+        failure = _resolution_refusal(refused)
+    except ObservationTimeError:
+        failure = InvalidRequestError(SafeDetail.OBSERVED_AT)
+    except ObservationAuthorityError:
+        failure = InvalidRequestError(SafeDetail.OBSERVATION_AUTHORITY)
+    if failure is not None:
+        raise failure
+
+
+#: Which `safe_details` token each resolution refusal names, and which error
+#: class carries it. Two mappings rather than one of callables, because a
+#: callable table reads as dispatch and this is a translation: the token the
+#: domain raised is the token the caller is told, and the class is what decides
+#: the status and the retry guidance.
+_RESOLUTION_DETAILS: Final[Mapping[str, SafeDetail]] = MappingProxyType(
+    {
+        "ambiguous_identity": SafeDetail.AMBIGUOUS_IDENTITY,
+        "conflicted_identifier": SafeDetail.CONFLICTED_IDENTIFIER,
+        "historical_entity": SafeDetail.HISTORICAL_ENTITY,
+        "review_required": SafeDetail.REVIEW_REQUIRED,
+        "stale_version": SafeDetail.EXPECTED_VERSION,
+        "evidence_invalid": SafeDetail.EVIDENCE_INVALID,
+    }
+)
+
+#: Which of the six are a disagreement with state rather than a malformed
+#: request. `ambiguous_identity` is neither and is handled first: it is the one
+#: refusal whose honest guidance is "somebody has to say which".
+_RESOLUTION_CONFLICTS: Final[frozenset[str]] = frozenset(
+    {"conflicted_identifier", "historical_entity", "review_required", "stale_version"}
+)
+
+
+def _resolution_refusal(refused: ResolutionNotPermittedError) -> ApplicationError:
+    """The public error one resolution refusal is, derived from its own token.
+
+    An unrecognised token is `invalid_request` rather than an assertion: a
+    refusal is already the unhappy path, and a translation table that raised on
+    an unfamiliar entry would turn a refusal the caller could act on into an
+    `internal_error` they cannot.
+    """
+    detail = _RESOLUTION_DETAILS.get(refused.detail, SafeDetail.EVIDENCE_INVALID)
+    if refused.detail == "ambiguous_identity":
+        return AmbiguousRequestError(detail)
+    if refused.detail in _RESOLUTION_CONFLICTS:
+        return ConflictError(detail)
+    return InvalidRequestError(detail)
+
+
+@contextmanager
 def _work_cursor_translated() -> Iterator[None]:
     """Collapse absent and foreign Work anchors into one safe cursor conflict."""
     failure: ApplicationError | None = None
@@ -1438,20 +1729,27 @@ def _assignment_view(assignment: Assignment, at: datetime | None = None) -> dict
     """
     is_current: bool | None = None
     if at is not None:
-        is_current = assignment.status == ACTIVE_ASSIGNMENT_STATUS and is_in_force(
+        is_current = assignment.state.value == ACTIVE_ASSIGNMENT_STATUS and is_in_force(
             assignment.effective_from, assignment.effective_to, at
         )
     return {
         "assignment_id": assignment.assignment_id,
+        # `entity_id` and `version` are here for the reason `_relationship_view`
+        # carries `from_entity_id` and `version`: a read that a write is expected
+        # to follow has to hand back both halves of what the write needs, and a
+        # caller that had to fetch the version separately would be reading a
+        # second time and revising against the older of the two answers.
+        "entity_id": assignment.entity_id,
         "assignment_type": assignment.assignment_type.value,
         "scope_entity_id": assignment.scope_entity_id,
         "role": assignment.role,
         "discipline": assignment.discipline,
         "responsibility_class": assignment.responsibility_class,
-        "status": assignment.status,
+        "status": assignment.state.value,
         "is_current": is_current,
         "effective_from": _moment_or_none(assignment.effective_from),
         "effective_to": _moment_or_none(assignment.effective_to),
+        "version": assignment.version,
     }
 
 
@@ -1466,7 +1764,7 @@ def _relationship_view(edge: EntityRelationship, at: datetime | None = None) -> 
     """
     is_current: bool | None = None
     if at is not None:
-        is_current = edge.state == ACTIVE_RELATIONSHIP_STATE and is_in_force(
+        is_current = edge.state.value == ACTIVE_RELATIONSHIP_STATE and is_in_force(
             edge.effective_from, edge.effective_to, at
         )
     return {
@@ -1476,7 +1774,7 @@ def _relationship_view(edge: EntityRelationship, at: datetime | None = None) -> 
         "relationship_type": edge.relationship_type.value,
         "to_entity_id": edge.to_entity_id,
         "scope_entity_id": edge.scope_entity_id,
-        "state": edge.state,
+        "state": edge.state.value,
         "effective_from": _moment_or_none(edge.effective_from),
         "effective_to": _moment_or_none(edge.effective_to),
         "version": edge.version,
@@ -1626,6 +1924,42 @@ def _unresolved_mention_view(observation: EntityObservation) -> dict[str, object
     }
 
 
+def _recorded_observation_view(observation: EntityObservation) -> dict[str, object]:
+    """One recorded observation, with neither value the source produced.
+
+    Same omission as `_unresolved_mention_view` and for the same reason:
+    `normalized_value` is not a redaction of `observed_value` -- `normalize_name`
+    casefolds and unpunctuates and removes no content -- so publishing it would
+    publish the raw span with its dots turned into spaces, and no predicate over
+    the stored string could tell the result from a long real name.
+
+    What this adds over the queue's view is the four columns the queue has no
+    use for: `authority` says what standing the claim has, `state` says whether
+    it is still usable evidence, `entity_id` says what placed it, and
+    `resolution_version` is the value a decision has to state as
+    `expected_resolution_version`. That last one is why a caller working the
+    queue can page it here: without the version there is nothing to decide
+    against.
+    """
+    return {
+        "observation_id": observation.observation_id,
+        "kind": observation.kind.value,
+        "authority": observation.authority.value,
+        "origin": origin_of(observation.source_id).value,
+        "state": observation.state.value,
+        "state_reason": observation.state_reason,
+        "mention_display_name": observation.mention_display_name,
+        "source_id": observation.source_id,
+        "source_object_id": observation.source_object_id,
+        "source_version_id": observation.source_version_id,
+        "entity_id": observation.entity_id,
+        "superseded_by_observation_id": observation.superseded_by_observation_id,
+        "resolution_version": observation.resolution_version,
+        "observed_at": format_rfc3339(observation.observed_at),
+        "recorded_at": format_rfc3339(observation.recorded_at),
+    }
+
+
 def _moment_or_none(moment: datetime | None) -> str | None:
     return None if moment is None else format_rfc3339(moment)
 
@@ -1659,6 +1993,24 @@ _COMMITMENT_TRUST_BASIS: Final = ("product_owned_commitment",)
 #: so its trust basis is the partition, exactly as the task plane's is.
 _ENTITY_TRUST_BASIS: Final = ("principal_partition",)
 
+#: What a governed entity write's receipt rests on.
+#: `principal_partition` because every statement behind it carried the
+#: authenticated partition, and `user_confirmed_assertion` because that is the
+#: authority the mutation ledger recorded — the user was asked, named the version
+#: they had read, and answered. Not `user_authored`: an entity is not an ADR-003
+#: append-only record, and saying so would claim the wrong custody.
+#:
+#: **Sixteen of the eighteen writes disclose this and two do not**, and the
+#: split is a property of the ledger rather than a preference. The ten identity,
+#: identifier and alias writes and the six directed writes each record
+#: `user_confirmed_assertion` as a constant, so their receipts can name it.
+#: `entities.observe` records whichever of three authorities its own
+#: `authority` field implies — a source observation is `system_deterministic` —
+#: and `entities.unresolved_mentions.resolve` records `review_accepted` when a
+#: review promotion decided it. Neither can claim a constant it does not always
+#: write, so both stay on `_ENTITY_TRUST_BASIS` and disclose only the partition.
+_ENTITY_AUTHORING_TRUST_BASIS: Final = ("principal_partition", "user_confirmed_assertion")
+
 
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
@@ -1674,6 +2026,7 @@ class ApplicationService:
         task_management_unit_of_work: Callable[[], Any] | None = None,
         commitment_management_unit_of_work: Callable[[], Any] | None = None,
         relationship_intelligence_enabled: bool = False,
+        relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
     ) -> None:
         self._unit_of_work = unit_of_work
@@ -1686,8 +2039,8 @@ class ApplicationService:
         #: than publish six a caller cannot reach.
         self._managed_store_or_none = managed_store
         #: Whether this build serves the relationship-intelligence entity plane.
-        #: Default `False`, and the default is the point: the six `entities.*`
-        #: capabilities read who a person is, and `adapters.mcp.remote` derives
+        #: Default `False`, and the default is the point: this family reads who
+        #: a person is, and `adapters.mcp.remote` derives
         #: the remote tool profile from `Capability` with no per-capability
         #: exclusion list — so a non-operator read joins the remote surface the
         #: moment it becomes available. Withholding it here is the one mechanism
@@ -1695,6 +2048,15 @@ class ApplicationService:
         #: process, and it keeps `capabilities.get`, `tools/list`, and the remote
         #: profile agreeing about what exists.
         self._relationship_intelligence_enabled = relationship_intelligence_enabled
+        #: Whether this build serves the entity plane's *write* half. Default
+        #: `False`, and independent of the flag above for the reason
+        #: `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` exists: reading who a
+        #: person is and deciding it are different authorities, and an operator
+        #: who wants the first should not have to accept the second. A build that
+        #: set this without the plane does not reach here -- `bootstrap.settings`
+        #: refuses to start -- so this flag narrows an already-composed plane and
+        #: never widens an absent one.
+        self._relationship_intelligence_writes_enabled = relationship_intelligence_writes_enabled
         self._relationship_memory_enabled = relationship_memory_enabled
         #: Explicit production composition of the optional proposal plane. The
         #: default gate is disabled; an enabled gate cannot be constructed
@@ -1705,6 +2067,13 @@ class ApplicationService:
         #: would say it held something.
         self._managed = ManagedDocumentService()
         self._memory = RelationshipMemoryService()
+        #: WP-RI-A-02's entity authoring service, held for the reason the two
+        #: above are: it is stateless and takes its port as an argument.
+        self._entity_authoring = EntityAuthoringService()
+        #: WP-RI-A-03's directed-write service, held on the same terms: it is
+        #: stateless, takes its port as an argument, and constructing one per
+        #: call would say it held something.
+        self._directed = EntityDirectedService()
         #: WP-TM-02's task management service, held rather than built per request:
         #: it is stateless, takes its own unit-of-work factory as an argument, and
         #: constructing one per call would say it held something. The factory is
@@ -1732,7 +2101,7 @@ class ApplicationService:
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
         something the composition root did not supply — the six `documents.`
-        names in a process with no managed root, and the six `entities.` names
+        names in a process with no managed root, and the twenty-eight `entities.` names
         in one that has not enabled the relationship plane. It is one answer with
         two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
@@ -1743,6 +2112,13 @@ class ApplicationService:
             served -= _MANAGED_CAPABILITIES
         if not self._relationship_intelligence_enabled:
             served -= _ENTITY_CAPABILITIES
+        # The write half, narrowed separately. Subtracted after the line above
+        # rather than folded into it, because the two answer different questions
+        # and a build can be in either state: the plane off withholds the
+        # whole `entities.` family, and the plane on with writes off withholds
+        # `_ENTITY_WRITE_CAPABILITIES` out of it.
+        if not self._relationship_intelligence_writes_enabled:
+            served -= _ENTITY_WRITE_CAPABILITIES
         # Two conditions, not one. The plane needs its own switch *and* the
         # entity plane, because a memory's subject is an Entity and the
         # repository proves ownership of it by reading `knowledge.entities`.
@@ -3532,7 +3908,7 @@ class ApplicationService:
         the request.
 
         **This is the floor, and it was missing.** `available_capabilities`
-        withholds the six `entities.` names, and two readers consult it —
+        withholds the twenty-eight `entities.` names, and two readers consult it —
         `capabilities.get` and the MCP tool list. The HTTP transport is not one
         of them: `/v1/{capability}` routes by path segment and `_run` dispatches
         straight from `_HANDLERS`, so every one of the six executed and
@@ -3547,6 +3923,30 @@ class ApplicationService:
         not depend on which transport asked.
         """
         if not self._relationship_intelligence_enabled:
+            raise UnsupportedError()
+
+    def _entity_writes(self) -> None:
+        """Refuse when this build has not enabled the entity plane's write half.
+
+        The same floor `_entity_plane` is, one switch narrower, and it exists for
+        the same reason that one does: `available_capabilities` withholds the
+        eighteen write names and two readers consult it -- `capabilities.get`
+        and the MCP tool list -- while the HTTP transport consults neither. It
+        routes by path segment and `_run` dispatches straight from `_HANDLERS`,
+        so a build with `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` unset
+        would report every write as `not_implemented` and then execute it.
+
+        `unsupported` and not `denied`: a process without the switch has no write
+        half, which is a fact about the build and not a fault in the request or
+        a shortfall in the caller's authority.
+
+        Every write handler calls this rather than `_entity_plane`, so the
+        refusal does not depend on which transport asked, and the plane check is
+        made first so a build with neither switch answers for the missing plane
+        rather than for the missing half of it.
+        """
+        self._entity_plane()
+        if not self._relationship_intelligence_writes_enabled:
             raise UnsupportedError()
 
     # ---- the Relationship Memory plane -------------------------------------
@@ -4090,6 +4490,194 @@ class ApplicationService:
             ),
         )
 
+    def _entities_observations_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListEntityObservations,
+    ) -> _Result:
+        """`entities.observations.list`: one bounded page of recorded observations.
+
+        The evidence log, where `entities.unresolved_mentions` is the *queue*.
+        They read the same table and answer different questions: the queue is
+        the subset nothing has placed, and this is everything -- including the
+        mentions that were placed, which the queue by definition never shows.
+        A caller working the queue needs the first; a caller auditing what this
+        plane was told needs the second, and deriving one from the other would
+        mean paging the whole table to find the rows that are missing from it.
+
+        **Neither observed value goes out, here or anywhere on this plane.**
+        `_observation_view` publishes identifiers, closed vocabulary members,
+        versions and the optional disclosed name, exactly as
+        `_unresolved_mention_view` does, and it publishes the state and
+        authority columns that view has no use for. The rule is one rule: raw
+        observed content is evidence that lives at its source.
+        """
+        self._entity_plane()
+        principal_id = authorization.principal.principal_id
+        page_size = self._page_size(command.page_size)
+        with _translated(), _entity_translated():
+            found = unit_of_work.entities.observations(
+                principal_id,
+                command.entity_id,
+                unresolved_only=command.unresolved_only,
+                limit=page_size + 1,
+                after_observation_id=command.after,
+            )
+        truncated = len(found) > page_size
+        page = found[:page_size]
+        return _Result(
+            payload={"observations": [_recorded_observation_view(item) for item in page]},
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].observation_id if truncated and page else None,
+                ),
+            ),
+        )
+
+    def _entities_observe(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ObserveEntityMention,
+    ) -> _Result:
+        """`entities.observe`: record what a source said, and create nothing.
+
+        The handler restates no rule. Which authorities an origin admits,
+        whether a product-owned capture may claim a source's standing, what the
+        normalized form is and what the ledger row looks like all stay in
+        `EntityGovernanceService`, so a second copy here cannot disagree with
+        them. What this file supplies is the Principal, the clock, the
+        correlation and the audit reference the authorization already resolved
+        -- and the command has no field for any of them, so there is nothing a
+        caller could have sent for them to be confused with.
+        """
+        self._entity_writes()
+        with _translated(), _entity_governance_translated():
+            admission = EntityGovernanceService(unit_of_work.entities).ingest(
+                ObserveCommand(
+                    principal_id=authorization.principal.principal_id,
+                    kind=command.kind,
+                    authority=command.authority,
+                    observed_value=command.observed_value,
+                    observed_at=command.observed_at,
+                    idempotency_key=command.idempotency_key,
+                    mention_display_name=command.mention_display_name,
+                    source_id=command.source_id,
+                    source_object_id=command.source_object_id,
+                    source_version_id=command.source_version_id,
+                    capture_id=command.capture_id,
+                    capture_version_id=command.capture_version_id,
+                    entity_id=command.entity_id,
+                    expected_entity_version=command.expected_entity_version,
+                ),
+                sources=unit_of_work.sources,
+                at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+            )
+        return _Result(
+            payload={
+                "observation_id": admission.observation_id,
+                "kind": admission.kind.value,
+                "authority": admission.authority.value,
+                "origin": admission.origin.value,
+                "state": admission.state.value,
+                "resolution_version": admission.resolution_version,
+                "entity_id": admission.entity_id,
+                "recorded_at": format_rfc3339(admission.recorded_at),
+                "idempotency_key": admission.idempotency_key,
+                "created": admission.created,
+                # The ledger row, which is what a receipt is on this plane. Every
+                # one of the eighteen writes returns one under this key and every
+                # one of them stores `receipt_id` null, so the field means the
+                # same thing across the family.
+                "receipt_id": admission.mutation_event_id,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
+    def _entities_unresolved_mentions_resolve(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ResolveUnresolvedMention,
+    ) -> _Result:
+        """`entities.unresolved_mentions.resolve`: decide one mention, or refuse.
+
+        The fresh resolution is built here and run inside this transaction,
+        against the state that exists now rather than the state the queue was
+        rendered from. It is handed to the use case as a callable so that module
+        cannot reach a second read of the entity plane through it, and so the
+        resolver's own request vocabulary stays out of a module whose subject is
+        governance.
+
+        `decided_by` is the acting Principal and `ActorClass.USER`, both
+        server-supplied. There is no field on the command for either: a caller
+        that could name who decided something could name somebody else.
+        """
+        self._entity_writes()
+        principal_id = authorization.principal.principal_id
+        resolver = EntityResolutionService(unit_of_work.entities)
+
+        def resolve_now(
+            observation: EntityObservation, refused: frozenset[str], at: datetime
+        ) -> EntityResolution:
+            return resolver.resolve(
+                principal_id,
+                ResolutionRequest(
+                    raw_reference=observation.observed_value,
+                    at=at,
+                    refused_entity_ids=refused,
+                ),
+            )
+
+        with _translated(), _entity_governance_translated():
+            decided = EntityGovernanceService(unit_of_work.entities).resolve_mention(
+                ResolveMentionCommand(
+                    principal_id=principal_id,
+                    observation_id=command.observation_id,
+                    expected_resolution_version=command.expected_resolution_version,
+                    disposition=command.disposition,
+                    idempotency_key=command.idempotency_key,
+                    entity_id=command.entity_id,
+                    expected_entity_version=command.expected_entity_version,
+                    entity_type=command.entity_type,
+                    canonical_name=command.canonical_name,
+                    display_name=command.display_name,
+                    rejected_entity_id=command.rejected_entity_id,
+                    reason=command.reason,
+                ),
+                resolve=resolve_now,
+                at=authorization.at,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                decided_by=principal_id,
+                actor_class=ActorClass.USER,
+            )
+        return _Result(
+            payload={
+                "decision_id": decided.decision_id,
+                "observation_id": decided.observation_id,
+                "disposition": decided.disposition.value,
+                "resolution_version": decided.resolution_version,
+                "entity_id": decided.entity_id,
+                "evidence_link_ids": list(decided.evidence_link_ids),
+                "decided_at": format_rfc3339(decided.decided_at),
+                "idempotency_key": decided.idempotency_key,
+                "created": decided.created,
+                #: The ledger row, on `entities.observe`'s terms.
+                "receipt_id": decided.mutation_event_id,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
     def _entities_relationships(
         self,
         unit_of_work: UnitOfWork,
@@ -4147,6 +4735,618 @@ class ApplicationService:
                     reason="page_size_reached" if truncated else None,
                     next_cursor=page[-1].relationship_id if truncated and page else None,
                 ),
+            ),
+        )
+
+    # ---- the entity plane's authoring half (WP-RI-A-02) ---------------------
+    #
+    # Two paged reads and ten writes, over one service. The shape is the one the
+    # Relationship Memory handlers use: resolve the gate, hand the use case the
+    # Principal the authorization already resolved, and restate no rule. Which
+    # duplicate refuses a create, which status a restore returns to, whether a
+    # re-bind is a duplicate, and what a stale expectation leaves behind all stay
+    # in `application.entity_authoring`, the repository and the domain, so a
+    # second copy here cannot disagree with them.
+    #
+    # `principal_id=authorization.principal.principal_id` is the only thing these
+    # handlers say about identity, and the transport commands have no
+    # `principal_id` field at all, so there is nothing a caller could have
+    # supplied for it to be confused with.
+
+    def _entities_identifiers_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListEntityIdentifiers,
+    ) -> _Result:
+        """`entities.identifiers.list`: one bounded page of an entity's bindings.
+
+        The entity is read first so an unknown identifier is `not_found` naming
+        `entity_id` rather than `cursor` -- `_entity_translated` maps every
+        `UnknownScopeError` on this plane to the cursor, which is right for the
+        one thing the paged reads refuse and wrong for the entity itself. "There
+        is no such person" and "that position is not yours" are different
+        answers and a caller can act on only one of them.
+        """
+        self._entity_plane()
+        page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            if unit_of_work.entities.get(principal_id, command.entity_id) is None:
+                raise NotFoundError(SafeDetail.ENTITY_ID)
+        with _translated(), _entity_translated():
+            page = unit_of_work.entities.identifier_page(
+                command.entity_id,
+                principal_id=principal_id,
+                limit=page_size,
+                states=None if command.states is None else frozenset(command.states),
+                namespaces=None if command.namespaces is None else frozenset(command.namespaces),
+                after_identifier_id=command.after,
+            )
+        return _Result(
+            payload={
+                "entity_id": command.entity_id,
+                "identifiers": [_lifecycle_identifier_view(record) for record in page.records],
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.is_truncated,
+                    reason="page_size_reached" if page.is_truncated else None,
+                    next_cursor=(
+                        page.records[-1].identifier_id
+                        if page.is_truncated and page.records
+                        else None
+                    ),
+                ),
+            ),
+        )
+
+    def _entities_aliases_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListEntityAliases,
+    ) -> _Result:
+        """`entities.aliases.list`: one bounded page of an entity's recorded names.
+
+        The entity is read first, for the reason `_entities_identifiers_list`
+        states beside its own read.
+        """
+        self._entity_plane()
+        page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            if unit_of_work.entities.get(principal_id, command.entity_id) is None:
+                raise NotFoundError(SafeDetail.ENTITY_ID)
+        with _translated(), _entity_translated():
+            page = unit_of_work.entities.alias_page(
+                command.entity_id,
+                principal_id=principal_id,
+                limit=page_size,
+                states=None if command.states is None else frozenset(command.states),
+                alias_types=(
+                    None if command.alias_types is None else frozenset(command.alias_types)
+                ),
+                after_alias_id=command.after,
+            )
+        return _Result(
+            payload={
+                "entity_id": command.entity_id,
+                "aliases": [_lifecycle_alias_view(record) for record in page.records],
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.is_truncated,
+                    reason="page_size_reached" if page.is_truncated else None,
+                    next_cursor=(
+                        page.records[-1].alias_id if page.is_truncated and page.records else None
+                    ),
+                ),
+            ),
+        )
+
+    def _entities_create(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateEntity
+    ) -> _Result:
+        """`entities.create`: one entity, or a refusal naming why one already exists."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _entity_authoring_translated():
+            admission = self._entity_authoring.create(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                entity_type=command.entity_type,
+                display_name=command.display_name,
+                aliases=_named_values(command.aliases, "alias_type"),
+                identifiers=_named_values(command.identifiers, "namespace"),
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._entity_receipt(authorization, admission)
+
+    def _entities_update(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: UpdateEntity
+    ) -> _Result:
+        """`entities.update`: correct a name, a matched name, or a status."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _entity_authoring_translated():
+            admission = self._entity_authoring.update(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                entity_id=command.entity_id,
+                expected_version=command.expected_version,
+                display_name=command.display_name,
+                canonical_name=command.canonical_name,
+                status=command.status,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._entity_receipt(authorization, admission)
+
+    def _entities_archive(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ArchiveEntity
+    ) -> _Result:
+        """`entities.archive`: withdraw one entity, recording what to restore it to."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _entity_authoring_translated():
+            admission = self._entity_authoring.archive(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                entity_id=command.entity_id,
+                expected_version=command.expected_version,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._entity_receipt(authorization, admission)
+
+    def _entities_restore(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: RestoreEntity
+    ) -> _Result:
+        """`entities.restore`: return one archived entity to the status it held."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _entity_authoring_translated():
+            admission = self._entity_authoring.restore(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                entity_id=command.entity_id,
+                expected_version=command.expected_version,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._entity_receipt(authorization, admission)
+
+    def _entities_identifiers_bind(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: BindEntityIdentifier,
+    ) -> _Result:
+        """`entities.identifiers.bind`: record one address as this entity's identity."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _entity_authoring_translated():
+            admission = self._entity_authoring.bind_identifier(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                entity_id=command.entity_id,
+                expected_version=command.expected_version,
+                namespace=command.namespace,
+                display_value=command.display_value,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+                evidence=command.evidence,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._entity_receipt(authorization, admission)
+
+    def _entities_identifiers_retire(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RetireEntityIdentifier,
+    ) -> _Result:
+        """`entities.identifiers.retire`: withdraw one binding, keeping the row."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _entity_authoring_translated():
+            admission = self._entity_authoring.retire_identifier(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                entity_id=command.entity_id,
+                expected_version=command.expected_version,
+                identifier_id=command.identifier_id,
+                expected_identifier_version=command.expected_identifier_version,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._entity_receipt(authorization, admission)
+
+    def _entities_identifiers_supersede(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SupersedeEntityIdentifier,
+    ) -> _Result:
+        """`entities.identifiers.supersede`: replace one binding, atomically."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _entity_authoring_translated():
+            admission = self._entity_authoring.supersede_identifier(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                entity_id=command.entity_id,
+                expected_version=command.expected_version,
+                identifier_id=command.identifier_id,
+                expected_identifier_version=command.expected_identifier_version,
+                namespace=command.namespace,
+                display_value=command.display_value,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+                evidence=command.evidence,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._entity_receipt(authorization, admission)
+
+    def _entities_aliases_add(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: AddEntityAlias
+    ) -> _Result:
+        """`entities.aliases.add`: record one more name this entity goes by."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _entity_authoring_translated():
+            admission = self._entity_authoring.add_alias(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                entity_id=command.entity_id,
+                expected_version=command.expected_version,
+                alias_type=command.alias_type,
+                display_value=command.display_value,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+                evidence=command.evidence,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._entity_receipt(authorization, admission)
+
+    def _entities_aliases_retire(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: RetireEntityAlias
+    ) -> _Result:
+        """`entities.aliases.retire`: withdraw one name form, keeping it matchable."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _entity_authoring_translated():
+            admission = self._entity_authoring.retire_alias(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                entity_id=command.entity_id,
+                expected_version=command.expected_version,
+                alias_id=command.alias_id,
+                expected_alias_version=command.expected_alias_version,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._entity_receipt(authorization, admission)
+
+    def _entities_aliases_supersede(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SupersedeEntityAlias,
+    ) -> _Result:
+        """`entities.aliases.supersede`: correct one name form, naming the successor."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _entity_authoring_translated():
+            admission = self._entity_authoring.supersede_alias(
+                repository,
+                principal_id=authorization.principal.principal_id,
+                entity_id=command.entity_id,
+                expected_version=command.expected_version,
+                alias_id=command.alias_id,
+                expected_alias_version=command.expected_alias_version,
+                alias_type=command.alias_type,
+                display_value=command.display_value,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+                evidence=command.evidence,
+                reason=command.reason,
+                idempotency_key=command.idempotency_key,
+                correlation_id=authorization.correlation_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._entity_receipt(authorization, admission)
+
+    def _entity_repository(self, unit_of_work: UnitOfWork) -> EntitiesRepository:
+        """The entity port, behind the two gates every *writing* handler shares.
+
+        `_entity_writes` and not `_entity_plane`: the sixteen handlers that ask
+        for the port through this method all write, so both switches are checked
+        here rather than sixteen times. The reads reach `unit_of_work.entities`
+        directly after their own `_entity_plane()` call, which is the gate that
+        applies to them and the only one that does.
+        """
+        self._entity_writes()
+        return unit_of_work.entities
+
+    def _entity_receipt(
+        self, authorization: Authorization, admission: EntityMutationAdmission
+    ) -> _Result:
+        """The one shape all ten entity writes answer with.
+
+        **No name and no address.** A receipt acknowledges that a record is
+        durable; echoing what was written would put a person's mailbox on a
+        second surface for no gain, since the caller already has it — and a
+        *replayed* receipt would put an earlier caller's value on this one.
+
+        `idempotent_replay` is stated rather than left to be inferred from
+        versions. A client whose response was lost retries, gets this, and has to
+        know whether its retry wrote anything; comparing versions cannot answer
+        that, because a concurrent writer could have advanced them either way.
+        """
+        receipt = admission.receipt
+        return _Result(
+            payload={
+                "record_id": receipt.record_id,
+                "record_family": receipt.record_family.value,
+                "entity_id": receipt.entity_id,
+                "entity_version": receipt.entity_version,
+                "lifecycle_state": receipt.entity_status.value,
+                "child_id": receipt.child_id,
+                "child_version": receipt.child_version,
+                "child_state": receipt.child_state,
+                "superseded_ids": list(receipt.superseded_ids),
+                "evidence_refs": list(receipt.evidence_link_ids),
+                "receipt_id": receipt.event_id,
+                "audit_id": authorization.audit_id,
+                "idempotent_replay": not admission.created,
+                "canonical_entity_id": receipt.canonical_entity_id,
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at, trust_basis=_ENTITY_AUTHORING_TRUST_BASIS
+            ),
+        )
+
+    # ---- the directed-relationship family (WP-RI-A-03) ---------------------
+    #
+    # One read and six writes over `entity_assignments` and
+    # `entity_relationships`. Every one of them calls `_entity_plane()` first,
+    # for the reason that method's docstring gives: `available_capabilities`
+    # withholds these names from `capabilities.get` and from the MCP tool list,
+    # and the HTTP transport consults neither -- it routes by path segment
+    # straight into `_HANDLERS`.
+    #
+    # No directed-write rule is restated in this file. Which duplicates are
+    # refused, which version guard applies, what a replay returns and what the
+    # ledger records all stay in `EntityDirectedService`, the repository and the
+    # schema, so a second copy here cannot disagree with them.
+    #
+    # `principal_id=authorization.principal.principal_id` is the only thing these
+    # handlers say about identity, and the commands have no `principal_id` field
+    # at all, so there is nothing a caller could have supplied for it to be
+    # confused with.
+
+    def _entities_assignments_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListEntityAssignments,
+    ) -> _Result:
+        """`entities.assignments.list`: one bounded page of an entity's assignments.
+
+        The entity is read first so an unknown identifier is `not_found` rather
+        than an empty page -- "this person holds no assignments" and "there is no
+        such person" are different answers, and `_entities_relationships` draws
+        the same distinction for the same reason.
+
+        One row past the page is fetched and dropped, so a corpus of exactly
+        `page_size` rows is not reported as truncated and the last page of a
+        larger one is not reported as complete.
+        """
+        self._entity_plane()
+        principal_id = authorization.principal.principal_id
+        page_size = self._page_size(command.page_size)
+        with _translated(), _entity_translated():
+            entity = unit_of_work.entities.get(principal_id, command.entity_id)
+            if entity is None:
+                raise NotFoundError(SafeDetail.ENTITY_ID)
+            found = unit_of_work.entities.assignments_page(
+                principal_id,
+                command.entity_id,
+                active_only=command.active_only,
+                limit=page_size + 1,
+                after_assignment_id=command.after,
+            )
+        truncated = len(found) > page_size
+        page = found[:page_size]
+        return _Result(
+            payload={
+                "assignments": [
+                    _assignment_view(assignment, authorization.at) for assignment in page
+                ]
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=truncated,
+                    reason="page_size_reached" if truncated else None,
+                    next_cursor=page[-1].assignment_id if truncated and page else None,
+                ),
+            ),
+        )
+
+    def _entities_assignments_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateEntityAssignment,
+    ) -> _Result:
+        """`entities.assignments.create`: one new typed assignment."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated():
+            receipt = self._directed.create_assignment(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _entities_assignments_revise(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReviseEntityAssignment,
+    ) -> _Result:
+        """`entities.assignments.revise`: correct what an assignment describes."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated():
+            receipt = self._directed.revise_assignment(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _entities_assignments_end(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: EndEntityAssignment,
+    ) -> _Result:
+        """`entities.assignments.end`: withdraw one assignment, keeping the row."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated():
+            receipt = self._directed.end_assignment(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _entities_relationships_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateEntityRelationship,
+    ) -> _Result:
+        """`entities.relationships.create`: assert one directed edge, and only one."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated():
+            receipt = self._directed.create_relationship(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _entities_relationships_revise(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReviseEntityRelationship,
+    ) -> _Result:
+        """`entities.relationships.revise`: correct when an edge applies."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated():
+            receipt = self._directed.revise_relationship(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _entities_relationships_end(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: EndEntityRelationship,
+    ) -> _Result:
+        """`entities.relationships.end`: withdraw one directed edge, keeping the row."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated():
+            receipt = self._directed.end_relationship(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _directed_receipt(self, authorization: Authorization, receipt: DirectedReceipt) -> _Result:
+        """The one shape all six directed writes answer with.
+
+        Every field the completion contract asks a mutation to return: the
+        record it touched, the version it now stands at, the lifecycle state it
+        is in, the receipt, the audit identifier, and whether this call did the
+        work or found it already done.
+
+        `superseded_id` is present and null on every answer rather than absent.
+        This package's `end` moves a record to `ended` and names no successor --
+        `superseded` is the correction path and nothing here writes it -- so the
+        honest answer is a stated null, and a caller reading the field gets one
+        rather than a key error and a retry.
+
+        `replayed` is not a warning and is not a limitation. A retry that finds
+        its work already done succeeded; saying so in the payload is what lets a
+        caller tell "I did this" from "this was already done", and both are
+        successes.
+        """
+        return _Result(
+            payload={
+                "record_id": receipt.record_id,
+                "record_family": receipt.record_family.value,
+                "prior_version": receipt.prior_version,
+                "version": receipt.version,
+                "state": receipt.state,
+                "receipt_id": receipt.mutation_event_id,
+                "audit_id": receipt.audit_id,
+                "idempotency_key": receipt.idempotency_key,
+                "superseded_id": receipt.superseded_id,
+                "evidence_refs": list(receipt.evidence_refs),
+                "replayed": receipt.replayed,
+                "issued_at": format_rfc3339(receipt.issued_at),
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at, trust_basis=_ENTITY_AUTHORING_TRUST_BASIS
             ),
         )
 
@@ -6144,6 +7344,36 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_CONTEXT: ApplicationService._entities_context,
         Capability.ENTITIES_RELATIONSHIPS: ApplicationService._entities_relationships,
         Capability.ENTITIES_UNRESOLVED_MENTIONS: (ApplicationService._entities_unresolved_mentions),
+        Capability.ENTITIES_IDENTIFIERS_LIST: ApplicationService._entities_identifiers_list,
+        Capability.ENTITIES_ALIASES_LIST: ApplicationService._entities_aliases_list,
+        Capability.ENTITIES_CREATE: ApplicationService._entities_create,
+        Capability.ENTITIES_UPDATE: ApplicationService._entities_update,
+        Capability.ENTITIES_ARCHIVE: ApplicationService._entities_archive,
+        Capability.ENTITIES_RESTORE: ApplicationService._entities_restore,
+        Capability.ENTITIES_IDENTIFIERS_BIND: ApplicationService._entities_identifiers_bind,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE: ApplicationService._entities_identifiers_retire,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE: (
+            ApplicationService._entities_identifiers_supersede
+        ),
+        Capability.ENTITIES_ALIASES_ADD: ApplicationService._entities_aliases_add,
+        Capability.ENTITIES_ALIASES_RETIRE: ApplicationService._entities_aliases_retire,
+        Capability.ENTITIES_ALIASES_SUPERSEDE: ApplicationService._entities_aliases_supersede,
+        Capability.ENTITIES_ASSIGNMENTS_LIST: ApplicationService._entities_assignments_list,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE: ApplicationService._entities_assignments_create,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE: ApplicationService._entities_assignments_revise,
+        Capability.ENTITIES_ASSIGNMENTS_END: ApplicationService._entities_assignments_end,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE: (
+            ApplicationService._entities_relationships_create
+        ),
+        Capability.ENTITIES_RELATIONSHIPS_REVISE: (
+            ApplicationService._entities_relationships_revise
+        ),
+        Capability.ENTITIES_RELATIONSHIPS_END: ApplicationService._entities_relationships_end,
+        Capability.ENTITIES_OBSERVATIONS_LIST: ApplicationService._entities_observations_list,
+        Capability.ENTITIES_OBSERVE: ApplicationService._entities_observe,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: (
+            ApplicationService._entities_unresolved_mentions_resolve
+        ),
         Capability.RELATIONSHIP_MEMORY_CREATE: ApplicationService._relationship_memory_create,
         Capability.RELATIONSHIP_MEMORY_GET: ApplicationService._relationship_memory_get,
         Capability.RELATIONSHIP_MEMORY_LIST: ApplicationService._relationship_memory_list,
@@ -6170,6 +7400,63 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        Capability.ENTITIES_IDENTIFIERS_LIST,
+        Capability.ENTITIES_ALIASES_LIST,
+        Capability.ENTITIES_CREATE,
+        Capability.ENTITIES_UPDATE,
+        Capability.ENTITIES_ARCHIVE,
+        Capability.ENTITIES_RESTORE,
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE,
+        Capability.ENTITIES_ALIASES_ADD,
+        Capability.ENTITIES_ALIASES_RETIRE,
+        Capability.ENTITIES_ALIASES_SUPERSEDE,
+        Capability.ENTITIES_ASSIGNMENTS_LIST,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE,
+        Capability.ENTITIES_ASSIGNMENTS_END,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_REVISE,
+        Capability.ENTITIES_RELATIONSHIPS_END,
+        Capability.ENTITIES_OBSERVATIONS_LIST,
+        Capability.ENTITIES_OBSERVE,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+    }
+)
+
+#: The write half of the `entities.` plane, withheld from a process that has
+#: not set `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`. A subset of
+#: `_ENTITY_CAPABILITIES` rather than a separate family: turning the plane off
+#: withholds these too, and the write switch narrows an already-composed plane.
+#:
+#: Written out rather than derived from the purpose map, for the reason
+#: `_ENTITY_CAPABILITIES` is written out: admitting another write is a decision
+#: made here, not a spelling that happens to carry a write purpose. The
+#: derivation is still made, in
+#: `tests/contract/test_entity_write_gate.py`, which compares this set against
+#: the capabilities whose permitted purposes are write purposes -- so the two
+#: cannot disagree, and neither one is the only statement of the fact.
+_ENTITY_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.ENTITIES_CREATE,
+        Capability.ENTITIES_UPDATE,
+        Capability.ENTITIES_ARCHIVE,
+        Capability.ENTITIES_RESTORE,
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE,
+        Capability.ENTITIES_ALIASES_ADD,
+        Capability.ENTITIES_ALIASES_RETIRE,
+        Capability.ENTITIES_ALIASES_SUPERSEDE,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE,
+        Capability.ENTITIES_ASSIGNMENTS_END,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_REVISE,
+        Capability.ENTITIES_RELATIONSHIPS_END,
+        Capability.ENTITIES_OBSERVE,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
     }
 )
 

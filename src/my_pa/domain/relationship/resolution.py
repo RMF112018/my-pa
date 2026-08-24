@@ -190,6 +190,11 @@ class ResolutionWarning(StrEnum):
     #: none of them. Said out loud so a reader can see that the system consulted
     #: the context and it did not help, rather than never having looked.
     CONTEXT_DID_NOT_DISTINGUISH_THE_CANDIDATES = "context_did_not_distinguish_the_candidates"
+    #: A candidate this answer would otherwise have carried was withheld
+    #: because the user has already refused that pairing. Disclosed because the
+    #: alternative is an answer that quietly differs from the same question
+    #: asked before the refusal, with nothing on it saying why.
+    A_REFUSED_PAIRING_WAS_WITHHELD = "a_refused_pairing_was_withheld"
 
 
 @dataclass(frozen=True, slots=True)

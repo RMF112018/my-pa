@@ -205,6 +205,18 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # Remote grant staging compares the NAS-issued contract Principal with the
     # store's authenticated Principal partition before persisting any bounds.
     "infrastructure/persistence/native_sources.py": (("grant", "principal_id"),),
+    # `WP-RI-A-02`'s governed entity writes. `EntityWriteRequest.principal_id`
+    # is *not* a caller-stated owner despite the shape this scan matches: the
+    # request is built inside `application.entity_authoring` from
+    # `Authorization.principal.principal_id`, and the transport commands that
+    # reach it — `CreateEntity`, `UpdateEntity` and the ten beside them — have
+    # no `principal_id` field at all, so a payload naming one is refused by the
+    # dataclass constructor before any of this runs. What these reads do is
+    # carry the already-resolved partition into each statement, which is the
+    # same shape `MemoryWriteRequest.principal_id` has and the reason
+    # `persistence.relationship_memory` is registered below.
+    "application/entity_authoring.py": (("request", "principal_id"),) * 2,
+    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 13,
     "application/intelligence.py": (
         ("artifact", "principal_id"),
         ("artifact", "principal_id"),
@@ -226,19 +238,79 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # compare the record's own field against the acting Principal and raise
     # before writing when the two differ. The value is never trusted; it is
     # checked, which is what this registry is for.
+    #
+    # The eight `row` reads are the row mappers, and they appear here for the
+    # reason `infrastructure/persistence/relationship_memory.py`'s two do: the
+    # two joined resolution lookups select `entities` and one child table at
+    # once, both tables declare `updated_at` and `version`, and a `Row` read by
+    # attribute answers with the entity's column — so the child records were
+    # hydrated with the entity's version and revision moment. The child columns
+    # are labelled and read back through `_ChildRow`, which is not a `Row`, so
+    # the two child mappers take `Any` and this module stops earning the `row`
+    # spelling for free. Every one of the eight reads a `principal_id` off a row
+    # a partition-scoped statement returned, and stamps it onto the record built
+    # from that row; none of them is caller input, and none decides a partition.
+    #
+    # The nineteen `request` reads are WP-RI-A-03's directed write path, and the
+    # value they read is the one thing on those requests a caller could not have
+    # sent. `AssignmentWriteRequest` and `RelationshipWriteRequest` are built in
+    # `application/entity_directed.py` from a transport command that has no
+    # `principal_id` field at all -- so a payload naming one is refused by the
+    # command constructor before that module runs -- and the field is filled from
+    # `authorization.principal.principal_id`. Every read here is the partition
+    # predicate of a statement or the stamp on a row it writes, which is the
+    # server-resolved Principal reaching persistence by the only route it has.
+    # WP-RI-A-04 adds three more of exactly the first kind -- `decision`,
+    # `event` and `link` are the records handed to `record_resolution_decision`,
+    # `record_mutation_event` and `record_fact_evidence_link`, and each read is
+    # the same `if X.principal_id != principal_id: raise` those writes already
+    # perform for an observation and a proposal -- and three more row mappers.
     "infrastructure/persistence/entity.py": (
         ("alias", "principal_id"),
         ("assignment", "principal_id"),
+        ("decision", "principal_id"),
         ("entity", "principal_id"),
         ("entity", "principal_id"),
         ("entity", "principal_id"),
         ("entity", "principal_id"),
+        ("event", "principal_id"),
         ("identifier", "principal_id"),
+        ("link", "principal_id"),
         ("observation", "principal_id"),
         ("proposal", "principal_id"),
         ("proposal", "principal_id"),
         ("record", "principal_id"),
         ("rel", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
     ),
     # WP-RI-06's governance service carries the `principal_id` of the proposal
     # it just loaded onto the decided copy of that proposal. The value is not
@@ -246,7 +318,26 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # proposal held by anyone else was already answered as absent, and the read
     # is of a row this Principal owns. `decide_proposal` then refuses a mismatch
     # again at the write, which is where the registry's own rule wants it.
-    "application/entity_governance.py": (("held", "principal_id"),),
+    #
+    # WP-RI-A-04's seven `command.principal_id` reads are the same shape the
+    # Relationship Memory service's are, and are safe for the same reason
+    # rather than for a new one: `ObserveCommand` and `ResolveMentionCommand`
+    # are internal dataclasses whose docstrings say "with the Principal already
+    # resolved", and the transport-facing `ObserveEntityMention` and
+    # `ResolveUnresolvedMention` carry no `principal_id` field at all -- so there
+    # is nothing a caller could have supplied for these reads to be confused
+    # with. The handler builds them from `authorization.principal.principal_id`,
+    # and every repository call below stamps or refuses on the same value.
+    "application/entity_governance.py": (
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("held", "principal_id"),
+    ),
     # WP-29's Relationship Memory service. Its three commands are internal
     # dataclasses whose docstrings each say "with the Principal already
     # resolved", and the transport-facing commands the normalizer builds carry

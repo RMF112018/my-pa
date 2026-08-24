@@ -52,13 +52,17 @@ from base64 import b64decode
 from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
 from datetime import date, datetime
+from enum import StrEnum
 from types import MappingProxyType
 from typing import Any, Final
 
 from my_pa.application.commands import (
+    AddEntityAlias,
+    ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
     BeginIntelligenceCycle,
+    BindEntityIdentifier,
     BulkConfirmTasks,
     BulkPreviewTasks,
     CloseCommitment,
@@ -66,12 +70,17 @@ from my_pa.application.commands import (
     CommitIntelligenceArtifact,
     CreateCapture,
     CreateCommitment,
+    CreateEntity,
+    CreateEntityAssignment,
+    CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
     CreateRelationshipMemory,
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAssignment,
+    EndEntityRelationship,
     EnrollSource,
     FetchSource,
     GetCapabilities,
@@ -91,6 +100,10 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAliases,
+    ListEntityAssignments,
+    ListEntityIdentifiers,
+    ListEntityObservations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -100,6 +113,7 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    ObserveEntityMention,
     PrepareContext,
     ReadCapture,
     ReadCommitment,
@@ -113,10 +127,16 @@ from my_pa.application.commands import (
     Representation,
     ResolveEntity,
     ResolveIntelligenceSet,
+    ResolveUnresolvedMention,
+    RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAlias,
+    RetireEntityIdentifier,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAssignment,
+    ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
     SearchCaptures,
@@ -127,8 +147,11 @@ from my_pa.application.commands import (
     SearchRelationshipMemories,
     SearchTasks,
     SubmitGoodNotesProposal,
+    SupersedeEntityAlias,
+    SupersedeEntityIdentifier,
     TransitionTask,
     UpdateCommitment,
+    UpdateEntity,
     UpdateTask,
     WaitingOn,
 )
@@ -147,6 +170,22 @@ from my_pa.domain.intelligence.catalog import (
     ProducerRunState,
     ResolverSetId,
     SourceLaneId,
+)
+from my_pa.domain.relationship.authoring import CallerNamespace
+from my_pa.domain.relationship.entity import (
+    AliasState,
+    AliasType,
+    AssignmentType,
+    EntityRelationshipType,
+    EntityStatus,
+    EntityType,
+    ExternalIdentifierNamespace,
+    IdentifierState,
+)
+from my_pa.domain.relationship.governance import (
+    ObservationAuthority,
+    ObservationKind,
+    ResolutionDisposition,
 )
 from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
 from my_pa.domain.situation.continuity import (
@@ -745,6 +784,130 @@ def _list_unresolved_mentions(payload: Mapping[str, Any]) -> Command:
     return ListUnresolvedMentions(**payload)
 
 
+#: The directed-relationship times a caller may supply. Separate from
+#: `_MEMORY_MOMENTS` for the reason that mapping is separate from
+#: `_CAPTURE_MOMENTS`: the planes carry different fields, and one shared mapping
+#: would convert a key on a command that has no such field.
+_DIRECTED_MOMENTS: Mapping[str, SafeDetail] = MappingProxyType(
+    {
+        "effective_from": SafeDetail.EFFECTIVE_FROM,
+        "effective_to": SafeDetail.EFFECTIVE_TO,
+        "effective_end": SafeDetail.EFFECTIVE_TO,
+    }
+)
+
+
+def _directed_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """One directed-write payload, in the shapes the command declares.
+
+    Shape conversion only: JSON has no datetime, no tuple and no enum. A value
+    outside a closed vocabulary is left exactly as it arrived so the command
+    reports it under its own field name, which is the rule `_memory_vocabulary`
+    states and for the same reason -- refusing here would report the wrong field
+    for a payload that got two things wrong.
+    """
+    converted = dict(payload)
+    for name, detail in _DIRECTED_MOMENTS.items():
+        supplied = converted.get(name)
+        if supplied is None:
+            continue
+        if not isinstance(supplied, str):
+            raise InvalidRequestError(detail)
+        try:
+            converted[name] = datetime.fromisoformat(supplied)
+        except ValueError:
+            pass
+        else:
+            continue
+        # Outside the handler: the original renders the rejected value.
+        raise InvalidRequestError(detail)
+    for name, vocabulary in (
+        ("assignment_type", AssignmentType),
+        ("relationship_type", EntityRelationshipType),
+    ):
+        value = converted.get(name)
+        if isinstance(value, str):
+            try:
+                converted[name] = vocabulary(value)
+            except ValueError:
+                continue
+    for name in ("evidence_refs", "clear"):
+        value = converted.get(name)
+        if isinstance(value, list):
+            converted[name] = tuple(value)
+    return converted
+
+
+def _list_entity_assignments(payload: Mapping[str, Any]) -> Command:
+    return ListEntityAssignments(**payload)
+
+
+def _create_entity_assignment(payload: Mapping[str, Any]) -> Command:
+    return CreateEntityAssignment(**_directed_payload(payload))
+
+
+def _revise_entity_assignment(payload: Mapping[str, Any]) -> Command:
+    return ReviseEntityAssignment(**_directed_payload(payload))
+
+
+def _end_entity_assignment(payload: Mapping[str, Any]) -> Command:
+    return EndEntityAssignment(**_directed_payload(payload))
+
+
+def _create_entity_relationship(payload: Mapping[str, Any]) -> Command:
+    return CreateEntityRelationship(**_directed_payload(payload))
+
+
+def _revise_entity_relationship(payload: Mapping[str, Any]) -> Command:
+    return ReviseEntityRelationship(**_directed_payload(payload))
+
+
+def _end_entity_relationship(payload: Mapping[str, Any]) -> Command:
+    return EndEntityRelationship(**_directed_payload(payload))
+
+
+def _list_entity_observations(payload: Mapping[str, Any]) -> Command:
+    return ListEntityObservations(**payload)
+
+
+def _observe_entity_mention(payload: Mapping[str, Any]) -> Command:
+    """Shape conversion only: JSON has no enum and no datetime.
+
+    The two closed vocabularies become the members the command declares, so the
+    published MCP schema names them and a caller can see what it may send. A
+    value outside either vocabulary is refused *here*, under its own field name,
+    rather than passed through -- `authority` is the field this plane most needs
+    a caller to get right, and reporting it as a generic bad request would tell
+    a caller the least useful true thing.
+    """
+    converted = dict(payload)
+    converted["kind"] = _enum_or_invalid(
+        converted.get("kind"), ObservationKind, SafeDetail.OBSERVATION_KIND
+    )
+    converted["authority"] = _enum_or_invalid(
+        converted.get("authority"), ObservationAuthority, SafeDetail.OBSERVATION_AUTHORITY
+    )
+    observed_at = converted.get("observed_at")
+    if isinstance(observed_at, str):
+        try:
+            converted["observed_at"] = datetime.fromisoformat(observed_at)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.OBSERVED_AT) from None
+    return ObserveEntityMention(**converted)
+
+
+def _resolve_unresolved_mention(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    converted["disposition"] = _enum_or_invalid(
+        converted.get("disposition"), ResolutionDisposition, SafeDetail.DISPOSITION
+    )
+    if converted.get("entity_type") is not None:
+        converted["entity_type"] = _enum_or_invalid(
+            converted["entity_type"], EntityType, SafeDetail.ENTITY_TYPE
+        )
+    return ResolveUnresolvedMention(**converted)
+
+
 #: The Relationship Memory times a caller may supply, and the field each is
 #: reported under when it is not a moment. Separate from `_CAPTURE_MOMENTS`
 #: because the two planes carry different fields, and one shared mapping would
@@ -851,6 +1014,150 @@ def _archive_relationship_memory(payload: Mapping[str, Any]) -> Command:
 
 def _restore_relationship_memory(payload: Mapping[str, Any]) -> Command:
     return RestoreRelationshipMemory(**payload)
+
+
+# --- the entity plane's authoring half (WP-RI-A-02) --------------------------
+#
+# Shape conversion and nothing else, exactly as the memory builders above are.
+# A value outside a vocabulary is left as it arrived so the command reports it
+# under its own field name; converting here would need a second copy of each
+# vocabulary's error mapping, and refusing here would report the wrong field for
+# a payload that got two things wrong.
+
+#: The entity times a caller may supply, and the field each is reported under
+#: when it is not a moment. Separate from `_MEMORY_MOMENTS` because the two
+#: planes carry different fields, and one shared mapping would convert a key on
+#: a command that has no such field.
+_ENTITY_MOMENTS: Mapping[str, SafeDetail] = MappingProxyType(
+    {
+        "effective_from": SafeDetail.EFFECTIVE_FROM,
+        "effective_to": SafeDetail.EFFECTIVE_TO,
+    }
+)
+
+#: Which closed vocabulary each scalar entity field belongs to.
+_ENTITY_VOCABULARIES: Mapping[str, type[StrEnum]] = MappingProxyType(
+    {
+        "entity_type": EntityType,
+        "status": EntityStatus,
+        "namespace": CallerNamespace,
+        "alias_type": AliasType,
+    }
+)
+
+#: Which closed vocabulary each list-valued entity filter belongs to. `states`
+#: is in neither mapping and is resolved per command, because the identifier and
+#: alias planes declare separate state vocabularies -- deliberately separate, so
+#: that widening one cannot silently widen the other -- and a single entry here
+#: would convert an alias state against the identifier's set.
+_ENTITY_FILTERS: Mapping[str, type[StrEnum]] = MappingProxyType(
+    {
+        "namespaces": ExternalIdentifierNamespace,
+        "alias_types": AliasType,
+    }
+)
+
+#: Fields whose JSON array becomes a tuple, with no per-item conversion.
+_ENTITY_SEQUENCES = ("evidence", "aliases", "identifiers")
+
+
+def _entity_moments(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """Resolve an entity write's optional times from RFC 3339 strings to datetimes."""
+    converted = dict(payload)
+    for name, detail in _ENTITY_MOMENTS.items():
+        supplied = converted.get(name)
+        if supplied is None:
+            continue
+        if not isinstance(supplied, str):
+            raise InvalidRequestError(detail)
+        try:
+            converted[name] = datetime.fromisoformat(supplied)
+        except ValueError:
+            pass
+        else:
+            continue
+        # Outside the handler: the original renders the rejected value.
+        raise InvalidRequestError(detail)
+    return converted
+
+
+def _entity_member(value: object, vocabulary: type[StrEnum]) -> object:
+    """One vocabulary string as its member, or exactly what arrived."""
+    if not isinstance(value, str):
+        return value
+    try:
+        return vocabulary(value)
+    except ValueError:
+        return value
+
+
+def _entity_vocabulary(
+    payload: dict[str, Any], states: type[StrEnum] | None = None
+) -> dict[str, Any]:
+    """Closed-vocabulary strings as the enum members the entity commands declare."""
+    for name, vocabulary in _ENTITY_VOCABULARIES.items():
+        if name in payload:
+            payload[name] = _entity_member(payload[name], vocabulary)
+    filters = dict(_ENTITY_FILTERS)
+    if states is not None:
+        filters["states"] = states
+    for name, vocabulary in filters.items():
+        supplied = payload.get(name)
+        if isinstance(supplied, list):
+            payload[name] = tuple(_entity_member(entry, vocabulary) for entry in supplied)
+    for name in _ENTITY_SEQUENCES:
+        supplied = payload.get(name)
+        if isinstance(supplied, list):
+            payload[name] = tuple(supplied)
+    return payload
+
+
+def _list_entity_identifiers(payload: Mapping[str, Any]) -> Command:
+    return ListEntityIdentifiers(**_entity_vocabulary(dict(payload), IdentifierState))
+
+
+def _list_entity_aliases(payload: Mapping[str, Any]) -> Command:
+    return ListEntityAliases(**_entity_vocabulary(dict(payload), AliasState))
+
+
+def _create_entity(payload: Mapping[str, Any]) -> Command:
+    return CreateEntity(**_entity_vocabulary(dict(payload)))
+
+
+def _update_entity(payload: Mapping[str, Any]) -> Command:
+    return UpdateEntity(**_entity_vocabulary(dict(payload)))
+
+
+def _archive_entity(payload: Mapping[str, Any]) -> Command:
+    return ArchiveEntity(**payload)
+
+
+def _restore_entity(payload: Mapping[str, Any]) -> Command:
+    return RestoreEntity(**payload)
+
+
+def _bind_entity_identifier(payload: Mapping[str, Any]) -> Command:
+    return BindEntityIdentifier(**_entity_vocabulary(_entity_moments(payload)))
+
+
+def _retire_entity_identifier(payload: Mapping[str, Any]) -> Command:
+    return RetireEntityIdentifier(**payload)
+
+
+def _supersede_entity_identifier(payload: Mapping[str, Any]) -> Command:
+    return SupersedeEntityIdentifier(**_entity_vocabulary(_entity_moments(payload)))
+
+
+def _add_entity_alias(payload: Mapping[str, Any]) -> Command:
+    return AddEntityAlias(**_entity_vocabulary(_entity_moments(payload)))
+
+
+def _retire_entity_alias(payload: Mapping[str, Any]) -> Command:
+    return RetireEntityAlias(**payload)
+
+
+def _supersede_entity_alias(payload: Mapping[str, Any]) -> Command:
+    return SupersedeEntityAlias(**_entity_vocabulary(_entity_moments(payload)))
 
 
 def _get_goodnotes_content(payload: Mapping[str, Any]) -> Command:
@@ -1168,6 +1475,28 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_CONTEXT: _get_entity_context,
         Capability.ENTITIES_RELATIONSHIPS: _get_entity_relationships,
         Capability.ENTITIES_UNRESOLVED_MENTIONS: _list_unresolved_mentions,
+        Capability.ENTITIES_IDENTIFIERS_LIST: _list_entity_identifiers,
+        Capability.ENTITIES_ALIASES_LIST: _list_entity_aliases,
+        Capability.ENTITIES_CREATE: _create_entity,
+        Capability.ENTITIES_UPDATE: _update_entity,
+        Capability.ENTITIES_ARCHIVE: _archive_entity,
+        Capability.ENTITIES_RESTORE: _restore_entity,
+        Capability.ENTITIES_IDENTIFIERS_BIND: _bind_entity_identifier,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE: _retire_entity_identifier,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE: _supersede_entity_identifier,
+        Capability.ENTITIES_ALIASES_ADD: _add_entity_alias,
+        Capability.ENTITIES_ALIASES_RETIRE: _retire_entity_alias,
+        Capability.ENTITIES_ALIASES_SUPERSEDE: _supersede_entity_alias,
+        Capability.ENTITIES_ASSIGNMENTS_LIST: _list_entity_assignments,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE: _create_entity_assignment,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE: _revise_entity_assignment,
+        Capability.ENTITIES_ASSIGNMENTS_END: _end_entity_assignment,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE: _create_entity_relationship,
+        Capability.ENTITIES_RELATIONSHIPS_REVISE: _revise_entity_relationship,
+        Capability.ENTITIES_RELATIONSHIPS_END: _end_entity_relationship,
+        Capability.ENTITIES_OBSERVATIONS_LIST: _list_entity_observations,
+        Capability.ENTITIES_OBSERVE: _observe_entity_mention,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: _resolve_unresolved_mention,
         Capability.RELATIONSHIP_MEMORY_CREATE: _create_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_GET: _get_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_LIST: _list_relationship_memories,
@@ -1185,7 +1514,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the seventy-three names nothing.
+    not one of the ninety-five names nothing.
     """
     try:
         return Capability(capability)

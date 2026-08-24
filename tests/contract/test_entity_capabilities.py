@@ -19,20 +19,43 @@ import pytest
 from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 
 from my_pa.application.commands import (
+    AddEntityAlias,
+    ArchiveEntity,
+    BindEntityIdentifier,
+    CreateEntity,
+    CreateEntityAssignment,
+    CreateEntityRelationship,
+    EndEntityAssignment,
+    EndEntityRelationship,
     GetEntity,
     GetEntityContext,
     GetEntityRelationships,
+    ListEntityAliases,
+    ListEntityAssignments,
+    ListEntityIdentifiers,
+    ListEntityObservations,
     ListUnresolvedMentions,
+    ObserveEntityMention,
     ResolveEntity,
+    ResolveUnresolvedMention,
+    RestoreEntity,
+    RetireEntityAlias,
+    RetireEntityIdentifier,
+    ReviseEntityAssignment,
+    ReviseEntityRelationship,
     SearchEntities,
+    SupersedeEntityAlias,
+    SupersedeEntityIdentifier,
+    UpdateEntity,
 )
 from my_pa.application.errors import InvalidRequestError
 from my_pa.contracts.ports import MemoryWriteRequest
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
@@ -45,8 +68,14 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    RelationshipState,
 )
-from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
+from my_pa.domain.relationship.governance import (
+    EntityObservation,
+    ObservationAuthority,
+    ObservationKind,
+    ResolutionDisposition,
+)
 from my_pa.domain.relationship.memory import (
     DIRECT_USER_AUTHORITY,
     MemoryActorClass,
@@ -62,6 +91,11 @@ ALICE = "ent_alice0001alice0001"
 ALICE_TWO = "ent_alice0002alice0002"
 ACME = "ent_acme0003acme000003"
 TOWER = "ent_tower0004tower0004"
+#: Two derived identifiers the off-switch sweep names. Derived rather than
+#: staged: the plane is disabled in that sweep, so nothing is reached and no row
+#: has to exist for the refusal to be the one under test.
+ASSIGNMENT = "asn_offswitch01offswitch1"
+RELATIONSHIP = "erel_offswitch1offswitch"
 WHEN = datetime(2026, 8, 18, 12, tzinfo=UTC)
 
 #: What the one staged memory says. Synthetic and about a working preference, so
@@ -531,10 +565,27 @@ def test_the_capability_passes_its_own_clock_to_the_resolver(staged: Scene) -> N
 
 
 def _disabled(scene: Scene, capability: Capability, command: object) -> dict[str, object]:
-    """Invoke against a build that never enabled the relationship plane."""
+    """Invoke against a build that never enabled the relationship plane.
+
+    The purpose is derived from the capability rather than fixed at
+    `entity_read`. It was fixed while the plane was all reads, and a fixed
+    purpose would now answer `denied` for the two writes -- a refusal that looks
+    like the one this sweep is checking for and is a different one, which is
+    exactly the kind of pass this file exists not to give.
+    """
     service = build_service(scene.world, scene.providers, relationship_intelligence_enabled=False)
+    # The purpose is derived rather than fixed at `entity_read`. Six of the
+    # thirteen are writes and take `entity_authoring`, and a sweep that sent the
+    # read purpose for all of them would meet `denied` before it reached the
+    # gate -- proving that a mismatched purpose is refused, which is a different
+    # test, while reading as proof that the plane was withheld.
     envelope = service.invoke(
-        metadata_for(capability, Purpose.ENTITY_READ, scene.principal),
+        # The purpose the domain permits for *this* capability, not the read
+        # purpose the plane had when this sweep was written: `WP-RI-A-02` gave
+        # ten of its capabilities `entity_authoring`, and invoking one of those
+        # under `entity_read` would be denied for the purpose rather than
+        # refused for the missing plane — a green sweep over the wrong refusal.
+        metadata_for(capability, sorted(permitted_purposes(capability))[0], scene.principal),
         command,  # type: ignore[arg-type]
         principal=scene.principal,
     )
@@ -553,6 +604,146 @@ _OFF_SWITCH_COMMANDS: dict[Capability, object] = {
     Capability.ENTITIES_CONTEXT: GetEntityContext(entity_id=ALICE),
     Capability.ENTITIES_RELATIONSHIPS: GetEntityRelationships(entity_id=ALICE),
     Capability.ENTITIES_UNRESOLVED_MENTIONS: ListUnresolvedMentions(),
+    # The authoring half (`WP-RI-A-02`). Every subject is `ALICE` and every
+    # child identifier is minted: this sweep never reaches a handler, so what
+    # each command has to be is well formed rather than resolvable.
+    Capability.ENTITIES_IDENTIFIERS_LIST: ListEntityIdentifiers(entity_id=ALICE),
+    Capability.ENTITIES_ALIASES_LIST: ListEntityAliases(entity_id=ALICE),
+    Capability.ENTITIES_CREATE: CreateEntity(
+        entity_type=EntityType.PERSON,
+        display_name="Alice Chen",
+        idempotency_key="off-switch-create",
+    ),
+    Capability.ENTITIES_UPDATE: UpdateEntity(
+        entity_id=ALICE,
+        expected_version=1,
+        display_name="Alice Chen",
+        reason="A synthetic correction.",
+        idempotency_key="off-switch-update",
+    ),
+    Capability.ENTITIES_ARCHIVE: ArchiveEntity(
+        entity_id=ALICE,
+        expected_version=1,
+        reason="A synthetic withdrawal.",
+        idempotency_key="off-switch-archive",
+    ),
+    Capability.ENTITIES_RESTORE: RestoreEntity(
+        entity_id=ALICE,
+        expected_version=1,
+        reason="A synthetic restoration.",
+        idempotency_key="off-switch-restore",
+    ),
+    Capability.ENTITIES_IDENTIFIERS_BIND: BindEntityIdentifier(
+        entity_id=ALICE,
+        expected_version=1,
+        namespace=CallerNamespace.EMAIL,
+        display_value="alice@example.invalid",
+        idempotency_key="off-switch-bind",
+    ),
+    Capability.ENTITIES_IDENTIFIERS_RETIRE: RetireEntityIdentifier(
+        entity_id=ALICE,
+        expected_version=1,
+        identifier_id=issue_identifier(IdKind.EXTERNAL_IDENTIFIER),
+        expected_identifier_version=1,
+        reason="A synthetic retirement.",
+        idempotency_key="off-switch-retire-identifier",
+    ),
+    Capability.ENTITIES_IDENTIFIERS_SUPERSEDE: SupersedeEntityIdentifier(
+        entity_id=ALICE,
+        expected_version=1,
+        identifier_id=issue_identifier(IdKind.EXTERNAL_IDENTIFIER),
+        expected_identifier_version=1,
+        namespace=CallerNamespace.EMAIL,
+        display_value="alice.new@example.invalid",
+        reason="A synthetic replacement.",
+        idempotency_key="off-switch-supersede-identifier",
+    ),
+    Capability.ENTITIES_ALIASES_ADD: AddEntityAlias(
+        entity_id=ALICE,
+        expected_version=1,
+        alias_type=AliasType.NICKNAME,
+        display_value="Ali",
+        idempotency_key="off-switch-add-alias",
+    ),
+    Capability.ENTITIES_ALIASES_RETIRE: RetireEntityAlias(
+        entity_id=ALICE,
+        expected_version=1,
+        alias_id=issue_identifier(IdKind.ENTITY_ALIAS),
+        expected_alias_version=1,
+        reason="A synthetic retirement.",
+        idempotency_key="off-switch-retire-alias",
+    ),
+    Capability.ENTITIES_ALIASES_SUPERSEDE: SupersedeEntityAlias(
+        entity_id=ALICE,
+        expected_version=1,
+        alias_id=issue_identifier(IdKind.ENTITY_ALIAS),
+        expected_alias_version=1,
+        alias_type=AliasType.NICKNAME,
+        display_value="Ally",
+        reason="A synthetic correction.",
+        idempotency_key="off-switch-supersede-alias",
+    ),
+    Capability.ENTITIES_ASSIGNMENTS_LIST: ListEntityAssignments(entity_id=ALICE),
+    Capability.ENTITIES_ASSIGNMENTS_CREATE: CreateEntityAssignment(
+        entity_id=ALICE,
+        expected_entity_version=1,
+        assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+        idempotency_key="off-switch-assignment-create",
+    ),
+    Capability.ENTITIES_ASSIGNMENTS_REVISE: ReviseEntityAssignment(
+        assignment_id=ASSIGNMENT,
+        expected_version=1,
+        role="Synthetic Role",
+        idempotency_key="off-switch-assignment-revise",
+    ),
+    Capability.ENTITIES_ASSIGNMENTS_END: EndEntityAssignment(
+        assignment_id=ASSIGNMENT,
+        expected_version=1,
+        reason="A synthetic withdrawal.",
+        end_now=True,
+        idempotency_key="off-switch-assignment-end",
+    ),
+    Capability.ENTITIES_RELATIONSHIPS_CREATE: CreateEntityRelationship(
+        from_entity_id=ALICE,
+        expected_from_version=1,
+        relationship_type=EntityRelationshipType.WORKS_FOR,
+        to_entity_id=ACME,
+        expected_to_version=1,
+        idempotency_key="off-switch-relationship-create",
+    ),
+    Capability.ENTITIES_RELATIONSHIPS_REVISE: ReviseEntityRelationship(
+        relationship_id=RELATIONSHIP,
+        expected_version=1,
+        idempotency_key="off-switch-relationship-revise",
+    ),
+    Capability.ENTITIES_RELATIONSHIPS_END: EndEntityRelationship(
+        relationship_id=RELATIONSHIP,
+        expected_version=1,
+        reason="A synthetic withdrawal.",
+        end_now=True,
+        idempotency_key="off-switch-relationship-end",
+    ),
+    Capability.ENTITIES_OBSERVATIONS_LIST: ListEntityObservations(),
+    Capability.ENTITIES_OBSERVE: ObserveEntityMention(
+        kind=ObservationKind.CONTACT_RECORD,
+        authority=ObservationAuthority.SOURCE_OBSERVATION,
+        observed_value="Alice Chen",
+        observed_at=datetime(2026, 1, 1, tzinfo=UTC),
+        idempotency_key="off-switch-observe",
+        source_id="src_offswitch0001",
+        source_object_id="obj_offswitch0001",
+        source_version_id="ver_offswitch0001",
+    ),
+    # `defer` rather than a disposition that binds, because this sweep is about
+    # the composition gate: a refusal that needed a staged entity would be
+    # indistinguishable from a missing fixture.
+    Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: ResolveUnresolvedMention(
+        observation_id="eobs_offswitch0001",
+        expected_resolution_version=0,
+        disposition=ResolutionDisposition.DEFER,
+        idempotency_key="off-switch-resolve",
+        reason="the plane is off, so nothing decides this",
+    ),
 }
 
 
@@ -565,7 +756,7 @@ def test_the_off_switch_sweep_covers_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert set(_OFF_SWITCH_COMMANDS) == served
-    assert len(served) == 6
+    assert len(served) == 28
 
 
 @pytest.mark.parametrize(
@@ -697,7 +888,7 @@ def test_the_card_labels_each_relationship_current_or_historical(staged: Scene) 
                 relationship_type=EntityRelationshipType.WORKS_FOR,
                 to_entity_id=ACME,
                 principal_id=principal_id,
-                state="ended",
+                state=RelationshipState.ENDED,
             ),
         )
     body = _payload(scene, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE))

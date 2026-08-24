@@ -48,6 +48,7 @@ from my_pa.domain.relationship.entity import (
     EntityRelationshipType,
     EntityStatus,
     EntityType,
+    RelationshipState,
 )
 from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
 from my_pa.domain.relationship.normalization import normalize_name
@@ -108,7 +109,7 @@ def hub(scene: Scene) -> Scene:
                     relationship_type=EntityRelationshipType.WORKS_FOR,
                     to_entity_id=HUB,
                     principal_id=principal_id,
-                    state="active",
+                    state=RelationshipState.ACTIVE,
                     version=1,
                 ),
             )

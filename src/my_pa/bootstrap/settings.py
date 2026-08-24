@@ -368,13 +368,43 @@ class Settings(StrictModel):
     goodnotes_user_facing_summary_delivery_enabled: bool = False
     goodnotes_tbr_bridge_enabled: bool = False
     #: Process-local gate for the relationship-intelligence entity plane
-    #: (WP-RI-05). Default off. True publishes six read capabilities over the
-    #: acting Principal's own entities; it enables no write, no observation, and
-    #: no source traversal, because none exists. Off by default because the
-    #: remote MCP profile is derived from the capability set with no
+    #: (WP-RI-05, widened through Phase A). Default off. True composes all
+    #: twenty-eight `entities.` names over the acting Principal's own entities
+    #: and publishes the ten that read; the eighteen that write need the switch
+    #: below as well, so this flag on its own serves a read-only plane. It
+    #: enables no source traversal, because none exists. Off by default because
+    #: the remote MCP profile is derived from the capability set with no
     #: per-capability exclusion list, so "available" and "remotely reachable"
     #: are one decision and this is where it is made.
+    #:
+    #: **The sentence this comment used to carry — "it enables no write, no
+    #: observation" — described the plane before Phase A** and is corrected
+    #: rather than left standing: turning this on now composes a write half,
+    #: which is exactly why that half has a switch of its own.
     relationship_intelligence_enabled: bool = False
+    #: Process-local gate for the entity plane's *write* half. Default off, and
+    #: it requires `relationship_intelligence_enabled` as well: a process that
+    #: set this while the plane itself was off would be asking to serve writes
+    #: over records it does not serve reads of, so `_check` ends the process
+    #: rather than resolving the contradiction one way or the other.
+    #:
+    #: A switch of its own rather than a reuse of the plane flag, on the argument
+    #: `relationship_memory_enabled` makes beside it: the two admit different
+    #: things. The plane flag publishes ten reads over the acting Principal's own
+    #: entities. This one publishes eighteen writes that decide who a person is,
+    #: which external addresses resolve to them, who they report to, and what a
+    #: source said about them — and the remote MCP profile is derived from the
+    #: capability set with no per-capability exclusion list, so "available" and
+    #: "remotely reachable" are one decision. An operator who wants entity reads
+    #: should not have to accept identity authoring to get them.
+    #:
+    #: **Off is fail-closed on every transport, not only where a tool list is
+    #: published.** `ApplicationService.available_capabilities` subtracts
+    #: `_ENTITY_WRITE_CAPABILITIES`, which is what `capabilities.get` and the
+    #: MCP tool list read — and each write handler asks again through the same execution floor
+    #: `_entity_plane()` uses, because the HTTP transport routes by path segment
+    #: straight into `_HANDLERS` and consults neither.
+    relationship_intelligence_writes_enabled: bool = False
     #: Process-local gate for the Relationship Memory plane. Default off, and it
     #: requires `relationship_intelligence_enabled` as well: a memory binds a
     #: generalized Entity as its subject and the repository proves ownership of
@@ -536,6 +566,21 @@ class Settings(StrictModel):
                     "remote MCP OAuth requires one exact HTTPS public origin and its /mcp resource"
                 )
         self._check_gsqs_remote_eval()
+        if self.relationship_intelligence_writes_enabled and (
+            not self.relationship_intelligence_enabled
+        ):
+            # Fail closed, and closed in the direction that says what was meant.
+            # The alternatives were to serve the writes anyway — which would put
+            # eighteen identity writes on a process whose operator turned the
+            # plane off — or to ignore the variable, which is the shape where an
+            # operator sets a switch, sees no error, and believes a surface is
+            # gated when it is not. Neither is better than refusing to start.
+            raise SettingsError(
+                f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED requires "
+                f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED. There is no inference: "
+                "the entity plane's writes are not served by a process that does not "
+                "serve the plane"
+            )
         if not self.redaction_enabled:
             raise SettingsError(
                 "redaction cannot be disabled; debug mode does not bypass redaction"

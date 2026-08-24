@@ -325,13 +325,51 @@ _ORDINAL_UNITS = (
     "seventy-first",
     "seventy-second",
     "seventy-third",
-    "seventy-fourth",
+    "seventy-seventh",
     "seventy-fifth",
     "seventy-sixth",
     "seventy-seventh",
     "seventy-eighth",
     "seventy-ninth",
     "eightieth",
+    # The eighties, added when `WP-RI-A-02` gave the entity plane its authoring
+    # half and the public set reached eighty-five, so `an eighty-sixth
+    # capability` became the ordinal a correct claim would use. This boundary
+    # announced itself the way every one before it did, and in the sharper of
+    # the two ways: the corrected prose read `eighty-sixth`, the longest-match
+    # scan could find no compound ordinal in range, and it fell back to the bare
+    # `sixth` inside the word -- reporting a claim of *six* against a set of
+    # eighty-six. A false finding rather than a false pass, which is what the
+    # density of this tuple buys.
+    "eighty-first",
+    "eighty-second",
+    "eighty-third",
+    "eighty-fourth",
+    "eighty-fifth",
+    "eighty-sixth",
+    "eighty-seventh",
+    "eighty-eighth",
+    "eighty-ninth",
+    "ninetieth",
+    # The nineties, added when Phase A's three entity work packages integrated
+    # and the public set reached ninety-five, so `a ninety-sixth capability`
+    # became the ordinal a correct claim would use. Added ahead of the boundary
+    # announcing itself this time, because the boundary above records what
+    # happens when it does not: the longest-match scan finds no compound ordinal
+    # in range, falls back to the bare ordinal inside the word, and reports a
+    # claim of *six* against a set of ninety-six -- a false finding rather than a
+    # false pass, and still a finding nobody can act on without reading this
+    # tuple first.
+    "ninety-first",
+    "ninety-second",
+    "ninety-third",
+    "ninety-fourth",
+    "ninety-fifth",
+    "ninety-sixth",
+    "ninety-seventh",
+    "ninety-eighth",
+    "ninety-ninth",
+    "hundredth",
 )
 
 
@@ -565,43 +603,22 @@ def _family(span: str | None) -> str | None:
 #: Matched exactly as `EXCUSED` is: path, phrase, and a distinctive fragment of
 #: the block, so an entry binds one occurrence rather than every occurrence of
 #: the same words in the same file.
-SUBSET_CLAIMS: tuple[tuple[str, str, str], ...] = (
-    (
-        "docs/plans/relationship-intelligence-implementation-plan.md",
-        "Six `Capability` members",
-        "Delivered in full",
-    ),
-    (
-        "docs/plans/relationship-intelligence-implementation-plan.md",
-        "six `Capability` members",
-        "The capability and MCP surface",
-    ),
-    (
-        "docs/operations/mcv-limitations.md",
-        "six** public read capabilities",
-        "this document, whose job is stating what the build does not do",
-    ),
-    (
-        "docs/plans/relationship-intelligence-implementation-plan.md",
-        "Six read capabilities",
-        "each bounded and paginated",
-    ),
-    (
-        "ops/runbooks/README.md",
-        "six read capabilities",
-        "how to read the unresolved-mention",
-    ),
-    (
-        "src/my_pa/bootstrap/settings.py",
-        "six read capabilities",
-        "Default off",
-    ),
-    (
-        "src/my_pa/domain/identity/operation.py",
-        "Six read capabilities",
-        "over `knowledge.entities` and the tables around it",
-    ),
-)
+#: **Emptied by WP-RI-A-04, and the emptiness is the point.** Every entry here
+#: was a sentence that counted the entity plane and read as counting
+#: `Capability`, resolved against the family rather than excused. When the plane
+#: grew from six names to nine, every one of them became false as written --
+#: which is exactly what this mechanism is for, and four of the seven turned out
+#: to be sentences that should never have counted the *current* family at all:
+#: they describe what WP-RI-05 delivered on the day it merged, which is a
+#: historical claim and belongs in `EXCUSED` beside the `capture.*` one. The
+#: other three were reworded to name the family in a code span, so `_family`
+#: derives their size from `Capability` and there is nothing left here to keep
+#: in step.
+#:
+#: Kept as an empty tuple rather than deleted, because the resolution mechanism
+#: it feeds is still the right answer for the next subset claim and a reader who
+#: finds it empty should find the argument beside it.
+SUBSET_CLAIMS: tuple[tuple[str, str, str], ...] = ()
 
 
 def expected(noun: str, number: str, subset: str | None = None) -> int:
@@ -637,6 +654,35 @@ def stated(number: str) -> int:
 #: distinctive fragment of the block, so an entry excuses one occurrence rather
 #: than every occurrence of the same words in the same file.
 EXCUSED: tuple[tuple[str, str, str, str], ...] = (
+    # --- what WP-RI-05 added, on the day it merged ---------------------------
+    #
+    # Four claims that used to be checked against the entity plane's size and
+    # cannot be any more, because WP-RI-A-03 gave the plane writes and these four
+    # sentences are about the read surface one earlier work package delivered.
+    # Excused on exactly the `four `capture.*` names` precedent above: a sentence
+    # about what a package added is not a sentence about what the family holds
+    # now, and rewriting it to the new figure would make it say something that
+    # package never did.
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "Six `Capability` members",
+        "Delivered in full",
+        "the members WP-RI-05 delivered, not the size of the `entities.` family "
+        "now -- Phase A added twenty-two more and this row is about WP-RI-05",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "six `Capability` members",
+        "The capability and MCP surface",
+        "the members WP-RI-05 delivered, in the row that records that work package as complete",
+    ),
+    (
+        "docs/plans/relationship-intelligence-implementation-plan.md",
+        "Six read capabilities",
+        "each bounded and paginated",
+        "the read capabilities WP-RI-05 delivered, in the cell describing that "
+        "work package's outcome",
+    ),
     (
         "README.md",
         "four `capture.*` names",
@@ -652,14 +698,6 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "the four names *this revision* admits, which is the task read plane; "
         "the `tasks.` family has since grown a write plane that this revision "
         "does not mention and must not count",
-    ),
-    (
-        "src/my_pa/domain/identity/purpose.py",
-        "second read purpose",
-        "would map to exactly one capability and separate",
-        "counts read purposes, which is neither `Purpose` nor a capability set, "
-        "and argues that a second one would separate nothing -- a claim about "
-        "what a purpose would buy, not about how many exist",
     ),
     (
         "docs/plans/relationship-intelligence-implementation-plan.md",
@@ -826,12 +864,6 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "All five capabilities share the single",
         "the five task-write names sharing one purpose, not the size of `Capability`",
     ),
-    (
-        "tests/unit/test_policy.py",
-        "six capabilities",
-        "All six capabilities share the single",
-        "the six entity-plane read names sharing one purpose, not the size of `Capability`",
-    ),
     # --- the two runbook lines this package corrected --------------------------
     #
     # The default publication count. Read by `BARE_EMPHASIS` and excused rather
@@ -849,7 +881,7 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "the count a default composition publishes — `Capability` less the six "
         "`documents.`, six `entities.` and eight `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as seventy-three",
+        "correctly as seventy-six",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
@@ -864,7 +896,7 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "
-        "seventy-three",
+        "seventy-six",
     ),
     # --- the Intelligence Artifact plane, newly swept --------------------------
     #

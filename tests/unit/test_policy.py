@@ -267,16 +267,46 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.REPORTS_LIST, Purpose.REPORT_READ),
         (Capability.REPORTS_SEARCH, Purpose.REPORT_READ),
         (Capability.REPORTS_RESOLVE_SET, Purpose.REPORT_READ),
-        # The entity plane. All six capabilities share the single `entity_read`
-        # purpose, exactly as the task-plane reads share `task_read`: the plane
-        # is a read plane over the acting Principal's own entities, and there is
-        # no write here for a wider purpose to reach.
+        # The entity plane. Every read on it shares the single `entity_read`
+        # purpose, exactly as the task-plane reads share `task_read`. The writes
+        # take `entity_authoring`, except `entities.observe`, which takes
+        # `entity_observation_ingest` and nothing else -- separated rather than
+        # merged, on the rule the capture and managed-document planes each
+        # carry: a purpose wide enough to cover writing and reading is a purpose
+        # that grants both, and one wide enough to cover recording evidence and
+        # deciding an identity is a purpose that grants both of those.
         (Capability.ENTITIES_SEARCH, Purpose.ENTITY_READ),
         (Capability.ENTITIES_GET, Purpose.ENTITY_READ),
         (Capability.ENTITIES_RESOLVE, Purpose.ENTITY_READ),
         (Capability.ENTITIES_CONTEXT, Purpose.ENTITY_READ),
         (Capability.ENTITIES_RELATIONSHIPS, Purpose.ENTITY_READ),
         (Capability.ENTITIES_UNRESOLVED_MENTIONS, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_IDENTIFIERS_LIST, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_ALIASES_LIST, Purpose.ENTITY_READ),
+        # The plane's writes take `entity_authoring` (`WP-RI-A-02`), and the
+        # split is the one every plane here makes between reading and writing:
+        # a grant issued so an assistant can look up who someone is must not
+        # also let it rename them or retire the address their mail arrives at.
+        (Capability.ENTITIES_CREATE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_UPDATE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_ARCHIVE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_RESTORE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_IDENTIFIERS_BIND, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_IDENTIFIERS_RETIRE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_IDENTIFIERS_SUPERSEDE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_ALIASES_ADD, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_ALIASES_RETIRE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_ALIASES_SUPERSEDE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_ASSIGNMENTS_LIST, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_ASSIGNMENTS_CREATE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_ASSIGNMENTS_REVISE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_ASSIGNMENTS_END, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_RELATIONSHIPS_CREATE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_RELATIONSHIPS_REVISE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_RELATIONSHIPS_END, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_OBSERVATIONS_LIST, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_OBSERVE, Purpose.ENTITY_OBSERVATION_INGEST),
+        (Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE, Purpose.ENTITY_AUTHORING),
         (Capability.RELATIONSHIP_MEMORY_CREATE, Purpose.RELATIONSHIP_MEMORY_AUTHORING),
         (Capability.RELATIONSHIP_MEMORY_REVISE, Purpose.RELATIONSHIP_MEMORY_AUTHORING),
         (Capability.RELATIONSHIP_MEMORY_ARCHIVE, Purpose.RELATIONSHIP_MEMORY_AUTHORING),
@@ -321,10 +351,16 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # capabilities and 2 purposes, and it maps one-to-one onto them — four
     # writes under `relationship_memory_authoring` and four reads under
     # `relationship_memory_read` — so it contributes eight pairs rather than the
-    # sixteen a cross product would give.
-    # Unioned: 73 capabilities, 27 purposes, 75 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 75
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 75 == 1896
+    # sixteen a cross product would give; Phase A added 22 `entities.`
+    # capabilities and 2 purposes, and maps each capability onto exactly one of
+    # the three the plane now has -- four paged reads under the `entity_read`
+    # the earlier reads already use, `entities.observe` under
+    # `entity_observation_ingest` and nothing else, and the other seventeen
+    # writes under `entity_authoring` -- so it contributes twenty-two pairs
+    # rather than the sixty-six a cross product would give.
+    # Unioned: 95 capabilities, 29 purposes, 97 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 97
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 97 == 2658
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

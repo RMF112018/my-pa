@@ -24,6 +24,13 @@ PREVIOUS = "e9b2c4d7a150"
 #: the edge is asserted in both directions below and the head is asserted once,
 #: which is what "single head" was there to say.
 SUCCESSOR = "f1c6b904a2d7"
+#: And the entity lifecycle plane (WP-RI-A-01), which stacked on `SUCCESSOR` for
+#: the same reason. Named separately so the assertion below stays a statement
+#: about the *order* rather than about whichever revision happens to be last.
+LIFECYCLE = "2fe4e13fb449"
+#: And Phase A's single vocabulary revision, which stacked on `LIFECYCLE` and is
+#: where the single head now sits. Named on the same terms as the two above.
+HEAD = "823e23b6cc63"
 REVISION_PATH = (
     ROOT
     / "migrations"
@@ -34,9 +41,11 @@ REVISION_PATH = (
 
 def test_work_revision_sits_on_the_single_head_chain_after_its_predecessor() -> None:
     script = ScriptDirectory.from_config(Config(str(ROOT / "alembic.ini")))
-    assert script.get_heads() == [SUCCESSOR]
+    assert script.get_heads() == [HEAD]
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(SUCCESSOR).down_revision == REVISION
+    assert script.get_revision(LIFECYCLE).down_revision == SUCCESSOR
+    assert script.get_revision(HEAD).down_revision == LIFECYCLE
 
 
 def test_bulk_metadata_matches_the_persisted_preview_and_confirmation_contract() -> None:

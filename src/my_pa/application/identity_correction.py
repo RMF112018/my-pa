@@ -15,18 +15,32 @@ families and adds one sentence: "do not silently ignore an affected family."
 `MergeFamily` therefore has a member for every one of them, `_analyse` returns a
 group for every member on every preview, and a family this phase has no
 repository binding for reports that -- rather than being absent from a report
-that then looks complete. Three of them are answered with a blocker rather than
-a transformation, and the difference between blocking a family and passing over
+that then looks complete. Two of them are answered with a blocker rather than a
+transformation, and the difference between blocking a family and passing over
 it is the difference between a merge an operator can trust and one they cannot.
 
 **What blocks, and why blocking is the honest answer.** Relationship Memory
 names entities as subjects and `WP-RI-08` owns what a merge does to that
 binding; this phase's effect ledger has no family that could record it, so a
 merge over an entity a memory names is refused rather than performed with no
-way back. A Review case bound to a proposal this merge invalidates is the same
-shape one work package earlier. Neither refusal is a gap being hidden: it is
-section 20's requirement that an unsupported family surface an explicit blocker
-and that apply refuse the case.
+way back. An active external identifier the survivor already holds as a former
+one is the other, and section 21 settles that one outright. Neither refusal is a
+gap being hidden: it is section 20's requirement that an unsupported family
+surface an explicit blocker and that apply refuse the case.
+
+**A Review case is not one of them, and it used to be.** The reasoning that
+blocked it was that closing a proposal and leaving its case standing is a silent
+half-transformation -- which is true wherever a case is a record in its own
+right. On this plane it is not one: `entity_proposals.review_case_id` is the
+case identifier and `entity_proposal_review_cases` derives the case's state,
+version and latest disposition from the proposal row and the decision ledger, so
+invalidating the proposal presents the case as invalidated in the same
+statement. There is no second write to forget. What the merge does record is a
+`REVIEW_CASE` effect that writes no row, because section 22's ledger is what a
+`WP-RI-07` split reads and it has to be able to say which cases came off a
+reviewer's surface. What the merge does *not* record is a `review.decide` row:
+nobody decided the case, the ground moved under it, and a synthesized
+disposition would be a reviewer's judgement with no reviewer behind it.
 
 **Coalescing is decided by what a duplicate means to each family, and the two
 answers come from the two index shapes.** An alias and an identifier record the
@@ -341,7 +355,10 @@ class _RowChange:
     after_state: Mapping[str, object] = field(repr=False)
     #: `None` for the two families whose writer guards itself: an entity
     #: redirect is refused by `redirect_entity`'s own chain and cycle checks, and
-    #: a proposal invalidation is refused unless the proposal is still open.
+    #: a proposal invalidation is refused unless the proposal is still open. Also
+    #: `None` for a `REVIEW_CASE` change, which has no writer at all -- it
+    #: records that a derived case left a reviewer's surface, and there is no row
+    #: for a version to guard.
     expected_version: int | None = None
     coalesced_into: str | None = None
 
@@ -1020,9 +1037,7 @@ def plan_observations(
     )
 
 
-def plan_proposals(
-    proposals: Sequence[EntityProposal],
-) -> tuple[tuple[_RowChange, ...], tuple[IdentityConflict, ...]]:
+def plan_proposals(proposals: Sequence[EntityProposal]) -> tuple[_RowChange, ...]:
     """Invalidate every open proposal whose subject the identity change removed.
 
     **Invalidated rather than reprocessed, and rather than left open.** A
@@ -1032,25 +1047,39 @@ def plan_proposals(
     `EntityProposalState.INVALIDATED` is the state the vocabulary already has for
     "the basis failed", and it is not a decision: nobody refused the proposal.
 
-    A proposal bound to a Review case is a **blocker**. The case is as materially
-    affected as the proposal is -- it is the surface a reviewer sees it on -- and
-    invalidating a Review case is `WP-RI-05`'s `invalidate` disposition, which
-    does not exist at this revision. Section 20 is explicit about what to do with
-    a family this phase cannot transform with reversible lineage: surface the
-    blocker and refuse the merge. Closing the proposal and leaving its case
-    standing would be the silent half-transformation that instruction names.
+    **A proposal bound to a Review case was a blocker here, and the reasoning
+    that made it one is kept rather than deleted, because what changed is worth
+    knowing.** It was: the case is as materially affected as the proposal is --
+    it is the surface a reviewer sees it on -- invalidating a Review case is
+    `WP-RI-05`'s `invalidate` disposition, which did not exist at that revision,
+    and closing the proposal while leaving its case standing is the silent
+    half-transformation section 20 forbids. `invalidate` exists now, but that is
+    not the fact that settles it. **The Entity plane's Review case has no row of
+    its own.** `entity_proposals.review_case_id` *is* the case identifier, and
+    `entity_proposal_review_cases` derives the case's state, version, escalation
+    and latest disposition from the proposal row and the decision ledger. So a
+    proposal that becomes `invalidated` presents as an invalidated case on
+    `review.list` in the same statement: there is no second record that could be
+    left standing, and nothing has to remember to close it. The half a merge
+    could have performed silently does not exist here.
+
+    **The Review-case effect is therefore ledger-only, and is emitted all the
+    same.** A second `_RowChange` in `IdentityEffectFamily.REVIEW_CASE` writes no
+    row -- `_write` guards on the family for exactly that reason -- and exists so
+    that section 22's ledger says which cases this merge took off a reviewer's
+    surface. Without it a `WP-RI-07` split would restore the proposal with no
+    record of which case it had just revived along with it.
+
+    **What is deliberately not written is a decision.** No `review.decide` row
+    goes into `entity_proposal_review_decisions`: nobody decided this case, the
+    ground moved under it, and a synthesized `invalidate` disposition would put a
+    reviewer's judgement on the ledger with no reviewer behind it -- the false
+    record that disposition exists to avoid. The proposal's own
+    `invalidated_reason` is where the "why" belongs, and `INVALIDATED_BY_MERGE`
+    is what goes there.
     """
     changes: list[_RowChange] = []
-    conflicts: list[IdentityConflict] = []
     for proposal in sorted(proposals, key=lambda row: row.proposal_id):
-        if proposal.review_case_id is not None:
-            conflicts.append(
-                IdentityConflict(
-                    kind=IdentityConflictKind.UNSUPPORTED_FAMILY,
-                    family=IdentityEffectFamily.REVIEW_CASE,
-                    record_id=proposal.review_case_id,
-                )
-            )
         changes.append(
             _RowChange(
                 family=IdentityEffectFamily.PROPOSAL,
@@ -1060,7 +1089,17 @@ def plan_proposals(
                 after_state={"state": _INVALIDATED_STATE},
             )
         )
-    return tuple(changes), tuple(conflicts)
+        if proposal.review_case_id is not None:
+            changes.append(
+                _RowChange(
+                    family=IdentityEffectFamily.REVIEW_CASE,
+                    record_id=proposal.review_case_id,
+                    kind=IdentityEffectKind.DEPENDENT_INVALIDATED,
+                    before_state={"state": proposal.state.value},
+                    after_state={"state": _INVALIDATED_STATE},
+                )
+            )
+    return tuple(changes)
 
 
 #: The state an invalidated proposal is written in, spelled rather than reached
@@ -1383,13 +1422,23 @@ class IdentityCorrectionService:
             if change.kind is IdentityEffectKind.ENTITY_REDIRECTED:
                 self._entities.redirect_entity(principal_id, change.record_id, survivor_entity_id)
             elif change.kind is IdentityEffectKind.DEPENDENT_INVALIDATED:
-                self._entities.invalidate_proposal(
-                    principal_id,
-                    change.record_id,
-                    reason=INVALIDATED_BY_MERGE,
-                    decided_by=performed_by,
-                    decided_at=at,
-                )
+                # Guarded on the family because this kind now names two effects
+                # and only one of them is a write. A `REVIEW_CASE` change is
+                # ledger-only: on this plane the case *is* the proposal the same
+                # loop has already invalidated -- `entity_proposals.review_case_id`
+                # is the case identifier and the case's state is derived from that
+                # row -- so there is no second record to close, and the effect
+                # exists so `WP-RI-07` knows which cases a split has to revive.
+                # Unguarded, this would hand `invalidate_proposal` an `rvw_`
+                # identifier and be refused by its own identifier check.
+                if change.family is IdentityEffectFamily.PROPOSAL:
+                    self._entities.invalidate_proposal(
+                        principal_id,
+                        change.record_id,
+                        reason=INVALIDATED_BY_MERGE,
+                        decided_by=performed_by,
+                        decided_at=at,
+                    )
             elif change.kind is IdentityEffectKind.OWNER_REPARENTED:
                 self._entities.reparent_entity_reference(
                     principal_id,
@@ -1555,19 +1604,20 @@ class IdentityCorrectionService:
             for proposal in self._entities.proposals(principal_id)
             if proposal.is_open and _names_a_merged_entity(proposal, merged_entity_ids)
         ]
-        proposal_changes, review_conflicts = plan_proposals(open_proposals)
+        proposal_changes = plan_proposals(open_proposals)
         changes.extend(proposal_changes)
-        conflicts.extend(review_conflicts)
         groups.append(
             _group(MergeFamily.ENTITY_PROPOSAL, len(open_proposals), bool(proposal_changes))
         )
-        groups.append(
-            MergeAffectedGroup(
-                MergeFamily.REVIEW_CASE,
-                FamilyDisposition.BLOCKED if review_conflicts else FamilyDisposition.UNCHANGED,
-                len(review_conflicts),
-            )
+        # Counted from the proposals rather than from the planned changes,
+        # because the count answers "how many cases are materially affected" and
+        # the planner is what decides they are the same number. A proposal that
+        # opened no case carries no `review_case_id`, has no identity a reviewer
+        # could hold, and is not a case this merge does anything to.
+        affected_cases = sum(
+            1 for proposal in open_proposals if proposal.review_case_id is not None
         )
+        groups.append(_group(MergeFamily.REVIEW_CASE, affected_cases, bool(affected_cases)))
 
         memory_subjects = self._memories.subject_entity_ids(
             merged_entity_ids, principal_id=principal_id

@@ -38,6 +38,7 @@ from my_pa.application.identity_correction import (
     MergeReceipt,
 )
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.relationship.entity import (
     AliasState,
     AliasType,
@@ -79,6 +80,9 @@ from my_pa.domain.relationship.proposal_payload import (
 )
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
+from my_pa.infrastructure.persistence.entity_proposal_review import (
+    entity_proposal_review_cases,
+)
 from my_pa.infrastructure.persistence.relationship_memory import (
     SqlRelationshipMemoryRepository,
 )
@@ -816,21 +820,114 @@ def test_a_needs_review_proposal_naming_the_merged_identity_is_invalidated(
     assert closed.decided_by == OPERATOR
 
 
-def test_a_proposal_on_a_review_case_blocks_the_merge(staged: Engine) -> None:
+def test_a_proposal_on_a_review_case_is_invalidated_and_the_case_goes_with_it(
+    staged: Engine,
+) -> None:
+    """The blocker `WP-RI-06` shipped, and why the merge can now perform it.
+
+    It refused because closing a proposal and leaving its Review case standing is
+    the half-transformation section 20 forbids. `WP-RI-05` then put Entity
+    proposals on the canonical surface as a *derived* case:
+    `entity_proposals.review_case_id` is the case identifier and the case's
+    state, version and latest disposition are read off the proposal row and the
+    decision ledger. There is no second row to leave standing, so invalidating
+    the proposal presents the case as invalidated in the same statement.
+
+    Staged the way a producer actually files one -- through `propose`, with a
+    kind `requirement_for` says a person must look at -- because that is what
+    opens a case at all, and a hand-built record carrying a `review_case_id`
+    would prove the plumbing without proving the population.
+    """
+    with staged.begin() as connection:
+        EntityGovernanceService(SqlEntityRepository(connection)).propose(
+            PRINCIPAL_A,
+            kind=EntityProposalKind.UPDATE_ENTITY,
+            payload={"entity_id": MERGED_ONE, "reason": "a synthetic correction"},
+            observation_ids=(),
+            proposed_by="synthetic-producer",
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="v1",
+            at=WHEN,
+        )
+    with staged.connect() as connection:
+        staged_proposal = SqlEntityRepository(connection).proposals(PRINCIPAL_A)[0]
+    review_case_id = staged_proposal.review_case_id
+    assert review_case_id is not None, (
+        "the fixture is not staging the review case this test exists to cover"
+    )
+
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    assert report.blockers == ()
+    assert _group(report, MergeFamily.ENTITY_PROPOSAL) == (FamilyDisposition.TRANSFORMED, 1)
+    assert _group(report, MergeFamily.REVIEW_CASE) == (FamilyDisposition.TRANSFORMED, 1)
+    with staged.begin() as connection:
+        receipt = _applied(connection, report)
+
+    assert _row_count(staged, "entities", "status = 'merged_redirect'") == 1
+    with staged.connect() as connection:
+        closed = SqlEntityRepository(connection).proposal(PRINCIPAL_A, staged_proposal.proposal_id)
+    assert closed is not None
+    assert closed.state is EntityProposalState.INVALIDATED
+    assert closed.review_case_id == review_case_id
+
+    # Both rows, and both from the ledger the split will read rather than from
+    # the receipt alone.
+    with staged.connect() as connection:
+        stored = SqlEntityRepository(connection).identity_effects(
+            PRINCIPAL_A, receipt.operation.identity_operation_id
+        )
+    invalidations = [
+        (effect.family, effect.record_id)
+        for effect in stored
+        if effect.kind is IdentityEffectKind.DEPENDENT_INVALIDATED
+    ]
+    assert invalidations == [
+        (IdentityEffectFamily.PROPOSAL, staged_proposal.proposal_id),
+        (IdentityEffectFamily.REVIEW_CASE, review_case_id),
+    ]
+    case_effect = next(
+        effect for effect in stored if effect.family is IdentityEffectFamily.REVIEW_CASE
+    )
+    assert case_effect.before_state == {"state": "needs_review"}
+    assert case_effect.after_state == {"state": "invalidated"}
+    # The extra row is inside the gapless sequence, not appended after it.
+    assert [effect.sequence for effect in stored] == list(range(1, len(stored) + 1))
+    assert stored[-1].family is IdentityEffectFamily.REVIEW_CASE
+
+    # The surface a reviewer reads, and nobody decided anything on it.
+    with staged.connect() as connection:
+        cases = entity_proposal_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+    assert [case.review_case_id for case in cases] == [review_case_id]
+    assert cases[0].proposal_state is ProposalState.INVALIDATED
+    assert cases[0].latest_disposition is None
+    assert cases[0].review_version == 0
+    assert cases[0].escalated is False
+    assert _row_count(staged, "entity_proposal_review_decisions") == 0
+
+
+def test_a_proposal_with_no_review_case_leaves_the_review_family_unchanged(
+    staged: Engine,
+) -> None:
+    """A proposal a threshold could accept opens no case, and the merge says so.
+
+    The counterpart to the test above, and the reason the `REVIEW_CASE` group is
+    counted from `review_case_id` rather than from the fact that a proposal was
+    invalidated: there is no case here, so there is nothing for a split to revive
+    and nothing the ledger should claim it took off a reviewer's surface.
+    """
     with staged.begin() as connection:
         SqlEntityRepository(connection).record_proposal(
-            PRINCIPAL_A,
-            _proposal("eprp_aaaa0001aaaa01", MERGED_ONE, review_case_id="rvw_aaaa0001aaaa0001"),
+            PRINCIPAL_A, _proposal("eprp_aaaa0001aaaa01", MERGED_ONE)
         )
     with staged.begin() as connection:
         report = _previewed(connection)
-    assert _group(report, MergeFamily.REVIEW_CASE) == (FamilyDisposition.BLOCKED, 1)
-    assert [conflict.kind for conflict in report.blockers] == [
-        IdentityConflictKind.UNSUPPORTED_FAMILY
-    ]
-    with pytest.raises(ConflictError), staged.begin() as connection:
-        _applied(connection, report)
-    assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
+    assert _group(report, MergeFamily.ENTITY_PROPOSAL) == (FamilyDisposition.TRANSFORMED, 1)
+    assert _group(report, MergeFamily.REVIEW_CASE) == (FamilyDisposition.UNCHANGED, 0)
+    with staged.begin() as connection:
+        receipt = _applied(connection, report)
+    assert IdentityEffectFamily.REVIEW_CASE not in {effect.family for effect in receipt.effects}
+    assert _row_count(staged, "entity_identity_effects", "record_family = 'review_case'") == 0
 
 
 def test_a_relationship_memory_subject_blocks_the_merge_without_naming_the_memory(

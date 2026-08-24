@@ -596,21 +596,38 @@ def test_a_mention_is_rebound_without_its_resolution_version_advancing() -> None
 
 
 def test_an_open_proposal_naming_a_merged_entity_is_invalidated() -> None:
-    changes, conflicts = plan_proposals([_proposal("eprp_aaaa0001aaaa01", MERGED_ONE)])
-    assert conflicts == ()
+    changes = plan_proposals([_proposal("eprp_aaaa0001aaaa01", MERGED_ONE)])
     assert [change.kind for change in changes] == [IdentityEffectKind.DEPENDENT_INVALIDATED]
     assert changes[0].before_state == {"state": "proposed"}
     assert changes[0].after_state == {"state": "invalidated"}
 
 
-def test_a_proposal_bound_to_a_review_case_blocks_the_merge() -> None:
-    """Invalidating a Review case is WP-RI-05's disposition and does not exist yet."""
-    _, conflicts = plan_proposals(
+def test_a_proposal_that_opened_no_review_case_records_no_review_case_effect() -> None:
+    """`review_case_id` is what says a reviewer holds this one, and it is absent."""
+    changes = plan_proposals([_proposal("eprp_aaaa0001aaaa01", MERGED_ONE)])
+    assert [change.family for change in changes] == [IdentityEffectFamily.PROPOSAL]
+
+
+def test_a_proposal_bound_to_a_review_case_records_the_case_as_well() -> None:
+    """No longer a blocker, and the second effect is what lets it stop being one.
+
+    The case is derived from the proposal row, so invalidating the proposal is
+    what invalidates the case; the `REVIEW_CASE` effect writes nothing and exists
+    so `WP-RI-07` knows which case a split would put back on the surface.
+    """
+    changes = plan_proposals(
         [_proposal("eprp_aaaa0001aaaa01", MERGED_ONE, review_case_id="rvw_aaaa0001aaaa0001")]
     )
-    assert [conflict.kind for conflict in conflicts] == [IdentityConflictKind.UNSUPPORTED_FAMILY]
-    assert conflicts[0].family is IdentityEffectFamily.REVIEW_CASE
-    assert conflicts[0].blocks
+    assert [(change.family, change.record_id) for change in changes] == [
+        (IdentityEffectFamily.PROPOSAL, "eprp_aaaa0001aaaa01"),
+        (IdentityEffectFamily.REVIEW_CASE, "rvw_aaaa0001aaaa0001"),
+    ]
+    assert {change.kind for change in changes} == {IdentityEffectKind.DEPENDENT_INVALIDATED}
+    case = changes[1]
+    assert case.before_state == {"state": "proposed"}
+    assert case.after_state == {"state": "invalidated"}
+    assert case.expected_version is None
+    assert case.coalesced_into is None
 
 
 # --- determinism -------------------------------------------------------------
@@ -646,6 +663,51 @@ def test_the_write_order_is_the_order_the_ledger_numbers_the_effects_in() -> Non
         effect.record_id for effect in effects
     ]
     assert effects[0].family is IdentityEffectFamily.ENTITY
+
+
+def test_a_review_case_effect_takes_its_place_in_the_one_deterministic_order() -> None:
+    """The ledger gained a row family, and the sequence it lands in is still fixed.
+
+    `WP-RI-07` reads the sequence, so a family added to it has to be numbered the
+    same way twice. Shuffled input, the same numbers; the write order and the
+    ledger order still agree; the `REVIEW_CASE` row sits after the `PROPOSAL` row
+    it is a consequence of, because `IdentityEffectFamily` declares it there.
+    """
+    changes = [
+        *plan_proposals(
+            [
+                _proposal("eprp_bbbb0002bbbb02", MERGED_ONE, review_case_id="rvw_bbbb0002bbbb0002"),
+                _proposal("eprp_aaaa0001aaaa01", MERGED_ONE, review_case_id="rvw_aaaa0001aaaa0001"),
+            ]
+        ),
+        *plan_entities(SURVIVOR, [_entity(MERGED_ONE)]),
+    ]
+    ordered = [
+        (effect.sequence, effect.family, effect.record_id)
+        for effect in sequence_effects(
+            (change.draft for change in changes),
+            identity_operation_id="eiop_aaaa0001aaaa0001",
+            principal_id=PRINCIPAL,
+            recorded_at=WHEN,
+        )
+    ]
+    assert ordered == [
+        (1, IdentityEffectFamily.ENTITY, MERGED_ONE),
+        (2, IdentityEffectFamily.PROPOSAL, "eprp_aaaa0001aaaa01"),
+        (3, IdentityEffectFamily.PROPOSAL, "eprp_bbbb0002bbbb02"),
+        (4, IdentityEffectFamily.REVIEW_CASE, "rvw_aaaa0001aaaa0001"),
+        (5, IdentityEffectFamily.REVIEW_CASE, "rvw_bbbb0002bbbb0002"),
+    ]
+    shuffled = sequence_effects(
+        (change.draft for change in reversed(changes)),
+        identity_operation_id="eiop_aaaa0001aaaa0001",
+        principal_id=PRINCIPAL,
+        recorded_at=WHEN,
+    )
+    assert [(effect.sequence, effect.family, effect.record_id) for effect in shuffled] == ordered
+    assert [change.record_id for change in sorted(changes, key=_ledger_order)] == [
+        record_id for _, _, record_id in ordered
+    ]
 
 
 # --- the idempotency identity ------------------------------------------------

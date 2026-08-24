@@ -25,6 +25,7 @@ from alembic.config import Config
 from sqlalchemy import Connection, Engine, text
 from sqlalchemy.engine import make_url
 
+from my_pa.application.commands import MergeEntities, PreviewEntityMerge
 from my_pa.application.entity_governance import EntityGovernanceService
 from my_pa.application.errors import ConflictError, DeniedError, InvalidRequestError, NotFoundError
 from my_pa.application.identity_correction import (
@@ -37,8 +38,16 @@ from my_pa.application.identity_correction import (
     MergePreviewReport,
     MergeReceipt,
 )
+from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.ports import UnitOfWork as UnitOfWorkPort
+from my_pa.contracts.v1.capabilities import EffectiveLimits
+from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.common.identifiers import IdKind, parse_identifier
+from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.relationship.entity import (
     AliasState,
     AliasType,
@@ -78,7 +87,9 @@ from my_pa.domain.relationship.proposal_payload import (
     EntityProposalPayload,
     dedupe_digest,
 )
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.entity_proposal_review import (
     entity_proposal_review_cases,
@@ -86,6 +97,7 @@ from my_pa.infrastructure.persistence.entity_proposal_review import (
 from my_pa.infrastructure.persistence.relationship_memory import (
     SqlRelationshipMemoryRepository,
 )
+from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 
 pytestmark = pytest.mark.database
 
@@ -1225,3 +1237,242 @@ def test_no_effect_state_carries_a_name_an_address_or_a_statement(staged: Engine
     assert "Ali" not in rendered
     assert "example.invalid" not in rendered
     assert "Alice" not in rendered
+
+
+# --- the two capabilities, through `invoke`, against a real server ------------
+#
+# Everything above drives `IdentityCorrectionService` directly, which is where
+# the merge's rules live and is the right place to prove them. What it cannot
+# prove is that a *request* reaches those rules: the command shapes, the
+# dispatcher, the server-derived idempotency key, the feature gate and the
+# operator boundary are all `WP-RI-B-07`'s, and none of them is exercised by
+# constructing the service by hand.
+#
+# So this block composes `ApplicationService` the way `bootstrap.gateway` does
+# and sends the two capabilities by name. It is the only evidence in this
+# repository that the published surface of `WP-RI-06` works at all.
+
+
+class _Composed:
+    """`ApplicationService` over a real database, with the three gates on."""
+
+    def __init__(self, url: str, *, identity_correction: bool = True) -> None:
+        self.work_engine = create_database_engine(url)
+        self.audit_engine = create_database_engine(url)
+        audit = SqlAlchemyAuditSink(self.audit_engine)
+
+        def unit_of_work() -> UnitOfWorkPort:
+            return SqlAlchemyUnitOfWork(
+                self.work_engine,
+                audit=audit,
+                relationship_memory_enabled=True,
+                relationship_intelligence_enabled=True,
+            )
+
+        self.service = ApplicationService(
+            unit_of_work=unit_of_work,
+            limits=EffectiveLimits(
+                max_page_size=100,
+                default_page_size=25,
+                max_fetch_bytes=1 << 20,
+                max_enrollment_depth=0,
+            ),
+            relationship_intelligence_enabled=True,
+            relationship_intelligence_writes_enabled=True,
+            relationship_identity_correction_enabled=identity_correction,
+        )
+
+    def close(self) -> None:
+        self.work_engine.dispose()
+        self.audit_engine.dispose()
+
+    def invoke(
+        self, capability: Capability, command: object, *, operator: bool = True
+    ) -> ResponseEnvelope:
+        """One request, with the acting Principal's operator flag under test.
+
+        `operator=False` is what a `relationship_standard` or
+        `relationship_reviewer` client is: authenticated, holding the capability
+        name, and not the operator. Operator §24 says that must not be enough.
+        """
+        return self.service.invoke(
+            RequestMetadata(
+                request_id=issue_identifier(IdKind.CORRELATION),
+                capability=capability,
+                purpose=sorted(permitted_purposes(capability))[0],
+                principal_id=PRINCIPAL_A,
+                requested_at=WHEN,
+            ),
+            command,  # type: ignore[arg-type]
+            principal=Principal(
+                principal_id=PRINCIPAL_A,
+                kind=PrincipalKind.OPERATOR if operator else PrincipalKind.GATEWAY,
+                authenticated=True,
+            ),
+        )
+
+
+@pytest.fixture
+def composed(staged: Engine, disposable_database: str) -> Iterator[_Composed]:
+    runtime = _Composed(disposable_database)
+    try:
+        yield runtime
+    finally:
+        runtime.close()
+
+
+def _preview_payload(**overrides: object) -> PreviewEntityMerge:
+    fields: dict[str, object] = {
+        "survivor_entity_id": SURVIVOR,
+        "expected_survivor_version": 1,
+        "merged_away": ({"entity_id": MERGED_ONE, "expected_version": 1},),
+        "reason": REASON,
+    }
+    fields.update(overrides)
+    return PreviewEntityMerge(**fields)  # type: ignore[arg-type]
+
+
+def test_the_published_preview_answers_and_persists_the_binding(composed: _Composed) -> None:
+    """`entities.merge.preview` by name, and the row it is classified a write for.
+
+    The response is read field by field because it is the contract's own list
+    (operator §19) and because nothing else in this repository sends this
+    capability: a report assembled correctly and rendered wrongly would pass
+    every test above.
+    """
+    envelope = composed.invoke(Capability.ENTITIES_MERGE_PREVIEW, _preview_payload())
+
+    assert envelope.error is None, envelope.error
+    result = envelope.result
+    assert result is not None
+    assert parse_identifier(str(result["preview_id"]))[0] is IdKind.ENTITY_IDENTITY_PREVIEW
+    assert isinstance(result["preview_token"], str)
+    assert len(str(result["preview_token"])) == 64
+    assert len(str(result["conflict_digest"])) == 64
+    assert result["expires_at"]
+    assert result["blockers"] == []
+    assert result["required_choices"] == []
+    assert result["audit_id"]
+    groups = result["affected_groups"]
+    assert isinstance(groups, list)
+    # Every family the contract names answers, rather than only the ones that
+    # had rows: §20 forbids silently ignoring an affected family.
+    assert {str(group["family"]) for group in groups} == {family.value for family in MergeFamily}
+    # And the write this capability is classified for is durable.
+    assert _row_count(composed.work_engine, "entity_identity_previews") == 1
+
+
+def test_the_published_merge_consumes_that_preview_and_replays_on_retry(
+    composed: _Composed,
+) -> None:
+    """`entities.merge` by name, twice, with the idempotency key the server derived.
+
+    The key is never sent — operator §23 and §26 make it server-owned and
+    `REMOTE_OWNED_PAYLOAD_FIELDS` refuses one that arrives — so an identical
+    retry can only replay if the *handler* derived the same key both times. That
+    is the whole claim here, and it cannot be made anywhere the handler is not
+    involved.
+    """
+    previewed = composed.invoke(Capability.ENTITIES_MERGE_PREVIEW, _preview_payload())
+    assert previewed.result is not None
+    preview_id = str(previewed.result["preview_id"])
+    token = str(previewed.result["preview_token"])
+    command = MergeEntities(preview_id=preview_id, preview_digest=token, reason=REASON)
+
+    first = composed.invoke(Capability.ENTITIES_MERGE, command)
+    assert first.error is None, first.error
+    assert first.result is not None
+    assert first.result["survivor_entity_id"] == SURVIVOR
+    assert first.result["merged_entity_ids"] == [MERGED_ONE]
+    assert first.result["state"] == IdentityOperationState.COMPLETED.value
+    assert first.result["replayed"] is False
+    assert first.result["effects"]
+    assert first.result["receipt_id"] is None
+
+    again = composed.invoke(Capability.ENTITIES_MERGE, command)
+    assert again.error is None, again.error
+    assert again.result is not None
+    assert again.result["replayed"] is True
+    assert again.result["identity_operation_id"] == first.result["identity_operation_id"]
+    assert _row_count(composed.work_engine, "entity_identity_operations") == 1
+
+
+def test_a_caller_who_is_not_the_operator_is_denied_both_halves(composed: _Composed) -> None:
+    """Operator §24, at the entry point rather than in the registry.
+
+    A `relationship_standard` or `relationship_reviewer` client is authenticated
+    and holds the capability name; what it does not hold is operator authority,
+    and `_OPERATOR_ONLY` is what makes that enough to refuse. Both halves are
+    driven, because a boundary on the apply alone would leave the inspection —
+    the exact identities of two people — open to a reviewer.
+    """
+    for capability, sent in (
+        (Capability.ENTITIES_MERGE_PREVIEW, _preview_payload()),
+        (
+            Capability.ENTITIES_MERGE,
+            MergeEntities(
+                preview_id=issue_identifier(IdKind.ENTITY_IDENTITY_PREVIEW),
+                preview_digest="0" * 64,
+                reason=REASON,
+            ),
+        ),
+    ):
+        envelope = composed.invoke(capability, sent, operator=False)
+        assert envelope.result is None, capability.value
+        assert envelope.error is not None
+        assert envelope.error.code is ErrorCode.DENIED, capability.value
+    assert _row_count(composed.work_engine, "entity_identity_previews") == 0
+
+
+def test_the_feature_gate_refuses_both_halves_before_a_handler_runs(
+    staged: Engine, disposable_database: str
+) -> None:
+    """`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, at the execution floor.
+
+    `available_capabilities` withholds the two names, and two readers consult it
+    — `capabilities.get` and the MCP tool list. The HTTP transport is not one of
+    them: it routes by path segment and dispatches straight from `_HANDLERS`.
+    So the floor is asserted here, on a build whose other two switches are on and
+    whose third is not, against a real database that could have been written to.
+    """
+    runtime = _Composed(disposable_database, identity_correction=False)
+    try:
+        envelope = runtime.invoke(Capability.ENTITIES_MERGE_PREVIEW, _preview_payload())
+        assert envelope.result is None
+        assert envelope.error is not None
+        assert envelope.error.code is ErrorCode.UNSUPPORTED
+        assert Capability.ENTITIES_MERGE_PREVIEW not in runtime.service.available_capabilities
+        assert Capability.ENTITIES_MERGE not in runtime.service.available_capabilities
+    finally:
+        runtime.close()
+    assert _row_count(staged, "entity_identity_previews") == 0
+
+
+def test_a_tampered_token_and_a_stale_version_are_both_refused_through_the_capability(
+    composed: _Composed,
+) -> None:
+    """Two refusals §21 names, reached through the published surface.
+
+    Driven here as well as against the service because the digest and the version
+    arrive from a *caller* on this path, and a handler that dropped either on the
+    way through would leave every service-level test green.
+    """
+    previewed = composed.invoke(Capability.ENTITIES_MERGE_PREVIEW, _preview_payload())
+    assert previewed.result is not None
+    preview_id = str(previewed.result["preview_id"])
+
+    tampered = composed.invoke(
+        Capability.ENTITIES_MERGE,
+        MergeEntities(preview_id=preview_id, preview_digest="1" * 64, reason=REASON),
+    )
+    assert tampered.result is None
+    assert tampered.error is not None
+    assert tampered.error.code is ErrorCode.CONFLICT
+    assert tampered.error.safe_details == ("preview_stale",)
+
+    stale = composed.invoke(
+        Capability.ENTITIES_MERGE_PREVIEW, _preview_payload(expected_survivor_version=99)
+    )
+    assert stale.result is None
+    assert stale.error is not None
+    assert stale.error.code is ErrorCode.CONFLICT

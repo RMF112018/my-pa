@@ -66,6 +66,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
@@ -107,8 +108,11 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewEntityMerge,
+    ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -182,6 +186,7 @@ from my_pa.domain.relationship.governance import (
     ObservationKind,
     ResolutionDisposition,
 )
+from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 from my_pa.domain.situation.continuity import CommitmentDirection
 from my_pa.domain.source.provider import SourceProvider
 from my_pa.domain.source.registry import issue_identifier
@@ -459,6 +464,40 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             entity_id=issue_identifier(IdKind.ENTITY),
             statement="A synthetic note.",
             idempotency_key="policy-memory-create",
+        ),
+        # Phase B's four. Each is well formed and reaches nothing: this file is
+        # about the decision `evaluate` makes before a handler exists, so what
+        # every command here has to be is constructible rather than resolvable.
+        Capability.ENTITIES_PROPOSALS_CREATE: CreateEntityProposal(
+            kind=EntityProposalKind.RECORD_ALIAS,
+            payload={
+                "entity_id": issue_identifier(IdKind.ENTITY),
+                "alias_type": "nickname",
+                "display_value": "Ali",
+            },
+            proposed_by="policy-producer",
+        ),
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: ProposeRelationshipMemory(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            expected_entity_version=1,
+            statement="A synthetic produced candidate.",
+            evidence=(
+                {
+                    "role": "direct",
+                    "entity_observation_id": issue_identifier(IdKind.ENTITY_OBSERVATION),
+                },
+            ),
+        ),
+        Capability.ENTITIES_MERGE_PREVIEW: PreviewEntityMerge(
+            survivor_entity_id=issue_identifier(IdKind.ENTITY),
+            expected_survivor_version=1,
+            merged_away=({"entity_id": issue_identifier(IdKind.ENTITY), "expected_version": 1},),
+            reason="A synthetic identity correction.",
+        ),
+        Capability.ENTITIES_MERGE: MergeEntities(
+            preview_id=issue_identifier(IdKind.ENTITY_IDENTITY_PREVIEW),
+            preview_digest="0" * 64,
+            reason="A synthetic identity correction.",
         ),
         Capability.RELATIONSHIP_MEMORY_GET: GetRelationshipMemory(
             memory_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY)
@@ -922,6 +961,15 @@ SCOPED_CAPABILITIES = [
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
+        # Phase B's four (`WP-RI-B-05`, `WP-RI-B-06`). A proposal names the
+        # mutation it asks for, a candidate memory names its subject, and a merge
+        # names two identities and a preview -- none of them names a source, and
+        # none of the rows any of them writes carries a `source_id` or an
+        # `enrollment_id` for a scope to be compared against.
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 ]
 
@@ -1080,6 +1128,15 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
+        # Phase B's four (`WP-RI-B-05`, `WP-RI-B-06`). A proposal names the
+        # mutation it asks for, a candidate memory names its subject, and a merge
+        # names two identities and a preview -- none of them names a source, and
+        # none of the rows any of them writes carries a `source_id` or an
+        # `enrollment_id` for a scope to be compared against.
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)
     assert excluded == {Capability.SOURCES_ENROLL, *scopeless_capabilities}

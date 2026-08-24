@@ -38,6 +38,7 @@ from typing import Final
 import pytest
 
 import my_pa.application.relationship_memory as producer_module
+import my_pa.contracts.ports as ports_module
 from my_pa.application.relationship_memory import (
     MemoryProposalOrigin,
     MemoryProposalReceipt,
@@ -386,8 +387,18 @@ def test_the_producer_service_reaches_no_memory_write() -> None:
 
 
 def test_the_producer_port_declares_exactly_one_method() -> None:
-    """The port a producer is handed has nothing on it that could decide anything."""
-    port = _class_node("RelationshipMemoryProposalRepository")
+    """The port a producer is handed has nothing on it that could decide anything.
+
+    Read out of `contracts/ports.py` since `WP-RI-B-07`, and the move is the
+    reason rather than an inconvenience: the port used to be a `Protocol` beside
+    the service, on the argument that a port whose only implementor and only
+    caller are one use case is a port the use case may own. `ApplicationService`
+    now reaches it through `UnitOfWork.relationship_memory_proposals`, and
+    `contracts` may not import `application`, so a port a dispatcher reaches has
+    to be declared where `UnitOfWork` can name it. The claim this test makes is
+    unchanged and is the whole of operator section 16's structural half.
+    """
+    port = _port_class("RelationshipMemoryProposalRepository")
     declared = sorted(member.name for member in port.body if isinstance(member, ast.FunctionDef))
     assert declared == ["record_proposal"], (
         f"the producer port declares {declared}. Operator §16 makes 'a producer never "
@@ -665,6 +676,15 @@ def _producer_source() -> str:
 
 def _module() -> ast.Module:
     return ast.parse(MODULE_SOURCE, filename=producer_module.__file__)
+
+
+def _port_class(name: str) -> ast.ClassDef:
+    """One class out of `contracts/ports.py`, where the producer's port now lives."""
+    source = Path(ports_module.__file__ or "").read_text(encoding="utf-8")
+    for node in ast.walk(ast.parse(source, filename=ports_module.__file__)):
+        if isinstance(node, ast.ClassDef) and node.name == name:
+            return node
+    raise AssertionError(f"{name} is not in `contracts.ports`; the guard is reading nothing")
 
 
 def _class_node(name: str) -> ast.ClassDef:

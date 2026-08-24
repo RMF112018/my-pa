@@ -34,6 +34,7 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     EndEntityAssignment,
     EndEntityRelationship,
@@ -45,7 +46,9 @@ from my_pa.application.commands import (
     ListEntityIdentifiers,
     ListEntityObservations,
     ListUnresolvedMentions,
+    MergeEntities,
     ObserveEntityMention,
+    PreviewEntityMerge,
     ResolveEntity,
     ResolveUnresolvedMention,
     RestoreEntity,
@@ -96,7 +99,10 @@ from my_pa.domain.relationship.governance import (
     ResolutionDisposition,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
-from my_pa.domain.relationship.proposal_payload import EntityProposalPayload, dedupe_digest
+from my_pa.domain.relationship.proposal_payload import (
+    EntityProposalPayload,
+    dedupe_digest,
+)
 from my_pa.domain.relationship.resolution import ResolutionOutcome
 
 WHEN: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
@@ -504,6 +510,42 @@ _EVERY_CAPABILITY: Final = (
             idempotency_key="privacy-entities-resolve-0001",
         ),
     ),
+    # Phase B's three (`WP-RI-B-05`, `WP-RI-B-06`), every one of them aimed at
+    # the *other* Principal's entity. The producer path is the sharper of the
+    # three for this claim: a proposal is the cheapest way to probe for a
+    # stranger's identity, because it asks a question about an entity without
+    # trying to change one, and a plane that answered a foreign target with
+    # anything but the answer an absent one gets would confirm the entity exists.
+    (
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        CreateEntityProposal(
+            kind=EntityProposalKind.RECORD_ALIAS,
+            payload={
+                "entity_id": FOREIGN_ENTITY,
+                "alias_type": "nickname",
+                "display_value": "Conf",
+            },
+            proposed_by="privacy-producer",
+            expected_target_version=1,
+        ),
+    ),
+    (
+        Capability.ENTITIES_MERGE_PREVIEW,
+        PreviewEntityMerge(
+            survivor_entity_id=FOREIGN_ENTITY,
+            expected_survivor_version=1,
+            merged_away=({"entity_id": FOREIGN_SCOPE, "expected_version": 1},),
+            reason="a stranger may not merge these",
+        ),
+    ),
+    (
+        Capability.ENTITIES_MERGE,
+        MergeEntities(
+            preview_id="eipv_privacy0001privacy01",
+            preview_digest="0" * 64,
+            reason="a stranger may not merge these",
+        ),
+    ),
 )
 
 
@@ -521,7 +563,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    assert len(served) == 28
+    # Thirty-one since `WP-RI-B-05` and `WP-RI-B-06`. The count is asserted as
+    # well as the set, because a prefix scan that stopped matching would satisfy
+    # the equality against an equally empty tuple.
+    assert len(served) == 31
 
 
 # --- the partition, under every capability ---------------------------------

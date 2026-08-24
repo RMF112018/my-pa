@@ -176,7 +176,12 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(INTELLIGENCE_REVISION).down_revision == MENTION_REVISION
     assert script.get_revision(WORK_REVISION).down_revision == INTELLIGENCE_REVISION
     assert script.get_revision(MEMORY_REVISION).down_revision == WORK_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == LIFECYCLE_REVISION
+    # Phase A's revision still sits on the lifecycle plane; the Phase B chain
+    # stacked five more on top of it, and `HEAD_REVISION` is the last of those.
+    # Both halves are asserted, so the chain claim stays a statement about the
+    # *order* rather than about whichever revision happens to be last.
+    assert script.get_revision(PHASE_A_REVISION).down_revision == LIFECYCLE_REVISION
+    assert script.get_heads() == [HEAD_REVISION]
     assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 74
 
 

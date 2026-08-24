@@ -417,6 +417,17 @@ SCOPED_CAPABILITIES = [
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
+        # Phase B's four (`WP-RI-B-05`, `WP-RI-B-06`) join them for the same
+        # reason: a proposal names a mutation, a candidate memory names its
+        # subject and a merge names two identities and a preview, and none of
+        # those is a `src_…` or an `enr_…`. All four are in
+        # `domain.policy.decision._SCOPELESS`, and leaving them in would make this
+        # rule assert that a stranger is denied a scope neither the request nor
+        # the plane has.
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 ]
 
@@ -679,6 +690,23 @@ ENTITY_DIRECTED_EXEMPTION = frozenset(
 )
 
 
+#: The Phase B exemption (`WP-RI-B-05`), and it is one name.
+#: `entities.proposals.create` is the only one of Phase B's four the substring
+#: proxy refuses, and it is refused for the reason `capture.create`,
+#: `documents.create`, `relationship_memory.create`, `entities.create` and the two
+#: directed `create` names are: what it writes is a *product-owned* record under
+#: `ADR-003` -- a request, filed in this Principal's own partition, for a change a
+#: reviewer may or may not make -- and writing one mutates no source. Its rows
+#: carry no `source_id`, and the plane reaches no `SourceProvider` at all.
+#:
+#: The other three pass the name check unaided, which is the check working rather
+#: than an omission: `relationship_memory.propose`, `entities.merge.preview` and
+#: `entities.merge` name what they do without claiming a mutation of anything
+#: outside this product, and a future `entities.proposals.delete` is still caught
+#: here.
+PHASE_B_PROPOSAL_EXEMPTION = frozenset({Capability.ENTITIES_PROPOSALS_CREATE})
+
+
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
 
@@ -700,6 +728,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | RELATIONSHIP_MEMORY_EXEMPTION
         | ENTITY_AUTHORING_EXEMPTION
         | ENTITY_DIRECTED_EXEMPTION
+        | PHASE_B_PROPOSAL_EXEMPTION
     )
     checked = [c for c in Capability if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

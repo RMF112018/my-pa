@@ -397,20 +397,58 @@ def test_compose_stamps_idempotency_for_task_create() -> None:
 # ---- the entity plane's eighteen writes ------------------------------------
 
 
+#: The `entities.` writes whose replay identity is **not** a caller-shaped key,
+#: and so are deliberately outside the sweep below.
+#:
+#: Every one of the eighteen Phase A writes carries an `idempotency_key` field on
+#: its command, which is what makes membership of
+#: `_IDEMPOTENT_REMOTE_CAPABILITIES` meaningful for it: the set's mechanism is
+#: *inserting a derived key into the payload*, so a capability in it must have a
+#: field to insert one into. `WP-RI-B-05` and `WP-RI-B-06`'s three carry none, and
+#: that absence is their contract rather than an omission:
+#:
+#: * `entities.proposals.create` is arbitrated by the server-derived
+#:   `dedupe_sha256` under `UNIQUE (principal_id, dedupe_sha256)` on the open
+#:   states, so a repeat is answered by the proposal that is already open and
+#:   writes nothing -- a stronger guarantee than a key, and one that holds on
+#:   every transport rather than only the remote one;
+#: * `entities.merge` is arbitrated by `UNIQUE (principal_id, idempotency_key)`
+#:   on `entity_identity_operations`, with the key derived by the handler from
+#:   the preview it consumes -- so an identical retry replays and a materially
+#:   different request against the same preview conflicts, on all three
+#:   transports;
+#: * `entities.merge.preview` mints a fresh preview on every call and has no
+#:   replay identity to key on at all.
+#:
+#: Named here rather than derived, so admitting a nineteenth write to this
+#: exception is a decision made in this file and argued for.
+KEYLESS_ENTITY_WRITES: frozenset[Capability] = frozenset(
+    {
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+    }
+)
+
+
 def _entity_writes() -> frozenset[Capability]:
     """The population, read off the purpose map rather than listed here.
 
-    A nineteenth entity write mapped to a write purpose joins this sweep on
-    arrival, which is the failure mode the two tests below exist for: a remote
-    write that never joined `_IDEMPOTENT_REMOTE_CAPABILITIES` accepts no key from
-    the caller and is stamped with none by the server, so a lost response and a
-    retry write a second row.
+    A further entity write mapped to a write purpose joins this sweep on arrival,
+    which is the failure mode the two tests below exist for: a remote write that
+    never joined `_IDEMPOTENT_REMOTE_CAPABILITIES` accepts no key from the caller
+    and is stamped with none by the server, so a lost response and a retry write a
+    second row. `KEYLESS_ENTITY_WRITES` is subtracted, and every member of it has
+    a stated replay identity of its own.
     """
-    return frozenset(
-        capability
-        for capability in Capability
-        if capability.value.startswith("entities.")
-        and permitted_purposes(capability) & _WRITE_PURPOSES
+    return (
+        frozenset(
+            capability
+            for capability in Capability
+            if capability.value.startswith("entities.")
+            and permitted_purposes(capability) & _WRITE_PURPOSES
+        )
+        - KEYLESS_ENTITY_WRITES
     )
 
 
@@ -419,6 +457,12 @@ def test_every_entity_write_is_a_server_stamped_idempotent_remote_capability() -
     writes = _entity_writes()
     assert len(writes) == 18
     assert writes <= _IDEMPOTENT_REMOTE_CAPABILITIES
+    # And the exception is not the rule: every keyless write really does carry a
+    # write purpose, so subtracting them narrowed the sweep rather than being a
+    # no-op somebody could delete without noticing.
+    for capability in KEYLESS_ENTITY_WRITES:
+        assert permitted_purposes(capability) & _WRITE_PURPOSES
+        assert capability not in _IDEMPOTENT_REMOTE_CAPABILITIES
 
 
 def test_no_entity_read_is_stamped_with_an_idempotency_key() -> None:

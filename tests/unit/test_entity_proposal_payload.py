@@ -446,13 +446,39 @@ def test_each_schema_names_only_fields_its_canonical_command_takes(
     assert admitted <= taken, f"{sorted(admitted - taken)} is not taken by {kind.value}'s command"
 
 
-def test_the_two_identity_correction_kinds_have_no_canonical_command_yet() -> None:
+def test_the_two_identity_correction_kinds_have_no_promotion_command() -> None:
     """Stated rather than left implicit: their absence above is a fact, not a gap.
 
-    `entities.merge` arrives with WP-06 and `entities.split` with WP-07. If
-    either name appears in `Capability`, this kind's schema has a command to be
-    read against and belongs in the mapping above.
+    **This test used to assert that `entities.merge` did not exist**, and `WP-06`
+    published it. The assertion is replaced rather than deleted, because the claim
+    it was standing in for is the one that matters and is still true: accepting a
+    `merge_entities` proposal does not construct a command and does not mutate an
+    identity (Manager ruling R-1, operator section 15). Acceptance records
+    reviewed intent and lineage; the merge is a separate operator act.
+
+    The two are not the same request, and the schemas are what say so.
+    `merge_entities` admits `retained_entity_id`, `merged_entity_id` and a reason.
+    `MergeEntities` takes a `preview_id` and the digest of a preview an operator
+    read — a value no proposal payload can name, because no proposal has one.
+    So there is nothing here for the mapping above to read a proposal's payload
+    against, and a `_CAPABILITY_BY_KIND` entry for either kind would assert a
+    promotion this plane deliberately does not perform.
+
+    `entities.split` is still absent outright; `WP-07` owns it.
     """
     published = {capability.value for capability in Capability}
-    assert "entities.merge" not in published
     assert "entities.split" not in published
+    assert EntityProposalKind.MERGE_ENTITIES not in _CAPABILITY_BY_KIND
+    assert EntityProposalKind.SPLIT_IDENTITY not in _CAPABILITY_BY_KIND
+    # And the proposal names the two identities while the command names a
+    # preview, which is what makes the paragraph above a measurement rather than
+    # an assurance. `reason` is the one field both carry, and it is not a
+    # promotion: an operator's stated reason for performing a merge is not the
+    # producer's stated reason for proposing one.
+    proposed = schema_for(EntityProposalKind.MERGE_ENTITIES).admitted
+    commanded = _command_fields("entities.merge")
+    assert proposed & commanded == {"reason"}
+    assert {"retained_entity_id", "merged_entity_id"} <= proposed
+    assert not {"retained_entity_id", "merged_entity_id"} & commanded
+    assert "preview_id" in commanded
+    assert "preview_id" not in proposed

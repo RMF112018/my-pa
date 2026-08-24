@@ -53,9 +53,9 @@ the envelope that call produced — the transport maps and does not decide.
 **Corrected 2026-08-19: this line read "serves the fifty-four public
 capabilities", and a default gateway does not.** Three families are composed
 only when their variable is set — the six `documents.` names behind
-`MY_PA_MANAGED_DOCUMENT_ROOT`, the twenty-eight `entities.` names behind
+`MY_PA_MANAGED_DOCUMENT_ROOT`, the thirty-one `entities.` names behind
 `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` (whose eighteen writes need
-`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` as well), and the eight
+`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` as well), and the nine
 `relationship_memory.` names behind `MY_PA_RELATIONSHIP_MEMORY_ENABLED` and the
 entity plane together. None of the four has a default.
 `/v1/{capability}` is a path parameter, so all of them *route*: dispatch

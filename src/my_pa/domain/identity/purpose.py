@@ -255,9 +255,9 @@ class Purpose(StrEnum):
     # readable in a profile and absent from a broad search under the same grant.
     RELATIONSHIP_MEMORY_READ = "relationship_memory_read"
     RELATIONSHIP_MEMORY_AUTHORING = "relationship_memory_authoring"
-    # Phase B's three. Each is a purpose of its own rather than a reuse, and
-    # `D-91`'s test — would the reuse widen the grant? — answers loudly for all
-    # three.
+    # Phase B's additions. Each is a purpose of its own rather than a reuse, and
+    # `D-91`'s test — would the reuse widen the grant? — answers loudly in every
+    # case.
     #
     # **`ENTITY_PROPOSAL` is not `ENTITY_AUTHORING`.** Authoring *decides* who a
     # person is; a proposal *asks* a reviewer to. Admitting the producer path

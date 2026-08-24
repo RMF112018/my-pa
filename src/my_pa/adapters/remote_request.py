@@ -129,7 +129,7 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         #   no replay identity to key on at all.
         #
         # `REMOTE_OWNED_PAYLOAD_FIELDS` still refuses a caller-supplied
-        # `idempotency_key` for all four, which is what operator §23's "do not
+        # `idempotency_key` on every one of these paths, which is what operator §23's "do not
         # accept caller-selected remote idempotency keys" actually needs.
     }
 )

@@ -2196,7 +2196,7 @@ class ApplicationService:
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
         something the composition root did not supply — the six `documents.`
-        names in a process with no managed root, and the twenty-eight `entities.` names
+        names in a process with no managed root, and the thirty-one `entities.` names
         in one that has not enabled the relationship plane. It is one answer with
         two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
@@ -4110,7 +4110,7 @@ class ApplicationService:
         the request.
 
         **This is the floor, and it was missing.** `available_capabilities`
-        withholds the twenty-eight `entities.` names, and two readers consult it —
+        withholds the thirty-one `entities.` names, and two readers consult it —
         `capabilities.get` and the MCP tool list. The HTTP transport is not one
         of them: `/v1/{capability}` routes by path segment and `_run` dispatches
         straight from `_HANDLERS`, so every one of the six executed and
@@ -7578,8 +7578,8 @@ class ApplicationService:
         """Refuse when this build has not enabled the governed merge.
 
         The same floor `_entity_writes` is, one switch narrower, and it exists for
-        the same reason: `available_capabilities` withholds the two names and two
-        readers consult it -- `capabilities.get` and the MCP tool list -- while
+        the same reason: `available_capabilities` withholds the governed merge and
+        two readers consult it -- `capabilities.get` and the MCP tool list -- while
         the HTTP transport consults neither, routing by path segment straight into
         `_HANDLERS`.
 
@@ -8074,7 +8074,7 @@ _ENTITY_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
-#: The governed merge's two names, withheld from a process that has not set
+#: The governed merge, withheld from a process that has not set
 #: `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`. A subset of
 #: `_ENTITY_WRITE_CAPABILITIES` and therefore of `_ENTITY_CAPABILITIES`: this is
 #: a third narrowing of an already-narrowed plane, not a family of its own.

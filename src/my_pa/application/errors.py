@@ -331,7 +331,8 @@ class SafeDetail(StrEnum):
     PREVIEW_STALE = "preview_stale"
     OPERATOR_REQUIRED = "operator_required"
     IDENTITY_CORRECTION_CONFLICT = "identity_correction_conflict"
-    #: The fields Phase B's four capabilities accept and nothing else names.
+    #: The transport fields `WP-RI-B-05` and `WP-RI-B-06` accept, which nothing
+    #: else names.
     #: Each is the transport field's own name, which is this enum's rule -- a
     #: token names a *field* and never a value -- and each is added rather than
     #: reused because no existing member names the same field. `PAYLOAD` is the

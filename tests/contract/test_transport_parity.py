@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-ninety-five capabilities. There are two ways to prove that and only one of them stays
+ninety-nine capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -28,7 +28,7 @@ command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
 default composition exposes fifty-three: the six managed-document names, the
-twenty-eight `entities.` names and the eight Relationship Memory names are
+thirty-one `entities.` names and the eight Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
 second switch over the `entities.` family and withholds its eighteen writes on
@@ -1663,7 +1663,8 @@ def assert_same_answer(
     assert len(set(signals.values())) == 1, f"{where}: transports disagreed on success {signals}"
 
 
-#: The two this matrix compares a *refusal* for rather than an answer, because
+#: The identity-correction pair, which this matrix compares a *refusal* for
+#: rather than an answer, because
 #: the harness composes no governed merge. Named rather than skipped, so the
 #: comparison below still covers them and the reason is legible.
 UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
@@ -1696,7 +1697,7 @@ def test_every_capability_answers_identically_over_all_three_transports(
 def test_the_governed_merge_refuses_identically_over_all_three_transports(
     capability: Capability, staged: tuple[Scene, KnowledgeRecord]
 ) -> None:
-    """`SPEC-AC-001` for the two names this harness does not compose.
+    """`SPEC-AC-001` for the governed merge, which this harness does not compose.
 
     A refusal is an answer, and the claim `SPEC-AC-001` makes is about the
     application's semantics reaching every transport unchanged -- so the row that
@@ -2069,7 +2070,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: ninety-five capabilities answered from an empty world prove little."""
+    """Guard the matrix: ninety-nine capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

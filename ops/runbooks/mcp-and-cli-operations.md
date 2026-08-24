@@ -165,8 +165,8 @@ one declared capability, `tools`, and nothing else.
 `tools/list` returns the tools **this process can serve**, and that is not the
 same as the tools this build implements. The build implements ninety-nine, one
 per capability name. A default process publishes **fifty-three**. That is the
-ninety-nine, less the six `documents.` names, the twenty-eight `entities.` names
-and the eight `relationship_memory.` names a default composition withholds.
+ninety-nine, less the six `documents.` names, the thirty-one `entities.` names
+and the nine `relationship_memory.` names a default composition withholds.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
 configured**, and nothing else gates them. There is no default location and no
@@ -174,7 +174,7 @@ inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
 same child publishes those six, reaching fifty-nine of the ninety-nine. The
-remaining thirty-six are the twenty-eight `entities.` names, which `D-RI-20`
+remaining thirty-six are the thirty-one `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 — and whose eighteen writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it, so a process with

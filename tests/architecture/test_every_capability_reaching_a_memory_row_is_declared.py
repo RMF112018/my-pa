@@ -326,8 +326,8 @@ DECLARED: Final = frozenset(
         Capability.ENTITIES_CONTEXT,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
-        # `WP-RI-B-05`: the producer path, which is the plane's ninth capability
-        # and the only one of the nine that cannot reach `relationship_memories`.
+        # `WP-RI-B-05`: the producer path, which is the only name on the plane's
+        # own prefix that cannot reach `relationship_memories`.
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
         # `WP-RI-B-06`: the governed merge reads the memory plane to decide
         # whether it may proceed, and writes nothing on it. Both are beyond the
@@ -2301,10 +2301,24 @@ def test_the_branch_split_reads_every_guard_it_meets() -> None:
             "branches are unioned and the per-branch claim over it is a bound wearing an "
             "itinerary's words"
         )
+    # **Scoped to the functions the walk actually reaches**, which is the scope
+    # this module states for every other rule about branches: "only guards inside
+    # a function that reaches a memory row are collected". It was unscoped while
+    # `Disposition` was the only axis, and that cost nothing because the memory
+    # review plane is the only place a `Disposition` member is written down.
+    # `EntityStatus` is not like that: `EntityStatus.ACTIVE` and
+    # `EntityStatus.ARCHIVED` are handed to frozen *record constructors* all over
+    # the entity plane -- `Entity(...)`, `_Outcome(...)` -- in functions that
+    # reach no memory table at all. Reporting those would be this rule finding a
+    # true fact about a call site and drawing a false conclusion about a branch
+    # split that never runs there.
+    reaching = {(module, enclosing) for module, enclosing, _name in reaching_nodes()}
     handed_on = {
-        (_module_name(path), ast.unparse(call))
-        for path, tree in _sources()
-        for call in ast.walk(tree)
+        (module, ast.unparse(call))
+        for node, (path, _enclosing, function) in _nodes().items()
+        for module in [_module_name(path)]
+        if (module, node[1]) in reaching or node in reaching_nodes()
+        for call in ast.walk(function)
         if isinstance(call, ast.Call)
         for argument in [*call.args, *(keyword.value for keyword in call.keywords)]
         if isinstance(argument, ast.Attribute)
@@ -2312,9 +2326,10 @@ def test_the_branch_split_reads_every_guard_it_meets() -> None:
         and argument.value.id in DECLARED_BRANCH_AXES
     }
     assert not handed_on, (
-        f"{sorted(handed_on)} passes a branch-axis member as an argument. The split "
-        "assumes the member a callee's guards ask about is the one the capability was "
-        "asked about, and a member handed in at a call site breaks that"
+        f"{sorted(handed_on)} passes a branch-axis member as an argument from a "
+        "function that reaches a memory row. The split assumes the member a callee's "
+        "guards ask about is the one the capability was asked about, and a member "
+        "handed in at a call site breaks that"
     )
 
 

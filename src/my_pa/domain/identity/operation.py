@@ -388,7 +388,7 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
-    # The relationship-intelligence entity plane. Twenty-eight `entities.` names
+    # The relationship-intelligence entity plane. Thirty-one `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
     # WP-RI-A-02's twelve, WP-RI-A-03's seven and WP-RI-A-04's three.

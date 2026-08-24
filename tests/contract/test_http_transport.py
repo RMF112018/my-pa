@@ -2,9 +2,9 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the ninety-five capabilities is addressable
+**Reachability.** Every one of the ninety-nine capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a ninety-sixth capability added to the domain arrives as a
+written here, so a hundredth capability added to the domain arrives as a
 failing row instead of as an untested one. Eight of the ninety-five answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
@@ -237,7 +237,7 @@ ALL_CAPABILITIES = list(Capability)
 
 _UNIMPLEMENTED_CAPABILITIES: frozenset[Capability] = frozenset()
 
-#: The eight `relationship_memory.` names, which are implemented and are refused
+#: The nine `relationship_memory.` names, which are implemented and are refused
 #: here for a different reason: `RecordingService` below leaves
 #: `relationship_memory_enabled` off, so
 #: `ApplicationService._relationship_memory_plane` refuses each of them at the
@@ -263,7 +263,7 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
-        # The ninth name on that plane (`WP-RI-B-05`), withheld by the same
+        # The producer path on that plane (`WP-RI-B-05`), withheld by the same
         # switch and for the same reason.
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
         # `WP-RI-B-06`'s two, withheld by a *third* switch:

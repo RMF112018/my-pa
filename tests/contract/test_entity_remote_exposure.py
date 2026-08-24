@@ -65,7 +65,7 @@ ENTITY_READS: Final[frozenset[str]] = frozenset(
 ENTITY_WRITES: Final[frozenset[str]] = ENTITY_CAPABILITIES - ENTITY_READS
 
 
-#: The two names that are *also* operator-only, and so never join a remote
+#: The identity-correction pair, which is *also* operator-only and so never joins a remote
 #: profile at all. `remote_tool_names` drops an operator-only capability before it
 #: classifies read from write, so every assertion below about the remote surface
 #: has to subtract them: they are withheld by a gate that is not the one this file

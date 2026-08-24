@@ -75,9 +75,9 @@ The `my_pa` application defines and wires ninety-nine capabilities through HTTP,
 MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
 planes. **A default composition exposes fifty-three of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT`, the
-twenty-eight `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
+thirty-one `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
 (and its eighteen writes a second switch beside it), and the
-eight `relationship_memory.` names require that variable *and*
+nine `relationship_memory.` names require that variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`, because a memory binds an Entity as its
 subject and ownership is proven by reading `knowledge.entities`; none has
 a default, so an unconfigured process withholds all three families from

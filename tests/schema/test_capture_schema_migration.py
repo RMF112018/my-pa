@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with ninety-five capabilities and
-twenty-nine purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with ninety-nine capabilities and
+thirty-two purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -259,7 +259,7 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # it, and this line is why a further one cannot arrive without it.
         "entities.unresolved_mentions",
         # The Relationship Memory plane. `f1c6b904a2d7` is the forward `ALTER`
-        # that admits the eight `relationship_memory.` names, and it travels in
+        # that admits the nine `relationship_memory.` names, and it travels in
         # the same revision as the tables rather than after them: a build that
         # could serve `relationship_memory.create` against a database whose
         # `capability_is_known` refuses the string would fail on the *audit*

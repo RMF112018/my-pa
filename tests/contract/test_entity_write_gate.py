@@ -61,7 +61,7 @@ WRITE_PURPOSES: Final[frozenset[Purpose]] = frozenset(
         # `WP-RI-B-05` and `WP-RI-B-06`. A proposal writes a request rather than
         # a canonical fact and a preview writes a control row rather than either,
         # and both are still writes -- so both purposes belong here, and a
-        # read-only build withholds all three names that carry them.
+        # read-only build withholds every capability that carries them.
         Purpose.ENTITY_PROPOSAL,
         Purpose.ENTITY_IDENTITY_CORRECTION,
     }
@@ -145,7 +145,7 @@ def test_a_read_only_build_withholds_the_writes_from_the_remote_profile(
     assert not remote & {capability.value for capability in ENTITY_WRITES}
 
 
-def test_a_fully_composed_build_serves_all_thirty_one() -> None:
+def test_a_fully_composed_build_serves_the_whole_plane() -> None:
     """The non-vacuity control: the assertions above are about a switch.
 
     Without this, a gate that withheld the writes unconditionally — or a
@@ -161,8 +161,9 @@ def test_a_fully_composed_build_serves_all_thirty_one() -> None:
 def test_the_identity_correction_gate_is_a_third_narrowing_of_the_same_plane() -> None:
     """`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, on its own axis.
 
-    The plane switch withholds all thirty-one names; the write switch withholds
-    twenty-one of them; this one withholds two out of those twenty-one. Asserted
+    The plane switch withholds the whole `entities.` family; the write switch
+    withholds its write half; this one withholds the governed merge out of that
+    half. Asserted
     as a strict subset relation rather than as three memberships, because the
     failure this prevents is a gate that turned into the gate beside it -- a
     build with writes on and identity correction off must serve every other

@@ -336,7 +336,7 @@ class Settings(StrictModel):
     goodnotes_tbr_bridge_enabled: bool = False
     #: Process-local gate for the relationship-intelligence entity plane
     #: (WP-RI-05, widened through Phase A). Default off. True composes all
-    #: twenty-eight `entities.` names over the acting Principal's own entities
+    #: thirty-one `entities.` names over the acting Principal's own entities
     #: and publishes the ten that read; the eighteen that write need the switch
     #: below as well, so this flag on its own serves a read-only plane. It
     #: enables no source traversal, because none exists. Off by default because
@@ -396,8 +396,9 @@ class Settings(StrictModel):
     #: A third switch rather than a reuse of the write switch, because the two
     #: admit different things. The write switch publishes eighteen writes that
     #: each change one record of one entity, every one of them reversible by its
-    #: own inverse. This publishes two capabilities that collapse up to eleven
-    #: identities into one, reparent every child they own, and are undone only
+    #: own inverse. This publishes a preview and an apply that between them
+    #: collapse up to eleven identities into one, reparent every child they own,
+    #: and are undone only
     #: by a split this phase does not implement. An operator who wants entity
     #: authoring should not have to accept identity correction to get it.
     #:

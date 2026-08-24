@@ -1636,7 +1636,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-    not one of the ninety-five names nothing.
+    not one of the ninety-nine names nothing.
     """
     try:
         return Capability(capability)

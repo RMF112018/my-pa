@@ -260,6 +260,7 @@ def _harness(
     eval_enabled: bool = True,
     staging_fail: bool = False,
     uncertain: bool = False,
+    lease_seconds: int = LEASE_DURATION_SECONDS,
 ) -> tuple[RemoteEvalService, FakeStore, FakeClock, FakeStaging, FakeDisclosure]:
     clock = FakeClock(datetime(2026, 8, 23, 12, 0, tzinfo=UTC))
     store = FakeStore()
@@ -271,6 +272,7 @@ def _harness(
         staging=staging,
         disclosure=disclosure,
         eval_enabled=eval_enabled,
+        lease_seconds=lease_seconds,
     )
     return service, store, clock, staging, disclosure
 
@@ -501,6 +503,35 @@ def test_lease_issue_repeat_expiry_and_replacement() -> None:
     advanced = store.load_state(session_id)
     assert advanced is not None
     assert advanced.next_case_ordinal == 2
+
+
+def test_default_lease_survives_observed_chatllm_visual_delay() -> None:
+    service, store, clock, session_id = _in_progress()
+    acquired = service.acquire_case(session_id)
+    clock.advance(timedelta(seconds=1097))
+    receipt = service.submit_capture(session_id, acquired.lease.lease_id, VALID_SEGMENTS)
+    assert receipt.duplicate is False
+    state = store.load_state(session_id)
+    assert state is not None
+    assert state.next_case_ordinal == 2
+
+
+def test_configured_short_lease_expires_and_does_not_advance_case() -> None:
+    service, store, clock, _staging, _disclosure = _harness(lease_seconds=900)
+    session = service.create_session(_request(clock))
+    service.seal_ready(session.session_id)
+    service.open_repetition(session.session_id, 1)
+    first = service.acquire_case(session.session_id)
+    clock.advance(timedelta(seconds=901))
+    with pytest.raises(RemoteEvalError) as expired:
+        service.submit_capture(session.session_id, first.lease.lease_id, VALID_SEGMENTS)
+    assert expired.value.code == ERROR_LEASE_EXPIRED
+    replacement = service.acquire_case(session.session_id)
+    assert replacement.lease.lease_id != first.lease.lease_id
+    assert replacement.ordinal == 1
+    state = store.load_state(session.session_id)
+    assert state is not None
+    assert state.next_case_ordinal == 1
 
 
 def test_duplicate_and_conflicting_submit() -> None:

@@ -39,6 +39,7 @@ def test_gsqs_remote_eval_defaults_are_disabled_and_empty_state_root() -> None:
     assert settings.gsqs_remote_eval_port == 8767
     assert settings.gsqs_remote_eval_state_root == ""
     assert settings.gsqs_remote_eval_session_ttl_seconds == 259200
+    assert settings.gsqs_remote_eval_lease_seconds == 3600
     assert settings.gsqs_remote_eval_retention_seconds == 1_209_600
     assert settings.gsqs_remote_eval_max_image_bytes == 8_388_608
     assert settings.gsqs_remote_eval_max_result_bytes == 1_048_576
@@ -167,6 +168,26 @@ def test_session_ttl_is_bounded() -> None:
         _environment(**{f"{ENV_PREFIX}GSQS_REMOTE_EVAL_SESSION_TTL_SECONDS": "3600"})
     )
     assert settings.gsqs_remote_eval_session_ttl_seconds == 3600
+
+
+def test_lease_seconds_are_bounded_and_cannot_exceed_session_ttl() -> None:
+    with pytest.raises(SettingsError, match="invalid configuration"):
+        load_settings(_environment(**{f"{ENV_PREFIX}GSQS_REMOTE_EVAL_LEASE_SECONDS": "899"}))
+    with pytest.raises(SettingsError, match="invalid configuration"):
+        load_settings(_environment(**{f"{ENV_PREFIX}GSQS_REMOTE_EVAL_LEASE_SECONDS": "7201"}))
+    with pytest.raises(SettingsError, match="must not exceed session ttl"):
+        load_settings(
+            _environment(
+                **{
+                    f"{ENV_PREFIX}GSQS_REMOTE_EVAL_SESSION_TTL_SECONDS": "3600",
+                    f"{ENV_PREFIX}GSQS_REMOTE_EVAL_LEASE_SECONDS": "7200",
+                }
+            )
+        )
+    settings = load_settings(
+        _environment(**{f"{ENV_PREFIX}GSQS_REMOTE_EVAL_LEASE_SECONDS": "3600"})
+    )
+    assert settings.gsqs_remote_eval_lease_seconds == 3600
 
 
 def test_allowed_origins_split_on_comma_or_space(tmp_path: Path) -> None:

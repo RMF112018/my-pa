@@ -43,6 +43,8 @@ from my_pa.application.goodnotes_gsqs_remote_eval_contracts import (
     ERROR_UNAUTHENTICATED,
     LEASE_DURATION_SECONDS,
     MAX_CAPTURE_SEGMENTS_BYTES,
+    MAX_LEASE_DURATION_SECONDS,
+    MIN_LEASE_DURATION_SECONDS,
     OCCUPYING_STATES,
     REPETITIONS_REQUIRED,
     SCHEMA_CAPTURE_ENTRY_V1,
@@ -108,12 +110,19 @@ class RemoteEvalService:
         staging: StagingPort,
         disclosure: DisclosurePort,
         eval_enabled: bool = True,
+        lease_seconds: int = LEASE_DURATION_SECONDS,
     ) -> None:
+        if not MIN_LEASE_DURATION_SECONDS <= lease_seconds <= MAX_LEASE_DURATION_SECONDS:
+            raise RemoteEvalError(
+                ERROR_INTERNAL_FAIL_CLOSED,
+                "lease duration is outside the permitted remote-eval bound",
+            )
         self._store = store
         self._clock = clock
         self._staging = staging
         self._disclosure = disclosure
         self._eval_enabled = eval_enabled
+        self._lease_seconds = lease_seconds
 
     def create_session(self, request: RemoteEvalCreateRequest) -> RemoteEvalSession:
         self._require_enabled()
@@ -286,7 +295,7 @@ class RemoteEvalService:
             ordinal=current.ordinal,
             repetition=state.active_repetition,
             issued_at=now,
-            expires_at=now + timedelta(seconds=LEASE_DURATION_SECONDS),
+            expires_at=now + timedelta(seconds=self._lease_seconds),
         )
         next_state = replace(
             state,

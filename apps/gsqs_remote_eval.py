@@ -168,6 +168,7 @@ def compose_eval_service(settings: Settings) -> RemoteEvalService:
         staging=staging,
         disclosure=disclosure,
         eval_enabled=True,
+        lease_seconds=settings.gsqs_remote_eval_lease_seconds,
     )
 
 

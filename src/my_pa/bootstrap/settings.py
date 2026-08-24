@@ -416,6 +416,7 @@ class Settings(StrictModel):
     gsqs_remote_eval_port: int = Field(default=8767, ge=1, le=65535)
     gsqs_remote_eval_state_root: str = ""
     gsqs_remote_eval_session_ttl_seconds: int = Field(default=259200, ge=3600, le=259200)
+    gsqs_remote_eval_lease_seconds: int = Field(default=3600, ge=900, le=7200)
     gsqs_remote_eval_retention_seconds: int = Field(default=1_209_600, gt=0)
     gsqs_remote_eval_max_image_bytes: int = Field(default=8_388_608, gt=0)
     gsqs_remote_eval_max_result_bytes: int = Field(default=1_048_576, gt=0)
@@ -585,6 +586,10 @@ class Settings(StrictModel):
         """Fail closed for the isolated eval process. Independent of remote MCP."""
         if self.gsqs_remote_eval_max_concurrency != 1:
             raise SettingsError("GSQS remote-eval max concurrency must equal 1")
+        if self.gsqs_remote_eval_lease_seconds > self.gsqs_remote_eval_session_ttl_seconds:
+            raise SettingsError(
+                "GSQS remote-eval lease seconds must not exceed session ttl seconds"
+            )
         origins = self.gsqs_remote_eval_origin_allowlist()
         if any(origin == "*" or "*" in origin for origin in origins):
             raise SettingsError("GSQS remote-eval allowed origins must not contain a wildcard")

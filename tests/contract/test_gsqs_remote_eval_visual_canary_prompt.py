@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[2]
 FULL_PROMPT = ROOT / "ops/goodnotes/gsqs/b0/chatllm-remote-eval-prompt-v1.txt"
 CANARY_PROMPT = ROOT / "ops/goodnotes/gsqs/b0/chatllm-remote-eval-visual-canary-prompt-v1.txt"
 CANARY_PROMPT_V2 = ROOT / "ops/goodnotes/gsqs/b0/chatllm-remote-eval-visual-canary-prompt-v2.txt"
+CANARY_PROMPT_V3 = ROOT / "ops/goodnotes/gsqs/b0/chatllm-remote-eval-visual-canary-prompt-v3.txt"
 
 
 def _assert_single_case_visual_canary_prompt(text: str) -> None:
@@ -38,6 +39,20 @@ def test_visual_canary_prompt_v2_ordinary_visual_inspection_only() -> None:
     assert "zlib" in lower
     assert "do not write" in lower and "python" in lower
     assert "pixels" in lower
+
+
+def test_visual_canary_prompt_v3_immediate_submit_without_local_inspection() -> None:
+    text = CANARY_PROMPT_V3.read_text(encoding="utf-8")
+    _assert_single_case_visual_canary_prompt(text)
+    lower = text.lower()
+    assert "immediately visually inspect" in lower
+    assert "immediately call goodnotes.eval.submit" in lower
+    assert "do not use a shell" in lower
+    assert "do not cat files" in lower
+    assert "do not run python" in lower
+    assert "zlib" in lower
+    assert "lease_expired" in lower
+    assert "expected token" not in lower
 
 
 def test_full_run_frozen_prompt_is_unchanged_as_a_repetition_loop() -> None:

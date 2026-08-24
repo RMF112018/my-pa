@@ -10,11 +10,12 @@ Related: [`docs/plans/relationship-intelligence-implementation-plan.md`](../../d
 | Plane status | Implemented, **off by default** |
 | Process gate | `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`, default `false` |
 | Read capabilities | Ten. `entities.search`, `entities.get`, `entities.resolve`, `entities.context`, `entities.relationships`, `entities.unresolved_mentions` (`WP-RI-05`); `entities.identifiers.list`, `entities.aliases.list` (`WP-RI-A-02`); `entities.assignments.list` (`WP-RI-A-03`); `entities.observations.list` (`WP-RI-A-04`) |
-| Write capabilities | Eighteen. `entities.create`, `entities.update`, `entities.archive`, `entities.restore`, `entities.identifiers.bind`, `entities.identifiers.retire`, `entities.identifiers.supersede`, `entities.aliases.add`, `entities.aliases.retire`, `entities.aliases.supersede` (`WP-RI-A-02`); `entities.assignments.create`, `entities.assignments.revise`, `entities.assignments.end`, `entities.relationships.create`, `entities.relationships.revise`, `entities.relationships.end` (`WP-RI-A-03`); `entities.observe`, `entities.unresolved_mentions.resolve` (`WP-RI-A-04`). Proposal and merge remain in-process only |
+| Write capabilities | Twenty-one. `entities.create`, `entities.update`, `entities.archive`, `entities.restore`, `entities.identifiers.bind`, `entities.identifiers.retire`, `entities.identifiers.supersede`, `entities.aliases.add`, `entities.aliases.retire`, `entities.aliases.supersede` (`WP-RI-A-02`); `entities.assignments.create`, `entities.assignments.revise`, `entities.assignments.end`, `entities.relationships.create`, `entities.relationships.revise`, `entities.relationships.end` (`WP-RI-A-03`); `entities.observe`, `entities.unresolved_mentions.resolve` (`WP-RI-A-04`); `entities.proposals.create` (`WP-RI-B-05`, the producer path); and `entities.merge.preview` and `entities.merge` (`WP-RI-B-06`, operator-only and behind a third gate of their own). **The row above said "proposal and merge remain in-process only" and Phase B published all three**; it is corrected rather than left standing. `entities.split` is still in-process only and is `WP-07`'s |
 | Write gate | `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, default `false`, and it requires the plane gate above. A process that sets it `true` while `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` is `false` refuses to start rather than serving a half-configured plane |
-| Purposes | Three. `entity_read` for the ten reads; `entity_observation_ingest` for `entities.observe` and nothing else; `entity_authoring` for the other seventeen writes. Separate rather than shared, so a grant issued to look up who someone reports to cannot assert that they do, and a grant issued to record what a mailbox said cannot decide who somebody is |
-| Tables | `entities`, `entity_aliases`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, `entity_observations`, `entity_proposals`, `entity_merge_records`, `entity_mutation_events`, `entity_fact_evidence_links`, `entity_resolution_decisions` |
-| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `d2b8f5c04e71` (governance tables), `e4d7b2f9a316` (`entities.unresolved_mentions`), `f3a8c1d7e592` (the disclosed mention name), `2fe4e13fb449` (record lifecycle, Principal-composite references and the three ledgers), `823e23b6cc63` (the one Phase A revision, admitting every `entities.` name this phase added and both new purposes) to `knowledge.audit_events`' `capability_is_known` and `purpose_is_known` CHECKs. Phase A takes exactly one such revision: three concurrent packages each restating one frozen constraint would produce three heads and three conflicting restatements |
+| Identity-correction gate | `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, default `false`, and it requires the **write** gate above rather than the plane gate — so the whole chain is transitive and a process may not serve a governed merge while refusing an ordinary entity write. A process that sets it without the write switch refuses to start. It withholds `entities.merge.preview` and `entities.merge` and nothing else. Both are **also** operator-only, so the flag is the second of two independent gates rather than the only one |
+| Purposes | Five. `entity_read` for the ten reads; `entity_observation_ingest` for `entities.observe` and nothing else; `entity_authoring` for the seventeen Phase A writes; `entity_proposal` for the producer path and nothing else, so a client that may raise candidates cannot author what it proposed; and `entity_identity_correction` for both halves of the governed merge, which share one purpose deliberately — splitting it to un-gate the preview would weaken the operator boundary to buy nothing. Separate rather than shared, so a grant issued to look up who someone reports to cannot assert that they do, and a grant issued to record what a mailbox said cannot decide who somebody is |
+| Tables | `entities`, `entity_aliases`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, `entity_observations`, `entity_proposals`, `entity_merge_records`, `entity_mutation_events`, `entity_fact_evidence_links`, `entity_resolution_decisions`, and Phase B's five: `entity_proposal_evidence_links`, `entity_proposal_review_decisions`, `entity_identity_previews`, `entity_identity_operations` and the append-only `entity_identity_effects` |
+| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `d2b8f5c04e71` (governance tables), `e4d7b2f9a316` (`entities.unresolved_mentions`), `f3a8c1d7e592` (the disclosed mention name), `2fe4e13fb449` (record lifecycle, Principal-composite references and the three ledgers), `823e23b6cc63` (the one Phase A revision, admitting every `entities.` name this phase added and both new purposes) to `knowledge.audit_events`' `capability_is_known` and `purpose_is_known` CHECKs. Phase A takes exactly one such revision: three concurrent packages each restating one frozen constraint would produce three heads and three conflicting restatements. Phase B adds five, in one line: `c7a1f04b9e63` (the widened proposal record and its evidence table), `d38e6b2fa715` (the three identity-correction tables), `e5b0c94d7182` (the Entity review-decision ledger), `a1f7d3c85e40` (`invalidate` on the capture and memory disposition CHECKs) and `b64e29a0f7c1` (this phase's capability names and purposes), for the same reason and under the same rule |
 | Calibration | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) |
 | Frontend | Not implemented. Held by the operator's `D-09` instruction |
 
@@ -47,7 +48,7 @@ writes alike. It deletes nothing, and it does not undo a write already made.
 **The write half is gated once more, locally as well as remotely.**
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` is a second switch and defaults
 to `false`, so a process that enables the plane serves the ten reads and refuses
-all eighteen writes with `unsupported` until it is set. It is refused on every
+every write with `unsupported` until it is set. It is refused on every
 transport rather than only where a tool list is published: the writes are
 subtracted from `ApplicationService.available_capabilities`, which is what
 `capabilities.get` and the MCP tool list read, *and* each write handler asks the
@@ -55,6 +56,31 @@ gate again before it does anything, because the HTTP transport routes by path
 segment straight into `_HANDLERS` and consults neither. Setting it `true` on a
 process that has not enabled the plane is a startup failure rather than a
 silently ignored variable.
+
+**The governed merge is gated once more again, and is operator-only besides.**
+`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED` is a third switch, defaults to
+`false`, and requires the *write* switch rather than the plane switch — so a
+process cannot serve a merge while refusing an ordinary entity write, and setting
+it without the switch below it is a startup failure. With it off,
+`entities.merge.preview` and `entities.merge` are subtracted from
+`available_capabilities` and each handler asks the gate again, for the reason the
+write half does: the HTTP transport routes by path segment and reads no manifest.
+
+With it on they are still refused to anything but an authenticated operator.
+Both are in `_OPERATOR_ONLY`, which is the first time that set has held a
+knowledge-plane name: the test it applies is whether a capability *widens the
+scope a later request is evaluated against*, and after a merge every alias,
+identifier, assignment, edge, observation, proposal, review case and memory that
+named a merged-away entity is reached through the survivor. Neither reaches a
+remote profile at all — `remote_tool_names` drops an operator-only capability
+before it classifies anything — so a remote client cannot merge identities under
+any combination of these variables.
+
+**The preview is a write and is gated as one.** It mutates no canonical record
+and it does persist a bounded control row carrying a digest, an expiry and a
+consumption state, so `entities.merge` can be bound to exactly the world an
+operator was shown. Describing it as a read would be an annotation contradicting
+the transaction.
 
 Remotely a write is gated twice more. A remote client reaches one only with
 `MY_PA_REMOTE_WRITES_ENABLED` *and* a `remote_capability_grants` row:

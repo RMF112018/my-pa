@@ -965,6 +965,21 @@ EXPECTED_TABLE_COLUMNS = {
             "created_at",
         }
     ),
+    "entity_proposal_review_decisions": frozenset(
+        {
+            "decision_id",
+            "proposal_id",
+            "review_case_id",
+            "principal_id",
+            "sequence",
+            "disposition",
+            "reason",
+            "corrected_payload",
+            "correlation_id",
+            "audit_id",
+            "decided_at",
+        }
+    ),
     "entity_merge_records": frozenset(
         {
             "merge_id",
@@ -1307,7 +1322,11 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
     assert len(actual_model_fields) == 51
-    assert len(actual_table_columns) == 41
+    # Forty-two since `WP-RI-B-05` added `entity_proposal_review_decisions`, the
+    # Entity plane's own review decision ledger. The figure is what makes the
+    # allow-list closed in both directions, so it moves with the declaration and
+    # never ahead of it.
+    assert len(actual_table_columns) == 42
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

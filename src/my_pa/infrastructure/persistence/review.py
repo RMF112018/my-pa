@@ -254,7 +254,22 @@ def decide_review(connection: Connection, request: ReviewDecisionRequest) -> Rev
     )
     if current != request.expected_review_version:
         raise ReviewConflictError("the expected review version is stale")
-    if request.disposition in {Disposition.REPROCESS, Disposition.ESCALATE}:
+    # `INVALIDATE` joins the two `WP-RI-B-05` made reachable elsewhere, and is
+    # refused here for a reason of its own rather than for theirs. The
+    # disposition *requires* a reason -- that is what separates "the ground moved"
+    # from "a reviewer refused this" -- and this plane has nowhere to put one.
+    # `capture_proposals` reaches `invalidated` only through
+    # `proposals.invalidate_proposal`, whose reason is a closed
+    # `ProposalQuarantineReason` describing an evidence fault the server found,
+    # not prose a person wrote. Writing the state with a reason nobody can read
+    # back, or with a quarantine reason nobody chose, is exactly the false record
+    # `invalidate` exists to prevent, so the honest answer is that this plane has
+    # no eligible route yet.
+    if request.disposition in {
+        Disposition.REPROCESS,
+        Disposition.ESCALATE,
+        Disposition.INVALIDATE,
+    }:
         raise ReviewUnsupportedError("the requested disposition has no eligible route")
     if request.disposition in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}:
         faults = span_faults(connection, str(case.proposal_id))

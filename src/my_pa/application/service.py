@@ -237,10 +237,12 @@ from my_pa.application.entity_context import EntityContextService
 from my_pa.application.entity_directed import EntityDirectedService
 from my_pa.application.entity_governance import (
     EntityGovernanceService,
+    EntityProposalReviewService,
     ObserveCommand,
     QuarantinedObservationError,
     ResolutionNotPermittedError,
     ResolveMentionCommand,
+    ReviewAuthorityError,
     UnknownEntityError,
     UnknownObservationError,
 )
@@ -344,9 +346,13 @@ from my_pa.domain.capture.errors import (
 )
 from my_pa.domain.capture.reveal import EvidenceState
 from my_pa.domain.capture.review import (
+    EntityProposalReviewCase,
     ReviewCase,
     ReviewConflictError,
+    ReviewCorrectionError,
+    ReviewDecision,
     ReviewNotFoundError,
+    ReviewSubjectKind,
     ReviewUnsupportedError,
 )
 from my_pa.domain.capture.submission import CaptureKind, CaptureTransport
@@ -650,7 +656,10 @@ def _memory_view(detail: MemoryDetail, *, include_statement: bool) -> dict[str, 
 
 
 def _review_case_payload(
-    case: ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase,
+    case: ReviewCase
+    | GoodNotesReviewCase
+    | RelationshipMemoryReviewCase
+    | EntityProposalReviewCase,
 ) -> dict[str, Any]:
     """One review case as the contract may disclose it, whatever its subject kind.
 
@@ -674,6 +683,18 @@ def _review_case_payload(
     own decision to its result through the memory plane, where classification is
     enforced. Disclosing `proposed_kind` is deliberate: a reviewer asked to
     accept a sensitivity has to know that is what they are accepting.
+
+    **The Entity branch follows the same rule and adds one field to it.** An
+    Entity proposal's payload is a producer's assertion about a person — the
+    display name a rule inferred, the external address a source claimed — and
+    `EntityProposalReviewCase` carries none of it, structurally rather than by
+    omission here. What it adds is `method`: `deterministic`, `rule` or
+    `local_model`. A reviewer being asked to accept a local model's conclusion
+    has to know that is what they are accepting, which is the same argument
+    `proposed_kind` makes one branch up and is the whole of section 21.4's
+    anti-laundering rule read from the reviewer's side. `escalated` is disclosed
+    for the same reason: a case that has been raised to the operator ceiling
+    looks identical to one that has not unless the listing says so.
     """
     common = {
         "review_case_id": case.review_case_id,
@@ -689,7 +710,7 @@ def _review_case_payload(
     if isinstance(case, GoodNotesReviewCase):
         return {
             **common,
-            "subject_kind": "goodnotes_region",
+            "subject_kind": ReviewSubjectKind.GOODNOTES_REGION.value,
             "region_id": case.region_id,
             "page_version_id": case.page_version_id,
             "confidence": case.confidence,
@@ -697,15 +718,25 @@ def _review_case_payload(
     if isinstance(case, RelationshipMemoryReviewCase):
         return {
             **common,
-            "subject_kind": "relationship_memory",
+            "subject_kind": ReviewSubjectKind.RELATIONSHIP_MEMORY.value,
             "subject_entity_id": case.subject_entity_id,
             "proposed_kind": case.proposed_kind.value,
             "accepted_memory_id": case.accepted_memory_id,
             "accepted_memory_version_id": case.accepted_memory_version_id,
         }
+    if isinstance(case, EntityProposalReviewCase):
+        return {
+            **common,
+            "subject_kind": ReviewSubjectKind.ENTITY_PROPOSAL.value,
+            "subject_entity_id": case.target_entity_id,
+            "proposed_kind": case.proposed_kind.value,
+            "method": case.method.value,
+            "escalated": case.escalated,
+            "accepted_record_id": case.accepted_record_id,
+        }
     return {
         **common,
-        "subject_kind": "capture_proposal",
+        "subject_kind": ReviewSubjectKind.CAPTURE_PROPOSAL.value,
         "capture_id": case.capture_id,
         "version_id": case.version_id,
         "proposal_type": case.proposal_type.value,
@@ -3211,11 +3242,22 @@ class ApplicationService:
     def _review_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListReviewCases
     ) -> _Result:
-        """List review cases without capture or normalized-value content."""
+        """List review cases without capture, statement or payload content.
+
+        One page across every composed subject kind, narrowed by whichever of the
+        three filters the caller stated. The filters go to the port rather than
+        being applied to the page after it comes back: a filter applied here
+        would return a short page and call it complete, and `entity_id` would
+        have made two planes that cannot answer it read everything first.
+        """
         page_size = self._page_size(command.page_size)
         with _translated():
             found = unit_of_work.reviews.cases(
-                limit=page_size + 1, principal_id=authorization.principal.principal_id
+                limit=page_size + 1,
+                principal_id=authorization.principal.principal_id,
+                subject_kind=command.subject_kind,
+                state=command.state,
+                entity_id=command.entity_id,
             )
         truncated = len(found) > page_size
         return _Result(
@@ -3234,36 +3276,66 @@ class ApplicationService:
     def _review_decide(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: DecideReviewCase
     ) -> _Result:
-        """Append one disposition and, for acceptance, its assertion and receipt."""
+        """Append one disposition and, for acceptance, carry out what it accepted.
+
+        **Which plane decides is decided here, and it is one branch rather than a
+        capability of its own.** Three of the four subject kinds are decided inside
+        the port, because everything their decision does is SQL. An Entity
+        proposal is executed through the canonical Phase A mutation services,
+        which live in this layer, so its ordering is
+        `EntityProposalReviewService`'s and this routes to it. A caller sees one
+        capability, one request shape and one answer either way.
+
+        `decided_by`, the operator declaration and the fresh resolver are all
+        server-supplied. There is no field on the command for any of them: a
+        caller that could name its own authority would name the one it needed.
+        """
+        request = ReviewDecisionRequest(
+            review_case_id=command.review_case_id,
+            expected_review_version=command.expected_review_version,
+            disposition=command.disposition,
+            principal_id=authorization.principal.principal_id,
+            correlation_id=authorization.correlation_id,
+            audit_id=authorization.audit_id,
+            policy_version=authorization.decision.policy_version,
+            decided_at=self._clock(),
+            corrected_value=command.corrected_value,
+            correction_patch=command.correction_patch,
+            reason=command.reason,
+        )
         decision = None
         conflict = False
         missing = False
         unsupported = False
-        with _translated():
+        denied = False
+        invalid = False
+        with _translated(), _entity_governance_translated():
             try:
-                decision = unit_of_work.reviews.decide(
-                    ReviewDecisionRequest(
-                        review_case_id=command.review_case_id,
-                        expected_review_version=command.expected_review_version,
-                        disposition=command.disposition,
-                        principal_id=authorization.principal.principal_id,
-                        correlation_id=authorization.correlation_id,
-                        audit_id=authorization.audit_id,
-                        policy_version=authorization.decision.policy_version,
-                        decided_at=self._clock(),
-                        corrected_value=command.corrected_value,
-                    )
+                entity_case = unit_of_work.reviews.entity_proposal_case(
+                    request.principal_id, request.review_case_id
                 )
+                if entity_case is None:
+                    decision = unit_of_work.reviews.decide(request)
+                else:
+                    decision = self._entity_review(unit_of_work, authorization, request)
             except ReviewConflictError:
                 conflict = True
             except ReviewNotFoundError:
                 missing = True
             except ReviewUnsupportedError:
                 unsupported = True
+            except ReviewAuthorityError:
+                denied = True
+            except ReviewCorrectionError:
+                invalid = True
         if conflict:
             raise ConflictError(SafeDetail.EXPECTED_REVIEW_VERSION)
         if unsupported:
             raise UnsupportedError(SafeDetail.DISPOSITION)
+        if denied:
+            raise DeniedError(SafeDetail.DISPOSITION)
+        if invalid:
+            raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
         if missing:
             raise NotFoundError(SafeDetail.REVIEW_CASE_ID)
         if decision is None:
@@ -3288,6 +3360,50 @@ class ApplicationService:
                 authorization.at,
                 trust_basis=("review_policy", "reviewed_promotion"),
             ),
+        )
+
+    def _entity_review(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        request: ReviewDecisionRequest,
+    ) -> ReviewDecision:
+        """One Entity proposal decided, with the fresh resolver its kind may need.
+
+        The resolver is built here and run inside this transaction, against the
+        state that exists now rather than the state the proposal was filed
+        against — the same callable `entities.unresolved_mentions.resolve` builds
+        and for the same reason. It is a veto and not a licence: it can refuse a
+        binding the world no longer supports and it cannot license one, and a
+        `resolve_mention` acceptance arriving without it is refused rather than
+        performed unchecked.
+
+        `has_operator_authority` is `False`. A reviewer holding `review.decide`
+        is not thereby an operator: identity correction is `entities.merge`'s and
+        is operator-only, and an escalated case is one this capability has
+        deliberately raised out of its own reach. Section 15's "a reviewer grant
+        is not an identity-correction grant" is this one argument.
+        """
+        principal_id = authorization.principal.principal_id
+        resolver = EntityResolutionService(unit_of_work.entities)
+
+        def resolve_now(
+            observation: EntityObservation, refused: frozenset[str], at: datetime
+        ) -> EntityResolution:
+            return resolver.resolve(
+                principal_id,
+                ResolutionRequest(
+                    raw_reference=observation.observed_value,
+                    at=at,
+                    refused_entity_ids=refused,
+                ),
+            )
+
+        return EntityProposalReviewService(unit_of_work.entities, unit_of_work.reviews).decide(
+            request,
+            decided_by=principal_id,
+            has_operator_authority=False,
+            resolve=resolve_now,
         )
 
     def _continuity_pulse(

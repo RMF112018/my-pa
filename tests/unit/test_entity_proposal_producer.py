@@ -60,7 +60,7 @@ from my_pa.domain.relationship.proposal_payload import (
     schema_for,
 )
 from tests.conftest import World
-from tests.unit.entity_proposal_fakes import ProposalEntities
+from tests.conftest import _Entities as FakeEntities
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 OTHER: Final = "prn_bbbb0002bbbb0002bbbb0002"
@@ -83,16 +83,15 @@ ALIAS_PAYLOAD: Final[dict[str, str | bool]] = {
 }
 
 
-def _entities(world: World) -> ProposalEntities:
-    """The entity plane over this `World`, with the proposal-plane methods.
+def _entities(world: World) -> FakeEntities:
+    """The entity plane over this `World`.
 
-    `ProposalEntities` rather than `FakeUnitOfWork(world).entities`, and the
-    reason is stated in that module: `tests/conftest.py` is frozen for
-    `WP-RI-B-05`, so the four methods the proposal and promotion paths need had
-    to be written beside it instead of in it. Both share one `World`, so a test
-    that stages rows through either sees them through the other.
+    One fake since `WP-RI-B-05` moved the proposal-plane methods into
+    `tests/conftest.py`. They lived in a subclass beside it while that file was
+    frozen for the worker that needed them, which meant a second fake of one
+    repository and a `World` field stapled on from outside.
     """
-    return ProposalEntities(world)
+    return FakeEntities(world)
 
 
 @pytest.fixture

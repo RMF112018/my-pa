@@ -157,7 +157,13 @@ from my_pa.application.commands import (
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail, UnsupportedError
 from my_pa.contracts.v1.envelope import RequestMetadata
-from my_pa.domain.capture.review import Disposition
+from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import (
+    CorrectionPatch,
+    Disposition,
+    ReviewError,
+    ReviewSubjectKind,
+)
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.context import ContextPlane
 from my_pa.domain.context.preference import ContextPreferenceAction
@@ -407,7 +413,29 @@ def _reveal_subject(payload: Mapping[str, Any]) -> Command:
 
 
 def _list_review_cases(payload: Mapping[str, Any]) -> Command:
-    return ListReviewCases(**payload)
+    """`review.list`, with its two closed-vocabulary filters named rather than raw.
+
+    A caller sends `"entity_proposal"` and `"needs_review"` as strings; the
+    command takes the enum members, so the strings are converted here and a
+    string outside either vocabulary is refused with the field it named. Doing
+    it here rather than in the command keeps `ReviewSubjectKind` and
+    `ProposalState` out of a transport payload's type, which is the same
+    division `_decide_review_case` already makes for `disposition`.
+    """
+    converted = dict(payload)
+    named = converted.get("subject_kind")
+    if isinstance(named, str):
+        try:
+            converted["subject_kind"] = ReviewSubjectKind(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SUBJECT) from None
+    state = converted.get("state")
+    if isinstance(state, str):
+        try:
+            converted["state"] = ProposalState(state)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE) from None
+    return ListReviewCases(**converted)
 
 
 def _get_pulse(payload: Mapping[str, Any]) -> Command:
@@ -1393,6 +1421,16 @@ def _restore_managed_document(payload: Mapping[str, Any]) -> Command:
 
 
 def _decide_review_case(payload: Mapping[str, Any]) -> Command:
+    """`review.decide`, with the disposition named and the correction typed.
+
+    A correction patch arrives as a JSON object of named fields. It becomes a
+    `CorrectionPatch` here, which checks that it is a bounded set of named
+    string-or-flag values and nothing else — *not* that those are fields the
+    target command takes, which is the target command schema's answer and is
+    checked by the plane that owns the subject before it commits. A non-object,
+    or a value that is neither a string nor a flag, is refused here with the
+    field it named and never with what it held.
+    """
     converted = dict(payload)
     named = converted.get("disposition")
     if isinstance(named, str):
@@ -1400,7 +1438,25 @@ def _decide_review_case(payload: Mapping[str, Any]) -> Command:
             converted["disposition"] = Disposition(named)
         except ValueError:
             raise InvalidRequestError(SafeDetail.DISPOSITION) from None
+    patch = converted.get("correction_patch")
+    if patch is not None:
+        converted["correction_patch"] = _correction_patch(patch)
     return DecideReviewCase(**converted)
+
+
+def _correction_patch(patch: Any) -> CorrectionPatch:  # noqa: ANN401 - a decoded JSON value
+    """One decoded JSON object as a typed correction patch, or a refusal."""
+    if not isinstance(patch, Mapping):
+        raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+    values: dict[str, str | bool] = {}
+    for name, value in patch.items():
+        if not isinstance(name, str) or not isinstance(value, str | bool):
+            raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+        values[name] = value
+    try:
+        return CorrectionPatch.of(values)
+    except ReviewError:
+        raise InvalidRequestError(SafeDetail.CORRECTED_VALUE) from None
 
 
 #: One builder per command owned by these legacy transports. WP-12C adds a

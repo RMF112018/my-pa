@@ -370,6 +370,21 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # is nothing a caller could have supplied for these reads to be confused
     # with. The handler builds them from `authorization.principal.principal_id`,
     # and every repository call below stamps or refuses on the same value.
+    #
+    # `WP-RI-B-05`'s eleven `request.principal_id` reads are
+    # `EntityProposalReviewService` carrying one already-resolved Principal
+    # through one review decision, and they are safe for a reason of their own
+    # rather than by extension. `ReviewDecisionRequest` does have a
+    # `principal_id` field -- unlike the internal command dataclasses above --
+    # but no caller ever fills it: `ApplicationService._review_decide` is the
+    # only construction site in `src/`, and it writes
+    # `authorization.principal.principal_id` into it, while the transport
+    # command `DecideReviewCase` carries no `principal_id` field at all, so a
+    # payload naming one is refused by the dataclass constructor before any of
+    # this runs. What the reads do is carry that resolved partition into the
+    # repository calls, each of which stamps or refuses on the same value --
+    # `entity_proposal_case` and the ledger reads are `_mine`-scoped, and every
+    # write goes through `_bound`.
     "application/entity_governance.py": (
         ("command", "principal_id"),
         ("command", "principal_id"),
@@ -379,6 +394,25 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("command", "principal_id"),
         ("command", "principal_id"),
         ("held", "principal_id"),
+    )
+    + (("request", "principal_id"),) * 11,
+    # The one read in the application service is the same value on the way back
+    # out: `_review_decide` builds the request from
+    # `authorization.principal.principal_id` on the line above and then hands
+    # the field to the router that decides which plane owns the case. Reading
+    # the request rather than the authorization a second time is what keeps the
+    # routing read and the decision that follows it provably the same Principal.
+    "application/service.py": (("request", "principal_id"),),
+    # `WP-RI-B-05`'s Review SQL for the entity plane. Neither read is a caller's
+    # statement: `decision.principal_id` is checked *against* the acting
+    # Principal and the write is refused on a mismatch -- the same shape
+    # `record_proposal` uses one module over -- and `row.principal_id` is a
+    # column selected out of a `_mine`-scoped statement, so it is the partition
+    # the query already confined itself to, being copied onto the record it
+    # produced.
+    "infrastructure/persistence/entity_proposal_review.py": (
+        ("decision", "principal_id"),
+        ("row", "principal_id"),
     ),
     # WP-29's Relationship Memory service, and WP-RI-05's producer beside it.
     # Every command in the module is an internal dataclass whose docstring says

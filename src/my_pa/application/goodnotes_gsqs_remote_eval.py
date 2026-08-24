@@ -43,6 +43,7 @@ from my_pa.application.goodnotes_gsqs_remote_eval_contracts import (
     ERROR_UNAUTHENTICATED,
     LEASE_DURATION_SECONDS,
     MAX_CAPTURE_SEGMENTS_BYTES,
+    OCCUPYING_STATES,
     REPETITIONS_REQUIRED,
     SCHEMA_CAPTURE_ENTRY_V1,
     SCHEMA_EVALUATION_CASE_STATE_V1,
@@ -127,11 +128,11 @@ class RemoteEvalService:
             raise RemoteEvalError(ERROR_FORBIDDEN_SCOPE, "unsupported remote-eval mode")
         now = self._now()
         self._expire_due_sessions()
-        existing = self._store.find_non_terminal_session_id()
-        if existing is not None:
+        occupying = self._occupying_session_id()
+        if occupying is not None:
             raise RemoteEvalError(
                 ERROR_INTERNAL_FAIL_CLOSED,
-                "one non-terminal remote-eval session is already active",
+                "one occupying remote-eval session is already active",
             )
         cases = self._admit_cases(request.cases)
         session = build_remote_eval_session(
@@ -493,6 +494,19 @@ class RemoteEvalService:
             active_lease=active_lease,
             capture_identity_sha256=capture_identity,
         )
+
+    def _occupying_session_id(self) -> str | None:
+        """Return the session that blocks creating another, if any.
+
+        ``REPETITION_COMPLETE`` is parked and does not occupy, so a fresh
+        diagnostic canary can be created without aborting a completed repetition.
+        """
+
+        for session_id in self._store.list_session_ids():
+            state = self._store.load_state(session_id)
+            if state is not None and state.state in OCCUPYING_STATES:
+                return session_id
+        return None
 
     def _require_enabled(self) -> None:
         if not self._eval_enabled:

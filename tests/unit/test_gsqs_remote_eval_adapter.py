@@ -48,7 +48,14 @@ class FakeAuthenticator:
 
 
 class FakeStore:
+    def list_session_ids(self) -> tuple[str, ...]:
+        return ()
+
     def find_non_terminal_session_id(self) -> str | None:
+        return None
+
+    def load_state(self, session_id: str) -> object | None:
+        _ = session_id
         return None
 
     def load_session(self, session_id: str) -> object | None:

@@ -574,7 +574,7 @@ def test_tool_imagecontent_without_asgi_send_is_not_disclosed_to_transport(tmp_p
             raster_reader=_RasterReader(png),
         )
         assert result.is_error is False
-        assert isinstance(result.content[1], ImageContent)
+        assert isinstance(result.content[0], ImageContent)
         assert _types(tmp_path, session_id) == [EVENT_OUTBOUND_ATTEMPT_STARTED]
         wrapped = wrap_eval_asgi_send(  # type: ignore[arg-type]
             _identity_send,

@@ -35,6 +35,7 @@ from my_pa.application.goodnotes_gsqs_remote_eval_contracts import (
     ERROR_SESSION_NOT_IN_PROGRESS,
     EVENT_OUTBOUND_ATTEMPT_STARTED,
     RemoteEvalError,
+    RemoteEvalSessionState,
 )
 from my_pa.infrastructure.security.gsqs_remote_eval_authentication import (
     GsqsRemoteEvalAuthenticationError,
@@ -104,6 +105,14 @@ def _png() -> bytes:
 def _error_code(result: CallToolResult) -> str:
     payload = json.loads(result.content[0].text)
     return str(payload["error"])
+
+
+def _text_payload(result: CallToolResult) -> dict[str, object]:
+    texts = [block for block in result.content if getattr(block, "type", None) == "text"]
+    assert texts
+    payload = json.loads(texts[0].text)
+    assert isinstance(payload, dict)
+    return payload
 
 
 def _in_progress_with_png() -> tuple[RemoteEvalService, FakeStore, FakeDisclosure, str, bytes]:
@@ -276,14 +285,15 @@ def test_next_returns_image_content_png_not_a_url() -> None:
     )
     assert result.is_error is False
     assert len(result.content) == 2
-    payload = json.loads(result.content[0].text)
+    assert isinstance(result.content[0], ImageContent)
+    assert result.content[0].type == "image"
+    payload = _text_payload(result)
     assert payload["mime_type"] == "image/png"
     assert payload["byte_length"] == len(png)
     assert "lease_id" in payload
     assert "url" not in payload
     assert "path" not in payload
-    image = result.content[1]
-    assert isinstance(image, ImageContent)
+    image = result.content[0]
     assert image.mime_type == "image/png"
     assert not image.data.startswith("http")
     assert not image.data.startswith("data:")
@@ -293,6 +303,31 @@ def test_next_returns_image_content_png_not_a_url() -> None:
     assert EVENT_OUTBOUND_ATTEMPT_STARTED in disclosure.events
     assert "DISCLOSED_TO_TRANSPORT" not in disclosure.events
     assert gsqs_eval_disclosure_attempt.get() == disclosure.started[-1]
+
+
+def test_tools_bind_occupying_session_not_parked_repetition_complete() -> None:
+    service, store, clock, _staging, _disclosure = _harness()
+    parked = service.create_session(_request(clock, session_id="parked"))
+    service.seal_ready(parked.session_id)
+    service.open_repetition(parked.session_id, 1)
+    current = store.load_state(parked.session_id)
+    assert current is not None
+    store.save_state(replace(current, state=RemoteEvalSessionState.REPETITION_COMPLETE))
+    live = service.create_session(_request(clock, session_id="live"))
+    service.seal_ready(live.session_id)
+    service.open_repetition(live.session_id, 1)
+    result = invoke_gsqs_eval_tool(
+        EVAL_TOOL_STATUS,
+        {},
+        principal=FakePrincipal("principal-1"),
+        service=service,
+        store=store,
+        raster_reader=FakeRasterReader(_png()),
+    )
+    assert result.is_error is False
+    payload = _text_payload(result)
+    assert payload["state"] == "IN_PROGRESS"
+    assert payload["session_identity_sha256"] == live.session_identity_sha256
 
 
 def test_submit_rejects_extra_properties() -> None:

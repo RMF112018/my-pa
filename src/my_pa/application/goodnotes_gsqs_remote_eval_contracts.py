@@ -134,6 +134,16 @@ TERMINAL_STATES = frozenset(
     }
 )
 
+# Occupies the control plane so a new session cannot be created. REPETITION_COMPLETE
+# is parked (waiting for an explicit later repetition) and does not occupy.
+OCCUPYING_STATES = frozenset(
+    {
+        RemoteEvalSessionState.PREPARED,
+        RemoteEvalSessionState.READY,
+        RemoteEvalSessionState.IN_PROGRESS,
+    }
+)
+
 LEGAL_TRANSITIONS: dict[RemoteEvalSessionState, frozenset[RemoteEvalSessionState]] = {
     RemoteEvalSessionState.PREPARED: frozenset(
         {

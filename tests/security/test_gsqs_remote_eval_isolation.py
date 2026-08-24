@@ -112,8 +112,15 @@ class _Principal:
 
 
 class _Store:
+    def list_session_ids(self) -> tuple[str, ...]:
+        return ("sess-1",)
+
     def find_non_terminal_session_id(self) -> str | None:
         return "sess-1"
+
+    def load_state(self, session_id: str) -> object:
+        _ = session_id
+        return SimpleNamespace(state="IN_PROGRESS")
 
     def load_session(self, session_id: str) -> object:
         return SimpleNamespace(
@@ -225,7 +232,10 @@ def _invoke(name: str, arguments: dict[str, Any] | None = None) -> object:
 def _text_payload(result: object) -> dict[str, object]:
     content = getattr(result, "content", ())
     assert content, "tool result had no content"
-    return json.loads(content[0].text)
+    for block in content:
+        if getattr(block, "type", None) == "text":
+            return json.loads(block.text)
+    raise AssertionError("tool result had no text content")
 
 
 def _visible_text(result: object) -> str:

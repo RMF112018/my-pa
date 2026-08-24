@@ -56,6 +56,7 @@ from my_pa.application.goodnotes_gsqs_remote_eval_contracts import (
     ERROR_NO_ACTIVE_SESSION,
     ERROR_RASTER_INTEGRITY_FAILURE,
     ERROR_RESULT_TOO_LARGE,
+    OCCUPYING_STATES,
     SCHEMA_STATE_V1,
     RemoteEvalError,
     RemoteEvalStore,
@@ -568,9 +569,12 @@ def _error_result(code: str, message: str = "") -> CallToolResult:
 def _success_result(
     document: Mapping[str, object], image: ImageContent | None = None
 ) -> CallToolResult:
-    blocks: list[ContentBlock] = [TextContent(type="text", text=_json_text(document))]
+    # IMAGE_FIRST: put ImageContent before metadata text so clients that
+    # attach only the first content block to the model still receive pixels.
+    blocks: list[ContentBlock] = []
     if image is not None:
         blocks.append(image)
+    blocks.append(TextContent(type="text", text=_json_text(document)))
     return CallToolResult(content=blocks, is_error=False)
 
 
@@ -599,8 +603,30 @@ def _submit_arguments(arguments: Mapping[str, object] | None) -> tuple[str, Sequ
     return lease_id, segments
 
 
+def _occupying_session_id(store: RemoteEvalStore) -> str | None:
+    """Bind MCP tools to the unique occupying (not parked) session.
+
+    ``REPETITION_COMPLETE`` is parked and must not capture ChatLLM next/status.
+    """
+
+    occupying: list[str] = []
+    for session_id in store.list_session_ids():
+        state = store.load_state(session_id)
+        if state is not None and state.state in OCCUPYING_STATES:
+            occupying.append(session_id)
+    if len(occupying) > 1:
+        raise RemoteEvalError(ERROR_INTERNAL_FAIL_CLOSED, "multiple occupying sessions")
+    if len(occupying) == 1:
+        return occupying[0]
+    return None
+
+
 def _resolve_bound_session(store: RemoteEvalStore, principal: GsqsEvalPrincipal) -> str:
-    session_id = store.find_non_terminal_session_id()
+    session_id = _occupying_session_id(store)
+    if session_id is None:
+        # Parked REPETITION_COMPLETE is not occupying, but status must still
+        # observe it when no IN_PROGRESS/READY/PREPARED session exists.
+        session_id = store.find_non_terminal_session_id()
     if session_id is None:
         raise RemoteEvalError(ERROR_NO_ACTIVE_SESSION, "no active session")
     session = store.load_session(session_id)

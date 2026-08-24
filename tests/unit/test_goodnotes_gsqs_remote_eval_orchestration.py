@@ -30,6 +30,7 @@ from my_pa.application.goodnotes_gsqs_remote_eval_contracts import (
     ERROR_CAPTURE_CONFLICT,
     ERROR_DISCLOSURE_UNCERTAIN,
     ERROR_FORBIDDEN_SCOPE,
+    ERROR_INTERNAL_FAIL_CLOSED,
     ERROR_INVALID_TRANSITION,
     ERROR_LEASE_CONFLICT,
     ERROR_LEASE_EXPIRED,
@@ -322,6 +323,33 @@ def test_phase_c_create_is_fail_closed(tmp_path: Path) -> None:
             _create_request(generate, clock, session_id="phase-c", mode=RemoteEvalMode.PHASE_C)
         )
     assert exc.value.code == ERROR_FORBIDDEN_SCOPE
+
+
+def test_create_session_rejects_second_occupying_session(tmp_path: Path) -> None:
+    generate = _load_generate()
+    service, _store, clock, _state_root, _source_root, _session_id = _ready_session(
+        tmp_path, generate, session_id="occupying"
+    )
+    with pytest.raises(RemoteEvalError) as exc:
+        service.create_session(_create_request(generate, clock, session_id="second"))
+    assert exc.value.code == ERROR_INTERNAL_FAIL_CLOSED
+
+
+def test_create_session_allowed_when_existing_is_parked_repetition_complete(
+    tmp_path: Path,
+) -> None:
+    generate = _load_generate()
+    service, store, clock, _state_root, _source_root, session_id = _ready_session(
+        tmp_path, generate, session_id="parked-complete"
+    )
+    service.open_repetition(session_id, 1)
+    current = store.load_state(session_id)
+    assert current is not None
+    store.save_state(replace(current, state=RemoteEvalSessionState.REPETITION_COMPLETE))
+    created = service.create_session(
+        _create_request(generate, clock, session_id="image-first-canary")
+    )
+    assert created.session_id == "image-first-canary"
 
 
 def test_cannot_skip_case_or_repetition(tmp_path: Path) -> None:

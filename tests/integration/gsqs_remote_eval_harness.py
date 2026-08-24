@@ -193,9 +193,9 @@ async def connected_eval_session(http: httpx2.AsyncClient) -> AsyncIterator[Clie
 
 def text_payload(result: CallToolResult) -> dict[str, object]:
     assert result.content, "tool result has no content"
-    block = result.content[0]
-    assert getattr(block, "type", None) == "text"
-    loaded = json.loads(block.text)
+    texts = [block for block in result.content if getattr(block, "type", None) == "text"]
+    assert texts, "tool result has no text content"
+    loaded = json.loads(texts[0].text)
     assert isinstance(loaded, dict)
     return loaded
 

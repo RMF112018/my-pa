@@ -462,6 +462,18 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # row with it, never to trust it. The `row` and `link` reads are stored
     # column values being mapped back onto domain records, from statements that
     # were already scoped by those same calls.
+    # The producer's one insert (`WP-RI-B-05`). Two reads, both arguments to
+    # `_bound` -- the domain record's own `principal_id` handed to
+    # `principal_bound_values`, which is the guard that *refuses* values already
+    # carrying a partition column and stamps the context's identity instead. So
+    # the value is read in order to name which partition context to build, never
+    # to trust: a record whose `principal_id` disagreed with the acting
+    # Principal's context would have its row stamped with the context's, and the
+    # service above it has already refused a subject outside the acting scope.
+    "infrastructure/persistence/relationship_memory_proposals.py": (
+        ("link", "principal_id"),
+        ("proposal", "principal_id"),
+    ),
     "infrastructure/persistence/relationship_memory.py": (
         ("link", "principal_id"),
         ("request", "principal_id"),

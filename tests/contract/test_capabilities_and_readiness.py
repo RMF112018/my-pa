@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 95
+    assert len(names) == len(Capability) == 99
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -145,6 +145,10 @@ def test_capability_names_match_the_published_contract() -> None:
         "relationship_memory.revise",
         "relationship_memory.archive",
         "relationship_memory.restore",
+        "relationship_memory.propose",
+        "entities.proposals.create",
+        "entities.merge.preview",
+        "entities.merge",
         "entities.identifiers.list",
         "entities.aliases.list",
         "entities.create",
@@ -189,10 +193,41 @@ def test_operator_only_flag_cannot_contradict_the_domain() -> None:
         )
 
 
-def test_only_sources_enroll_is_operator_only() -> None:
+def test_the_operator_only_set_is_enrollment_and_the_governed_merge() -> None:
+    """Three, and the third and fourth are the first knowledge-plane members.
+
+    This test was named `test_only_sources_enroll_is_operator_only` and asserted
+    a set of one for every package up to `WP-RI-B-06`. The name is corrected
+    rather than the assertion loosened: the claim it was making -- that
+    `_OPERATOR_ONLY` holds exactly what somebody decided it holds -- is the same
+    claim, and the set it holds has changed.
+
+    The test `_OPERATOR_ONLY` applies is whether a capability *widens the scope a
+    later request is evaluated against*. Enrolling a source does. A governed
+    merge does too: afterwards every alias, identifier, assignment, edge,
+    observation, proposal, review case and memory that named a merged-away entity
+    is reached through the survivor, so a grant issued before the merge returns
+    records it did not return before. The preview is in beside the apply because
+    it reads the exact identities of two people, which is the disclosure the
+    apply's authority exists to protect.
+    """
     operator_only = {s.name for s in manifest().capabilities if s.operator_only}
-    assert operator_only == {Capability.SOURCES_ENROLL}
+    assert operator_only == {
+        Capability.SOURCES_ENROLL,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+    }
     assert is_operator_only(Capability.SOURCES_ENROLL)
+    assert is_operator_only(Capability.ENTITIES_MERGE_PREVIEW)
+    assert is_operator_only(Capability.ENTITIES_MERGE)
+    # And no capture, review, continuity, document, task, commitment, report,
+    # entity-authoring or memory name joined them, which is the half of this
+    # claim that keeps the boundary from spreading by precedent.
+    assert not any(
+        is_operator_only(capability)
+        for capability in Capability
+        if capability.value.startswith(("capture.", "review.", "relationship_memory."))
+    )
 
 
 def test_availability_is_derived_from_what_is_implemented() -> None:

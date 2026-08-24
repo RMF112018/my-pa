@@ -194,6 +194,26 @@ SPAN_CITERS: Final[tuple[Capability, ...]] = (
     Capability.ENTITIES_ALIASES_SUPERSEDE,
 )
 
+#: `WP-RI-B-06`'s two, which cite observations and are not in `OBSERVATION_CITERS`.
+#:
+#: **A third tuple rather than a fourth and fifth row in the first one**, because
+#: the two halves above are about a *split* this pair does not belong to: an
+#: assignment cites an observation and an alias cites a span, and each of the two
+#: sweeps drives its capability's own command builder to prove the other two
+#: reference kinds are refused. The governed merge cites observations through
+#: `evidence_refs` like the first half, but its command is built by a different
+#: shape and it is operator-only, so folding it into `OBSERVATION_CITERS` would
+#: put it through a sweep written for the directed writes and prove nothing about
+#: it. What it is here for is the exhaustiveness claim below, which is the only
+#: claim in this file that has to cover the whole plane.
+#:
+#: `entities.proposals.create` is deliberately absent: it names its evidence in
+#: `evidence_observation_ids` rather than in either field this module reads, so
+#: the population derived below does not contain it.
+IDENTITY_CITERS: Final[frozenset[Capability]] = frozenset(
+    {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
+)
+
 
 @pytest.mark.parametrize("capability", OBSERVATION_CITERS)
 @pytest.mark.parametrize("kind", sorted(CITED_KINDS))
@@ -254,7 +274,7 @@ def test_the_two_citing_halves_are_the_whole_of_what_a_caller_may_cite() -> None
         if capability.value.startswith("entities.")
         and ({"evidence", "evidence_refs"} & {f.name for f in dataclasses.fields(shape)})
     }
-    assert citing == set(OBSERVATION_CITERS) | set(SPAN_CITERS)
+    assert citing == set(OBSERVATION_CITERS) | set(SPAN_CITERS) | IDENTITY_CITERS
 
 
 def test_the_resolution_write_names_no_evidence_a_caller_supplied() -> None:

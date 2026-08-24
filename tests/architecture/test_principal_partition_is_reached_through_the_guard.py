@@ -166,6 +166,12 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # — composes `_mine` or `_bound`, and those two are one-line wrappers
         # over `partition_criterion` and `principal_bound_values` respectively.
         "infrastructure/persistence/relationship_memory.py",
+        # The producer's one insert (`WP-RI-B-05`). Both of its statements are
+        # stamped through `principal_bound_values`, which is the stronger half of
+        # this guard rather than the weaker one: it *refuses* values that already
+        # carry a partition column, so the row is written under the context's
+        # Principal and cannot take one from a record a caller influenced.
+        "infrastructure/persistence/relationship_memory_proposals.py",
         # The Relationship Memory review and promotion plane. Every statement it
         # builds — the case listing, the dispatch probe, the decision append, the
         # proposal stamp, the promoted aggregate and version, the evidence copy,
@@ -311,6 +317,12 @@ STATEMENT_LEVEL: Final = frozenset(
         "infrastructure/persistence/knowledge.py",
         "infrastructure/persistence/managed_documents.py",
         "infrastructure/persistence/relationships.py",
+        # The producer's one insert (`WP-RI-B-05`). Statement-level rather than
+        # per-module, and it is the easiest such claim in this file to check:
+        # the module builds exactly two statements and both are `insert(...)`
+        # values stamped through `principal_bound_values`. There is no read to
+        # scope and no third statement to be uncertain about.
+        "infrastructure/persistence/relationship_memory_proposals.py",
         "infrastructure/persistence/reveal.py",
     }
 )
@@ -929,6 +941,53 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
         "table without reaching the partition through `principal_scope`. Every "
         "read and update predicate goes through `_mine`; every insert goes "
         "through `_bound`"
+    )
+
+
+def test_every_memory_proposal_statement_reaches_the_partition() -> None:
+    """The producer's insert, statement by statement, which is two statements.
+
+    Claim 1 says the module uses `principal_scope` somewhere; this says every
+    statement in it does. It is the cheapest such claim in this file to check and
+    the strictest: the module builds exactly two statements, both `insert`s, and
+    both are stamped through `_bound` -- there is no read to scope and no third
+    statement whose classification could be argued about.
+
+    `_bound` and never `_mine`, and the asymmetry is the port rather than an
+    omission. `RelationshipMemoryProposalRepository` declares one method and it
+    inserts; a `_mine`-scoped read here would be a read the port has no method
+    for, which is the whole of what makes a producer unable to read back what a
+    reviewer did with its candidate.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "relationship_memory_proposals.py"
+    partitioned = set(_partitioned_tables())
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    checked = 0
+    offending: list[str] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        for statement in ast.walk(function):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
+                continue
+            rendered = ast.unparse(statement)
+            if not any(f"insert({table})" in rendered for table in partitioned):
+                continue
+            checked += 1
+            if "_bound(" not in rendered:
+                offending.append(f"{function.name}:{statement.lineno}")
+
+    assert checked == 2, (
+        f"{checked} statements over a partitioned table were examined, not two. "
+        "The producer's whole persistence surface is one insert of a candidate "
+        "and one insert per evidence row; a third is a reach this port does not "
+        "declare a method for"
+    )
+    assert offending == [], (
+        f"{offending} insert into a principal-partitioned memory table without "
+        "stamping the partition through `principal_scope`. Every insert here goes "
+        "through `_bound`, which refuses a value that already carries one"
     )
 
 
@@ -1993,6 +2052,9 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
                 # proves ownership by joining to `captures.owner_principal_id`. That
                 # comparison is registered in `HAND_WRITTEN_COMPARISONS`.
                 "infrastructure/persistence/entity_authoring.py",
+                # `WP-RI-B-05`'s producer insert, held by
+                # `test_every_memory_proposal_statement_reaches_the_partition`.
+                "infrastructure/persistence/relationship_memory_proposals.py",
             }
         )
         == STATEMENT_LEVEL
@@ -2003,7 +2065,8 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
         "`test_every_reveal_statement_reaches_the_partition`, "
         "`test_every_corpus_coverage_statement_reaches_the_partition`, "
         "`test_every_managed_document_statement_reaches_the_partition_or_is_registered` "
-        "and `test_every_entity_statement_reaches_the_partition` are the six "
+        "`test_every_entity_statement_reaches_the_partition` and "
+        "`test_every_memory_proposal_statement_reaches_the_partition` are the seven "
         "that exist"
     )
 

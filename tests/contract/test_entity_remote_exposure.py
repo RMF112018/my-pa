@@ -65,6 +65,21 @@ ENTITY_READS: Final[frozenset[str]] = frozenset(
 ENTITY_WRITES: Final[frozenset[str]] = ENTITY_CAPABILITIES - ENTITY_READS
 
 
+#: The two names that are *also* operator-only, and so never join a remote
+#: profile at all. `remote_tool_names` drops an operator-only capability before it
+#: classifies read from write, so every assertion below about the remote surface
+#: has to subtract them: they are withheld by a gate that is not the one this file
+#: is about, and asserting they appear when writes are enabled would be asserting
+#: the operator boundary away.
+OPERATOR_ONLY_WRITES: Final[frozenset[str]] = frozenset(
+    {"entities.merge.preview", "entities.merge"}
+)
+
+#: The write half a remote client can ever reach, which is the write half less
+#: the two above.
+REMOTE_REACHABLE_WRITES: Final[frozenset[str]] = ENTITY_WRITES - OPERATOR_ONLY_WRITES
+
+
 def _service(*, enabled: bool) -> ApplicationService:
     """Two services whose only difference is the one switch.
 
@@ -113,6 +128,12 @@ def test_the_names_this_file_is_about_are_the_family() -> None:
         "entities.restore",
         "entities.unresolved_mentions.resolve",
         "entities.update",
+        # Phase B's three. A proposal writes a request, a preview writes a
+        # durable control row, and a merge rewrites canonical rows -- so all
+        # three carry a write purpose and land in this half.
+        "entities.proposals.create",
+        "entities.merge.preview",
+        "entities.merge",
     }
     assert ENTITY_READS | ENTITY_WRITES == ENTITY_CAPABILITIES
 
@@ -176,7 +197,10 @@ def test_a_build_with_the_plane_withholds_every_write_until_writes_are_enabled()
     withheld = remote_tool_names(_service(enabled=True), writes_enabled=False)
     assert withheld & ENTITY_WRITES == frozenset()
     granted = remote_tool_names(_service(enabled=True), writes_enabled=True)
-    assert granted >= ENTITY_WRITES
+    assert granted >= REMOTE_REACHABLE_WRITES
+    # And the two operator-only writes are still absent with writes enabled,
+    # which is the second gate rather than this one.
+    assert not granted & OPERATOR_ONLY_WRITES
 
 
 def test_the_read_half_is_classified_as_a_read_and_the_write_half_as_a_write() -> None:
@@ -216,13 +240,23 @@ def test_the_three_purposes_do_not_overlap() -> None:
     assert not ingest & authoring
 
 
-def test_none_of_the_family_is_operator_only() -> None:
+def test_only_the_governed_merge_is_operator_only_on_this_family() -> None:
     """Operator-only is about who may call one, not about whether this build has it.
 
-    The two are different gates and the plane uses the second. Asserted so a
-    future change cannot quietly swap them: making these operator-only would
-    withhold them from the Principal whose own records they are.
+    The two are different gates and most of this plane uses only the second.
+    **This test used to say none of the family was operator-only**, and that was
+    true of every name until `WP-RI-B-06`. It is corrected rather than deleted,
+    because the reasoning it carried is still the reasoning that keeps the other
+    twenty-nine out: making an ordinary entity read or write operator-only would
+    withhold it from the Principal whose own records they are, and none of them
+    widens the scope a later request is evaluated against.
+
+    The governed merge does widen it -- afterwards every child of a merged-away
+    entity is reached through the survivor -- which is the test `_OPERATOR_ONLY`
+    applies, and operator section 24 states the conclusion independently.
     """
     for capability in Capability:
         if capability.value in ENTITY_CAPABILITIES:
-            assert not is_operator_only(capability)
+            assert is_operator_only(capability) == (
+                capability.value in OPERATOR_ONLY_WRITES
+            )

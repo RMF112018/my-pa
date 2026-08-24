@@ -55,7 +55,16 @@ from my_pa.domain.identity.purpose import Purpose
 #: The purposes that mean "this capability changes something", read off the
 #: transport that already decides read-versus-write with them.
 WRITE_PURPOSES: Final[frozenset[Purpose]] = frozenset(
-    {Purpose.ENTITY_AUTHORING, Purpose.ENTITY_OBSERVATION_INGEST}
+    {
+        Purpose.ENTITY_AUTHORING,
+        Purpose.ENTITY_OBSERVATION_INGEST,
+        # `WP-RI-B-05` and `WP-RI-B-06`. A proposal writes a request rather than
+        # a canonical fact and a preview writes a control row rather than either,
+        # and both are still writes -- so both purposes belong here, and a
+        # read-only build withholds all three names that carry them.
+        Purpose.ENTITY_PROPOSAL,
+        Purpose.ENTITY_IDENTITY_CORRECTION,
+    }
 )
 
 
@@ -72,13 +81,20 @@ ENTITY_WRITES: Final[frozenset[Capability]] = frozenset(
 ENTITY_READS: Final[frozenset[Capability]] = _ENTITY_CAPABILITIES - ENTITY_WRITES
 
 
-def _service(*, plane: bool, writes: bool) -> ApplicationService:
-    """One build per state, through the shared builder so only the flags differ."""
+def _service(*, plane: bool, writes: bool, identity: bool = True) -> ApplicationService:
+    """One build per state, through the shared builder so only the flags differ.
+
+    `identity` defaults to *on* so that the two governed-merge names are inside
+    every assertion below rather than withheld by a third gate this file is not
+    about. `test_the_identity_correction_gate_is_a_third_narrowing` is where that
+    gate is the subject.
+    """
     return build_service(
         World(),
         FakeProviders(),
         relationship_intelligence_enabled=plane,
         relationship_intelligence_writes_enabled=writes,
+        relationship_identity_correction_enabled=identity,
     )
 
 
@@ -92,7 +108,9 @@ def test_the_write_set_the_service_subtracts_is_the_set_with_a_write_purpose() -
     here instead.
     """
     assert ENTITY_WRITES == _ENTITY_WRITE_CAPABILITIES
-    assert len(ENTITY_WRITES) == 18
+    # Twenty-one since Phase B: the eighteen Phase A writes, the producer path,
+    # and the governed merge's two halves.
+    assert len(ENTITY_WRITES) == 21
     assert ENTITY_WRITES < _ENTITY_CAPABILITIES
     assert not ENTITY_READS & ENTITY_WRITES
 
@@ -127,7 +145,7 @@ def test_a_read_only_build_withholds_the_writes_from_the_remote_profile(
     assert not remote & {capability.value for capability in ENTITY_WRITES}
 
 
-def test_a_fully_composed_build_serves_all_twenty_eight() -> None:
+def test_a_fully_composed_build_serves_all_thirty_one() -> None:
     """The non-vacuity control: the assertions above are about a switch.
 
     Without this, a gate that withheld the writes unconditionally — or a
@@ -138,6 +156,33 @@ def test_a_fully_composed_build_serves_all_twenty_eight() -> None:
     assert served >= _ENTITY_CAPABILITIES
     names = {tool.name for tool in published_tools(_service(plane=True, writes=True))}
     assert {capability.value for capability in _ENTITY_CAPABILITIES} <= names
+
+
+def test_the_identity_correction_gate_is_a_third_narrowing_of_the_same_plane() -> None:
+    """`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, on its own axis.
+
+    The plane switch withholds all thirty-one names; the write switch withholds
+    twenty-one of them; this one withholds two out of those twenty-one. Asserted
+    as a strict subset relation rather than as three memberships, because the
+    failure this prevents is a gate that turned into the gate beside it -- a
+    build with writes on and identity correction off must serve every other
+    write, and a build with identity correction off must serve no merge whatever
+    the other two switches say.
+    """
+    from my_pa.application.service import _IDENTITY_CORRECTION_CAPABILITIES
+
+    assert _IDENTITY_CORRECTION_CAPABILITIES < _ENTITY_WRITE_CAPABILITIES
+    without = _service(plane=True, writes=True, identity=False).available_capabilities
+    assert not without & _IDENTITY_CORRECTION_CAPABILITIES
+    assert without >= _ENTITY_WRITE_CAPABILITIES - _IDENTITY_CORRECTION_CAPABILITIES
+    names = {
+        tool.name
+        for tool in published_tools(_service(plane=True, writes=True, identity=False))
+    }
+    assert not names & {capability.value for capability in _IDENTITY_CORRECTION_CAPABILITIES}
+    for plane, writes in ((False, False), (True, False)):
+        served = _service(plane=plane, writes=writes, identity=True).available_capabilities
+        assert not served & _IDENTITY_CORRECTION_CAPABILITIES
 
 
 def test_a_build_without_the_plane_withholds_the_reads_too() -> None:

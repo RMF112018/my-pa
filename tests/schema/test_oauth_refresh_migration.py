@@ -73,7 +73,12 @@ MEMORY_REVISION = "f1c6b904a2d7"
 #: the order rather than about whichever revision happens to be last.
 LIFECYCLE_REVISION = "2fe4e13fb449"
 PHASE_A_REVISION = "823e23b6cc63"
-HEAD_REVISION = PHASE_A_REVISION
+#: Phase B's vocabulary revision, which is where `upgrade head` now lands.
+#: `PHASE_A_REVISION` above was head until the Phase B chain stacked on it;
+#: naming both keeps the chain assertion below a statement about the order
+#: rather than about whichever revision happens to be last.
+PHASE_B_REVISION = "b64e29a0f7c1"
+HEAD_REVISION = PHASE_B_REVISION
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -172,7 +177,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(WORK_REVISION).down_revision == INTELLIGENCE_REVISION
     assert script.get_revision(MEMORY_REVISION).down_revision == WORK_REVISION
     assert script.get_revision(HEAD_REVISION).down_revision == LIFECYCLE_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 69
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 74
 
 
 @pytest.mark.database

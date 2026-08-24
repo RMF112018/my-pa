@@ -97,6 +97,7 @@ from my_pa.contracts.ports import (
     PreferenceConflictError,
     ProjectRepository,
     PulseRepository,
+    RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RelationshipWriteRequest,
     ReviewDecisionRequest,
@@ -243,10 +244,12 @@ from my_pa.domain.relationship.memory import (
     MemoryKind,
     MemoryLifecycle,
     MemoryOperation,
+    MemoryProposalEvidence,
     MemoryReceipt,
     MergedSubjectError,
     RelationshipMemory,
     RelationshipMemoryError,
+    RelationshipMemoryProposal,
     RelationshipMemoryReviewCase,
     RelationshipMemoryVersion,
     StaleMemoryVersionError,
@@ -538,6 +541,16 @@ class World:
     #: `review_version` is the count of. Separate from `review_decisions` because
     #: they are two tables about two subjects, exactly as they are in the schema.
     entity_review_decisions: list[EntityProposalReviewDecision] = field(default_factory=list)
+    #: The Relationship Memory producer's two tables (`WP-RI-B-05`). Flat lists
+    #: for the reason every other ledger here is one: this fake's whole job is
+    #: the partition predicate and the shape, and a list a filter runs over is
+    #: the clearest place to see one of them missing. They are separate fields
+    #: from `entity_proposals` because they are a different plane's tables about
+    #: a different subject, exactly as they are in the schema.
+    relationship_memory_proposals: list[RelationshipMemoryProposal] = field(default_factory=list)
+    relationship_memory_proposal_evidence: list[MemoryProposalEvidence] = field(
+        default_factory=list
+    )
     entity_merges: list[EntityMergeRecord] = field(default_factory=list)
     #: The entity plane's three ledgers, shared by every writer on it. Flat
     #: lists for the reason the entity ones are: the fake's only job is the
@@ -5143,6 +5156,42 @@ def _refuse_websearch_control(query: str) -> None:
         )
 
 
+class _RelationshipMemoryProposals(RelationshipMemoryProposalRepository):
+    """The producer's one insert over `World` (`WP-RI-B-05`).
+
+    One method, because the port declares one. That is the whole of what this
+    fake has to reproduce and the whole of what it is allowed to: a producer
+    handed this object cannot reach `relationship_memories`, and a fake with a
+    convenience read on it would let a unit test prove a producer can do
+    something the server's port has no method for.
+
+    **What it reproduces.** The insert is atomic in the sense that matters here:
+    the two lists are appended together, so a run that raised part-way would not
+    leave a candidate with no evidence. The domain records arrive already
+    validated -- `RelationshipMemoryProposal.__post_init__` and
+    `MemoryProposalEvidence.__post_init__` have run -- and nothing is re-checked,
+    exactly as `SqlRelationshipMemoryProposalRepository` re-checks nothing.
+
+    **What it cannot prove.** There is no unique constraint, no partition
+    predicate enforced by a server and no foreign key, so a unit test cannot
+    learn from this fake that a candidate naming a foreign subject is refused --
+    the scoped entity read in the handler is what refuses that, and
+    `tests/database/` is where the server's own guarantees are proved.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def record_proposal(
+        self,
+        proposal: RelationshipMemoryProposal,
+        evidence: tuple[MemoryProposalEvidence, ...],
+    ) -> None:
+        self._world.fail("relationship_memory.record_proposal")
+        self._world.relationship_memory_proposals.append(proposal)
+        self._world.relationship_memory_proposal_evidence.extend(evidence)
+
+
 class _RelationshipMemories(RelationshipMemoryRepository):
     """The Relationship Memory plane over `World`, partition-first.
 
@@ -5904,6 +5953,18 @@ class FakeUnitOfWork(UnitOfWork):
         return _Entities(self._world)
 
     @property
+    def relationship_memory_proposals(self) -> RelationshipMemoryProposalRepository:
+        """The producer's one insert over this `World` (`WP-RI-B-05`).
+
+        Composed unconditionally, for the reason `relationship_memory` below is:
+        the base class's own property raises, so a unit of work that did not
+        override it turns the producer handler into a crash rather than an
+        answer, and `ApplicationService` reads the plane switches to decide
+        whether to reach for it.
+        """
+        return _RelationshipMemoryProposals(self._world)
+
+    @property
     def relationship_memory(self) -> RelationshipMemoryRepository:
         """The Relationship Memory plane over this `World` (WP-RM-01).
 
@@ -6056,6 +6117,7 @@ def build_service(
     relationship_intelligence_enabled: bool = True,
     relationship_intelligence_writes_enabled: bool = True,
     relationship_memory_enabled: bool = True,
+    relationship_identity_correction_enabled: bool = True,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -6108,6 +6170,29 @@ def build_service(
         # memory plane off with it and does not have to say so twice.
         relationship_memory_enabled=(
             relationship_intelligence_enabled and relationship_memory_enabled
+        ),
+        # Enabled by the same default reasoning, and conjoined with the write
+        # switch above it for the reason that one is conjoined with the plane:
+        # `Settings._check` refuses a process that turns this on without the
+        # gates below it, and a test that turns the plane or the writes off
+        # should not have to say so twice.
+        #
+        # **What "enabled" buys here is publication and not execution**, and the
+        # difference is worth stating rather than discovering. With this on,
+        # `capabilities.get`, the local tool list and the remote profile all
+        # answer about `entities.merge.preview` and `entities.merge`, which is
+        # what the manifest and annotation tests are for. Neither one can be
+        # *executed* against this `World`: `_Entities` implements none of the
+        # sixteen identity-correction port methods, and a fake that
+        # approximated a governed merge would let a unit test prove something
+        # the server does not do. The merge is proved against a real server, in
+        # `tests/database/test_identity_correction_merge.py` and
+        # `tests/recovery/test_identity_correction_recovery.py`. A sweep that
+        # *invokes* every capability passes `False` here and says so.
+        relationship_identity_correction_enabled=(
+            relationship_intelligence_enabled
+            and relationship_intelligence_writes_enabled
+            and relationship_identity_correction_enabled
         ),
     )
 

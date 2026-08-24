@@ -552,12 +552,18 @@ def test_a_child_with_a_managed_root_publishes_every_capability(tmp_path: Path) 
         MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED="true",
         # Every relationship switch, because each narrows the surface and "every
         # capability" is the claim this test makes. The write switch withholds
-        # the twenty-one `entities.` writes on its own, and the memory plane needs
-        # the entity plane under it; narrowing the claim to what a partly
-        # composed build publishes would leave those names proved reachable in
-        # no composed process at all.
+        # the twenty-one `entities.` writes on its own, the memory plane needs
+        # the entity plane under it, and the identity-correction switch is a
+        # third narrowing *inside* the write half that withholds the governed
+        # merge's two halves; narrowing the claim to what a partly composed build
+        # publishes would leave those names proved reachable in no composed
+        # process at all. Phase B added the fourth switch and this list is the
+        # thing that has to grow with it -- it did not, and a `database`-marked
+        # test is invisible to the FAST tier, so the miss survived every fast
+        # gate and was caught only by the full tier.
         MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED="true",
         MY_PA_RELATIONSHIP_MEMORY_ENABLED="true",
+        MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED="true",
     )
     assert composed == [capability.value for capability in Capability]
     assert {capability.value for capability in _COMPOSED_CAPABILITIES} <= set(composed)

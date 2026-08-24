@@ -51,6 +51,7 @@ from __future__ import annotations
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from datetime import date, datetime
 from enum import StrEnum
 from types import MappingProxyType
@@ -72,6 +73,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
@@ -113,8 +115,11 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewEntityMerge,
+    ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -194,6 +199,7 @@ from my_pa.domain.relationship.governance import (
     ResolutionDisposition,
 )
 from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
+from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -1459,6 +1465,62 @@ def _correction_patch(patch: Any) -> CorrectionPatch:  # noqa: ANN401 - a decode
         raise InvalidRequestError(SafeDetail.CORRECTED_VALUE) from None
 
 
+# --- WP-RI-B: the two producer paths and the governed merge -------------------
+#
+# Shape conversion and nothing else, exactly as every builder above is. JSON has
+# no enum and no tuple; a value outside a closed vocabulary is left as it arrived
+# so the command reports it under its own field name, and no rule about which
+# fields a payload may carry is decided here — that is the proposal schema's, the
+# preview's and the domain's, and a copy here would be a copy able to disagree.
+
+
+def _create_entity_proposal(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    kind = converted.get("kind")
+    if isinstance(kind, str):
+        try:
+            converted["kind"] = EntityProposalKind(kind)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.PROPOSAL_KIND) from None
+    observations = converted.get("evidence_observation_ids")
+    if isinstance(observations, list):
+        converted["evidence_observation_ids"] = tuple(observations)
+    return CreateEntityProposal(**converted)
+
+
+def _propose_relationship_memory(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    kind = converted.get("kind")
+    if isinstance(kind, str):
+        # Left as it arrived on a bad value, the way `_memory_vocabulary` leaves
+        # one, so the command reports `kind` rather than this reporting a field
+        # a payload may have got wrong twice.
+        with suppress(ValueError):
+            converted["kind"] = MemoryKind(kind)
+    evidence = converted.get("evidence")
+    if isinstance(evidence, list):
+        converted["evidence"] = tuple(evidence)
+    return ProposeRelationshipMemory(**converted)
+
+
+def _preview_entity_merge(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    for name in ("merged_away", "evidence_refs"):
+        value = converted.get(name)
+        if isinstance(value, list):
+            converted[name] = tuple(value)
+    return PreviewEntityMerge(**converted)
+
+
+def _merge_entities(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    for name in ("choices", "evidence_refs"):
+        value = converted.get(name)
+        if isinstance(value, list):
+            converted[name] = tuple(value)
+    return MergeEntities(**converted)
+
+
 #: One builder per command owned by these legacy transports. WP-12C adds a
 #: distinct authenticated native-host boundary; its capabilities are valid
 #: audit vocabulary but remain intentionally absent here until WP-12G owns the
@@ -1554,6 +1616,10 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_OBSERVE: _observe_entity_mention,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: _resolve_unresolved_mention,
         Capability.RELATIONSHIP_MEMORY_CREATE: _create_relationship_memory,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: _propose_relationship_memory,
+        Capability.ENTITIES_PROPOSALS_CREATE: _create_entity_proposal,
+        Capability.ENTITIES_MERGE_PREVIEW: _preview_entity_merge,
+        Capability.ENTITIES_MERGE: _merge_entities,
         Capability.RELATIONSHIP_MEMORY_GET: _get_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_LIST: _list_relationship_memories,
         Capability.RELATIONSHIP_MEMORY_SEARCH: _search_relationship_memories,

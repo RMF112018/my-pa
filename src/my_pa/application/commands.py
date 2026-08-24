@@ -42,6 +42,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail
+from my_pa.application.identity_correction import ConflictChoice
 from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
 from my_pa.domain.capture.review import (
     REVIEW_REASON_LIMIT,
@@ -122,11 +123,13 @@ from my_pa.domain.relationship.governance import (
     ObservationKind,
     ResolutionDisposition,
 )
+from my_pa.domain.relationship.identity_correction import MAX_MERGED_AWAY_ENTITIES
 from my_pa.domain.relationship.memory import (
     CONTEXT_TARGET_ID_KINDS,
     MAX_CONTEXT_LINKS_PER_VERSION,
     MAX_CORRECTION_REASON_CHARACTERS,
     MAX_STATEMENT_CHARACTERS,
+    EvidenceLinkRole,
     MemoryKind,
     MemoryLifecycle,
 )
@@ -136,6 +139,7 @@ from my_pa.domain.relationship.memory import (
 from my_pa.domain.relationship.memory import (
     ContextLinkTargetType as MemoryContextTargetType,
 )
+from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 from my_pa.domain.search.query import MAX_QUERY_CHARACTERS, SearchQuery, SearchQueryError
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -5206,6 +5210,363 @@ class SupersedeEntityAlias:
         _entity_evidence(self.evidence)
 
 
+def _proposed_by(value: object) -> str:
+    """The producer's own identity, present and bounded.
+
+    A producer names itself so a reviewer can see what raised the candidate. It
+    is not an authority: the Principal, the method and the model identity are all
+    the server's, and nothing downstream reads this field to decide anything.
+    Bounded at `MENTION_DISPLAY_NAME_LIMIT`, which is the same bound the column
+    carries.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequestError(SafeDetail.PROPOSED_BY)
+    if len(value) > MENTION_DISPLAY_NAME_LIMIT:
+        raise InvalidRequestError(SafeDetail.PROPOSED_BY)
+    return value
+
+
+def _proposal_observation_ids(
+    value: object, *, detail: SafeDetail = SafeDetail.OBSERVATION_ID
+) -> tuple[str, ...]:
+    """Entity observations one proposal or one merge cites, bounded and distinct.
+
+    Whether an observation exists and whose partition it belongs to is decided by
+    the repository and cannot be decided here: this layer holds no port, and the
+    repository answers a foreign observation exactly as an absent one.
+    """
+    if not isinstance(value, tuple):
+        raise InvalidRequestError(detail)
+    if len(value) > MAX_EVIDENCE_REFERENCES:
+        raise InvalidRequestError(detail)
+    for reference in value:
+        _identifier(reference, IdKind.ENTITY_OBSERVATION, detail)
+    if len(set(value)) != len(value):
+        raise InvalidRequestError(detail)
+    return value
+
+
+#: The three record kinds one memory-proposal evidence entry may name, and the
+#: `IdKind` each is checked against. Exactly one per entry, which is the rule
+#: `memory_proposal_evidence_names_exactly_one_record` enforces at the server and
+#: `MemoryProposalEvidence.__post_init__` enforces in the domain; this restates
+#: the *shape* a transport can refuse without a repository, and restates none of
+#: the semantics.
+_MEMORY_EVIDENCE_TARGETS: Mapping[str, IdKind] = MappingProxyType(
+    {
+        "entity_observation_id": IdKind.ENTITY_OBSERVATION,
+        "capture_span_id": IdKind.SPAN,
+        "knowledge_id": IdKind.KNOWLEDGE,
+    }
+)
+
+
+def _proposal_payload(value: object) -> Mapping[str, str | bool]:
+    """A flat mapping of names to strings and flags, and nothing more.
+
+    Shape only. Which names this kind admits, which it requires, and which are
+    server-owned are `EntityProposalPayload`'s and `FORBIDDEN_PAYLOAD_FIELDS`',
+    and re-deciding any of them here would be a second copy of the schema able to
+    disagree with the one the dedupe digest is computed from.
+    """
+    if not isinstance(value, Mapping):
+        raise InvalidRequestError(SafeDetail.PAYLOAD)
+    for name, item in value.items():
+        if not isinstance(name, str) or not name:
+            raise InvalidRequestError(SafeDetail.PAYLOAD)
+        if not isinstance(item, str | bool):
+            raise InvalidRequestError(SafeDetail.PAYLOAD)
+    return value
+
+
+def _memory_proposal_evidence(value: object) -> tuple[Mapping[str, str], ...]:
+    """At least one citation, each a known role and exactly one record identifier.
+
+    Required, and required here as well as in the use case: a produced candidate
+    with no record behind it is an assertion a reviewer cannot check, and the
+    emptiness is a shape a transport can refuse without reading the statement.
+    """
+    if not isinstance(value, tuple) or not value:
+        raise InvalidRequestError(SafeDetail.EVIDENCE)
+    if len(value) > MAX_EVIDENCE_REFERENCES:
+        raise InvalidRequestError(SafeDetail.EVIDENCE)
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        if set(entry) - set(_MEMORY_EVIDENCE_TARGETS) - {"role"}:
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        role = entry.get("role")
+        if not isinstance(role, str):
+            raise InvalidRequestError(SafeDetail.ROLE)
+        try:
+            EvidenceLinkRole(role)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.ROLE) from None
+        named = [name for name in _MEMORY_EVIDENCE_TARGETS if entry.get(name) is not None]
+        if len(named) != 1:
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        _identifier(entry[named[0]], _MEMORY_EVIDENCE_TARGETS[named[0]], SafeDetail.EVIDENCE)
+    return value
+
+
+def _merged_away(value: object, survivor_entity_id: str) -> tuple[Mapping[str, object], ...]:
+    """One to ten `(entity_id, expected_version)` pairs, distinct, without the survivor.
+
+    Every rule here is also enforced by `IdentityPreview.__post_init__`, and the
+    duplication is the same one every command in this module carries: the domain
+    refuses the request whatever built it, and the transport refuses it under the
+    field name a caller can act on. `MAX_MERGED_AWAY_ENTITIES` is imported rather
+    than restated, so the two cannot disagree about the number.
+    """
+    if not isinstance(value, tuple) or not value:
+        raise InvalidRequestError(SafeDetail.MERGED_AWAY)
+    if len(value) > MAX_MERGED_AWAY_ENTITIES:
+        raise InvalidRequestError(SafeDetail.MERGED_AWAY)
+    seen: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, Mapping) or set(entry) != {"entity_id", "expected_version"}:
+            raise InvalidRequestError(SafeDetail.MERGED_AWAY)
+        entity_id = entry["entity_id"]
+        _identifier(entity_id, IdKind.ENTITY, SafeDetail.MERGED_AWAY)
+        _expected_version(entry["expected_version"])
+        if entity_id == survivor_entity_id or entity_id in seen:
+            raise InvalidRequestError(SafeDetail.MERGED_AWAY)
+        seen.add(str(entity_id))
+    return value
+
+
+def _merge_choices(value: object) -> tuple[Mapping[str, str], ...]:
+    """One disposition per record the preview said needed one, named once each.
+
+    Whether these are *exactly* the records the preview reported is decided
+    against the stored preview, not here: this layer has no preview to compare
+    against, and a shape check that implied otherwise would be the more
+    dangerous half of a check.
+    """
+    if not isinstance(value, tuple):
+        raise InvalidRequestError(SafeDetail.CHOICES)
+    if len(value) > MAX_MERGED_AWAY_ENTITIES * MAX_EVIDENCE_REFERENCES:
+        raise InvalidRequestError(SafeDetail.CHOICES)
+    seen: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, Mapping) or set(entry) != {"record_id", "choice"}:
+            raise InvalidRequestError(SafeDetail.CHOICES)
+        record_id = entry["record_id"]
+        if not isinstance(record_id, str) or not record_id.strip():
+            raise InvalidRequestError(SafeDetail.CHOICES)
+        if record_id in seen:
+            raise InvalidRequestError(SafeDetail.CHOICES)
+        seen.add(record_id)
+        try:
+            ConflictChoice(entry["choice"])
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.CHOICES) from None
+    return value
+
+
+# --- WP-RI-B: the two producer paths and the governed merge -------------------
+#
+# Four commands, and what is *absent* from each is the contract. Operator §11,
+# §12, §19, §21 and §26 assign the Principal, the proposal method and model
+# identity, the review requirement, the review case, every server timestamp, the
+# dedupe digest, the actor authority and the idempotency key to the server, and
+# absence is how they stay there: a field that can be sent is a field a later
+# change can start honouring. Nothing below reads such a field and decides to
+# ignore it, because there is nothing to read.
+
+
+@dataclass(frozen=True, slots=True)
+class CreateEntityProposal:
+    """Ask a reviewer for one entity-plane change. Decides nothing and changes nothing.
+
+    This is how a source worker, a rule or a local model puts a candidate in
+    front of a person. It records what you are asking for and the exact
+    observations you read; it never performs the change, and holding it does not
+    let you decide your own proposal.
+
+    Name the kind and give payload exactly the fields that kind's own command
+    takes — no more, and none of the server's. Give expected_target_version when
+    the kind changes a record that already exists. Proposing the same thing twice
+    hands you back the proposal that is already open rather than raising a second
+    one.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PROPOSALS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "payload": {
+                "description": (
+                    "The requested mutation's own fields, as a flat object of "
+                    "strings and flags. Admitted names are exactly the ones the "
+                    "canonical command for this kind takes; a server-owned name "
+                    "is refused."
+                ),
+                "additionalProperties": {"type": ["string", "boolean"]},
+            },
+            "evidence_observation_ids": {
+                "description": "Entity observation identifiers this proposal rests on."
+            },
+        }
+    )
+
+    kind: EntityProposalKind
+    payload: Mapping[str, object] = field(repr=False)
+    proposed_by: str
+    evidence_observation_ids: tuple[str, ...] = ()
+    expected_target_version: int | None = None
+
+    def __post_init__(self) -> None:
+        _entity_vocabulary(self.kind, EntityProposalKind, SafeDetail.PROPOSAL_KIND)
+        # Shape only. Which names this kind admits, which it requires, and which
+        # are server-owned are `EntityProposalPayload`'s and
+        # `FORBIDDEN_PAYLOAD_FIELDS`', and re-deciding any of them here would be
+        # a second copy of the schema able to disagree with the one the digest is
+        # computed from.
+        _proposal_payload(self.payload)
+        _proposed_by(self.proposed_by)
+        _proposal_observation_ids(self.evidence_observation_ids)
+        if self.expected_target_version is not None:
+            _expected_version(self.expected_target_version)
+
+
+@dataclass(frozen=True, slots=True)
+class ProposeRelationshipMemory:
+    """Raise a candidate memory about someone. Creates no memory and revises none.
+
+    The producer half of the Relationship Memory plane: a rule, a source worker
+    or a local model records what it thinks is worth keeping about a person, and
+    a reviewer decides. Direct user-authored "remember this" stays
+    relationship_memory.create.
+
+    Name the subject entity and the version you resolved it at, and cite at least
+    one exact record — an entity observation, a capture span or a knowledge
+    record — for every claim. The classification floor, the method, the review
+    state and the review case are the server's.
+    """
+
+    capability: ClassVar[Capability] = Capability.RELATIONSHIP_MEMORY_PROPOSE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "evidence": {
+                "description": (
+                    "One entry per record this candidate rests on. Each names a "
+                    "role (direct, supporting, counterevidence) and exactly one "
+                    "of entity_observation_id, capture_span_id or knowledge_id."
+                ),
+                "items": {"type": "object"},
+            },
+            "structured_value": {
+                "description": "The kind's own structured envelope, when it takes one."
+            },
+        }
+    )
+
+    entity_id: str
+    expected_entity_version: int
+    statement: str = field(repr=False)
+    evidence: tuple[Mapping[str, str], ...] = field(repr=False)
+    kind: MemoryKind = MemoryKind.GENERAL_NOTE
+    structured_value: dict[str, Any] | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.SUBJECT_ENTITY_ID)
+        _expected_version(self.expected_entity_version)
+        _memory_kind(self.kind)
+        _memory_statement(self.statement)
+        _memory_proposal_evidence(self.evidence)
+        if self.structured_value is not None and not isinstance(self.structured_value, dict):
+            raise InvalidRequestError(SafeDetail.STRUCTURED_VALUE)
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewEntityMerge:
+    """Show exactly what merging these people would do, and write no identity change.
+
+    Operator-only. Reads the whole affected world of a proposed merge — aliases,
+    identifiers, assignments, relationships, observations, proposals, review
+    cases and memory references — and returns the blockers, the conflicts you
+    must decide, and every row the merge would touch.
+
+    The preview is stored, bound to these exact entities at these exact versions,
+    and expires fifteen minutes after it is taken. entities.merge will refuse
+    anything else.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_MERGE_PREVIEW
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "merged_away": {
+                "description": (
+                    "One to ten entities to merge into the survivor. Each names "
+                    "entity_id and the expected_version you read it at. The "
+                    "survivor may not appear here and no identifier may repeat."
+                ),
+                "items": {"type": "object"},
+            }
+        }
+    )
+
+    survivor_entity_id: str
+    expected_survivor_version: int
+    merged_away: tuple[Mapping[str, object], ...]
+    reason: str = field(repr=False)
+    evidence_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.survivor_entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_survivor_version)
+        _merged_away(self.merged_away, self.survivor_entity_id)
+        _bounded_reason(self.reason, SafeDetail.REASON)
+        _proposal_observation_ids(self.evidence_refs, detail=SafeDetail.EVIDENCE_REFS)
+
+
+@dataclass(frozen=True, slots=True)
+class MergeEntities:
+    """Perform the merge a preview described, exactly as it described it.
+
+    Operator-only, atomic, and refused outright when anything has moved: an
+    expired preview, a version that changed, a digest that does not match, or a
+    conflict the preview did not report all refuse and write nothing. Nothing is
+    deleted — merged-away people become redirects to the survivor and their
+    history is kept.
+
+    Send back the preview identifier and the digest it gave you, and one choice
+    for each record the preview listed under required_choices. An identical retry
+    returns the receipt of the merge you already performed.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_MERGE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "choices": {
+                "description": (
+                    "One entry per record the preview reported under "
+                    "required_choices. Each names record_id and a choice of "
+                    "reparent or coalesce. No more and no fewer."
+                ),
+                "items": {"type": "object"},
+            }
+        }
+    )
+
+    preview_id: str
+    preview_digest: str
+    reason: str = field(repr=False)
+    evidence_refs: tuple[str, ...] = ()
+    choices: tuple[Mapping[str, str], ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.preview_id, IdKind.ENTITY_IDENTITY_PREVIEW, SafeDetail.PREVIEW_ID)
+        _sha256_digest(self.preview_digest, SafeDetail.PREVIEW_DIGEST)
+        _bounded_reason(self.reason, SafeDetail.REASON)
+        _proposal_observation_ids(self.evidence_refs, detail=SafeDetail.EVIDENCE_REFS)
+        _merge_choices(self.choices)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -5302,6 +5663,10 @@ type Command = (
     | ReviseRelationshipMemory
     | ArchiveRelationshipMemory
     | RestoreRelationshipMemory
+    | CreateEntityProposal
+    | ProposeRelationshipMemory
+    | PreviewEntityMerge
+    | MergeEntities
 )
 
 

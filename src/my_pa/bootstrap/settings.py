@@ -387,6 +387,29 @@ class Settings(StrictModel):
     #: are one decision, and an operator who wants entity reads should not have
     #: to accept memory authoring to get them.
     relationship_memory_enabled: bool = False
+    #: Process-local gate for the governed identity merge (WP-RI-06). Default
+    #: off, and it requires **both** switches above it: identity correction is
+    #: unavailable unless every lower gate is enabled (operator §18). `_check`
+    #: ends the process rather than resolving a contradiction, exactly as the
+    #: write switch does.
+    #:
+    #: A third switch rather than a reuse of the write switch, because the two
+    #: admit different things. The write switch publishes eighteen writes that
+    #: each change one record of one entity, every one of them reversible by its
+    #: own inverse. This publishes two capabilities that collapse up to eleven
+    #: identities into one, reparent every child they own, and are undone only
+    #: by a split this phase does not implement. An operator who wants entity
+    #: authoring should not have to accept identity correction to get it.
+    #:
+    #: **Off is fail-closed on every transport.**
+    #: `ApplicationService.available_capabilities` subtracts
+    #: `_IDENTITY_CORRECTION_CAPABILITIES`, which is what `capabilities.get` and
+    #: the MCP tool list read, and both handlers ask again through
+    #: `_identity_correction_plane()` because the HTTP transport routes by path
+    #: segment straight into `_HANDLERS` and consults neither. Both capabilities
+    #: are operator-only as well, so the flag is the *second* of two independent
+    #: gates rather than the only one.
+    relationship_identity_correction_enabled: bool = False
     goodnotes_self_improving_optimizer_enabled: bool = False
     goodnotes_rollout_stage: GoodNotesRolloutStage = GoodNotesRolloutStage.OBSERVE_ONLY
     remote_mcp_public_host: str = ""
@@ -514,6 +537,26 @@ class Settings(StrictModel):
                 f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED. There is no inference: "
                 "the entity plane's writes are not served by a process that does not "
                 "serve the plane"
+            )
+        if self.relationship_identity_correction_enabled and (
+            not self.relationship_intelligence_writes_enabled
+        ):
+            # The second half of operator §18's ordering, and it is checked
+            # against the *write* switch rather than the plane switch on
+            # purpose. Checking the plane switch alone would admit a process
+            # serving governed merges while refusing every ordinary entity
+            # write — a build where an operator may collapse two identities and
+            # may not correct a misspelled name. The write switch already
+            # requires the plane switch above, so this one line makes the whole
+            # chain transitive: identity correction is unavailable unless every
+            # lower gate is enabled.
+            raise SettingsError(
+                f"{ENV_PREFIX}RELATIONSHIP_IDENTITY_CORRECTION_ENABLED requires "
+                f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED (which itself "
+                f"requires {ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED). There is no "
+                "inference: a governed merge rewrites the records the entity plane's "
+                "writes maintain, and a process that does not serve those writes does "
+                "not serve the operation that rewrites them"
             )
         if not self.redaction_enabled:
             raise SettingsError(

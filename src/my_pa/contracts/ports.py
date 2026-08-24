@@ -156,8 +156,10 @@ from my_pa.domain.relationship.memory import (
     MemoryKind,
     MemoryLifecycle,
     MemoryOperation,
+    MemoryProposalEvidence,
     MemoryReceipt,
     RelationshipMemory,
+    RelationshipMemoryProposal,
     RelationshipMemoryReviewCase,
     RelationshipMemoryVersion,
 )
@@ -3514,6 +3516,23 @@ class UnitOfWork(ABC):
         raise NotImplementedError
 
     @property
+    def relationship_memory_proposals(self) -> RelationshipMemoryProposalRepository:
+        """The producer's one insert on the memory plane, inside this transaction.
+
+        A property of its own beside `relationship_memory` rather than a method
+        on it, and the separation is what operator §12 rests on: the object
+        `relationship_memory.propose` is handed cannot reach
+        `relationship_memories`, so "a producer must not create active memory
+        directly" is a fact about the port rather than a branch a later writer
+        might add.
+
+        Non-abstract with a refusal, exactly as `relationship_memory` above is
+        and for the same reason: the narrow doubles in `tests/schema` and
+        `tests/concurrency` implement only the ports their subject needs.
+        """
+        raise NotImplementedError
+
+    @property
     @abstractmethod
     def audit(self) -> AuditSink:
         """The audit sink, inside this transaction.
@@ -4360,6 +4379,46 @@ class RelationshipMemoryRepository(ABC):
         operator-only path none of them serves.
         """
         raise NotImplementedError
+
+
+class RelationshipMemoryProposalRepository(ABC):
+    """The producer's whole persistence surface on the memory plane: one insert.
+
+    **One method, and the count is the contract.** Operator §16 requires that a
+    source, rule or model worker never accept its own proposal, and this is where
+    that is structural rather than asserted: the port a producer's use case is
+    handed declares no `decide`, no `accept`, no `promote` and no memory write, so
+    a producer holding it has nothing to call. `RelationshipMemoryRepository` is a
+    different port reached by a different service, and promotion lives in the
+    Review path.
+
+    **Declared here rather than beside its use case, and that is a change from
+    the wave that wrote it.** `RelationshipMemoryProposalService` shipped against
+    an identical `Protocol` in `application/relationship_memory.py`, on the
+    `GoodNotesCorrectionRepository` precedent — a port whose only implementor and
+    only caller are one use case is a port the use case may own. That reasoning
+    held while nothing exposed it on the unit of work. It stops holding here:
+    `ApplicationService` reaches this through `UnitOfWork`, and a port a
+    dispatcher reaches has to be declared where `UnitOfWork` can name it, because
+    `contracts` may not import `application`. The application module now imports
+    this name so the service's own argument about it stays readable next to the
+    service.
+    """
+
+    @abstractmethod
+    def record_proposal(
+        self,
+        proposal: RelationshipMemoryProposal,
+        evidence: tuple[MemoryProposalEvidence, ...],
+    ) -> None:
+        """Insert one candidate and the exact records it rests on, atomically.
+
+        Takes the whole domain records rather than their fields, so what reaches
+        storage has been through `RelationshipMemoryProposal.__post_init__` and
+        `MemoryProposalEvidence.__post_init__` — which is what refuses a candidate
+        naming an accepted memory, a model proposal with no model, or a
+        classification below its kind's floor.
+        """
 
 
 @dataclass(frozen=True, slots=True)

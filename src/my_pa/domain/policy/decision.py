@@ -205,6 +205,13 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
+        # Phase B's four. Each names records of the acting Principal's own
+        # partition and no configured source, so a request that states a scope
+        # for one is a contradiction rather than a narrower ask.
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
         # The task plane (WP-TM-03) names a Principal, not a source. A task is
         # opened by a Principal directly — through the assistant surface or an
         # accepted review decision — and never through a configured source's

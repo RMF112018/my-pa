@@ -577,6 +577,18 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             work_engine,
             audit=audit,
             relationship_memory_enabled=relationship_memory_composed,
+            # The Entity half of the Review surface, and it is the same one
+            # switch `ApplicationService` is given below rather than a
+            # conjunction: an Entity proposal's subject is an entity of this
+            # plane and nothing else, so the plane's own flag is the whole
+            # composition. Until `WP-RI-B-07` this argument was not passed at
+            # all, so `_Reviews` defaulted closed and `review.list` returned no
+            # Entity case in any real build however the flag was set — a silent
+            # failure rather than a loud one, which is why
+            # `tests/contract/test_review_capabilities.py` now proves the wiring
+            # end to end through `build_gateway_runtime` instead of by reading
+            # this line.
+            relationship_intelligence_enabled=settings.relationship_intelligence_enabled,
         )
 
     def task_management_unit_of_work() -> SqlAlchemyTaskManagementUnitOfWork:
@@ -619,6 +631,9 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
                 settings.relationship_intelligence_writes_enabled
             ),
             relationship_memory_enabled=settings.relationship_memory_enabled,
+            relationship_identity_correction_enabled=(
+                settings.relationship_identity_correction_enabled
+            ),
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

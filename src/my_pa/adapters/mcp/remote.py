@@ -57,6 +57,30 @@ _WRITE_PURPOSES: Final = frozenset(
         Purpose.RELATIONSHIP_MEMORY_AUTHORING,
         Purpose.ENTITY_OBSERVATION_INGEST,
         Purpose.ENTITY_AUTHORING,
+        # Phase B's three, each admitted because the capability it permits
+        # persists a row. A proposal is a request rather than a canonical fact
+        # and it is still written down, so a remote producer needs
+        # remote-writes-enabled to raise one.
+        Purpose.ENTITY_PROPOSAL,
+        Purpose.RELATIONSHIP_MEMORY_PROPOSAL,
+        # `entity_identity_correction` covers `entities.merge.preview` as well as
+        # `entities.merge`, and the coupling is accepted rather than worked
+        # around (Manager R-7). This set is intersected with a capability's
+        # permitted purposes, so a shared purpose makes both write-gated — and
+        # that is the safe direction: the preview persists a durable control row
+        # and reads the exact identities of two people, so requiring
+        # remote-writes-enabled *plus* an operator grant for it is the boundary
+        # operator §24 asks for rather than an accident of the derivation.
+        # Splitting the purpose to un-gate the preview was considered and
+        # refused; `domain/identity/purpose.py` records why.
+        #
+        # Both capabilities are operator-only, so `remote_tool_names` withholds
+        # them from every remote profile before this set is consulted. The
+        # membership is still load-bearing rather than decorative: it is what
+        # keeps the classification true if the operator gate is ever the thing
+        # that changes, and it is the axis
+        # `tests/contract/test_entity_remote_exposure.py` asserts against.
+        Purpose.ENTITY_IDENTITY_CORRECTION,
     }
 )
 

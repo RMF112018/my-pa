@@ -112,7 +112,7 @@ from dataclasses import dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from itertools import islice
 from types import MappingProxyType
-from typing import Any, Final, assert_never, cast
+from typing import Any, ClassVar, Final, assert_never, cast
 from zoneinfo import ZoneInfo
 
 from my_pa.application.authorization import Authorization, authorize
@@ -134,6 +134,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateManagedDocumentCommand,
@@ -177,8 +178,11 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewEntityMerge,
+    ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -274,6 +278,12 @@ from my_pa.application.goodnotes_semantics import (
     submit_proposal,
     work_payload,
 )
+from my_pa.application.identity_correction import (
+    ConflictChoice,
+    IdentityCorrectionService,
+    MergeCommand,
+    MergePreviewCommand,
+)
 from my_pa.application.intelligence import (
     begin_cycle,
     commit_artifact,
@@ -289,6 +299,10 @@ from my_pa.application.model_gate import BoundedModelGate
 from my_pa.application.relationship_memory import (
     ArchiveMemoryCommand,
     CreateMemoryCommand,
+    MemoryProposalOrigin,
+    ProposedEvidence,
+    ProposeMemoryCommand,
+    RelationshipMemoryProposalService,
     RelationshipMemoryService,
     ReviseMemoryCommand,
 )
@@ -406,17 +420,21 @@ from my_pa.domain.relationship.governance import (
     ActorClass,
     EntityMutationConflictError,
     EntityObservation,
+    EntityProposalMethod,
     ObservationAuthorityError,
     ObservationTimeError,
     StaleResolutionVersionError,
     origin_of,
 )
+from my_pa.domain.relationship.identity_correction import IdentityConflict
 from my_pa.domain.relationship.memory import (
+    EvidenceLinkRole,
     MemoryAdmission,
     MemoryBoundsError,
     MemoryConflictError,
     MemoryKind,
     MemoryKindNotPermittedError,
+    MemoryProposalMethod,
     MemoryStructuredValueError,
     MergedSubjectError,
     RelationshipMemory,
@@ -2043,6 +2061,44 @@ _ENTITY_TRUST_BASIS: Final = ("principal_partition",)
 _ENTITY_AUTHORING_TRUST_BASIS: Final = ("principal_partition", "user_confirmed_assertion")
 
 
+#: The identity-correction views, and the two module-level helpers the two
+#: handlers share.
+
+
+def _identity_conflict_view(conflict: IdentityConflict) -> dict[str, object]:
+    """One conflict as a caller reads it: what kind, which family, which record.
+
+    No value and no name, for the reason `IdentityEffect`'s own states carry
+    none: a merge conflict is a statement about somebody's identity, and the
+    record identifier is what an operator needs to decide it.
+    """
+    return {
+        "kind": conflict.kind.value,
+        "family": conflict.family.value,
+        "record_id": conflict.record_id,
+    }
+
+
+def _merge_idempotency_key(principal_id: str, preview_id: str) -> str:
+    """The server's replay identity for one governed merge.
+
+    Over the Principal and the preview, and nothing the caller can vary
+    independently of them. A preview is consumable once, so one preview is one
+    operation: an identical retry produces this same key and replays, while a
+    materially different request naming the same preview produces this same key
+    and a different request digest, which is the conflict operator §23 asks for.
+
+    `idk_` and thirty-two hexadecimal characters, the shape
+    `adapters.remote_request` derives for the capabilities whose commands carry
+    the field. This one's command does not carry it, which is what §26 requires
+    of a server-owned field -- so the shape is shared and the *source* is not.
+    """
+    digest = hashlib.sha256(
+        f"{Capability.ENTITIES_MERGE.value}|{principal_id}|{preview_id}".encode()
+    ).hexdigest()
+    return f"idk_{digest[:32]}"
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -2059,6 +2115,7 @@ class ApplicationService:
         relationship_intelligence_enabled: bool = False,
         relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
+        relationship_identity_correction_enabled: bool = False,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._limits = _effective_limits(limits)
@@ -2089,6 +2146,13 @@ class ApplicationService:
         #: never widens an absent one.
         self._relationship_intelligence_writes_enabled = relationship_intelligence_writes_enabled
         self._relationship_memory_enabled = relationship_memory_enabled
+        # The third gate, and it is the narrowest. `_identity_correction_plane`
+        # is the floor every one of its handlers asks; `available_capabilities`
+        # is what `capabilities.get` and the MCP tool list read. Default `False`
+        # for the reason the two above it default `False`: a composition root
+        # that has not said the operation is composed gets a process that does
+        # not serve it.
+        self._relationship_identity_correction_enabled = relationship_identity_correction_enabled
         #: Explicit production composition of the optional proposal plane. The
         #: default gate is disabled; an enabled gate cannot be constructed
         #: without its local provider and canonical Review router.
@@ -2155,6 +2219,16 @@ class ApplicationService:
         # repository proves ownership of it by reading `knowledge.entities`.
         if not (self._relationship_intelligence_enabled and self._relationship_memory_enabled):
             served -= _RELATIONSHIP_MEMORY_CAPABILITIES
+        # The governed merge, narrowed separately again. Its own switch requires
+        # the write switch, which requires the plane switch, and `Settings._check`
+        # refuses a process configured otherwise -- so the three subtractions
+        # above have already removed these names whenever a lower gate is off,
+        # and this line is what a build with every lower gate on still has to
+        # pass. Written as its own condition rather than folded into the write
+        # subtraction because the two answer different questions and a build can
+        # be in either state.
+        if not self._relationship_identity_correction_enabled:
+            served -= _IDENTITY_CORRECTION_CAPABILITIES
         return served
 
     def invoke(
@@ -3378,11 +3452,23 @@ class ApplicationService:
         `resolve_mention` acceptance arriving without it is refused rather than
         performed unchecked.
 
-        `has_operator_authority` is `False`. A reviewer holding `review.decide`
-        is not thereby an operator: identity correction is `entities.merge`'s and
-        is operator-only, and an escalated case is one this capability has
-        deliberately raised out of its own reach. Section 15's "a reviewer grant
-        is not an identity-correction grant" is this one argument.
+        **`has_operator_authority` is the acting context's own declaration, and
+        it used to be hard-coded `False`.** The old sentence read "a reviewer
+        holding `review.decide` is not thereby an operator", and that is still
+        exactly right and is still what happens: `review.decide` is not
+        operator-only, so a reviewer who is not the authenticated operator gets
+        `False` here and cannot accept an escalated case or a `merge_entities`
+        proposal. What the constant also did was make `escalate` a disposition
+        with no exit -- it raises a case to the operator ceiling, and nothing
+        published could then reach it -- which is a hole in a surface Phase B
+        itself publishes rather than a boundary Phase B is keeping.
+
+        Section 15 is preserved and is preserved somewhere else, which is the
+        point: acceptance of a `merge_entities` or `split_identity` proposal
+        records reviewed intent and lineage and mutates no identity, whatever
+        this flag says. Identity mutation is `entities.merge`'s, which is
+        operator-only *and* behind its own feature gate. So an operator who
+        accepts a merge proposal here has still not merged anything.
         """
         principal_id = authorization.principal.principal_id
         resolver = EntityResolutionService(unit_of_work.entities)
@@ -3402,7 +3488,7 @@ class ApplicationService:
         return EntityProposalReviewService(unit_of_work.entities, unit_of_work.reviews).decide(
             request,
             decided_by=principal_id,
-            has_operator_authority=False,
+            has_operator_authority=self._operator_authority(authorization),
             resolve=resolve_now,
         )
 
@@ -7389,6 +7475,402 @@ class ApplicationService:
         )
         return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
 
+    # ---- WP-RI-B: the producers, and the governed merge ---------------------
+    #
+    # Four handlers, and every rule they enforce lives somewhere else. Which
+    # payload fields a proposal kind admits, what a dedupe digest is over, what a
+    # candidate memory's classification floor is, what a merge blocks on and what
+    # its effect ledger records are all `EntityGovernanceService`',
+    # `RelationshipMemoryProposalService`'s and `IdentityCorrectionService`'s, so
+    # a second copy here could not disagree with them.
+    #
+    # What this file supplies is the four things a caller may not: the Principal,
+    # the clock, the correlation and audit references the authorization already
+    # resolved, and -- for the two producer paths -- the proposal method. None of
+    # the four commands has a field for any of them.
+
+    #: How the server records what produced a proposal, when it has no producer
+    #: registry to consult.
+    #:
+    #: **This is the honest answer to a real gap and it is written here rather
+    #: than left implicit.** Operator §11 and §12 make the proposal method and the
+    #: model identity server-owned, and `FORBIDDEN_PAYLOAD_FIELDS` plus the
+    #: commands' own absent fields make a caller-supplied one unrepresentable. But
+    #: "the server owns it" only means something if the server *knows* it, and at
+    #: this head there is no producer registration: a request arrives over an
+    #: authenticated capability and nothing tells this process whether a
+    #: deterministic matcher, a rule engine or a local model composed it.
+    #:
+    #: `RULE` rather than `DETERMINISTIC`, and the direction of the error is the
+    #: reason. `EntityProposalMethod`'s own docstring names the danger: "a model
+    #: conclusion filed as a deterministic match is a model conclusion a threshold
+    #: would accept without a person". Filing every producer's work as
+    #: `deterministic` is exactly that record. `RULE` is the least specific true
+    #: statement this build can make -- something ran and asked, through the
+    #: governed producer path -- and it claims no exact match. `LOCAL_MODEL` is
+    #: refused in the other direction: it would say a model ran when none may
+    #: have, and the schema then requires a `model_id` there is none of.
+    #:
+    #: The method version names the thing that actually chose the method, which is
+    #: this dispatcher. A reviewer reading `rule / entity-proposal-dispatch.1`
+    #: learns precisely what the server can attest, which is that the candidate
+    #: arrived through this path at this version of it.
+    #:
+    #: **The residual gap, stated rather than carried:** every proposal this build
+    #: records carries the same method, so `method` currently distinguishes
+    #: nothing between producers. Closing it needs a producer registry that maps
+    #: an authenticated client to its declared method -- which is a grant-profile
+    #: change WP-09 owns, not a payload field. `model_id` and `model_version` stay
+    #: `None` on every path, so `local_model` is unreachable from any transport.
+    _PROPOSAL_METHOD: ClassVar[EntityProposalMethod] = EntityProposalMethod.RULE
+    _PROPOSAL_METHOD_VERSION: ClassVar[str] = "entity-proposal-dispatch.1"
+    _MEMORY_PROPOSAL_METHOD: ClassVar[MemoryProposalMethod] = MemoryProposalMethod.RULE
+    _MEMORY_PROPOSAL_METHOD_VERSION: ClassVar[str] = "memory-proposal-dispatch.1"
+
+    def _proposal_origin(self) -> tuple[EntityProposalMethod, str]:
+        """What the server will record as having produced an entity proposal.
+
+        **Takes nothing.** Not the command, not the payload, not the
+        authorization: the signature is the guarantee, because a function with no
+        parameters cannot have been influenced by a request. B2 named the risk
+        precisely -- "a payload cannot carry `method`, but nothing yet proves the
+        *dispatcher* did not choose it from something the caller influenced" --
+        and this is the proof, in a form
+        `tests/architecture/test_a_producer_cannot_choose_its_own_method.py`
+        reads off the signature rather than off a comment.
+        """
+        return self._PROPOSAL_METHOD, self._PROPOSAL_METHOD_VERSION
+
+    def _memory_proposal_origin(self) -> MemoryProposalOrigin:
+        """What the server will record as having produced a candidate memory.
+
+        Takes nothing, for the reason `_proposal_origin` takes nothing. `model_id`
+        and `model_version` are left unset, so `local_model` -- the one method
+        that would require them -- is unreachable from any transport.
+        """
+        return MemoryProposalOrigin(
+            method=self._MEMORY_PROPOSAL_METHOD,
+            method_version=self._MEMORY_PROPOSAL_METHOD_VERSION,
+        )
+
+    def _operator_authority(self, authorization: Authorization) -> bool:
+        """Whether the acting context is the authenticated operator.
+
+        **The one place a handler reads `is_operator`, and it decides nothing.**
+        Whether an operator-only capability may run at all was decided by
+        `domain.policy.decision.evaluate`, which denies every non-operator caller
+        of a member of `_OPERATOR_ONLY` before a handler exists. What this reports
+        is the authenticated fact, to services whose own rules are the decision:
+        `IdentityCorrectionService` refuses without it and
+        `EntityProposalReviewService` refuses an escalated case without it.
+
+        Derived rather than passed as `True` at the merge call sites, and the
+        difference is load-bearing rather than stylistic. A hard-coded `True`
+        would be correct today and would silently stop being correct the moment
+        `entities.merge` left `_OPERATOR_ONLY` -- which is exactly the mutation
+        operator §30 requires a test to catch. Derived, the code fails closed
+        under that mutation and the service's own refusal becomes reachable
+        instead of dead.
+        """
+        return authorization.principal.is_operator
+
+    def _identity_correction_plane(self) -> None:
+        """Refuse when this build has not enabled the governed merge.
+
+        The same floor `_entity_writes` is, one switch narrower, and it exists for
+        the same reason: `available_capabilities` withholds the two names and two
+        readers consult it -- `capabilities.get` and the MCP tool list -- while
+        the HTTP transport consults neither, routing by path segment straight into
+        `_HANDLERS`.
+
+        `_entity_writes()` first, so a build that turned this on without the
+        gates below it refuses on the lowest one that is off rather than on this
+        one. `Settings._check` refuses that configuration at startup, so the
+        ordering here is what holds for a process composed some other way -- a
+        test double, an embedded build -- rather than a second copy of a rule the
+        settings already enforce.
+
+        `unsupported` and not `denied`: a process without the switch has no
+        governed merge, which is a fact about the build. Who may call it is the
+        separate question `_OPERATOR_ONLY` answers, and a caller without operator
+        authority is denied by policy before reaching here.
+        """
+        self._entity_writes()
+        if not self._relationship_identity_correction_enabled:
+            raise UnsupportedError()
+
+    def _entities_proposals_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateEntityProposal,
+    ) -> _Result:
+        """`entities.proposals.create`: ask for a change, and perform none.
+
+        The producer's whole write surface on this plane. What comes back says
+        what was recorded, what it will need before it can be accepted, and
+        whether this request created it or found the same thing already open --
+        and it carries no review case identifier, because a producer handed one
+        would hold half of a reviewer's read.
+
+        **The receipt is the audit event, not a mutation ledger row.**
+        `entities.proposals.create` writes no `entity_mutation_events` row and
+        should not: `MutationRecordFamily` enumerates the canonical record classes
+        this plane can mutate, and its own docstring is what a proposal is not --
+        a proposal changes nothing, so a family for it would make the ledger a log
+        of requests as well as of facts. Every capability already writes an
+        `audit_events` row before its handler runs, and `authorization.audit_id`
+        is that row. So the contract's audit/receipt field is `audit_id`, which is
+        the same field every non-mutating capability answers with, and no enum
+        gains a member that contradicts its own definition.
+        """
+        self._entity_writes()
+        method, method_version = self._proposal_origin()
+        with _translated(), _entity_governance_translated():
+            admission = EntityGovernanceService(unit_of_work.entities).propose(
+                authorization.principal.principal_id,
+                kind=command.kind,
+                payload=cast("Mapping[str, str | bool]", command.payload),
+                observation_ids=command.evidence_observation_ids,
+                proposed_by=command.proposed_by,
+                method=method,
+                method_version=method_version,
+                at=authorization.at,
+                expected_target_version=command.expected_target_version,
+            )
+        return _Result(
+            payload={
+                "proposal_id": admission.proposal_id,
+                "kind": admission.kind.value,
+                "state": admission.state.value,
+                "review_requirement": admission.requirement.value,
+                "dedupe_sha256": admission.dedupe_sha256,
+                "evidence_refs": list(admission.observation_ids),
+                "proposed_at": format_rfc3339(admission.proposed_at),
+                "created": admission.created,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
+    def _relationship_memory_propose(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ProposeRelationshipMemory,
+    ) -> _Result:
+        """`relationship_memory.propose`: raise a candidate, and never a memory.
+
+        The subject is read through the entity plane's own Principal-scoped port
+        before anything else, which is what keeps a foreign subject
+        indistinguishable from an absent one: a caller that cannot read the entity
+        gets `None` and the same `not_found`, and never learns which of the two it
+        was. `RelationshipMemoryProposalService` re-checks the subject's Principal
+        as defence in depth; the scoped read is the first line.
+
+        **The receipt carries no statement**, because `MemoryProposalReceipt` has
+        no statement field. A `sensitivity` candidate floors at
+        `restricted_local` and the read plane withholds restricted statements from
+        search; handing the proposed words back through a producer's receipt would
+        be a second channel for exactly the text the accepted form is withheld on.
+        """
+        self._relationship_memory_plane()
+        principal_id = authorization.principal.principal_id
+        with _translated(), _memory_translated(), _entity_translated():
+            subject = unit_of_work.entities.get(principal_id, command.entity_id)
+            if subject is None:
+                raise NotFoundError(SafeDetail.SUBJECT_ENTITY_ID)
+            receipt = RelationshipMemoryProposalService().propose(
+                unit_of_work.relationship_memory_proposals,
+                ProposeMemoryCommand(
+                    principal_id=principal_id,
+                    subject_entity_id=command.entity_id,
+                    expected_subject_version=command.expected_entity_version,
+                    memory_kind=command.kind,
+                    statement=command.statement,
+                    structured_value=command.structured_value,
+                    evidence=tuple(
+                        ProposedEvidence(
+                            role=EvidenceLinkRole(entry["role"]),
+                            entity_observation_id=entry.get("entity_observation_id"),
+                            capture_span_id=entry.get("capture_span_id"),
+                            knowledge_id=entry.get("knowledge_id"),
+                        )
+                        for entry in command.evidence
+                    ),
+                ),
+                subject=subject,
+                origin=self._memory_proposal_origin(),
+                at=authorization.at,
+            )
+        return _Result(
+            payload={
+                "memory_proposal_id": receipt.memory_proposal_id,
+                "review_case_id": receipt.review_case_id,
+                "subject_entity_id": receipt.subject_entity_id,
+                "kind": receipt.proposed_kind.value,
+                "state": receipt.state.value,
+                "classification": receipt.classification.value,
+                "method": receipt.method.value,
+                "proposed_at": format_rfc3339(receipt.proposed_at),
+                "evidence_count": receipt.evidence_count,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEMORY_TRUST_BASIS),
+        )
+
+    def _entities_merge_preview(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PreviewEntityMerge,
+    ) -> _Result:
+        """`entities.merge.preview`: what a merge would do, bound and stored.
+
+        **No error translation.** `IdentityCorrectionService` raises
+        `application.errors` types directly, with the `SafeDetail` decided where
+        the failure is understood, which is `errors.py`'s own stated rule.
+        Wrapping this call in a `_..._translated()` context manager would
+        re-classify decisions that layer already made -- turning, for instance, a
+        deliberate `PREVIEW_STALE` into whatever the wrapper maps a conflict to.
+        The two producer handlers above wrap, because the services they call raise
+        domain errors; this one does not, because the service it calls does not.
+        """
+        self._identity_correction_plane()
+        report = IdentityCorrectionService(
+            unit_of_work.entities, unit_of_work.relationship_memory
+        ).preview(
+            MergePreviewCommand(
+                principal_id=authorization.principal.principal_id,
+                survivor_entity_id=command.survivor_entity_id,
+                expected_survivor_version=command.expected_survivor_version,
+                merged_away=tuple(
+                    (str(entry["entity_id"]), cast("int", entry["expected_version"]))
+                    for entry in command.merged_away
+                ),
+                reason=command.reason,
+                evidence_refs=command.evidence_refs,
+            ),
+            at=authorization.at,
+            requested_by=authorization.principal.principal_id,
+            actor_class=ActorClass.USER,
+            has_operator_authority=self._operator_authority(authorization),
+        )
+        preview = report.preview
+        return _Result(
+            payload={
+                "preview_id": preview.preview_id,
+                "preview_token": preview.preview_digest,
+                "conflict_digest": preview.conflict_digest,
+                "expires_at": format_rfc3339(preview.expires_at),
+                "affected_groups": [
+                    {
+                        "family": group.family.value,
+                        "disposition": group.disposition.value,
+                        "record_count": group.record_count,
+                    }
+                    for group in report.groups
+                ],
+                "blockers": [_identity_conflict_view(item) for item in report.blockers],
+                "conflicts": [_identity_conflict_view(item) for item in report.conflicts],
+                "required_choices": list(report.required_choices),
+                "projected_effects": [
+                    {
+                        "family": draft.family.value,
+                        "record_id": draft.record_id,
+                        "kind": draft.kind.value,
+                    }
+                    for draft in report.projected_effects
+                ],
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
+    def _entities_merge(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: MergeEntities,
+    ) -> _Result:
+        """`entities.merge`: perform the merge the preview described, or refuse.
+
+        **The idempotency key is derived here and never sent.** Operator §23 keeps
+        it out of a remote caller's hands and §26 makes it server-owned, and
+        `REMOTE_OWNED_PAYLOAD_FIELDS` refuses one that arrives anyway -- but
+        something still has to choose it. It is derived from the capability, the
+        Principal and the preview, which is the operation's identity: a preview is
+        consumable once, so one preview is one operation. An identical retry
+        therefore produces the same key and replays; a materially different
+        request against the same preview produces the same key and a different
+        request digest, which is the conflict §23 asks for. Deriving it here
+        rather than at the remote boundary is what makes that true on local MCP,
+        remote MCP and HTTP alike instead of on one transport.
+
+        **The preview token is not this key**, which §23 states as a rule: the
+        digest says "the world is still what I was shown" and the key says "this
+        is the request I already made". The key is over the preview *identifier*,
+        which the caller cannot forge into another operation's -- a preview it
+        does not own is refused as absent before the key is consulted.
+
+        No error translation, for the reason `_entities_merge_preview` gives.
+        """
+        self._identity_correction_plane()
+        principal_id = authorization.principal.principal_id
+        receipt = IdentityCorrectionService(
+            unit_of_work.entities, unit_of_work.relationship_memory
+        ).apply(
+            MergeCommand(
+                principal_id=principal_id,
+                preview_id=command.preview_id,
+                preview_digest=command.preview_digest,
+                idempotency_key=_merge_idempotency_key(principal_id, command.preview_id),
+                reason=command.reason,
+                evidence_refs=command.evidence_refs,
+                choices=tuple(
+                    sorted(
+                        (str(entry["record_id"]), ConflictChoice(entry["choice"]))
+                        for entry in command.choices
+                    )
+                ),
+            ),
+            at=authorization.at,
+            correlation_id=authorization.correlation_id,
+            audit_id=authorization.audit_id,
+            performed_by=principal_id,
+            actor_class=ActorClass.USER,
+            has_operator_authority=self._operator_authority(authorization),
+        )
+        operation = receipt.operation
+        return _Result(
+            payload={
+                "identity_operation_id": operation.identity_operation_id,
+                "state": operation.state.value,
+                "survivor_entity_id": operation.survivor_entity_id,
+                "merged_entity_ids": list(operation.merged_entity_ids),
+                "preview_id": operation.preview_id,
+                "completed_at": (
+                    None
+                    if operation.completed_at is None
+                    else format_rfc3339(operation.completed_at)
+                ),
+                "replayed": receipt.replayed,
+                "effects": [
+                    {
+                        "effect_id": effect.effect_id,
+                        "sequence": effect.sequence,
+                        "family": effect.family.value,
+                        "record_id": effect.record_id,
+                        "kind": effect.kind.value,
+                    }
+                    for effect in receipt.effects
+                ],
+                "receipt_id": operation.receipt_id,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
 
 #: The wiring. `capabilities.get` reports availability from these keys, so a
 #: capability is available exactly when something here can execute it, and there
@@ -7498,6 +7980,10 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.RELATIONSHIP_MEMORY_REVISE: ApplicationService._relationship_memory_revise,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE: ApplicationService._relationship_memory_archive,
         Capability.RELATIONSHIP_MEMORY_RESTORE: ApplicationService._relationship_memory_restore,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: ApplicationService._relationship_memory_propose,
+        Capability.ENTITIES_PROPOSALS_CREATE: ApplicationService._entities_proposals_create,
+        Capability.ENTITIES_MERGE_PREVIEW: ApplicationService._entities_merge_preview,
+        Capability.ENTITIES_MERGE: ApplicationService._entities_merge,
     }
 )
 
@@ -7538,6 +8024,9 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_OBSERVATIONS_LIST,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
     }
 )
 
@@ -7573,6 +8062,31 @@ _ENTITY_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # Phase B's three `entities.` writes. The producer path is here because
+        # it inserts a proposal row, and the two identity-correction capabilities
+        # because the preview inserts a control row and the merge rewrites
+        # canonical ones -- so a build with the plane on and writes off serves
+        # none of the three, which is what `test_entity_write_gate` derives from
+        # the purpose map and compares against this set.
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+    }
+)
+
+#: The governed merge's two names, withheld from a process that has not set
+#: `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`. A subset of
+#: `_ENTITY_WRITE_CAPABILITIES` and therefore of `_ENTITY_CAPABILITIES`: this is
+#: a third narrowing of an already-narrowed plane, not a family of its own.
+#:
+#: Two rather than one. The preview is here beside the apply because the operator
+#: boundary is about reading the exact identities of two people as much as about
+#: collapsing them, and a build that served the inspection while withholding the
+#: act would gate the less sensitive half.
+_IDENTITY_CORRECTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
     }
 )
 
@@ -7591,6 +8105,14 @@ _RELATIONSHIP_MEMORY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
+        # The producer path is composed on exactly the same conjunction as the
+        # eight, and on no further switch. It writes, so the question was whether
+        # to gate it behind `relationship_intelligence_writes_enabled` as well;
+        # the answer is no, because `relationship_memory.create` -- which writes
+        # an *accepted* memory -- is not gated on it either, and gating the
+        # weaker act more tightly than the stronger one would be a rule nobody
+        # could explain to an operator.
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 )
 

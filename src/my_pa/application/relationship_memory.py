@@ -45,12 +45,13 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Protocol
+from typing import Any
 
 from my_pa.contracts.ports import (
     MemoryDetail,
     MemoryPage,
     MemoryWriteRequest,
+    RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
 )
 from my_pa.domain.common.classification import Classification
@@ -531,41 +532,6 @@ class MemoryProposalReceipt:
     evidence_count: int
 
 
-class RelationshipMemoryProposalRepository(Protocol):
-    """The producer's whole persistence surface: one insert.
-
-    One method, and the count is the point. Operator §16 requires that a source,
-    rule or model worker never accept its own proposal, and this is where that
-    is made structural rather than asserted: the port a producer is handed
-    declares no `decide`, no `accept`, no `promote` and no memory write, so a
-    producer holding it has nothing to call. `RelationshipMemoryService`'s own
-    `RelationshipMemoryRepository` is a different port on a different service,
-    and promotion lives in the Review path
-    (`infrastructure.persistence.relationship_memory_review`), which a producer
-    reaches through no object in this module.
-
-    Declared here rather than in `contracts.ports`, following
-    `GoodNotesCorrectionRepository`: a port whose only implementor and only
-    caller are one use case is a port the use case may own, and putting it here
-    keeps the "one method" claim above readable next to the service that relies
-    on it.
-    """
-
-    def record_proposal(
-        self,
-        proposal: RelationshipMemoryProposal,
-        evidence: tuple[MemoryProposalEvidence, ...],
-    ) -> None:
-        """Insert one candidate and the exact records it rests on, atomically.
-
-        Takes the whole domain records rather than their fields, so what reaches
-        storage has been through `RelationshipMemoryProposal.__post_init__` and
-        `MemoryProposalEvidence.__post_init__` — which is what refuses a
-        candidate naming an accepted memory, a model proposal with no model, or
-        a classification below its kind's floor.
-        """
-
-
 class RelationshipMemoryProposalService:
     """`relationship_memory.propose`: raise a candidate, and never a memory.
 
@@ -574,9 +540,22 @@ class RelationshipMemoryProposalService:
     path from creating active Relationship Memory directly; §16 forbids a
     producer deciding its own proposal. Both hold here because this object has
     no reference to a `RelationshipMemoryRepository` and no reference to the
-    Review plane — not because a method chose not to call one. A future writer
+    Review plane -- not because a method chose not to call one. A future writer
     who wants to promote from here has to add a port to the constructor of a
     class that has none, which is a visible change rather than an added line.
+
+    **`RelationshipMemoryProposalRepository` is imported from `contracts.ports`
+    and used to be declared in this module.** It moved at `WP-RI-B-07`, when
+    `ApplicationService` started reaching it through
+    `UnitOfWork.relationship_memory_proposals`: `contracts` may not import
+    `application`, so a port a dispatcher reaches has to be declared where
+    `UnitOfWork` can name it. The argument that put it here — a port whose only
+    implementor and only caller are one use case is a port the use case may own,
+    which is `GoodNotesCorrectionRepository`'s shape — was true while nothing
+    exposed it, and that stopped being true rather than turning out to be wrong.
+    The "one method, and the count is the contract" reasoning moved with the
+    declaration.
+
 
     What this path adds beyond `create`, and why each is not duplication:
 

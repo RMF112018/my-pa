@@ -79,6 +79,7 @@ from my_pa.contracts.ports import (
     OperationQueue,
     ProjectRepository,
     PulseRepository,
+    RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RepositoryFailureError,
     ReviewDecisionRequest,
@@ -169,6 +170,9 @@ from my_pa.infrastructure.persistence.registry import (
 )
 from my_pa.infrastructure.persistence.relationship_memory import (
     SqlRelationshipMemoryRepository,
+)
+from my_pa.infrastructure.persistence.relationship_memory_proposals import (
+    SqlRelationshipMemoryProposalRepository,
 )
 from my_pa.infrastructure.persistence.relationship_memory_review import (
     decide_relationship_memory_review,
@@ -882,11 +886,15 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         are separately composed: the memory plane binds its subjects from the
         entity plane and so implies it, but the entity plane does not imply the
         memory plane, and one flag would make enabling either enable both.
-        **This is the half of the composition that is not wired yet:** the
-        composition root passes the memory conjunction today and passes nothing
-        for this, so it defaults closed and the Entity branch contributes no
-        case. Threading the setting through is `WP-RI-B-07`'s, with the flag it
-        also lands.
+
+        **This paragraph used to say the half was not wired yet, and that is no
+        longer true.** `WP-RI-B-07` threads
+        `settings.relationship_intelligence_enabled` through
+        `bootstrap.gateway.build_gateway_runtime`, so a real build with the plane
+        on now reaches the Entity branch. The sentence is corrected rather than
+        deleted because the state it described was real for one wave and the
+        default here is still `False` for the reason above: a caller that has not
+        said the plane is composed gets a unit of work that does not reach it.
         """
         self._engine = engine
         self._audit = audit
@@ -1059,6 +1067,19 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def relationship_memory(self) -> RelationshipMemoryRepository:
         """The Relationship Memory rows, on this transaction's connection."""
         return SqlRelationshipMemoryRepository(self._open)
+
+    @property
+    def relationship_memory_proposals(self) -> RelationshipMemoryProposalRepository:
+        """The producer's one insert, on this transaction's connection.
+
+        Ungated here, exactly as `relationship_memory` above is: whether the
+        plane is composed is `ApplicationService.available_capabilities`' answer
+        and `_relationship_memory_plane()`'s, and a second copy of that decision
+        in the unit of work would be a second thing able to disagree with it.
+        What this property decides is which object the handler gets, and the
+        answer is one that can only insert a candidate.
+        """
+        return SqlRelationshipMemoryProposalRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

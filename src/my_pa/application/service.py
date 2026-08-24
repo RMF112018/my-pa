@@ -444,6 +444,7 @@ from my_pa.domain.relationship.memory import (
     StaleMemoryVersionError,
 )
 from my_pa.domain.relationship.normalization import NormalizationError
+from my_pa.domain.relationship.proposal_payload import ProposalPayloadError
 from my_pa.domain.relationship.resolution import EntityResolution
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -1631,6 +1632,16 @@ def _entity_governance_translated() -> Iterator[None]:
         failure = InvalidRequestError(SafeDetail.OBSERVED_AT)
     except ObservationAuthorityError:
         failure = InvalidRequestError(SafeDetail.OBSERVATION_AUTHORITY)
+    except ProposalPayloadError:
+        # `WP-RI-B-05`. A payload that names a field its kind's command does not
+        # take, omits one the kind requires, carries a server-owned name, or
+        # proposes a status a caller may not ask for. Every one of those is the
+        # caller's own move to correct, so `invalid_request` and not `conflict`
+        # -- and the token is `payload` rather than the offending field, because
+        # a token per admitted name would restate seventeen schemas in
+        # `SafeDetail` and would tell a caller which of its fields the *schema*
+        # objected to, which is the one thing a closed vocabulary must not do.
+        failure = InvalidRequestError(SafeDetail.PAYLOAD)
     if failure is not None:
         raise failure
 

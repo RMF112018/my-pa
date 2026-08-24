@@ -8,6 +8,13 @@ The merge tests are the sharp end. A merge joins two histories permanently, and
 `RI-AC-039`, specification section 21.4 and `AGENTS.md` section 8.2 all put that
 decision outside anything automatic — so the checks here are about *authority*
 rather than about correctness of the join.
+
+**And since `WP-RI-B-05` they are also about the join not happening here at
+all.** Accepting a `merge_entities` proposal records reviewed intent; the
+identity change is an operator act under `entity_identity_correction`. The
+tests below that used to assert a redirect and a lineage row now assert their
+absence, which is the same subject read the other way round: what a reviewer's
+disposition may reach.
 """
 
 from __future__ import annotations
@@ -236,14 +243,13 @@ def test_proposing_changes_nothing(world: World, governing: EntityGovernanceServ
     _entities(world).create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Chen"))
     governing.propose(
         PRINCIPAL,
-        proposal_id="eprp_aaaa0001aaaa0001",
         kind=EntityProposalKind.MERGE_ENTITIES,
         payload={"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
         observation_ids=(),
         proposed_by="resolver",
-        proposed_at=WHEN,
         method=EntityProposalMethod.DETERMINISTIC,
         method_version="1",
+        at=WHEN,
     )
     stored = _entities(world).get(PRINCIPAL, ALICE_TWO)
     assert stored is not None
@@ -255,18 +261,20 @@ def test_proposing_changes_nothing(world: World, governing: EntityGovernanceServ
 def test_an_open_proposal_names_nobody_who_decided_it(
     world: World, governing: EntityGovernanceService
 ) -> None:
-    proposal = governing.propose(
+    admitted = governing.propose(
         PRINCIPAL,
-        proposal_id="eprp_aaaa0001aaaa0001",
         kind=EntityProposalKind.RECORD_ALIAS,
         payload={"entity_id": ALICE, "alias_type": "nickname", "display_value": "Ali"},
         observation_ids=(),
         proposed_by="extractor",
-        proposed_at=WHEN,
         method=EntityProposalMethod.DETERMINISTIC,
         method_version="1",
+        at=WHEN,
     )
-    assert proposal.state is EntityProposalState.PROPOSED
+    assert admitted.state is EntityProposalState.PROPOSED
+    assert admitted.created is True
+    proposal = _entities(world).proposal(PRINCIPAL, admitted.proposal_id)
+    assert proposal is not None
     assert proposal.decided_by is None
     assert proposal.decided_at is None
     assert proposal.is_open is True
@@ -311,35 +319,34 @@ def test_a_proposal_cannot_name_its_own_review_requirement() -> None:
 # --- a merge needs an operator ----------------------------------------------
 
 
-def _staged_merge(world: World, governing: EntityGovernanceService) -> None:
+def _staged_merge(world: World, governing: EntityGovernanceService) -> str:
+    """Two entities and one open merge proposal. Returns the minted identifier."""
     _entities(world).create(PRINCIPAL, an_entity(ALICE))
     _entities(world).create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Chen"))
-    governing.propose(
+    return governing.propose(
         PRINCIPAL,
-        proposal_id="eprp_aaaa0001aaaa0001",
         kind=EntityProposalKind.MERGE_ENTITIES,
         payload={"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
         observation_ids=(),
         proposed_by="resolver",
-        proposed_at=WHEN,
         method=EntityProposalMethod.DETERMINISTIC,
         method_version="1",
-    )
+        at=WHEN,
+    ).proposal_id
 
 
 def test_accepting_a_merge_without_operator_authority_is_refused(
     world: World, governing: EntityGovernanceService
 ) -> None:
     """The single most consequential refusal in this module."""
-    _staged_merge(world, governing)
+    proposal_id = _staged_merge(world, governing)
     with pytest.raises(ReviewAuthorityError, match="operator authority"):
         governing.accept(
             PRINCIPAL,
-            "eprp_aaaa0001aaaa0001",
+            proposal_id,
             decided_by="the resolver",
             decided_at=LATER,
             reason="looks like the same person",
-            merge_id="emrg_aaaa0001aaaa0001",
         )
     stored = _entities(world).get(PRINCIPAL, ALICE_TWO)
     assert stored is not None
@@ -351,121 +358,159 @@ def test_a_refused_merge_leaves_the_proposal_open(
     world: World, governing: EntityGovernanceService
 ) -> None:
     """Refusing the *authority* is not deciding the proposal."""
-    _staged_merge(world, governing)
+    proposal_id = _staged_merge(world, governing)
     with pytest.raises(ReviewAuthorityError):
         governing.accept(
             PRINCIPAL,
-            "eprp_aaaa0001aaaa0001",
+            proposal_id,
             decided_by="the resolver",
             decided_at=LATER,
             reason="looks like the same person",
-            merge_id="emrg_aaaa0001aaaa0001",
         )
-    assert [item.proposal_id for item in governing.open_proposals(PRINCIPAL)] == [
-        "eprp_aaaa0001aaaa0001"
-    ]
+    assert [item.proposal_id for item in governing.open_proposals(PRINCIPAL)] == [proposal_id]
 
 
 def test_an_operator_may_accept_a_merge(world: World, governing: EntityGovernanceService) -> None:
-    _staged_merge(world, governing)
+    """The decision is recorded, and the decision is all that is recorded."""
+    proposal_id = _staged_merge(world, governing)
     decided = governing.accept(
         PRINCIPAL,
-        "eprp_aaaa0001aaaa0001",
+        proposal_id,
         decided_by="the operator",
         decided_at=LATER,
         reason="confirmed the same person by employee number",
         has_operator_authority=True,
-        merge_id="emrg_aaaa0001aaaa0001",
     )
     assert decided.state is EntityProposalState.ACCEPTED
     assert decided.decided_by == "the operator"
-
-    merged = _entities(world).get(PRINCIPAL, ALICE_TWO)
-    assert merged is not None
-    assert merged.status is EntityStatus.MERGED_REDIRECT
-    assert merged.superseded_by_entity_id == ALICE
+    assert decided.accepted_record_id is None, (
+        "an accepted identity correction names no canonical record; it records intent"
+    )
 
 
-def test_an_accepted_merge_leaves_lineage(world: World, governing: EntityGovernanceService) -> None:
-    """Section 15.3: the record is what makes the merge reversible."""
-    _staged_merge(world, governing)
+def test_accepting_a_merge_proposal_mutates_no_identity(
+    world: World, governing: EntityGovernanceService
+) -> None:
+    """`WP-RI-B-05`, and the sharpest assertion in this file.
+
+    Both entities are photographed before the acceptance and compared after it,
+    field for field on the two fields a merge changes plus the version every
+    optimistic write on this plane is checked against. Accepting a
+    `merge_entities` proposal must leave all six values exactly as they were:
+    a reviewer's disposition is not an identity-correction authority, and if
+    acceptance ever redirects an entity again this test is what says so.
+
+    Written to fail loudly against the code this replaced. Restoring the
+    `redirect_entity` / `record_merge` pair inside the decision path turns the
+    status of `ALICE_TWO` into `merged_redirect`, fills its
+    `superseded_by_entity_id`, and puts a row in `merge_lineage` — three
+    assertions here, so the mutation cannot be half-detected.
+    """
+    proposal_id = _staged_merge(world, governing)
+    entities = _entities(world)
+    before = {}
+    for entity_id in (ALICE, ALICE_TWO):
+        held = entities.get(PRINCIPAL, entity_id)
+        assert held is not None
+        # Both are active and unversioned before the decision, so "unchanged"
+        # below is an assertion about something rather than about an absence.
+        assert held.status is EntityStatus.ACTIVE
+        assert held.superseded_by_entity_id is None
+        before[entity_id] = held
+
     governing.accept(
         PRINCIPAL,
-        "eprp_aaaa0001aaaa0001",
+        proposal_id,
+        decided_by="the operator",
+        decided_at=LATER,
+        reason="confirmed the same person by employee number",
+        has_operator_authority=True,
+    )
+
+    for entity_id, was in before.items():
+        now = entities.get(PRINCIPAL, entity_id)
+        assert now is not None, "accepting a proposal removed an entity"
+        assert now.status is was.status, f"{entity_id} changed status on a review disposition"
+        assert now.version == was.version, f"{entity_id} was versioned by a review disposition"
+        assert now.superseded_by_entity_id is was.superseded_by_entity_id
+    assert world.entity_merges == [], "a review disposition wrote merge lineage"
+
+
+def test_accepting_a_merge_leaves_the_lineage_to_the_operator_act(
+    world: World, governing: EntityGovernanceService
+) -> None:
+    """Section 15.3's lineage record still exists; acceptance is not what writes it.
+
+    The record is what makes a merge reversible, so nothing here argues against
+    writing one — it argues about *which act* writes it. `entities.merge` does,
+    holding a live preview bound to exact versions. An accepted proposal is the
+    reviewed intent that operator act cites, which is why the proposal survives
+    the decision with both entity identifiers still readable in its payload.
+    """
+    proposal_id = _staged_merge(world, governing)
+    governing.accept(
+        PRINCIPAL,
+        proposal_id,
         decided_by="the operator",
         decided_at=LATER,
         reason="confirmed by employee number",
         has_operator_authority=True,
-        merge_id="emrg_aaaa0001aaaa0001",
     )
-    lineage = governing.merge_lineage(PRINCIPAL, ALICE_TWO)
-    assert len(lineage) == 1
-    assert lineage[0].retained_entity_id == ALICE
-    assert lineage[0].merged_entity_id == ALICE_TWO
-    assert lineage[0].decided_by == "the operator"
-    assert lineage[0].reason == "confirmed by employee number"
+    assert governing.merge_lineage(PRINCIPAL, ALICE_TWO) == []
+    intent = _entities(world).proposal(PRINCIPAL, proposal_id)
+    assert intent is not None
+    assert intent.state is EntityProposalState.ACCEPTED
+    assert intent.decided_by == "the operator"
+    assert intent.decision_reason == "confirmed by employee number"
+    assert intent.payload.as_mapping() == {
+        "retained_entity_id": ALICE,
+        "merged_entity_id": ALICE_TWO,
+    }
 
 
-def test_a_merged_away_entity_still_exists(
+def test_accepting_a_merge_asks_for_no_lineage_identifier(
     world: World, governing: EntityGovernanceService
 ) -> None:
-    """Merging redirects; it does not delete.
+    """The parameter is gone, and its absence is the mechanism.
 
-    An entity that survives as a redirect is what lets `entities.resolve` answer
-    `HISTORICAL_MATCH` for a reference to the old identity, instead of
-    `NOT_FOUND` — which would be the system denying it had ever known them.
+    `accept` used to take a `merge_id` and refuse without one, because it was
+    about to write a merge record. A method that still took one would be a
+    method that still intended to, and the honest form of "this no longer merges"
+    is that there is nowhere left to put the merge's identifier.
     """
-    _staged_merge(world, governing)
-    governing.accept(
-        PRINCIPAL,
-        "eprp_aaaa0001aaaa0001",
-        decided_by="the operator",
-        decided_at=LATER,
-        reason="confirmed",
-        has_operator_authority=True,
-        merge_id="emrg_aaaa0001aaaa0001",
-    )
-    assert _entities(world).get(PRINCIPAL, ALICE_TWO) is not None
-
-
-def test_accepting_a_merge_without_a_lineage_identifier_is_refused(
-    world: World, governing: EntityGovernanceService
-) -> None:
-    """A merge whose lineage could not be written must not happen at all."""
-    _staged_merge(world, governing)
-    with pytest.raises(ValueError, match="needs an identifier"):
+    proposal_id = _staged_merge(world, governing)
+    with pytest.raises(TypeError):
         governing.accept(
             PRINCIPAL,
-            "eprp_aaaa0001aaaa0001",
+            proposal_id,
             decided_by="the operator",
             decided_at=LATER,
             reason="confirmed",
             has_operator_authority=True,
+            merge_id="emrg_aaaa0001aaaa0001",
         )
 
 
 def test_a_decided_proposal_cannot_be_decided_again(
     world: World, governing: EntityGovernanceService
 ) -> None:
-    _staged_merge(world, governing)
+    proposal_id = _staged_merge(world, governing)
     governing.accept(
         PRINCIPAL,
-        "eprp_aaaa0001aaaa0001",
+        proposal_id,
         decided_by="the operator",
         decided_at=LATER,
         reason="confirmed",
         has_operator_authority=True,
-        merge_id="emrg_aaaa0001aaaa0001",
     )
     with pytest.raises(ProposalNotOpenError, match="already been decided"):
         governing.accept(
             PRINCIPAL,
-            "eprp_aaaa0001aaaa0001",
+            proposal_id,
             decided_by="someone else",
             decided_at=LATER,
             reason="again",
             has_operator_authority=True,
-            merge_id="emrg_bbbb0002bbbb0002",
         )
 
 
@@ -473,10 +518,10 @@ def test_rejecting_needs_no_operator_authority_and_changes_nothing(
     world: World, governing: EntityGovernanceService
 ) -> None:
     """Asymmetric on purpose: refusing a change has nothing to protect."""
-    _staged_merge(world, governing)
+    proposal_id = _staged_merge(world, governing)
     decided = governing.reject(
         PRINCIPAL,
-        "eprp_aaaa0001aaaa0001",
+        proposal_id,
         decided_by="a reviewer",
         decided_at=LATER,
         reason="different people, same name",
@@ -492,26 +537,24 @@ def test_a_rejected_proposal_is_kept_rather_than_deleted(
     world: World, governing: EntityGovernanceService
 ) -> None:
     """Section 10.11: no record is silently deleted."""
-    _staged_merge(world, governing)
+    proposal_id = _staged_merge(world, governing)
     governing.reject(
         PRINCIPAL,
-        "eprp_aaaa0001aaaa0001",
+        proposal_id,
         decided_by="a reviewer",
         decided_at=LATER,
         reason="different people",
     )
-    held = _entities(world).proposal(PRINCIPAL, "eprp_aaaa0001aaaa0001")
+    held = _entities(world).proposal(PRINCIPAL, proposal_id)
     assert held is not None
     assert held.state is EntityProposalState.REJECTED
     assert held.decision_reason == "different people"
 
 
 def test_a_decision_names_who_made_it(world: World, governing: EntityGovernanceService) -> None:
-    _staged_merge(world, governing)
+    proposal_id = _staged_merge(world, governing)
     with pytest.raises(ValueError, match="names who made it"):
-        governing.reject(
-            PRINCIPAL, "eprp_aaaa0001aaaa0001", decided_by="  ", decided_at=LATER, reason="no"
-        )
+        governing.reject(PRINCIPAL, proposal_id, decided_by="  ", decided_at=LATER, reason="no")
 
 
 def test_deciding_an_unknown_proposal_is_refused(governing: EntityGovernanceService) -> None:
@@ -528,11 +571,11 @@ def test_deciding_an_unknown_proposal_is_refused(governing: EntityGovernanceServ
 def test_governance_cannot_reach_another_principals_proposal(
     world: World, governing: EntityGovernanceService
 ) -> None:
-    _staged_merge(world, governing)
+    proposal_id = _staged_merge(world, governing)
     with pytest.raises(ProposalNotOpenError, match="no such proposal"):
         governing.reject(
             OTHER,
-            "eprp_aaaa0001aaaa0001",
+            proposal_id,
             decided_by="a reviewer",
             decided_at=LATER,
             reason="no",

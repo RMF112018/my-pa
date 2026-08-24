@@ -1239,7 +1239,7 @@ def test_no_effect_state_carries_a_name_an_address_or_a_statement(staged: Engine
     assert "Alice" not in rendered
 
 
-# --- the two capabilities, through `invoke`, against a real server ------------
+# --- the governed merge, through `invoke`, against a real server --------------
 #
 # Everything above drives `IdentityCorrectionService` directly, which is where
 # the merge's rules live and is the right place to prove them. What it cannot
@@ -1249,7 +1249,7 @@ def test_no_effect_state_carries_a_name_an_address_or_a_statement(staged: Engine
 # constructing the service by hand.
 #
 # So this block composes `ApplicationService` the way `bootstrap.gateway` does
-# and sends the two capabilities by name. It is the only evidence in this
+# and sends each of them by name. It is the only evidence in this
 # repository that the published surface of `WP-RI-06` works at all.
 
 
@@ -1429,7 +1429,7 @@ def test_the_feature_gate_refuses_both_halves_before_a_handler_runs(
 ) -> None:
     """`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, at the execution floor.
 
-    `available_capabilities` withholds the two names, and two readers consult it
+    `available_capabilities` withholds the governed merge, and two readers consult it
     — `capabilities.get` and the MCP tool list. The HTTP transport is not one of
     them: it routes by path segment and dispatches straight from `_HANDLERS`.
     So the floor is asserted here, on a build whose other two switches are on and

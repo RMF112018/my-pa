@@ -218,7 +218,7 @@ def _service(marked: Scene) -> ApplicationService:
     Composed **without** the governed merge, and the reason is the same one
     `tests/contract/test_transport_parity.py` records: `_Entities` implements none
     of the sixteen identity-correction port methods, so a build that composed the
-    plane would answer `internal_error` for two capabilities and this file's
+    plane would answer `internal_error` for the merge pair and this file's
     all-succeed sweeps would be measuring a crash. The two are still driven --
     every negative sweep here sends them and reads the refusal -- and what they
     are exempted from is the *positive* sweep, which asserts a successful answer.

@@ -9,32 +9,135 @@ Related: [`docs/plans/relationship-intelligence-implementation-plan.md`](../../d
 | --- | --- |
 | Plane status | Implemented, **off by default** |
 | Process gate | `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`, default `false` |
-| Capabilities | `entities.search`, `entities.get`, `entities.resolve`, `entities.context`, `entities.relationships`, `entities.unresolved_mentions` |
-| Purpose | `entity_read` — one, read-only |
-| Write capabilities | **None.** Observation, proposal and merge are in-process only |
-| Tables | `entities`, `entity_aliases`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, `entity_observations`, `entity_proposals`, `entity_merge_records` |
-| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `d2b8f5c04e71` (governance tables), `e4d7b2f9a316` (`entities.unresolved_mentions`), `f3a8c1d7e592` (the disclosed mention name) |
+| Read capabilities | Ten. `entities.search`, `entities.get`, `entities.resolve`, `entities.context`, `entities.relationships`, `entities.unresolved_mentions` (`WP-RI-05`); `entities.identifiers.list`, `entities.aliases.list` (`WP-RI-A-02`); `entities.assignments.list` (`WP-RI-A-03`); `entities.observations.list` (`WP-RI-A-04`) |
+| Write capabilities | Eighteen. `entities.create`, `entities.update`, `entities.archive`, `entities.restore`, `entities.identifiers.bind`, `entities.identifiers.retire`, `entities.identifiers.supersede`, `entities.aliases.add`, `entities.aliases.retire`, `entities.aliases.supersede` (`WP-RI-A-02`); `entities.assignments.create`, `entities.assignments.revise`, `entities.assignments.end`, `entities.relationships.create`, `entities.relationships.revise`, `entities.relationships.end` (`WP-RI-A-03`); `entities.observe`, `entities.unresolved_mentions.resolve` (`WP-RI-A-04`). Proposal and merge remain in-process only |
+| Write gate | `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, default `false`, and it requires the plane gate above. A process that sets it `true` while `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` is `false` refuses to start rather than serving a half-configured plane |
+| Purposes | Three. `entity_read` for the ten reads; `entity_observation_ingest` for `entities.observe` and nothing else; `entity_authoring` for the other seventeen writes. Separate rather than shared, so a grant issued to look up who someone reports to cannot assert that they do, and a grant issued to record what a mailbox said cannot decide who somebody is |
+| Tables | `entities`, `entity_aliases`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, `entity_observations`, `entity_proposals`, `entity_merge_records`, `entity_mutation_events`, `entity_fact_evidence_links`, `entity_resolution_decisions` |
+| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `d2b8f5c04e71` (governance tables), `e4d7b2f9a316` (`entities.unresolved_mentions`), `f3a8c1d7e592` (the disclosed mention name), `2fe4e13fb449` (record lifecycle, Principal-composite references and the three ledgers), `823e23b6cc63` (the one Phase A revision, admitting every `entities.` name this phase added and both new purposes) to `knowledge.audit_events`' `capability_is_known` and `purpose_is_known` CHECKs. Phase A takes exactly one such revision: three concurrent packages each restating one frozen constraint would produce three heads and three conflicting restatements |
 | Calibration | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) |
 | Frontend | Not implemented. Held by the operator's `D-09` instruction |
 
 ## 2. Turning the plane on
 
-`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED=true` makes the entity capabilities
-available to the process. **It is one decision with two consequences**, and both
-should be intended before it is set:
+`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED=true` makes the entity plane's ten
+reads available to the process, and nothing else: the eighteen writes need
+`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it. **The read switch is
+one decision with two consequences**, and both should be intended before it is
+set:
 
 1. the local MCP `tools/list` and `capabilities.get` begin publishing them;
 2. `adapters/mcp/remote.py` derives the remote profile from the capability set
    with no per-capability exclusion list, so if `MY_PA_REMOTE_MCP_ENABLED` is
-   also true they become reachable remotely — as **reads**, so
-   `MY_PA_REMOTE_WRITES_ENABLED` does not gate them.
+   also true they become reachable remotely. **The reads go out as reads**, so
+   `MY_PA_REMOTE_WRITES_ENABLED` does not gate them; **every write goes out as a
+   write**, so it does. That second half is the one worth checking before
+   setting either variable: a remote client holding `entity_authoring` can
+   decide who a person is and who they work for, and one holding
+   `entity_observation_ingest` can record what a source said about them.
 
 To serve the plane locally and *not* remotely, leave `MY_PA_REMOTE_MCP_ENABLED`
 off, or grant no `remote_capability_grants` row for the `entities.` names: in
 production a remote client reaches a capability only if an operator inserted a
 grant for it.
 
-Turning it off again withholds all six immediately. It deletes nothing.
+Turning it off again withholds every `entities.` name immediately, reads and
+writes alike. It deletes nothing, and it does not undo a write already made.
+
+**The write half is gated once more, locally as well as remotely.**
+`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` is a second switch and defaults
+to `false`, so a process that enables the plane serves the ten reads and refuses
+all eighteen writes with `unsupported` until it is set. It is refused on every
+transport rather than only where a tool list is published: the writes are
+subtracted from `ApplicationService.available_capabilities`, which is what
+`capabilities.get` and the MCP tool list read, *and* each write handler asks the
+gate again before it does anything, because the HTTP transport routes by path
+segment straight into `_HANDLERS` and consults neither. Setting it `true` on a
+process that has not enabled the plane is a startup failure rather than a
+silently ignored variable.
+
+Remotely a write is gated twice more. A remote client reaches one only with
+`MY_PA_REMOTE_WRITES_ENABLED` *and* a `remote_capability_grants` row:
+`adapters/mcp/remote.py` classifies a capability as a write by intersecting its
+permitted purposes with `_WRITE_PURPOSES`, and both `entity_authoring` and
+`entity_observation_ingest` are in that set. The reads stay reachable with the
+write switch off, which is the correct classification and the property
+`tests/contract/test_entity_remote_exposure.py` holds in both directions.
+
+## 2a. What the writes do, and what they refuse
+
+**The identity half** — `create`, `update`, `archive`, `restore`, and the
+`identifiers.*` and `aliases.*` transitions — changes what an entity is, which
+external addresses resolve to it, and what it may be called.
+
+**The directed half** — assignments and typed edges — takes the same three acts
+on each family: `create`, `revise`, `end`.
+
+**The observation half** — `observe` and `unresolved_mentions.resolve` — records
+what a source said and decides what one mention refers to. `observe` creates no
+entity: section 12.2 is explicit that a source record does not become the
+canonical person by itself.
+
+**Nothing is deleted and nothing that carries meaning is edited in place.** An
+assignment's subject, type and scope, and an edge's source, type, target and
+scope, are the record's identity. A `revise` cannot reach them — the command has
+no field for one — so correcting a record recorded against the wrong scope is
+`end` followed by a fresh `create`, which is the only shape that records both
+what was believed and what replaced it. An `end` keeps the row, stamps
+`ended_at`, and requires a bounded reason.
+
+**Direction is first class and no reciprocal edge is ever generated.**
+`works_for` does not imply `manages`. If the inverse is also true it is asserted
+as its own edge, so it can be withdrawn on its own terms later.
+
+**Every write is guarded by a version and a key.** The record's own
+`expected_version`; the `expected_entity_version` of each endpoint a create binds
+to; and an idempotency key. An exact retry returns the original receipt and
+writes nothing; the same key carrying a different request is refused as a
+conflict rather than admitted as a second write.
+
+**A duplicate is refused by the database, not by a convention.** Partial unique
+indexes over the *active* row decide it: assignments on
+`(principal, entity, type, scope, role, discipline, responsibility class)` with
+the three free-text fields folded case- and whitespace-insensitively, edges on
+`(principal, from, type, to, scope)`, and the identifier and alias families on
+their own active keys. Ending a record frees its key for a replacement, which is
+what makes end-and-replace work.
+
+**Every write appends one row to `entity_mutation_events`, and that row is what
+the caller is handed back.** It carries the capability, the record and its
+family, the prior and new version, the before and after state, the authority, the
+actor class, the request digest, the idempotency key and the audit identifier.
+The table is append-only by trigger, and
+`UNIQUE (principal_id, capability, idempotency_key)` is the idempotency store.
+
+**`receipt_id` is null in the ledger, and the `receipt_id` a result returns is
+that row's own `emut_…`.** The two are one decision made once, for all eighteen
+writes. The column exists to point at a separate receipt record and this build
+keeps none, so filling it with the row's own primary key would be a
+self-reference dressed as a reference and would make `receipt_id IS NOT NULL`
+mean nothing to anyone reading the ledger. What the completion contract requires
+is that a mutation *result* carry a `receipt_id`; it does, and it names a
+durable row an operator can go and read.
+
+**Evidence is cited from two record families, and which one depends on the
+write.** `entity_fact_evidence_links` admits an entity observation, a capture
+span or a knowledge record, one per row. The four directed writes that carry
+`evidence_refs` admit `eobs_…` only; the four identifier and alias writes that
+carry `evidence` admit `span_…` only; no capability admits a knowledge record,
+and `unresolved_mentions.resolve` cites nothing a caller names — its links are
+minted server-side to record a refused pairing as counterevidence.
+
+The split is by what the schema can prove rather than by preference. An
+observation carries a composite `(observation_id, principal_id)` foreign key, so
+a foreign one is refused by the database and nothing rests on an application
+check. `capture_spans` carries no Principal column at all, so ownership there is
+proven by an application join through `capture_versions` to
+`captures.owner_principal_id`. Merging the two fields would either spread the
+weaker proof across the whole plane or drop a citation form one capability
+already accepts, so the difference is stated and bound instead:
+`tests/contract/test_entity_evidence_scope.py` derives which kind each write
+admits from the commands themselves, so a later widening reddens there.
 
 ## 3. Inspecting the plane
 
@@ -73,11 +176,31 @@ pointers and carries no text. Disclosure is an affirmative write into a column
 whose name says what it is for, so "did anyone mean to publish this?" is a
 question with an answer, and an auditor greps one column's writers.
 
-Nothing in `src/` writes this table, so the queue is empty on every build.
+**This paragraph said the queue is empty on every build because nothing in
+`src/` writes the table. That stopped being true with WP-RI-A-04.**
+`entities.observe` is the first writer of `entity_observations` on any
+transport, so the queue now fills from ordinary use rather than only from a
+script, and an operator who expected it to be empty should expect rows.
 
-It remains a **read**. Nothing on this plane links a mention to an entity, so
-this capability shows the queue and cannot work it. That is section 4's gap,
-unchanged.
+**And the queue can now be worked.**
+`entities.unresolved_mentions.resolve` decides one mention: `link_existing`
+binds an entity the caller named, `create_new` creates one, and `reject`,
+`defer` and `quarantine` record that the caller declined to. Every decision is
+appended to `entity_resolution_decisions`, which is append-only by trigger, and
+checked against the mention's own `resolution_version` — so two operators
+working the queue at once produce one decision and one refusal rather than a
+silent overwrite. `entities.observations.list` is the read that carries that
+version, which the queue's own view does not.
+
+**A `reject` that names `rejected_entity_id` has a durable effect.** The refused
+pairing is written to `entity_fact_evidence_links` with role `counterevidence`,
+and every later resolution of that mention withholds the refused entity from its
+candidates. Nothing is deleted: the observation, its text and the decision all
+remain, which is what section 10.11 requires and what makes the refusal
+auditable.
+
+Proposals are still not decidable from any transport. That is section 4's gap,
+and it is unchanged.
 
 Read `unresolved_mentions` and `open_proposals` first. The first is references
 the system knows it has not placed; the second is decisions waiting on a person
@@ -92,12 +215,17 @@ the guarantee that this report carries no personal data.
 Read this section as a description of the rules, not as a procedure. There is
 **no way to decide a proposal in this build.**
 
-- There is no capability for it, deliberately (`D-RI-21`): observe, propose,
-  decide and merge exist on no transport, local or remote.
-- There is also no operator entry point. `EntityGovernanceService` and
-  `EntityReenrichmentService` are composed by **nothing** in `src/` — no
-  bootstrap wiring, no script, no worker. They are in-process contracts with a
-  test suite and no caller.
+- There is no capability for it: propose, decide and merge exist on no
+  transport, local or remote. **Corrected after Phase A**, which is the point of
+  reading this section carefully — this list said "observe, propose, decide and
+  merge", and `entities.observe` and `entities.unresolved_mentions.resolve` are
+  capabilities now. Recording what a source said and deciding what one mention
+  refers to are served. Deciding a *proposal* and merging two entities are not.
+- There is also no operator entry point for those two.
+  `EntityReenrichmentService` and the merge and proposal half of
+  `EntityGovernanceService` are composed by **nothing** in `src/` — no bootstrap
+  wiring, no script, no worker. They are in-process contracts with a test suite
+  and no caller.
 
 So the queue `scripts/inspect_entity_plane.py` reports can be *read* and cannot
 be *worked*. An operator who needs a proposal decided today has no supported
@@ -165,5 +293,32 @@ candidate is the honest answer.
   `EntityAlias` or `ExternalIdentifier` can store one — but a migration, a
   backfill or a direct `INSERT` still can, and such a row is unresolvable or,
   worse, resolves as a neighbouring entity.
-- **`record_assignment` and `record_relationship` have no natural key**, so a
-  retry that mints a fresh identifier writes a second row.
+- **`record_assignment` and `record_relationship` are refused rather than
+  deduplicated on retry.** `2fe4e13fb449` gave each a natural key — a partial
+  unique over the active row — so a retry that mints a fresh identifier no
+  longer writes a second row; it raises. Neither repository write arbitrates
+  that index the way `bind_identifier` and `record_alias` do, so the caller sees
+  an integrity error rather than a quiet no-op. Closing that needs an
+  idempotency key on the write path, which arrives with the work package that
+  has something observed to write.
+- **Two of the three ledgers now have a writer, and only two of the three are
+  append-only.** `WP-RI-A-02` made the ten governed writes the first writer of
+  `entity_mutation_events` — one row per accepted change, and the same table is
+  the plane's idempotency store through
+  `UNIQUE (principal_id, capability, idempotency_key)` — and of
+  `entity_fact_evidence_links`, which a write fills only when it cites a capture
+  span. `entity_resolution_decisions` is still unwritten: deciding what an
+  unresolved mention refers to is a governed review, and this package publishes
+  no capability that does it.
+  `2fe4e13fb449` names exactly two tables in `_IMMUTABLE_TABLES` —
+  `entity_mutation_events` and `entity_resolution_decisions` — and creates one
+  `BEFORE UPDATE OR DELETE` trigger on each, so those are append-only at the
+  server. `entity_fact_evidence_links` carries **no trigger at all**: what it
+  has instead is six `CHECK` constraints, including the pair that make a row
+  cite exactly one fact and exactly one record, and six composite foreign keys,
+  every one of them `ON DELETE CASCADE`. So a link row can be updated, can be
+  deleted, and *is* deleted when the fact or the observation it cites goes —
+  which is the opposite of append-only, and is a property to know before this
+  table is cited as an audit trail. Corrected 2026-08-23: this bullet said all
+  three were append-only by trigger, and a live server shows zero triggers on
+  the third.

@@ -27,15 +27,20 @@ import pytest
 
 from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.relationship.entity import (
+    AliasState,
+    AliasType,
     Assignment,
+    AssignmentState,
     AssignmentType,
     Entity,
+    EntityAlias,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    IdentifierState,
 )
 from my_pa.infrastructure.persistence.entity import (
     _contains,
@@ -70,6 +75,7 @@ def test_an_entity_row_becomes_its_closed_vocabularies() -> None:
             updated_at=WHEN,
             version=3,
             superseded_by_entity_id=None,
+            archived_from_status=None,
         )
     )
     assert entity.entity_type is EntityType.WORK_PACKAGE
@@ -91,6 +97,7 @@ def test_a_merged_entity_row_keeps_the_identifier_it_redirects_to() -> None:
             updated_at=WHEN,
             version=1,
             superseded_by_entity_id=SECOND,
+            archived_from_status=None,
         )
     )
     assert entity.status is EntityStatus.MERGED_REDIRECT
@@ -109,6 +116,11 @@ def test_an_external_identifier_row_keeps_both_forms_and_its_verification() -> N
             verified=True,
             effective_from=WHEN,
             effective_to=None,
+            state="active",
+            version=1,
+            updated_at=None,
+            retired_at=None,
+            superseded_by_identifier_id=None,
         )
     )
     assert identifier.namespace is ExternalIdentifierNamespace.ENTRA_OBJECT_ID
@@ -134,7 +146,11 @@ def test_an_assignment_row_distinguishes_an_absent_field_from_an_empty_one() -> 
             responsibility_class="approver",
             effective_from=None,
             effective_to=None,
-            status="active",
+            state="active",
+            version=1,
+            updated_at=None,
+            ended_at=None,
+            superseded_by_assignment_id=None,
         )
     )
     assert assignment.assignment_type is AssignmentType.TEAM_MEMBERSHIP
@@ -156,6 +172,9 @@ def test_a_relationship_row_keeps_its_direction_and_scope() -> None:
             effective_to=None,
             state="active",
             version=2,
+            updated_at=None,
+            ended_at=None,
+            superseded_by_relationship_id=None,
         )
     )
     assert relationship.relationship_type is EntityRelationshipType.SUBCONTRACTOR_TO
@@ -309,6 +328,130 @@ def test_binding_the_same_external_identity_twice_writes_one_row(world: World) -
     assert len(world.entity_identifiers) == 1
 
 
+# --- the double agrees with the server about `state` -------------------------
+#
+# Three tests, and each of them failed against this double at `bd5b8be` while
+# its `tests/database/test_entity_repository.py` counterpart passed against
+# PostgreSQL. `_Entities` keyed both idempotent writes on the *total* natural
+# key the tables were created with, and `2fe4e13fb449` replaced both with a
+# partial unique over the active row; nothing here read `state` at all, so the
+# double admitted a write the server refuses and swallowed a write the server
+# performs. A double that is wrong in the permissive direction is worse than no
+# double: `WP-RI-A-02` implements `identifiers.bind`, `identifiers.retire` and
+# `identifiers.supersede` against this object, and every one of those paths runs
+# through the two rules below.
+
+
+def _an_email(
+    identifier_id: str,
+    entity_id: str,
+    value: str,
+    state: IdentifierState = IdentifierState.ACTIVE,
+) -> ExternalIdentifier:
+    return ExternalIdentifier(
+        identifier_id=identifier_id,
+        entity_id=entity_id,
+        namespace=ExternalIdentifierNamespace.EMAIL,
+        normalized_value=value,
+        display_value=value,
+        principal_id=PRINCIPAL,
+        state=state,
+        retired_at=None if state is IdentifierState.ACTIVE else WHEN,
+    )
+
+
+def test_binding_an_address_another_entity_currently_holds_is_refused(world: World) -> None:
+    """The unique spans the Principal, so the conflicting row need not be the caller's.
+
+    `tests/database/test_entity_repository.py` asserts exactly this against
+    PostgreSQL, where `ON CONFLICT DO NOTHING` cannot say "only when the
+    conflicting row is this entity's" and `SqlEntityRepository` reads the holder
+    back to refuse. Keyed on the entity, this double *accepted* the second bind
+    and left two active claimants of one address in `World` -- the false join the
+    whole plane exists to prevent, provable in a unit test.
+    """
+    with FakeUnitOfWork(world) as unit_of_work:
+        unit_of_work.entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL, "Alice Synthetic"))
+        unit_of_work.entities.create(PRINCIPAL, an_entity(THIRD, PRINCIPAL, "Bob Synthetic"))
+        unit_of_work.entities.bind_identifier(
+            PRINCIPAL, ENTITY, _an_email("xid_aaaa0001aaaa0001", ENTITY, "shared@example.test")
+        )
+        with pytest.raises(ValueError, match="binds exactly one entity"):
+            unit_of_work.entities.bind_identifier(
+                PRINCIPAL, THIRD, _an_email("xid_bbbb0002bbbb0002", THIRD, "shared@example.test")
+            )
+    assert [held.entity_id for held in world.entity_identifiers] == [ENTITY]
+
+
+def test_an_address_retired_from_an_entity_may_be_rebound_to_it(world: World) -> None:
+    """Retire-and-replace on one entity writes twice, because only the active row is unique.
+
+    The half that is *not* idempotent any more. Keyed without `state`, the
+    second call here matched the retired row and returned, so the entity ended
+    with one retired binding, no active one, and a repository that reported the
+    rebind as done. The server writes both rows and the history is the point: a
+    message sent before the address was reissued still resolves.
+    """
+    with FakeUnitOfWork(world) as unit_of_work:
+        unit_of_work.entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL))
+        unit_of_work.entities.bind_identifier(
+            PRINCIPAL,
+            ENTITY,
+            _an_email(
+                "xid_aaaa0001aaaa0001", ENTITY, "alice@example.test", IdentifierState.RETIRED
+            ),
+        )
+        unit_of_work.entities.bind_identifier(
+            PRINCIPAL, ENTITY, _an_email("xid_bbbb0002bbbb0002", ENTITY, "alice@example.test")
+        )
+    assert {held.identifier_id: held.state for held in world.entity_identifiers} == {
+        "xid_aaaa0001aaaa0001": IdentifierState.RETIRED,
+        "xid_bbbb0002bbbb0002": IdentifierState.ACTIVE,
+    }
+
+
+def test_a_retired_name_form_and_the_one_that_replaced_it_are_both_recorded(
+    world: World,
+) -> None:
+    """`record_alias` carries the same partial unique, and had the same divergence.
+
+    Per entity rather than per Principal, so there is no cross-entity refusal to
+    make here -- two real people do share a name. What there is is the same
+    swallowed write: a former name and its replacement are two rows on the
+    server and were one here.
+    """
+
+    def an_alias(alias_id: str, value: str, state: AliasState) -> EntityAlias:
+        return EntityAlias(
+            alias_id=alias_id,
+            entity_id=ENTITY,
+            alias_type=AliasType.FULL_NAME,
+            normalized_value=value,
+            display_value=value.title(),
+            principal_id=PRINCIPAL,
+            state=state,
+            retired_at=None if state is AliasState.ACTIVE else WHEN,
+        )
+
+    with FakeUnitOfWork(world) as unit_of_work:
+        unit_of_work.entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL))
+        unit_of_work.entities.record_alias(
+            PRINCIPAL, an_alias("eals_aaaa0001aaaa0001", "alice synthetic", AliasState.RETIRED)
+        )
+        unit_of_work.entities.record_alias(
+            PRINCIPAL, an_alias("eals_bbbb0002bbbb0002", "alice synthetic", AliasState.ACTIVE)
+        )
+        # The active row is still idempotent against its own key: this third
+        # call is the repeat the partial unique does absorb.
+        unit_of_work.entities.record_alias(
+            PRINCIPAL, an_alias("eals_cccc0003cccc0003", "alice synthetic", AliasState.ACTIVE)
+        )
+    assert {held.alias_id: held.state for held in world.entity_aliases} == {
+        "eals_aaaa0001aaaa0001": AliasState.RETIRED,
+        "eals_bbbb0002bbbb0002": AliasState.ACTIVE,
+    }
+
+
 def test_an_assignment_scope_in_another_partition_is_refused(two_principals: World) -> None:
     """The scope is checked too: a foreign key spans every Principal, a partition does not."""
     assignment = Assignment(
@@ -392,9 +535,9 @@ def test_assignments_default_to_the_active_ones_and_can_include_the_rest(world: 
     with FakeUnitOfWork(world) as unit_of_work:
         entities = unit_of_work.entities
         entities.create(PRINCIPAL, an_entity(ENTITY, PRINCIPAL))
-        for assignment_id, status in (
-            ("asn_aaaa0001aaaa0001", "active"),
-            ("asn_bbbb0002bbbb0002", "ended"),
+        for assignment_id, state in (
+            ("asn_aaaa0001aaaa0001", AssignmentState.ACTIVE),
+            ("asn_bbbb0002bbbb0002", AssignmentState.ENDED),
         ):
             entities.record_assignment(
                 PRINCIPAL,
@@ -403,10 +546,10 @@ def test_assignments_default_to_the_active_ones_and_can_include_the_rest(world: 
                     entity_id=ENTITY,
                     assignment_type=AssignmentType.EMPLOYMENT,
                     principal_id=PRINCIPAL,
-                    status=status,
+                    state=state,
                 ),
             )
         active = entities.assignments(PRINCIPAL, ENTITY)
         every = entities.assignments(PRINCIPAL, ENTITY, active_only=False)
-    assert [assignment.status for assignment in active] == ["active"]
+    assert [assignment.state for assignment in active] == [AssignmentState.ACTIVE]
     assert len(every) == 2

@@ -36,12 +36,12 @@ from __future__ import annotations
 import hashlib
 import re
 import sys
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Callable, Iterable, Iterator, Mapping
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from types import TracebackType
-from typing import Final
+from typing import Any, Final
 
 import pytest
 
@@ -53,6 +53,7 @@ from my_pa.application.service import ApplicationService
 from my_pa.application.tasks import TaskManagementService
 from my_pa.contracts.ports import (
     Acceptance,
+    AssignmentWriteRequest,
     AuditSink,
     AuthoringConflictError,
     AuthoringReceipt,
@@ -69,9 +70,14 @@ from my_pa.contracts.ports import (
     ContextRunRepository,
     ContinuityAuthoringRepository,
     CounterpartyOption,
+    DirectedReceipt,
     EnrollmentRepository,
     EntitiesRepository,
+    EntityChildPage,
+    EntityMutationAdmission,
+    EntityMutationReceipt,
     EntitySummary,
+    EntityWriteRequest,
     GoodNotesProposalAdmission,
     GoodNotesProposalConflictError,
     GoodNotesSemanticRepository,
@@ -92,6 +98,7 @@ from my_pa.contracts.ports import (
     ProjectRepository,
     PulseRepository,
     RelationshipMemoryRepository,
+    RelationshipWriteRequest,
     ReviewDecisionRequest,
     ReviewRepository,
     SearchOutcome,
@@ -175,8 +182,22 @@ from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
+from my_pa.domain.relationship.authoring import (
+    ConflictedIdentifierError,
+    DuplicateEntityFactError,
+    EntityEvidenceError,
+    EntityIdempotencyConflictError,
+    EntityWriteOperation,
+    HistoricalEntityError,
+    StaleEntityVersionError,
+)
 from my_pa.domain.relationship.entity import (
+    AliasState,
+    AliasType,
     Assignment,
+    AssignmentState,
+    DirectedWriteError,
+    DuplicateDirectedFactError,
     Entity,
     EntityAlias,
     EntityRelationship,
@@ -184,12 +205,26 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    IdentifierState,
+    MergedEndpointError,
+    RelationshipState,
+    StaleDirectedVersionError,
+    descriptor_key,
 )
 from my_pa.domain.relationship.governance import (
+    ActorClass,
+    EntityFactEvidenceLink,
     EntityMergeRecord,
+    EntityMutationConflictError,
+    EntityMutationEvent,
     EntityObservation,
     EntityProposal,
     EntityProposalState,
+    EntityResolutionDecision,
+    EvidenceRole,
+    MutationAuthority,
+    MutationRecordFamily,
+    ObservationState,
 )
 from my_pa.domain.relationship.memory import (
     CONTEXT_TARGET_ID_KINDS,
@@ -486,8 +521,43 @@ class World:
     entity_observations: list[EntityObservation] = field(default_factory=list)
     entity_proposals: list[EntityProposal] = field(default_factory=list)
     entity_merges: list[EntityMergeRecord] = field(default_factory=list)
+    #: The entity plane's three ledgers, shared by every writer on it. Flat
+    #: lists for the reason the entity ones are: the fake's only job is the
+    #: partition predicate, the unique key and the guarded version, and a list a
+    #: filter runs over is the clearest place to see one of them missing.
+    #:
+    #: **One list of `EntityMutationEvent` rather than one list per writer.**
+    #: The directed writes held their own list of raw dicts until integration,
+    #: which shared a field name with this one and produced a single list of two
+    #: shapes; every reader then had to guess which. There is one ledger in the
+    #: schema and there is one here, so a reader that works for one writer works
+    #: for all of them, and the idempotency unique
+    #: `(principal_id, capability, idempotency_key)` is arbitrated in one place.
+    entity_mutation_events: list[EntityMutationEvent] = field(default_factory=list)
+    entity_resolution_decisions: list[EntityResolutionDecision] = field(default_factory=list)
+    entity_fact_evidence_links: list[EntityFactEvidenceLink] = field(default_factory=list)
     entity_assignments: list[Assignment] = field(default_factory=list)
     entity_relationships: list[EntityRelationship] = field(default_factory=list)
+    #: The entity plane's mutation ledger (WP-RI-A-02), keyed the way the server
+    #: keys it: `one_entity_mutation_per_key_and_capability` is
+    #: `(principal_id, capability, idempotency_key)`, so a key spent again under
+    #: a different capability is an independent write and never a replay, and the
+    #: same key held by two Principals likewise. A fake that keyed it any other
+    #: way would let a test prove a behaviour the constraint does not give.
+    #: The digest travels with the receipt because it is what decides a replay
+    #: from a conflict.
+    entity_mutations: dict[tuple[str, str, str], tuple[str, EntityMutationReceipt]] = field(
+        default_factory=dict
+    )
+    #: Capture spans a governed entity write may cite as evidence, partitioned
+    #: exactly like the production join. Held as `(principal_id, span_id)` pairs
+    #: rather than reconstructed from `capture_spans` above, for the reason
+    #: `work_evidence_refs` is held that way: the production check walks
+    #: `capture_spans -> capture_versions -> captures.owner_principal_id`, and a
+    #: fake that rebuilt that walk would be asserting the join rather than the
+    #: rule the join exists to enforce — that a span behind another Principal's
+    #: capture answers exactly what an absent span answers.
+    entity_evidence_spans: set[tuple[str, str]] = field(default_factory=set)
     #: The Relationship Memory plane (WP-RM-01). Flat lists again, and the same
     #: division the schema draws: `relationship_memories` is the aggregate — no
     #: statement on it, because the table has none — and every word the user
@@ -2980,7 +3050,7 @@ class _Entities(EntitiesRepository):
                 for assignment in self._world.entity_assignments
                 if assignment.principal_id == principal_id
                 and assignment.entity_id == entity_id
-                and (not active_only or assignment.status == "active")
+                and (not active_only or assignment.state is AssignmentState.ACTIVE)
             ),
             key=lambda assignment: assignment.assignment_id,
         )
@@ -3064,9 +3134,48 @@ class _Entities(EntitiesRepository):
         if not is_normalized_identifier(identifier.namespace, identifier.normalized_value):
             raise ValueError("an external identifier is stored in the form resolution compares in")
         self._require_own(principal_id, entity_id)
-        natural_key = (identifier.entity_id, identifier.namespace, identifier.normalized_value)
-        for held in self._world.entity_identifiers:
-            if (held.entity_id, held.namespace, held.normalized_value) == natural_key:
+        # The partial unique `an_active_external_identifier_binding_is_unique`,
+        # spelled out in Python. This double keyed on `(entity_id, namespace,
+        # normalized_value)` with no reference to `state` at all, which *was*
+        # the server's rule until `2fe4e13fb449` replaced the total unique with
+        # a partial one and did not come back here. Three properties of the
+        # index that replaced it, and the old key disagreed with two of them:
+        #
+        # * it is over the **active** row only, so recording a retired binding
+        #   and then its replacement writes twice where the total unique the
+        #   table was created with wrote once. Ignoring `state` made that second
+        #   write a silent no-op here, leaving the entity with no active binding
+        #   while reporting success -- a green unit test over a write path that
+        #   does something else;
+        # * it spans the **Principal**, not the entity, so an address that is
+        #   already another entity's current identity is refused rather than
+        #   absorbed. Ignoring `state` and keying on the entity made that
+        #   *accepted* here and refused by the server, which is the direction a
+        #   double must never diverge in: it admits what production rejects;
+        # * a row outside `ACTIVE` participates in no uniqueness at all, so it
+        #   is always written.
+        if identifier.state is IdentifierState.ACTIVE:
+            holder = next(
+                (
+                    held.entity_id
+                    for held in self._world.entity_identifiers
+                    if held.principal_id == principal_id
+                    and held.state is IdentifierState.ACTIVE
+                    and held.namespace is identifier.namespace
+                    and held.normalized_value == identifier.normalized_value
+                ),
+                None,
+            )
+            if holder is not None:
+                if holder != entity_id:
+                    # Typed, because the server's is typed since `WP-RI-A-02`
+                    # and both still subclass `ValueError`. A fake that kept the
+                    # bare class would let a unit test prove that a caller cannot
+                    # tell this permanent conflict from the retryable race the
+                    # server reports as `UnsettledBindingError`.
+                    raise ConflictedIdentifierError(
+                        "an active external identity binds exactly one entity"
+                    )
                 return
         _refuse_taken_identifier(
             next(
@@ -3088,10 +3197,25 @@ class _Entities(EntitiesRepository):
             raise ValueError("an alias belongs to the acting Principal")
         _refuse_unnormalized_name(alias.normalized_value)
         self._require_own(principal_id, alias.entity_id)
-        natural_key = (alias.entity_id, alias.alias_type, alias.normalized_value)
-        for held in self._world.entity_aliases:
-            if (held.entity_id, held.alias_type, held.normalized_value) == natural_key:
-                return
+        # `an_active_alias_is_unique_per_entity_and_type`, and the same
+        # correction as `bind_identifier` above, from the same cause: this keyed
+        # on `(entity_id, alias_type, normalized_value)` and ignored `state`, so
+        # once `2fe4e13fb449` made that unique partial, retiring a name form and
+        # recording the one that replaced it no-opped here and wrote two rows on
+        # the server. Only the first of that method's
+        # three divergences applies -- this unique is already per entity, so a
+        # conflicting active row can only ever be this entity's own and there is
+        # nothing to refuse.
+        if alias.state is AliasState.ACTIVE:
+            for held in self._world.entity_aliases:
+                if (
+                    held.principal_id == principal_id
+                    and held.state is AliasState.ACTIVE
+                    and held.entity_id == alias.entity_id
+                    and held.alias_type is alias.alias_type
+                    and held.normalized_value == alias.normalized_value
+                ):
+                    return
         _refuse_taken_identifier(
             next(
                 (held for held in self._world.entity_aliases if held.alias_id == alias.alias_id),
@@ -3101,6 +3225,479 @@ class _Entities(EntitiesRepository):
             "an alias",
         )
         self._world.entity_aliases.append(alias)
+
+    # --- WP-RI-A-02: the paged child reads ---------------------------------
+
+    def identifier_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        states: frozenset[IdentifierState] | None = None,
+        namespaces: frozenset[ExternalIdentifierNamespace] | None = None,
+        after_identifier_id: str | None = None,
+    ) -> EntityChildPage[ExternalIdentifier]:
+        self._world.fail("entities.identifier_page")
+        _refuse_empty_limit(limit)
+        self._require_own(principal_id, entity_id)
+        found = sorted(
+            (
+                identifier
+                for identifier in self._world.entity_identifiers
+                if identifier.principal_id == principal_id
+                and identifier.entity_id == entity_id
+                and (states is None or identifier.state in states)
+                and (namespaces is None or identifier.namespace in namespaces)
+            ),
+            key=lambda identifier: identifier.identifier_id,
+        )
+        return _child_page(
+            found,
+            cursor=after_identifier_id,
+            key=lambda identifier: identifier.identifier_id,
+            known=[
+                identifier.identifier_id
+                for identifier in self._world.entity_identifiers
+                if identifier.principal_id == principal_id and identifier.entity_id == entity_id
+            ],
+            limit=limit,
+        )
+
+    def alias_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        states: frozenset[AliasState] | None = None,
+        alias_types: frozenset[AliasType] | None = None,
+        after_alias_id: str | None = None,
+    ) -> EntityChildPage[EntityAlias]:
+        self._world.fail("entities.alias_page")
+        _refuse_empty_limit(limit)
+        self._require_own(principal_id, entity_id)
+        found = sorted(
+            (
+                alias
+                for alias in self._world.entity_aliases
+                if alias.principal_id == principal_id
+                and alias.entity_id == entity_id
+                and (states is None or alias.state in states)
+                and (alias_types is None or alias.alias_type in alias_types)
+            ),
+            key=lambda alias: alias.alias_id,
+        )
+        return _child_page(
+            found,
+            cursor=after_alias_id,
+            key=lambda alias: alias.alias_id,
+            known=[
+                alias.alias_id
+                for alias in self._world.entity_aliases
+                if alias.principal_id == principal_id and alias.entity_id == entity_id
+            ],
+            limit=limit,
+        )
+
+    # --- WP-RI-A-02: the governed write path -------------------------------
+    #
+    # The server's ordering, spelled out in Python: the entity guard first and
+    # its outcome read before anything else is written, then the child write,
+    # then the evidence, then the ledger row. A fake that wrote the child first
+    # would let a unit test prove that a stale expectation leaves partial state
+    # behind, which is the one property this path exists to guarantee.
+
+    def mutation_replay_for(
+        self,
+        idempotency_key: str,
+        request_digest: str,
+        *,
+        principal_id: str,
+        capability: str,
+    ) -> EntityMutationReceipt | None:
+        held = self._world.entity_mutations.get((principal_id, capability, idempotency_key))
+        if held is None:
+            return None
+        digest, receipt = held
+        if digest != request_digest:
+            raise EntityIdempotencyConflictError(
+                "an entity idempotency key is bound to a different request"
+            )
+        return replace(receipt, created=False)
+
+    def admit_mutation(self, request: EntityWriteRequest) -> EntityMutationAdmission:
+        self._world.fail("entities.admit_mutation")
+        key = (request.principal_id, request.capability, request.idempotency_key)
+        if key in self._world.entity_mutations:
+            # The unique constraint, reached when a concurrent writer claimed the
+            # key between the service's replay pre-read and here. The pre-read is
+            # an optimisation; this is the decision.
+            raise EntityIdempotencyConflictError(
+                "an entity idempotency key is bound to a different request"
+            )
+        # **The transaction, spelled out.** A governed write touches up to four
+        # collections and any of them may refuse; on the server every one of
+        # those refusals rolls the whole statement back, so a caller that was
+        # told `duplicate_fact` about an alias finds the entity's version
+        # unchanged. A fake without this leaves the entity advanced and the
+        # child untouched -- a state the database cannot produce, and one a unit
+        # test would then be free to assert.
+        snapshot = (
+            list(self._world.entities),
+            list(self._world.entity_aliases),
+            list(self._world.entity_identifiers),
+        )
+        try:
+            if request.operation is EntityWriteOperation.CREATE:
+                receipt = self._create_entity(request)
+            else:
+                receipt = self._mutate_entity(request)
+        except Exception:
+            self._world.entities[:] = snapshot[0]
+            self._world.entity_aliases[:] = snapshot[1]
+            self._world.entity_identifiers[:] = snapshot[2]
+            raise
+        self._world.entity_mutations[key] = (request.payload_digest, receipt)
+        return EntityMutationAdmission(receipt=receipt, created=True)
+
+    def _create_entity(self, request: EntityWriteRequest) -> EntityMutationReceipt:
+        entity_id = str(request.minted_entity_id)
+        for identifier in request.initial_identifiers:
+            self._refuse_a_claimed_address(
+                request.principal_id, identifier.namespace, identifier.normalized_value, entity_id
+            )
+        entity = Entity(
+            entity_id=entity_id,
+            principal_id=request.principal_id,
+            entity_type=EntityType(str(request.entity_type)),
+            canonical_name=str(request.canonical_name),
+            display_name=str(request.display_name),
+            status=EntityStatus.ACTIVE,
+            created_at=request.server_received_at,
+            updated_at=request.server_received_at,
+            version=1,
+        )
+        self._world.entities.append(entity)
+        for alias in request.initial_aliases:
+            self._world.entity_aliases.append(
+                EntityAlias(
+                    alias_id=alias.alias_id,
+                    entity_id=entity_id,
+                    alias_type=alias.alias_type,
+                    normalized_value=alias.normalized_value,
+                    display_value=alias.display_value,
+                    principal_id=request.principal_id,
+                )
+            )
+        for identifier in request.initial_identifiers:
+            self._world.entity_identifiers.append(
+                ExternalIdentifier(
+                    identifier_id=identifier.identifier_id,
+                    entity_id=entity_id,
+                    namespace=identifier.namespace,
+                    normalized_value=identifier.normalized_value,
+                    display_value=identifier.display_value,
+                    principal_id=request.principal_id,
+                )
+            )
+        links = self._record_evidence(request)
+        return EntityMutationReceipt(
+            event_id=request.event_id,
+            capability=request.capability,
+            record_family=request.record_family,
+            record_id=entity_id,
+            entity_id=entity_id,
+            entity_version=1,
+            entity_status=EntityStatus.ACTIVE,
+            idempotency_key=request.idempotency_key,
+            issued_at=request.server_received_at,
+            created=True,
+            evidence_link_ids=links,
+        )
+
+    def _mutate_entity(self, request: EntityWriteRequest) -> EntityMutationReceipt:
+        entity_id = str(request.entity_id)
+        entity = self._mine(request.principal_id, entity_id)
+        if entity is None:
+            raise UnknownScopeError("an entity write names an entity outside this scope")
+        if entity.status is EntityStatus.MERGED_REDIRECT:
+            raise HistoricalEntityError(str(entity.superseded_by_entity_id))
+        operation = request.operation
+        status = entity.status
+        archived_from = entity.archived_from_status
+        display_name = entity.display_name
+        canonical_name = entity.canonical_name
+        if operation is EntityWriteOperation.UPDATE:
+            if request.status is not None:
+                if status is EntityStatus.ARCHIVED:
+                    raise DuplicateEntityFactError(
+                        "an archived entity is restored rather than updated"
+                    )
+                status = EntityStatus(request.status)
+            display_name = request.display_name or display_name
+            canonical_name = request.canonical_name or canonical_name
+        elif operation is EntityWriteOperation.ARCHIVE:
+            if status is EntityStatus.ARCHIVED:
+                raise DuplicateEntityFactError("an archived entity is already withdrawn")
+            archived_from = status
+            status = EntityStatus.ARCHIVED
+        elif operation is EntityWriteOperation.RESTORE:
+            if status is not EntityStatus.ARCHIVED:
+                raise DuplicateEntityFactError("an entity that is not archived cannot be restored")
+            status = EntityStatus(str(archived_from))
+            archived_from = None
+        # The guard, and its outcome read before anything else is written.
+        if entity.version != request.expected_version:
+            raise StaleEntityVersionError("the expected entity version is stale")
+        new_version = entity.version + 1
+        self._world.entities[self._world.entities.index(entity)] = replace(
+            entity,
+            display_name=display_name,
+            canonical_name=canonical_name,
+            status=status,
+            archived_from_status=archived_from,
+            version=new_version,
+            updated_at=request.server_received_at,
+        )
+        record_id = entity_id
+        child_id: str | None = None
+        child_version: int | None = None
+        child_state: str | None = None
+        superseded: tuple[str, ...] = ()
+        if operation is EntityWriteOperation.UPDATE:
+            corrected = (
+                request.canonical_name is not None
+                and request.canonical_name != entity.canonical_name
+            )
+            if corrected:
+                written = self._add_alias_row(
+                    request,
+                    entity_id=entity_id,
+                    alias_id=str(request.minted_child_id),
+                    alias_type=AliasType.FORMER_NAME,
+                    normalized_value=entity.canonical_name,
+                    display_value=entity.display_name,
+                    effective_from=None,
+                    effective_to=None,
+                    refuse_a_duplicate=False,
+                )
+                if written:
+                    child_id = str(request.minted_child_id)
+                    child_version = 1
+                    child_state = AliasState.ACTIVE.value
+        elif operation in (
+            EntityWriteOperation.BIND_IDENTIFIER,
+            EntityWriteOperation.SUPERSEDE_IDENTIFIER,
+        ):
+            child_id = str(request.minted_child_id)
+            self._add_binding_row(request, entity_id=entity_id, identifier_id=child_id)
+            child_version = 1
+            child_state = IdentifierState.ACTIVE.value
+            record_id = child_id
+            if operation is EntityWriteOperation.SUPERSEDE_IDENTIFIER:
+                self._transition_identifier(
+                    request, state=IdentifierState.SUPERSEDED, successor=child_id
+                )
+                superseded = (str(request.target_child_id),)
+        elif operation is EntityWriteOperation.RETIRE_IDENTIFIER:
+            self._transition_identifier(request, state=IdentifierState.RETIRED, successor=None)
+            record_id = child_id = str(request.target_child_id)
+            child_version = int(request.target_child_version or 0) + 1
+            child_state = IdentifierState.RETIRED.value
+        elif operation in (EntityWriteOperation.ADD_ALIAS, EntityWriteOperation.SUPERSEDE_ALIAS):
+            child_id = str(request.minted_child_id)
+            self._add_alias_row(
+                request,
+                entity_id=entity_id,
+                alias_id=child_id,
+                alias_type=AliasType(str(request.alias_type)),
+                normalized_value=str(request.normalized_value),
+                display_value=str(request.display_value),
+                effective_from=request.effective_from,
+                effective_to=request.effective_to,
+            )
+            child_version = 1
+            child_state = AliasState.ACTIVE.value
+            record_id = child_id
+            if operation is EntityWriteOperation.SUPERSEDE_ALIAS:
+                self._transition_alias(request, state=AliasState.SUPERSEDED, successor=child_id)
+                superseded = (str(request.target_child_id),)
+        elif operation is EntityWriteOperation.RETIRE_ALIAS:
+            self._transition_alias(request, state=AliasState.RETIRED, successor=None)
+            record_id = child_id = str(request.target_child_id)
+            child_version = int(request.target_child_version or 0) + 1
+            child_state = AliasState.RETIRED.value
+        links = self._record_evidence(request)
+        return EntityMutationReceipt(
+            event_id=request.event_id,
+            capability=request.capability,
+            record_family=request.record_family,
+            record_id=record_id,
+            entity_id=entity_id,
+            entity_version=new_version,
+            entity_status=status,
+            idempotency_key=request.idempotency_key,
+            issued_at=request.server_received_at,
+            created=True,
+            child_id=child_id,
+            child_version=child_version,
+            child_state=child_state,
+            superseded_ids=superseded,
+            evidence_link_ids=links,
+        )
+
+    def _refuse_a_claimed_address(
+        self,
+        principal_id: str,
+        namespace: ExternalIdentifierNamespace,
+        normalized_value: str,
+        entity_id: str,
+    ) -> None:
+        """`an_active_external_identifier_binding_is_unique`, in Python.
+
+        Two different refusals, because the two are different facts: an address
+        another entity currently holds is permanent and never transferred, and
+        one this entity already holds is a duplicate rather than a binding that
+        was made.
+        """
+        holder = next(
+            (
+                held.entity_id
+                for held in self._world.entity_identifiers
+                if held.principal_id == principal_id
+                and held.state is IdentifierState.ACTIVE
+                and held.namespace is namespace
+                and held.normalized_value == normalized_value
+            ),
+            None,
+        )
+        if holder is None:
+            return
+        if holder != entity_id:
+            raise ConflictedIdentifierError("an active external identity binds exactly one entity")
+        raise DuplicateEntityFactError("this entity already holds that external identity")
+
+    def _add_binding_row(
+        self, request: EntityWriteRequest, *, entity_id: str, identifier_id: str
+    ) -> None:
+        namespace = ExternalIdentifierNamespace(str(request.namespace))
+        self._refuse_a_claimed_address(
+            request.principal_id, namespace, str(request.normalized_value), entity_id
+        )
+        self._world.entity_identifiers.append(
+            ExternalIdentifier(
+                identifier_id=identifier_id,
+                entity_id=entity_id,
+                namespace=namespace,
+                normalized_value=str(request.normalized_value),
+                display_value=str(request.display_value),
+                principal_id=request.principal_id,
+                effective_from=request.effective_from,
+                effective_to=request.effective_to,
+            )
+        )
+
+    def _add_alias_row(
+        self,
+        request: EntityWriteRequest,
+        *,
+        entity_id: str,
+        alias_id: str,
+        alias_type: AliasType,
+        normalized_value: str,
+        display_value: str,
+        effective_from: datetime | None,
+        effective_to: datetime | None,
+        refuse_a_duplicate: bool = True,
+    ) -> bool:
+        held = any(
+            alias.principal_id == request.principal_id
+            and alias.entity_id == entity_id
+            and alias.state is AliasState.ACTIVE
+            and alias.alias_type is alias_type
+            and alias.normalized_value == normalized_value
+            for alias in self._world.entity_aliases
+        )
+        if held:
+            if refuse_a_duplicate:
+                raise DuplicateEntityFactError("this entity already carries that name form")
+            return False
+        self._world.entity_aliases.append(
+            EntityAlias(
+                alias_id=alias_id,
+                entity_id=entity_id,
+                alias_type=alias_type,
+                normalized_value=normalized_value,
+                display_value=display_value,
+                principal_id=request.principal_id,
+                effective_from=effective_from,
+                effective_to=effective_to,
+            )
+        )
+        return True
+
+    def _transition_identifier(
+        self, request: EntityWriteRequest, *, state: IdentifierState, successor: str | None
+    ) -> None:
+        held = next(
+            (
+                identifier
+                for identifier in self._world.entity_identifiers
+                if identifier.principal_id == request.principal_id
+                and identifier.identifier_id == request.target_child_id
+                and identifier.entity_id == request.entity_id
+            ),
+            None,
+        )
+        if held is None:
+            raise UnknownScopeError("an identifier transition names a record outside this scope")
+        if held.version != request.target_child_version:
+            raise StaleEntityVersionError("the expected identifier version is stale")
+        if held.state is not IdentifierState.ACTIVE:
+            raise DuplicateEntityFactError("that binding has already left service")
+        self._world.entity_identifiers[self._world.entity_identifiers.index(held)] = replace(
+            held,
+            state=state,
+            retired_at=request.server_received_at,
+            updated_at=request.server_received_at,
+            version=held.version + 1,
+            superseded_by_identifier_id=successor,
+        )
+
+    def _transition_alias(
+        self, request: EntityWriteRequest, *, state: AliasState, successor: str | None
+    ) -> None:
+        held = next(
+            (
+                alias
+                for alias in self._world.entity_aliases
+                if alias.principal_id == request.principal_id
+                and alias.alias_id == request.target_child_id
+                and alias.entity_id == request.entity_id
+            ),
+            None,
+        )
+        if held is None:
+            raise UnknownScopeError("an alias transition names a record outside this scope")
+        if held.version != request.target_child_version:
+            raise StaleEntityVersionError("the expected alias version is stale")
+        if held.state is not AliasState.ACTIVE:
+            raise DuplicateEntityFactError("that name form has already left service")
+        self._world.entity_aliases[self._world.entity_aliases.index(held)] = replace(
+            held,
+            state=state,
+            retired_at=request.server_received_at,
+            updated_at=request.server_received_at,
+            version=held.version + 1,
+            superseded_by_alias_id=successor,
+        )
+
+    def _record_evidence(self, request: EntityWriteRequest) -> tuple[str, ...]:
+        for reference in request.evidence:
+            if (request.principal_id, reference) not in self._world.entity_evidence_spans:
+                raise EntityEvidenceError("an entity write cites evidence outside this scope")
+        return request.minted_evidence_link_ids
 
     # --- WP-RI-06 governance ----------------------------------------------
 
@@ -3193,6 +3790,170 @@ class _Entities(EntitiesRepository):
                 self._world.entity_observations[index] = replace(held, entity_id=entity_id)
                 return
         raise UnknownScopeError("an observation link names an observation outside this scope")
+
+    # --- WP-RI-A-04 ledgers -------------------------------------------------
+
+    def observation(self, principal_id: str, observation_id: str) -> EntityObservation | None:
+        self._world.fail("entities.observation")
+        return next(
+            (
+                held
+                for held in self._world.entity_observations
+                if held.observation_id == observation_id and held.principal_id == principal_id
+            ),
+            None,
+        )
+
+    def record_mutation_event(self, principal_id: str, event: EntityMutationEvent) -> None:
+        self._world.fail("entities.record_mutation_event")
+        if event.principal_id != principal_id:
+            raise ValueError("a mutation event belongs to the acting Principal")
+        held = self.mutation_event(
+            principal_id, capability=event.capability, idempotency_key=event.idempotency_key
+        )
+        if held is not None:
+            # Parity with the unique `(principal_id, capability, idempotency_key)`.
+            # A fake that appended a second row would let a unit test prove a
+            # replay behaviour the constraint does not give.
+            if held.request_digest != event.request_digest:
+                raise EntityMutationConflictError(
+                    "an entity mutation key is held for a different request"
+                )
+            return
+        self._world.entity_mutation_events.append(event)
+
+    def mutation_event(
+        self, principal_id: str, *, capability: str, idempotency_key: str
+    ) -> EntityMutationEvent | None:
+        self._world.fail("entities.mutation_event")
+        return next(
+            (
+                held
+                for held in self._world.entity_mutation_events
+                if held.principal_id == principal_id
+                and held.capability == capability
+                and held.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+
+    def record_resolution_decision(
+        self, principal_id: str, decision: EntityResolutionDecision
+    ) -> None:
+        self._world.fail("entities.record_resolution_decision")
+        if decision.principal_id != principal_id:
+            raise ValueError("a resolution decision belongs to the acting Principal")
+        if decision.entity_id is not None:
+            self._require_own(principal_id, decision.entity_id)
+        # Parity with `UNIQUE (observation_id, sequence)`, which is not
+        # partitioned by Principal at the server -- the observation identifier
+        # already is.
+        for held in self._world.entity_resolution_decisions:
+            if (
+                held.observation_id == decision.observation_id
+                and held.sequence == decision.sequence
+            ):
+                raise ValueError("one resolution decision per observation and sequence")
+        self._world.entity_resolution_decisions.append(decision)
+
+    def resolution_decisions(
+        self,
+        principal_id: str,
+        observation_id: str | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[EntityResolutionDecision]:
+        self._world.fail("entities.resolution_decisions")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                held
+                for held in self._world.entity_resolution_decisions
+                if held.principal_id == principal_id
+                and (observation_id is None or held.observation_id == observation_id)
+            ),
+            key=lambda held: (held.observation_id, held.sequence),
+        )
+        return found if limit is None else found[:limit]
+
+    def decide_observation(
+        self,
+        principal_id: str,
+        observation_id: str,
+        *,
+        expected_resolution_version: int,
+        entity_id: str | None = None,
+        state: ObservationState | None = None,
+        state_reason: str | None = None,
+    ) -> bool:
+        self._world.fail("entities.decide_observation")
+        if expected_resolution_version < 0:
+            raise ValueError("an expected resolution version is not negative")
+        if entity_id is not None:
+            self._require_own(principal_id, entity_id)
+        for index, held in enumerate(self._world.entity_observations):
+            if held.observation_id != observation_id or held.principal_id != principal_id:
+                continue
+            # The whole point of the fake here is that a mismatched version
+            # writes *nothing*, exactly as the guarded UPDATE's `WHERE` does. A
+            # fake that raised instead would let a test prove a refusal the
+            # server expresses as a rowcount.
+            if held.resolution_version != expected_resolution_version:
+                return False
+            changes: dict[str, object] = {"resolution_version": expected_resolution_version + 1}
+            if entity_id is not None:
+                changes["entity_id"] = entity_id
+            if state is not None:
+                changes["state"] = state
+                changes["state_reason"] = state_reason
+            self._world.entity_observations[index] = replace(held, **changes)
+            return True
+        return False
+
+    def record_fact_evidence_link(self, principal_id: str, link: EntityFactEvidenceLink) -> None:
+        self._world.fail("entities.record_fact_evidence_link")
+        if link.principal_id != principal_id:
+            raise ValueError("an evidence link belongs to the acting Principal")
+        if link.entity_id is not None:
+            self._require_own(principal_id, link.entity_id)
+        _refuse_taken_identifier(
+            next(
+                (
+                    held
+                    for held in self._world.entity_fact_evidence_links
+                    if held.link_id == link.link_id
+                ),
+                None,
+            ),
+            link.link_id,
+            "an evidence link",
+        )
+        self._world.entity_fact_evidence_links.append(link)
+
+    def fact_evidence_links(
+        self,
+        principal_id: str,
+        *,
+        entity_observation_id: str | None = None,
+        role: EvidenceRole | None = None,
+        limit: int | None = None,
+    ) -> list[EntityFactEvidenceLink]:
+        self._world.fail("entities.fact_evidence_links")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                held
+                for held in self._world.entity_fact_evidence_links
+                if held.principal_id == principal_id
+                and (
+                    entity_observation_id is None
+                    or held.entity_observation_id == entity_observation_id
+                )
+                and (role is None or held.role is role)
+            ),
+            key=lambda held: held.link_id,
+        )
+        return found if limit is None else found[:limit]
 
     def record_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
         self._world.fail("entities.record_proposal")
@@ -3416,6 +4177,477 @@ class _Entities(EntitiesRepository):
         )
         self._world.entity_relationships.append(rel)
 
+    # --- The directed-relationship write path (WP-RI-A-03) -------------------
+    #
+    # The double repeats the *server's* rules and not a convenient subset of
+    # them, on the terms `_refuse_taken_identifier` states: the active semantic
+    # uniques, the version guard, the merged-endpoint refusal and the
+    # `(principal, capability, key)` idempotency key are all what
+    # `SqlEntityRepository` does, so a unit test cannot prove the opposite of
+    # what the server does. The one thing it deliberately does *not* imitate is
+    # concurrency: there is no interleaving here to lose, so the tests that
+    # matter for it are in `tests/database/`.
+
+    def assignment(self, principal_id: str, assignment_id: str) -> Assignment | None:
+        self._world.fail("entities.assignment")
+        validate_identifier(assignment_id, IdKind.ASSIGNMENT)
+        return next(
+            (
+                held
+                for held in self._world.entity_assignments
+                if held.principal_id == principal_id and held.assignment_id == assignment_id
+            ),
+            None,
+        )
+
+    def relationship(self, principal_id: str, relationship_id: str) -> EntityRelationship | None:
+        self._world.fail("entities.relationship")
+        validate_identifier(relationship_id, IdKind.ENTITY_RELATIONSHIP)
+        return next(
+            (
+                held
+                for held in self._world.entity_relationships
+                if held.principal_id == principal_id and held.relationship_id == relationship_id
+            ),
+            None,
+        )
+
+    def assignments_page(
+        self,
+        principal_id: str,
+        entity_id: str,
+        *,
+        active_only: bool,
+        limit: int,
+        after_assignment_id: str | None = None,
+    ) -> list[Assignment]:
+        self._world.fail("entities.assignments_page")
+        _refuse_empty_limit(limit)
+        if after_assignment_id is not None:
+            validate_identifier(after_assignment_id, IdKind.ASSIGNMENT)
+            # Refused here too, because the server refuses it. A fake that
+            # emptied the page instead would let a unit test assert a
+            # continuation the database does not perform.
+            if not any(
+                held.principal_id == principal_id and held.assignment_id == after_assignment_id
+                for held in self._world.entity_assignments
+            ):
+                raise UnknownScopeError("an assignment cursor names a row in this scope")
+        found = sorted(
+            (
+                held
+                for held in self._world.entity_assignments
+                if held.principal_id == principal_id
+                and held.entity_id == entity_id
+                and (not active_only or held.state is AssignmentState.ACTIVE)
+                and (after_assignment_id is None or held.assignment_id > after_assignment_id)
+            ),
+            key=lambda held: held.assignment_id,
+        )
+        return found[:limit]
+
+    def directed_replay(
+        self,
+        capability: str,
+        idempotency_key: str,
+        payload_digest: str,
+        *,
+        principal_id: str,
+    ) -> DirectedReceipt | None:
+        self._world.fail("entities.directed_replay")
+        row = next(
+            (
+                held
+                for held in self._world.entity_mutation_events
+                if held.principal_id == principal_id
+                and held.capability == capability
+                and held.idempotency_key == idempotency_key
+            ),
+            None,
+        )
+        if row is None:
+            return None
+        if row.request_digest != payload_digest:
+            raise DirectedWriteError("this idempotency key is bound to a different request")
+        return _directed_receipt_from(row, replayed=True)
+
+    def create_assignment(self, request: AssignmentWriteRequest) -> DirectedReceipt:
+        self._world.fail("entities.create_assignment")
+        entity_id = request.entity_id
+        assignment_type = request.assignment_type
+        if entity_id is None or assignment_type is None:
+            raise DirectedWriteError("an assignment creation names its subject and its type")
+        self._require_writable(request.principal_id, entity_id, request.expected_entity_version)
+        if request.scope_entity_id is not None:
+            self._require_writable(
+                request.principal_id, request.scope_entity_id, request.expected_scope_version
+            )
+        wanted = (
+            descriptor_key(request.role),
+            descriptor_key(request.discipline),
+            descriptor_key(request.responsibility_class),
+        )
+        for held in self._world.entity_assignments:
+            if (
+                held.principal_id == request.principal_id
+                and held.entity_id == entity_id
+                and held.assignment_type is assignment_type
+                and held.scope_entity_id == request.scope_entity_id
+                and held.state is AssignmentState.ACTIVE
+                and (
+                    descriptor_key(held.role),
+                    descriptor_key(held.discipline),
+                    descriptor_key(held.responsibility_class),
+                )
+                == wanted
+            ):
+                raise DuplicateDirectedFactError("an identical active assignment is recorded")
+        assignment = Assignment(
+            assignment_id=issue_identifier(IdKind.ASSIGNMENT),
+            entity_id=entity_id,
+            assignment_type=assignment_type,
+            principal_id=request.principal_id,
+            scope_entity_id=request.scope_entity_id,
+            role=request.role,
+            discipline=request.discipline,
+            responsibility_class=request.responsibility_class,
+            effective_from=request.effective_from,
+            effective_to=request.effective_to,
+            state=AssignmentState.ACTIVE,
+            version=1,
+            updated_at=request.server_received_at,
+        )
+        self._world.entity_assignments.append(assignment)
+        self._link_evidence(request, assignment_id=assignment.assignment_id)
+        return self._append_mutation(
+            request,
+            capability=Capability.ENTITIES_ASSIGNMENTS_CREATE.value,
+            family=MutationRecordFamily.ASSIGNMENT,
+            record_id=assignment.assignment_id,
+            prior_version=None,
+            new_version=1,
+            state=AssignmentState.ACTIVE.value,
+        )
+
+    def revise_assignment(self, request: AssignmentWriteRequest) -> DirectedReceipt:
+        self._world.fail("entities.revise_assignment")
+        return self._mutate_assignment(
+            request, capability=Capability.ENTITIES_ASSIGNMENTS_REVISE.value, ending=False
+        )
+
+    def end_assignment(self, request: AssignmentWriteRequest) -> DirectedReceipt:
+        self._world.fail("entities.end_assignment")
+        return self._mutate_assignment(
+            request, capability=Capability.ENTITIES_ASSIGNMENTS_END.value, ending=True
+        )
+
+    def create_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
+        self._world.fail("entities.create_relationship")
+        from_entity_id = request.from_entity_id
+        to_entity_id = request.to_entity_id
+        relationship_type = request.relationship_type
+        if from_entity_id is None or to_entity_id is None or relationship_type is None:
+            raise DirectedWriteError("an edge creation names both endpoints and its type")
+        self._require_writable(request.principal_id, from_entity_id, request.expected_from_version)
+        self._require_writable(request.principal_id, to_entity_id, request.expected_to_version)
+        if request.scope_entity_id is not None:
+            self._require_writable(
+                request.principal_id, request.scope_entity_id, request.expected_scope_version
+            )
+        for held in self._world.entity_relationships:
+            if (
+                held.principal_id == request.principal_id
+                and held.from_entity_id == from_entity_id
+                and held.relationship_type is relationship_type
+                and held.to_entity_id == to_entity_id
+                and held.scope_entity_id == request.scope_entity_id
+                and held.state is RelationshipState.ACTIVE
+            ):
+                raise DuplicateDirectedFactError(
+                    "an identical active entity relationship is recorded"
+                )
+        edge = EntityRelationship(
+            relationship_id=issue_identifier(IdKind.ENTITY_RELATIONSHIP),
+            from_entity_id=from_entity_id,
+            relationship_type=relationship_type,
+            to_entity_id=to_entity_id,
+            principal_id=request.principal_id,
+            scope_entity_id=request.scope_entity_id,
+            effective_from=request.effective_from,
+            effective_to=request.effective_to,
+            state=RelationshipState.ACTIVE,
+            version=1,
+            updated_at=request.server_received_at,
+        )
+        self._world.entity_relationships.append(edge)
+        self._link_evidence(request, relationship_id=edge.relationship_id)
+        return self._append_mutation(
+            request,
+            capability=Capability.ENTITIES_RELATIONSHIPS_CREATE.value,
+            family=MutationRecordFamily.RELATIONSHIP,
+            record_id=edge.relationship_id,
+            prior_version=None,
+            new_version=1,
+            state=RelationshipState.ACTIVE.value,
+        )
+
+    def revise_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
+        self._world.fail("entities.revise_relationship")
+        return self._mutate_relationship(
+            request, capability=Capability.ENTITIES_RELATIONSHIPS_REVISE.value, ending=False
+        )
+
+    def end_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
+        self._world.fail("entities.end_relationship")
+        return self._mutate_relationship(
+            request, capability=Capability.ENTITIES_RELATIONSHIPS_END.value, ending=True
+        )
+
+    def _require_writable(
+        self, principal_id: str, entity_id: str, expected_version: int | None
+    ) -> None:
+        """This Principal's, not merged away, and at the version the caller read."""
+        held = next(
+            (
+                entity
+                for entity in self._world.entities
+                if entity.principal_id == principal_id and entity.entity_id == entity_id
+            ),
+            None,
+        )
+        if held is None:
+            raise UnknownScopeError("a directed write names an entity outside this scope")
+        if held.status is EntityStatus.MERGED_REDIRECT:
+            raise MergedEndpointError("a directed write names an entity that was merged away")
+        if expected_version is not None and held.version != expected_version:
+            raise StaleDirectedVersionError("the expected entity version is stale")
+
+    def _mutate_assignment(
+        self, request: AssignmentWriteRequest, *, capability: str, ending: bool
+    ) -> DirectedReceipt:
+        assignment_id = request.assignment_id
+        if assignment_id is None:
+            raise DirectedWriteError("a state-dependent assignment write names its assignment")
+        current = self.assignment(request.principal_id, assignment_id)
+        if current is None:
+            raise UnknownScopeError("an assignment write names a row outside this scope")
+        if current.version != request.expected_version:
+            raise StaleDirectedVersionError("the expected assignment version is stale")
+        cleared = frozenset(request.cleared)
+        if ending:
+            successor = replace(
+                current,
+                state=AssignmentState.ENDED,
+                ended_at=request.server_received_at,
+                effective_to=request.effective_to,
+                version=current.version + 1,
+                updated_at=request.server_received_at,
+            )
+        else:
+            successor = replace(
+                current,
+                role=_resolved(request.role, current.role, "role" in cleared),
+                discipline=_resolved(
+                    request.discipline, current.discipline, "discipline" in cleared
+                ),
+                responsibility_class=_resolved(
+                    request.responsibility_class,
+                    current.responsibility_class,
+                    "responsibility_class" in cleared,
+                ),
+                effective_from=_resolved(
+                    request.effective_from, current.effective_from, "effective_from" in cleared
+                ),
+                effective_to=_resolved(
+                    request.effective_to, current.effective_to, "effective_to" in cleared
+                ),
+                version=current.version + 1,
+                updated_at=request.server_received_at,
+            )
+            self._refuse_duplicate_after(successor)
+        self._world.entity_assignments[self._world.entity_assignments.index(current)] = successor
+        self._link_evidence(request, assignment_id=assignment_id, replace_links=True)
+        return self._append_mutation(
+            request,
+            capability=capability,
+            family=MutationRecordFamily.ASSIGNMENT,
+            record_id=assignment_id,
+            prior_version=current.version,
+            new_version=successor.version,
+            state=successor.state.value,
+        )
+
+    def _refuse_duplicate_after(self, successor: Assignment) -> None:
+        """A revise that folds onto another active row is refused, as the index refuses it."""
+        wanted = (
+            descriptor_key(successor.role),
+            descriptor_key(successor.discipline),
+            descriptor_key(successor.responsibility_class),
+        )
+        for held in self._world.entity_assignments:
+            if (
+                held.assignment_id != successor.assignment_id
+                and held.principal_id == successor.principal_id
+                and held.entity_id == successor.entity_id
+                and held.assignment_type is successor.assignment_type
+                and held.scope_entity_id == successor.scope_entity_id
+                and held.state is AssignmentState.ACTIVE
+                and successor.state is AssignmentState.ACTIVE
+                and (
+                    descriptor_key(held.role),
+                    descriptor_key(held.discipline),
+                    descriptor_key(held.responsibility_class),
+                )
+                == wanted
+            ):
+                raise DuplicateDirectedFactError("an identical active assignment is recorded")
+
+    def _mutate_relationship(
+        self, request: RelationshipWriteRequest, *, capability: str, ending: bool
+    ) -> DirectedReceipt:
+        relationship_id = request.relationship_id
+        if relationship_id is None:
+            raise DirectedWriteError("a state-dependent edge write names its edge")
+        current = self.relationship(request.principal_id, relationship_id)
+        if current is None:
+            raise UnknownScopeError("an edge write names a row outside this scope")
+        if current.version != request.expected_version:
+            raise StaleDirectedVersionError("the expected entity relationship version is stale")
+        cleared = frozenset(request.cleared)
+        if ending:
+            successor = replace(
+                current,
+                state=RelationshipState.ENDED,
+                ended_at=request.server_received_at,
+                effective_to=request.effective_to,
+                version=current.version + 1,
+                updated_at=request.server_received_at,
+            )
+        else:
+            successor = replace(
+                current,
+                effective_from=_resolved(
+                    request.effective_from, current.effective_from, "effective_from" in cleared
+                ),
+                effective_to=_resolved(
+                    request.effective_to, current.effective_to, "effective_to" in cleared
+                ),
+                version=current.version + 1,
+                updated_at=request.server_received_at,
+            )
+        index = self._world.entity_relationships.index(current)
+        self._world.entity_relationships[index] = successor
+        self._link_evidence(request, relationship_id=relationship_id, replace_links=True)
+        return self._append_mutation(
+            request,
+            capability=capability,
+            family=MutationRecordFamily.RELATIONSHIP,
+            record_id=relationship_id,
+            prior_version=current.version,
+            new_version=successor.version,
+            state=successor.state.value,
+        )
+
+    def _link_evidence(
+        self,
+        request: AssignmentWriteRequest | RelationshipWriteRequest,
+        *,
+        assignment_id: str | None = None,
+        relationship_id: str | None = None,
+        replace_links: bool = False,
+    ) -> None:
+        if replace_links:
+            self._world.entity_fact_evidence_links[:] = [
+                link
+                for link in self._world.entity_fact_evidence_links
+                if not (
+                    link.principal_id == request.principal_id
+                    and link.assignment_id == assignment_id
+                    and link.relationship_id == relationship_id
+                )
+            ]
+        for reference in request.evidence_refs:
+            validate_identifier(reference, IdKind.ENTITY_OBSERVATION)
+            if not any(
+                held.observation_id == reference and held.principal_id == request.principal_id
+                for held in self._world.entity_observations
+            ):
+                raise UnknownScopeError("a directed write cites evidence outside this scope")
+            self._world.entity_fact_evidence_links.append(
+                EntityFactEvidenceLink(
+                    link_id=issue_identifier(IdKind.ENTITY_FACT_EVIDENCE_LINK),
+                    principal_id=request.principal_id,
+                    assignment_id=assignment_id,
+                    relationship_id=relationship_id,
+                    entity_observation_id=reference,
+                    role=EvidenceRole.DIRECT,
+                    authority=MutationAuthority.USER_CONFIRMED_ASSERTION,
+                    created_at=request.server_received_at,
+                )
+            )
+
+    def _append_mutation(
+        self,
+        request: AssignmentWriteRequest | RelationshipWriteRequest,
+        *,
+        capability: str,
+        family: MutationRecordFamily,
+        record_id: str,
+        prior_version: int | None,
+        new_version: int,
+        state: str,
+    ) -> DirectedReceipt:
+        row = EntityMutationEvent(
+            event_id=issue_identifier(IdKind.ENTITY_MUTATION_EVENT),
+            principal_id=request.principal_id,
+            capability=capability,
+            record_family=family,
+            record_id=record_id,
+            prior_version=prior_version,
+            new_version=new_version,
+            authority=MutationAuthority.USER_CONFIRMED_ASSERTION,
+            after_state={"state": state},
+            reason=request.reason,
+            idempotency_key=request.idempotency_key,
+            request_digest=request.payload_digest,
+            correlation_id=request.correlation_id,
+            audit_id=request.audit_id,
+            receipt_id=None,
+            actor_class=ActorClass.USER,
+            recorded_at=request.server_received_at,
+        )
+        self._world.entity_mutation_events.append(row)
+        receipt = _directed_receipt_from(row, replayed=False)
+        return replace(receipt, evidence_refs=request.evidence_refs)
+
+
+def _resolved[ValueT](
+    stated: ValueT | None, current: ValueT | None, cleared: bool
+) -> ValueT | None:
+    """What a revise leaves in one field, exactly as `persistence.entity` decides it."""
+    if cleared:
+        return None
+    return current if stated is None else stated
+
+
+def _directed_receipt_from(row: EntityMutationEvent, *, replayed: bool) -> DirectedReceipt:
+    """One ledger row as the receipt it is, on the SQL repository's terms."""
+    after = row.after_state
+    return DirectedReceipt(
+        mutation_event_id=row.event_id,
+        record_id=row.record_id,
+        record_family=row.record_family,
+        prior_version=row.prior_version,
+        version=row.new_version,
+        state=str(after["state"]) if after is not None else "",
+        audit_id=row.audit_id,
+        idempotency_key=row.idempotency_key,
+        superseded_id=None,
+        evidence_refs=(),
+        issued_at=row.recorded_at,
+        replayed=replayed,
+    )
+
 
 def _refuse_taken_identifier(held: object, identifier: str, noun: str) -> None:
     """Refuse an identifier some other partition already holds, as the server does.
@@ -3466,6 +4698,33 @@ def _refuse_empty_limit(limit: int | None) -> None:
     """
     if limit is not None and limit < 1:
         raise ValueError("an entity row limit asks for at least one row")
+
+
+def _child_page[T](
+    found: list[T],
+    *,
+    cursor: str | None,
+    key: Callable[[T], str],
+    known: list[str],
+    limit: int,
+) -> EntityChildPage[Any]:
+    """One bounded page of an entity's children, with the SQL keyset spelled out.
+
+    `known` is every child identifier of this entity in this partition, filters
+    ignored: a cursor is a *position*, and a position stays valid when the caller
+    narrows what it is paging through. Checking it against the filtered set
+    instead would refuse a caller that paged the active bindings and then asked
+    for the retired ones from the same place.
+
+    A cursor naming nothing is refused rather than emptying the page, because the
+    server refuses it: a caller handed an empty page cannot tell it from having
+    reached the end.
+    """
+    if cursor is not None:
+        if cursor not in known:
+            raise UnknownScopeError("a child cursor names a record of this entity in this scope")
+        found = [record for record in found if key(record) > cursor]
+    return EntityChildPage(records=tuple(found[:limit]), is_truncated=len(found) > limit)
 
 
 def _touches(relationship: EntityRelationship, entity_id: str, direction: str) -> bool:
@@ -4417,6 +5676,7 @@ def build_service(
     limits: EffectiveLimits = DEFAULT_LIMITS,
     managed_store: ManagedByteStore | None = None,
     relationship_intelligence_enabled: bool = True,
+    relationship_intelligence_writes_enabled: bool = True,
     relationship_memory_enabled: bool = True,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
@@ -4444,13 +5704,22 @@ def build_service(
         # names its own service refuses.
         task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
         commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
-        # Enabled by the same default reasoning: the six `entities.` names are
+        # Enabled by the same default reasoning: the twenty-eight `entities.` names are
         # withheld from a build that has not turned the plane on, and a suite
         # that quantifies over `Capability` would be quantifying over names its
         # own service refuses. A test about the *withheld* build passes `False`
         # explicitly and says so — `tests/contract/test_mcp_transport` is the one
         # that does, against a real child process.
         relationship_intelligence_enabled=relationship_intelligence_enabled,
+        # Enabled by the same default reasoning, and conjoined with the plane
+        # switch for the reason the memory one below is: `ApplicationService`
+        # refuses the plane's eighteen writes unless *both* are on, and a
+        # test that turns the plane off should not have to say so twice. A test
+        # about the *read-only* build passes `False` explicitly and says so --
+        # `tests/contract/test_entity_write_gate.py` is the one that does.
+        relationship_intelligence_writes_enabled=(
+            relationship_intelligence_enabled and relationship_intelligence_writes_enabled
+        ),
         # Enabled by the same default reasoning again, and requiring the switch
         # above rather than standing alone: `ApplicationService` refuses the
         # eight `relationship_memory.` names unless *both* are on, because a

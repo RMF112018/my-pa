@@ -392,3 +392,160 @@ def test_compose_stamps_idempotency_for_task_create() -> None:
         issue_id=_issue,
     )
     assert replay["payload"]["idempotency_key"] == key
+
+
+# ---- the entity plane's eighteen writes ------------------------------------
+
+
+def _entity_writes() -> frozenset[Capability]:
+    """The population, read off the purpose map rather than listed here.
+
+    A nineteenth entity write mapped to a write purpose joins this sweep on
+    arrival, which is the failure mode the two tests below exist for: a remote
+    write that never joined `_IDEMPOTENT_REMOTE_CAPABILITIES` accepts no key from
+    the caller and is stamped with none by the server, so a lost response and a
+    retry write a second row.
+    """
+    return frozenset(
+        capability
+        for capability in Capability
+        if capability.value.startswith("entities.")
+        and permitted_purposes(capability) & _WRITE_PURPOSES
+    )
+
+
+def test_every_entity_write_is_a_server_stamped_idempotent_remote_capability() -> None:
+    """The whole write half, derived and compared rather than enumerated twice."""
+    writes = _entity_writes()
+    assert len(writes) == 18
+    assert writes <= _IDEMPOTENT_REMOTE_CAPABILITIES
+
+
+def test_no_entity_read_is_stamped_with_an_idempotency_key() -> None:
+    """The control: stamping a read would put a key on a command with no field for one."""
+    reads = {
+        capability
+        for capability in Capability
+        if capability.value.startswith("entities.")
+        and not permitted_purposes(capability) & _WRITE_PURPOSES
+    }
+    assert len(reads) == 10
+    assert not reads & _IDEMPOTENT_REMOTE_CAPABILITIES
+
+
+def test_compose_stamps_a_content_addressed_key_for_an_entity_write() -> None:
+    """Derived server-side from capability, Principal and canonical payload.
+
+    Asserted as a *replay* rather than as a shape: what makes the key useful is
+    that the same request from the same Principal produces the same key, and
+    that a different payload does not.
+    """
+    grants = frozenset({(Capability.ENTITIES_CREATE, Purpose.ENTITY_AUTHORING)})
+    payload = {"entity_type": "person", "display_name": "Remote Newcomer"}
+    composed = compose_remote_arguments(
+        capability_name=Capability.ENTITIES_CREATE.value,
+        arguments={"payload": dict(payload)},
+        principal=PRINCIPAL,
+        grants=grants,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    key = composed["payload"]["idempotency_key"]
+    assert key.startswith("idk_")
+    assert composed["purpose"] == Purpose.ENTITY_AUTHORING.value
+    replay = compose_remote_arguments(
+        capability_name=Capability.ENTITIES_CREATE.value,
+        arguments={"payload": dict(payload)},
+        principal=PRINCIPAL,
+        grants=grants,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert replay["payload"]["idempotency_key"] == key
+    different = compose_remote_arguments(
+        capability_name=Capability.ENTITIES_CREATE.value,
+        arguments={"payload": {**payload, "display_name": "Someone Else"}},
+        principal=PRINCIPAL,
+        grants=grants,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert different["payload"]["idempotency_key"] != key
+
+
+def test_compose_stamps_a_key_for_an_observation_ingest_write() -> None:
+    """`entities.observe` too, and it carries the plane's other write purpose.
+
+    Separated from the test above because the purpose is the thing most likely
+    to be got wrong here: `entity_observation_ingest` maps to exactly one
+    capability, so a classification that missed it would leave the one caller
+    most likely to retry -- an ingest path -- writing a second observation for
+    every lost response.
+    """
+    grants = frozenset({(Capability.ENTITIES_OBSERVE, Purpose.ENTITY_OBSERVATION_INGEST)})
+    composed = compose_remote_arguments(
+        capability_name=Capability.ENTITIES_OBSERVE.value,
+        arguments={
+            "payload": {
+                "kind": "user_statement",
+                "authority": "user_authored_statement",
+                "observed_value": "Remote Person",
+            }
+        },
+        principal=PRINCIPAL,
+        grants=grants,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert composed["payload"]["idempotency_key"].startswith("idk_")
+    assert composed["purpose"] == Purpose.ENTITY_OBSERVATION_INGEST.value
+
+
+@pytest.mark.parametrize(
+    "capability",
+    sorted(_entity_writes(), key=lambda item: item.value),
+    ids=lambda item: item.value,
+)
+def test_no_entity_write_accepts_a_caller_supplied_key(capability: Capability) -> None:
+    """Refused before a Purpose is resolved, on every one of the eighteen.
+
+    Parametrised deliberately: `REMOTE_OWNED_PAYLOAD_FIELDS` is checked once in
+    `compose_remote_arguments` for every capability, so a per-capability sweep
+    is what proves the check is not reached through a branch one of them skips.
+    """
+    with pytest.raises(InvalidRequestError):
+        compose_remote_arguments(
+            capability_name=capability.value,
+            arguments={"payload": {"idempotency_key": "forged"}},
+            principal=PRINCIPAL,
+            grants=None,
+            clock=lambda: FROZEN,
+            issue_id=_issue,
+        )
+
+
+@pytest.mark.parametrize("field", sorted(SERVER_OWNED_REMOTE_FIELDS))
+def test_no_entity_write_accepts_a_caller_supplied_envelope_field(field: str) -> None:
+    """The other injection surface, on a capability that decides who a person is."""
+    with pytest.raises(InvalidRequestError):
+        compose_remote_arguments(
+            capability_name=Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE.value,
+            arguments={field: "forged", "payload": {}},
+            principal=PRINCIPAL,
+            grants=None,
+            clock=lambda: FROZEN,
+            issue_id=_issue,
+        )
+
+
+def test_no_entity_write_publishes_a_field_the_server_owns() -> None:
+    """A published schema that named one would be inviting a refusal."""
+    for capability in sorted(_entity_writes(), key=lambda item: item.value):
+        command = next(
+            member for member in get_args(Command.__value__) if member.capability is capability
+        )
+        schema = remote_tool_schema(input_schema_for(command))
+        assert not SERVER_OWNED_REMOTE_FIELDS & set(schema["properties"])
+        payload = schema["properties"]["payload"]
+        assert not REMOTE_OWNED_PAYLOAD_FIELDS & set(payload.get("properties", {}))
+        assert "idempotency_key" not in payload.get("required", [])

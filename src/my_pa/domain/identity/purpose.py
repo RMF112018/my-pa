@@ -170,14 +170,66 @@ class Purpose(StrEnum):
     # edges. A grant issued to search extracted text has no occasion to also
     # return who a person is.
     #
-    # One rather than two, on the `capture.search` argument (`D-91`): every
-    # `entities.*` capability reads the same rows under the same authority, so
-    # a second read purpose would map to exactly one capability and separate
-    # nothing while costing another frozen-constraint `ALTER`. The *write*
-    # purpose is deliberately absent rather than declared unused — this plane
-    # has no write capability, and a purpose no capability permits is denied for
-    # everything and reads as a mistake rather than as a decision.
+    # One read purpose rather than several, on the `capture.search` argument
+    # (`D-91`): every `entities.*` read reaches the same rows under the same
+    # authority, so a second one would map to a single capability and separate
+    # nothing while costing another frozen-constraint `ALTER`. That covers the
+    # paged identifier and alias listings `WP-RI-A-02` adds as well: they read
+    # `entity_external_identifiers` and `entity_aliases`, which `entities.context`
+    # already returns from under this purpose.
     ENTITY_READ = "entity_read"
+    # The entity plane's two write purposes. Both arrived with Phase A, and all
+    # three of its authoring packages declared `ENTITY_AUTHORING` independently;
+    # it is declared once here, with the argument each of them made for it.
+    #
+    # **The comment beside `ENTITY_READ` used to record the absence of a write
+    # purpose as deliberate** — "this plane has no write capability, and a
+    # purpose no capability permits is denied for everything and reads as a
+    # mistake rather than as a decision" — and that reasoning is why both of
+    # them arrive with the write capabilities that permit them rather than
+    # ahead of them. That paragraph described a plane with no writes, and stops
+    # being true here rather than being quietly left standing.
+    #
+    # **Neither is a reuse of `ENTITY_READ`, and `D-91`'s test answers loudly in
+    # both directions.** Admitting the writes under the read purpose would mean
+    # a grant issued so an assistant can look up who someone is could also
+    # rename them, retire the address their mail arrives at, archive them, and
+    # assert who they report to — which is the exact separation the capture,
+    # document, task, commitment and memory planes each split their purposes to
+    # preserve. `RELATIONSHIP_MEMORY_AUTHORING` writes private notes *about* a
+    # person and this writes who the person *is*; a grant for one has no
+    # occasion to reach the other. `CAPTURE_AUTHORING` is ADR-003's append-only
+    # user-authored plane, and an identity correction is neither append-only nor
+    # a capture.
+    #
+    # **`ENTITY_OBSERVATION_INGEST` covers `entities.observe` alone**, and is
+    # separate from `ENTITY_AUTHORING` for the reason the whole plane is built
+    # around: recording what a source said is not the same act as deciding who
+    # somebody is. An ingest path — a connector, a capture pipeline, anything
+    # that reads a mailbox — needs to write evidence continuously and must never
+    # be able to bind an identity; a grant that covered both would let the thing
+    # with the widest reach and the least judgement do the one thing this plane
+    # reserves. `entities.observe` is permitted under this purpose and under no
+    # other, so it is unreachable by whichever grant a caller happened to hold.
+    #
+    # **`ENTITY_AUTHORING` covers every decision the plane admits**: what an
+    # entity is called and whether it is archived, which external addresses
+    # resolve to it, what it may be called, who it is assigned to and what it is
+    # directed at, and what an unresolved mention refers to. One rather than one
+    # per record family, on the argument `DOCUMENT_AUTHORING` covers create,
+    # revise, archive and restore together: all of them touch the acting
+    # Principal's own entities, none destroys anything, and each lifecycle
+    # transition has an inverse. The residual is stated rather than smoothed
+    # over: a grant issued to correct a misspelled display name also reaches
+    # every identifier binding, every archive and every directed edge on that
+    # Principal's entities. It is paid because the alternative is a purpose per
+    # family, which no authority in this build could act on differently — under
+    # `P00-OD-010` there is one local Principal — and which would cost several
+    # more frozen-constraint literals, while the separations that do matter,
+    # reading versus writing identity and ingesting evidence versus deciding
+    # identity, are the two these members make.
+    ENTITY_OBSERVATION_INGEST = "entity_observation_ingest"
+    ENTITY_AUTHORING = "entity_authoring"
     # The Relationship Memory plane's pair. Two rather than one, on the rule
     # this module states for the capture and managed-document planes: a purpose
     # wide enough to cover writing and reading is a purpose that grants both,

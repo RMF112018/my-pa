@@ -55,6 +55,7 @@ from __future__ import annotations
 
 import ast
 import re
+from collections.abc import Iterator
 from functools import cache
 from pathlib import Path
 from typing import Final
@@ -115,6 +116,16 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # goes through `partition_criterion` or `principal_bound_values`, so it
         # is registered statement-level below rather than per-module.
         "infrastructure/persistence/entity.py",
+        # The same plane's governed write path (`WP-RI-A-02`), separated from the
+        # module above because a guarded write is a transaction rather than a
+        # statement. Every statement it builds over an entity table goes through
+        # `partition_criterion` or `principal_bound_values`, and both are
+        # registered statement-level below alongside `entity.py`'s. The one
+        # statement that does not is the evidence read, which reaches
+        # `capture_spans` -- a table with no principal partition at all -- and
+        # proves ownership by joining to `captures.owner_principal_id`. That
+        # comparison is registered in `HAND_WRITTEN_COMPARISONS`.
+        "infrastructure/persistence/entity_authoring.py",
         "infrastructure/persistence/goodnotes.py",
         "infrastructure/persistence/goodnotes_semantics.py",
         "infrastructure/persistence/goodnotes_delivery.py",
@@ -275,6 +286,16 @@ QUARANTINED: Final = {
 STATEMENT_LEVEL: Final = frozenset(
     {
         "infrastructure/persistence/entity.py",
+        # The same plane's governed write path (`WP-RI-A-02`), separated from the
+        # module above because a guarded write is a transaction rather than a
+        # statement. Every statement it builds over an entity table goes through
+        # `partition_criterion` or `principal_bound_values`, and both are
+        # registered statement-level below alongside `entity.py`'s. The one
+        # statement that does not is the evidence read, which reaches
+        # `capture_spans` -- a table with no principal partition at all -- and
+        # proves ownership by joining to `captures.owner_principal_id`. That
+        # comparison is registered in `HAND_WRITTEN_COMPARISONS`.
+        "infrastructure/persistence/entity_authoring.py",
         "infrastructure/persistence/jobs.py",
         "infrastructure/persistence/knowledge.py",
         "infrastructure/persistence/managed_documents.py",
@@ -467,6 +488,16 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("enrollments", "principal_id"),
     ),
     "infrastructure/persistence/review.py": (("capture_review_cases", "principal_id"),),
+    # `WP-RI-A-02`'s evidence check, and the one predicate on this plane that
+    # cannot be reached through the guard. A governed entity write may cite a
+    # capture span, and `capture_spans` carries no principal partition --
+    # `tests/architecture/test_user_owned_tables_are_partitioned` records why --
+    # so the only thing that says whose span it is is the capture at the end of
+    # the join. The comparison is on `captures.owner_principal_id` against the
+    # server-resolved Principal already stamped on the write request, and a span
+    # behind another Principal's capture answers exactly what an absent one
+    # answers.
+    "infrastructure/persistence/entity_authoring.py": (("captures", "owner_principal_id"),),
     # WP-11 grew this entry from fourteen comparisons to thirty-four, and every
     # new one is the same shape as the fourteen that were here: a
     # `<table>.c.principal_id == principal_id` predicate written into the
@@ -929,6 +960,44 @@ def _own_source(statement: ast.stmt) -> str:
     return " ".join(ast.unparse(expression) for expression in carried)
 
 
+#: The two modules that make up the generalized entity plane's persistence.
+#:
+#: Both, and naming only the first was a live blind spot: `WP-RI-A-02` put the
+#: plane's guarded writes in a second module, and a walk anchored on one file
+#: would have reported the plane compliant while every write it added went
+#: unread. A guard scoped to where the last defect was found is a guard shaped
+#: by where the last defect was found.
+_ENTITY_PLANE_MODULES: Final = (
+    PACKAGE / "infrastructure" / "persistence" / "entity.py",
+    PACKAGE / "infrastructure" / "persistence" / "entity_authoring.py",
+)
+
+#: `<module>:<function>` sites that name a partitioned table without carrying
+#: `_mine` or `_bound`, each with what holds the partition instead.
+#:
+#: One entry, and it is not a hole. `_record_evidence` proves that a cited
+#: capture span is this Principal's, and `capture_spans` carries no principal
+#: partition at all — `tests/architecture/test_user_owned_tables_are_partitioned`
+#: records why — so there is nothing on that table for `_mine` to constrain. The
+#: partition comes from the far end of the join, `captures.owner_principal_id`,
+#: compared against the Principal already stamped on the write request; that
+#: comparison is registered in `HAND_WRITTEN_COMPARISONS` above, so removing it
+#: reddens there rather than passing quietly here.
+_UNGUARDED_ENTITY_PLANE_STATEMENTS: Final = frozenset({"entity_authoring.py:_record_evidence"})
+
+
+def _entity_plane_statements() -> Iterator[tuple[Path, str, ast.stmt]]:
+    """Every statement of every function in the entity plane's two modules."""
+    for path in _ENTITY_PLANE_MODULES:
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+        for function in ast.walk(tree):
+            if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+                continue
+            for statement in ast.walk(function):
+                if isinstance(statement, ast.stmt):
+                    yield path, function.name, statement
+
+
 def test_every_entity_statement_reaches_the_partition() -> None:
     """The generalized entity plane, statement by statement.
 
@@ -937,53 +1006,41 @@ def test_every_entity_statement_reaches_the_partition() -> None:
     and made the same way: a statement naming a partitioned declaration must
     also name `_mine` (the read predicate) or `_bound` (the insert stamp).
 
-    This module has no `text()` block and no registered exception, so the
-    offending list is expected to be empty outright rather than empty against a
-    registry -- which is the state a new plane should be in, since every
-    exception the older modules carry was earned by code that predated the
-    guard.
+    **Every statement kind, and the table named any way at all.** This walk used
+    to admit four kinds and to recognise a table only as `entities.c` or
+    `(entities,`. Both halves let real reads through: `for row in
+    conn.execute(select(entities.c.x)).all():` is a `For`, `if
+    conn.execute(...).first():` is an `If`, and
+    `conn.execute(select(entities)).all()` -- a whole-table read of every
+    Principal's rows, in the idiom this plane uses for `assignments`,
+    `relationships` and `observations` -- matches neither spelling. That last
+    one was planted into `get` and the entire architecture tier passed. A guard
+    whose job is to catch the statement nobody wrote a test for cannot afford a
+    shape it does not read, so it reads them all and matches the table as a bare
+    name.
     """
-    path = PACKAGE / "infrastructure" / "persistence" / "entity.py"
     partitioned = set(_partitioned_tables())
-    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-
     checked = 0
     offending: list[str] = []
-    for function in ast.walk(tree):
-        if not isinstance(function, ast.FunctionDef | ast.AsyncFunctionDef):
+    for path, function, statement in _entity_plane_statements():
+        rendered = _own_source(statement)
+        if not any(_names_table(table).search(rendered) for table in partitioned):
             continue
-        for statement in ast.walk(function):
-            # **Every statement kind, and the table named any way at all.**
-            # This walk used to admit four kinds and to recognise a table only
-            # as `entities.c` or `(entities,`. Both halves let real reads
-            # through: `for row in conn.execute(select(entities.c.x)).all():`
-            # is a `For`, `if conn.execute(...).first():` is an `If`, and
-            # `conn.execute(select(entities)).all()` — a whole-table read of
-            # every Principal's rows, in the idiom this very module uses for
-            # `assignments`, `relationships` and `observations` — matches
-            # neither spelling. That last one was planted into `get` and the
-            # entire architecture tier passed.
-            #
-            # A guard whose job is to catch the statement nobody wrote a test
-            # for cannot afford a shape it does not read, so it reads them all
-            # and matches the table as a bare name.
-            if not isinstance(statement, ast.stmt):
-                continue
-            rendered = _own_source(statement)
-            if not any(_names_table(table).search(rendered) for table in partitioned):
-                continue
-            checked += 1
-            if "_mine(" not in rendered and "_bound(" not in rendered:
-                offending.append(f"{function.name}:{statement.lineno}")
+        checked += 1
+        if "_mine(" in rendered or "_bound(" in rendered:
+            continue
+        if f"{path.name}:{function}" in _UNGUARDED_ENTITY_PLANE_STATEMENTS:
+            continue
+        offending.append(f"{path.name}:{function}:{statement.lineno}")
 
     # The floor tracks the real count rather than sitting far beneath it. At 9,
     # against the statements actually present, a refactor could hide two-thirds
-    # of the module's queries from this walk and still clear it — an
+    # of the plane's queries from this walk and still clear it -- an
     # anti-vacuity floor that cannot detect the vacuity it exists for.
     assert checked >= _MINIMUM_ENTITY_STATEMENTS, (
         f"only {checked} entity statements were examined, against at least "
         f"{_MINIMUM_ENTITY_STATEMENTS} present; the walk is not reaching the "
-        "module's queries"
+        "plane's queries"
     )
     assert offending == [], (
         f"{offending} build a statement over a principal-partitioned entity "
@@ -1889,6 +1946,16 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
                 "infrastructure/persistence/relationships.py",
                 "infrastructure/persistence/reveal.py",
                 "infrastructure/persistence/entity.py",
+                # The same plane's governed write path (`WP-RI-A-02`), separated from the
+                # module above because a guarded write is a transaction rather than a
+                # statement. Every statement it builds over an entity table goes through
+                # `partition_criterion` or `principal_bound_values`, and both are
+                # registered statement-level below alongside `entity.py`'s. The one
+                # statement that does not is the evidence read, which reaches
+                # `capture_spans` -- a table with no principal partition at all -- and
+                # proves ownership by joining to `captures.owner_principal_id`. That
+                # comparison is registered in `HAND_WRITTEN_COMPARISONS`.
+                "infrastructure/persistence/entity_authoring.py",
             }
         )
         == STATEMENT_LEVEL

@@ -1,4 +1,4 @@
-"""The ports the seventy-three capability use cases call, and nothing else.
+"""The ports the ninety-five capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -85,22 +85,41 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesSemanticProposal,
 )
 from my_pa.domain.policy.decision import validate_policy_version
+from my_pa.domain.relationship.authoring import (
+    MAX_EVIDENCE_REFERENCES,
+    MAX_INITIAL_ALIASES,
+    MAX_INITIAL_IDENTIFIERS,
+    EntityWriteOperation,
+)
 from my_pa.domain.relationship.entity import (
+    AliasState,
+    AliasType,
     Assignment,
+    AssignmentType,
+    DirectedWriteOperation,
     Entity,
     EntityAlias,
     EntityRelationship,
+    EntityRelationshipType,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    IdentifierState,
 )
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.relationship.governance import (
+    ENTITY_CHANGE_REASON_LIMIT,
+    EntityFactEvidenceLink,
     EntityMergeRecord,
+    EntityMutationEvent,
     EntityObservation,
     EntityProposal,
     EntityProposalState,
+    EntityResolutionDecision,
+    EvidenceRole,
+    MutationRecordFamily,
+    ObservationState,
 )
 from my_pa.domain.relationship.identity import (
     IdentityCandidateSet,
@@ -171,6 +190,7 @@ class BulkIdempotencyConflictError(Exception):
 
 __all__ = [
     "Acceptance",
+    "AssignmentWriteRequest",
     "AuditSink",
     "AuthoringConflictError",
     "AuthoringReceipt",
@@ -189,11 +209,18 @@ __all__ = [
     "ContinuityReadRepository",
     "ContinuityRepository",
     "CounterpartyOption",
+    "DirectedReceipt",
     "EnrollmentRepository",
     "EntitiesRepository",
+    "EntityChildPage",
+    "EntityMutationAdmission",
+    "EntityMutationReceipt",
     "EntitySummary",
+    "EntityWriteRequest",
     "EvidenceUnavailableError",
     "FrameRepository",
+    "InitialAlias",
+    "InitialIdentifier",
     "KnowledgeRecord",
     "KnowledgeRepository",
     "ManagedAdmission",
@@ -207,6 +234,7 @@ __all__ = [
     "PulseRepository",
     "RelationshipEventRepository",
     "RelationshipRepository",
+    "RelationshipWriteRequest",
     "RepositoryFailureError",
     "ReviewDecisionRequest",
     "ReviewRepository",
@@ -340,6 +368,605 @@ class EntitySummary:
     status: EntityStatus
 
 
+# --- WP-RI-A-02: the entity plane's governed writes ---------------------------
+#
+# One request shape for every governed change, the way `MemoryWriteRequest` is one
+# shape for four. The alternative -- ten request records -- would be ten copies
+# of the same seven server-owned fields and ten places the digest that decides a
+# replay could be spelled differently.
+#
+# **Every identifier a write mints travels in the request and is excluded from
+# the digest.** That is `MemoryWriteRequest`'s ordering and it is here for the
+# same reason: an entity and its first alias are inserted in one statement pair,
+# so both identifiers have to exist before either row does, and a digest that
+# included them would make every retry a fresh key -- which is to say, no
+# idempotency at all.
+
+
+@dataclass(frozen=True, slots=True)
+class InitialAlias:
+    """One name form recorded with the entity it belongs to, at creation.
+
+    `alias_id` is minted by the caller of the port and is excluded from the
+    request digest; the three remaining fields are what a repeat of the same
+    request would carry again, so those are what the digest reads.
+    """
+
+    alias_id: str
+    alias_type: AliasType
+    normalized_value: str
+    display_value: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.alias_id, IdKind.ENTITY_ALIAS)
+        if not isinstance(self.alias_type, AliasType):
+            raise ValueError("an initial alias has a closed alias type")
+        if not self.normalized_value.strip() or not self.display_value.strip():
+            raise ValueError("an initial alias carries both of its forms")
+
+
+@dataclass(frozen=True, slots=True)
+class InitialIdentifier:
+    """One external identity recorded with the entity it belongs to, at creation."""
+
+    identifier_id: str
+    namespace: ExternalIdentifierNamespace
+    normalized_value: str
+    display_value: str
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.identifier_id, IdKind.EXTERNAL_IDENTIFIER)
+        if not isinstance(self.namespace, ExternalIdentifierNamespace):
+            raise ValueError("an initial external identifier has a closed namespace")
+        if not self.normalized_value.strip() or not self.display_value.strip():
+            raise ValueError("an initial external identifier carries both of its forms")
+
+
+@dataclass(frozen=True, slots=True)
+class EntityWriteRequest:
+    """One governed change to the entity plane, already normalized and stamped.
+
+    **Nothing a caller may not choose has a field it could arrive in.** There is
+    no `principal_id` a transport controls, no `authority`, no `actor_class`, no
+    `version` and no `superseded_by_entity_id`: the first is the authenticated
+    partition the application supplies, and the rest are the server's. A payload
+    naming one is refused by the command constructor before this record is
+    built, because the command has no such field either.
+
+    `entity_id` is `None` exactly on a create, where `minted_entity_id` carries
+    the identifier the server issued instead. `expected_version` is required for
+    every operation *except* create, because a state-dependent write without one
+    is a blind write, and a create has no state to have read.
+
+    **`expected_version` is the entity's, on every operation including the child
+    ones.** A binding, a retirement and an alias correction all change what the
+    entity says about itself, so the entity is the aggregate and its version is
+    the one concurrency control the plane has. `target_child_version` is the
+    *second* expectation the two transition operations carry, so a caller that
+    read one identifier and a stale entity, or a current entity and a stale
+    identifier, is refused either way rather than in one direction only.
+    """
+
+    operation: EntityWriteOperation
+    #: The public capability name this write was authorized as. Part of the
+    #: ledger's idempotency unique, because one key replayed against a different
+    #: capability is a different request and answering it from that row would be
+    #: wrong.
+    capability: str
+    principal_id: str
+    correlation_id: str
+    audit_id: str
+    idempotency_key: str
+    server_received_at: datetime
+    #: The ledger row this write will be recorded as. Minted here for the reason
+    #: every other identifier is: it has to exist before the row does.
+    event_id: str
+    entity_id: str | None
+    expected_version: int | None
+    minted_entity_id: str | None = None
+    minted_child_id: str | None = None
+    entity_type: EntityType | None = None
+    display_name: str | None = None
+    canonical_name: str | None = None
+    status: EntityStatus | None = None
+    target_child_id: str | None = None
+    target_child_version: int | None = None
+    namespace: ExternalIdentifierNamespace | None = None
+    alias_type: AliasType | None = None
+    normalized_value: str | None = None
+    display_value: str | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    reason: str | None = field(default=None, repr=False)
+    #: Capture spans the caller cites for this change. Verified against this
+    #: Principal by the implementation before any link row is written.
+    evidence: tuple[str, ...] = ()
+    initial_aliases: tuple[InitialAlias, ...] = ()
+    initial_identifiers: tuple[InitialIdentifier, ...] = ()
+    #: Minted link identifiers, one per evidence reference and in the same
+    #: order. Excluded from the digest with every other minted identifier.
+    minted_evidence_link_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.audit_id, IdKind.AUDIT)
+        validate_identifier(self.event_id, IdKind.ENTITY_MUTATION_EVENT)
+        creating = self.operation is EntityWriteOperation.CREATE
+        if creating is (self.entity_id is not None):
+            raise ValueError("an entity creation names no entity; every other operation does")
+        if creating is (self.minted_entity_id is None):
+            raise ValueError("an entity creation carries the identifier the server issued")
+        if creating is (self.expected_version is not None):
+            raise ValueError("a state-dependent entity write names the version it expects")
+        if self.entity_id is not None:
+            validate_identifier(self.entity_id, IdKind.ENTITY)
+        if self.minted_entity_id is not None:
+            validate_identifier(self.minted_entity_id, IdKind.ENTITY)
+        if self.expected_version is not None and self.expected_version < 1:
+            raise ValueError("an expected entity version starts at one")
+        if self.target_child_version is not None and self.target_child_version < 1:
+            raise ValueError("an expected child version starts at one")
+        if self.operation.names_an_existing_child != (self.target_child_id is not None):
+            raise ValueError("a child transition names the record it transitions, and only then")
+        if self.operation.names_an_existing_child != (self.target_child_version is not None):
+            raise ValueError("a child transition names the child version it expects")
+        if self.target_child_id is not None:
+            validate_identifier(
+                self.target_child_id,
+                IdKind.EXTERNAL_IDENTIFIER
+                if self.operation.writes_an_identifier
+                else IdKind.ENTITY_ALIAS,
+            )
+        if self.minted_child_id is not None:
+            validate_identifier(
+                self.minted_child_id,
+                IdKind.EXTERNAL_IDENTIFIER
+                if self.operation.writes_an_identifier
+                else IdKind.ENTITY_ALIAS,
+            )
+        if creating and (self.entity_type is None or self.display_name is None):
+            raise ValueError("an entity creation carries a type and a display name")
+        if not self.idempotency_key:
+            raise ValueError("an entity write carries an idempotency key")
+        if self.reason is not None and (
+            not self.reason.strip() or len(self.reason) > ENTITY_CHANGE_REASON_LIMIT
+        ):
+            raise ValueError("an entity change reason is a bounded non-blank sentence")
+        if len(self.evidence) > MAX_EVIDENCE_REFERENCES:
+            raise ValueError("an entity write cites a bounded number of evidence records")
+        if len(self.minted_evidence_link_ids) != len(self.evidence):
+            raise ValueError("an entity write mints one link identifier per evidence record")
+        if len(self.initial_aliases) > MAX_INITIAL_ALIASES:
+            raise ValueError("an entity creation carries a bounded number of aliases")
+        if len(self.initial_identifiers) > MAX_INITIAL_IDENTIFIERS:
+            raise ValueError("an entity creation carries a bounded number of external identities")
+        ensure_utc(self.server_received_at)
+
+    @property
+    def record_family(self) -> MutationRecordFamily:
+        """Which canonical record family this write's primary record belongs to."""
+        if self.operation.writes_an_identifier:
+            return MutationRecordFamily.IDENTIFIER
+        if self.operation.writes_an_alias:
+            return MutationRecordFamily.ALIAS
+        return MutationRecordFamily.ENTITY
+
+    @property
+    def payload_digest(self) -> str:
+        """What makes a replay decidable, and a conflicting reuse detectable.
+
+        Every field a caller supplied that could differ between two requests
+        carrying one key, and none this layer added: the minted identifiers, the
+        correlation identifier, the audit identifier and the receipt time are
+        excluded because they differ on every attempt by construction, and
+        including any one of them would make every retry a conflict rather than
+        a replay.
+
+        The evidence references *are* read, because two requests citing
+        different evidence for the same change are different requests -- and
+        answering the second from the first's receipt would report evidence as
+        recorded that never was.
+        """
+        payload = {
+            "operation": self.operation.value,
+            "capability": self.capability,
+            "entity_id": self.entity_id,
+            "expected_version": self.expected_version,
+            "entity_type": None if self.entity_type is None else self.entity_type.value,
+            "display_name": self.display_name,
+            "canonical_name": self.canonical_name,
+            "status": None if self.status is None else self.status.value,
+            "target_child_id": self.target_child_id,
+            "target_child_version": self.target_child_version,
+            "namespace": None if self.namespace is None else self.namespace.value,
+            "alias_type": None if self.alias_type is None else self.alias_type.value,
+            "normalized_value": self.normalized_value,
+            "display_value": self.display_value,
+            "effective_from": (
+                None if self.effective_from is None else self.effective_from.isoformat()
+            ),
+            "effective_to": None if self.effective_to is None else self.effective_to.isoformat(),
+            "reason": self.reason,
+            "evidence": sorted(self.evidence),
+            "initial_aliases": sorted(
+                [alias.alias_type.value, alias.normalized_value, alias.display_value]
+                for alias in self.initial_aliases
+            ),
+            "initial_identifiers": sorted(
+                [
+                    identifier.namespace.value,
+                    identifier.normalized_value,
+                    identifier.display_value,
+                ]
+                for identifier in self.initial_identifiers
+            ),
+        }
+        return sha256(
+            json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        ).hexdigest()
+
+
+@dataclass(frozen=True, slots=True)
+class EntityMutationReceipt:
+    """What a caller is handed once one governed entity write commits.
+
+    **The entity's version is on every receipt, whatever was written.** A child
+    write advances the aggregate, so a caller that bound an identifier and then
+    tried to retire one using the version it read before the bind would be
+    refused -- and the receipt is where it learns the version it now holds
+    without having to read the entity again.
+
+    **`canonical_entity_id` is always absent today, and saying so is the point.**
+    The completion contract's response shape names a canonical successor "if a
+    redirect was met", so the field is here; what is *not* here is a path that
+    fills it. A write that meets a merged-away entity refuses with
+    `HistoricalEntityError` rather than following the redirect, because
+    following it would apply a correction to an identity the caller never named,
+    and a refusal produces no receipt. The successor is reached through
+    `entities.get`, which returns `superseded_by_entity_id`; it is deliberately
+    not carried in the refusal, because `application.errors.SafeDetail` is a
+    closed token vocabulary that names fields and never values, and an
+    identifier in a public error is a disclosure. The field is kept rather than
+    dropped so the shape a later governed-merge capability answers with is
+    already the one callers read.
+
+    `created` distinguishes a write that happened from a replay that did not, so
+    a retrying client can tell them apart without comparing versions.
+    """
+
+    event_id: str
+    capability: str
+    record_family: MutationRecordFamily
+    record_id: str
+    entity_id: str
+    entity_version: int
+    entity_status: EntityStatus
+    idempotency_key: str
+    issued_at: datetime
+    created: bool
+    child_id: str | None = None
+    child_version: int | None = None
+    child_state: str | None = None
+    superseded_ids: tuple[str, ...] = ()
+    evidence_link_ids: tuple[str, ...] = ()
+    canonical_entity_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.event_id, IdKind.ENTITY_MUTATION_EVENT)
+        validate_identifier(self.entity_id, IdKind.ENTITY)
+        if self.entity_version < 1:
+            raise ValueError("an entity receipt names a positive version")
+        if self.child_version is not None and self.child_version < 1:
+            raise ValueError("an entity receipt names a positive child version")
+        if not isinstance(self.entity_status, EntityStatus):
+            raise ValueError("an entity receipt names a known status")
+        ensure_utc(self.issued_at)
+
+
+@dataclass(frozen=True, slots=True)
+class EntityMutationAdmission:
+    """The outcome of one governed entity write: the receipt, and whether it is new."""
+
+    receipt: EntityMutationReceipt
+    created: bool
+
+
+@dataclass(frozen=True, slots=True)
+class EntityChildPage[T: (ExternalIdentifier, EntityAlias)]:
+    """One bounded page of an entity's identifiers or aliases.
+
+    `is_truncated` is proved by reading one row past the ceiling rather than
+    inferred from a full page, which is the rule every other listing on this
+    plane follows: a page that happened to hold exactly `limit` rows and a page
+    that was cut are different facts, and only one of them has a continuation.
+    """
+
+    records: tuple[T, ...]
+    is_truncated: bool = False
+
+
+def _directed_digest(payload: dict[str, Any]) -> str:
+    """The canonical-JSON sha256 the two directed write requests both compute.
+
+    One function rather than two identical properties, for the reason
+    `MemoryWriteRequest.payload_digest` states about its own exclusions: what
+    makes a replay decidable is that the *same* material fields hash the same
+    way, and two copies of a canonicalisation are two things that can start
+    disagreeing about key order or separators.
+    """
+    return sha256(
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
+def _moment(value: datetime | None) -> str | None:
+    return None if value is None else value.isoformat()
+
+
+@dataclass(frozen=True, slots=True)
+class AssignmentWriteRequest:
+    """One request to create, revise or end an assignment, already normalized.
+
+    **What is immutable is what is absent from a revise, not what is validated
+    out of one.** `entity_id`, `assignment_type` and `scope_entity_id` are the
+    assignment's semantic identity, and a `REVISE` carries `None` for all three
+    because the application never puts a value there -- the command has no field
+    to carry one. Correcting an identity is `END` followed by `CREATE`, which is
+    the only shape in which the plane can say *both* what was believed and what
+    replaced it.
+
+    `expected_entity_version` and `expected_scope_version` are the endpoint
+    versions a `CREATE` says it read. They are separate from `expected_version`,
+    which is the *assignment's* own, and all three are checked: a create binds a
+    new row to two existing entities, so an entity archived or merged between
+    the caller's read and this write is exactly the interleaving optimistic
+    concurrency exists to refuse.
+
+    **`cleared` is how a revise removes a value, and its absence is how a revise
+    keeps one.** `role=None` on a revise means "leave it alone", not "make it
+    null" -- the Relationship Memory plane wrote `pinned=False` for an omitted
+    field and silently unpinned memories on ordinary wording fixes, and this
+    request refuses to repeat it. Removal is still reachable and is reachable
+    only by naming the field. Stating a value and naming it in `cleared` is a
+    contradiction the command refuses before this request is built.
+
+    `evidence_refs` **replaces** the cited set on a revise rather than adding to
+    it, exactly as `context_links` replaces on a memory revision: an additive
+    field gives a caller no way to withdraw a citation it now knows to be wrong.
+    An empty tuple on a revise therefore clears the citations, which is why it
+    is a stated tuple and not an optional one.
+    """
+
+    operation: DirectedWriteOperation
+    assignment_id: str | None
+    principal_id: str
+    entity_id: str | None
+    expected_entity_version: int | None
+    assignment_type: AssignmentType | None
+    scope_entity_id: str | None
+    expected_scope_version: int | None
+    expected_version: int | None
+    role: str | None
+    discipline: str | None
+    responsibility_class: str | None
+    effective_from: datetime | None
+    effective_to: datetime | None
+    cleared: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    reason: str | None
+    idempotency_key: str
+    correlation_id: str
+    audit_id: str
+    server_received_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.audit_id, IdKind.AUDIT)
+        creating = self.operation is DirectedWriteOperation.CREATE
+        if creating is (self.assignment_id is not None):
+            raise ValueError("an assignment creation names no assignment; the others do")
+        if creating is (self.expected_version is not None):
+            raise ValueError("a state-dependent assignment write names the version it expects")
+        if self.assignment_id is not None:
+            validate_identifier(self.assignment_id, IdKind.ASSIGNMENT)
+        if creating:
+            if self.entity_id is None or self.assignment_type is None:
+                raise ValueError("an assignment creation names its subject and its type")
+            validate_identifier(self.entity_id, IdKind.ENTITY)
+            if self.scope_entity_id is not None:
+                validate_identifier(self.scope_entity_id, IdKind.ENTITY)
+        elif (
+            self.entity_id is not None
+            or self.assignment_type is not None
+            or self.scope_entity_id is not None
+        ):
+            raise ValueError("only an assignment creation states its semantic identity")
+        if (self.operation is DirectedWriteOperation.END) is (self.reason is None):
+            raise ValueError("an assignment end carries a reason and no other operation does")
+        if self.expected_version is not None and self.expected_version < 1:
+            raise ValueError("an expected assignment version starts at one")
+        for expected in (self.expected_entity_version, self.expected_scope_version):
+            if expected is not None and expected < 1:
+                raise ValueError("an expected entity version starts at one")
+        if not self.idempotency_key:
+            raise ValueError("an assignment write carries an idempotency key")
+        ensure_utc(self.server_received_at)
+
+    @property
+    def payload_digest(self) -> str:
+        """What decides replay against conflict for one idempotency key.
+
+        Every field a caller supplied that could differ between two requests
+        carrying one key, and none this layer added: the correlation identifier,
+        the audit identifier and the receipt time are excluded because they
+        differ on every attempt by construction, and including any of them would
+        make every retry a conflict. The minted assignment identifier is not in
+        the request at all on a create, for the same reason.
+        """
+        return _directed_digest(
+            {
+                "operation": self.operation.value,
+                "assignment_id": self.assignment_id,
+                "expected_version": self.expected_version,
+                "entity_id": self.entity_id,
+                "expected_entity_version": self.expected_entity_version,
+                "assignment_type": (
+                    None if self.assignment_type is None else self.assignment_type.value
+                ),
+                "scope_entity_id": self.scope_entity_id,
+                "expected_scope_version": self.expected_scope_version,
+                "role": self.role,
+                "discipline": self.discipline,
+                "responsibility_class": self.responsibility_class,
+                "effective_from": _moment(self.effective_from),
+                "effective_to": _moment(self.effective_to),
+                "cleared": sorted(self.cleared),
+                "evidence_refs": sorted(self.evidence_refs),
+                "reason": self.reason,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class RelationshipWriteRequest:
+    """One request to create, revise or end a directed edge, already normalized.
+
+    **A revise carries effective dates and evidence and nothing else.** An
+    edge's semantic identity is `(from, type, to, scope)` -- all four -- so there
+    is no descriptive field left over for a revise to touch, and there is
+    deliberately no field here through which a caller could redirect an edge.
+    Retargeting is `END` plus `CREATE`, which is also the only way a reader can
+    later tell that the first edge was ever asserted.
+
+    **Nothing here generates a reciprocal edge.** `works_for` does not imply
+    `manages`, and a plane that minted the inverse would be asserting a fact the
+    user did not state and could not later withdraw independently.
+    """
+
+    operation: DirectedWriteOperation
+    relationship_id: str | None
+    principal_id: str
+    from_entity_id: str | None
+    expected_from_version: int | None
+    relationship_type: EntityRelationshipType | None
+    to_entity_id: str | None
+    expected_to_version: int | None
+    scope_entity_id: str | None
+    expected_scope_version: int | None
+    expected_version: int | None
+    effective_from: datetime | None
+    effective_to: datetime | None
+    cleared: tuple[str, ...]
+    evidence_refs: tuple[str, ...]
+    reason: str | None
+    idempotency_key: str
+    correlation_id: str
+    audit_id: str
+    server_received_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.audit_id, IdKind.AUDIT)
+        creating = self.operation is DirectedWriteOperation.CREATE
+        if creating is (self.relationship_id is not None):
+            raise ValueError("an edge creation names no edge; the others do")
+        if creating is (self.expected_version is not None):
+            raise ValueError("a state-dependent edge write names the version it expects")
+        if self.relationship_id is not None:
+            validate_identifier(self.relationship_id, IdKind.ENTITY_RELATIONSHIP)
+        if creating:
+            if (
+                self.from_entity_id is None
+                or self.to_entity_id is None
+                or self.relationship_type is None
+            ):
+                raise ValueError("an edge creation names both endpoints and its type")
+            validate_identifier(self.from_entity_id, IdKind.ENTITY)
+            validate_identifier(self.to_entity_id, IdKind.ENTITY)
+            if self.scope_entity_id is not None:
+                validate_identifier(self.scope_entity_id, IdKind.ENTITY)
+        elif (
+            self.from_entity_id is not None
+            or self.to_entity_id is not None
+            or self.relationship_type is not None
+            or self.scope_entity_id is not None
+        ):
+            raise ValueError("only an edge creation states its semantic identity")
+        if (self.operation is DirectedWriteOperation.END) is (self.reason is None):
+            raise ValueError("an edge end carries a reason and no other operation does")
+        if self.expected_version is not None and self.expected_version < 1:
+            raise ValueError("an expected edge version starts at one")
+        for expected in (
+            self.expected_from_version,
+            self.expected_to_version,
+            self.expected_scope_version,
+        ):
+            if expected is not None and expected < 1:
+                raise ValueError("an expected entity version starts at one")
+        if not self.idempotency_key:
+            raise ValueError("an edge write carries an idempotency key")
+        ensure_utc(self.server_received_at)
+
+    @property
+    def payload_digest(self) -> str:
+        """What decides replay against conflict, on `AssignmentWriteRequest`'s terms."""
+        return _directed_digest(
+            {
+                "operation": self.operation.value,
+                "relationship_id": self.relationship_id,
+                "expected_version": self.expected_version,
+                "from_entity_id": self.from_entity_id,
+                "expected_from_version": self.expected_from_version,
+                "relationship_type": (
+                    None if self.relationship_type is None else self.relationship_type.value
+                ),
+                "to_entity_id": self.to_entity_id,
+                "expected_to_version": self.expected_to_version,
+                "scope_entity_id": self.scope_entity_id,
+                "expected_scope_version": self.expected_scope_version,
+                "effective_from": _moment(self.effective_from),
+                "effective_to": _moment(self.effective_to),
+                "cleared": sorted(self.cleared),
+                "evidence_refs": sorted(self.evidence_refs),
+                "reason": self.reason,
+            }
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class DirectedReceipt:
+    """What one admitted directed write leaves behind.
+
+    **The mutation-ledger row is the receipt on this plane**, which is why
+    `mutation_event_id` is the identifier a caller is handed rather than a
+    reference into a receipt store this Phase does not build. The row is
+    append-only, carries the request digest, the idempotency key, the before and
+    after state and the audit identifier, so re-reading it answers every
+    question a separate receipt record would have.
+
+    `replayed` says the write did not happen this time because it had already
+    happened under this key. It is a separate field from anything in the payload
+    because a caller retrying after a timeout has to be able to tell "I did this"
+    from "this was already done", and both are successes.
+    """
+
+    mutation_event_id: str
+    record_id: str
+    record_family: MutationRecordFamily
+    prior_version: int | None
+    version: int
+    state: str
+    audit_id: str
+    idempotency_key: str
+    superseded_id: str | None
+    evidence_refs: tuple[str, ...]
+    issued_at: datetime
+    replayed: bool
+
+
 class EntitiesRepository(ABC):
     """The generalized entity read/write port for relationship intelligence v0.3.
 
@@ -417,12 +1044,29 @@ class EntitiesRepository(ABC):
 
     @abstractmethod
     def record_alias(self, principal_id: str, alias: EntityAlias) -> None:
-        """Idempotently record one alias of an entity.
+        """Record one alias of an entity, idempotently against the *active* one.
 
-        Idempotent against the natural key `(entity_id, alias_type,
-        normalized_value)`.  Note what that key does *not* say: two different
-        entities may hold the same alias, because two real people share a name,
-        and a schema that refused it would force one of them into the other.
+        The natural key is `(principal_id, entity_id, alias_type,
+        normalized_value)` and it is enforced over the active row only -- a
+        partial unique since `2fe4e13fb449`, and a total unique over
+        `(entity_id, alias_type, normalized_value)` before it.  Note what that
+        key does *not* say: two different entities may hold the same alias,
+        because two real people share a name, and a schema that refused it would
+        force one of them into the other.
+
+        What `state` changes is what a *repeat* means.  Recording a name form
+        this entity actively carries under this alias type is still a no-op,
+        whatever `alias_id` the caller minted, because that is what a duplicate
+        is.  Recording a `RETIRED` or `SUPERSEDED` form of the same value is a
+        **write**: a row outside `ACTIVE` sits outside the unique's predicate,
+        so a former name and the name that replaced it are both held.  The total
+        unique made that impossible -- recording the correction meant deleting
+        the record of what the entity used to be called -- and deleting it is
+        what section 10.11 forbids.
+
+        Nothing here is refused.  Unlike `bind_identifier` the unique is already
+        per entity, so a conflicting active row can only ever be this entity's
+        own.
         """
 
     @abstractmethod
@@ -541,12 +1185,143 @@ class EntitiesRepository(ABC):
         """
 
     @abstractmethod
+    def observation(self, principal_id: str, observation_id: str) -> EntityObservation | None:
+        """One observation in this Principal's partition, or `None`.
+
+        `None` for a foreign observation as well as an absent one, which is the
+        rule the whole port keeps: a record belonging to somebody else has to be
+        indistinguishable from a record that does not exist, or the absence
+        itself discloses that it does.
+
+        A read of its own rather than a scan of `observations`, because every
+        caller that decides something about one mention needs its current
+        `resolution_version`, and reading a page to find one row would make the
+        cost of a decision grow with the size of the queue.
+        """
+
+    @abstractmethod
     def link_observation(self, principal_id: str, observation_id: str, entity_id: str) -> None:
         """Link one observation to an entity.
 
         Separate from recording it, because the two happen at different times
         for different reasons: a source produces the observation, and a
         resolution or a review decides what it refers to.
+        """
+
+    # --- WP-RI-A-04: the three ledgers WP-RI-A-01 created and left unwritten ---
+    #
+    # `entity_mutation_events`, `entity_resolution_decisions` and
+    # `entity_fact_evidence_links` arrived with the revision that created them
+    # and with no writer at all. These are the writes. They are on this port
+    # for the reason the governance half is: the same partition, through the
+    # same transaction, and a ledger row that could be written outside the
+    # transaction that made the change it records would be a ledger that
+    # disagrees with the plane.
+
+    @abstractmethod
+    def record_mutation_event(self, principal_id: str, event: EntityMutationEvent) -> None:
+        """Append one row to the mutation ledger, which is also the idempotency store.
+
+        `(principal_id, capability, idempotency_key)` is unique at the server,
+        so two concurrent writers holding one key produce one row and the loser
+        raises. Implementations raise `EntityMutationConflictError` when the key is
+        held with a *different* `request_digest` -- the caller replayed nothing
+        and asked for something else -- and let the constraint violation
+        surface otherwise.
+
+        Append-only by trigger. There is no update and no delete, and this port
+        offers neither.
+        """
+
+    @abstractmethod
+    def mutation_event(
+        self, principal_id: str, *, capability: str, idempotency_key: str
+    ) -> EntityMutationEvent | None:
+        """The ledger row this key already wrote under this capability, or `None`.
+
+        The replay pre-read. It is an optimisation and never the decision:
+        `record_mutation_event` still relies on the unique constraint, so two
+        writers that both read `None` still produce one row.
+        """
+
+    @abstractmethod
+    def record_resolution_decision(
+        self, principal_id: str, decision: EntityResolutionDecision
+    ) -> None:
+        """Append one disposition of one observation.
+
+        Append-only by trigger, and `UNIQUE (observation_id, sequence)` orders
+        the decisions about one observation. A sequence already taken raises
+        rather than overwriting: two reviewers deciding one mention is the case
+        this table exists to make visible, not the case it absorbs.
+        """
+
+    @abstractmethod
+    def resolution_decisions(
+        self,
+        principal_id: str,
+        observation_id: str | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[EntityResolutionDecision]:
+        """Decisions in this Principal's partition, optionally about one observation."""
+
+    @abstractmethod
+    def decide_observation(
+        self,
+        principal_id: str,
+        observation_id: str,
+        *,
+        expected_resolution_version: int,
+        entity_id: str | None = None,
+        state: ObservationState | None = None,
+        state_reason: str | None = None,
+    ) -> bool:
+        """Advance one observation's resolution version, or write nothing.
+
+        **One guarded `UPDATE` whose rowcount decides everything.** The
+        `WHERE` names the Principal, the observation and
+        `resolution_version = expected_resolution_version`; a stale expectation
+        matches no row, returns `False`, and leaves every column as it was. The
+        caller checks the answer before writing anything else, so a decision
+        that lost the race writes no ledger row, no evidence link and no
+        decision either.
+
+        `entity_id` binds the observation to an entity, which is what
+        `link_existing` and `create_new` do. `state` and `state_reason` move it
+        out of `CURRENT`, which is what `quarantine` does. Passing neither is a
+        decision that changed nothing about the observation except that it has
+        now been decided -- `defer` and `reject` -- and the version still
+        advances, because deciding is what the version counts.
+        """
+
+    @abstractmethod
+    def record_fact_evidence_link(self, principal_id: str, link: EntityFactEvidenceLink) -> None:
+        """Bind one canonical fact to the single record that evidences it.
+
+        **Not trigger-protected, and that is a property of the table rather
+        than an oversight.** `entity_fact_evidence_links` carries six CHECKs and
+        six cascading foreign keys and no trigger: its rows are editable and are
+        deleted with the fact they cite, because a link to a fact that no longer
+        exists is not evidence of anything. The decision that *cited* the link
+        is on `entity_resolution_decisions`, which is append-only, so what was
+        decided survives even where what it pointed at does not.
+        """
+
+    @abstractmethod
+    def fact_evidence_links(
+        self,
+        principal_id: str,
+        *,
+        entity_observation_id: str | None = None,
+        role: EvidenceRole | None = None,
+        limit: int | None = None,
+    ) -> list[EntityFactEvidenceLink]:
+        """Evidence links in this Principal's partition.
+
+        `role=EvidenceRole.COUNTEREVIDENCE` with an observation is how the
+        resolution path reads persisted negative identity evidence: the pairings
+        a user has already refused, so the same one is not proposed again.
         """
 
     @abstractmethod
@@ -600,13 +1375,52 @@ class EntitiesRepository(ABC):
     def bind_identifier(
         self, principal_id: str, entity_id: str, identifier: ExternalIdentifier
     ) -> None:
-        """Idempotently bind one external identifier to an entity.
+        """Bind one external identifier to an entity, idempotently against the *active* one.
 
         The identifier's `entity_id` must match `entity_id` and its
-        `principal_id` must match the acting Principal.  Idempotent against the
-        natural key: a repeat of the same `(entity_id, namespace,
-        normalized_value)` is a no-op whatever identifier the caller minted for
-        it, because that triple is what "the same external identity" means.
+        `principal_id` must match the acting Principal.
+
+        **The uniqueness this write is idempotent against is not the one this
+        docstring stated until `2fe4e13fb449`.**  It said the natural key was
+        `(entity_id, namespace, normalized_value)` and that a repeat of it was a
+        no-op.  The key is now `(principal_id, namespace, normalized_value)`
+        enforced over rows whose `state` is `ACTIVE` only, and the move changed
+        the answer in three places, in both directions.
+
+        *Still a no-op.*  Re-binding an address this entity already holds as its
+        current identity, whatever `identifier_id` the caller minted for it,
+        because that triple is what "the same external identity" means.
+
+        *No longer a no-op -- it **writes**.*  Recording a `RETIRED` or
+        `SUPERSEDED` binding of a value this entity already carried, and then
+        recording its replacement.  A row outside `ACTIVE` falls outside the
+        unique's predicate, so an address that was retired and later reissued is
+        held as the several rows it actually was.  The total unique forced the
+        plane to *delete* the retired row in order to record the new one, and
+        the deleted row is the one that resolves a message sent before the
+        address changed.  A caller that binds twice and expects one row must now
+        say `ACTIVE` both times to get it.
+
+        *Refused rather than absorbed.*  An address that is currently a
+        **different** entity's raises `ConflictedIdentifierError`.  The unique spans the
+        Principal rather than the entity, so the row that conflicts need not be
+        the caller's -- and answering that with silence would report a binding
+        the store does not hold.  Deciding that two entities are the same person
+        is a merge, and a merge is a proposal, not a side effect of a bind.
+
+        Concurrency is the implementation's problem, not the caller's: if the
+        conflicting holder is retired by another session between the write and
+        the read-back that identifies it, the bind is retried and succeeds, and
+        a store that cannot settle the question raises `UnsettledBindingError`
+        rather than letting a driver exception out through this boundary.
+
+        **The two refusals are different classes, and until `WP-RI-A-02` they
+        were one.**  Both were a bare `ValueError` separated only by message, so
+        a handler that classified `ValueError` reported a retryable race as a
+        permanent conflict -- telling a caller to stop when the address may
+        already be free.  Both classes still subclass `ValueError`, so an
+        existing `except ValueError` catches them unchanged; a caller that needs
+        to tell them apart now can, without comparing strings.
         """
 
     @abstractmethod
@@ -707,6 +1521,234 @@ class EntitiesRepository(ABC):
         bound introduced beneath them would answer "no such relationship" for an
         edge that is recorded.
         """
+
+    # --- WP-RI-A-02: the governed write path ---------------------------------
+    #
+    # Two methods for the whole write half, plus two paged reads. The writes are one
+    # method because they share one transaction, one idempotency store and one
+    # concurrency control: the entity is the aggregate, `entity_mutation_events`
+    # is both its ledger and its replay index, and a second method would be a
+    # second place the guarded `UPDATE` has to be remembered.
+    #
+    # The methods above stay exactly as they were. `create`, `bind_identifier`
+    # and `record_alias` are the *unguarded* writes the resolution and
+    # re-enrichment paths already use, and narrowing them to require an expected
+    # version and an idempotency key would break every existing caller for the
+    # benefit of one that has both.
+
+    @abstractmethod
+    def admit_mutation(self, request: EntityWriteRequest) -> EntityMutationAdmission:
+        """Admit one governed entity write, or return the receipt its key is bound to.
+
+        Raises `EntityIdempotencyConflictError` when the key is bound to a
+        materially different request, `StaleEntityVersionError` when the named
+        expected entity or child version is no longer current,
+        `HistoricalEntityError` when the entity has been merged away,
+        `AmbiguousEntityError` when a create cannot be told apart from entities
+        that already exist, `ConflictedIdentifierError` when an address is
+        already a different entity's current identity,
+        `DuplicateEntityFactError` when the transition is not available from the
+        state the record holds, `EntityEvidenceError` when a cited span is not
+        this Principal's, and `UnknownScopeError` when the request names an
+        entity or child record this Principal does not hold.
+
+        **A refused write leaves nothing behind.** The guarded `UPDATE` on the
+        entity is the first statement of every operation that names one, and its
+        row count is read before any other row is written -- so a stale
+        expectation has no successor to roll back rather than a successor that
+        is rolled back.
+        """
+
+    @abstractmethod
+    def mutation_replay_for(
+        self,
+        idempotency_key: str,
+        request_digest: str,
+        *,
+        principal_id: str,
+        capability: str,
+    ) -> EntityMutationReceipt | None:
+        """The receipt this Principal's key is already bound to, or `None`.
+
+        Takes the digest for the reason `RelationshipMemoryRepository.replay_for`
+        does: a lookup on the key alone would answer a *conflicting* request
+        with the original receipt, silently reporting a write that never
+        happened as durable. A key bound to a different digest raises
+        `EntityIdempotencyConflictError` here, exactly as `admit_mutation` does
+        at the unique constraint.
+
+        `capability` is part of the lookup because it is part of the constraint.
+        One key spent on `entities.aliases.add` says nothing about the same key
+        arriving on `entities.identifiers.bind`.
+        """
+
+    @abstractmethod
+    def identifier_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        states: frozenset[IdentifierState] | None = None,
+        namespaces: frozenset[ExternalIdentifierNamespace] | None = None,
+        after_identifier_id: str | None = None,
+    ) -> EntityChildPage[ExternalIdentifier]:
+        """One bounded page of an entity's external identifiers.
+
+        Separate from `external_identifiers` rather than a parameter on it, and
+        the difference is the default. That method is unbounded because
+        resolution reads the collection whole to decide whether an identifier is
+        conflicted, and a bound applied beneath it would let a conflict fall off
+        the end of a page and read as a clean match. This one is bounded because
+        it answers a person scrolling, and it *discloses* its bound.
+
+        The keyset is `identifier_id`, which is unique and totally ordered, so a
+        row written between two requests cannot shift a later page backwards and
+        hide a binding -- which is exactly what an `OFFSET` does to a table that
+        is still being written to. A cursor naming a record this Principal
+        cannot read is refused rather than silently restarting the walk.
+        """
+
+    @abstractmethod
+    def alias_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        states: frozenset[AliasState] | None = None,
+        alias_types: frozenset[AliasType] | None = None,
+        after_alias_id: str | None = None,
+    ) -> EntityChildPage[EntityAlias]:
+        """One bounded page of an entity's recorded name forms.
+
+        The terms `identifier_page` states, over the alias plane's own
+        vocabulary.
+        """
+
+    # --- the directed-relationship write path (WP-RI-A-03) ------------------
+    #
+    # Six methods and two lookups, all of them beside `record_assignment` and
+    # `record_relationship` rather than replacing them. The two older writers
+    # take a fully-formed domain record and mint nothing; they are how the
+    # resolver and the fixtures put a row in place, and they carry no
+    # idempotency key, no version guard and no ledger row. The six below are the
+    # *capability* path: they own the identifier, the version, the lifecycle and
+    # the ledger, and they are the only writers on this plane a request reaches.
+
+    @abstractmethod
+    def assignment(self, principal_id: str, assignment_id: str) -> Assignment | None:
+        """One assignment by identifier, within this Principal's partition.
+
+        `None` for an absent row and for one belonging to another Principal,
+        and the two are indistinguishable by construction: `principal_id` is
+        part of the lookup key, so there is no branch here that could tell them
+        apart even by accident.
+        """
+
+    @abstractmethod
+    def relationship(self, principal_id: str, relationship_id: str) -> EntityRelationship | None:
+        """One directed edge by identifier, on `assignment`'s terms."""
+
+    @abstractmethod
+    def assignments_page(
+        self,
+        principal_id: str,
+        entity_id: str,
+        *,
+        active_only: bool,
+        limit: int,
+        after_assignment_id: str | None = None,
+    ) -> list[Assignment]:
+        """One bounded, keyset-continued page of an entity's assignments.
+
+        Separate from `assignments` rather than a widening of it, and the
+        separation is deliberate: that method defaults to *every* row because
+        resolution and re-enrichment read the collection whole and a bound
+        introduced beneath them would answer "no such assignment" for a recorded
+        one. This one exists for `entities.assignments.list`, whose contract is
+        the opposite -- bounded output, and a cursor that continues rather than
+        an offset that shifts. Rows are ordered by `assignment_id` and
+        `after_assignment_id` excludes every identifier at or before the one
+        named, for the reason `relationships` gives for its own keyset.
+        """
+
+    @abstractmethod
+    def directed_replay(
+        self,
+        capability: str,
+        idempotency_key: str,
+        payload_digest: str,
+        *,
+        principal_id: str,
+    ) -> DirectedReceipt | None:
+        """The receipt already issued for this key, or `None` if the key is unused.
+
+        Raises `DuplicateDirectedFactError`'s sibling
+        `RelationshipMemoryError`-style refusal -- concretely,
+        `my_pa.domain.relationship.entity.DirectedWriteError` -- when the key is
+        in use for a *different* request: same key, different digest is an
+        idempotency conflict and never a silent second write.
+
+        `capability` is part of the key because
+        `entity_mutation_events` is unique on
+        `(principal_id, capability, idempotency_key)`. A caller that reuses one
+        key across `create` and `revise` is therefore making two writes and not
+        one, which is the honest reading: they are different acts on different
+        state.
+        """
+
+    @abstractmethod
+    def create_assignment(self, request: AssignmentWriteRequest) -> DirectedReceipt:
+        """Admit one new assignment, refusing a duplicate active semantic key.
+
+        Refuses with `DuplicateDirectedFactError` when an active assignment
+        already exists for `(entity, type, scope, role, discipline,
+        responsibility class)` folded case- and whitespace-insensitively --
+        which is the partial unique index `an_active_assignment_is_recorded_once`
+        stated in the application's terms, not a second rule: the index is what
+        actually decides, and the pre-read exists only so the refusal is
+        classified rather than escaping as a driver error.
+
+        Refuses with `StaleDirectedVersionError` when the subject or the scope
+        entity is not at the version the request says it read, and with
+        `MergedEndpointError` when either has been merged away.
+        """
+
+    @abstractmethod
+    def revise_assignment(self, request: AssignmentWriteRequest) -> DirectedReceipt:
+        """Append the descriptive change, refusing a stale expected version.
+
+        One guarded `UPDATE` whose rowcount decides everything: a stale
+        expectation writes no row, no ledger entry and no evidence link, and
+        leaves the prior state exactly as it stood.
+        """
+
+    @abstractmethod
+    def end_assignment(self, request: AssignmentWriteRequest) -> DirectedReceipt:
+        """Move one assignment to `ended`, on `revise_assignment`'s guard.
+
+        The row is kept. `ended_at` records when it left service and `state`
+        records that it did; nothing is deleted, on the rule section 10.11
+        states and `IdentifierState` explains.
+        """
+
+    @abstractmethod
+    def create_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
+        """Admit one new directed edge, refusing a duplicate active semantic key.
+
+        The key is `(from, type, to, scope)`, so the *opposite* direction of the
+        same pair is not a duplicate and is admitted -- which is what a directed
+        model is for. No reciprocal edge is generated.
+        """
+
+    @abstractmethod
+    def revise_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
+        """Append the effective-date and evidence change, on the same guard."""
+
+    @abstractmethod
+    def end_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
+        """Move one directed edge to `ended`, on `end_assignment`'s terms."""
 
 
 class PortError(Exception):

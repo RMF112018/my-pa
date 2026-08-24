@@ -85,7 +85,38 @@ from my_pa.domain.intelligence.catalog import (
     ResolverSetId,
     SourceLaneId,
 )
+from my_pa.domain.relationship.authoring import (
+    CALLER_SETTABLE_STATUSES,
+    MAX_ENTITY_NAME_CHARACTERS,
+    MAX_EVIDENCE_REFERENCES,
+    MAX_IDENTIFIER_VALUE_CHARACTERS,
+    MAX_INITIAL_ALIASES,
+    MAX_INITIAL_IDENTIFIERS,
+    CallerNamespace,
+)
+from my_pa.domain.relationship.entity import (
+    MAX_DIRECTED_EVIDENCE_REFS,
+    MAX_DIRECTED_REASON_CHARACTERS,
+    MAX_DIRECTED_TEXT_CHARACTERS,
+    AliasState,
+    AliasType,
+    AssignmentType,
+    EntityRelationshipType,
+    EntityStatus,
+    EntityType,
+    ExternalIdentifierNamespace,
+    IdentifierState,
+)
 from my_pa.domain.relationship.event import RelationshipEventType
+from my_pa.domain.relationship.governance import (
+    EDGE_WHITESPACE,
+    ENTITY_CHANGE_REASON_LIMIT,
+    MENTION_DISPLAY_NAME_LIMIT,
+    OBSERVED_VALUE_LIMIT,
+    ObservationAuthority,
+    ObservationKind,
+    ResolutionDisposition,
+)
 from my_pa.domain.relationship.memory import (
     CONTEXT_TARGET_ID_KINDS,
     MAX_CONTEXT_LINKS_PER_VERSION,
@@ -116,10 +147,13 @@ from my_pa.domain.task.lifecycle import (
 from my_pa.domain.task.role import TaskRole
 
 __all__ = [
+    "AddEntityAlias",
     "AddProjectCommand",
+    "ArchiveEntity",
     "ArchiveManagedDocument",
     "ArchiveManagedDocumentCommand",
     "BeginIntelligenceCycle",
+    "BindEntityIdentifier",
     "BulkConfirmTasks",
     "BulkPreviewTasks",
     "CloseCommitment",
@@ -128,6 +162,7 @@ __all__ = [
     "CommitIntelligenceArtifact",
     "CreateCapture",
     "CreateCommitment",
+    "CreateEntity",
     "CreateManagedDocument",
     "CreateManagedDocumentCommand",
     "CreateProject",
@@ -150,6 +185,8 @@ __all__ = [
     "LinkSituationToProjectCommand",
     "ListCaptures",
     "ListCommitments",
+    "ListEntityAliases",
+    "ListEntityIdentifiers",
     "ListIntelligenceArtifacts",
     "ListManagedDocuments",
     "ListManagedDocumentsCommand",
@@ -173,8 +210,11 @@ __all__ = [
     "RecordTask",
     "Representation",
     "ResolveIntelligenceSet",
+    "RestoreEntity",
     "RestoreManagedDocument",
     "RestoreManagedDocumentCommand",
+    "RetireEntityAlias",
+    "RetireEntityIdentifier",
     "RevealSubject",
     "ReviseCapture",
     "ReviseManagedDocument",
@@ -185,9 +225,12 @@ __all__ = [
     "SearchKnowledge",
     "SearchTasks",
     "SubmitGoodNotesProposal",
+    "SupersedeEntityAlias",
+    "SupersedeEntityIdentifier",
     "TraceObjectCommand",
     "TransitionTask",
     "UpdateCommitment",
+    "UpdateEntity",
     "UpdateTask",
     "WaitingOn",
 ]
@@ -2441,6 +2484,421 @@ class ListUnresolvedMentions:
             _identifier(self.after, IdKind.ENTITY_OBSERVATION, SafeDetail.CURSOR)
 
 
+#: What the observation and resolution surface publishes about its own fields.
+#: Written out rather than derived, for the reason `_MEMORY_FIELD_DOCS` is: the
+#: annotation says a field is a string and the description says what a caller
+#: may legitimately put in it, and the second one is what stops a model
+#: inventing a source identifier to satisfy a required field.
+_OBSERVATION_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
+    {
+        "kind": {
+            "description": (
+                "What kind of source record this observation came from. Use "
+                "user_statement only for something the user said in their own words."
+            )
+        },
+        "authority": {
+            "description": (
+                "What standing this observation has. source_observation requires a real "
+                "source object version this product has already read and is refused for "
+                "anything else. user_authored_statement requires kind=user_statement and a "
+                "product-owned capture. A conclusion a model drew is never an observation "
+                "authority: propose it instead."
+            )
+        },
+        "observed_value": {
+            "description": (
+                "Exactly what the source record said. Stored, matched against, and never "
+                "returned by any read on this plane."
+            )
+        },
+        "mention_display_name": {
+            "description": (
+                "The short name an operator should see beside this mention on the "
+                "unresolved queue. Optional, and the only field the queue discloses. Leave "
+                "it out when the observed span is not a name a person would recognise."
+            )
+        },
+        "source_id": {
+            "description": (
+                "The configured source this observation was read from. Supply all three "
+                "source_* fields together, or supply capture_id and capture_version_id "
+                "instead. Never both."
+            )
+        },
+        "source_object_id": {"description": "The source object this observation was read from."},
+        "source_version_id": {
+            "description": "The exact version of that source object, so the claim is re-derivable."
+        },
+        "capture_id": {
+            "description": (
+                "A product-owned capture this observation was read from, for evidence that "
+                "belongs to no configured source. Supply with capture_version_id."
+            )
+        },
+        "capture_version_id": {"description": "The exact version of that capture."},
+        "observed_at": {
+            "description": "When the source record said it. Not when this request was made."
+        },
+        "entity_id": {
+            "description": (
+                "Bind this observation to an entity only where that is already justified. "
+                "Recording an observation never creates an entity and this field does not "
+                "make it do so. Requires expected_entity_version."
+            )
+        },
+        "expected_entity_version": {
+            "description": "The entity version you read, so a concurrent change is refused."
+        },
+        "observation_id": {
+            "description": (
+                "One mention, from entities.unresolved_mentions or entities.observations.list."
+            )
+        },
+        "expected_resolution_version": {
+            "description": (
+                "The resolution_version the mention carried when you read it. A stale value "
+                "writes nothing."
+            )
+        },
+        "disposition": {
+            "description": (
+                "What you decided. link_existing and create_new bind an identity; reject, "
+                "defer and quarantine record that you declined to, which is an ordinary "
+                "outcome and not a failure."
+            )
+        },
+        "entity_type": {"description": "The type of entity create_new should create."},
+        "canonical_name": {"description": "The name create_new should record."},
+        "display_name": {
+            "description": "How that name should be shown. Defaults to canonical_name."
+        },
+        "rejected_entity_id": {
+            "description": (
+                "For reject: the entity this mention does not refer to. Recorded as "
+                "counterevidence so the pairing is not proposed again."
+            )
+        },
+        "reason": {
+            "description": (
+                "Why, in one sentence. Required by reject, defer and quarantine. Never put "
+                "the observed text here."
+            )
+        },
+        "page_size": {"description": "How many rows to return."},
+        "after": {"description": "The next_cursor from the previous page."},
+        "idempotency_key": {
+            "description": "Your own key for this write, so a retry is not a second write."
+        },
+    }
+)
+
+
+def _observation_docs(*names: str) -> Mapping[str, Mapping[str, str]]:
+    """The subset of `_OBSERVATION_FIELD_DOCS` one command publishes."""
+    return MappingProxyType({name: _OBSERVATION_FIELD_DOCS[name] for name in names})
+
+
+def _observed_value(value: object) -> str:
+    """What one source record said, bounded and never read into a message.
+
+    `value` is `object` and not `str` for the reason `_idempotency_key` states:
+    the field *is* annotated `str`, so annotating it here too makes the
+    `isinstance` unreachable to a type checker and the check reads as dead code
+    to delete. The annotation describes what actually arrives from a transport,
+    which is anything the caller sent.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequestError(SafeDetail.OBSERVED_VALUE)
+    if len(value) > OBSERVED_VALUE_LIMIT:
+        raise InvalidRequestError(SafeDetail.OBSERVED_VALUE)
+    return value
+
+
+def _mention_name(value: object) -> str:
+    """The one field the unresolved queue discloses, refused rather than trimmed.
+
+    Against the exact character set `EntityObservation.__post_init__` refuses
+    and the column's CHECK refuses. Three spellings of one rule, and they have
+    to reject the same strings: a value this layer trimmed would be stored as
+    something the caller did not send, and a value it admitted would fail at the
+    server naming a constraint instead of a field.
+    """
+    if not isinstance(value, str) or not value.strip(EDGE_WHITESPACE):
+        raise InvalidRequestError(SafeDetail.MENTION_DISPLAY_NAME)
+    if any(character in EDGE_WHITESPACE for character in value[:1] + value[-1:]):
+        raise InvalidRequestError(SafeDetail.MENTION_DISPLAY_NAME)
+    if len(value) > MENTION_DISPLAY_NAME_LIMIT:
+        raise InvalidRequestError(SafeDetail.MENTION_DISPLAY_NAME)
+    return value
+
+
+def _resolution_entity_name(value: object, detail: SafeDetail) -> str:
+    """A name a `create_new` disposition supplies, present and non-blank.
+
+    Distinct from `_entity_name`, which the identity-authoring commands use:
+    that one bounds at `MAX_ENTITY_NAME_CHARACTERS`, and this one at
+    `OBSERVED_VALUE_LIMIT`, because the name a resolution mints is read out of
+    an observed value and cannot be longer than the value it came from.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequestError(detail)
+    if len(value) > OBSERVED_VALUE_LIMIT:
+        raise InvalidRequestError(detail)
+    return value
+
+
+def _bounded_reason(value: object, detail: SafeDetail) -> str:
+    """A short explanation of one decision, or a refusal naming the field.
+
+    Bounded at `ENTITY_CHANGE_REASON_LIMIT`, which is the same number the
+    column's CHECK holds. The two have to refuse the same values, or a request
+    this layer admits fails at the server with an error that names a constraint
+    instead of a field.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequestError(detail)
+    if len(value) > ENTITY_CHANGE_REASON_LIMIT:
+        raise InvalidRequestError(detail)
+    return value
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityObservations:
+    """List what this plane has been told about people, and what happened to each mention.
+
+    The evidence log behind the entity plane: every observation recorded, whether
+    or not anything has placed it, with the source version it came from, the
+    standing it carries and whether it is still current. Use
+    entities.unresolved_mentions instead when you only want the ones nobody has
+    placed yet.
+
+    **The observed text is not returned**, here or anywhere on this plane. What
+    comes back is the mention's own identifiers, its kind, its state, and the
+    optional short name a writer chose to publish.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_OBSERVATIONS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _observation_docs(
+        "entity_id", "page_size", "after"
+    )
+
+    entity_id: str | None = None
+    unresolved_only: bool = False
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.entity_id is not None:
+            _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        if not isinstance(self.unresolved_only, bool):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_OBSERVATION, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ObserveEntityMention:
+    """Record what a source record said about someone. Creates no person and links to none.
+
+    This is how evidence enters the entity plane. It stores the observed text,
+    where it was read from and when, and nothing else happens: no entity is
+    created, no identity is decided, and nothing is merged. Deciding what an
+    observation refers to is entities.unresolved_mentions.resolve, which is a
+    separate act with its own authority.
+
+    Name the origin exactly once: either all three source_* fields, or
+    capture_id with capture_version_id. `authority` is checked against that
+    origin rather than believed — a conclusion a model drew is not an
+    observation and cannot be recorded as one.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_OBSERVE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _observation_docs(
+        "kind",
+        "authority",
+        "observed_value",
+        "mention_display_name",
+        "source_id",
+        "source_object_id",
+        "source_version_id",
+        "capture_id",
+        "capture_version_id",
+        "observed_at",
+        "entity_id",
+        "expected_entity_version",
+        "idempotency_key",
+    )
+
+    kind: ObservationKind
+    authority: ObservationAuthority
+    observed_value: str = field(repr=False)
+    observed_at: datetime
+    idempotency_key: str
+    mention_display_name: str | None = field(default=None, repr=False)
+    source_id: str | None = None
+    source_object_id: str | None = None
+    source_version_id: str | None = None
+    capture_id: str | None = None
+    capture_version_id: str | None = None
+    entity_id: str | None = None
+    expected_entity_version: int | None = None
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, ObservationKind):
+            raise InvalidRequestError(SafeDetail.OBSERVATION_KIND)
+        if not isinstance(self.authority, ObservationAuthority):
+            raise InvalidRequestError(SafeDetail.OBSERVATION_AUTHORITY)
+        _observed_value(self.observed_value)
+        _idempotency_key(self.idempotency_key)
+        if _moment(self.observed_at, SafeDetail.OBSERVED_AT) is None:
+            # `_moment` admits `None` because most callers of it have an
+            # optional time. This one does not: an observation with no moment
+            # is a claim with no provenance in time, and defaulting it to the
+            # request clock would invent a fact about the world out of a fact
+            # about this process.
+            raise InvalidRequestError(SafeDetail.OBSERVED_AT)
+        if self.mention_display_name is not None:
+            _mention_name(self.mention_display_name)
+        named_source = (self.source_id, self.source_object_id, self.source_version_id)
+        named_capture = (self.capture_id, self.capture_version_id)
+        supplied_source = all(part is not None for part in named_source)
+        supplied_capture = all(part is not None for part in named_capture)
+        partial_source = any(part is not None for part in named_source) and not supplied_source
+        partial_capture = any(part is not None for part in named_capture) and not supplied_capture
+        if supplied_source == supplied_capture or partial_source or partial_capture:
+            # Exactly one origin, whole. Both is a request whose provenance is
+            # ambiguous; neither leaves three NOT NULL columns with nothing to
+            # put in them; and half of either is the shape that would otherwise
+            # be completed by a default, which is how a fabricated provenance
+            # gets written without anyone choosing it.
+            raise InvalidRequestError(SafeDetail.SOURCE_VERSION_ID)
+        # Each part checked through `_identifier` on the attribute itself, and
+        # never through `str(...)` first. Wrapping would hand the helper a
+        # string whatever arrived, so a caller sending a number would be told
+        # its identifier was malformed rather than that its field was not a
+        # string -- and `tests/architecture/test_commands_check_the_type_before
+        # _the_content` reads the call site rather than the outcome, correctly:
+        # the conversion is exactly the shape that hides the missing check.
+        if self.source_id is not None:
+            _identifier(self.source_id, IdKind.SOURCE, SafeDetail.SOURCE_ID)
+        if self.source_object_id is not None:
+            _identifier(self.source_object_id, IdKind.SOURCE_OBJECT, SafeDetail.SOURCE_OBJECT_ID)
+        if self.source_version_id is not None:
+            _identifier(self.source_version_id, IdKind.VERSION, SafeDetail.SOURCE_VERSION_ID)
+        if self.capture_id is not None:
+            _identifier(self.capture_id, IdKind.CAPTURE, SafeDetail.CAPTURE_ID)
+        if self.capture_version_id is not None:
+            _identifier(
+                self.capture_version_id, IdKind.CAPTURE_VERSION, SafeDetail.CAPTURE_VERSION_ID
+            )
+        if (self.entity_id is None) is not (self.expected_entity_version is None):
+            # A binding names the version it expects, and only a binding names
+            # one. Without the second half a caller could send a version for an
+            # entity it is not binding, and the field would read as though it
+            # had been checked.
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+        if self.entity_id is not None:
+            _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+            _expected_version(self.expected_entity_version)
+
+
+@dataclass(frozen=True, slots=True)
+class ResolveUnresolvedMention:
+    """Decide what one unresolved mention refers to, or record that you declined to.
+
+    Five dispositions and three of them are refusals, which is the design rather
+    than an omission: an ambiguous mention stays unresolved rather than being
+    forced into the nearest person. link_existing binds the entity you name and
+    requires the entity version you read. create_new is admitted only when a
+    fresh resolution finds nothing at all — ambiguity needs review, not a second
+    record. reject, defer and quarantine each need a one-sentence reason.
+
+    Give reject a rejected_entity_id when you are saying "this is not that
+    person": the pairing is preserved as counterevidence, and this plane stops
+    proposing it. Nothing is deleted by any disposition.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _observation_docs(
+        "observation_id",
+        "expected_resolution_version",
+        "disposition",
+        "entity_id",
+        "expected_entity_version",
+        "entity_type",
+        "canonical_name",
+        "display_name",
+        "rejected_entity_id",
+        "reason",
+        "idempotency_key",
+    )
+
+    observation_id: str
+    expected_resolution_version: int
+    disposition: ResolutionDisposition
+    idempotency_key: str
+    entity_id: str | None = None
+    expected_entity_version: int | None = None
+    entity_type: EntityType | None = None
+    canonical_name: str | None = field(default=None, repr=False)
+    display_name: str | None = field(default=None, repr=False)
+    rejected_entity_id: str | None = None
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.observation_id, IdKind.ENTITY_OBSERVATION, SafeDetail.OBSERVATION_ID)
+        if (
+            type(self.expected_resolution_version) is not int
+            or self.expected_resolution_version < 0
+        ):
+            # Zero is a real value and not a sentinel: an observation nothing
+            # has decided has had no resolution, and that is what zero says.
+            raise InvalidRequestError(SafeDetail.EXPECTED_RESOLUTION_VERSION)
+        if not isinstance(self.disposition, ResolutionDisposition):
+            raise InvalidRequestError(SafeDetail.DISPOSITION)
+        _idempotency_key(self.idempotency_key)
+        binds = self.disposition in (
+            ResolutionDisposition.LINK_EXISTING,
+            ResolutionDisposition.CREATE_NEW,
+        )
+        if self.disposition is ResolutionDisposition.LINK_EXISTING:
+            if self.entity_id is None or self.expected_entity_version is None:
+                raise InvalidRequestError(SafeDetail.ENTITY_ID)
+            _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+            _expected_version(self.expected_entity_version)
+        elif self.entity_id is not None or self.expected_entity_version is not None:
+            raise InvalidRequestError(SafeDetail.ENTITY_ID)
+        if self.disposition is ResolutionDisposition.CREATE_NEW:
+            if not isinstance(self.entity_type, EntityType):
+                raise InvalidRequestError(SafeDetail.ENTITY_TYPE)
+            _resolution_entity_name(self.canonical_name, SafeDetail.CANONICAL_NAME)
+            if self.display_name is not None:
+                _resolution_entity_name(self.display_name, SafeDetail.NAME)
+        elif (
+            self.entity_type is not None
+            or self.canonical_name is not None
+            or self.display_name is not None
+        ):
+            # A creation payload on a disposition that creates nothing is a
+            # request that contradicts itself, and admitting it would let a
+            # caller believe an entity had been created from fields nothing read.
+            raise InvalidRequestError(SafeDetail.ENTITY_TYPE)
+        if self.rejected_entity_id is not None:
+            if self.disposition is not ResolutionDisposition.REJECT:
+                raise InvalidRequestError(SafeDetail.REJECTED_ENTITY_ID)
+            _identifier(self.rejected_entity_id, IdKind.ENTITY, SafeDetail.REJECTED_ENTITY_ID)
+        if binds:
+            if self.reason is not None:
+                _bounded_reason(self.reason, SafeDetail.REASON)
+        else:
+            _bounded_reason(self.reason, SafeDetail.REASON)
+
+
 @dataclass(frozen=True, slots=True)
 class GetEntityRelationships:
     """`entities.relationships`: one bounded page of an entity's typed edges, to depth one.
@@ -2477,6 +2935,423 @@ class GetEntityRelationships:
             # order somewhere in the middle of the key space and skip edges
             # rather than continue past them.
             _identifier(self.after, IdKind.ENTITY_RELATIONSHIP, SafeDetail.CURSOR)
+
+
+#: The clearable descriptive and effective fields, and the closed vocabulary a
+#: revise names them from. A named list rather than a blank string or a null,
+#: because "leave this alone" and "remove this" are different instructions and a
+#: payload that expressed them both by absence could express only one.
+#:
+#: The Relationship Memory plane learned this the expensive way: `revise` wrote
+#: `pinned=False` whenever the field was omitted, so an ordinary wording
+#: correction silently unpinned a memory the caller never mentioned. Absence
+#: means keep, here as there. What is new is that removal is still reachable,
+#: and it is reachable only by saying so.
+_CLEARABLE_ASSIGNMENT_FIELDS: Final[frozenset[str]] = frozenset(
+    {"role", "discipline", "responsibility_class", "effective_from", "effective_to"}
+)
+_CLEARABLE_RELATIONSHIP_FIELDS: Final[frozenset[str]] = frozenset(
+    {"effective_from", "effective_to"}
+)
+
+
+def _directed_text(value: object, detail: SafeDetail) -> str | None:
+    """One assignment descriptor, bounded, reporting the field and never the value.
+
+    `value` is `object` for the reason `_idempotency_key` states: the field *is*
+    annotated `str | None`, so annotating it here too makes the `isinstance`
+    unreachable to a type checker and the check reads as dead code to delete.
+    The annotation describes what actually arrives from a transport, which is
+    anything the caller sent.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequestError(detail)
+    if len(value) > MAX_DIRECTED_TEXT_CHARACTERS:
+        raise InvalidRequestError(detail)
+    return value
+
+
+def _directed_reason(value: object) -> str:
+    """The bounded explanation an `end` carries. The words never reach a message.
+
+    `value` is `object` on `_directed_text`'s terms.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequestError(SafeDetail.REASON)
+    if len(value) > MAX_DIRECTED_REASON_CHARACTERS:
+        raise InvalidRequestError(SafeDetail.REASON)
+    return value
+
+
+def _evidence_refs(value: tuple[str, ...]) -> tuple[str, ...]:
+    """The evidence records one directed write cites.
+
+    Bounded in count and validated in kind. **Only an entity observation is
+    admitted in this package**, and that is a scope decision rather than an
+    oversight: `entity_fact_evidence_links` carries a composite
+    `(entity_observation_id, principal_id)` foreign key, so an observation
+    belonging to another Principal is refused by the schema, while
+    `capture_span_id` and `knowledge_id` have no Principal column to compose
+    with and would rest on an application check alone. Admitting the two weaker
+    halves alongside the strong one would make the guarantee the weakest of the
+    three while the field name suggested otherwise.
+    """
+    if not isinstance(value, tuple):
+        raise InvalidRequestError(SafeDetail.EVIDENCE_REFS)
+    if len(value) > MAX_DIRECTED_EVIDENCE_REFS:
+        raise InvalidRequestError(SafeDetail.EVIDENCE_REFS)
+    if len(set(value)) != len(value):
+        raise InvalidRequestError(SafeDetail.EVIDENCE_REFS)
+    for reference in value:
+        _identifier(reference, IdKind.ENTITY_OBSERVATION, SafeDetail.EVIDENCE_REFS)
+    return value
+
+
+def _cleared(value: tuple[str, ...], permitted: frozenset[str]) -> tuple[str, ...]:
+    """The fields a revise asks to remove, refused unless every name is one it may."""
+    if not isinstance(value, tuple):
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+    if len(set(value)) != len(value):
+        raise InvalidRequestError(SafeDetail.SELECTOR)
+    for name in value:
+        if name not in permitted:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+    return value
+
+
+def _not_both(stated: object, name: str, cleared: tuple[str, ...], detail: SafeDetail) -> None:
+    """A field is stated or cleared, never both. Contradiction is refused, not ordered."""
+    if stated is not None and name in cleared:
+        raise InvalidRequestError(detail)
+
+
+def _effective_window(
+    effective_from: datetime | None, effective_to: datetime | None, detail: SafeDetail
+) -> None:
+    """A stated window does not close before it opens.
+
+    Checked here as well as on the domain record because the two are checked
+    against different things: the record compares the pair it will store, and a
+    revise that states only one of them is compared against the stored other by
+    the repository. This refuses the case a caller can see -- both stated, and
+    inverted -- at the boundary where the field names are still known.
+    """
+    if effective_from is not None and effective_to is not None and effective_to < effective_from:
+        raise InvalidRequestError(detail)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityAssignments:
+    """`entities.assignments.list`: one bounded page of an entity's assignments.
+
+    The assignments *this* entity holds -- the roles, disciplines and
+    responsibility classes it carries in each scope -- which is a different
+    record family from `entities.relationships` and is paged independently of
+    it. `active_only` defaults to true, so an ordinary read answers about what
+    is live; pass false for the historical set, which is the collection that
+    grows without bound on a long programme and is why this read is bounded and
+    continuable rather than whole.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ASSIGNMENTS_LIST
+
+    entity_id: str
+    active_only: bool = True
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        if not isinstance(self.active_only, bool):
+            raise InvalidRequestError(SafeDetail.ACTIVE_ONLY)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            # Validated as an assignment identifier rather than accepted as an
+            # opaque string, for the reason `GetEntityRelationships.after`
+            # states: the repository compares it against `assignment_id`
+            # directly, so an arbitrary string orders somewhere in the middle of
+            # the key space and skips rows rather than continuing past them.
+            _identifier(self.after, IdKind.ASSIGNMENT, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateEntityAssignment:
+    """`entities.assignments.create`: record that an entity holds a typed assignment.
+
+    Names an entity you have already resolved, never a name: resolve the person
+    with `entities.resolve` or `entities.search` first, and if resolution is
+    ambiguous ask rather than choosing. `expected_entity_version` is the version
+    that read returned, and the write is refused if the entity changed since --
+    so an assignment cannot be attached to an identity that was archived or
+    merged in between.
+
+    `assignment_type` and `scope_entity_id` are the assignment's identity
+    together with the entity, and they cannot be corrected later: an assignment
+    recorded against the wrong scope is ended and a replacement created, which
+    is the only shape that records both what was believed and what replaced it.
+
+    An identical active assignment is refused rather than duplicated. Retrying
+    the same request with the same `idempotency_key` returns the original
+    receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ASSIGNMENTS_CREATE
+
+    entity_id: str
+    expected_entity_version: int
+    assignment_type: AssignmentType
+    idempotency_key: str
+    scope_entity_id: str | None = None
+    expected_scope_version: int | None = None
+    role: str | None = None
+    discipline: str | None = None
+    responsibility_class: str | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    evidence_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_entity_version)
+        if not isinstance(self.assignment_type, AssignmentType):
+            raise InvalidRequestError(SafeDetail.ASSIGNMENT_TYPE)
+        _idempotency_key(self.idempotency_key)
+        if self.scope_entity_id is not None:
+            _identifier(self.scope_entity_id, IdKind.ENTITY, SafeDetail.SCOPE_ENTITY_ID)
+        # A scope version without a scope names the version of nothing, and a
+        # scope without a version is an unguarded reference to a second record
+        # this write depends on. Both are refused rather than one being inferred.
+        if (self.scope_entity_id is None) is not (self.expected_scope_version is None):
+            raise InvalidRequestError(SafeDetail.EXPECTED_SCOPE_VERSION)
+        if self.expected_scope_version is not None and (
+            type(self.expected_scope_version) is not int or self.expected_scope_version < 1
+        ):
+            raise InvalidRequestError(SafeDetail.EXPECTED_SCOPE_VERSION)
+        _directed_text(self.role, SafeDetail.ROLE)
+        _directed_text(self.discipline, SafeDetail.DISCIPLINE)
+        _directed_text(self.responsibility_class, SafeDetail.RESPONSIBILITY_CLASS)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _evidence_refs(self.evidence_refs)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseEntityAssignment:
+    """`entities.assignments.revise`: correct what an existing assignment describes.
+
+    Role, discipline, responsibility class and the effective window, and nothing
+    else. The entity, the type and the scope are the assignment's identity and
+    are not editable here at all -- there is no field to carry one -- because
+    changing them would rewrite what was recorded rather than record that it
+    changed. Use `entities.assignments.end` and then create the replacement.
+
+    Requires `expected_version` from a recent read: if the assignment changed
+    since, the revision is refused and nothing is written rather than
+    overwriting what you did not see. An omitted field keeps its current value;
+    `clear` names the fields to remove, and naming a field in `clear` while also
+    stating it is refused rather than resolved.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ASSIGNMENTS_REVISE
+
+    assignment_id: str
+    expected_version: int
+    idempotency_key: str
+    role: str | None = None
+    discipline: str | None = None
+    responsibility_class: str | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    clear: tuple[str, ...] = ()
+    evidence_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.assignment_id, IdKind.ASSIGNMENT, SafeDetail.ASSIGNMENT_ID)
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+        _directed_text(self.role, SafeDetail.ROLE)
+        _directed_text(self.discipline, SafeDetail.DISCIPLINE)
+        _directed_text(self.responsibility_class, SafeDetail.RESPONSIBILITY_CLASS)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+        cleared = _cleared(self.clear, _CLEARABLE_ASSIGNMENT_FIELDS)
+        _not_both(self.role, "role", cleared, SafeDetail.ROLE)
+        _not_both(self.discipline, "discipline", cleared, SafeDetail.DISCIPLINE)
+        _not_both(
+            self.responsibility_class,
+            "responsibility_class",
+            cleared,
+            SafeDetail.RESPONSIBILITY_CLASS,
+        )
+        _not_both(self.effective_from, "effective_from", cleared, SafeDetail.EFFECTIVE_FROM)
+        _not_both(self.effective_to, "effective_to", cleared, SafeDetail.EFFECTIVE_TO)
+        _evidence_refs(self.evidence_refs)
+
+
+@dataclass(frozen=True, slots=True)
+class EndEntityAssignment:
+    """`entities.assignments.end`: record that an assignment stopped being held.
+
+    The row is kept and its history with it; there is no capability that
+    destroys an assignment. Give either `effective_end`, when you know the date
+    the person left the role, or `end_now`, when the answer is "as of now" --
+    exactly one of the two, because a request stating both is stating two
+    different facts and guessing which was meant is how a wrong date becomes a
+    recorded one.
+
+    `reason` is required and bounded. A withdrawal with no stated reason leaves
+    a later reader unable to tell a correction from a change in the world.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ASSIGNMENTS_END
+
+    assignment_id: str
+    expected_version: int
+    reason: str
+    idempotency_key: str
+    effective_end: datetime | None = None
+    end_now: bool = False
+
+    def __post_init__(self) -> None:
+        _identifier(self.assignment_id, IdKind.ASSIGNMENT, SafeDetail.ASSIGNMENT_ID)
+        _expected_version(self.expected_version)
+        _directed_reason(self.reason)
+        _idempotency_key(self.idempotency_key)
+        _moment(self.effective_end, SafeDetail.EFFECTIVE_TO)
+        if not isinstance(self.end_now, bool):
+            raise InvalidRequestError(SafeDetail.END_NOW)
+        if (self.effective_end is None) is not self.end_now:
+            raise InvalidRequestError(SafeDetail.END_NOW)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateEntityRelationship:
+    """`entities.relationships.create`: assert one directed edge between two entities.
+
+    Direction is the whole meaning of the record: `from_entity_id works_for
+    to_entity_id` says something the reverse does not, and **no reciprocal edge
+    is created**. If the inverse is also true, assert it as its own edge, so it
+    can be withdrawn on its own terms later.
+
+    Both endpoints are named by identifiers you have already resolved, with the
+    versions those reads returned; the write is refused if either changed since.
+    `scope_entity_id` narrows the claim to a programme, project or work package
+    and is part of the edge's identity, so an edge recorded against the wrong
+    scope is ended and replaced rather than edited.
+
+    An identical active edge -- same source, same type, same target, same scope
+    -- is refused rather than duplicated. The opposite direction of the same pair
+    is a different edge and is admitted.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_RELATIONSHIPS_CREATE
+
+    from_entity_id: str
+    expected_from_version: int
+    relationship_type: EntityRelationshipType
+    to_entity_id: str
+    expected_to_version: int
+    idempotency_key: str
+    scope_entity_id: str | None = None
+    expected_scope_version: int | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    evidence_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.from_entity_id, IdKind.ENTITY, SafeDetail.FROM_ENTITY_ID)
+        _expected_version(self.expected_from_version)
+        if not isinstance(self.relationship_type, EntityRelationshipType):
+            raise InvalidRequestError(SafeDetail.RELATIONSHIP_TYPE)
+        _identifier(self.to_entity_id, IdKind.ENTITY, SafeDetail.TO_ENTITY_ID)
+        _expected_version(self.expected_to_version)
+        if self.from_entity_id == self.to_entity_id:
+            raise InvalidRequestError(SafeDetail.TO_ENTITY_ID)
+        _idempotency_key(self.idempotency_key)
+        if self.scope_entity_id is not None:
+            _identifier(self.scope_entity_id, IdKind.ENTITY, SafeDetail.SCOPE_ENTITY_ID)
+        if (self.scope_entity_id is None) is not (self.expected_scope_version is None):
+            raise InvalidRequestError(SafeDetail.EXPECTED_SCOPE_VERSION)
+        if self.expected_scope_version is not None and (
+            type(self.expected_scope_version) is not int or self.expected_scope_version < 1
+        ):
+            raise InvalidRequestError(SafeDetail.EXPECTED_SCOPE_VERSION)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _evidence_refs(self.evidence_refs)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseEntityRelationship:
+    """`entities.relationships.revise`: correct when an edge applies, and its evidence.
+
+    The effective window and the cited evidence, and nothing else. An edge's
+    identity is all four of source, type, target and scope, so there is no
+    descriptive field left for a revise to touch and no field here through which
+    an edge could be redirected. Retargeting is
+    `entities.relationships.end` followed by a new create, which is also the
+    only shape in which a reader can later see that the first edge was asserted.
+
+    Requires `expected_version` from a recent read. An omitted field keeps its
+    current value; `clear` names the fields to remove.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_RELATIONSHIPS_REVISE
+
+    relationship_id: str
+    expected_version: int
+    idempotency_key: str
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    clear: tuple[str, ...] = ()
+    evidence_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.relationship_id, IdKind.ENTITY_RELATIONSHIP, SafeDetail.RELATIONSHIP_ID)
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+        cleared = _cleared(self.clear, _CLEARABLE_RELATIONSHIP_FIELDS)
+        _not_both(self.effective_from, "effective_from", cleared, SafeDetail.EFFECTIVE_FROM)
+        _not_both(self.effective_to, "effective_to", cleared, SafeDetail.EFFECTIVE_TO)
+        _evidence_refs(self.evidence_refs)
+
+
+@dataclass(frozen=True, slots=True)
+class EndEntityRelationship:
+    """`entities.relationships.end`: record that a directed edge stopped holding.
+
+    The row is kept, on the terms `entities.assignments.end` states, and only
+    the edge named ends -- an edge in the opposite direction between the same
+    two entities is a separate assertion and is untouched.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_RELATIONSHIPS_END
+
+    relationship_id: str
+    expected_version: int
+    reason: str
+    idempotency_key: str
+    effective_end: datetime | None = None
+    end_now: bool = False
+
+    def __post_init__(self) -> None:
+        _identifier(self.relationship_id, IdKind.ENTITY_RELATIONSHIP, SafeDetail.RELATIONSHIP_ID)
+        _expected_version(self.expected_version)
+        _directed_reason(self.reason)
+        _idempotency_key(self.idempotency_key)
+        _moment(self.effective_end, SafeDetail.EFFECTIVE_TO)
+        if not isinstance(self.end_now, bool):
+            raise InvalidRequestError(SafeDetail.END_NOW)
+        if (self.effective_end is None) is not self.end_now:
+            raise InvalidRequestError(SafeDetail.END_NOW)
 
 
 GetGoodNotesContent.__doc__ = (
@@ -3434,6 +4309,795 @@ class RestoreRelationshipMemory:
         _idempotency_key(self.idempotency_key)
 
 
+# --- the entity plane's authoring half (WP-RI-A-02) --------------------------
+#
+# Twelve commands: two paged child reads, and ten governed writes. Their
+# docstring first lines are the MCP tool descriptions, so each opens with what
+# the tool does and what it needs, in the terms a model calling it has.
+#
+# **No command carries a principal, a version it did not read, an authority, a
+# normalized value, a canonical name it composed itself, or a
+# `superseded_by_…`.** Those are server-owned, decided in
+# `application.entity_authoring`, and their absence from these dataclasses is
+# what makes "a caller cannot self-assert them" structural: the fields do not
+# exist, so a payload naming one is refused by the constructor as an unknown
+# field before any handler runs.
+#
+# **Every write names the version it read, except the one that has nothing to
+# have read.** `entities.create` carries an idempotency key and no
+# `expected_version`; every other write carries both, and the two child
+# transitions carry a second expectation for the child record as well.
+
+
+#: Shared field documentation for the MCP schema. One mapping rather than a copy
+#: per command, so the same field cannot be described two ways.
+_ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
+    {
+        "entity_id": {
+            "description": (
+                "Opaque identifier of the entity, as returned by entities.resolve, "
+                "entities.search, entities.get or entities.create. Never a person's "
+                "name: resolve the name first and ask rather than guessing if "
+                "resolution is ambiguous."
+            )
+        },
+        "entity_type": {
+            "description": (
+                "What kind of thing this is: person, organization, program, project, "
+                "work_package, team_or_group or location. It cannot be changed "
+                "afterwards, so a wrong choice needs a new entity rather than an "
+                "update."
+            )
+        },
+        "display_name": {
+            "description": (
+                "What to call this entity, as a person would write it. The server "
+                "derives the normalized form it matches on; you never send that."
+            )
+        },
+        "canonical_name": {
+            "description": (
+                "A correction to the form resolution matches on, sent as ordinary "
+                "text. Use this only when the matched form is wrong, not to fix "
+                "capitalisation: the previous name is preserved as a former_name "
+                "alias so references written under it keep resolving."
+            )
+        },
+        "status": {
+            "description": (
+                "active, inactive or historical. Use archive rather than this to "
+                "withdraw an entity; archived and merged_redirect cannot be set here."
+            )
+        },
+        "expected_version": {
+            "description": (
+                "The entity version you last read, from a get or a previous write's "
+                "receipt. The write is refused and nothing is written if the entity "
+                "changed since. Every write on this plane advances it, including "
+                "identifier and alias changes."
+            )
+        },
+        "identifier_id": {
+            "description": (
+                "Opaque identifier of one external identity binding, as returned by "
+                "entities.identifiers.list or a bind receipt."
+            )
+        },
+        "expected_identifier_version": {
+            "description": (
+                "The version of that binding you last read. Checked in addition to "
+                "expected_version, so a stale read of either is refused."
+            )
+        },
+        "alias_id": {
+            "description": (
+                "Opaque identifier of one recorded name form, as returned by "
+                "entities.aliases.list or an add receipt."
+            )
+        },
+        "expected_alias_version": {
+            "description": (
+                "The version of that alias you last read. Checked in addition to expected_version."
+            )
+        },
+        "namespace": {
+            "description": (
+                "Which external system the value belongs to: email, entra_object_id, "
+                "teams_user_id, apple_contact_id, outlook_contact_id, "
+                "source_participant_id or vendor_system_id. Stated, never sniffed "
+                "from the value."
+            )
+        },
+        "alias_type": {
+            "description": (
+                "What form of name this is: full_name, preferred_name, nickname, "
+                "initials, abbreviation, former_name or document_reference. It is "
+                "the shape of the name, not a judgement about which is correct."
+            )
+        },
+        "display_value": {
+            "description": (
+                "The value as a source actually wrote it. The server derives the "
+                "normalized form it matches on."
+            )
+        },
+        "effective_from": {"description": "Optional moment this became applicable, if known."},
+        "effective_to": {"description": "Optional moment this stopped being applicable."},
+        "reason": {
+            "description": (
+                "A short sentence saying why this change was made. Stored on the "
+                "change record so a later reader can reconstruct it."
+            )
+        },
+        "evidence": {
+            "description": (
+                "Optional capture-span identifiers supporting this change. Each must "
+                "be a span of a capture you own; anything else is refused."
+            )
+        },
+        "aliases": {
+            "description": (
+                "Optional name forms to record with the entity, as objects with "
+                "alias_type and display_value."
+            )
+        },
+        "identifiers": {
+            "description": (
+                "Optional external identities to record with the entity, as objects "
+                "with namespace and display_value. Supplying one also tells the "
+                "server this is a different person from an existing entity of the "
+                "same name; a create with none is refused when the name already "
+                "matches."
+            )
+        },
+        "idempotency_key": {
+            "description": (
+                "A unique key you choose for this write. Retrying with the same key "
+                "and the same payload returns the original result instead of writing "
+                "twice; reusing it with a different payload is refused."
+            )
+        },
+        "states": {
+            "description": (
+                "Optional filter: active, retired or superseded. Omit for all; an "
+                "explicit empty list is refused."
+            )
+        },
+        "namespaces": {"description": "Optional filter to these external namespaces."},
+        "alias_types": {"description": "Optional filter to these alias types."},
+        "page_size": {"description": "How many results to return in this page."},
+        "after": {"description": "Opaque cursor from a previous page's next_cursor."},
+    }
+)
+
+
+def _entity_docs(*names: str) -> Mapping[str, Mapping[str, str]]:
+    """The subset of `_ENTITY_FIELD_DOCS` one command publishes."""
+    return MappingProxyType({name: _ENTITY_FIELD_DOCS[name] for name in names})
+
+
+def _entity_name(value: object, detail: SafeDetail) -> str:
+    """One caller-supplied name, bounded and non-blank. The value never reaches a message."""
+    name = _bounded_token(value, detail, maximum=MAX_ENTITY_NAME_CHARACTERS)
+    if not name.strip():
+        raise InvalidRequestError(detail)
+    return name
+
+
+def _entity_reason(value: object, *, required: bool = True) -> str | None:
+    """The explanation a change carries, bounded by the column that stores it.
+
+    `required` defaults to the stricter half rather than being demanded at every
+    call site, and the default is what
+    `tests/architecture/test_commands_check_the_type_before_the_content` can
+    measure: that module proves a helper type-checks by *calling* it with a
+    non-string, and it can only synthesise arguments whose annotations it
+    recognises. A keyword-only `bool` with no default is not one of them, so the
+    helper would be skipped, and every command handing it a `reason` would be
+    reported as reading a string before checking its type.
+    """
+    if value is None:
+        if required:
+            raise InvalidRequestError(SafeDetail.REASON)
+        return None
+    reason = _bounded_token(value, SafeDetail.REASON, maximum=ENTITY_CHANGE_REASON_LIMIT)
+    if not reason.strip():
+        raise InvalidRequestError(SafeDetail.REASON)
+    return reason
+
+
+def _entity_evidence(value: object) -> tuple[str, ...]:
+    """Capture spans cited for one change, bounded and shape-checked.
+
+    Whether the span exists and whose capture it belongs to is not decided here
+    and cannot be: this layer holds no repository. It is decided by the
+    repository, which answers a foreign span exactly as an absent one.
+    """
+    if not isinstance(value, tuple | list):
+        raise InvalidRequestError(SafeDetail.EVIDENCE)
+    if len(value) > MAX_EVIDENCE_REFERENCES:
+        raise InvalidRequestError(SafeDetail.EVIDENCE)
+    references = tuple(_identifier(str(item), IdKind.SPAN, SafeDetail.EVIDENCE) for item in value)
+    if len(set(references)) != len(references):
+        raise InvalidRequestError(SafeDetail.EVIDENCE)
+    return references
+
+
+def _entity_vocabulary[T](value: object, enum: type[T], detail: SafeDetail) -> T:
+    """One closed-vocabulary field, which has already been resolved to its member.
+
+    Strict, and the strictness is the same rule `_memory_kind` applies: the
+    wire's string is turned into a member by `adapters.normalization`, which is
+    the one place shape conversion happens, and a command that also accepted the
+    string would be a second conversion path that could admit a spelling the
+    adapter refuses.
+    """
+    if not isinstance(value, enum):
+        raise InvalidRequestError(detail)
+    return value
+
+
+def _entity_kind(value: object, enum: type[StrEnum], detail: SafeDetail) -> str:
+    """One closed-vocabulary value nested inside a caller-supplied object.
+
+    Accepts the string because these arrive inside `aliases` and `identifiers`,
+    which are objects rather than fields: `adapters.normalization` converts the
+    fields a command declares and does not reach inside a mapping to rewrite it.
+    Returns the member's own value, so what is stored is the vocabulary's
+    spelling and never the caller's.
+    """
+    if isinstance(value, enum):
+        return str(value.value)
+    if not isinstance(value, str):
+        raise InvalidRequestError(detail)
+    try:
+        return str(enum(value).value)
+    except ValueError:
+        raise InvalidRequestError(detail) from None
+
+
+def _entity_filter[T](value: object, enum: type[T], detail: SafeDetail) -> tuple[T, ...] | None:
+    """One optional closed-vocabulary filter. An explicit empty list is refused.
+
+    Refused rather than treated as "no filter", for the reason the memory
+    plane's own kind filter refuses it: a caller that sent an empty list asked
+    for nothing and would be handed everything, which is the opposite answer.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, tuple | list) or not value:
+        raise InvalidRequestError(detail)
+    return tuple(_entity_vocabulary(item, enum, detail) for item in value)
+
+
+def _named_values(
+    value: object,
+    kind_field: str,
+    enum: type[StrEnum],
+    detail: SafeDetail,
+    *,
+    maximum: int,
+    value_maximum: int,
+) -> tuple[dict[str, str], ...]:
+    """The `{kind, display_value}` objects a create carries, validated by shape.
+
+    `set(item) != {...}` rather than a membership test, so an object carrying an
+    extra key is refused rather than silently ignored. An ignored key is how a
+    caller comes to believe it set something it did not.
+    """
+    if not isinstance(value, tuple | list):
+        raise InvalidRequestError(detail)
+    if len(value) > maximum:
+        raise InvalidRequestError(detail)
+    admitted: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, Mapping) or set(item) != {kind_field, "display_value"}:
+            raise InvalidRequestError(detail)
+        supplied = _bounded_token(item["display_value"], detail, maximum=value_maximum)
+        if not supplied.strip():
+            raise InvalidRequestError(detail)
+        admitted.append(
+            {
+                kind_field: _entity_kind(item[kind_field], enum, detail),
+                "display_value": supplied,
+            }
+        )
+    return tuple(admitted)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityIdentifiers:
+    """List the external identities bound to one entity, newest binding last.
+
+    This is the read a lifecycle write is driven from: it returns each binding's
+    identifier, its state and the version to pass as `expected_identifier_version`
+    when retiring or superseding it. Retired and superseded bindings are included
+    only when you ask for them, because a former address still resolves and is
+    not the same fact as a current one.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_IDENTIFIERS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "states", "namespaces", "page_size", "after"
+    )
+
+    entity_id: str
+    states: tuple[IdentifierState, ...] | None = None
+    namespaces: tuple[ExternalIdentifierNamespace, ...] | None = None
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_filter(self.states, IdentifierState, SafeDetail.STATES)
+        _entity_filter(self.namespaces, ExternalIdentifierNamespace, SafeDetail.NAMESPACES)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.EXTERNAL_IDENTIFIER, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityAliases:
+    """List the name forms recorded for one entity, with each one's state and version.
+
+    The read `entities.aliases.retire` and `entities.aliases.supersede` are
+    driven from. A name another entity also carries is not a conflict and is not
+    reported as one: two real people do share a name.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ALIASES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "states", "alias_types", "page_size", "after"
+    )
+
+    entity_id: str
+    states: tuple[AliasState, ...] | None = None
+    alias_types: tuple[AliasType, ...] | None = None
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_filter(self.states, AliasState, SafeDetail.STATES)
+        _entity_filter(self.alias_types, AliasType, SafeDetail.ALIAS_TYPES)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_ALIAS, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateEntity:
+    """Bring one person, organization, project or other entity into existence.
+
+    Resolve first. The server reruns duplicate resolution inside the write, and
+    refuses rather than choosing: an address that is already someone's current
+    identity is a conflict, and a name that already exists is ambiguous unless
+    you also supply an external identity nobody holds — which is what says this
+    is a different person rather than the same one.
+
+    You choose the type, what to call it, and optionally the names and addresses
+    you already have. The server owns the identifier, the matched form of the
+    name, the version, the status and every timestamp.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_type",
+        "display_name",
+        "aliases",
+        "identifiers",
+        "reason",
+        "idempotency_key",
+    )
+
+    entity_type: EntityType
+    display_name: str
+    idempotency_key: str
+    aliases: tuple[dict[str, str], ...] = ()
+    identifiers: tuple[dict[str, str], ...] = ()
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _entity_vocabulary(self.entity_type, EntityType, SafeDetail.ENTITY_TYPE)
+        _entity_name(self.display_name, SafeDetail.DISPLAY_NAME)
+        _idempotency_key(self.idempotency_key)
+        _named_values(
+            self.aliases,
+            "alias_type",
+            AliasType,
+            SafeDetail.ALIASES,
+            maximum=MAX_INITIAL_ALIASES,
+            value_maximum=MAX_ENTITY_NAME_CHARACTERS,
+        )
+        _named_values(
+            self.identifiers,
+            "namespace",
+            CallerNamespace,
+            SafeDetail.IDENTIFIERS,
+            maximum=MAX_INITIAL_IDENTIFIERS,
+            value_maximum=MAX_IDENTIFIER_VALUE_CHARACTERS,
+        )
+        _entity_reason(self.reason, required=False)
+
+
+@dataclass(frozen=True, slots=True)
+class UpdateEntity:
+    """Correct one entity's name, matched name, or status. Requires the version you read.
+
+    Send at least one of `display_name`, `canonical_name` and `status`. A
+    display-name change is cosmetic and does not change what resolution matches
+    on; a `canonical_name` change does, and preserves the previous name as a
+    former_name alias so older references keep resolving. The entity's type,
+    owner, version and timestamps cannot be set here at all.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_UPDATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "expected_version",
+        "display_name",
+        "canonical_name",
+        "status",
+        "reason",
+        "idempotency_key",
+    )
+
+    entity_id: str
+    expected_version: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+    display_name: str | None = None
+    canonical_name: str | None = None
+    status: EntityStatus | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_version)
+        _entity_reason(self.reason, required=True)
+        _idempotency_key(self.idempotency_key)
+        if self.display_name is not None:
+            _entity_name(self.display_name, SafeDetail.DISPLAY_NAME)
+        if self.canonical_name is not None:
+            _entity_name(self.canonical_name, SafeDetail.CANONICAL_NAME)
+        if self.status is not None:
+            status = _entity_vocabulary(self.status, EntityStatus, SafeDetail.STATUS)
+            # Refused here rather than at the repository, because `archived` and
+            # `merged_redirect` are not "a status a caller got wrong" — each is
+            # written by a capability that also writes the column that makes it
+            # reversible or followable, and setting either bare would leave a
+            # row the schema itself refuses.
+            if status not in CALLER_SETTABLE_STATUSES:
+                raise InvalidRequestError(SafeDetail.STATUS)
+        if self.display_name is None and self.canonical_name is None and self.status is None:
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ArchiveEntity:
+    """Withdraw one entity from current use. Reversible, and not a delete.
+
+    The status it held is recorded, so restoring returns it to that status
+    rather than guessing active. An entity that has been merged into another
+    cannot be archived: the redirect has to keep resolving.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ARCHIVE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "expected_version", "reason", "idempotency_key"
+    )
+
+    entity_id: str
+    expected_version: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_version)
+        _entity_reason(self.reason, required=True)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class RestoreEntity:
+    """Return one archived entity to the status it was archived from.
+
+    The inverse of entities.archive. Refused for an entity that was merged away,
+    and refused for one that is not archived.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_RESTORE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "expected_version", "reason", "idempotency_key"
+    )
+
+    entity_id: str
+    expected_version: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_version)
+        _entity_reason(self.reason, required=True)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class BindEntityIdentifier:
+    """Record one external address — a mailbox, a directory id — as this entity's identity.
+
+    An address that is already a different entity's current identity is refused
+    and never transferred: deciding two entities are the same person is a merge,
+    not a side effect of a bind. An address this entity already holds is refused
+    as a duplicate rather than answered with a receipt for a binding that was
+    not made.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_IDENTIFIERS_BIND
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "expected_version",
+        "namespace",
+        "display_value",
+        "effective_from",
+        "effective_to",
+        "evidence",
+        "reason",
+        "idempotency_key",
+    )
+
+    entity_id: str
+    expected_version: int
+    namespace: CallerNamespace
+    display_value: str
+    idempotency_key: str
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    evidence: tuple[str, ...] = ()
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_version)
+        _entity_vocabulary(self.namespace, CallerNamespace, SafeDetail.NAMESPACE)
+        _bounded_token(
+            self.display_value,
+            SafeDetail.DISPLAY_VALUE,
+            maximum=MAX_IDENTIFIER_VALUE_CHARACTERS,
+        )
+        _idempotency_key(self.idempotency_key)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _entity_evidence(self.evidence)
+        _entity_reason(self.reason, required=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RetireEntityIdentifier:
+    """Record that one binding no longer holds. The row is kept, never deleted.
+
+    A retired address still resolves a message sent before it changed, which is
+    the whole reason retirement is not deletion. Requires both the entity
+    version and the binding's own version.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_IDENTIFIERS_RETIRE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "expected_version",
+        "identifier_id",
+        "expected_identifier_version",
+        "reason",
+        "idempotency_key",
+    )
+
+    entity_id: str
+    expected_version: int
+    identifier_id: str
+    expected_identifier_version: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_version)
+        _identifier(self.identifier_id, IdKind.EXTERNAL_IDENTIFIER, SafeDetail.IDENTIFIER_ID)
+        _expected_version(self.expected_identifier_version)
+        _entity_reason(self.reason, required=True)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class SupersedeEntityIdentifier:
+    """Replace one binding with another in a single step, recording which replaced which.
+
+    Use this when an address changed. Retiring and then binding would leave the
+    entity with no current address in between; this writes the replacement and
+    points the old row at it together, so either both land or neither does.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_IDENTIFIERS_SUPERSEDE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "expected_version",
+        "identifier_id",
+        "expected_identifier_version",
+        "namespace",
+        "display_value",
+        "effective_from",
+        "effective_to",
+        "evidence",
+        "reason",
+        "idempotency_key",
+    )
+
+    entity_id: str
+    expected_version: int
+    identifier_id: str
+    expected_identifier_version: int
+    namespace: CallerNamespace
+    display_value: str
+    reason: str = field(repr=False)
+    idempotency_key: str
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    evidence: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_version)
+        _identifier(self.identifier_id, IdKind.EXTERNAL_IDENTIFIER, SafeDetail.IDENTIFIER_ID)
+        _expected_version(self.expected_identifier_version)
+        _entity_vocabulary(self.namespace, CallerNamespace, SafeDetail.NAMESPACE)
+        _bounded_token(
+            self.display_value,
+            SafeDetail.DISPLAY_VALUE,
+            maximum=MAX_IDENTIFIER_VALUE_CHARACTERS,
+        )
+        _entity_reason(self.reason, required=True)
+        _idempotency_key(self.idempotency_key)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _entity_evidence(self.evidence)
+
+
+@dataclass(frozen=True, slots=True)
+class AddEntityAlias:
+    """Record one more name this entity is referred to by — a nickname, initials, a former name.
+
+    A name another entity also carries is not a conflict: two real people do
+    share a name and both keep it. What is refused is this entity carrying the
+    same name twice under the same alias type.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ALIASES_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "expected_version",
+        "alias_type",
+        "display_value",
+        "effective_from",
+        "effective_to",
+        "evidence",
+        "reason",
+        "idempotency_key",
+    )
+
+    entity_id: str
+    expected_version: int
+    alias_type: AliasType
+    display_value: str
+    idempotency_key: str
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    evidence: tuple[str, ...] = ()
+    reason: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_version)
+        _entity_vocabulary(self.alias_type, AliasType, SafeDetail.ALIAS_TYPE)
+        _entity_name(self.display_value, SafeDetail.DISPLAY_VALUE)
+        _idempotency_key(self.idempotency_key)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _entity_evidence(self.evidence)
+        _entity_reason(self.reason, required=False)
+
+
+@dataclass(frozen=True, slots=True)
+class RetireEntityAlias:
+    """Record that one name form is no longer used. It stays matchable, never deleted."""
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ALIASES_RETIRE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "expected_version",
+        "alias_id",
+        "expected_alias_version",
+        "reason",
+        "idempotency_key",
+    )
+
+    entity_id: str
+    expected_version: int
+    alias_id: str
+    expected_alias_version: int
+    reason: str = field(repr=False)
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_version)
+        _identifier(self.alias_id, IdKind.ENTITY_ALIAS, SafeDetail.ALIAS_ID)
+        _expected_version(self.expected_alias_version)
+        _entity_reason(self.reason, required=True)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class SupersedeEntityAlias:
+    """Correct one recorded name form, keeping the old one and saying what replaced it.
+
+    Use this for a misspelling that was corrected. Use retire instead for a name
+    that simply stopped being used: that one has no successor to point at, and
+    naming one would be inventing a correction that never happened.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ALIASES_SUPERSEDE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "expected_version",
+        "alias_id",
+        "expected_alias_version",
+        "alias_type",
+        "display_value",
+        "effective_from",
+        "effective_to",
+        "evidence",
+        "reason",
+        "idempotency_key",
+    )
+
+    entity_id: str
+    expected_version: int
+    alias_id: str
+    expected_alias_version: int
+    alias_type: AliasType
+    display_value: str
+    reason: str = field(repr=False)
+    idempotency_key: str
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    evidence: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _expected_version(self.expected_version)
+        _identifier(self.alias_id, IdKind.ENTITY_ALIAS, SafeDetail.ALIAS_ID)
+        _expected_version(self.expected_alias_version)
+        _entity_vocabulary(self.alias_type, AliasType, SafeDetail.ALIAS_TYPE)
+        _entity_name(self.display_value, SafeDetail.DISPLAY_VALUE)
+        _entity_reason(self.reason, required=True)
+        _idempotency_key(self.idempotency_key)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _entity_evidence(self.evidence)
+
+
 type Command = (
     GetCapabilities
     | ListSources
@@ -3500,6 +5164,28 @@ type Command = (
     | GetEntityContext
     | GetEntityRelationships
     | ListUnresolvedMentions
+    | ListEntityIdentifiers
+    | ListEntityAliases
+    | CreateEntity
+    | UpdateEntity
+    | ArchiveEntity
+    | RestoreEntity
+    | BindEntityIdentifier
+    | RetireEntityIdentifier
+    | SupersedeEntityIdentifier
+    | AddEntityAlias
+    | RetireEntityAlias
+    | SupersedeEntityAlias
+    | ListEntityAssignments
+    | CreateEntityAssignment
+    | ReviseEntityAssignment
+    | EndEntityAssignment
+    | CreateEntityRelationship
+    | ReviseEntityRelationship
+    | EndEntityRelationship
+    | ListEntityObservations
+    | ObserveEntityMention
+    | ResolveUnresolvedMention
     | CreateRelationshipMemory
     | GetRelationshipMemory
     | ListRelationshipMemories

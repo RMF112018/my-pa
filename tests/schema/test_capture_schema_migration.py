@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with seventy-three capabilities and
-twenty-seven purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with ninety-five capabilities and
+twenty-nine purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -273,6 +273,33 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "relationship_memory.revise",
         "relationship_memory.archive",
         "relationship_memory.restore",
+        # Phase A's entity write and paged-read surface. `823e23b6cc63` is the
+        # forward `ALTER` that admits every name below, and it is one revision
+        # for three work packages on purpose: `capability_is_known` is a single
+        # closed-set CHECK, so three branches restating it would have produced
+        # three heads and three conflicting vocabularies.
+        "entities.aliases.add",
+        "entities.aliases.list",
+        "entities.aliases.retire",
+        "entities.aliases.supersede",
+        "entities.archive",
+        "entities.assignments.create",
+        "entities.assignments.end",
+        "entities.assignments.list",
+        "entities.assignments.revise",
+        "entities.create",
+        "entities.identifiers.bind",
+        "entities.identifiers.list",
+        "entities.identifiers.retire",
+        "entities.identifiers.supersede",
+        "entities.observations.list",
+        "entities.observe",
+        "entities.relationships.create",
+        "entities.relationships.end",
+        "entities.relationships.revise",
+        "entities.restore",
+        "entities.unresolved_mentions.resolve",
+        "entities.update",
     }
 )
 
@@ -1010,6 +1037,11 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # the same reason as the report plane's above.
             "relationship_memory_versions_are_append_only",
             "relationship_memory_decisions_are_append_only",
+            # The entity plane's two ledgers (WP-RI-A-01), on their own trigger
+            # function rather than the memory plane's, so dropping one plane's
+            # trigger cannot silently disarm the other's.
+            "entity_mutation_events_are_append_only",
+            "entity_resolution_decisions_are_append_only",
             "goodnotes_page_versions_are_immutable",
             "goodnotes_region_proposals_are_immutable",
             "goodnotes_source_snapshots_are_immutable",

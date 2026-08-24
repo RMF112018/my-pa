@@ -30,23 +30,53 @@ than the requirement it implies. "This needs an operator" is actionable;
 
 from __future__ import annotations
 
+import re
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
+from typing import Final
 
-from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.common.identifiers import (
+    IdKind,
+    make_identifier,
+    parse_identifier,
+    validate_identifier,
+)
 from my_pa.domain.common.time import ensure_utc
 
 __all__ = [
     "EDGE_WHITESPACE",
+    "ENTITY_CHANGE_REASON_LIMIT",
     "MENTION_DISPLAY_NAME_LIMIT",
+    "NEGATIVE_IDENTITY_EVIDENCE_ROLE",
+    "OBSERVED_VALUE_LIMIT",
+    "PRODUCT_OWNED_CAPTURE_SOURCE_ID",
+    "ActorClass",
+    "EntityFactEvidenceLink",
+    "EntityGovernanceError",
     "EntityMergeRecord",
+    "EntityMutationConflictError",
+    "EntityMutationEvent",
     "EntityObservation",
     "EntityProposal",
     "EntityProposalKind",
     "EntityProposalState",
+    "EntityResolutionDecision",
+    "EvidenceRole",
+    "MutationAuthority",
+    "MutationRecordFamily",
+    "ObservationAuthority",
+    "ObservationAuthorityError",
     "ObservationKind",
+    "ObservationOrigin",
+    "ObservationState",
+    "ObservationTimeError",
+    "ResolutionDisposition",
     "ReviewRequirement",
+    "StaleResolutionVersionError",
+    "capture_origin_triple",
+    "origin_of",
 ]
 
 #: How long a disclosed mention name may be. Stated here and repeated as a CHECK
@@ -68,6 +98,94 @@ MENTION_DISPLAY_NAME_LIMIT = 200
 #: not move with the server's collation.
 EDGE_WHITESPACE = " \t\n\r\v\f"
 
+#: How long a stored explanation of one change may be: the `reason` on a
+#: mutation-ledger row, the `state_reason` on an observation, and the `reason` on
+#: a resolution decision.
+#:
+#: Bounded for the reason `MENTION_DISPLAY_NAME_LIMIT` is bounded, and the
+#: failure it prevents is worse here: these three columns are the ones a writer
+#: reaches for when it wants to say what happened, and an unbounded text column
+#: on an append-only ledger is where a caller eventually puts the payload it
+#: could not fit anywhere else -- source text, a stack trace, a document. Long
+#: enough for a sentence explaining a decision; short enough that a document
+#: does not fit.
+ENTITY_CHANGE_REASON_LIMIT = 500
+
+#: How long an observed value may be.
+#:
+#: **The column has no such CHECK, and this is stated rather than implied.**
+#: `entity_observations.observed_value` is bounded only by `text`, which is the
+#: shape `MENTION_DISPLAY_NAME_LIMIT`'s own note calls "a column an ingester can
+#: put a document in" -- and relaxing that here would be worse than on the
+#: disclosed column, because this is the one that holds the raw source span.
+#: `MYPA-RI-COMP-04`'s change list for this table does not add the constraint,
+#: so the bound lives at the write path instead: every caller reaches this
+#: column through `entities.observe`, and that command refuses a longer value.
+#: A row written around the command can still be longer, which is exactly the
+#: residual a CHECK would close and a comment cannot.
+#:
+#: Long enough for a mail envelope with a display name and a long address, or a
+#: full name with honorifics; short enough that a paragraph of lifted document
+#: text does not fit.
+OBSERVED_VALUE_LIMIT = 500
+
+#: The shape a request digest takes, restated here because the CHECK on
+#: `entity_mutation_events.request_digest` says the same thing in SQL and the
+#: two have to refuse the same values.
+_SHA256: Final = re.compile(r"\A[0-9a-f]{64}\Z")
+
+
+class EntityGovernanceError(Exception):
+    """Anything the governed half of the entity plane refuses.
+
+    A base class rather than three unrelated exceptions, so a caller that wants
+    to translate the whole family can, and one that wants to tell a stale
+    version from a duplicate key still can.
+    """
+
+
+class StaleResolutionVersionError(EntityGovernanceError):
+    """A resolution decision expected a version the observation no longer holds.
+
+    Raised *before* anything is written, and nothing is written after it: the
+    guarded `UPDATE` that checks the version is the first write of the
+    transaction, so a decision that lost the race leaves no ledger row, no
+    evidence link and no decision behind.
+    """
+
+
+class EntityMutationConflictError(EntityGovernanceError):
+    """One idempotency key is already held under this capability for a different request.
+
+    Distinguished from a replay by the request digest and by nothing else. Same
+    key and same digest is the caller retrying and gets the first answer back;
+    same key and a different digest is a caller reusing a key for a second
+    request, which is the one case that has to be refused rather than absorbed.
+    """
+
+
+class ObservationTimeError(EntityGovernanceError):
+    """An observation was said to have been observed after it was recorded.
+
+    Its own refusal rather than the `ValueError` `EntityObservation` raises,
+    because the two travel differently: the record's own check is the last line
+    of defence and reaches a caller as `internal_error`, which says "this is our
+    fault, retrying will not help" about a request that named a moment in the
+    future. A caller that mistyped a date is owed `invalid_request` naming
+    `observed_at`, and only the layer holding the server clock can tell the two
+    apart.
+    """
+
+
+class ObservationAuthorityError(EntityGovernanceError):
+    """An observation claimed standing its origin does not support.
+
+    The refusal that keeps a model conclusion out of `SOURCE_OBSERVATION`. It is
+    a refusal about the *origin* rather than about the caller, because a rule
+    that asked who was calling would be satisfied by anything willing to say it
+    was a source.
+    """
+
 
 class ObservationKind(StrEnum):
     """What kind of source record an observation came from.
@@ -82,6 +200,247 @@ class ObservationKind(StrEnum):
     CALENDAR_ATTENDEE = "calendar_attendee"
     DOCUMENT_MENTION = "document_mention"
     USER_STATEMENT = "user_statement"
+
+
+class ObservationAuthority(StrEnum):
+    """What kind of standing one observation has.
+
+    Section 12.2 says a contact row or a calendar attendee "does not become the
+    canonical person by itself", and that rule has always been enforced by the
+    *shape* of this plane -- an observation is a separate record from an entity.
+    What the shape could not say is that three unlike things were being stored in
+    one table once a user could speak into it: what a source said, what the user
+    said, and what this product computed.
+
+    They are not interchangeable, and the difference is not a ranking. A
+    SOURCE_OBSERVATION can be re-derived from the source and is falsified when
+    the source version changes. A USER_AUTHORED_STATEMENT cannot be re-derived at
+    all and is never falsified by a source, because the user is not quoting one.
+    A SYSTEM_DETERMINISTIC_OBSERVATION is reproducible from inputs this product
+    already holds. A reader that could not tell them apart would treat a user's
+    own correction as stale the moment the mailbox it disagreed with was re-read.
+    """
+
+    SOURCE_OBSERVATION = "source_observation"
+    USER_AUTHORED_STATEMENT = "user_authored_statement"
+    SYSTEM_DETERMINISTIC_OBSERVATION = "system_deterministic_observation"
+
+
+class ObservationOrigin(StrEnum):
+    """Where the record an observation quotes actually lives.
+
+    Two members, and they are not a ranking either. `CONFIGURED_SOURCE` names a
+    row in somebody's mailbox, calendar or contact store, reachable again
+    through the enrollment that admitted it. `PRODUCT_OWNED_CAPTURE` names a
+    record this product itself holds -- a capture the user typed, or a version
+    of one -- which belongs to no configured source and never will
+    (`ADR-003` makes that a third authority class, and `_SCOPELESS` in
+    `domain.policy.decision` says the same thing about every plane built on it).
+
+    It exists because `entity_observations.source_id`, `source_object_id` and
+    `source_version_id` are `NOT NULL` and stay that way: `MYPA-RI-COMP-04`'s
+    change list for that table does not relax them, and those three columns
+    carry no foreign key and no identifier-shape CHECK, so a product-owned
+    capture identity fits the triple the table already has. What the triple
+    *cannot* say by itself is which of the two kinds of record it names, and
+    that difference decides what authority an observation may claim -- so it is
+    a closed vocabulary here rather than a prefix comparison spelled out at
+    every reader.
+    """
+
+    CONFIGURED_SOURCE = "configured_source"
+    PRODUCT_OWNED_CAPTURE = "product_owned_capture"
+
+
+#: The reserved `src_...` identity every product-owned capture observation
+#: carries in `entity_observations.source_id`.
+#:
+#: A constant rather than a row: there is no configured source to point at, and
+#: inventing one would put a fabricated enrollment in front of an operator
+#: reading `sources.list`. The column carries no foreign key, so nothing is
+#: violated by a value naming no row -- and `origin_of` reads this exact string
+#: back out, so "which kind of record is this" stays decidable from the stored
+#: triple alone rather than from a second column nothing would keep in step.
+#:
+#: **It is deliberately not a real-looking identifier.** The suffix spells what
+#: it is, because an operator who finds it in a row should be able to tell that
+#: it is the product's own custody and not a source they have forgotten
+#: enrolling.
+PRODUCT_OWNED_CAPTURE_SOURCE_ID: str = "src_productownedcapture"
+
+
+def capture_origin_triple(capture_id: str, capture_version_id: str) -> tuple[str, str, str]:
+    """The `(source, object, version)` triple one product-owned capture observation carries.
+
+    Deterministic, and that is a requirement rather than a nicety: the triple is
+    part of what an idempotent replay compares, so a mapping that minted fresh
+    identifiers would make every retry a conflict.
+
+    The capture's own suffix is carried across rather than digested, so the row
+    still points back at the capture an operator can go and read. Re-prefixing
+    is not an identity claim about a source object -- `PRODUCT_OWNED_CAPTURE_SOURCE_ID`
+    is what says the record is the product's own -- it is what lets a `NOT NULL`
+    column whose shape the domain record checks hold a capture identity at all.
+    """
+    _, capture_suffix = parse_identifier(validate_identifier(capture_id, IdKind.CAPTURE))
+    _, version_suffix = parse_identifier(
+        validate_identifier(capture_version_id, IdKind.CAPTURE_VERSION)
+    )
+    return (
+        PRODUCT_OWNED_CAPTURE_SOURCE_ID,
+        make_identifier(IdKind.SOURCE_OBJECT, capture_suffix),
+        make_identifier(IdKind.VERSION, version_suffix),
+    )
+
+
+def origin_of(source_id: str) -> ObservationOrigin:
+    """Which kind of record the stored triple names.
+
+    Derived from the one column that can say so rather than stored beside it: a
+    second column would be a second place for the same fact, and the two would
+    eventually disagree about a row nobody rewrote.
+    """
+    if source_id == PRODUCT_OWNED_CAPTURE_SOURCE_ID:
+        return ObservationOrigin.PRODUCT_OWNED_CAPTURE
+    return ObservationOrigin.CONFIGURED_SOURCE
+
+
+class ObservationState(StrEnum):
+    """Where one observation stands as evidence.
+
+    CURRENT is the steady state. The other four are the four different ways an
+    observation stops being usable evidence, and they are separate because the
+    right response to each is different:
+
+    * STALE -- the source version it came from is no longer the current one, so
+      it may still be true and is no longer *checked*;
+    * CONTRADICTED -- something the product also holds says otherwise, and both
+      are still recorded, because deciding between them is a review's job;
+    * SUPERSEDED -- a later observation of the same fact replaced this one, and
+      `superseded_by_observation_id` says which;
+    * QUARANTINED -- the observation itself is not trustworthy input, on the same
+      terms `domain.extraction.quarantine` uses, and must not feed a resolution
+      even as a candidate.
+
+    None of them deletes the row. Section 10.11 forbids the silent deletion, and
+    a contradicted observation is exactly the evidence a reviewer needs in order
+    to decide anything at all.
+    """
+
+    CURRENT = "current"
+    STALE = "stale"
+    CONTRADICTED = "contradicted"
+    SUPERSEDED = "superseded"
+    QUARANTINED = "quarantined"
+
+
+class MutationAuthority(StrEnum):
+    """What admitted one change to a canonical record.
+
+    Three members, and each names a *mechanism* rather than an actor: the same
+    person can act through any of them and the accountability differs.
+    USER_CONFIRMED_ASSERTION is the user having been asked and having answered.
+    REVIEW_ACCEPTED is a review case having been dispositioned, which is the path
+    section 21.4 requires for identity. SYSTEM_DETERMINISTIC is work that follows
+    from inputs already held and could be recomputed -- and is therefore the one
+    authority that may never, by itself, create or merge an identity.
+
+    Shared by `entity_mutation_events` and `entity_fact_evidence_links` because
+    they answer the same question about the same act: what admitted this. Two
+    vocabularies would let the ledger and the evidence disagree about a single
+    write.
+    """
+
+    USER_CONFIRMED_ASSERTION = "user_confirmed_assertion"
+    REVIEW_ACCEPTED = "review_accepted"
+    SYSTEM_DETERMINISTIC = "system_deterministic"
+
+
+class MutationRecordFamily(StrEnum):
+    """Which canonical record family one ledger row is about.
+
+    Closed at the six families this plane holds as canonical fact. It is a family
+    rather than a table name because the ledger has to survive a table being
+    split or renamed without every historical row becoming unreadable, and it is
+    closed rather than free text because a ledger whose subject is unconstrained
+    is a ledger no reader can enumerate.
+
+    `entity_proposals` and `entity_merge_records` are deliberately absent: a
+    proposal is not canonical fact -- it is a request -- and a merge record is the
+    lineage an accepted proposal leaves, which is already an append-only row of
+    its own. A mutation ledger that also recorded proposals would record the
+    asking as if it were the doing.
+    """
+
+    ENTITY = "entity"
+    IDENTIFIER = "identifier"
+    ALIAS = "alias"
+    ASSIGNMENT = "assignment"
+    RELATIONSHIP = "relationship"
+    OBSERVATION = "observation"
+
+
+class EvidenceRole(StrEnum):
+    """How one evidence record bears on the fact it is linked to.
+
+    COUNTEREVIDENCE is the member that matters. A link table holding only
+    supporting records is a table that can only ever make a fact look better
+    supported than it is, and the state this plane most needs to be able to
+    represent is "we hold something that argues against this". Named the same way
+    `relationship_memory_evidence_links` names it, because it is the same
+    question about a different subject.
+    """
+
+    DIRECT = "direct"
+    SUPPORTING = "supporting"
+    COUNTEREVIDENCE = "counterevidence"
+
+
+#: The `EvidenceRole` a rejected identity pairing is preserved under.
+#:
+#: Named rather than spelled at each writer, because this is the whole mechanism
+#: by which a refusal has a durable operational effect: the resolver reads back
+#: exactly the links carrying this role, and a writer that reached for
+#: `SUPPORTING` by accident would record the opposite of what was decided while
+#: still looking like a record of it.
+NEGATIVE_IDENTITY_EVIDENCE_ROLE: EvidenceRole = EvidenceRole.COUNTEREVIDENCE
+
+
+class ResolutionDisposition(StrEnum):
+    """What was decided about one observation.
+
+    Five outcomes, and three of them are refusals. That ratio is the design:
+    section 15.2 requires an ambiguous mention to remain unresolved rather than
+    be forced into the nearest person, so the vocabulary has to make *not*
+    resolving an ordinary recorded decision rather than an absence of one.
+
+    DEFER and REJECT differ in what they say about the future: a deferred
+    observation is expected to be decidable later, and a rejected one has been
+    decided -- it refers to nothing this plane holds. QUARANTINE is the third
+    refusal and is about the observation rather than the match.
+    """
+
+    LINK_EXISTING = "link_existing"
+    CREATE_NEW = "create_new"
+    REJECT = "reject"
+    DEFER = "defer"
+    QUARANTINE = "quarantine"
+
+
+class ActorClass(StrEnum):
+    """What class of actor performed one recorded act.
+
+    Deliberately the same three classes `relationship.memory.MemoryActorClass`
+    names, and deliberately a separate declaration: the two planes are widened
+    independently, and one enum would make widening either a silent widening of
+    both. A model name never appears here -- which model proposed the thing a
+    reviewer accepted belongs on the proposal, and the honest answer for a
+    promotion is "a person decided".
+    """
+
+    USER = "user"
+    REVIEW_PROMOTION = "review_promotion"
+    SYSTEM_DETERMINISTIC = "system_deterministic"
 
 
 class EntityProposalKind(StrEnum):
@@ -183,6 +542,22 @@ class EntityObservation:
     `None`: a writer that does nothing deliberate publishes nothing, and
     disclosing is an affirmative act into a field whose name says what it is
     for. `f3a8c1d7e592` records the argument.
+
+    **`resolution_version` is the value an optimistic decision is checked
+    against.** It counts how many times this observation's resolution has been
+    decided, and a decision states the version it expected to be deciding
+    against. Without it, two reviewers looking at the same unresolved mention
+    both write a decision and the second silently overwrites the first's
+    conclusion -- on a record whose whole purpose is that identity is not
+    decided by accident. It starts at zero because an observation nothing has
+    decided has had no resolution, and zero is that fact rather than a sentinel.
+
+    `authority` and `state` are the two things this record could not previously
+    say about itself: where its claim comes from, and whether it is still usable
+    as evidence. Both default to the values every row written before this
+    revision actually holds -- a source-bound observation that nothing has
+    contradicted -- so the defaults are a statement about the existing rows
+    rather than a convenience.
     """
 
     observation_id: str
@@ -197,6 +572,11 @@ class EntityObservation:
     recorded_at: datetime
     entity_id: str | None = None
     mention_display_name: str | None = field(default=None, repr=False)
+    authority: ObservationAuthority = ObservationAuthority.SOURCE_OBSERVATION
+    state: ObservationState = ObservationState.CURRENT
+    state_reason: str | None = field(default=None, repr=False)
+    superseded_by_observation_id: str | None = None
+    resolution_version: int = 0
 
     def __post_init__(self) -> None:
         validate_identifier(self.observation_id, IdKind.ENTITY_OBSERVATION)
@@ -252,6 +632,29 @@ class EntityObservation:
                 raise ValueError("a disclosed mention name is not blank")
             if len(self.mention_display_name) > MENTION_DISPLAY_NAME_LIMIT:
                 raise ValueError("a disclosed mention name is bounded")
+        if not isinstance(self.authority, ObservationAuthority):
+            raise ValueError("an observation has a closed authority")
+        if not isinstance(self.state, ObservationState):
+            raise ValueError("an observation has a closed state")
+        if self.state_reason is not None:
+            # A reason explains a *departure* from CURRENT. On a current
+            # observation there is nothing to explain, and admitting one would
+            # make the column a free-text note field on the busiest table on the
+            # plane -- which is how an unbounded column acquires source text.
+            if self.state is ObservationState.CURRENT:
+                raise ValueError("a current observation has no state to explain")
+            if not self.state_reason.strip():
+                raise ValueError("an observation state reason is not blank")
+            if len(self.state_reason) > ENTITY_CHANGE_REASON_LIMIT:
+                raise ValueError("an observation state reason is bounded")
+        if self.superseded_by_observation_id is not None:
+            validate_identifier(self.superseded_by_observation_id, IdKind.ENTITY_OBSERVATION)
+            if self.superseded_by_observation_id == self.observation_id:
+                raise ValueError("an observation cannot supersede itself")
+            if self.state is not ObservationState.SUPERSEDED:
+                raise ValueError("an observation names a successor only when superseded")
+        if self.resolution_version < 0:
+            raise ValueError("an observation resolution version is not negative")
         ensure_utc(self.observed_at)
         ensure_utc(self.recorded_at)
         if self.recorded_at < self.observed_at:
@@ -357,4 +760,239 @@ class EntityMergeRecord:
             raise ValueError("a merge names who decided it")
         if not self.reason.strip():
             raise ValueError("a merge records why it was accepted")
+        ensure_utc(self.decided_at)
+
+
+@dataclass(frozen=True, slots=True)
+class EntityMutationEvent:
+    """One append-only row of the entity plane's mutation ledger.
+
+    **It is two records that happen to share a table, and the second one is the
+    reason this type exists at all.** As a ledger it says what changed, under
+    whose authority, and against which version. As an idempotency store its
+    `(principal_id, capability, idempotency_key)` is unique, so a replayed write
+    finds its own earlier row instead of writing a second one — the shape
+    `capture_submissions` and `relationship_memory_submissions` already use, and
+    `capability` is part of the key because one key replayed against a
+    *different* capability is a different request.
+
+    `request_digest` is what makes a replay decidable without keeping a second
+    copy of the request. Same key and same digest is a replay; same key and a
+    different digest is a conflict, and the difference has to be computable from
+    a row that stores none of the caller's text.
+
+    **`before_state` and `after_state` never carry raw observed content.** They
+    are `repr=False` and the writers on this plane put identifiers, closed
+    vocabulary members and versions in them and nothing else. The rule is stated
+    here because a photograph of an `entity_observations` row is exactly where
+    `observed_value` would end up if a writer photographed the row wholesale,
+    and this ledger is read by operators, exported, and rendered in failures.
+    """
+
+    event_id: str
+    principal_id: str
+    capability: str
+    record_family: MutationRecordFamily
+    record_id: str
+    new_version: int
+    authority: MutationAuthority
+    actor_class: ActorClass
+    idempotency_key: str = field(repr=False)
+    request_digest: str
+    correlation_id: str
+    audit_id: str
+    recorded_at: datetime
+    prior_version: int | None = None
+    before_state: Mapping[str, object] | None = field(default=None, repr=False)
+    after_state: Mapping[str, object] | None = field(default=None, repr=False)
+    reason: str | None = field(default=None, repr=False)
+    receipt_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.event_id, IdKind.ENTITY_MUTATION_EVENT)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.audit_id, IdKind.AUDIT)
+        # No expected kind: `record_id` names a row in whichever of six tables
+        # `record_family` says, and no single kind can express that. What is
+        # still checked is that the value is an opaque identifier at all, which
+        # is the same rule the column's own CHECK applies.
+        validate_identifier(self.record_id)
+        if self.receipt_id is not None:
+            validate_identifier(self.receipt_id)
+        if not isinstance(self.record_family, MutationRecordFamily):
+            raise ValueError("a mutation names a closed record family")
+        if not isinstance(self.authority, MutationAuthority):
+            raise ValueError("a mutation has a closed authority")
+        if not isinstance(self.actor_class, ActorClass):
+            raise ValueError("a mutation has a closed actor class")
+        if not self.capability.strip():
+            raise ValueError("a mutation names the capability that made it")
+        if not self.idempotency_key:
+            raise ValueError("a mutation carries an idempotency key")
+        if not _SHA256.fullmatch(self.request_digest):
+            raise ValueError("a mutation request digest is a sha256 digest")
+        if self.new_version < 1:
+            raise ValueError("a mutation new version is positive")
+        if self.prior_version is not None:
+            if self.prior_version < 1:
+                raise ValueError("a mutation prior version is positive")
+            if self.new_version <= self.prior_version:
+                raise ValueError("a mutation advances the version it names")
+        if self.reason is not None:
+            if not self.reason.strip():
+                raise ValueError("a mutation reason is not blank")
+            if len(self.reason) > ENTITY_CHANGE_REASON_LIMIT:
+                raise ValueError("a mutation reason is bounded")
+        ensure_utc(self.recorded_at)
+
+
+@dataclass(frozen=True, slots=True)
+class EntityFactEvidenceLink:
+    """One binding between a canonical fact and the single record that evidences it.
+
+    Exactly one fact and exactly one evidence record, refused here on the same
+    terms the server refuses them: a row naming two facts has an ambiguous
+    subject and a row naming two evidence records has an ambiguous basis, and
+    neither is a state a later read could disentangle.
+
+    **`COUNTEREVIDENCE` is what makes a refusal durable.** A rejected identity
+    decision names no entity on `entity_resolution_decisions` — the column's own
+    CHECK reserves `entity_id` for the two dispositions that *bind* one — so the
+    pairing a user refused would be unrecoverable if it were recorded nowhere
+    else. It is recorded here: the entity on one side, the observation on the
+    other, and `NEGATIVE_IDENTITY_EVIDENCE_ROLE` saying which way the evidence
+    points. That is the row `EntityResolutionService` reads so a known-bad
+    pairing is not offered again.
+    """
+
+    link_id: str
+    principal_id: str
+    role: EvidenceRole
+    authority: MutationAuthority
+    created_at: datetime
+    entity_id: str | None = None
+    identifier_id: str | None = None
+    alias_id: str | None = None
+    assignment_id: str | None = None
+    relationship_id: str | None = None
+    entity_observation_id: str | None = None
+    capture_span_id: str | None = None
+    knowledge_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.link_id, IdKind.ENTITY_FACT_EVIDENCE_LINK)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not isinstance(self.role, EvidenceRole):
+            raise ValueError("an evidence link has a closed role")
+        if not isinstance(self.authority, MutationAuthority):
+            raise ValueError("an evidence link has a closed authority")
+        named = [
+            (self.entity_id, IdKind.ENTITY),
+            (self.identifier_id, IdKind.EXTERNAL_IDENTIFIER),
+            (self.alias_id, IdKind.ENTITY_ALIAS),
+            (self.assignment_id, IdKind.ASSIGNMENT),
+            (self.relationship_id, IdKind.ENTITY_RELATIONSHIP),
+        ]
+        cited = [
+            (self.entity_observation_id, IdKind.ENTITY_OBSERVATION),
+            (self.capture_span_id, IdKind.SPAN),
+            (self.knowledge_id, IdKind.KNOWLEDGE),
+        ]
+        for value, kind in (*named, *cited):
+            if value is not None:
+                validate_identifier(value, kind)
+        if sum(value is not None for value, _ in named) != 1:
+            raise ValueError("entity evidence names exactly one fact")
+        if sum(value is not None for value, _ in cited) != 1:
+            raise ValueError("entity evidence names exactly one record")
+        ensure_utc(self.created_at)
+
+    @property
+    def is_negative_identity_evidence(self) -> bool:
+        """Whether this link refuses a pairing rather than supporting one."""
+        return (
+            self.role is NEGATIVE_IDENTITY_EVIDENCE_ROLE
+            and self.entity_id is not None
+            and self.entity_observation_id is not None
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class EntityResolutionDecision:
+    """One append-only disposition of one observation.
+
+    Three of the five dispositions are refusals, and recording a refusal is the
+    point: section 15.2 requires an ambiguous mention to stay unresolved rather
+    than be forced into the nearest person, so "we looked and declined to
+    decide" has to be storable and has to be distinguishable from "nobody
+    looked".
+
+    `expected_resolution_version` is the value the decider believed it was
+    deciding against, and `sequence` is where this decision falls in the
+    observation's own order. They are both here and they are not the same fact:
+    the first is an optimistic check the writer performs against the
+    observation, and the second is the uniqueness the table enforces. A writer
+    that derived one from the other silently would lose the check the moment the
+    derivation was wrong.
+
+    `reason` is bounded and never carries the observed text. It explains a
+    decision; a column that could hold a document is a column an ingester
+    eventually puts one in.
+    """
+
+    decision_id: str
+    principal_id: str
+    observation_id: str
+    sequence: int
+    expected_resolution_version: int
+    disposition: ResolutionDisposition
+    decided_by: str
+    actor_class: ActorClass
+    correlation_id: str
+    audit_id: str
+    decided_at: datetime
+    entity_id: str | None = None
+    reason: str | None = field(default=None, repr=False)
+    evidence_link_ids: tuple[str, ...] = ()
+    review_case_id: str | None = None
+    receipt_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.decision_id, IdKind.ENTITY_RESOLUTION_DECISION)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.observation_id, IdKind.ENTITY_OBSERVATION)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.audit_id, IdKind.AUDIT)
+        if not isinstance(self.disposition, ResolutionDisposition):
+            raise ValueError("a resolution has a closed disposition")
+        if not isinstance(self.actor_class, ActorClass):
+            raise ValueError("a resolution has a closed actor class")
+        if self.sequence < 1:
+            raise ValueError("a resolution sequence is positive")
+        if self.expected_resolution_version < 0:
+            raise ValueError("a resolution expects a version that could exist")
+        if not self.decided_by.strip():
+            raise ValueError("a resolution names what decided it")
+        binds = self.disposition in (
+            ResolutionDisposition.LINK_EXISTING,
+            ResolutionDisposition.CREATE_NEW,
+        )
+        if binds != (self.entity_id is not None):
+            raise ValueError("a resolution names an entity exactly when it binds one")
+        if self.entity_id is not None:
+            validate_identifier(self.entity_id, IdKind.ENTITY)
+        if self.reason is not None:
+            if not self.reason.strip():
+                raise ValueError("a resolution reason is not blank")
+            if len(self.reason) > ENTITY_CHANGE_REASON_LIMIT:
+                raise ValueError("a resolution reason is bounded")
+        for link_id in self.evidence_link_ids:
+            validate_identifier(link_id, IdKind.ENTITY_FACT_EVIDENCE_LINK)
+        if len(set(self.evidence_link_ids)) != len(self.evidence_link_ids):
+            raise ValueError("a resolution cites each evidence link once")
+        if self.review_case_id is not None:
+            validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
+        if self.receipt_id is not None:
+            validate_identifier(self.receipt_id)
         ensure_utc(self.decided_at)

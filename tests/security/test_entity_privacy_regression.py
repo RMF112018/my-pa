@@ -29,12 +29,34 @@ import pytest
 from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 
 from my_pa.application.commands import (
+    AddEntityAlias,
+    ArchiveEntity,
+    BindEntityIdentifier,
+    CreateEntity,
+    CreateEntityAssignment,
+    CreateEntityRelationship,
+    EndEntityAssignment,
+    EndEntityRelationship,
     GetEntity,
     GetEntityContext,
     GetEntityRelationships,
+    ListEntityAliases,
+    ListEntityAssignments,
+    ListEntityIdentifiers,
+    ListEntityObservations,
     ListUnresolvedMentions,
+    ObserveEntityMention,
     ResolveEntity,
+    ResolveUnresolvedMention,
+    RestoreEntity,
+    RetireEntityAlias,
+    RetireEntityIdentifier,
+    ReviseEntityAssignment,
+    ReviseEntityRelationship,
     SearchEntities,
+    SupersedeEntityAlias,
+    SupersedeEntityIdentifier,
+    UpdateEntity,
 )
 from my_pa.application.errors import SafeDetail
 from my_pa.bootstrap.relationship_intelligence_task import (
@@ -48,6 +70,7 @@ from my_pa.bootstrap.settings import Settings
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
+from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
@@ -67,7 +90,9 @@ from my_pa.domain.relationship.governance import (
     EntityProposal,
     EntityProposalKind,
     EntityProposalState,
+    ObservationAuthority,
     ObservationKind,
+    ResolutionDisposition,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
 from my_pa.domain.relationship.resolution import ResolutionOutcome
@@ -78,6 +103,18 @@ FOREIGN_ENTITY: Final = "ent_foreign0001foreig"
 #: A second entity the other Principal owns, so a foreign assignment and a
 #: foreign edge have somewhere to point.
 FOREIGN_SCOPE: Final = "ent_foreign0002foreig"
+#: The other Principal's alias and binding, named here so the lifecycle writes
+#: below can aim at a record that really is theirs. Aiming at a minted
+#: identifier would prove only that an absent record is refused; these prove
+#: that a record which *exists* and is not mine is refused the same way.
+FOREIGN_ALIAS: Final = "eals_foreign1foreign1"
+FOREIGN_IDENTIFIER: Final = "xid_foreign01foreign1"
+#: The foreign assignment and the foreign edge this file stages, named as
+#: constants so the sweep below reaches the rows the staging actually wrote
+#: rather than two identifiers nothing holds -- a refusal for something absent
+#: proves less than a refusal for something that exists in another partition.
+FOREIGN_ASSIGNMENT: Final = "asn_foreign01foreign1"
+FOREIGN_RELATIONSHIP: Final = "erel_foreign1foreign1"
 OWN_ENTITY: Final = "ent_mine0002mine00002"
 #: A second entity of my own, so a write of mine that has to name two of them
 #: does not have to borrow one of theirs.
@@ -168,7 +205,7 @@ def staged(scene: Scene) -> Scene:
         unit_of_work.entities.record_alias(
             theirs,
             EntityAlias(
-                alias_id="eals_foreign1foreign1",
+                alias_id=FOREIGN_ALIAS,
                 entity_id=FOREIGN_ENTITY,
                 alias_type=AliasType.FORMER_NAME,
                 normalized_value=normalize_name("Confidential Predecessor"),
@@ -180,7 +217,7 @@ def staged(scene: Scene) -> Scene:
             theirs,
             FOREIGN_ENTITY,
             ExternalIdentifier(
-                identifier_id="xid_foreign01foreign1",
+                identifier_id=FOREIGN_IDENTIFIER,
                 entity_id=FOREIGN_ENTITY,
                 namespace=ExternalIdentifierNamespace.EMAIL,
                 normalized_value=normalize_identifier(
@@ -196,7 +233,7 @@ def staged(scene: Scene) -> Scene:
         unit_of_work.entities.record_assignment(
             theirs,
             Assignment(
-                assignment_id="asn_foreign01foreign1",
+                assignment_id=FOREIGN_ASSIGNMENT,
                 entity_id=FOREIGN_ENTITY,
                 assignment_type=AssignmentType.EMPLOYMENT,
                 principal_id=theirs,
@@ -207,7 +244,7 @@ def staged(scene: Scene) -> Scene:
         unit_of_work.entities.record_relationship(
             theirs,
             EntityRelationship(
-                relationship_id="erel_foreign1foreign1",
+                relationship_id=FOREIGN_RELATIONSHIP,
                 from_entity_id=FOREIGN_ENTITY,
                 relationship_type=EntityRelationshipType.WORKS_FOR,
                 to_entity_id=FOREIGN_SCOPE,
@@ -218,9 +255,21 @@ def staged(scene: Scene) -> Scene:
 
 
 def _answer(scene: Scene, capability: Capability, command: object) -> dict[str, object]:
+    """One answer, under a purpose the capability actually permits.
+
+    The purpose was fixed at `entity_read` while this plane was all reads. It is
+    derived now, because the two writes carry their own purposes and a fixed one
+    would answer `denied` for them -- a body with no foreign data in it for a
+    reason that has nothing to do with the partition, which is the shape of pass
+    this file exists not to give.
+    """
     service = build_service(scene.world, scene.providers)
     envelope = service.invoke(
-        metadata_for(capability, Purpose.ENTITY_READ, scene.principal),
+        # The purpose the domain permits for *this* capability. `WP-RI-A-02`
+        # gave ten of them `entity_authoring`, and sweeping those under
+        # `entity_read` would answer `denied` for the purpose rather than
+        # exercising the partition this file is about.
+        metadata_for(capability, sorted(permitted_purposes(capability))[0], scene.principal),
         command,  # type: ignore[arg-type]
         principal=scene.principal,
     )
@@ -234,6 +283,215 @@ _EVERY_CAPABILITY: Final = (
     (Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=FOREIGN_ENTITY)),
     (Capability.ENTITIES_RELATIONSHIPS, GetEntityRelationships(entity_id=FOREIGN_ENTITY)),
     (Capability.ENTITIES_UNRESOLVED_MENTIONS, ListUnresolvedMentions()),
+    # The authoring half (`WP-RI-A-02`), every one of them aimed at the *other*
+    # Principal's entity. A write is the sharper half of this claim than a read:
+    # a plane that refused a foreign entity with anything but the answer an
+    # absent one gets would let a caller confirm a stranger's identifier by
+    # trying to rename it.
+    (Capability.ENTITIES_IDENTIFIERS_LIST, ListEntityIdentifiers(entity_id=FOREIGN_ENTITY)),
+    (Capability.ENTITIES_ALIASES_LIST, ListEntityAliases(entity_id=FOREIGN_ENTITY)),
+    (
+        Capability.ENTITIES_CREATE,
+        CreateEntity(
+            entity_type=EntityType.PERSON,
+            display_name="Confidential Counterparty",
+            idempotency_key="privacy-entity-create",
+        ),
+    ),
+    (
+        Capability.ENTITIES_UPDATE,
+        UpdateEntity(
+            entity_id=FOREIGN_ENTITY,
+            expected_version=1,
+            display_name="Renamed Counterparty",
+            reason="A synthetic correction.",
+            idempotency_key="privacy-entity-update",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ARCHIVE,
+        ArchiveEntity(
+            entity_id=FOREIGN_ENTITY,
+            expected_version=1,
+            reason="A synthetic withdrawal.",
+            idempotency_key="privacy-entity-archive",
+        ),
+    ),
+    (
+        Capability.ENTITIES_RESTORE,
+        RestoreEntity(
+            entity_id=FOREIGN_ENTITY,
+            expected_version=1,
+            reason="A synthetic restoration.",
+            idempotency_key="privacy-entity-restore",
+        ),
+    ),
+    (
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        BindEntityIdentifier(
+            entity_id=FOREIGN_ENTITY,
+            expected_version=1,
+            namespace=CallerNamespace.EMAIL,
+            display_value="privacy@example.invalid",
+            idempotency_key="privacy-entity-bind",
+        ),
+    ),
+    (
+        Capability.ENTITIES_IDENTIFIERS_RETIRE,
+        RetireEntityIdentifier(
+            entity_id=FOREIGN_ENTITY,
+            expected_version=1,
+            identifier_id=FOREIGN_IDENTIFIER,
+            expected_identifier_version=1,
+            reason="A synthetic retirement.",
+            idempotency_key="privacy-entity-retire-identifier",
+        ),
+    ),
+    (
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE,
+        SupersedeEntityIdentifier(
+            entity_id=FOREIGN_ENTITY,
+            expected_version=1,
+            identifier_id=FOREIGN_IDENTIFIER,
+            expected_identifier_version=1,
+            namespace=CallerNamespace.EMAIL,
+            display_value="privacy.new@example.invalid",
+            reason="A synthetic replacement.",
+            idempotency_key="privacy-entity-supersede-identifier",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ALIASES_ADD,
+        AddEntityAlias(
+            entity_id=FOREIGN_ENTITY,
+            expected_version=1,
+            alias_type=AliasType.NICKNAME,
+            display_value="Conf",
+            idempotency_key="privacy-entity-add-alias",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ALIASES_RETIRE,
+        RetireEntityAlias(
+            entity_id=FOREIGN_ENTITY,
+            expected_version=1,
+            alias_id=FOREIGN_ALIAS,
+            expected_alias_version=1,
+            reason="A synthetic retirement.",
+            idempotency_key="privacy-entity-retire-alias",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ALIASES_SUPERSEDE,
+        SupersedeEntityAlias(
+            entity_id=FOREIGN_ENTITY,
+            expected_version=1,
+            alias_id=FOREIGN_ALIAS,
+            expected_alias_version=1,
+            alias_type=AliasType.NICKNAME,
+            display_value="Confidential",
+            reason="A synthetic correction.",
+            idempotency_key="privacy-entity-supersede-alias",
+        ),
+    ),
+    # The directed writes, each naming the foreign entity or the foreign row
+    # this file stages. What they must not do is answer differently from the way
+    # they answer for something that does not exist: a `denied`, or a refusal
+    # naming a different field, would confirm that the identifier names
+    # something in another Principal's partition.
+    (Capability.ENTITIES_ASSIGNMENTS_LIST, ListEntityAssignments(entity_id=FOREIGN_ENTITY)),
+    (
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        CreateEntityAssignment(
+            entity_id=FOREIGN_ENTITY,
+            expected_entity_version=1,
+            assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+            idempotency_key="privacy-assignment-create",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ASSIGNMENTS_REVISE,
+        ReviseEntityAssignment(
+            assignment_id=FOREIGN_ASSIGNMENT,
+            expected_version=1,
+            role="Synthetic Role",
+            idempotency_key="privacy-assignment-revise",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ASSIGNMENTS_END,
+        EndEntityAssignment(
+            assignment_id=FOREIGN_ASSIGNMENT,
+            expected_version=1,
+            reason="A synthetic withdrawal.",
+            end_now=True,
+            idempotency_key="privacy-assignment-end",
+        ),
+    ),
+    (
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        CreateEntityRelationship(
+            from_entity_id=FOREIGN_ENTITY,
+            expected_from_version=1,
+            relationship_type=EntityRelationshipType.WORKS_FOR,
+            to_entity_id=FOREIGN_SCOPE,
+            expected_to_version=1,
+            idempotency_key="privacy-relationship-create",
+        ),
+    ),
+    (
+        Capability.ENTITIES_RELATIONSHIPS_REVISE,
+        ReviseEntityRelationship(
+            relationship_id=FOREIGN_RELATIONSHIP,
+            expected_version=1,
+            idempotency_key="privacy-relationship-revise",
+        ),
+    ),
+    (
+        Capability.ENTITIES_RELATIONSHIPS_END,
+        EndEntityRelationship(
+            relationship_id=FOREIGN_RELATIONSHIP,
+            expected_version=1,
+            reason="A synthetic withdrawal.",
+            end_now=True,
+            idempotency_key="privacy-relationship-end",
+        ),
+    ),
+    (Capability.ENTITIES_OBSERVATIONS_LIST, ListEntityObservations()),
+    # The two writes. Each *names the foreign record* rather than a harmless
+    # one, because that is the only version of these rows that proves anything:
+    # a write pointed at the caller's own partition would succeed and disclose
+    # nothing whatever the partition rule did.
+    #
+    # `entities.observe` binds the foreign entity, so a repository that stamped
+    # the caller's Principal onto somebody else's entity would answer with the
+    # identifier this sweep looks for. `entities.unresolved_mentions.resolve`
+    # names the foreign observation, so a decision path that read across the
+    # partition would answer with a decision about it rather than `not_found`.
+    (
+        Capability.ENTITIES_OBSERVE,
+        ObserveEntityMention(
+            kind=ObservationKind.USER_STATEMENT,
+            authority=ObservationAuthority.USER_AUTHORED_STATEMENT,
+            observed_value="Confidential Counterparty",
+            capture_id="cap_privacyobserve01",
+            capture_version_id="capver_privacyobserve1",
+            observed_at=WHEN,
+            entity_id=FOREIGN_ENTITY,
+            expected_entity_version=1,
+            idempotency_key="privacy-entities-observe-0001",
+        ),
+    ),
+    (
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        ResolveUnresolvedMention(
+            observation_id="eobs_foreign01foreign1",
+            expected_resolution_version=0,
+            disposition=ResolutionDisposition.DEFER,
+            reason="a stranger may not decide this",
+            idempotency_key="privacy-entities-resolve-0001",
+        ),
+    ),
 )
 
 
@@ -251,7 +509,7 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    assert len(served) == 6
+    assert len(served) == 28
 
 
 # --- the partition, under every capability ---------------------------------

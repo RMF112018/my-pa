@@ -134,6 +134,15 @@ def test_contract_prefixes_are_stable() -> None:
         "eobs",
         "eprp",
         "emrg",
+        # WP-RI-A-01: the entity plane's three lifecycle ledgers. `emut` names
+        # one append-only ordinary mutation, `efev` one binding between a
+        # canonical fact and the record evidencing it, and `erdc` one
+        # append-only disposition of an observation. Added with the tables that
+        # issue them, which is the rule the entity-plane comment above states:
+        # this set never promises a prefix nothing issues.
+        "emut",
+        "efev",
+        "erdc",
     }
 
 

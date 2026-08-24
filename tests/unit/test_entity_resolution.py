@@ -26,6 +26,7 @@ from my_pa.contracts.ports import EntitiesRepository
 from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
+    AssignmentState,
     AssignmentType,
     Entity,
     EntityAlias,
@@ -35,6 +36,8 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    IdentifierState,
+    RelationshipState,
 )
 from my_pa.domain.relationship.normalization import (
     NormalizationError,
@@ -317,7 +320,17 @@ def an_email(
     verified: bool = False,
     effective_from: datetime | None = None,
     effective_to: datetime | None = None,
+    state: IdentifierState = IdentifierState.ACTIVE,
 ) -> ExternalIdentifier:
+    """One email binding, `ACTIVE` unless a caller needs a historical one.
+
+    `state` is a parameter because the conflict tests below need it. Only one
+    binding of an address may be `ACTIVE` per Principal since `2fe4e13fb449`, so
+    a second *current* claimant is not a state this plane can reach -- and the
+    conflict those tests are about is reached instead by a former holder whose
+    binding was retired. See the note on
+    `test_one_identifier_claimed_by_two_entities_is_a_stop`.
+    """
     return ExternalIdentifier(
         identifier_id=identifier_id,
         entity_id=entity_id,
@@ -328,6 +341,8 @@ def an_email(
         verified=verified,
         effective_from=effective_from,
         effective_to=effective_to,
+        state=state,
+        retired_at=None if state is IdentifierState.ACTIVE else WHEN,
     )
 
 
@@ -394,16 +409,31 @@ def test_an_unverified_identifier_resolves_but_says_so(
 def test_one_identifier_claimed_by_two_entities_is_a_stop(
     world: World, resolving: EntityResolutionService
 ) -> None:
-    """Section 15.2: conflicting identifiers prevent an automatic join."""
+    """Section 15.2: conflicting identifiers prevent an automatic join.
+
+    **The conflict is built from a retired holder and a current one, and it has
+    to be.** Two *active* claimants of one address is the state
+    `an_active_external_identifier_binding_is_unique` refuses outright, so
+    `bind_identifier` cannot produce it at the server and, since the WP-RI-A-01c
+    corrective taught the in-memory double the same rule, cannot produce it here
+    either -- this fixture built two active claimants until that landed, which
+    is how a unit test came to assert resolution over a state the store refuses.
+    That does not narrow what this test is about: resolution reads every state,
+    so an address that was one person's and is now another's matches two
+    entities and must still refuse to pick between them. It is the *likelier*
+    conflict of the two, and the one a reissued mailbox actually creates.
+    """
     entities = _Entities(world)
     entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Other"))
-    for identifier_id, entity_id in (
-        ("xid_aaaa0001aaaa0001", ALICE),
-        ("xid_bbbb0002bbbb0002", ALICE_TWO),
+    for identifier_id, entity_id, state in (
+        ("xid_aaaa0001aaaa0001", ALICE, IdentifierState.RETIRED),
+        ("xid_bbbb0002bbbb0002", ALICE_TWO, IdentifierState.ACTIVE),
     ):
         entities.bind_identifier(
-            PRINCIPAL, entity_id, an_email(identifier_id, entity_id, "shared@example.test", True)
+            PRINCIPAL,
+            entity_id,
+            an_email(identifier_id, entity_id, "shared@example.test", True, state=state),
         )
     answer = resolving.resolve(
         PRINCIPAL,
@@ -937,16 +967,23 @@ def test_an_entity_type_filter_cannot_collapse_a_conflicted_identifier(
     each filtered view see exactly one, so the same address resolved *exactly*
     to the person for one caller and to the organization for the next, with no
     warning at all. Both callers would have been told a confident wrong answer.
+
+    The office manager's binding is the retired one, for the reason
+    `test_one_identifier_claimed_by_two_entities_is_a_stop` states: the address
+    was hers before it became the company's, and only one binding of it may be
+    active at a time. The filter must still not collapse the pair.
     """
     entities = _Entities(world)
     entities.create(PRINCIPAL, an_entity(ALICE, "Office Manager"))
     entities.create(PRINCIPAL, an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
-    for identifier_id, entity_id in (
-        ("xid_aaaa0001aaaa0001", ALICE),
-        ("xid_bbbb0002bbbb0002", SECOND_ORG),
+    for identifier_id, entity_id, state in (
+        ("xid_aaaa0001aaaa0001", ALICE, IdentifierState.RETIRED),
+        ("xid_bbbb0002bbbb0002", SECOND_ORG, IdentifierState.ACTIVE),
     ):
         entities.bind_identifier(
-            PRINCIPAL, entity_id, an_email(identifier_id, entity_id, "info@acme.test", True)
+            PRINCIPAL,
+            entity_id,
+            an_email(identifier_id, entity_id, "info@acme.test", True, state=state),
         )
     for entity_type in (None, EntityType.PERSON, EntityType.ORGANIZATION):
         answer = resolving.resolve(
@@ -1112,20 +1149,38 @@ def test_a_relationship_that_has_ended_does_not_corroborate(
     """
     entities = _Entities(world)
     _scope(entities)
-    entities.record_relationship(PRINCIPAL, _edge("erel_aaaa0001aaaa0001", state="ended"))
+    entities.record_relationship(
+        PRINCIPAL, _edge("erel_aaaa0001aaaa0001", state=RelationshipState.ENDED)
+    )
     answer = _by_name(resolving)
     assert answer.outcome is ResolutionOutcome.AMBIGUOUS
     assert answer.resolved_entity_id is None
     assert answer.candidates[0].signals == ()
 
 
-def test_an_unrecognised_relationship_state_does_not_corroborate(
+def test_a_superseded_relationship_state_does_not_corroborate(
     world: World, resolving: EntityResolutionService
 ) -> None:
-    """`state` is free text on the record, so anything but active reads as not live."""
+    """Anything but active reads as not live, over the whole closed vocabulary.
+
+    This test planted the free-text value `"disputed"` until WP-RI-A-01 closed
+    `state`, because the column admitted anything and the property worth
+    measuring was that the *rule* names one live member rather than excluding a
+    list of dead ones. The record and the server both refuse an unrecognised
+    value now, so the plant is no longer constructible -- and the property is
+    unchanged, measured over the one non-active member the ended case does not
+    already cover.
+    """
     entities = _Entities(world)
     _scope(entities)
-    entities.record_relationship(PRINCIPAL, _edge("erel_aaaa0001aaaa0001", state="disputed"))
+    entities.record_relationship(
+        PRINCIPAL,
+        _edge(
+            "erel_aaaa0001aaaa0001",
+            state=RelationshipState.SUPERSEDED,
+            superseded_by_relationship_id="erel_bbbb0002bbbb0002",
+        ),
+    )
     assert _by_name(resolving).outcome is ResolutionOutcome.AMBIGUOUS
 
 
@@ -1168,7 +1223,9 @@ def test_an_assignment_that_is_not_active_does_not_corroborate(
 ) -> None:
     entities = _Entities(world)
     _scope(entities)
-    entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001", status="ended"))
+    entities.record_assignment(
+        PRINCIPAL, _assignment("asn_aaaa0001aaaa0001", state=AssignmentState.ENDED)
+    )
     assert _by_name(resolving).outcome is ResolutionOutcome.AMBIGUOUS
 
 
@@ -1332,7 +1389,12 @@ def test_a_refused_answer_does_not_claim_a_scope_lifted_it(
     """
     entities = _Entities(world)
     entities.create(
-        PRINCIPAL, replace(an_entity(ALICE, "Alice Synthetic"), status=EntityStatus.ARCHIVED)
+        PRINCIPAL,
+        replace(
+            an_entity(ALICE, "Alice Synthetic"),
+            status=EntityStatus.ARCHIVED,
+            archived_from_status=EntityStatus.ACTIVE,
+        ),
     )
     entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
     entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001"))
@@ -1361,7 +1423,11 @@ def test_a_resolved_answer_does_not_report_a_rivals_stale_evidence(
     entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001"))
     entities.record_assignment(
         PRINCIPAL,
-        replace(_assignment("asn_bbbb0002bbbb0002"), entity_id=ALICE_TWO, status="cancelled"),
+        replace(
+            _assignment("asn_bbbb0002bbbb0002"),
+            entity_id=ALICE_TWO,
+            state=AssignmentState.ENDED,
+        ),
     )
     answer = resolving.resolve(
         PRINCIPAL,
@@ -1435,7 +1501,9 @@ def test_a_cancelled_assignment_does_not_corroborate_at_the_earliest_moment(
     entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
     entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
-    entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001", status="cancelled"))
+    entities.record_assignment(
+        PRINCIPAL, _assignment("asn_aaaa0001aaaa0001", state=AssignmentState.ENDED)
+    )
     answer = resolving.resolve(
         PRINCIPAL,
         ResolutionRequest(
@@ -1449,10 +1517,10 @@ def test_a_cancelled_assignment_does_not_corroborate_at_the_earliest_moment(
     assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
 
 
-def test_an_assignment_ended_by_its_status_is_disclosed_not_silent(
+def test_an_assignment_ended_by_its_state_is_disclosed_not_silent(
     world: World, resolving: EntityResolutionService
 ) -> None:
-    """Excluded by `status`, and the caller is told -- as for excluded by date.
+    """Excluded by `state`, and the caller is told -- as for excluded by date.
 
     `active_only=True` dropped ended assignments in the query, so they never
     reached the fold and never set `withheld`: a row recorded as ended produced
@@ -1463,7 +1531,9 @@ def test_an_assignment_ended_by_its_status_is_disclosed_not_silent(
     entities = _Entities(world)
     entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
     entities.create(PRINCIPAL, an_entity(TOWER, "Alice Tower", entity_type=EntityType.PROJECT))
-    entities.record_assignment(PRINCIPAL, _assignment("asn_aaaa0001aaaa0001", status="ended"))
+    entities.record_assignment(
+        PRINCIPAL, _assignment("asn_aaaa0001aaaa0001", state=AssignmentState.ENDED)
+    )
     answer = resolving.resolve(
         PRINCIPAL,
         ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, at=NOW),
@@ -1530,16 +1600,28 @@ def test_a_conflicted_identifier_past_the_candidate_limit_still_answers(
     entities raised `ValueError` and reached the caller as `internal_error` --
     the refusal failing in exactly the case it exists for. It is bounded on the
     same terms the name path is, and says that it is.
+
+    One current holder and a queue of retired ones, because only one binding of
+    an address may be active per Principal -- a resource mailbox handed from
+    team to team for years is exactly how a claimant list gets past the limit,
+    and it is reachable where eleven simultaneous active claimants are not.
     """
     entities = _Entities(world)
     claimants = RESOLUTION_CANDIDATE_LIMIT + 1
     for index in range(claimants):
         entity_id = f"ent_{index:04d}shared{index:04d}"
+        current = index == claimants - 1
+        state = IdentifierState.ACTIVE if current else IdentifierState.RETIRED
         entities.create(PRINCIPAL, an_entity(entity_id, f"Team {index} Synthetic"))
         entities.bind_identifier(
             PRINCIPAL,
             entity_id,
-            an_email(f"xid_{index:04d}shared{index:04d}", entity_id, "info@example.test"),
+            an_email(
+                f"xid_{index:04d}shared{index:04d}",
+                entity_id,
+                "info@example.test",
+                state=state,
+            ),
         )
     answer = resolving.resolve(
         PRINCIPAL,

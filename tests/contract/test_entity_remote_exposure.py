@@ -8,20 +8,26 @@ build serves a capability" and "a remote client can reach it" are one decision,
 made at composition, and a capability added without noticing joins the remote
 surface silently.
 
-The entity plane is the case where that matters most: these six read who a
-person is. `tests/contract/test_remote_mcp_transport.py` checks the remote
-profile by named membership, which cannot notice an *addition* — so nothing in
-the suite would have failed if `entities.resolve` had appeared on the remote
-surface before anything made it safe.
+The entity plane is the case where that matters most: its reads return who a
+person is, and since `WP-RI-A-02` its writes *decide* who a person is.
+`tests/contract/test_remote_mcp_transport.py` checks the remote profile by named
+membership, which cannot notice an *addition* — so nothing in the suite would
+have failed if `entities.resolve` had appeared on the remote surface before
+anything made it safe.
 
-This file is that missing assertion, in both directions:
+This file is that missing assertion, in three directions:
 
-* a process that has not enabled the plane exposes none of the six, remotely or
-  locally, however the write switch is set;
-* a process that has enabled it exposes all six as **reads**, so they are
-  reachable with `remote_writes_enabled` off — which is the correct
+* a process that has not enabled the plane exposes none of the family, remotely
+  or locally, however the write switch is set;
+* a process that has enabled it exposes every `entities.` read as a **read**, so
+  each is reachable with `remote_writes_enabled` off — which is the correct
   classification, because none of them writes, and getting it wrong in the other
-  direction would hide them behind a switch that has nothing to do with them.
+  direction would hide them behind a switch that has nothing to do with them;
+* and it exposes every `entities.` write only with `remote_writes_enabled` on.
+  That half arrived with the writes and is the one this file would otherwise
+  have been silent about: the profile derives read-versus-write from the
+  purposes a capability permits, so a write mapped to a read purpose would reach
+  a remote client that was never granted one.
 
 `tests/contract/test_mcp_transport.py` proves the same withholding against a
 real child process. This proves it about the remote profile specifically, which
@@ -45,6 +51,19 @@ ENTITY_CAPABILITIES: Final[frozenset[str]] = frozenset(
     capability.value for capability in Capability if capability.value.startswith("entities.")
 )
 
+#: The plane's two halves, derived from the purpose each capability permits
+#: rather than listed. Derived, because that is the same decision
+#: `remote_tool_names` makes: a write mis-mapped to the read purpose would move
+#: between these two sets and the assertions below would follow it, which is
+#: exactly the change this file must not absorb quietly.
+ENTITY_READS: Final[frozenset[str]] = frozenset(
+    capability.value
+    for capability in Capability
+    if capability.value in ENTITY_CAPABILITIES
+    and permitted_purposes(capability) == frozenset({Purpose.ENTITY_READ})
+)
+ENTITY_WRITES: Final[frozenset[str]] = ENTITY_CAPABILITIES - ENTITY_READS
+
 
 def _service(*, enabled: bool) -> ApplicationService:
     """Two services whose only difference is the one switch.
@@ -56,17 +75,66 @@ def _service(*, enabled: bool) -> ApplicationService:
     return build_service(World(), FakeProviders(), relationship_intelligence_enabled=enabled)
 
 
-def test_the_six_names_are_the_family_this_file_is_about() -> None:
-    """Guards the rest: an empty family would make every assertion below vacuous."""
-    assert len(ENTITY_CAPABILITIES) == 6
-    assert set(ENTITY_CAPABILITIES) == {
+def test_the_names_this_file_is_about_are_the_family() -> None:
+    """Guards the rest: an empty family would make every assertion below vacuous.
+
+    Both halves are named exactly, so a capability that moves between them —
+    which is what a purpose mis-mapping looks like from here — reddens rather
+    than sliding from one assertion to the other.
+    """
+    assert set(ENTITY_READS) == {
+        "entities.aliases.list",
+        "entities.assignments.list",
         "entities.context",
         "entities.get",
+        "entities.identifiers.list",
+        "entities.observations.list",
         "entities.relationships",
         "entities.resolve",
         "entities.search",
         "entities.unresolved_mentions",
     }
+    assert set(ENTITY_WRITES) == {
+        "entities.aliases.add",
+        "entities.aliases.retire",
+        "entities.aliases.supersede",
+        "entities.archive",
+        "entities.assignments.create",
+        "entities.assignments.end",
+        "entities.assignments.revise",
+        "entities.create",
+        "entities.identifiers.bind",
+        "entities.identifiers.retire",
+        "entities.identifiers.supersede",
+        "entities.observe",
+        "entities.relationships.create",
+        "entities.relationships.end",
+        "entities.relationships.revise",
+        "entities.restore",
+        "entities.unresolved_mentions.resolve",
+        "entities.update",
+    }
+    assert ENTITY_READS | ENTITY_WRITES == ENTITY_CAPABILITIES
+
+
+def test_the_write_half_is_the_half_with_a_write_purpose() -> None:
+    """The split this file asserts against is derived, not asserted twice.
+
+    `ENTITY_WRITES` is this module's own subtraction, which is the shape this
+    suite keeps catching: a set that drifts from the thing it names. So it is
+    checked against the only definition that decides anything -- whether a
+    capability's permitted purposes intersect `_WRITE_PURPOSES`, which is what
+    `remote_tool_names` itself runs on.
+    """
+    from my_pa.adapters.mcp.remote import _WRITE_PURPOSES
+
+    derived = {
+        capability.value
+        for capability in Capability
+        if capability.value in ENTITY_CAPABILITIES
+        and permitted_purposes(capability) & _WRITE_PURPOSES
+    }
+    assert derived == ENTITY_WRITES
 
 
 @pytest.mark.parametrize("writes_enabled", [False, True])
@@ -83,7 +151,7 @@ def test_a_build_without_the_plane_publishes_none_of_it_locally_either() -> None
 
 
 def test_a_build_without_the_plane_still_serves_everything_else() -> None:
-    """The gate withholds six names, not the process.
+    """The gate withholds the `entities.` family, not the process.
 
     Asserted because a gate that accidentally emptied the surface would satisfy
     every assertion above while breaking the build.
@@ -92,30 +160,63 @@ def test_a_build_without_the_plane_still_serves_everything_else() -> None:
     assert len(remote) >= 20
 
 
-def test_a_build_with_the_plane_exposes_all_six_as_reads() -> None:
-    """Reachable with writes disabled, because none of the six writes."""
+def test_a_build_with_the_plane_exposes_every_read_as_a_read() -> None:
+    """Reachable with writes disabled, because none of these writes."""
     remote = remote_tool_names(_service(enabled=True), writes_enabled=False)
-    assert remote >= ENTITY_CAPABILITIES
+    assert remote >= ENTITY_READS
 
 
-def test_none_of_the_six_is_classified_as_a_write() -> None:
+def test_a_build_with_the_plane_withholds_every_write_until_writes_are_enabled() -> None:
+    """The half `WP-RI-A-02` added, and the one this file existed to be ready for.
+
+    A remote client with `remote_writes_enabled` off can read who a person is
+    and cannot decide it. The gate is the purpose mapping rather than a name
+    list, so this fails the moment one of the ten is mapped to `entity_read`.
+    """
+    withheld = remote_tool_names(_service(enabled=True), writes_enabled=False)
+    assert withheld & ENTITY_WRITES == frozenset()
+    granted = remote_tool_names(_service(enabled=True), writes_enabled=True)
+    assert granted >= ENTITY_WRITES
+
+
+def test_the_read_half_is_classified_as_a_read_and_the_write_half_as_a_write() -> None:
     """The classification the remote profile actually runs on.
 
     `remote_tool_names` decides read-versus-write by intersecting a capability's
     permitted purposes with `_WRITE_PURPOSES`. `entity_read` is not among them
-    and must not become one: this plane has no write capability, so a write
-    purpose here would be a grant nothing needs.
+    and must not become one; `entity_authoring` is, and must stay so.
     """
     from my_pa.adapters.mcp.remote import _WRITE_PURPOSES
 
     for capability in Capability:
-        if capability.value not in ENTITY_CAPABILITIES:
-            continue
-        assert permitted_purposes(capability) == frozenset({Purpose.ENTITY_READ})
-        assert not permitted_purposes(capability) & _WRITE_PURPOSES
+        if capability.value in ENTITY_READS:
+            assert permitted_purposes(capability) == frozenset({Purpose.ENTITY_READ})
+            assert not permitted_purposes(capability) & _WRITE_PURPOSES
+        elif capability.value in ENTITY_WRITES:
+            assert not permitted_purposes(capability) & {Purpose.ENTITY_READ}
+            assert permitted_purposes(capability) & _WRITE_PURPOSES
 
 
-def test_none_of_the_six_is_operator_only() -> None:
+def test_the_three_purposes_do_not_overlap() -> None:
+    """Three grants, three reaches, and no overlap.
+
+    A grant issued so an ingest path can record what a mailbox said must not
+    also decide who somebody is, and neither must let anything read the plane.
+    Stated as a disjointness rather than as three memberships, because the
+    failure this prevents is an *overlap* somebody adds later.
+    """
+    read = permitted_purposes(Capability.ENTITIES_SEARCH)
+    ingest = permitted_purposes(Capability.ENTITIES_OBSERVE)
+    authoring = permitted_purposes(Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE)
+    assert read == frozenset({Purpose.ENTITY_READ})
+    assert ingest == frozenset({Purpose.ENTITY_OBSERVATION_INGEST})
+    assert authoring == frozenset({Purpose.ENTITY_AUTHORING})
+    assert not read & ingest
+    assert not read & authoring
+    assert not ingest & authoring
+
+
+def test_none_of_the_family_is_operator_only() -> None:
     """Operator-only is about who may call one, not about whether this build has it.
 
     The two are different gates and the plane uses the second. Asserted so a

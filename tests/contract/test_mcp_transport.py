@@ -550,11 +550,13 @@ def test_a_child_with_a_managed_root_publishes_every_capability(tmp_path: Path) 
         MY_PA_DATABASE_URL=os.environ["MY_PA_DATABASE_URL"],
         MY_PA_MANAGED_DOCUMENT_ROOT=str(root),
         MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED="true",
-        # Both relationship switches, because the memory plane needs the entity
-        # plane under it and "every capability" is the claim this test makes:
-        # narrowing the claim to the sixty-two a memory-less build publishes
-        # would leave the eight `relationship_memory.` names proved reachable in
+        # Every relationship switch, because each narrows the surface and "every
+        # capability" is the claim this test makes. The write switch withholds
+        # the eighteen `entities.` writes on its own, and the memory plane needs
+        # the entity plane under it; narrowing the claim to what a partly
+        # composed build publishes would leave those names proved reachable in
         # no composed process at all.
+        MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED="true",
         MY_PA_RELATIONSHIP_MEMORY_ENABLED="true",
     )
     assert composed == [capability.value for capability in Capability]

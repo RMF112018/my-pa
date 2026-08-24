@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes seventy-three capability names and none of them
+  ends: the transport routes ninety-five capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -42,7 +42,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Final
 
 import pytest
 from tests.conftest import (
@@ -64,7 +64,14 @@ from tests.conftest import (
     staged_search,
     staged_task,
 )
-from tests.contract.test_transport_parity import ENTITY_EMAIL, staged_entities, staged_memory
+from tests.contract.test_transport_parity import (
+    ENTITY_EMAIL,
+    staged_assignment,
+    staged_edge,
+    staged_entities,
+    staged_memory,
+    staged_mention,
+)
 from tests.wire import Reply, Wire, serve
 
 from my_pa.adapters.http import (
@@ -92,6 +99,16 @@ from my_pa.domain.intelligence.catalog import (
     IntelligenceStage,
 )
 from my_pa.domain.policy.decision import DenialReason
+from my_pa.domain.relationship.entity import (
+    AliasType,
+    Entity,
+    EntityAlias,
+    EntityRelationshipType,
+    EntityStatus,
+    EntityType,
+    ExternalIdentifier,
+    ExternalIdentifierNamespace,
+)
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.domain.task.bulk import TaskBulkOperation
 
@@ -298,6 +315,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     assert collector_admission.artifact is not None
     report_id = collector_admission.artifact.artifact_id
     person, organization = staged_entities(marked)
+    subjects = staged_write_subjects(marked)
     # Four memories rather than one, because the sweeps below drive this whole
     # table in one pass over one scene: a revise, an archive and a restore that
     # all named the memory the reads name would meet it at version two and
@@ -307,6 +325,12 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     revise_memory = staged_memory(marked, "wire-memory-staging-revise")
     archive_memory = staged_memory(marked, "wire-memory-staging-archive")
     restore_memory = staged_memory(marked, "wire-memory-staging-restore")
+    # Two edges rather than one, on the same argument the four memories rest on:
+    # a revise takes the edge to version two, so a revise and an end naming one
+    # row would leave the second meeting a stale expectation. The staged
+    # `works_for` edge is left alone -- `entities.relationships` reads it.
+    revise_edge = staged_edge(marked, EntityRelationshipType.CONSULTANT_TO)
+    end_edge = staged_edge(marked, EntityRelationshipType.REPRESENTS)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": marked.source.source_id},
@@ -564,6 +588,171 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         Capability.ENTITIES_CONTEXT: {"entity_id": person.entity_id},
         Capability.ENTITIES_RELATIONSHIPS: {"entity_id": person.entity_id, "direction": "any"},
         Capability.ENTITIES_UNRESOLVED_MENTIONS: {},
+        # The entity plane's authoring half (`WP-RI-A-02`), and its payloads carry
+        # no marker for the reason the reads above carry none: every field is an
+        # identifier, a closed vocabulary value, a name or a reason the *caller*
+        # supplied, and a marker planted in one would be asserting the redaction
+        # of something the caller sent about their own record. What the scans
+        # check on this plane is the answer.
+        #
+        # The subject is the staged `person`, so a permitted request reaches a
+        # real entity rather than a `not_found` that would prove nothing about
+        # the authority path. `expected_version` is 1, which is what a freshly
+        # staged entity holds; the child identifiers are minted, because these
+        # tests never reach the handler that would look one up.
+        Capability.ENTITIES_IDENTIFIERS_LIST: {"entity_id": person.entity_id},
+        Capability.ENTITIES_ALIASES_LIST: {"entity_id": person.entity_id},
+        # A name no staged entity carries, so duplicate resolution admits it.
+        Capability.ENTITIES_CREATE: {
+            "entity_type": "person",
+            "display_name": "Wire Newcomer",
+            "idempotency_key": "wire-entity-create-0001",
+        },
+        Capability.ENTITIES_UPDATE: {
+            "entity_id": subjects["update"][0],
+            "expected_version": 1,
+            "display_name": "Wire Subject 0",
+            "reason": "A synthetic correction.",
+            "idempotency_key": "wire-entity-update-0001",
+        },
+        Capability.ENTITIES_ARCHIVE: {
+            "entity_id": subjects["archive"][0],
+            "expected_version": 1,
+            "reason": "A synthetic withdrawal.",
+            "idempotency_key": "wire-entity-archive-0001",
+        },
+        Capability.ENTITIES_RESTORE: {
+            "entity_id": subjects["restore"][0],
+            "expected_version": 1,
+            "reason": "A synthetic restoration.",
+            "idempotency_key": "wire-entity-restore-0001",
+        },
+        Capability.ENTITIES_IDENTIFIERS_BIND: {
+            "entity_id": subjects["bind"][0],
+            "expected_version": 1,
+            "namespace": "teams_user_id",
+            "display_value": "wire-teams-user",
+            "idempotency_key": "wire-entity-bind-0001",
+        },
+        Capability.ENTITIES_IDENTIFIERS_RETIRE: {
+            "entity_id": subjects["retire-identifier"][0],
+            "expected_version": 1,
+            "identifier_id": subjects["retire-identifier"][1],
+            "expected_identifier_version": 1,
+            "reason": "A synthetic retirement.",
+            "idempotency_key": "wire-entity-retire-identifier-0001",
+        },
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE: {
+            "entity_id": subjects["supersede-identifier"][0],
+            "expected_version": 1,
+            "identifier_id": subjects["supersede-identifier"][1],
+            "expected_identifier_version": 1,
+            "namespace": "email",
+            "display_value": "wire.subject.new@example.invalid",
+            "reason": "A synthetic replacement.",
+            "idempotency_key": "wire-entity-supersede-identifier-0001",
+        },
+        Capability.ENTITIES_ALIASES_ADD: {
+            "entity_id": subjects["add-alias"][0],
+            "expected_version": 1,
+            "alias_type": "initials",
+            "display_value": "WS",
+            "idempotency_key": "wire-entity-add-alias-0001",
+        },
+        Capability.ENTITIES_ALIASES_RETIRE: {
+            "entity_id": subjects["retire-alias"][0],
+            "expected_version": 1,
+            "alias_id": subjects["retire-alias"][2],
+            "expected_alias_version": 1,
+            "reason": "A synthetic retirement.",
+            "idempotency_key": "wire-entity-retire-alias-0001",
+        },
+        Capability.ENTITIES_ALIASES_SUPERSEDE: {
+            "entity_id": subjects["supersede-alias"][0],
+            "expected_version": 1,
+            "alias_id": subjects["supersede-alias"][2],
+            "expected_alias_version": 1,
+            "alias_type": "nickname",
+            "display_value": "Wire Buddy",
+            "reason": "A synthetic correction.",
+            "idempotency_key": "wire-entity-supersede-alias-0001",
+        },
+        # The directed-relationship family (WP-RI-A-03). The payloads carry no
+        # marker for the reason the six reads above carry none: every field on
+        # them is an opaque identifier, a closed vocabulary member or a version,
+        # and the freest text a caller may send here -- a `role`, or the `reason`
+        # an `end` carries -- is a descriptor of the *record*, not a statement
+        # about the person.
+        #
+        # **Each of the six writes meets a record of its own.** They are driven
+        # in one pass over one scene, and a revise takes the version to two, so
+        # a revise and an end sharing a staged row would leave the second
+        # meeting a stale expectation and answering `conflict` -- a refusal the
+        # sweeps here would read as the plane declining to act.
+        Capability.ENTITIES_ASSIGNMENTS_LIST: {"entity_id": person.entity_id},
+        Capability.ENTITIES_ASSIGNMENTS_CREATE: {
+            "entity_id": person.entity_id,
+            "expected_entity_version": 1,
+            "assignment_type": "team_membership",
+            "idempotency_key": "wire-assignment-create-0001",
+        },
+        Capability.ENTITIES_ASSIGNMENTS_REVISE: {
+            "assignment_id": staged_assignment(marked, "Wire Revise Role"),
+            "expected_version": 1,
+            "role": "Synthetic Revised Role",
+            "idempotency_key": "wire-assignment-revise-0001",
+        },
+        Capability.ENTITIES_ASSIGNMENTS_END: {
+            "assignment_id": staged_assignment(marked, "Wire End Role"),
+            "expected_version": 1,
+            "reason": "A synthetic withdrawal.",
+            "end_now": True,
+            "idempotency_key": "wire-assignment-end-0001",
+        },
+        Capability.ENTITIES_RELATIONSHIPS_CREATE: {
+            "from_entity_id": person.entity_id,
+            "expected_from_version": 1,
+            "relationship_type": "member_of",
+            "to_entity_id": organization.entity_id,
+            "expected_to_version": 1,
+            "idempotency_key": "wire-relationship-create-0001",
+        },
+        Capability.ENTITIES_RELATIONSHIPS_REVISE: {
+            "relationship_id": revise_edge,
+            "expected_version": 1,
+            "idempotency_key": "wire-relationship-revise-0001",
+        },
+        Capability.ENTITIES_RELATIONSHIPS_END: {
+            "relationship_id": end_edge,
+            "expected_version": 1,
+            "reason": "A synthetic withdrawal.",
+            "end_now": True,
+            "idempotency_key": "wire-relationship-end-0001",
+        },
+        # WP-RI-A-04's three. They carry **no marker either**, for the reason
+        # the six above do not: `observed_value` is the one request field on
+        # this plane that could carry one, and it is the field the whole plane
+        # exists to keep off every other surface -- so planting a marker in it
+        # would be planting one in the value these scans must never find, and a
+        # pass would then be indistinguishable from the leak.
+        Capability.ENTITIES_OBSERVATIONS_LIST: {},
+        Capability.ENTITIES_OBSERVE: {
+            "kind": "user_statement",
+            "authority": "user_authored_statement",
+            "observed_value": "Parity Person",
+            "mention_display_name": "Parity Person",
+            "capture_id": "cap_negobserve00001",
+            "capture_version_id": "capver_negobserve00001",
+            "observed_at": "2026-08-02T10:00:00Z",
+            "idempotency_key": "negative-entities-observe-0001",
+        },
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: {
+            "observation_id": staged_mention(marked),
+            "expected_resolution_version": 0,
+            "disposition": "defer",
+            "reason": "there is not enough identity evidence yet",
+            "idempotency_key": "negative-entities-resolve-0001",
+        },
         # The Relationship Memory plane (WP-RM-01), and unlike the entity plane
         # above **these payloads do carry a marker**, because this plane is the
         # one place in the relationship tier where the *request* supplies free
@@ -610,6 +799,112 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "idempotency_key": "wire-memory-restore-0001",
         },
     }
+
+
+#: One subject per governed entity write, so a sweep that sends every capability
+#: **in sequence against one world** does not have its own earlier write refuse
+#: its later one.
+#:
+#: Every write on this plane advances the entity's version, so ten payloads all
+#: naming the staged `person` at `expected_version=1` succeed once and answer
+#: `409` nine times — which is the plane behaving exactly as designed and this
+#: file measuring the wrong thing. A subject apiece makes each request
+#: independent of the order the table happens to be in.
+#:
+#: The names carry no `parity` token: `entities.search`'s payload queries that
+#: word, and a subject that matched would put this staging into an answer
+#: nobody asked it about.
+#: When the staged write subjects were created. Before the scene's frozen
+#: clock, deliberately: `Entity` refuses a row whose `updated_at` precedes its
+#: `created_at`, and a subject staged *after* the moment the request is served
+#: would make every write against it an `internal_error` from the record's own
+#: constructor rather than the answer this file is measuring.
+_WHEN: Final = datetime(2026, 8, 1, 12, tzinfo=UTC)
+
+_WRITE_SUBJECTS: Final[tuple[str, ...]] = (
+    "update",
+    "archive",
+    "restore",
+    "bind",
+    "retire-identifier",
+    "supersede-identifier",
+    "add-alias",
+    "retire-alias",
+    "supersede-alias",
+)
+
+
+def staged_write_subjects(marked: Scene) -> dict[str, tuple[str, str, str]]:
+    """One entity per write, each with one active binding and one active alias.
+
+    Returns `(entity_id, identifier_id, alias_id)` per subject. `restore`'s
+    subject is staged already archived, because a restore of an entity that was
+    never withdrawn is refused -- correctly, and this file is not the place to
+    prove it.
+    """
+    principal_id = marked.principal.principal_id
+    held = {
+        entity.display_name: entity
+        for entity in marked.world.entities
+        if entity.principal_id == principal_id
+    }
+    entities = FakeUnitOfWork(marked.world).entities
+    staged: dict[str, tuple[str, str, str]] = {}
+    for index, subject in enumerate(_WRITE_SUBJECTS):
+        display_name = f"Wire Subject {index}"
+        entity = held.get(display_name)
+        if entity is None:
+            archived = subject == "restore"
+            entity = entities.create(
+                principal_id,
+                Entity(
+                    entity_id=issue_identifier(IdKind.ENTITY),
+                    principal_id=principal_id,
+                    entity_type=EntityType.PERSON,
+                    canonical_name=display_name.casefold(),
+                    display_name=display_name,
+                    status=EntityStatus.ARCHIVED if archived else EntityStatus.ACTIVE,
+                    archived_from_status=EntityStatus.ACTIVE if archived else None,
+                    created_at=_WHEN,
+                    updated_at=_WHEN,
+                    version=1,
+                ),
+            )
+            entities.bind_identifier(
+                principal_id,
+                entity.entity_id,
+                ExternalIdentifier(
+                    identifier_id=issue_identifier(IdKind.EXTERNAL_IDENTIFIER),
+                    entity_id=entity.entity_id,
+                    namespace=ExternalIdentifierNamespace.EMAIL,
+                    normalized_value=f"wire.subject.{index}@example.invalid",
+                    display_value=f"wire.subject.{index}@example.invalid",
+                    principal_id=principal_id,
+                ),
+            )
+            entities.record_alias(
+                principal_id,
+                EntityAlias(
+                    alias_id=issue_identifier(IdKind.ENTITY_ALIAS),
+                    entity_id=entity.entity_id,
+                    alias_type=AliasType.NICKNAME,
+                    normalized_value=f"wire subject {index}",
+                    display_value=f"Wire Subject {index}",
+                    principal_id=principal_id,
+                ),
+            )
+        identifier = next(
+            held.identifier_id
+            for held in marked.world.entity_identifiers
+            if held.principal_id == principal_id and held.entity_id == entity.entity_id
+        )
+        alias = next(
+            held.alias_id
+            for held in marked.world.entity_aliases
+            if held.principal_id == principal_id and held.entity_id == entity.entity_id
+        )
+        staged[subject] = (entity.entity_id, identifier, alias)
+    return staged
 
 
 def staged_record(marked: Scene) -> KnowledgeRecord:
@@ -802,6 +1097,38 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        # The authoring half (`WP-RI-A-02`) is scopeless more plainly still: it
+        # writes the Principal's own record of a person, and the row it writes
+        # carries no `source_id` and no `enrollment_id` for a scope to be
+        # compared against. All twelve are in
+        # `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_IDENTIFIERS_LIST,
+        Capability.ENTITIES_ALIASES_LIST,
+        Capability.ENTITIES_CREATE,
+        Capability.ENTITIES_UPDATE,
+        Capability.ENTITIES_ARCHIVE,
+        Capability.ENTITIES_RESTORE,
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE,
+        Capability.ENTITIES_ALIASES_ADD,
+        Capability.ENTITIES_ALIASES_RETIRE,
+        Capability.ENTITIES_ALIASES_SUPERSEDE,
+        # The directed-relationship family names entities, not a source, and
+        # writing does not change that (WP-RI-A-03): an assignment and an edge
+        # carry no `source_id` and no `enrollment_id`, and the scope one of them
+        # *does* name is another Entity in the same partition rather than a
+        # grant. All seven sit in `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_ASSIGNMENTS_LIST,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE,
+        Capability.ENTITIES_ASSIGNMENTS_END,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_REVISE,
+        Capability.ENTITIES_RELATIONSHIPS_END,
+        Capability.ENTITIES_OBSERVATIONS_LIST,
+        Capability.ENTITIES_OBSERVE,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
         # The Relationship Memory plane (WP-RM-01) joins them for the same
         # reason, one step further out: a memory names an Entity, which itself
         # names no `src_…` and no `enr_…`, so a memory request has no scope to
@@ -972,6 +1299,47 @@ TASK_MANAGEMENT_EXEMPTION = frozenset(
 #: `capture.*` and `documents.create`.
 RELATIONSHIP_MEMORY_EXEMPTION = frozenset({Capability.RELATIONSHIP_MEMORY_CREATE})
 
+#: The fifth exemption (`WP-RI-A-02`), and it is a pair rather than a family.
+#: `entities.create` and `entities.update` are the only two of the plane's ten
+#: writes the substring proxy refuses, and both are refused for the reason
+#: `capture.create` and `documents.create` are: what they write is a
+#: *product-owned* record — this Principal's own account of who a person is —
+#: which `ADR-003` makes a third authority class that is neither a source-system
+#: write nor a managed-document write. Nothing on this plane reaches a source
+#: system at all; the entity tables are the product's own custody, and
+#: `test_no_capability_over_either_transport_calls_anything_but_a_read` carries
+#: the property the proxy stands for by driving every capability against a
+#: recording provider.
+#:
+#: The other eight writes are *not* exempt and still pass the name check, which
+#: is the check working rather than an omission: `archive`, `restore`, `bind`,
+#: `retire` and `supersede` are all names the proxy admits, and the plane was
+#: named that way partly because those verbs say what the write does without
+#: claiming a mutation of anything outside it.
+ENTITY_AUTHORING_EXEMPTION = frozenset({Capability.ENTITIES_CREATE, Capability.ENTITIES_UPDATE})
+#: The directed-relationship exemption (WP-RI-A-03), and it is deliberately the
+#: pair of `create` names, the way `RELATIONSHIP_MEMORY_EXEMPTION` is a single
+#: name.
+#: `entities.assignments.create` and `entities.relationships.create` are the only
+#: two of the seven the substring proxy refuses, and they are refused for the
+#: reason `capture.create`, `documents.create` and `relationship_memory.create`
+#: are: an assignment and a directed edge are *product-owned* records under
+#: `ADR-003` -- the Principal's own statement about the Principal's own entities
+#: -- and writing one mutates no source. Their rows carry no `source_id`, and
+#: the plane reaches no `SourceProvider` at all.
+#:
+#: An extension of the registry the rule reads and not a relaxation of the rule.
+#: The other four writes -- two `revise` and two `end` -- pass the name check
+#: unaided, and a future `entities.assignments.delete` is still caught here. The
+#: property the proxy stands for is carried behaviourally for this plane by the
+#: recording-provider sweep, exactly as it is for `capture.*`.
+ENTITY_DIRECTED_EXEMPTION = frozenset(
+    {
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+    }
+)
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -1009,6 +1377,8 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | CONTINUITY_AUTHORING_EXEMPTION
         | TASK_MANAGEMENT_EXEMPTION
         | RELATIONSHIP_MEMORY_EXEMPTION
+        | ENTITY_AUTHORING_EXEMPTION
+        | ENTITY_DIRECTED_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

@@ -53,6 +53,7 @@ from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
     CorrectionPatch,
     Disposition,
+    EntityProposalReviewCase,
     ReviewConflictError,
     ReviewNotFoundError,
     ReviewSubjectKind,
@@ -671,7 +672,11 @@ def test_a_real_build_reaches_the_entity_branch_of_the_shared_review_surface(
         runtime.close()
 
     assert [case.proposal_id for case in listed] == [admitted.proposal_id]
-    assert listed[0].subject_kind is ReviewSubjectKind.ENTITY_PROPOSAL
+    # And it is the Entity branch's own case type rather than a capture case
+    # that happens to carry a matching identifier: `_Reviews.cases` unions four
+    # planes, and the type is what says which one answered.
+    assert isinstance(listed[0], EntityProposalReviewCase)
+    assert listed[0].proposed_kind is EntityProposalKind.UPDATE_ENTITY
 
 
 def test_a_real_build_without_the_plane_lists_no_entity_case(

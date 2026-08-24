@@ -22,6 +22,26 @@ Four properties, read off the tree rather than trusted:
    `capture_review_decisions` before it writes, so promotion cannot happen
    without a review that happened.
 
+**And four more on the entity plane, added by `WP-RI-B-05`.** The same failure
+mode arrives there through a different door: `entities.proposals.create` gives a
+source, rule or local-model producer a published way to write, and the thing
+that must stay impossible is for that producer to reach the mutation its own
+proposal describes.
+
+5. **Proposing writes proposals and nothing else.** `EntityGovernanceService.propose`
+   reaches exactly one write on the repository, takes no parameter that could
+   name a decided state, and writes the proposed literal.
+6. **Deciding is a different method that demands an actor**, so there is no
+   path from producing to promoting that does not pass through somebody's name.
+7. **No acceptance reaches an identity mutation.** `redirect_entity` and
+   `record_merge` do not appear anywhere in `entity_governance`, which is the
+   structural form of section 15: a reviewer's disposition is not an
+   identity-correction grant.
+8. **The promotion routing performs no write and routes no identity
+   correction.** `application/entity_promotion.py` imports nothing that could
+   write, and its table holds no entry for `merge_entities` or `split_identity`
+   — so the mutation removed from acceptance cannot return by being routed to.
+
 Nothing here opens a connection. It parses source.
 """
 
@@ -39,6 +59,8 @@ PACKAGE: Final = ROOT / "src" / "my_pa"
 DERIVATION: Final = PACKAGE / "domain" / "situation" / "pulse_derivation.py"
 REPOSITORY: Final = PACKAGE / "infrastructure" / "persistence" / "situation_repository.py"
 AUTHORING: Final = PACKAGE / "infrastructure" / "persistence" / "continuity_authoring.py"
+GOVERNANCE: Final = PACKAGE / "application" / "entity_governance.py"
+PROMOTION: Final = PACKAGE / "application" / "entity_promotion.py"
 
 #: Statement builders that write. Named rather than inferred, because "does this
 #: expression write" is not decidable in general and these five are what this
@@ -182,7 +204,171 @@ def test_user_directed_task_authoring_is_not_review_promotion() -> None:
     assert "capture_review_decisions" not in source
 
 
-@pytest.mark.parametrize("path", [DERIVATION, REPOSITORY, AUTHORING], ids=lambda p: p.name)
+# --- the entity plane: a producer cannot reach what it proposes --------------
+
+
+#: The repository methods on `EntitiesRepository` that change an entity's
+#: identity. Named rather than inferred, because "does this write" is decided by
+#: the port's contract and not by the call site's spelling, and these two are the
+#: pair `EntityGovernanceService._apply` used to call.
+IDENTITY_WRITES: Final = frozenset({"redirect_entity", "record_merge"})
+
+#: Every repository call a proposal producer is allowed to make. `record_proposal`
+#: is the only write; the other three are the reads that refuse -- evidence that
+#: is not this Principal's, evidence that is quarantined, and the open-equivalent
+#: proposal a duplicate is answered with.
+PRODUCER_REPOSITORY_CALLS: Final = frozenset(
+    {"record_proposal", "observation", "proposals", "fact_evidence_links"}
+)
+
+
+def _repository_calls(node: ast.AST) -> set[str]:
+    """Every `self._entities.<name>(...)` this function reaches directly."""
+    found: set[str] = set()
+    for child in ast.walk(node):
+        if not isinstance(child, ast.Call):
+            continue
+        target = child.func
+        if not isinstance(target, ast.Attribute):
+            continue
+        owner = target.value
+        if (
+            isinstance(owner, ast.Attribute)
+            and owner.attr == "_entities"
+            and isinstance(owner.value, ast.Name)
+            and owner.value.id == "self"
+        ):
+            found.add(target.attr)
+    return found
+
+
+def test_proposing_reaches_one_write_and_it_is_the_proposal_table() -> None:
+    """Property 5. The producer path's whole reach, read off the source.
+
+    `propose` delegates three checks to private helpers, so the guard walks the
+    method *and* the helpers it calls: a write moved one level down would
+    otherwise be invisible to a scan of the entry point alone.
+    """
+    tree = _module(GOVERNANCE)
+    reached: set[str] = set()
+    for name in ("propose", "_admit_evidence", "_refuse_a_known_bad_proposal", "_open_equivalent"):
+        reached |= _repository_calls(_function(tree, klass="EntityGovernanceService", name=name))
+    assert "record_proposal" in reached, "the guard is not reading a method that records anything"
+    forbidden = sorted(reached - PRODUCER_REPOSITORY_CALLS)
+    assert forbidden == [], (
+        f"the producer path reaches {forbidden}. A producer that can reach a canonical write "
+        "is a producer that can promote its own proposal without a review"
+    )
+
+
+def test_proposing_writes_the_proposed_literal_and_takes_no_state() -> None:
+    """Property 5, the other half — `propose_*`'s rule on the entity plane.
+
+    The state is written as a literal, and there is no parameter through which a
+    caller could supply one, so a proposal cannot arrive already accepted.
+    """
+    propose = _function(_module(GOVERNANCE), klass="EntityGovernanceService", name="propose")
+    source = ast.dump(propose)
+    assert "PROPOSED" in source
+    for decided in ("ACCEPTED", "CORRECTED_ACCEPTED", "REJECTED"):
+        assert decided not in source, f"propose mentions {decided}"
+    arguments = {argument.arg for argument in propose.args.kwonlyargs}
+    for reserved in ("state", "decided_by", "decided_at", "proposal_id", "dedupe_sha256"):
+        assert reserved not in arguments, (
+            f"propose takes {reserved}. Every one of these is the server's, and a producer "
+            "that could supply one could file a proposal that had already been decided"
+        )
+
+
+def test_deciding_is_a_separate_method_that_demands_an_actor() -> None:
+    """Property 6. There is no path from producing to promoting without a name."""
+    tree = _module(GOVERNANCE)
+    decide = _function(tree, klass="EntityGovernanceService", name="_decide")
+    arguments = {argument.arg for argument in decide.args.kwonlyargs}
+    assert {"state", "decided_by", "decided_at", "has_operator_authority"} <= arguments
+    assert "names who made it" in ast.dump(decide), (
+        "_decide no longer refuses a blank actor; a decision nobody signed is a decision "
+        "a producer could have made"
+    )
+    propose = _function(tree, klass="EntityGovernanceService", name="propose")
+    assert "_decide" not in _called_names(propose)
+
+
+def test_no_acceptance_on_this_plane_reaches_an_identity_mutation() -> None:
+    """Property 7, and the structural form of `WP-RI-B-05`.
+
+    Read over the whole module rather than over one method, because the point is
+    that there is nowhere in it for a merge to live. Restoring the redirect and
+    the lineage write inside the decision path — the code this replaced — turns
+    this red without needing the guard to know which method they were put in.
+    """
+    tree = _module(GOVERNANCE)
+    reached = _repository_calls(tree)
+    assert reached, "the guard read no repository call at all"
+    identity = sorted(reached & IDENTITY_WRITES)
+    assert identity == [], (
+        f"entity_governance reaches {identity}. Identity mutation is an operator act under "
+        "entity_identity_correction; a review disposition that could reach it would make a "
+        "reviewer grant an identity-correction grant"
+    )
+    # And the module still reaches the *read* of that lineage, so the assertion
+    # above is about writes rather than about the merge vocabulary disappearing.
+    assert "merges" in reached
+
+
+def test_the_promotion_routing_imports_nothing_that_could_write() -> None:
+    """Property 8. Routing is a decision about which command; it is not the write."""
+    tree = _module(PROMOTION)
+    imported = {
+        node.module or "" for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
+    } | {
+        alias.name
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert imported, "the import scan read nothing"
+    forbidden = sorted(
+        name
+        for name in imported
+        if name.startswith(("sqlalchemy", "psycopg", "my_pa.infrastructure"))
+        or name.endswith("contracts.ports")
+    )
+    assert forbidden == [], (
+        f"{PROMOTION.name} imports {forbidden}. A module that can reach a repository is a "
+        "module in which promotion could stop being the Review path's act"
+    )
+    assert _called_names(tree).isdisjoint(WRITERS)
+
+
+def test_the_promotion_table_routes_no_identity_correction() -> None:
+    """Property 8, the half that matters most.
+
+    `_apply` used to merge on acceptance. Removing it is only half a correction
+    if the promotion table that replaced it holds an entry for the same kinds,
+    so the keys are read out of the source and the two are required to be
+    absent.
+    """
+    tree = _module(PROMOTION)
+    keys: set[str] = set()
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.Dict):
+            continue
+        for key in node.keys:
+            if (
+                isinstance(key, ast.Attribute)
+                and isinstance(key.value, ast.Name)
+                and key.value.id == "EntityProposalKind"
+            ):
+                keys.add(key.attr)
+    assert "RECORD_ALIAS" in keys, "the guard is not reading the promotion table"
+    assert "MERGE_ENTITIES" not in keys
+    assert "SPLIT_IDENTITY" not in keys
+
+
+@pytest.mark.parametrize(
+    "path", [DERIVATION, REPOSITORY, AUTHORING, GOVERNANCE, PROMOTION], ids=lambda p: p.name
+)
 def test_the_modules_this_guard_reads_exist_and_parse(path: Path) -> None:
     """Guards every assertion above: a moved file would make them all vacuous."""
     assert path.is_file()

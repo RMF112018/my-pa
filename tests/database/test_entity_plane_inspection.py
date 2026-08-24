@@ -30,6 +30,7 @@ from sqlalchemy.engine import make_url
 
 from my_pa.application.entity_governance import EntityGovernanceService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
@@ -213,14 +214,13 @@ def populated(disposable_database: str) -> Iterator[Engine]:
             )
             EntityGovernanceService(repository).propose(
                 PRINCIPAL_A,
-                proposal_id="eprp_aaaa0001aaaa0001",
                 kind=EntityProposalKind.MERGE_ENTITIES,
                 payload={"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
                 observation_ids=(),
                 proposed_by="Dana Whitfield",
-                proposed_at=WHEN,
                 method=EntityProposalMethod.DETERMINISTIC,
                 method_version="1",
+                at=WHEN,
             )
             # An assignment, so `role`, `discipline` and `responsibility_class`
             # are non-empty. Zero rows made three free-text columns unplantable:
@@ -242,9 +242,8 @@ def populated(disposable_database: str) -> Iterator[Engine]:
             # `decision_reason` and the merge `reason` carry text. `decided_by`
             # is the same free-text "who made this call" column the script's
             # docstring argues must never be selected, and it was unplanted.
-            EntityGovernanceService(repository).propose(
+            rejected = EntityGovernanceService(repository).propose(
                 PRINCIPAL_A,
-                proposal_id="eprp_bbbb0002bbbb0002",
                 kind=EntityProposalKind.RECORD_ALIAS,
                 payload={
                     "entity_id": ALICE,
@@ -253,14 +252,14 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                 },
                 observation_ids=(),
                 proposed_by="Ingrid Vasquez-Thorne",
-                proposed_at=WHEN,
                 method=EntityProposalMethod.DETERMINISTIC,
                 method_version="1",
+                at=WHEN,
             )
             repository.decide_proposal(
                 PRINCIPAL_A,
                 replace(
-                    repository.proposal(PRINCIPAL_A, "eprp_bbbb0002bbbb0002"),
+                    repository.proposal(PRINCIPAL_A, rejected.proposal_id),
                     state=EntityProposalState.REJECTED,
                     decided_by="Ingrid Vasquez-Thorne",
                     decided_at=WHEN,
@@ -298,7 +297,12 @@ def test_the_report_lists_the_open_proposal_without_its_payload(populated: Engin
     """An operator sees that a decision is waiting, not what it would join."""
     open_proposals = report(populated, PRINCIPAL_A)["open_proposals"]
     assert isinstance(open_proposals, list)
-    assert [entry["proposal_id"] for entry in open_proposals] == ["eprp_aaaa0001aaaa0001"]
+    assert len(open_proposals) == 1
+    # The identifier is checked for shape rather than against a literal: the
+    # server mints it now, so a literal here would be this test naming a value
+    # only the server may choose. `validate_identifier` is the same check the
+    # record applies, so a mint of the wrong kind still reddens.
+    validate_identifier(str(open_proposals[0]["proposal_id"]), IdKind.ENTITY_PROPOSAL)
     assert open_proposals[0]["kind"] == "merge_entities"
     assert "payload" not in open_proposals[0]
     assert ALICE not in json.dumps(open_proposals)

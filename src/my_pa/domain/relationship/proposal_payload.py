@@ -23,10 +23,12 @@ fields of the one canonical command that would carry out that mutation --
 optional, and nothing else. It does not re-check what those fields mean. A
 display name is well-formed because `AddEntityAlias.__post_init__` says so, and
 a second bounds check here would be a second, weaker constructor for a type that
-already has one -- which is the argument `EntityGovernanceService._apply` made
-against reconstructing domain records from flattened strings, and it is still
-right. The schema's job is that promotion is a *construction* rather than a
-translation: every name in an accepted payload is a name the command takes.
+already has one -- which is the argument the withdrawn
+`EntityGovernanceService._apply` made against reconstructing domain records from
+flattened strings, and it is still right. `application.entity_promotion` is
+where it now holds: the schema's job is that promotion is a *construction*
+rather than a translation, so every name in an accepted payload is a name the
+command takes and that module renames none of them.
 
 **Three exclusions, and each is a decision rather than an omission.**
 

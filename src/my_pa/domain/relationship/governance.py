@@ -55,6 +55,7 @@ from my_pa.domain.relationship.proposal_payload import (
 )
 
 __all__ = [
+    "ACCEPTED_PROPOSAL_STATES",
     "EDGE_WHITESPACE",
     "ENTITY_CHANGE_REASON_LIMIT",
     "IDENTITY_CORRECTION_PROPOSAL_KINDS",
@@ -536,12 +537,14 @@ _DECIDED_PROPOSAL_STATES: Final = (
     EntityProposalState.INVALIDATED,
 )
 
-#: The states in which a proposal produced a canonical record. A tuple for the
-#: reason above, and measured rather than assumed: written as a frozenset, these
-#: two values matched `f1c6b904a2d7`'s
+#: The states in which a proposal produced a canonical record, and the states in
+#: which one may be promoted -- `application.entity_promotion` reads this rather
+#: than spelling the pair, so "accepted" means one thing on both sides of the
+#: promotion. A tuple for the reason above, and measured rather than assumed:
+#: written as a frozenset, these two values matched `f1c6b904a2d7`'s
 #: `a_memory_proposal_names_its_result_exactly_when_accepted` -- the same
 #: sentence about the memory plane -- and that guard went red.
-_ACCEPTED_PROPOSAL_STATES: Final = (
+ACCEPTED_PROPOSAL_STATES: Final = (
     EntityProposalState.ACCEPTED,
     EntityProposalState.CORRECTED_ACCEPTED,
 )
@@ -949,7 +952,7 @@ class EntityProposal:
         # cannot imply "named a record". What does hold is the other way round:
         # a record named by a proposal nobody accepted would be a promotion with
         # no acceptance behind it.
-        if self.accepted_record_id is not None and self.state not in _ACCEPTED_PROPOSAL_STATES:
+        if self.accepted_record_id is not None and self.state not in ACCEPTED_PROPOSAL_STATES:
             raise ValueError("a proposal names the record it became only when it was accepted")
         if self.accepted_record_id is not None and self.kind in IDENTITY_CORRECTION_PROPOSAL_KINDS:
             raise ValueError("an accepted identity correction records intent, not a record")

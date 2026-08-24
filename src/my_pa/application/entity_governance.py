@@ -19,13 +19,38 @@ authority, and the declaration is a parameter rather than a flag on the
 proposal — a proposal that could name its own authority level could name the
 lowest one.
 
-**What accepting a merge does, and does not do.** It redirects the merged-away
-entity at the survivor and writes a lineage record. It does *not* delete the
-merged entity, rewrite its identifiers, or move its observations: section 15.3
-asks a merge to preserve prior identifiers as lineage, and an entity that still
-resolves as a `HISTORICAL_MATCH` is how a merge stays reversible. Re-pointing
-the records that referred to it is re-enrichment, and re-enrichment is
-`WP-RI-08`.
+**What accepting a merge does, and does not do — and what it used to do.**
+`WP-RI-06` applied the merge here: accepting a `merge_entities` proposal
+redirected the merged-away entity at the survivor and wrote the lineage record,
+and its argument was that an entity which still resolves as a `HISTORICAL_MATCH`
+is how a merge stays reversible, section 15.3 asking a merge to preserve prior
+identifiers as lineage. That half is still true and is now `WP-RI-B-06`'s to
+honour. The other half was the defect: it made *accepting a proposal* be the
+merge, so anything holding a reviewer's disposition held an identity-correction
+authority, and the whole distance between a review decision and a permanent
+identity join was one boolean this module asked its caller for.
+
+So acceptance now records reviewed intent, and only that. Accepting a
+`merge_entities` or a `split_identity` proposal writes the decision on the
+proposal — who accepted it, when, and why — and touches neither entity's status,
+redirect nor version. The identity change it asks for is a separate operator act
+under `entity_identity_correction`: `entities.merge.preview` binds an operator to
+exact entity versions and `entities.merge` applies what that preview bound. A
+reviewer grant is not an identity-correction grant, and `review.decide` is not a
+merge endpoint wearing another name.
+
+**Stated plainly, because it bounds what this correction is:** no published
+capability ever reached the applying code. The proposal methods here were called
+by tests and by nothing else, so this closes an unpublished path before it is
+published rather than withdrawing behaviour a caller could invoke.
+
+**Promotion of the ordinary kinds is elsewhere, and deliberately.**
+`application.entity_promotion` holds the routing from an accepted proposal to
+the canonical Phase A command that performs its mutation, and the Review path
+deciding the case is what executes it. This module holds no authoring service
+and no directed-write service, so "accepting a proposal cannot itself write a
+canonical record" is a property of what it can reach rather than a rule it
+promises to follow.
 """
 
 from __future__ import annotations
@@ -42,6 +67,7 @@ from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import (
+    OPEN_EQUIVALENT_PROPOSAL_STATES,
     ActorClass,
     EntityFactEvidenceLink,
     EntityGovernanceError,
@@ -80,7 +106,9 @@ __all__ = [
     "MentionResolution",
     "ObservationAdmission",
     "ObserveCommand",
+    "ProposalAdmission",
     "ProposalNotOpenError",
+    "ProposalSuppressedError",
     "QuarantinedObservationError",
     "ResolutionNotPermittedError",
     "ResolveMentionCommand",
@@ -139,6 +167,19 @@ class ResolutionNotPermittedError(EntityGovernanceError):
 
 class ReviewAuthorityError(Exception):
     """A decision was attempted without the authority the proposal requires."""
+
+
+class ProposalSuppressedError(EntityGovernanceError):
+    """A proposal repeats a claim whose whole basis has already been refused.
+
+    Its own error rather than a silent no-op or a dedupe answer, because the
+    three are different facts and a producer told the wrong one behaves wrongly:
+    "already open" means wait, "recorded" means a reviewer will see it, and this
+    means the grounds were refused and re-offering the same ones will be refused
+    again. Names the rule and never the pairing — the entity a citation was
+    refused against is exactly the kind of detail a refusal must not disclose to
+    a caller that could not otherwise read it.
+    """
 
 
 class ProposalNotOpenError(Exception):
@@ -200,50 +241,150 @@ class EntityGovernanceService:
         self,
         principal_id: str,
         *,
-        proposal_id: str,
         kind: EntityProposalKind,
         payload: Mapping[str, str | bool],
         observation_ids: tuple[str, ...],
         proposed_by: str,
-        proposed_at: datetime,
         method: EntityProposalMethod,
         method_version: str,
+        at: datetime,
         model_id: str | None = None,
         model_version: str | None = None,
         expected_target_version: int | None = None,
-    ) -> EntityProposal:
-        """Record a proposed mutation. Applies nothing.
+    ) -> ProposalAdmission:
+        """Record a proposed mutation, or hand back the open one that already says it.
 
-        Returns the proposal so a caller can read `requirement` and know what
-        would have to happen next, rather than discovering it when `decide`
-        refuses.
+        The application behaviour behind `entities.proposals.create`, and the
+        only way a proposal is written. There is no second entry point that
+        skips the checks below, because a producer path with a weaker sibling is
+        a producer path whose rules are optional.
 
-        `method` and its version are arguments and the dedupe digest is not: a
-        caller that could name the digest could name one nothing else would
-        collide with, and open-equivalent dedupe would then be over a value the
-        proposer chose. It is derived from the kind and the payload here, which
-        is the only place both are known.
+        **What the caller supplies is what a producer could legitimately have
+        decided**: which mutation it is asking for, the fields of that mutation,
+        which observations it read, and — from authenticated context rather than
+        from a payload — what produced it. Everything else is decided here. The
+        identifier is minted, the state is the initial one, the moment is the
+        server's clock, and the dedupe digest is derived: a caller that could
+        name the digest could name one nothing would collide with, and
+        open-equivalent dedupe would then be over a value the proposer chose.
+        `EntityProposalPayload` refuses the rest by field name, so a payload
+        carrying `principal_id`, `method`, `authority` or an idempotency key is
+        refused before this method has a proposal to record.
+
+        **Evidence is checked against this Principal's partition before it is
+        cited.** An observation that is absent and one that is somebody else's
+        are the same refusal here for the reason they are everywhere on this
+        plane. A quarantined observation is refused outright: `resolve_mention`
+        already refuses to let one bind an entity, and a proposal *is* a request
+        to bind one.
+
+        **An open-equivalent proposal is returned rather than multiplied.** Two
+        producers reaching the same conclusion have proposed the change once, and
+        a reviewer shown it twice has to decide the same thing twice. The
+        returned admission says `created=False`, so a caller can tell "recorded"
+        from "already open" without the two being one answer.
+
+        No review case is opened here and none is named: the Review plane owns
+        that, and a producer that could name a case could name one already
+        decided. No mutation-ledger row is written either, and that is the
+        ledger's own rule rather than an omission — `MutationRecordFamily` holds
+        the six canonical families and deliberately excludes proposals, because a
+        ledger that recorded requests would record the asking as if it were the
+        doing.
         """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         checked = EntityProposalPayload.of(kind, payload)
+        self._admit_evidence(principal_id, observation_ids)
+        # Suppression is decided before dedupe, and the order is deliberate: a
+        # producer re-filing evidence a reviewer has already refused is told so,
+        # rather than being told what is currently open in a queue it does not
+        # decide.
+        self._refuse_a_known_bad_proposal(principal_id, checked, observation_ids)
+        digest = dedupe_digest(checked)
+        open_equivalent = self._open_equivalent(principal_id, digest)
+        if open_equivalent is not None:
+            return _admission(open_equivalent, created=False)
         proposal = EntityProposal(
-            proposal_id=proposal_id,
+            proposal_id=issue_identifier(IdKind.ENTITY_PROPOSAL),
             principal_id=principal_id,
             kind=kind,
             state=EntityProposalState.PROPOSED,
             payload=checked,
             observation_ids=observation_ids,
-            proposed_at=ensure_utc(proposed_at),
+            proposed_at=ensure_utc(at),
             proposed_by=proposed_by,
             method=method,
             method_version=method_version,
-            dedupe_sha256=dedupe_digest(checked),
+            dedupe_sha256=digest,
             model_id=model_id,
             model_version=model_version,
             expected_target_version=expected_target_version,
         )
         self._entities.record_proposal(principal_id, proposal)
-        return proposal
+        return _admission(proposal, created=True)
+
+    def _admit_evidence(self, principal_id: str, observation_ids: tuple[str, ...]) -> None:
+        """Refuse a citation this Principal cannot make. See `propose`."""
+        for observation_id in observation_ids:
+            held = self._entities.observation(principal_id, observation_id)
+            if held is None:
+                raise UnknownObservationError("no such observation in this scope")
+            if held.state is ObservationState.QUARANTINED:
+                raise QuarantinedObservationError(
+                    "a quarantined observation does not evidence a proposal"
+                )
+
+    def _refuse_a_known_bad_proposal(
+        self,
+        principal_id: str,
+        payload: EntityProposalPayload,
+        observation_ids: tuple[str, ...],
+    ) -> None:
+        """Refuse a proposal every one of whose citations has already been refused.
+
+        This is what makes a rejection do more than sit in a table.
+        `OPEN_EQUIVALENT_PROPOSAL_STATES` deliberately excludes `REJECTED` and
+        `INVALIDATED` so that a refused claim *can* be raised again — but only on
+        new grounds, because a unique index cannot tell a producer that its basis
+        has changed and only the evidence can.
+
+        So the rule is over the evidence rather than over the digest: if this
+        proposal names a target entity and every observation it cites is already
+        recorded as counterevidence against that entity, it is the same claim on
+        the same grounds and is refused. One citation that has not been refused
+        is genuinely new grounds and the proposal is admitted — which is the
+        whole of "unless genuinely new evidence invalidates the prior basis", and
+        is why a proposal citing nothing is never suppressed: it has no basis to
+        have been refused.
+        """
+        target = payload.as_mapping().get("entity_id")
+        if not isinstance(target, str) or not observation_ids:
+            return
+        if all(
+            target in self._refused_pairings(principal_id, observation_id)
+            for observation_id in observation_ids
+        ):
+            raise ProposalSuppressedError(
+                "this pairing has already been refused on every citation offered"
+            )
+
+    def _open_equivalent(self, principal_id: str, digest: str) -> EntityProposal | None:
+        """The open proposal this digest already has, if any.
+
+        Read state by state rather than through one predicate, because
+        `EntitiesRepository.proposals` filters by a single state and
+        `OPEN_EQUIVALENT_PROPOSAL_STATES` names three. A repository read keyed on
+        `(principal_id, dedupe_sha256)` — the columns the partial unique index is
+        already over — would answer this in one statement; it does not exist yet,
+        and adding it is a port change. The index is the authority either way:
+        this read is what turns a would-be integrity error into the open proposal
+        the producer was going to be told about.
+        """
+        for state in sorted(OPEN_EQUIVALENT_PROPOSAL_STATES):
+            for held in self._entities.proposals(principal_id, state):
+                if held.dedupe_sha256 == digest:
+                    return held
+        return None
 
     def open_proposals(self, principal_id: str) -> list[EntityProposal]:
         """Everything awaiting a decision."""
@@ -284,13 +425,16 @@ class EntityGovernanceService:
         decided_at: datetime,
         reason: str,
         has_operator_authority: bool = False,
-        merge_id: str | None = None,
     ) -> EntityProposal:
-        """Accept a proposal and apply what it asked for.
+        """Record that a proposal was accepted. Mutates nothing else.
 
         `has_operator_authority` is a parameter the caller must pass rather than
-        anything this module can infer. A `REQUIRES_OPERATOR` proposal — today,
-        every merge — is refused without it.
+        anything this module can infer. A `REQUIRES_OPERATOR` proposal — today, a
+        merge or a split — is refused without it, and that refusal is about who
+        may *record the acceptance*: what the acceptance establishes is reviewed
+        identity-correction intent, and the identity change it asks for is a
+        separate act under a separate capability. See the module docstring for
+        the division and for what this method used to do instead.
         """
         return self._decide(
             principal_id,
@@ -300,7 +444,6 @@ class EntityGovernanceService:
             decided_at=decided_at,
             reason=reason,
             has_operator_authority=has_operator_authority,
-            merge_id=merge_id,
         )
 
     def _decide(
@@ -313,7 +456,6 @@ class EntityGovernanceService:
         decided_at: datetime,
         reason: str,
         has_operator_authority: bool,
-        merge_id: str | None = None,
     ) -> EntityProposal:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         held = self._entities.proposal(principal_id, proposal_id)
@@ -354,48 +496,11 @@ class EntityGovernanceService:
             decided_at=ensure_utc(decided_at),
             decision_reason=reason,
         )
-        if accepting:
-            self._apply(principal_id, decided, merge_id=merge_id)
+        # The decision, and no second write. There is no `_apply` step between
+        # these two lines any more; the module docstring records what used to be
+        # here and why it moved.
         self._entities.decide_proposal(principal_id, decided)
         return decided
-
-    # --- applying an accepted proposal -------------------------------------
-
-    def _apply(self, principal_id: str, proposal: EntityProposal, *, merge_id: str | None) -> None:
-        """Perform what an accepted proposal asked for.
-
-        Only merges are applied here. The other sixteen kinds name mutations
-        whose arguments are whole domain records rather than the flat fields a
-        proposal payload carries, and reconstructing an `ExternalIdentifier` from
-        flattened strings would be a second, weaker constructor for a type that
-        already has one. Those kinds are recorded and decided here and applied by
-        the caller that holds the record — which is the honest division until
-        something produces them, and is stated here rather than discovered.
-        """
-        if proposal.kind is not EntityProposalKind.MERGE_ENTITIES:
-            return
-        payload = proposal.payload.as_mapping()
-        merged = str(payload.get("merged_entity_id", ""))
-        retained = str(payload.get("retained_entity_id", ""))
-        if not merged or not retained:
-            raise ValueError("a merge proposal names the entity kept and the entity merged away")
-        if merge_id is None:
-            raise ValueError("accepting a merge records its lineage, which needs an identifier")
-
-        self._entities.redirect_entity(principal_id, merged, retained)
-        self._entities.record_merge(
-            principal_id,
-            EntityMergeRecord(
-                merge_id=merge_id,
-                principal_id=principal_id,
-                retained_entity_id=retained,
-                merged_entity_id=merged,
-                proposal_id=proposal.proposal_id,
-                decided_by=proposal.decided_by or "",
-                reason=proposal.decision_reason or "",
-                decided_at=proposal.decided_at or proposal.proposed_at,
-            ),
-        )
 
     def merge_lineage(
         self, principal_id: str, entity_id: str | None = None
@@ -1125,6 +1230,51 @@ class ObservationAdmission:
     #: this build does not keep, and the ledger row is what a caller is handed
     #: back. See `EntityMutationEvent` for the whole argument.
     mutation_event_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class ProposalAdmission:
+    """What one admitted proposal is, without the mutation it asks for.
+
+    No payload, on `ObservationAdmission`'s terms: the fields a proposal carries
+    are a display name, an address or a reason read out of somebody's mail, and a
+    receipt that echoed them would put them on a second surface for no gain — and
+    a *deduped* admission would put the earlier producer's text on this one.
+
+    `requirement` is derived from the kind and is here because it is the answer a
+    producer needs next: whether what it proposed will wait for a person, wait
+    for the operator, or may clear a threshold. Reading it off the admission is
+    how a producer learns that without guessing from the kind.
+
+    No review case identifier and no review version. The Review plane opens the
+    case, and a producer handed a case identifier by the path that created the
+    proposal would hold half of a reviewer's read.
+    """
+
+    proposal_id: str
+    kind: EntityProposalKind
+    state: EntityProposalState
+    requirement: ReviewRequirement
+    dedupe_sha256: str
+    observation_ids: tuple[str, ...]
+    proposed_at: datetime
+    #: False when an open-equivalent proposal already said this, in which case
+    #: every other field describes *that* proposal. The producer's request was
+    #: understood and nothing was written.
+    created: bool
+
+
+def _admission(proposal: EntityProposal, *, created: bool) -> ProposalAdmission:
+    return ProposalAdmission(
+        proposal_id=proposal.proposal_id,
+        kind=proposal.kind,
+        state=proposal.state,
+        requirement=proposal.requirement,
+        dedupe_sha256=proposal.dedupe_sha256,
+        observation_ids=proposal.observation_ids,
+        proposed_at=proposal.proposed_at,
+        created=created,
+    )
 
 
 @dataclass(frozen=True, slots=True)

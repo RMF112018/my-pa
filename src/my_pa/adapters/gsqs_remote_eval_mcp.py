@@ -106,11 +106,122 @@ _EMPTY_INPUT_SCHEMA: Final[dict[str, object]] = {
     "properties": {},
     "additionalProperties": False,
 }
+_GEOMETRY_SCHEMA: Final[dict[str, object]] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["x_min", "y_min", "width", "height"],
+    "properties": {
+        "x_min": {"type": "number", "minimum": 0, "maximum": 1},
+        "y_min": {"type": "number", "minimum": 0, "maximum": 1},
+        "width": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+        "height": {"type": "number", "exclusiveMinimum": 0, "maximum": 1},
+    },
+}
+_CONFIDENCE_SCHEMA: Final[dict[str, object]] = {
+    "type": "object",
+    "additionalProperties": False,
+    "description": (
+        "Optional decomposed 0..1 scores. This is an object, never a number. "
+        "Omitted keys are unset; do not send a scalar confidence."
+    ),
+    "properties": {
+        "transcription": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "segmentation": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "classification": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "linking": {"type": ["number", "null"], "minimum": 0, "maximum": 1},
+        "uncertainty": {"type": ["string", "null"], "maxLength": 500},
+    },
+}
+_RANKED_CANDIDATE_SCHEMA: Final[dict[str, object]] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["rank", "candidate"],
+    "properties": {
+        "rank": {"type": "integer", "minimum": 1},
+        "candidate": {"type": "string", "minLength": 1, "maxLength": 200},
+    },
+}
+_SOURCE_CONTEXT_SEGMENT_SCHEMA: Final[dict[str, object]] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["kind", "geometry"],
+    "properties": {
+        "kind": {"type": "string", "const": "SOURCE_CONTEXT"},
+        "geometry": _GEOMETRY_SCHEMA,
+        "crop_sha256": {"type": "string", "pattern": r"^[a-f0-9]{64}$"},
+        "transcription": {"type": "string", "maxLength": 20000},
+        "primary_class": {
+            "type": "string",
+            "enum": ["MEETING", "PROJECT", "RELATIONSHIP", "GENERAL"],
+        },
+    },
+}
+_NOTE_UNIT_SEGMENT_SCHEMA: Final[dict[str, object]] = {
+    "type": "object",
+    "additionalProperties": False,
+    "required": ["kind", "geometry", "transcription", "transcription_status", "primary_class"],
+    "properties": {
+        "kind": {"type": "string", "const": "NOTE_UNIT"},
+        "geometry": _GEOMETRY_SCHEMA,
+        "crop_sha256": {"type": "string", "pattern": r"^[a-f0-9]{64}$"},
+        "transcription": {"type": "string", "minLength": 1, "maxLength": 20000},
+        "transcription_status": {
+            "type": "string",
+            "enum": ["CLEAR", "UNCERTAIN", "UNREADABLE"],
+        },
+        "primary_class": {
+            "type": "string",
+            "enum": ["MEETING", "PROJECT", "RELATIONSHIP", "GENERAL"],
+        },
+        "candidate_tags": {
+            "type": "array",
+            "maxItems": 32,
+            "items": {"type": "string", "minLength": 1, "maxLength": 80},
+        },
+        "ranked_candidates": {
+            "type": "array",
+            "maxItems": 32,
+            "items": _RANKED_CANDIDATE_SCHEMA,
+        },
+        "confidence": _CONFIDENCE_SCHEMA,
+    },
+}
+_MINIMAL_NOTE_UNIT_V2_SEGMENT: Final[dict[str, object]] = {
+    "kind": "NOTE_UNIT",
+    "geometry": {"x_min": 0.12, "y_min": 0.20, "width": 0.62, "height": 0.18},
+    "transcription": "synthetic note unit",
+    "transcription_status": "CLEAR",
+    "primary_class": "GENERAL",
+    "candidate_tags": ["synthetic"],
+    "ranked_candidates": [{"rank": 1, "candidate": "synthetic note unit"}],
+    "confidence": {
+        "transcription": 0.92,
+        "segmentation": 0.90,
+        "classification": 0.88,
+        "linking": 0.75,
+    },
+}
+_SEGMENT_SCHEMA: Final[dict[str, object]] = {
+    "oneOf": [_SOURCE_CONTEXT_SEGMENT_SCHEMA, _NOTE_UNIT_SEGMENT_SCHEMA],
+    "examples": [_MINIMAL_NOTE_UNIT_V2_SEGMENT],
+}
 _SUBMIT_INPUT_SCHEMA: Final[dict[str, object]] = {
     "type": "object",
     "properties": {
-        "lease_id": {"type": "string"},
-        "segments": {"type": "array"},
+        "lease_id": {"type": "string", "minLength": 1},
+        "segments": {
+            "type": "array",
+            "minItems": 1,
+            "maxItems": 50,
+            "items": _SEGMENT_SCHEMA,
+            "description": (
+                "note-unit.v2 segments. SOURCE_CONTEXT is kind plus unit-square "
+                "geometry. NOTE_UNIT also requires transcription, "
+                "transcription_status, and primary_class. confidence is an object "
+                "with optional transcription, segmentation, classification, "
+                "linking, and uncertainty; never a number."
+            ),
+        },
     },
     "required": ["lease_id", "segments"],
     "additionalProperties": False,

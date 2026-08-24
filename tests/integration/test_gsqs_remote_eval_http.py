@@ -226,6 +226,33 @@ async def test_one_case_canary_through_streamable_http(
             assert progressed.state is RemoteEvalSessionState.IN_PROGRESS
 
 
+async def test_submit_accepts_the_published_minimal_note_unit_payload(
+    tmp_path: Path, no_external_io: None
+) -> None:
+    service, store, state_root, session_id, _generate = in_progress_session(
+        tmp_path, session_id="http-schema-canary"
+    )
+    app = eval_app(service)
+    async with running_eval_http(app) as http, connected_eval_session(http) as session:
+        listed = await session.list_tools()
+        submit_tool = next(tool for tool in listed.tools if tool.name == EVAL_TOOL_SUBMIT)
+        schema = getattr(submit_tool, "inputSchema", None) or submit_tool.input_schema
+        assert isinstance(schema, dict)
+        example = schema["properties"]["segments"]["items"]["examples"][0]
+        first = await call_next(session)
+        lease_id = text_payload(first)["lease_id"]
+        submitted = await call_submit(session, lease_id=lease_id, segments=[example])
+        assert submitted.is_error is False
+        body = text_payload(submitted)
+        assert body["ordinal"] == 1
+        assert body["duplicate"] is False
+        stored = store.load_capture(session_id, 1, "syn-b-001")
+        assert stored is not None
+        assert stored.segments[0]["kind"] == "NOTE_UNIT"
+        assert stored.segments[0]["confidence"]["transcription"] == 0.92
+    _ = state_root
+
+
 async def test_no_session_returns_no_active_session_without_image(
     tmp_path: Path, no_external_io: None
 ) -> None:

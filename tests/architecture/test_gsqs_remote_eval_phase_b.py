@@ -268,6 +268,8 @@ def test_evaluator_digests_are_stable_and_exclude_remote_eval_modules() -> None:
     assert ENTRYPOINT.resolve() not in resolved
     assert AUTH.resolve() not in resolved
     assert SETTINGS.resolve() not in resolved
+    prompt = ROOT / "ops" / "goodnotes" / "gsqs" / "b0" / "chatllm-remote-eval-prompt-v1.txt"
+    assert prompt.resolve() not in resolved
     for path in REMOTE_EVAL_APPLICATION:
         assert path.resolve() not in resolved
 

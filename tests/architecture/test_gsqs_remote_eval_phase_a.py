@@ -157,8 +157,11 @@ def test_evaluator_digests_are_stable_and_exclude_remote_eval_modules() -> None:
     assert identity == EXPECTED_CODE_IDENTITY
     assert digest == EXPECTED_IMPLEMENTATION_DIGEST
     names = [path.name for path in evaluator_implementation_files()]
+    resolved = {path.resolve() for path in evaluator_implementation_files()}
     assert not any("goodnotes_gsqs_remote_eval" in name for name in names)
     assert "goodnotes_gsqs.py" in names
+    prompt = ROOT / "ops" / "goodnotes" / "gsqs" / "b0" / "chatllm-remote-eval-prompt-v1.txt"
+    assert prompt.resolve() not in resolved
 
 
 def test_write_rasters_writes_only_pngs(tmp_path: Path) -> None:

@@ -69,6 +69,15 @@ def assert_eval_tool_schemas(tools: Sequence[object]) -> None:
     assert submit["type"] == "object"
     assert set(submit["properties"]) == {"lease_id", "segments"}
     assert set(submit["required"]) == {"lease_id", "segments"}
+    items = submit["properties"]["segments"]["items"]
+    assert "oneOf" in items
+    assert items["examples"]
+    confidence = next(
+        variant["properties"]["confidence"]
+        for variant in items["oneOf"]
+        if variant["properties"]["kind"].get("const") == "NOTE_UNIT"
+    )
+    assert confidence["type"] == "object"
 
 
 def assert_eval_tool_annotations(tools: Sequence[object]) -> None:

@@ -265,10 +265,17 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # `record_mutation_event` and `record_fact_evidence_link`, and each read is
     # the same `if X.principal_id != principal_id: raise` those writes already
     # perform for an observation and a proposal -- and three more row mappers.
+    # WP-RI-06 adds `effect`, `operation` and `preview` to the same family, and
+    # three more `row` reads for the mappers that build those records back. Each
+    # is the identity-correction plane's version of the rule above: the write
+    # methods refuse a record whose `principal_id` is not the acting Principal's
+    # before any statement runs, and the mappers read a column out of a statement
+    # `_mine` already scoped.
     "infrastructure/persistence/entity.py": (
         ("alias", "principal_id"),
         ("assignment", "principal_id"),
         ("decision", "principal_id"),
+        ("effect", "principal_id"),
         ("entity", "principal_id"),
         ("entity", "principal_id"),
         ("entity", "principal_id"),
@@ -277,6 +284,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("identifier", "principal_id"),
         ("link", "principal_id"),
         ("observation", "principal_id"),
+        ("operation", "principal_id"),
+        ("operation", "principal_id"),
+        ("preview", "principal_id"),
         ("proposal", "principal_id"),
         ("proposal", "principal_id"),
         ("record", "principal_id"),
@@ -311,6 +321,26 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("row", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+    ),
+    # WP-RI-06's merge service. `MergePreviewCommand` and `MergeCommand` are
+    # internal dataclasses whose docstrings say the actor, the clock and the
+    # authority are the server's, and neither has a transport-facing counterpart
+    # carrying a `principal_id` field — so there is nothing a caller could have
+    # supplied for these three reads to be confused with, exactly as for
+    # `ObserveCommand` above. The fourth is the stored preview's own field, read
+    # to recompute that preview's binding digest and refuse a row whose stored
+    # binding disagrees with the digest beside it -- so it is read in order to
+    # *check* it, which is the registry's own rule. `identity_preview` is
+    # partition-scoped, so a preview held by anyone else was answered as absent
+    # before this read happens at all.
+    "application/identity_correction.py": (
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("preview", "principal_id"),
     ),
     # WP-RI-06's governance service carries the `principal_id` of the proposal
     # it just loaded onto the decided copy of that proposal. The value is not

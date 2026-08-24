@@ -73,7 +73,7 @@ from my_pa.domain.relationship.governance import (
 )
 from my_pa.domain.relationship.normalization import normalize_name
 from tests.conftest import World
-from tests.unit.entity_proposal_fakes import ProposalEntities
+from tests.conftest import _Entities as FakeEntities
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 ALICE: Final = "ent_aaaa0001aaaa0001"
@@ -100,8 +100,8 @@ MERGE_PAYLOAD: Final[dict[str, str | bool]] = {
 }
 
 
-def _entities(world: World) -> ProposalEntities:
-    return ProposalEntities(world)
+def _entities(world: World) -> FakeEntities:
+    return FakeEntities(world)
 
 
 @pytest.fixture

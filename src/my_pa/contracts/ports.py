@@ -47,14 +47,23 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
 from types import TracebackType
-from typing import Any
+from typing import Any, ClassVar
 
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
-from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
+from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
 from my_pa.domain.capture.reveal import Reveal
-from my_pa.domain.capture.review import Disposition, ReviewCase, ReviewDecision
+from my_pa.domain.capture.review import (
+    REVIEW_REASON_LIMIT,
+    CorrectionPatch,
+    Disposition,
+    EntityProposalReviewCase,
+    EntityProposalReviewDecision,
+    ReviewCase,
+    ReviewDecision,
+    ReviewSubjectKind,
+)
 from my_pa.domain.capture.submission import CaptureKind, CaptureReceipt, CaptureTransport
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
@@ -2583,7 +2592,31 @@ class CaptureRepository(ABC):
 
 @dataclass(frozen=True, slots=True)
 class ReviewDecisionRequest:
-    """Everything one review transition needs inside a single transaction."""
+    """Everything one review transition needs inside a single transaction.
+
+    **Two shapes of correction, and they never travel together.**
+    `corrected_value` is the capture and GoodNotes shape and is unchanged: those
+    subjects have one normalized value, so a correction to one is one bounded
+    string. `correction_patch` is the Entity shape: an Entity proposal asks for a
+    mutation with *named arguments*, so a correction has to say which of them the
+    reviewer changed, and it is validated against the target command's schema by
+    the plane that owns the subject before anything commits. Exactly one of the
+    two accompanies `correct_and_accept` and neither accompanies anything else --
+    which is what stops a widening of the Entity shape from quietly relaxing the
+    bound the capture plane has always had on its one string.
+
+    **`reason` explains a departure.** Section 13 states one for `reject`,
+    `defer`, `mark_unresolved`, `escalate` and `invalidate`; it states none for
+    `accept`, `correct_and_accept` or `reprocess`, and a reason attached to those
+    would attribute a refusal to a decision nobody refused. So a reason is
+    refused on the three and permitted on the five -- and *required* on
+    `invalidate` and `escalate`, the two this package makes reachable and that
+    therefore have no caller to regress. Requiring it on the other three would
+    refuse every capture and GoodNotes reviewer that exists today, so the planes
+    that can require it do: `EntityProposalReviewService` requires a reason on all
+    five, because it is new and nothing calls it yet. That asymmetry is a
+    fact about what already ships, and it is recorded here rather than hidden.
+    """
 
     review_case_id: str
     expected_review_version: int
@@ -2594,6 +2627,25 @@ class ReviewDecisionRequest:
     policy_version: str
     decided_at: datetime
     corrected_value: str | None = field(default=None, repr=False)
+    correction_patch: CorrectionPatch | None = field(default=None, repr=False)
+    reason: str | None = field(default=None, repr=False)
+
+    #: The dispositions section 13 gives a reason. `accept`,
+    #: `correct_and_accept` and `reprocess` are deliberately absent.
+    _REASONED: ClassVar[frozenset[Disposition]] = frozenset(
+        {
+            Disposition.REJECT,
+            Disposition.DEFER,
+            Disposition.MARK_UNRESOLVED,
+            Disposition.ESCALATE,
+            Disposition.INVALIDATE,
+        }
+    )
+
+    #: The dispositions that cannot be recorded without one.
+    _REQUIRES_REASON: ClassVar[frozenset[Disposition]] = frozenset(
+        {Disposition.ESCALATE, Disposition.INVALIDATE}
+    )
 
     def __post_init__(self) -> None:
         validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
@@ -2606,39 +2658,157 @@ class ReviewDecisionRequest:
             raise ValueError("the expected review version is a non-negative integer")
         if not isinstance(self.disposition, Disposition):
             raise ValueError("a review request names one disposition")
+        self._check_correction()
+        self._check_reason()
+
+    def _check_correction(self) -> None:
         corrected = self.disposition is Disposition.CORRECT_AND_ACCEPT
-        if corrected is not (self.corrected_value is not None):
-            raise ValueError("a correction value belongs only to correct-and-accept")
+        supplied = (self.corrected_value is not None) + (self.correction_patch is not None)
+        if corrected is not (supplied == 1):
+            raise ValueError("correct-and-accept carries exactly one correction, and only it")
+        if self.correction_patch is not None and not isinstance(
+            self.correction_patch, CorrectionPatch
+        ):
+            raise ValueError("a correction patch is a typed patch")
         if self.corrected_value is not None and (
             not self.corrected_value.strip()
             or len(self.corrected_value) > MAX_NORMALIZED_VALUE_CHARACTERS
         ):
             raise ValueError("a correction value is bounded and not blank")
 
+    def _check_reason(self) -> None:
+        if self.reason is None:
+            if self.disposition in self._REQUIRES_REASON:
+                raise ValueError("this disposition states the reason for it")
+            return
+        if self.disposition not in self._REASONED:
+            raise ValueError("a reason explains a departure, and this disposition is not one")
+        if not self.reason.strip() or len(self.reason) > REVIEW_REASON_LIMIT:
+            raise ValueError("a reason is bounded and not blank")
+
 
 class ReviewRepository(ABC):
-    """Review cases and the only port capable of canonical promotion."""
+    """Review cases, and the storage every decision on them needs.
+
+    This said "the only port capable of canonical promotion", and for three of
+    the four subject kinds on this surface it still is: a capture proposal, a
+    GoodNotes region and a Relationship Memory candidate are each promoted inside
+    `decide`, because everything their promotion does is SQL. An accepted Entity
+    proposal is not. It is executed through the canonical Phase A mutation
+    services, which live in the application layer, so the promotion `review.decide`
+    performs for that subject reaches `EntitiesRepository` and never this port --
+    which is what section 14's "do not duplicate mutation logic inside Review"
+    asks for, and is why the sentence had to change rather than be repeated.
+    """
 
     @abstractmethod
     def cases(
-        self, *, limit: int, principal_id: str
-    ) -> tuple[ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase, ...]:
+        self,
+        *,
+        limit: int,
+        principal_id: str,
+        subject_kind: ReviewSubjectKind | None = None,
+        state: ProposalState | None = None,
+        entity_id: str | None = None,
+    ) -> tuple[
+        ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase | EntityProposalReviewCase,
+        ...,
+    ]:
         """One bounded page for this Principal, oldest case first.
 
         `principal_id` is the authenticated caller's identifier: the page is
         confined to that Principal's partition, and a case belonging to any
         other Principal is unreachable through this port (MU-AC-04).
 
-        Three variants and one surface. A capture proposal, a GoodNotes region
-        and a Relationship Memory candidate are decided by the same reviewer
-        through the same capability; the union is what keeps that one surface
-        from becoming three, and each variant carries only the subject facts its
-        own decision needs.
+        Four variants and one surface. A capture proposal, a GoodNotes region, a
+        Relationship Memory candidate and an Entity proposal are decided by the
+        same reviewer through the same capability; the union is what keeps that
+        one surface from becoming four, and each variant carries only the subject
+        facts its own decision needs.
+
+        **The three filters narrow one page; they do not open a second listing.**
+        `subject_kind` selects which planes are asked at all, `state` is the
+        shared `ProposalState` every variant already presents, and `entity_id`
+        selects the cases that are *about* one entity -- which only the two
+        entity-bearing variants can answer, so a filtered page contains only
+        those and a plane that cannot answer it contributes nothing rather than
+        contributing everything. Every filter is applied where the rows are, so a
+        narrowed page is still a full page of `limit` and not the remains of one.
         """
 
     @abstractmethod
     def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
         """Append a disposition; return `None` when evidence was invalidated."""
+
+    # --- the Entity proposal plane's own case read and decision ledger -------
+    #
+    # Five methods rather than a `decide` branch, and the split is section 14's.
+    # The other three subject kinds are decided *inside* this port, because
+    # everything their decision does is SQL. An accepted Entity proposal is
+    # executed through the canonical Phase A mutation services, which live in
+    # the application layer and which infrastructure may not import -- so the
+    # ordering of a decision belongs to `EntityProposalReviewService` and what
+    # is left here is exactly the storage that service cannot reach any other
+    # way. Non-abstract with a `NotImplementedError` default, on the terms
+    # `EntitiesRepository` uses for the same reason: this port has
+    # implementations outside the package.
+
+    def entity_proposal_case(
+        self, principal_id: str, review_case_id: str
+    ) -> EntityProposalReviewCase | None:
+        """The Entity proposal case `review_case_id` names, or `None`.
+
+        `None` is also the answer for another Principal's case, which is what
+        makes it indistinguishable from an identifier that names nothing.
+        """
+        raise NotImplementedError
+
+    def entity_proposal_decisions(
+        self, principal_id: str, review_case_id: str
+    ) -> tuple[Disposition, ...]:
+        """Every decision already appended to this case, in sequence order."""
+        raise NotImplementedError
+
+    def record_entity_proposal_decision(
+        self, principal_id: str, decision: EntityProposalReviewDecision
+    ) -> None:
+        """Append one decision to an Entity proposal's case."""
+        raise NotImplementedError
+
+    def invalidate_entity_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        reason: str,
+        decided_by: str,
+        decided_at: datetime,
+    ) -> bool:
+        """Close an open proposal a reviewer invalidated, naming why, in one act.
+
+        Distinct from `EntitiesRepository.invalidate_proposal`, which is the
+        merge's writer and records no `decision_reason` because no reviewer
+        decided anything. `False` when the proposal was decided in flight.
+        """
+        raise NotImplementedError
+
+    def supersede_entity_proposal(
+        self, principal_id: str, proposal_id: str, *, at: datetime
+    ) -> bool:
+        """Take an open proposal out of the open set, naming no successor yet.
+
+        `False` when it was decided in flight: a stale reprocess creates nothing.
+        Two statements rather than one because the successor pointer's foreign
+        key cannot name a row that does not exist yet, and the successor cannot
+        be inserted while the predecessor is still open-equivalent.
+        """
+        raise NotImplementedError
+
+    def name_entity_proposal_successor(
+        self, principal_id: str, proposal_id: str, *, successor_proposal_id: str
+    ) -> None:
+        """Point a superseded proposal at the successor that replaced it."""
+        raise NotImplementedError
 
 
 class SourceRepository(ABC):

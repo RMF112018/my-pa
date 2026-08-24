@@ -117,13 +117,33 @@ def test_nothing_calls_the_acceptance_gate_and_the_relationship_plane_cannot() -
         for path in _python_sources()
         if re.search(r"\.accept\(", path.read_text(encoding="utf-8"))
     )
-    # The two live `.accept(` call sites are an enrollment admission and a
-    # migration key guard; neither is the continuity gate. Named, so the claim
-    # "nothing calls it" is a measurement rather than a grep that found nothing.
+    # The three live `.accept(` call sites are an enrollment admission, a
+    # migration key guard, and — since `WP-RI-B-05` — the Review plane calling
+    # `EntityGovernanceService.accept` to carry out a proposal a reviewer
+    # accepted. None of them is the continuity gate. Named, so the claim
+    # "nothing calls it" is a measurement rather than a grep that found nothing,
+    # and named *per file* so a fourth call site in any of them still has to be
+    # confirmed by whoever adds it.
+    #
+    # `entity_governance.py` is the one that has to be checked rather than
+    # assumed, because it *is* the relationship plane. What it calls is its own
+    # module-level `EntityGovernanceService.accept`, which decides an
+    # `entity_proposals` row and promotes it through the entity plane's canonical
+    # mutation services; the assertion below is what holds the rest — that module
+    # names no continuity repository, no `ContinuityObjectKind` and no situation
+    # store, so the `accept` it reaches cannot be the gate whatever it is called.
     assert callers == [
+        "src/my_pa/application/entity_governance.py",
         "src/my_pa/application/service.py",
         "src/my_pa/infrastructure/migration/loader.py",
     ], f"a new `.accept(` call site appeared in {callers}; confirm it is not the continuity gate"
+
+    governance_source = (ROOT / "src/my_pa/application/entity_governance.py").read_text("utf-8")
+    for forbidden in ("situation_repository", "SqlContinuityRepository", "ContinuityObjectKind"):
+        assert forbidden not in governance_source, (
+            f"`entity_governance` names {forbidden}; its `accept` is the proposal "
+            "acceptance path and must not be able to reach the continuity gate"
+        )
 
     relationship_source = RELATIONSHIP_REPOSITORY.read_text(encoding="utf-8")
     for forbidden in ("situation_repository", "SqlContinuityRepository", "ContinuityObjectKind"):

@@ -116,7 +116,7 @@ from my_pa.domain.capture.proposal import (
     ProposalType,
     RiskClass,
 )
-from my_pa.domain.capture.review import Disposition
+from my_pa.domain.capture.review import REVIEW_REASON_LIMIT, Disposition
 from my_pa.domain.capture.span import (
     MAX_MAPPING_VERSION_CHARACTERS,
     OffsetBasis,
@@ -3628,6 +3628,18 @@ entity_proposals = Table(
     ),
     Index("entity_proposals_by_principal", "principal_id"),
     Index("entity_proposals_by_state", "principal_id", "state"),
+    # WP-RI-B-05: a review case names one proposal. `capture_review_cases`
+    # makes that structural with a `UNIQUE` on its own `proposal_id`; this plane
+    # keeps the case identifier on the proposal instead, so the same sentence is
+    # a unique index on the nullable column -- and nullable is the point, because
+    # a kind a configured threshold may accept opens no case at all and many
+    # such rows carry `NULL` together.
+    Index(
+        "a_review_case_names_one_entity_proposal",
+        "review_case_id",
+        unique=True,
+        postgresql_where=text("review_case_id IS NOT NULL"),
+    ),
     Index(
         "an_open_equivalent_proposal_is_raised_once",
         "principal_id",
@@ -3707,6 +3719,93 @@ entity_proposal_evidence_links = Table(
     ),
     Index("entity_proposal_evidence_links_by_principal", "principal_id"),
     Index("entity_proposal_evidence_links_by_observation", "entity_observation_id"),
+)
+
+#: WP-RI-B-05: what a reviewer decided about one Entity proposal, appended.
+#:
+#: **The plane's own decision ledger, which is what the canonical Review surface
+#: has asked of every subject kind that joined it.** `capture_review_decisions`
+#: is the capture plane's, `goodnotes_review_decisions` is GoodNotes',
+#: `relationship_memory_review_decisions` is the memory plane's, and this is the
+#: Entity plane's. One shared table would have needed a foreign key able to name
+#: four different proposal tables, which is the polymorphic reference this
+#: schema refuses everywhere else.
+#:
+#: **`review_version` is the count of rows here, and that is why the table
+#: exists rather than a column on the proposal.** Section 27 requires that a
+#: stale review version write nothing, and a version derived from "has this
+#: proposal been decided" can only ever be zero or one -- which would make
+#: `escalate` unrecordable, because an escalated case is one a reviewer has
+#: acted on *and* an operator has still to decide. Rows here are the only place
+#: that sequence is kept, and `UNIQUE (review_case_id, sequence)` is what makes
+#: two concurrent reviewers produce one decision rather than two.
+#:
+#: **`corrected_payload` is the reviewer's correction and never overwrites the
+#: proposal's own.** `entity_proposals.payload` is what a producer asserted and
+#: stays exactly that; a correction is the reviewer saying it was wrong, and
+#: writing it over the proposal would rewrite the record the decision was taken
+#: against and would leave `dedupe_sha256` -- a digest over the *proposed* kind
+#: and payload -- describing something nobody proposed. Promotion reads this
+#: column when it is present. It is the same argument
+#: `relationship_memory_review_decisions.corrected_statement` makes, about a
+#: subject whose correction has named fields instead of one string.
+#:
+#: **`reason` is required for exactly the dispositions section 13 gives one**,
+#: and refused for the three it does not, spelled out here rather than derived
+#: from the enum for the reason every closed-set CHECK in this file is spelled
+#: out: a constraint that read a Python set would change meaning the day the set
+#: did, against rows already stored under the old one.
+entity_proposal_review_decisions = Table(
+    "entity_proposal_review_decisions",
+    METADATA,
+    Column("decision_id", Text, primary_key=True),
+    Column("proposal_id", Text, nullable=False),
+    Column("review_case_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("disposition", Text, nullable=False),
+    Column("reason", Text),
+    Column("corrected_payload", JSONB),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("decision_id", IdKind.REVIEW_DECISION),
+    _is_identifier("proposal_id", IdKind.ENTITY_PROPOSAL),
+    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of("disposition", Disposition, name="an_entity_review_disposition_is_known"),
+    CheckConstraint("sequence >= 1", name="an_entity_review_sequence_is_positive"),
+    CheckConstraint(
+        "(disposition = 'correct_and_accept') = (corrected_payload IS NOT NULL)",
+        name="an_entity_correction_matches_its_disposition",
+    ),
+    CheckConstraint(
+        "reason IS NULL OR disposition IN "
+        "('reject', 'defer', 'mark_unresolved', 'escalate', 'invalidate')",
+        name="an_entity_review_reason_explains_a_departure",
+    ),
+    CheckConstraint(
+        "disposition NOT IN ('escalate', 'invalidate') OR reason IS NOT NULL",
+        name="an_escalation_or_invalidation_states_why",
+    ),
+    CheckConstraint(
+        f"reason IS NULL OR length(trim(reason)) BETWEEN 1 AND {REVIEW_REASON_LIMIT}",
+        name="an_entity_review_reason_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["proposal_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_proposals.proposal_id",
+            f"{SCHEMA}.entity_proposals.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="an_entity_review_decision_names_a_proposal_of_its_principal",
+    ),
+    UniqueConstraint("review_case_id", "sequence", name="one_entity_decision_per_review_sequence"),
+    Index("entity_proposal_review_decisions_by_case", "review_case_id", "sequence"),
+    Index("entity_proposal_review_decisions_by_principal", "principal_id"),
 )
 
 #: WP-RI-06: the lineage one accepted merge left behind (section 15.3).

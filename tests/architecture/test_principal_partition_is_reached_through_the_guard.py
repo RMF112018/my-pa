@@ -126,6 +126,17 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # proves ownership by joining to `captures.owner_principal_id`. That
         # comparison is registered in `HAND_WRITTEN_COMPARISONS`.
         "infrastructure/persistence/entity_authoring.py",
+        # `WP-RI-B-05`'s Review half of the same plane, separated from the two
+        # above for the reason they are separated from each other: this module's
+        # subject is a review case rather than a proposal or a canonical write.
+        # Every statement it builds over `entity_proposals` and
+        # `entity_proposal_review_decisions` goes through `partition_criterion`
+        # or `principal_bound_values`, through the one-line `_mine`/`_bound`
+        # wrappers `relationship_memory_review.py` established, and it has no
+        # statement that proves ownership any other way -- it cites no capture
+        # span and no knowledge record, so it adds nothing to
+        # `HAND_WRITTEN_COMPARISONS`.
+        "infrastructure/persistence/entity_proposal_review.py",
         "infrastructure/persistence/goodnotes.py",
         "infrastructure/persistence/goodnotes_semantics.py",
         "infrastructure/persistence/goodnotes_delivery.py",
@@ -385,6 +396,25 @@ PER_MODULE_ONLY: Final = {
         "per-module rather than statement-level only because this plane has no "
         "bespoke statement-level scan of its own yet; writing one is the work "
         "this entry represents, not a hole it is covering."
+    ),
+    "infrastructure/persistence/entity_proposal_review.py": (
+        "seven statements of ten — every write and every keyed read — compose "
+        "`_mine` or `_bound`, the same one-line wrappers over "
+        "partition_criterion and principal_bound_values that "
+        "`relationship_memory_review.py` established and that the plane it "
+        "reviews already uses. **Three do not**, and they are the same three "
+        "shapes the sibling entry below names: the `review_version`, "
+        "`escalated` and `latest_disposition` correlated subqueries built by "
+        "`_case_columns`, each keyed on `review_case_id` alone. All three "
+        "`.correlate(entity_proposals)` to the `_mine`-scoped select they hang "
+        "off, so they are evaluated per candidate row of a page that predicate "
+        "has already admitted and can only see decisions belonging to a case "
+        "this Principal holds. **What isolates them is that scoped statement "
+        "and nothing else** — not the key, which spans every Principal. Both "
+        "reads that use them are `_mine`-scoped; there is no third caller, and "
+        "a fourth would have to add one. Statement-level would say more, and "
+        "saying it requires a statement-level test of its own, which is the "
+        "work this entry represents rather than a hole it is covering."
     ),
     "infrastructure/persistence/relationship_memory_review.py": (
         "eleven statements of fourteen — every write, and every read of a "

@@ -530,7 +530,22 @@ def decide_relationship_memory_review(
     current = len(decisions)
     if current != request.expected_review_version:
         raise ReviewConflictError("the expected review version is stale")
-    if request.disposition in {Disposition.REPROCESS, Disposition.ESCALATE}:
+    # `INVALIDATE` joins them, and for a reason of its own. The disposition
+    # requires a reason -- that is what separates "the ground moved" from "a
+    # reviewer refused this" -- and `relationship_memory_review_decisions` has no
+    # reason column at all: its only prose column is `corrected_statement`, which
+    # is the reviewer's replacement text and is bound to `correct_and_accept` by
+    # a CHECK. `MemoryProposalState.INVALIDATED` exists, so the *state* is
+    # writable; writing it with the reason dropped would record that a
+    # candidate's basis failed without recording how, which is the shape
+    # `EntityProposal` refuses outright. Giving this ledger a reason column is a
+    # schema change, and a plane that could not say why is not a plane that
+    # should say it.
+    if request.disposition in {
+        Disposition.REPROCESS,
+        Disposition.ESCALATE,
+        Disposition.INVALIDATE,
+    }:
         raise ReviewUnsupportedError("the requested disposition has no eligible route")
 
     sequence = current + 1

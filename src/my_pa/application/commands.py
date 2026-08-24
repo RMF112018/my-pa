@@ -42,8 +42,13 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from my_pa.application import goodnotes_note_unit_contract as _note_unit
 from my_pa.application.errors import InvalidRequestError, SafeDetail
-from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
-from my_pa.domain.capture.review import Disposition
+from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
+from my_pa.domain.capture.review import (
+    REVIEW_REASON_LIMIT,
+    CorrectionPatch,
+    Disposition,
+    ReviewSubjectKind,
+)
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.common.identifiers import (
     IdKind,
@@ -1126,28 +1131,111 @@ class SearchCaptures:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
 
 
+#: The dispositions section 13 states a reason for, and the two that cannot be
+#: recorded without one. Spelled here rather than imported from
+#: `ReviewDecisionRequest`, which declares the same two sets for the same reason:
+#: this is what a *transport* request may carry and that is what a *transaction*
+#: may carry, and one shared set would make relaxing either relax both.
+_REASONED_DISPOSITIONS: Final[frozenset[Disposition]] = frozenset(
+    {
+        Disposition.REJECT,
+        Disposition.DEFER,
+        Disposition.MARK_UNRESOLVED,
+        Disposition.ESCALATE,
+        Disposition.INVALIDATE,
+    }
+)
+
+_REASON_REQUIRED_DISPOSITIONS: Final[frozenset[Disposition]] = frozenset(
+    {Disposition.ESCALATE, Disposition.INVALIDATE}
+)
+
+
 @dataclass(frozen=True, slots=True)
 class ListReviewCases:
-    """`review.list`: one bounded page of consequential proposal cases."""
+    """`review.list`: one bounded page of consequential proposal cases.
+
+    **Three filters and one page.** The surface carries four subject kinds now,
+    so a reviewer working through Entity proposals about one person had no way to
+    say so and would have paged through capture proposals to find them.
+    `subject_kind`, `state` and `entity_id` narrow the one canonical listing;
+    none of them opens a second one, and every one is a closed vocabulary or an
+    identifier so a misspelling is refused rather than silently matching nothing.
+    """
 
     capability: ClassVar[Capability] = Capability.REVIEW_LIST
 
     page_size: int | None = None
+    subject_kind: ReviewSubjectKind | None = None
+    state: ProposalState | None = None
+    entity_id: str | None = None
 
     def __post_init__(self) -> None:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.subject_kind is not None and not isinstance(self.subject_kind, ReviewSubjectKind):
+            raise InvalidRequestError(SafeDetail.SUBJECT)
+        if self.state is not None and not isinstance(self.state, ProposalState):
+            raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE)
+        if self.entity_id is not None:
+            _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
 
 
 @dataclass(frozen=True, slots=True)
 class DecideReviewCase:
-    """`review.decide`: append one disposition under optimistic concurrency."""
+    """`review.decide`: append one disposition under optimistic concurrency.
+
+    **Two correction shapes, and exactly one of them accompanies an acceptance
+    that corrects.** `corrected_value` is unchanged and is what a capture or
+    GoodNotes subject takes: one normalized value, one bounded string.
+    `correction_patch` is what an Entity proposal takes, because it asks for a
+    mutation with named arguments and a single string cannot say which of them
+    the reviewer changed. The plane that owns the subject validates the patch
+    against that mutation's own command schema before anything commits; this
+    checks only that a correction was supplied at all, and that it was not
+    supplied twice or to a disposition that corrects nothing.
+
+    `reason` is refused on `accept`, `correct_and_accept` and `reprocess`, which
+    section 13 gives no reason, and required on `escalate` and `invalidate`,
+    which cannot be recorded without one. The other three accept it and do not
+    require it: they have callers on planes that never asked for one, and
+    refusing those would be a regression rather than a rule.
+    """
 
     capability: ClassVar[Capability] = Capability.REVIEW_DECIDE
+
+    #: What the published schema says about the one field an annotation cannot
+    #: describe. `CorrectionPatch` is a domain record and `_schema_for` answers
+    #: `None` for it, which `payload_schema_for` publishes as `{}` — a field
+    #: documented as accepting anything, which is the slow erosion
+    #: `test_every_command_field_has_a_described_json_type` exists to stop.
+    #:
+    #: The overlay says the shape and deliberately not the field names: which
+    #: names are admitted is the *target command's* schema and depends on the
+    #: proposal's kind, which a tool description written once cannot know. So it
+    #: publishes "an object of named string-or-flag values" and leaves the rest
+    #: to the refusal, which names the rule and never the value.
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "correction_patch": {
+                "type": "object",
+                "additionalProperties": {"type": ["string", "boolean"]},
+                "description": (
+                    "The corrected fields of an entity proposal's requested mutation, "
+                    "named one by one. Validated against the schema of the canonical "
+                    "command that carries that mutation out before anything is written. "
+                    "Accompanies correct_and_accept for an entity proposal; a capture or "
+                    "GoodNotes subject takes corrected_value instead, and never both."
+                ),
+            }
+        }
+    )
 
     review_case_id: str
     expected_review_version: int
     disposition: Disposition
     corrected_value: str | None = field(default=None, repr=False)
+    correction_patch: CorrectionPatch | None = field(default=None, repr=False)
+    reason: str | None = field(default=None, repr=False)
 
     def __post_init__(self) -> None:
         _identifier(self.review_case_id, IdKind.REVIEW_CASE, SafeDetail.REVIEW_CASE_ID)
@@ -1155,8 +1243,17 @@ class DecideReviewCase:
             raise InvalidRequestError(SafeDetail.EXPECTED_REVIEW_VERSION)
         if not isinstance(self.disposition, Disposition):
             raise InvalidRequestError(SafeDetail.DISPOSITION)
+        self._check_correction()
+        self._check_reason()
+
+    def _check_correction(self) -> None:
         corrected = self.disposition is Disposition.CORRECT_AND_ACCEPT
-        if corrected is not (self.corrected_value is not None):
+        supplied = (self.corrected_value is not None) + (self.correction_patch is not None)
+        if corrected is not (supplied == 1):
+            raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+        if self.correction_patch is not None and not isinstance(
+            self.correction_patch, CorrectionPatch
+        ):
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
         if self.corrected_value is not None:
             _text(self.corrected_value, SafeDetail.CORRECTED_VALUE)
@@ -1165,6 +1262,17 @@ class DecideReviewCase:
                 or len(self.corrected_value) > MAX_NORMALIZED_VALUE_CHARACTERS
             ):
                 raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+
+    def _check_reason(self) -> None:
+        if self.reason is None:
+            if self.disposition in _REASON_REQUIRED_DISPOSITIONS:
+                raise InvalidRequestError(SafeDetail.ACTION)
+            return
+        if self.disposition not in _REASONED_DISPOSITIONS:
+            raise InvalidRequestError(SafeDetail.ACTION)
+        _text(self.reason, SafeDetail.ACTION)
+        if not self.reason.strip() or len(self.reason) > REVIEW_REASON_LIMIT:
+            raise InvalidRequestError(SafeDetail.ACTION)
 
 
 @dataclass(frozen=True, slots=True)

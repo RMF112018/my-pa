@@ -6,7 +6,7 @@ source-, rule- or model-derived candidate becomes memory only when a reviewer
 decides so (`RM-AC-005`, `RM-AC-016`, `RM-API-AC-011`, `RM-API-AC-012`,
 `RM-P-AC-008`).
 
-Six claims carry this path and each is asserted against the server rather than
+Seven claims carry this path and each is asserted against the server rather than
 against the code that usually calls it:
 
 * **A proposal is not memory.** Its invisibility to `page_for_entity` and
@@ -39,6 +39,12 @@ against the code that usually calls it:
   UPDATE while every one of that module's forty tests, and every one of the
   twenty-four here, stayed green. The population is `Disposition`'s own members,
   so a disposition the router grows arrives here unstated.
+* **The producer writes a row this database takes.** The seventh claim, and the
+  newest: `RelationshipMemoryProposalService` fills the proposal columns, and the
+  last section drives it through an insert-only adapter so the conditional
+  pairings the schema enforces — the model triple, the sensitivity floor — are
+  checked against the service that fills them rather than against a fixture
+  written to match them.
 
 Everything is synthetic: two invented Principals, invented entities, invented
 notes. The database is created and dropped by this module's own fixture and is
@@ -61,6 +67,13 @@ from sqlalchemy import Connection, Engine, Row, event, insert, select, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
+from my_pa.application.relationship_memory import (
+    MemoryProposalOrigin,
+    MemoryProposalReceipt,
+    ProposedEvidence,
+    ProposeMemoryCommand,
+    RelationshipMemoryProposalService,
+)
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import MemoryWriteRequest, ReviewDecisionRequest
 from my_pa.domain.capture.proposal import ProposalState
@@ -79,8 +92,10 @@ from my_pa.domain.relationship.memory import (
     MemoryAuthority,
     MemoryKind,
     MemoryOperation,
+    MemoryProposalEvidence,
     MemoryProposalMethod,
     MemoryProposalState,
+    RelationshipMemoryProposal,
     classification_floor_for,
     statement_digest,
 )
@@ -213,10 +228,21 @@ def two_principals(migrated_engine: Engine) -> Engine:
 
 # --- fixtures that put a candidate in front of a reviewer ---------------------
 #
-# Written as direct inserts rather than through a producer, because no producer
-# exists yet and inventing one here would make this suite a test of the
-# invention. The rows are exactly what a deterministic, rule or local-model
-# producer would have to write, and the schema's own CHECKs police that.
+# Written as direct inserts, and *still* direct inserts now that
+# `RelationshipMemoryProposalService` exists. The earlier reason recorded here —
+# "no producer exists yet" — has expired, and this is the reason that replaced
+# it: this fixture has to be able to write rows a producer refuses, and several
+# tests below depend on that. It seeds candidates for a foreign Principal and
+# candidates whose classification is stated rather than taken from the kind's
+# floor; the producer refuses both by construction. A fixture that could only
+# write well-formed candidates could not set up the refusals this suite is about.
+#
+# The producer is not thereby left unchecked against the schema. The last
+# section of this module drives `RelationshipMemoryProposalService` through an
+# insert-only adapter and asserts the row it writes survives every CHECK and
+# arrives on the canonical Review surface — the claim these hand-written rows
+# cannot make, because they were written to match the columns rather than
+# derived from the service that has to fill them.
 
 
 def _open_proposal(
@@ -1213,3 +1239,199 @@ def test_deciding_a_memory_case_in_an_uncomposed_build_answers_as_an_absent_one(
         decision = composed.reviews.decide(_decision(review_case_id, Disposition.ACCEPT))
     assert decision is not None
     assert decision.proposal_state is ProposalState.ACCEPTED
+
+
+# --- the producer, against the schema it has to satisfy -----------------------
+#
+# Every other test in this module seeds its candidate by hand. That is the right
+# fixture for a suite about *decisions*, and it is the wrong evidence for one
+# claim: that the record `RelationshipMemoryProposalService` builds is a record
+# this database will actually take. A hand-written row proves the columns accept
+# some value; it cannot prove the service fills them, because the service was not
+# involved in writing it.
+#
+# `_InsertOnlyProposals` is the producer's whole persistence surface — one
+# insert, exactly as `RelationshipMemoryProposalRepository` declares it — and it
+# lives here rather than in `src/` because the infrastructure implementation
+# lands with the capability that routes to it. It is also the reference shape for
+# that implementation: an insert of the domain records, unaltered.
+
+
+class _InsertOnlyProposals:
+    """`RelationshipMemoryProposalRepository`, over the two tables PR #147 created."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def record_proposal(
+        self,
+        proposal: RelationshipMemoryProposal,
+        evidence: tuple[MemoryProposalEvidence, ...],
+    ) -> None:
+        self._connection.execute(
+            insert(relationship_memory_proposals).values(
+                memory_proposal_id=proposal.memory_proposal_id,
+                principal_id=proposal.principal_id,
+                subject_entity_id=proposal.subject_entity_id,
+                proposed_kind=proposal.proposed_kind.value,
+                proposed_statement=proposal.proposed_statement,
+                proposed_statement_sha256=proposal.proposed_statement_sha256,
+                structured_value=proposal.structured_value,
+                state=proposal.state.value,
+                method=proposal.method.value,
+                method_version=proposal.method_version,
+                model_id=proposal.model_id,
+                model_version=proposal.model_version,
+                classification=proposal.classification.value,
+                proposed_at=proposal.proposed_at,
+                review_case_id=proposal.review_case_id,
+                accepted_memory_id=proposal.accepted_memory_id,
+                accepted_memory_version_id=proposal.accepted_memory_version_id,
+                invalidated_reason=proposal.invalidated_reason,
+            )
+        )
+        for link in evidence:
+            self._connection.execute(
+                insert(relationship_memory_proposal_evidence).values(
+                    proposal_evidence_id=link.proposal_evidence_id,
+                    memory_proposal_id=link.memory_proposal_id,
+                    principal_id=link.principal_id,
+                    role=link.role.value,
+                    entity_observation_id=link.entity_observation_id,
+                    capture_span_id=link.capture_span_id,
+                    knowledge_id=link.knowledge_id,
+                    created_at=link.created_at,
+                )
+            )
+
+
+def _produce(
+    connection: Connection,
+    *,
+    kind: MemoryKind = MemoryKind.WORKING_PREFERENCE,
+    statement: str = PROPOSED_NOTE,
+    origin: MemoryProposalOrigin | None = None,
+) -> MemoryProposalReceipt:
+    """One candidate, written the way a producer writes it and nowhere else."""
+    return RelationshipMemoryProposalService().propose(
+        _InsertOnlyProposals(connection),
+        ProposeMemoryCommand(
+            principal_id=PRINCIPAL_A,
+            subject_entity_id=DANA,
+            expected_subject_version=1,
+            memory_kind=kind,
+            statement=statement,
+            structured_value=None,
+            evidence=(
+                ProposedEvidence(
+                    role=EvidenceLinkRole.DIRECT,
+                    entity_observation_id=issue_identifier(IdKind.ENTITY_OBSERVATION),
+                ),
+                ProposedEvidence(
+                    role=EvidenceLinkRole.SUPPORTING,
+                    capture_span_id=issue_identifier(IdKind.SPAN),
+                ),
+            ),
+        ),
+        subject=an_entity(DANA, PRINCIPAL_A, "Dana Synthetic"),
+        origin=origin
+        or MemoryProposalOrigin(
+            method=MemoryProposalMethod.LOCAL_MODEL,
+            method_version="synthetic-extractor-v1",
+            model_id="synthetic-local-model",
+            model_version="2026.08",
+        ),
+        at=WHEN,
+    )
+
+
+def test_a_candidate_the_producer_writes_is_accepted_by_every_schema_check(
+    two_principals: Engine,
+) -> None:
+    """The columns the service fills are the columns the CHECKs police.
+
+    A local-model origin is used rather than a rule, because it is the shape with
+    the most to get wrong: `a_model_proposal_names_its_model` and
+    `a_named_proposal_model_states_its_version` are conditional pairings between
+    three columns, and a producer that filled two of them would be refused here
+    rather than in a later review.
+    """
+    with two_principals.begin() as connection:
+        receipt = _produce(connection)
+
+    with two_principals.connect() as connection:
+        row = _proposal_row(connection, receipt.memory_proposal_id)
+        links = connection.execute(
+            select(relationship_memory_proposal_evidence).where(
+                relationship_memory_proposal_evidence.c.memory_proposal_id
+                == receipt.memory_proposal_id
+            )
+        ).all()
+
+    assert row.state == MemoryProposalState.NEEDS_REVIEW.value
+    assert row.method == MemoryProposalMethod.LOCAL_MODEL.value
+    assert row.model_id == "synthetic-local-model"
+    assert row.model_version == "2026.08"
+    assert row.classification == Classification.PRIVATE_LOCAL.value
+    assert row.accepted_memory_id is None
+    assert row.review_case_id == receipt.review_case_id
+    assert len(links) == 2
+    assert {link.role for link in links} == {
+        EvidenceLinkRole.DIRECT.value,
+        EvidenceLinkRole.SUPPORTING.value,
+    }
+
+
+def test_a_produced_candidate_reaches_review_and_no_memory_read(
+    two_principals: Engine,
+) -> None:
+    """The producer's whole purpose, end to end: reviewable, and not yet memory.
+
+    `search` is asked for a term the candidate's own statement contains, so the
+    empty answer is the two record sets being different tables rather than a
+    query that matches nothing.
+    """
+    with two_principals.begin() as connection:
+        receipt = _produce(connection)
+
+    with two_principals.connect() as connection:
+        cases = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+        memories = SqlRelationshipMemoryRepository(connection)
+        page = memories.page_for_entity(DANA, principal_id=PRINCIPAL_A, limit=10)
+        found = memories.search("closeout", principal_id=PRINCIPAL_A, limit=10)
+
+    assert [case.review_case_id for case in cases] == [receipt.review_case_id]
+    assert cases[0].proposal_state is ProposalState.NEEDS_REVIEW
+    assert cases[0].subject_entity_id == DANA
+    assert cases[0].accepted_memory_id is None
+    assert page.memories == ()
+    assert page.withheld_by_policy == 0
+    assert found.memories == ()
+
+
+def test_a_produced_sensitivity_candidate_meets_the_floor_the_schema_demands(
+    two_principals: Engine,
+) -> None:
+    """`a_sensitivity_proposal_is_at_least_restricted` and `classification_floor_for`
+    are two statements of one rule, in two layers. This is where they are compared.
+
+    The service chooses the classification; the CHECK decides whether the choice
+    was right. If the floor were computed anywhere but from the kind, the insert
+    would be refused here rather than at a review.
+    """
+    with two_principals.begin() as connection:
+        receipt = _produce(
+            connection,
+            kind=MemoryKind.SENSITIVITY,
+            statement="Synthetic subject declines evening closeout calls.",
+        )
+
+    with two_principals.connect() as connection:
+        row = _proposal_row(connection, receipt.memory_proposal_id)
+        cases = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+
+    assert row.classification == Classification.RESTRICTED_LOCAL.value
+    assert receipt.classification is Classification.RESTRICTED_LOCAL
+    # And the reviewer still gets no statement to leak, which is the disclosure
+    # control this candidate is the sharpest case of.
+    assert not hasattr(cases[0], "proposed_statement")

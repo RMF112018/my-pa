@@ -63,9 +63,7 @@ SERVICE: Final = ROOT / "src" / "my_pa" / "application" / "service.py"
 ORIGIN_METHODS: Final = ("_proposal_origin", "_memory_proposal_origin")
 
 #: Every field name that would state a method or a model, on either plane.
-PROVENANCE_FIELDS: Final = frozenset(
-    {"method", "method_version", "model_id", "model_version"}
-)
+PROVENANCE_FIELDS: Final = frozenset({"method", "method_version", "model_id", "model_version"})
 
 
 def _is_docstring(node: ast.stmt) -> bool:
@@ -75,9 +73,7 @@ def _is_docstring(node: ast.stmt) -> bool:
 def _function(name: str) -> ast.FunctionDef:
     tree = ast.parse(SERVICE.read_text(encoding="utf-8"), filename=str(SERVICE))
     found = [
-        node
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef) and node.name == name
+        node for node in ast.walk(tree) if isinstance(node, ast.FunctionDef) and node.name == name
     ]
     assert len(found) == 1, f"{name} is defined {len(found)} times in {SERVICE.name}"
     return found[0]

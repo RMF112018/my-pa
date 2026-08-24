@@ -180,7 +180,7 @@ Within an accepted objective, the designated orchestration agent may, without ad
 - stage files, create commits, amend unreviewed commits, rebase or synchronize a feature branch, and resolve routine conflicts;
 - push feature branches and tags that do not publish a release or activate production;
 - create, edit, label, and close issues and pull requests; request reviews; respond to findings; and manage ordinary repository metadata;
-- authorize and direct one worker agent at a time, including approval of the worker's routine repository operations;
+- instantiate, authorize, and direct specialized worker agents under section 8.3, including concurrent workers when the orchestration agent has established dependency independence and non-overlapping write ownership, and approve those workers' routine repository operations;
 - run local and CI validation against synthetic or explicitly eligible data and use verified isolated test databases;
 - decide routine technical, architectural, sequencing, corrective, and recovery matters within the accepted objective;
 - accept bounded, reversible implementation risk that does not meet the extreme-risk definition in section 8.2;
@@ -216,6 +216,78 @@ Absence of an item from this reserved list does not by itself authorize work out
 
 Use ADRs only for durable, cross-cutting, difficult-to-reverse decisions. Ordinary implementation choices belong in code, tests, issues, and pull requests. Update documentation only when behavior, contracts, architecture, operations, or developer workflow materially changes.
 
+### 8.3 Mandatory tiered agent execution
+
+Substantive AI-assisted repository work MUST use the following three-tier execution topology:
+
+**Manager → Orchestrator → Specialized Workers**
+
+This is a repository execution-control requirement. It applies whether the accepted objective is governed through AEOS, another durable workflow, or a direct bounded/non-AEOS operator instruction. The topology does not itself create implementation authority, widen scope, authorize merge or deployment, or add a generalized agent framework to the `my-pa` product architecture.
+
+A task is substantive for this section when it includes implementation, schema or migration work, security/privacy changes, cross-layer or multi-file changes, review/audit/corrective cycles, deployment/readiness work, or two or more separable technical specialties. Such work MUST NOT be collapsed into one monolithic authoring context.
+
+#### Manager
+
+The Manager is the top-level controlling context for the accepted objective. The Manager MUST:
+
+- establish and preserve operator intent, objective, acceptance criteria, exact repository/base identity, in-scope behavior, prohibitions, and stop conditions;
+- instantiate one dedicated Orchestrator for technical execution;
+- retain final campaign accountability and resolve material scope or contract conflicts surfaced by the Orchestrator;
+- keep implementation, review, and operator-only authority distinctions explicit;
+- avoid becoming the routine feature-implementation worker except for a small integration correction that cannot reasonably be delegated without adding risk.
+
+The Manager may not delegate final accountability or treat worker output as self-validating evidence.
+
+#### Orchestrator
+
+The Orchestrator is a dedicated context separate from the Manager and routine feature workers. It owns the execution graph and MUST:
+
+- reauthenticate the current repository/base before execution and read the governing repository sources for the paths in scope;
+- decompose the objective into bounded tasks and dispatch specialized workers for distinct domains or technical concerns;
+- assign explicit worker file/path ownership, dependencies, acceptance criteria, and prohibitions before parallel work begins;
+- serialize dependent work and shared-file edits; concurrent workers are permitted only when dependencies are satisfied and write ownership does not overlap;
+- prefer isolated worker branches/worktrees for concurrent write tasks where the harness supports them;
+- assign a single integration owner for shared dispatcher, registry, migration-chain, or other contention-prone files rather than allowing competing edits;
+- collect worker handoffs, integrate the resulting changes, run the applicable test tiers, and coordinate corrective cycles;
+- preserve exact commit/tree identity through integration and review;
+- never substitute its own review for the independent exact-head review required for merge.
+
+The Orchestrator is the designated orchestration agent referenced by section 8.1 when standing orchestration authority is being exercised.
+
+#### Specialized workers
+
+Workers MUST be specialized to a bounded, unique task rather than given the entire objective. Examples include persistence/migrations, domain/application behavior, transport/policy integration, security/privacy validation, testing/evaluation, documentation, or independent review.
+
+Every worker assignment MUST specify:
+
+- worker role and objective;
+- exact base commit/tree or worktree identity;
+- in-scope files/behavior and explicit out-of-scope items;
+- dependencies and owned write paths;
+- acceptance criteria and required tests/evidence;
+- authority ceiling and prohibited actions;
+- required handoff fields.
+
+Every worker handoff MUST report:
+
+- exact base and resulting commit/tree when it performed writes;
+- files changed;
+- requirement/work-item IDs addressed when they exist;
+- tests/evidence produced and exact results;
+- assumptions, limitations, blockers, and intentionally unperformed work.
+
+Workers MUST NOT widen scope, redesign accepted contracts, merge to `main`, deploy, accept risk, or claim final objective completion unless the governing operator instruction independently grants that authority.
+
+#### Specialized independent reviewer
+
+When independent review is required, the Orchestrator MUST commission a fresh specialized reviewer context that did not author the change, has authority to block, and is not instructed toward an approval outcome. The reviewer binds its verdict to the exact reviewed head. Any later commit invalidates that verdict and requires a new exact-head review.
+
+#### Harness limitation
+
+If a substantive task requires this topology but the available execution harness cannot instantiate the necessary separate Manager, Orchestrator, and worker contexts, stop and report the limitation. Do not silently collapse the work into a single context unless the operator explicitly authorizes that exception for the exact task.
+
+A truly atomic, low-risk task that does not meet the substantive criteria above may use direct bounded execution; do not manufacture meaningless subagents for a trivial read or isolated mechanical edit. The controlling context must be able to explain why the task was classified as atomic if challenged.
+
 ## 9. Mandatory stops
 
 Stop and report the blocker when:
@@ -224,4 +296,5 @@ Stop and report the blocker when:
 - the objective, acceptance criteria, or path scope materially conflicts;
 - credentials, production access, destructive data operations, or undisclosed irreversible actions become necessary;
 - a security, privacy, or data-loss risk cannot be contained within the accepted scope;
-- the change requires a new architecture component not covered by the accepted objective.
+- the change requires a new architecture component not covered by the accepted objective;
+- substantive agent-assisted work cannot satisfy section 8.3 role separation because the execution harness lacks the required contexts and the operator has not authorized an exception.

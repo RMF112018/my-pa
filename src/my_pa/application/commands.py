@@ -5655,6 +5655,9 @@ type Command = (
     | ListEntityObservations
     | ObserveEntityMention
     | ResolveUnresolvedMention
+    | CreateEntityProposal
+    | PreviewEntityMerge
+    | MergeEntities
     | CreateRelationshipMemory
     | GetRelationshipMemory
     | ListRelationshipMemories
@@ -5663,10 +5666,7 @@ type Command = (
     | ReviseRelationshipMemory
     | ArchiveRelationshipMemory
     | RestoreRelationshipMemory
-    | CreateEntityProposal
     | ProposeRelationshipMemory
-    | PreviewEntityMerge
-    | MergeEntities
 )
 
 

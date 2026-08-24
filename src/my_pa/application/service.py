@@ -7972,6 +7972,9 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: (
             ApplicationService._entities_unresolved_mentions_resolve
         ),
+        Capability.ENTITIES_PROPOSALS_CREATE: ApplicationService._entities_proposals_create,
+        Capability.ENTITIES_MERGE_PREVIEW: ApplicationService._entities_merge_preview,
+        Capability.ENTITIES_MERGE: ApplicationService._entities_merge,
         Capability.RELATIONSHIP_MEMORY_CREATE: ApplicationService._relationship_memory_create,
         Capability.RELATIONSHIP_MEMORY_GET: ApplicationService._relationship_memory_get,
         Capability.RELATIONSHIP_MEMORY_LIST: ApplicationService._relationship_memory_list,
@@ -7981,9 +7984,6 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.RELATIONSHIP_MEMORY_ARCHIVE: ApplicationService._relationship_memory_archive,
         Capability.RELATIONSHIP_MEMORY_RESTORE: ApplicationService._relationship_memory_restore,
         Capability.RELATIONSHIP_MEMORY_PROPOSE: ApplicationService._relationship_memory_propose,
-        Capability.ENTITIES_PROPOSALS_CREATE: ApplicationService._entities_proposals_create,
-        Capability.ENTITIES_MERGE_PREVIEW: ApplicationService._entities_merge_preview,
-        Capability.ENTITIES_MERGE: ApplicationService._entities_merge,
     }
 )
 

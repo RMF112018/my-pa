@@ -93,6 +93,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
@@ -134,8 +135,11 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewEntityMerge,
+    ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -214,6 +218,7 @@ from my_pa.domain.relationship.governance import (
     ResolutionDisposition,
 )
 from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
+from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -258,6 +263,22 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
+        # The ninth name on that plane (`WP-RI-B-05`), withheld by the same
+        # switch and for the same reason.
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        # `WP-RI-B-06`'s two, withheld by a *third* switch:
+        # `RecordingService` leaves `relationship_identity_correction_enabled`
+        # unset, so `_identity_correction_plane` refuses both at the composition
+        # floor. Recorded here rather than in `_UNIMPLEMENTED_CAPABILITIES` for
+        # the reason the eight above are: they are implemented, and this process
+        # did not turn them on. A build that does cannot answer them against this
+        # `World` either -- `_Entities` implements none of the sixteen
+        # identity-correction port methods, and a fake that approximated a
+        # governed merge would let this suite prove something the server does not
+        # do. `tests/database/test_identity_correction_merge.py` is where the
+        # merge is proved, against a real server.
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
     }
 )
 
@@ -838,6 +859,43 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "kind": "personal_detail",
             "observed_at": "2026-08-02T10:00:00Z",
         },
+        # The producer path (`WP-RI-B-05`). Refused at the composition floor here
+        # like the eight beside it; what this payload has to do is build the
+        # command so `normalize` has a real pair to compare.
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: {
+            "entity_id": person.entity_id,
+            "expected_entity_version": person.version,
+            "statement": "A synthetic produced candidate",
+            "evidence": [{"role": "direct", "entity_observation_id": "eobs_httpwire01httpwire01"}],
+            "kind": "personal_detail",
+        },
+        # `WP-RI-B-05`'s entity producer, which this build *does* serve: it needs
+        # the plane and its write half and nothing further.
+        Capability.ENTITIES_PROPOSALS_CREATE: {
+            "kind": "record_alias",
+            "payload": {
+                "entity_id": person.entity_id,
+                "alias_type": "initials",
+                "display_value": "PP",
+            },
+            "proposed_by": "http-wire-producer",
+            "expected_target_version": person.version,
+        },
+        # `WP-RI-B-06`'s two, refused at the composition floor. Well formed for
+        # the reason the memory payloads are.
+        Capability.ENTITIES_MERGE_PREVIEW: {
+            "survivor_entity_id": person.entity_id,
+            "expected_survivor_version": person.version,
+            "merged_away": [
+                {"entity_id": organization.entity_id, "expected_version": organization.version}
+            ],
+            "reason": "A synthetic identity correction.",
+        },
+        Capability.ENTITIES_MERGE: {
+            "preview_id": "eipv_httpwire01httpwire01",
+            "preview_digest": "0" * 64,
+            "reason": "A synthetic identity correction.",
+        },
         Capability.RELATIONSHIP_MEMORY_GET: {
             "memory_id": MEMORY_ID,
             "include_statement": True,
@@ -1364,6 +1422,36 @@ def commands_for(
             idempotency_key="http-memory-create-0001",
             kind=MemoryKind.PERSONAL_DETAIL,
             observed_at=datetime(2026, 8, 2, 10, tzinfo=UTC),
+        ),
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: ProposeRelationshipMemory(
+            entity_id=person.entity_id,
+            expected_entity_version=person.version,
+            statement="A synthetic produced candidate",
+            evidence=({"role": "direct", "entity_observation_id": "eobs_httpwire01httpwire01"},),
+            kind=MemoryKind.PERSONAL_DETAIL,
+        ),
+        Capability.ENTITIES_PROPOSALS_CREATE: CreateEntityProposal(
+            kind=EntityProposalKind.RECORD_ALIAS,
+            payload={
+                "entity_id": person.entity_id,
+                "alias_type": "initials",
+                "display_value": "PP",
+            },
+            proposed_by="http-wire-producer",
+            expected_target_version=person.version,
+        ),
+        Capability.ENTITIES_MERGE_PREVIEW: PreviewEntityMerge(
+            survivor_entity_id=person.entity_id,
+            expected_survivor_version=person.version,
+            merged_away=(
+                {"entity_id": organization.entity_id, "expected_version": organization.version},
+            ),
+            reason="A synthetic identity correction.",
+        ),
+        Capability.ENTITIES_MERGE: MergeEntities(
+            preview_id="eipv_httpwire01httpwire01",
+            preview_digest="0" * 64,
+            reason="A synthetic identity correction.",
         ),
         Capability.RELATIONSHIP_MEMORY_GET: GetRelationshipMemory(
             memory_id=MEMORY_ID, include_statement=True

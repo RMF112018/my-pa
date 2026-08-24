@@ -260,9 +260,9 @@ def test_the_nine_names_are_every_name_on_the_plane() -> None:
     }
     assert set(MEMORY_CAPABILITIES) == by_prefix
     assert len(MEMORY_CAPABILITIES) == 9
-    assert (
-        set(MEMORY_WRITES) | set(MEMORY_READS) | set(MEMORY_PROPOSALS)
-    ) == set(MEMORY_CAPABILITIES)
+    assert (set(MEMORY_WRITES) | set(MEMORY_READS) | set(MEMORY_PROPOSALS)) == set(
+        MEMORY_CAPABILITIES
+    )
     # Three disjoint groups and not two overlapping ones: the producer is not a
     # direct write and is not a read, which is the whole of why it needs a
     # purpose neither of them holds.
@@ -282,9 +282,7 @@ def test_the_producer_holds_a_purpose_neither_half_of_the_plane_holds(
     candidates holds `relationship_memory_proposal` and nothing else, so it
     reaches neither the four direct writes nor the four reads.
     """
-    assert permitted_purposes(capability) == frozenset(
-        {Purpose.RELATIONSHIP_MEMORY_PROPOSAL}
-    )
+    assert permitted_purposes(capability) == frozenset({Purpose.RELATIONSHIP_MEMORY_PROPOSAL})
     assert Purpose.RELATIONSHIP_MEMORY_AUTHORING not in permitted_purposes(capability)
     assert Purpose.RELATIONSHIP_MEMORY_READ not in permitted_purposes(capability)
     for other in (*MEMORY_WRITES, *MEMORY_READS):

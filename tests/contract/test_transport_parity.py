@@ -1144,6 +1144,41 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "pinned": True,
             "observed_at": "2026-08-02T10:00:00Z",
         },
+        # `WP-RI-B-05`'s two producer paths and `WP-RI-B-06`'s two identity
+        # halves. The staged mention is the evidence a produced candidate rests
+        # on, so the citation resolves inside this Principal's partition rather
+        # than being a well-formed identifier naming nothing.
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: {
+            "entity_id": person.entity_id,
+            "expected_entity_version": person.version,
+            "statement": "Parity produced candidate",
+            "evidence": [{"role": "direct", "entity_observation_id": MENTION_ID}],
+            "kind": "personal_detail",
+        },
+        Capability.ENTITIES_PROPOSALS_CREATE: {
+            "kind": "record_alias",
+            "payload": {
+                "entity_id": person.entity_id,
+                "alias_type": "initials",
+                "display_value": "PP",
+            },
+            "evidence_observation_ids": [MENTION_ID],
+            "proposed_by": "parity-producer",
+            "expected_target_version": person.version,
+        },
+        Capability.ENTITIES_MERGE_PREVIEW: {
+            "survivor_entity_id": person.entity_id,
+            "expected_survivor_version": person.version,
+            "merged_away": [
+                {"entity_id": organization.entity_id, "expected_version": organization.version}
+            ],
+            "reason": "A synthetic identity correction.",
+        },
+        Capability.ENTITIES_MERGE: {
+            "preview_id": "eipv_parity0001parity0001",
+            "preview_digest": "0" * 64,
+            "reason": "A synthetic identity correction.",
+        },
         Capability.RELATIONSHIP_MEMORY_GET: {
             "memory_id": memory_id,
             "include_statement": True,
@@ -1211,7 +1246,18 @@ def answers_for(
     answers: dict[str, Answer] = {}
     for build in TRANSPORTS:
         world = deepcopy(scene.world)
-        service = build_service(world, FakeProviders({scene.source.source_id: scene.provider}))
+        service = build_service(
+            world,
+            FakeProviders({scene.source.source_id: scene.provider}),
+            # The governed merge is *not* composed, and the refusal that follows
+            # is itself compared over all three transports by
+            # `test_the_governed_merge_refuses_identically_over_all_three_transports`.
+            # It cannot be composed against this `World`: `_Entities` implements
+            # none of the sixteen identity-correction port methods, and a fake
+            # that approximated a governed merge would let this matrix report
+            # agreement about something the server does not do.
+            relationship_identity_correction_enabled=False,
+        )
         with build(service, scene.principal) as transport:
             answers[transport.name] = transport.send(capability, request)
     assert set(answers) == TRANSPORT_NAMES, f"only {sorted(answers)} answered"
@@ -1308,7 +1354,9 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 96, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # A hundred since `WP-RI-B-05` and `WP-RI-B-06`: the ninety-nine commands and
+    # `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 100, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -1615,7 +1663,19 @@ def assert_same_answer(
     assert len(set(signals.values())) == 1, f"{where}: transports disagreed on success {signals}"
 
 
-@pytest.mark.parametrize("capability", list(Capability), ids=lambda c: c.value)
+#: The two this matrix compares a *refusal* for rather than an answer, because
+#: the harness composes no governed merge. Named rather than skipped, so the
+#: comparison below still covers them and the reason is legible.
+UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
+    {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
+)
+
+
+@pytest.mark.parametrize(
+    "capability",
+    [c for c in Capability if c not in UNCOMPOSED_HERE],
+    ids=lambda c: c.value,
+)
 def test_every_capability_answers_identically_over_all_three_transports(
     capability: Capability, staged: tuple[Scene, KnowledgeRecord]
 ) -> None:
@@ -1628,6 +1688,36 @@ def test_every_capability_answers_identically_over_all_three_transports(
     assert not any(answer.failed for answer in answers.values()), answers
     for name, answer in answers.items():
         assert answer.document["error"] is None, f"{name} refused {capability.value}"
+        assert answer.document["request_id"] == request["request_id"]
+    assert_same_answer(answers, request, capability.value)
+
+
+@pytest.mark.parametrize("capability", sorted(UNCOMPOSED_HERE), ids=lambda c: c.value)
+def test_the_governed_merge_refuses_identically_over_all_three_transports(
+    capability: Capability, staged: tuple[Scene, KnowledgeRecord]
+) -> None:
+    """`SPEC-AC-001` for the two names this harness does not compose.
+
+    A refusal is an answer, and the claim `SPEC-AC-001` makes is about the
+    application's semantics reaching every transport unchanged -- so the row that
+    matters for these two is that all three refuse, refuse for the same reason,
+    and refuse in the same envelope. That is also the only end-to-end evidence
+    there is that `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED` gates the HTTP
+    path, which routes by path segment straight into `_HANDLERS` and never reads
+    `available_capabilities`.
+
+    `unsupported` and not `denied`: a process without the switch has no governed
+    merge, which is a fact about the build rather than a shortfall in the
+    caller's authority. Who may call one is `_OPERATOR_ONLY`'s separate answer.
+    """
+    scene, record = staged
+    request = document(
+        capability, scene.principal.principal_id, payloads_for(scene, record)[capability]
+    )
+    answers = answers_for(scene, capability.value, request)
+    for name, answer in answers.items():
+        assert answer.document["error"] is not None, f"{name} answered {capability.value}"
+        assert answer.document["error"]["code"] == "unsupported", name
         assert answer.document["request_id"] == request["request_id"]
     assert_same_answer(answers, request, capability.value)
 

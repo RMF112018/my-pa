@@ -29,7 +29,7 @@ from my_pa.adapters.mcp.remote import RemoteAccessContext, create_remote_mcp_app
 from my_pa.adapters.mcp.server import published_tools
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES
 from my_pa.adapters.remote_request import SERVER_OWNED_REMOTE_FIELDS
-from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 
 
@@ -131,6 +131,16 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # Phase B's four. `entities.merge.preview` is here and the membership is
+        # the one worth arguing: it mutates no canonical record and it INSERTs a
+        # durable control row carrying a digest, an expiry and a consumption
+        # state, so describing it as read-only would be an annotation that
+        # contradicts the transaction. `tasks.bulk_preview` is the precedent and
+        # is in this set for the same reason.
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
@@ -160,6 +170,12 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.ENTITIES_RELATIONSHIPS_REVISE,
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # Only one of Phase B's four. The two producer paths insert and never
+        # reach an existing record, and the preview creates a control row and
+        # mutates none; `entities.merge` redirects entities, reparents and
+        # coalesces their children, supersedes self-edges and invalidates
+        # dependent proposals.
+        Capability.ENTITIES_MERGE,
     }
     for capability in Capability:
         tool = tools.get(capability.value)
@@ -169,6 +185,92 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         assert tool.annotations.read_only_hint is (capability not in writes)
         assert tool.annotations.destructive_hint is (capability in destructive_writes)
         assert tool.annotations.open_world_hint is False
+
+
+def test_the_governed_merge_is_gated_on_two_axes_and_neither_is_derived_from_the_other(
+    scene: Scene,
+) -> None:
+    """Manager ruling R-7, both halves, asserted separately.
+
+    R-7 classifies `entities.merge.preview` a **write** from persistence
+    behaviour, and its last line is the part this test exists for: the MCP
+    annotation is a *separate axis* from remote write gating, and neither answer
+    may be taken from the other. So both are measured here, against the two
+    mechanisms that actually decide them.
+
+    **Axis one, remote gating.** `remote_tool_names` intersects a capability's
+    permitted purposes with `adapters.mcp.remote._WRITE_PURPOSES`, and both merge
+    names permit `entity_identity_correction`, which is in that set. That makes
+    the preview remote-write-gated because it *shares a purpose* with the apply --
+    the coupling R-7 tells this package to accept rather than work around. It is
+    also moot in the same breath and deliberately not left implicit: both are
+    operator-only, and `remote_tool_names` drops an operator-only capability
+    before it classifies anything, so neither reaches a remote profile at all.
+    The membership is what keeps the classification true if the operator gate is
+    ever the thing that changes.
+
+    **Axis two, the tool annotation.** `adapters.mcp.tools` derives
+    `read_only_hint` from `is_write_capability` and `destructive_hint` from
+    `is_destructive_capability`, which are `_WRITE_CAPABILITIES` and
+    `_WRITE_CAPABILITIES - _ADDITIVE_WRITE_CAPABILITIES`. The preview is a
+    non-read-only, non-destructive tool; the apply is non-read-only *and*
+    destructive. Neither value is read off the remote profile and neither is read
+    off the other.
+    """
+    from my_pa.adapters.mcp.remote import _WRITE_PURPOSES
+
+    # Axis one, on the derivation `remote_tool_names` runs.
+    for capability in (Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE):
+        assert permitted_purposes(capability) == frozenset({Purpose.ENTITY_IDENTITY_CORRECTION})
+        assert permitted_purposes(capability) & _WRITE_PURPOSES
+        assert is_operator_only(capability)
+    service = build_service(scene.world, scene.providers)
+    for writes_enabled in (False, True):
+        remote = remote_tool_names(service, writes_enabled=writes_enabled)
+        assert Capability.ENTITIES_MERGE_PREVIEW.value not in remote
+        assert Capability.ENTITIES_MERGE.value not in remote
+
+    # Axis two, on the tool list the local transport publishes.
+    tools = {tool.name: tool for tool in published_tools(service)}
+    preview = tools[Capability.ENTITIES_MERGE_PREVIEW.value]
+    apply = tools[Capability.ENTITIES_MERGE.value]
+    assert preview.annotations is not None and apply.annotations is not None
+    assert preview.annotations.read_only_hint is False
+    assert preview.annotations.destructive_hint is False
+    assert apply.annotations.read_only_hint is False
+    assert apply.annotations.destructive_hint is True
+    # And the two answers are not the same answer, which is what "separate axis"
+    # has to mean to be checkable: one capability, two gates, two verdicts.
+    assert preview.annotations.destructive_hint != apply.annotations.destructive_hint
+
+
+def test_the_two_producer_paths_are_additive_writes_on_both_axes(scene: Scene) -> None:
+    """The other half of the four, and the axis that separates them from the merge.
+
+    A proposal is a write of a *request*: it inserts and can reach no existing
+    record, which is what puts both names in `_ADDITIVE_WRITE_CAPABILITIES` and
+    what makes `destructive_hint` false for each. On the remote axis they are
+    write-gated and, unlike the merge, are *reachable* once remote writes are
+    enabled -- neither is operator-only, because operator section 16 gives a
+    producer client both.
+    """
+    from my_pa.adapters.mcp.remote import _WRITE_PURPOSES
+
+    service = build_service(scene.world, scene.providers)
+    tools = {tool.name: tool for tool in published_tools(service)}
+    for capability, purpose in (
+        (Capability.ENTITIES_PROPOSALS_CREATE, Purpose.ENTITY_PROPOSAL),
+        (Capability.RELATIONSHIP_MEMORY_PROPOSE, Purpose.RELATIONSHIP_MEMORY_PROPOSAL),
+    ):
+        assert permitted_purposes(capability) == frozenset({purpose})
+        assert purpose in _WRITE_PURPOSES
+        assert not is_operator_only(capability)
+        annotations = tools[capability.value].annotations
+        assert annotations is not None
+        assert annotations.read_only_hint is False
+        assert annotations.destructive_hint is False
+        assert capability.value not in remote_tool_names(service, writes_enabled=False)
+        assert capability.value in remote_tool_names(service, writes_enabled=True)
 
 
 @pytest.mark.anyio

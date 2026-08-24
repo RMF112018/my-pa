@@ -257,6 +257,4 @@ def test_only_the_governed_merge_is_operator_only_on_this_family() -> None:
     """
     for capability in Capability:
         if capability.value in ENTITY_CAPABILITIES:
-            assert is_operator_only(capability) == (
-                capability.value in OPERATOR_ONLY_WRITES
-            )
+            assert is_operator_only(capability) == (capability.value in OPERATOR_ONLY_WRITES)

@@ -176,8 +176,7 @@ def test_the_identity_correction_gate_is_a_third_narrowing_of_the_same_plane() -
     assert not without & _IDENTITY_CORRECTION_CAPABILITIES
     assert without >= _ENTITY_WRITE_CAPABILITIES - _IDENTITY_CORRECTION_CAPABILITIES
     names = {
-        tool.name
-        for tool in published_tools(_service(plane=True, writes=True, identity=False))
+        tool.name for tool in published_tools(_service(plane=True, writes=True, identity=False))
     }
     assert not names & {capability.value for capability in _IDENTITY_CORRECTION_CAPABILITIES}
     for plane, writes in ((False, False), (True, False)):

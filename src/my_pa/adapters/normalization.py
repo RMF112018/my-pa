@@ -1615,11 +1615,10 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_OBSERVATIONS_LIST: _list_entity_observations,
         Capability.ENTITIES_OBSERVE: _observe_entity_mention,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: _resolve_unresolved_mention,
-        Capability.RELATIONSHIP_MEMORY_CREATE: _create_relationship_memory,
-        Capability.RELATIONSHIP_MEMORY_PROPOSE: _propose_relationship_memory,
         Capability.ENTITIES_PROPOSALS_CREATE: _create_entity_proposal,
         Capability.ENTITIES_MERGE_PREVIEW: _preview_entity_merge,
         Capability.ENTITIES_MERGE: _merge_entities,
+        Capability.RELATIONSHIP_MEMORY_CREATE: _create_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_GET: _get_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_LIST: _list_relationship_memories,
         Capability.RELATIONSHIP_MEMORY_SEARCH: _search_relationship_memories,
@@ -1627,6 +1626,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.RELATIONSHIP_MEMORY_REVISE: _revise_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE: _archive_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_RESTORE: _restore_relationship_memory,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: _propose_relationship_memory,
     }
 )
 

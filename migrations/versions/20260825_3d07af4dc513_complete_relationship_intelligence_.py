@@ -20,6 +20,7 @@ from typing import Final
 
 from alembic import op
 from sqlalchemy import text
+from sqlalchemy.engine import Connection
 
 revision: str = "3d07af4dc513"
 down_revision: str | None = "b64e29a0f7c1"
@@ -49,6 +50,68 @@ def _frozen_memory_proposal_digest(
     return hashlib.sha256(
         json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
+
+
+def _reconcile_open_memory_proposals(bind: Connection) -> None:
+    """Collapse legacy semantic duplicates without deleting historical rows."""
+    duplicates = tuple(
+        bind.execute(
+            text(
+            f"""
+            SELECT principal_id, memory_proposal_id,
+                   first_value(memory_proposal_id) OVER (
+                     PARTITION BY principal_id, dedupe_sha256
+                     ORDER BY proposed_at, memory_proposal_id
+                   ) AS winner_id
+              FROM {SCHEMA}.relationship_memory_proposals
+             WHERE state IN ('proposed', 'needs_review', 'deferred')
+             ORDER BY principal_id, dedupe_sha256, proposed_at, memory_proposal_id
+            """
+            )
+        ).mappings()
+    )
+    move_missing_evidence = text(
+        f"""
+        UPDATE {SCHEMA}.relationship_memory_proposal_evidence loser_evidence
+           SET memory_proposal_id = :winner_id
+         WHERE loser_evidence.principal_id = :principal_id
+           AND loser_evidence.memory_proposal_id = :loser_id
+           AND NOT EXISTS (
+             SELECT 1
+               FROM {SCHEMA}.relationship_memory_proposal_evidence winner_evidence
+              WHERE winner_evidence.principal_id = loser_evidence.principal_id
+                AND winner_evidence.memory_proposal_id = :winner_id
+                AND winner_evidence.role = loser_evidence.role
+                AND winner_evidence.entity_observation_id IS NOT DISTINCT FROM
+                    loser_evidence.entity_observation_id
+                AND winner_evidence.capture_span_id IS NOT DISTINCT FROM
+                    loser_evidence.capture_span_id
+                AND winner_evidence.knowledge_id IS NOT DISTINCT FROM
+                    loser_evidence.knowledge_id
+           )
+        """
+    )
+    supersede_loser = text(
+        f"""
+        UPDATE {SCHEMA}.relationship_memory_proposals
+           SET state = 'superseded',
+               superseded_at = GREATEST(CURRENT_TIMESTAMP, proposed_at),
+               superseded_by_memory_proposal_id = :winner_id
+         WHERE principal_id = :principal_id
+           AND memory_proposal_id = :loser_id
+           AND state IN ('proposed', 'needs_review', 'deferred')
+        """
+    )
+    for duplicate in duplicates:
+        if duplicate["memory_proposal_id"] == duplicate["winner_id"]:
+            continue
+        parameters = {
+            "principal_id": duplicate["principal_id"],
+            "loser_id": duplicate["memory_proposal_id"],
+            "winner_id": duplicate["winner_id"],
+        }
+        bind.execute(move_missing_evidence, parameters)
+        bind.execute(supersede_loser, parameters)
 
 
 def upgrade() -> None:
@@ -149,6 +212,7 @@ def upgrade() -> None:
                 ),
             },
         )
+    _reconcile_open_memory_proposals(bind)
     op.execute(
         f"""
         ALTER TABLE {SCHEMA}.relationship_memory_proposals

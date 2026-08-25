@@ -682,7 +682,13 @@ and recomputes the canonical semantic digest for the successor.
 **Migration limitations.** Historical RM proposals had no stored subject
 version. `3d07af4dc513` approximates that legacy-only value from the subject's
 current entity version; it never overwrites a value already written by the new
-contract. Historical identity previews cannot prove the new full projected-plan
+contract. If legacy version-scoped digests collapse multiple still-open RM
+proposals onto one semantic claim, the migration retains the earliest
+`(proposed_at, proposal_id)` origin as the open winner, moves only evidence not
+already represented in its exact role/source union, and marks every losing row
+superseded with lineage to that winner. Exact duplicate evidence, proposal rows,
+provenance, and review history are not deleted. Historical identity previews
+cannot prove the new full projected-plan
 digest, so the migration writes a deterministic legacy sentinel that will fail
 apply-time recomputation as stale. Operators must generate a new preview rather
 than applying a pre-migration approval.

@@ -2286,6 +2286,12 @@ class ApplicationService:
         # repository proves ownership of it by reading `knowledge.entities`.
         if not (self._relationship_intelligence_enabled and self._relationship_memory_enabled):
             served -= _RELATIONSHIP_MEMORY_CAPABILITIES
+        # A proposal surface without a trusted server registration would
+        # advertise a write every authenticated caller can only be denied.
+        # Withhold both producer capabilities when composition has no exact
+        # producer identity; per-Principal resolution still fails closed.
+        if not self._producer_origins.has_registrations:
+            served -= _PRODUCER_CAPABILITIES
         # The governed merge, narrowed separately again. Its own switch requires
         # the write switch, which requires the plane switch, and `Settings._check`
         # refuses a process configured otherwise -- so the three subtractions
@@ -7619,52 +7625,18 @@ class ApplicationService:
     # resolved, and -- for the two producer paths -- the proposal method. None of
     # the four commands has a field for any of them.
 
-    #: How the server records what produced a proposal, when it has no producer
-    #: registry to consult.
-    #:
-    #: **This is the honest answer to a real gap and it is written here rather
-    #: than left implicit.** Operator §11 and §12 make the proposal method and the
-    #: model identity server-owned, and `FORBIDDEN_PAYLOAD_FIELDS` plus the
-    #: commands' own absent fields make a caller-supplied one unrepresentable. But
-    #: "the server owns it" only means something if the server *knows* it, and at
-    #: this head there is no producer registration: a request arrives over an
-    #: authenticated capability and nothing tells this process whether a
-    #: deterministic matcher, a rule engine or a local model composed it.
-    #:
-    #: `RULE` rather than `DETERMINISTIC`, and the direction of the error is the
-    #: reason. `EntityProposalMethod`'s own docstring names the danger: "a model
-    #: conclusion filed as a deterministic match is a model conclusion a threshold
-    #: would accept without a person". Filing every producer's work as
-    #: `deterministic` is exactly that record. `RULE` is the least specific true
-    #: statement this build can make -- something ran and asked, through the
-    #: governed producer path -- and it claims no exact match. `LOCAL_MODEL` is
-    #: refused in the other direction: it would say a model ran when none may
-    #: have, and the schema then requires a `model_id` there is none of.
-    #:
-    #: The method version names the thing that actually chose the method, which is
-    #: this dispatcher. A reviewer reading `rule / entity-proposal-dispatch.1`
-    #: learns precisely what the server can attest, which is that the candidate
-    #: arrived through this path at this version of it.
-    #:
-    #: **The residual gap, stated rather than carried:** every proposal this build
-    #: records carries the same method, so `method` currently distinguishes
-    #: nothing between producers. Closing it needs a producer registry that maps
-    #: an authenticated client to its declared method -- which is a grant-profile
-    #: change WP-09 owns, not a payload field. `model_id` and `model_version` stay
-    #: `None` on every path, so `local_model` is unreachable from any transport.
+    #: Producer provenance is injected by composition and keyed by the exact
+    #: authenticated Principal. Commands carry no origin fields. An unregistered
+    #: producer is refused, and a local-model registration must name the exact
+    #: model and version.
     def _proposal_origin(
         self, authorization: Authorization
     ) -> tuple[EntityProposalMethod, str, str | None, str | None]:
         """What the server will record as having produced an entity proposal.
 
-        **Takes nothing.** Not the command, not the payload, not the
-        authorization: the signature is the guarantee, because a function with no
-        parameters cannot have been influenced by a request. B2 named the risk
-        precisely -- "a payload cannot carry `method`, but nothing yet proves the
-        *dispatcher* did not choose it from something the caller influenced" --
-        and this is the proof, in a form
-        `tests/architecture/test_a_producer_cannot_choose_its_own_method.py`
-        reads off the signature rather than off a comment.
+        The only input is the server-created authorization. The immutable
+        registry resolves its authenticated Principal; no command field can
+        select or alter provenance.
         """
         try:
             origin = self._producer_origins.resolve(authorization.principal)
@@ -7680,9 +7652,7 @@ class ApplicationService:
     def _memory_proposal_origin(self, authorization: Authorization) -> MemoryProposalOrigin:
         """What the server will record as having produced a candidate memory.
 
-        Takes nothing, for the reason `_proposal_origin` takes nothing. `model_id`
-        and `model_version` are left unset, so `local_model` -- the one method
-        that would require them -- is unreachable from any transport.
+        Uses the same immutable Principal registration as entity proposals.
         """
         try:
             origin = self._producer_origins.resolve(authorization.principal)
@@ -8374,6 +8344,13 @@ _IDENTITY_CORRECTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+    }
+)
+
+_PRODUCER_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 )
 

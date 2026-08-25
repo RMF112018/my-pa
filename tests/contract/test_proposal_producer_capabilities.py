@@ -43,6 +43,7 @@ from my_pa.application.commands import (
     ProposeRelationshipMemory,
 )
 from my_pa.application.entity_promotion import requires_expected_target_version
+from my_pa.application.producer_origin import ProducerOriginRegistry
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
@@ -57,6 +58,22 @@ from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 #: `requires_review` for it would be reporting the requirement map wrongly rather
 #: than reporting a conservative default.
 ALIAS_VALUE: Final = "PP"
+
+
+def test_unregistered_composition_withholds_both_producer_capabilities(scene: Scene) -> None:
+    service = build_service(
+        scene.world,
+        scene.providers,
+        producer_origins=ProducerOriginRegistry(),
+    )
+    assert Capability.ENTITIES_PROPOSALS_CREATE not in service.available_capabilities
+    assert Capability.RELATIONSHIP_MEMORY_PROPOSE not in service.available_capabilities
+
+
+def test_registered_local_composition_serves_both_producer_capabilities(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    assert Capability.ENTITIES_PROPOSALS_CREATE in service.available_capabilities
+    assert Capability.RELATIONSHIP_MEMORY_PROPOSE in service.available_capabilities
 
 
 def _result(scene: Scene, capability: Capability, purpose: Purpose, command: Command) -> Any:  # noqa: ANN401 - a canonical envelope payload

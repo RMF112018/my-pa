@@ -5525,7 +5525,27 @@ class ProposeRelationshipMemory:
                     "role (direct, supporting, counterevidence) and exactly one "
                     "of entity_observation_id, capture_span_id or knowledge_id."
                 ),
-                "items": {"type": "object"},
+                "minItems": 1,
+                "maxItems": MAX_EVIDENCE_REFERENCES,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "role": {
+                            "type": "string",
+                            "enum": [role.value for role in EvidenceLinkRole],
+                        },
+                        "entity_observation_id": {"type": "string"},
+                        "capture_span_id": {"type": "string"},
+                        "knowledge_id": {"type": "string"},
+                    },
+                    "required": ["role"],
+                    "oneOf": [
+                        {"required": ["entity_observation_id"]},
+                        {"required": ["capture_span_id"]},
+                        {"required": ["knowledge_id"]},
+                    ],
+                    "additionalProperties": False,
+                },
             },
             "structured_value": {
                 "description": "The kind's own structured envelope, when it takes one."
@@ -5574,7 +5594,17 @@ class PreviewEntityMerge:
                     "entity_id and the expected_version you read it at. The "
                     "survivor may not appear here and no identifier may repeat."
                 ),
-                "items": {"type": "object"},
+                "minItems": 1,
+                "maxItems": MAX_MERGED_AWAY_ENTITIES,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "entity_id": {"type": "string"},
+                        "expected_version": {"type": "integer", "minimum": 1},
+                    },
+                    "required": ["entity_id", "expected_version"],
+                    "additionalProperties": False,
+                },
             }
         }
     )
@@ -5618,7 +5648,19 @@ class MergeEntities:
                     "required_choices. Each names record_id and a choice of "
                     "reparent or coalesce. No more and no fewer."
                 ),
-                "items": {"type": "object"},
+                "maxItems": MAX_MERGED_AWAY_ENTITIES * MAX_EVIDENCE_REFERENCES,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "record_id": {"type": "string"},
+                        "choice": {
+                            "type": "string",
+                            "enum": [choice.value for choice in ConflictChoice],
+                        },
+                    },
+                    "required": ["record_id", "choice"],
+                    "additionalProperties": False,
+                },
             }
         }
     )

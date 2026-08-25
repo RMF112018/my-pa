@@ -12,6 +12,8 @@ from my_pa.domain.identity.principal import Principal, PrincipalKind
 __all__ = ["ProducerOrigin", "ProducerOriginError", "ProducerOriginRegistry"]
 
 _METHODS: Final = frozenset({"deterministic", "rule", "local_model"})
+_MAX_ID = 200
+_MAX_VERSION = 200
 
 
 class ProducerOriginError(Exception):
@@ -28,10 +30,15 @@ class ProducerOrigin:
     model_version: str | None = None
 
     def __post_init__(self) -> None:
+        if not self.principal_id.strip() or len(self.principal_id) > _MAX_ID:
+            raise ValueError("producer Principal identifier is invalid")
         if self.method not in _METHODS:
             raise ValueError("producer method is not registered vocabulary")
-        if not self.method_version.strip():
+        if not self.method_version.strip() or len(self.method_version) > _MAX_VERSION:
             raise ValueError("producer method version is required")
+        for value in (self.model_id, self.model_version):
+            if value is not None and (not value.strip() or len(value) > _MAX_VERSION):
+                raise ValueError("producer model identity is invalid")
         model_pair = self.model_id is not None and self.model_version is not None
         if (self.model_id is None) != (self.model_version is None):
             raise ValueError("producer model identity is a pair")
@@ -57,3 +64,8 @@ class ProducerOriginRegistry:
         ):
             raise ProducerOriginError
         return held
+
+    @property
+    def has_registrations(self) -> bool:
+        """Whether this composition can truthfully serve a producer write."""
+        return bool(self._registrations)

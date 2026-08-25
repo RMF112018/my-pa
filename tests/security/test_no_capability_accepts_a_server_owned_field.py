@@ -33,6 +33,7 @@ from my_pa.adapters.remote_request import (
     REMOTE_OWNED_PAYLOAD_FIELDS,
     SERVER_OWNED_REMOTE_FIELDS,
     compose_remote_arguments,
+    is_server_replay_capability,
     remote_tool_schema,
 )
 from my_pa.application.commands import Command
@@ -149,6 +150,26 @@ def test_the_same_request_without_the_field_is_composed() -> None:
         # name carries it, and it is in `SERVER_OWNED_REMOTE_FIELDS` so that a
         # caller who sends it anyway is refused rather than believed.
         assert "capability" not in composed
+
+
+@pytest.mark.parametrize(
+    "capability",
+    [
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        Capability.REVIEW_DECIDE,
+    ],
+)
+def test_replay_backed_remote_writes_receive_deterministic_server_request_ids(
+    capability: Capability,
+) -> None:
+    assert is_server_replay_capability(capability)
+    first = _compose(capability, {"payload": {"value": "same"}})
+    retry = _compose(capability, {"payload": {"value": "same"}})
+    changed = _compose(capability, {"payload": {"value": "changed"}})
+    assert first["request_id"] == retry["request_id"]
+    assert first["request_id"] != changed["request_id"]
+    assert str(first["request_id"]).startswith("corr_")
 
 
 @pytest.mark.parametrize(

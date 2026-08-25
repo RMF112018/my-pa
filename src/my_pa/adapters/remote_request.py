@@ -33,9 +33,28 @@ __all__ = [
     "REMOTE_OWNED_PAYLOAD_FIELDS",
     "SERVER_OWNED_REMOTE_FIELDS",
     "compose_remote_arguments",
+    "is_server_replay_capability",
     "remote_tool_schema",
     "resolve_remote_purpose",
 ]
+
+#: Writes whose canonical application handler persists a Principal-scoped
+#: request receipt.  Unlike `_IDEMPOTENT_REMOTE_CAPABILITIES`, these commands
+#: intentionally have no caller-shaped idempotency field: the remote boundary
+#: derives the correlation identity itself and the same registry drives MCP's
+#: `idempotentHint`.
+_SERVER_REPLAY_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        Capability.REVIEW_DECIDE,
+    }
+)
+
+
+def is_server_replay_capability(capability: Capability) -> bool:
+    """Whether remote retries are backed by the canonical request ledger."""
+    return capability in _SERVER_REPLAY_REMOTE_CAPABILITIES
 
 #: Envelope fields a remote MCP caller may not state. `capability` is already
 #: removed from published schemas because the tool name carries it; it is listed
@@ -233,10 +252,26 @@ def compose_remote_arguments(
             ).encode()
         ).hexdigest()
         composed["payload"] = {**domain, "idempotency_key": f"idk_{digest[:32]}"}
+    if is_server_replay_capability(capability):
+        request_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "capability": capability.value,
+                    "principal_id": principal.principal_id,
+                    "arguments": composed,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode()
+        ).hexdigest()
+        request_id = f"corr_{request_digest[:32]}"
+    else:
+        request_id = issue_id(IdKind.CORRELATION)
     composed.update(
         {
             "contract_version": CONTRACT_VERSION,
-            "request_id": issue_id(IdKind.CORRELATION),
+            "request_id": request_id,
             "requested_at": format_rfc3339(clock()),
             "principal_id": principal.principal_id,
             "purpose": purpose.value,

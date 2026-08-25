@@ -170,6 +170,7 @@ from sqlalchemy import Engine
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.apple_machine import AppleBridgeIdentity, AppleMachineControl
 from my_pa.application.native_sources import NativeSourceController
+from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
 from my_pa.bootstrap.settings import AuthMode, Settings
@@ -252,6 +253,29 @@ def local_principal() -> Principal:
         principal_id=capture_principal_id(LOCAL_OPERATOR_UUID),
         kind=PrincipalKind.OPERATOR,
         authenticated=True,
+    )
+
+
+def relationship_producer_origins(principal: Principal | None) -> ProducerOriginRegistry:
+    """Trusted producer registration for this process composition.
+
+    Local-operator mode has one durable authenticated identity and registers it
+    as the gateway's rule producer. Entra mode has no single process Principal;
+    until trusted producer identities are configured, the empty registry makes
+    the application withhold producer capabilities instead of publishing an
+    unusable surface.
+    """
+    if principal is None:
+        return ProducerOriginRegistry()
+    return ProducerOriginRegistry(
+        {
+            principal.principal_id: ProducerOrigin(
+                principal_id=principal.principal_id,
+                principal_kind=principal.kind,
+                method="rule",
+                method_version="gateway.relationship-producer.1",
+            )
+        }
     )
 
 
@@ -599,6 +623,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
 
     entra = settings.auth_mode is AuthMode.ENTRA
     principal = None if entra else local_principal()
+    producer_origins = relationship_producer_origins(principal)
 
     class _NoRemoteHost:
         def __getattr__(self, name: str) -> Any:  # noqa: ANN401 - refusing protocol sentinel
@@ -634,6 +659,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             relationship_identity_correction_enabled=(
                 settings.relationship_identity_correction_enabled
             ),
+            producer_origins=producer_origins,
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

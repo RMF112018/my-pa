@@ -6300,6 +6300,7 @@ def build_service(
     relationship_intelligence_writes_enabled: bool = True,
     relationship_memory_enabled: bool = True,
     relationship_identity_correction_enabled: bool = True,
+    producer_origins: ProducerOriginRegistry | None = None,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -6376,7 +6377,11 @@ def build_service(
             and relationship_intelligence_writes_enabled
             and relationship_identity_correction_enabled
         ),
-        producer_origins=ProducerOriginRegistry(world.producer_origins),
+        producer_origins=(
+            ProducerOriginRegistry(world.producer_origins)
+            if producer_origins is None
+            else producer_origins
+        ),
     )
 
 

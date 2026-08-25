@@ -174,6 +174,26 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "caller-supplied output directory; it never writes gold, personal, or "
         "managed-document bytes."
     ),
+    "src/my_pa/application/goodnotes_gsqs_b0_stdio_session.py": (
+        "creates only the caller-supplied stdio evidence directory and a bounded "
+        "child-stderr file; it never writes raster bytes, gold, or managed-document "
+        "bytes."
+    ),
+    "src/my_pa/application/goodnotes_gsqs_b0_orchestrator.py": (
+        "writes only acquisition-state JSON and an accepted-case journal into an "
+        "explicit caller-supplied output directory; it never writes gold, raster "
+        "bytes, or managed-document bytes."
+    ),
+    "src/my_pa/application/goodnotes_gsqs_b0_capture.py": (
+        "atomically writes gsqs-analyzer-capture-v1 repetition JSON into an explicit "
+        "caller-supplied output directory; it refuses gold keys and never writes "
+        "managed-document bytes."
+    ),
+    "src/my_pa/application/goodnotes_gsqs_b0_synthetic_campaign.py": (
+        "writes only generated 1x1 synthetic PNG fixtures and a campaign JSON into "
+        "an explicit caller-supplied directory; it refuses real-handwriting "
+        "identities and never writes gold or managed-document bytes."
+    ),
 }
 
 #: Attribute names that are a filesystem write whatever they are called on,

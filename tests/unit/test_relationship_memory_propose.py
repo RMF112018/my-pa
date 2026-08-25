@@ -35,6 +35,7 @@ from contextlib import nullcontext
 from datetime import UTC, datetime
 from importlib import import_module
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, Final
 
 import pytest
@@ -171,6 +172,12 @@ class _FirstResult:
     def first(self) -> object | None:
         return self._value
 
+    def scalar_one(self) -> object | None:
+        return self._value
+
+    def one_or_none(self) -> object | None:
+        return self._value
+
 
 class EvidenceScopeConnection:
     """A statement recorder that makes one selected evidence family invisible."""
@@ -178,11 +185,19 @@ class EvidenceScopeConnection:
     def __init__(self, missing_marker: str | None = None) -> None:
         self.missing_marker = missing_marker
         self.queries: list[str] = []
+        self.locks: list[str] = []
+        self.subject_queries: list[str] = []
         self.writes: list[str] = []
 
     def execute(self, statement: Any) -> _FirstResult:  # noqa: ANN401 - SQLAlchemy clause
         rendered = str(statement)
         if statement.is_select:
+            if "pg_advisory_xact_lock" in rendered:
+                self.locks.append(rendered)
+                return _FirstResult(None)
+            if "FROM knowledge.entities" in rendered:
+                self.subject_queries.append(rendered)
+                return _FirstResult(SimpleNamespace(status="active", version=3))
             self.queries.append(rendered)
             missing = self.missing_marker is not None and self.missing_marker in rendered
             return _FirstResult(None if missing else object())
@@ -354,6 +369,10 @@ def test_persistence_validates_each_evidence_family_through_its_principal_chain(
     )
 
     assert len(connection.writes) == 4
+    assert len(connection.locks) == 1
+    assert "pg_advisory_xact_lock" in connection.locks[0]
+    assert len(connection.subject_queries) == 1
+    assert "entities.principal_id" in connection.subject_queries[0]
     observation, span, knowledge = connection.queries
     assert "entity_observations.principal_id" in observation
     assert "capture_versions.owner_principal_id" in span

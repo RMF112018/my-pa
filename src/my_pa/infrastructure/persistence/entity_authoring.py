@@ -80,6 +80,7 @@ from my_pa.domain.relationship.governance import (
     MutationRecordFamily,
 )
 from my_pa.infrastructure.persistence.identifier_claim_lock import (
+    lock_entity_mutation_scopes,
     lock_identifier_claim_keys,
     lock_identifier_entity_scopes,
 )
@@ -324,21 +325,27 @@ def admit_mutation(connection: Connection, request: EntityWriteRequest) -> Entit
 
 
 def _serialize_identifier_request(connection: Connection, request: EntityWriteRequest) -> None:
-    """Acquire the complete identifier lock set before this request's first write."""
+    """Acquire Entity and identifier locks before this request's first read/write."""
     claims: set[tuple[str, str]] = set()
     entity_id: str | None = None
     if request.operation is EntityWriteOperation.CREATE:
         entity_id = str(request.minted_entity_id)
-    elif request.operation in {
-        EntityWriteOperation.BIND_IDENTIFIER,
-        EntityWriteOperation.RETIRE_IDENTIFIER,
-        EntityWriteOperation.SUPERSEDE_IDENTIFIER,
-    }:
+    elif request.entity_id is not None:
         entity_id = str(request.entity_id)
     if entity_id is None:
         return
 
-    # The scope lock precedes reading a held claim: otherwise a retire or
+    lock_entity_mutation_scopes(connection, request.principal_id, (entity_id,))
+
+    if request.operation not in {
+        EntityWriteOperation.CREATE,
+        EntityWriteOperation.BIND_IDENTIFIER,
+        EntityWriteOperation.RETIRE_IDENTIFIER,
+        EntityWriteOperation.SUPERSEDE_IDENTIFIER,
+    }:
+        return
+
+    # The Entity lock precedes reading a held claim: otherwise a retire or
     # supersede could read one key, wait, and mutate a row whose key changed
     # before the lock was acquired.
     lock_identifier_entity_scopes(connection, request.principal_id, (entity_id,))

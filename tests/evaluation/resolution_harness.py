@@ -465,7 +465,12 @@ class _CorpusRepository(EntitiesRepository):
         raise NotImplementedError("resolution reads no merge lineage")
 
     def redirect_entity(
-        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+        self,
+        principal_id: str,
+        merged_entity_id: str,
+        retained_entity_id: str,
+        *,
+        expected_version: int | None = None,
     ) -> None:
         raise NotImplementedError("the evaluation corpus is frozen")
 

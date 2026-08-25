@@ -1444,6 +1444,50 @@ class EntitiesRepository(ABC):
     ) -> list[EntityProposal]:
         """Proposals in this Principal's partition, optionally by state."""
 
+    def serialize_entity_proposal_review_scope(
+        self,
+        principal_id: str,
+        review_case_id: str,
+        *,
+        correction_patch: Mapping[str, str | bool] | None = None,
+    ) -> EntityProposal | None:
+        """Lock every Entity participant a proposal review could mutate.
+
+        The implementation performs its own optimistic read, acquires the
+        participant locks in stable order, then re-reads and validates the
+        proposal and any indirect child target before returning it.  A corrected
+        acceptance contributes its corrected payload references to the same
+        lock union, so promotion cannot acquire a new participant after the
+        proposal row or review ledger has been touched.
+
+        Non-abstract because external in-memory repositories execute serially;
+        SQL implementations must override it before composing Entity review.
+        """
+        proposal = next(
+            (row for row in self.proposals(principal_id) if row.review_case_id == review_case_id),
+            None,
+        )
+        return proposal
+
+    def entity_proposal_review_snapshot(
+        self, principal_id: str, review_case_id: str
+    ) -> tuple[int, str | None, bool] | None:
+        """Return a text-free, Principal-scoped case ledger snapshot.
+
+        The members are review version, latest disposition and whether the case
+        was ever escalated. Identity-correction planning binds this bounded
+        derived state so any ledger-only decision makes a preview stale without
+        exposing decision narrative.
+        """
+        return (
+            (0, None, False)
+            if any(
+                proposal.review_case_id == review_case_id
+                for proposal in self.proposals(principal_id)
+            )
+            else None
+        )
+
     def proposal_by_dedupe(
         self,
         principal_id: str,
@@ -1583,12 +1627,19 @@ class EntitiesRepository(ABC):
 
     @abstractmethod
     def redirect_entity(
-        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+        self,
+        principal_id: str,
+        merged_entity_id: str,
+        retained_entity_id: str,
+        *,
+        expected_version: int | None = None,
     ) -> None:
         """Point one entity at the entity it was merged into.
 
         Sets `status` to `merged_redirect` and `superseded_by_entity_id` to the
-        survivor.  The merged entity is not deleted: section 15.3 asks a merge to
+        survivor. Governed correction supplies ``expected_version`` and is
+        refused unless the row is still current at that version. The merged
+        entity is not deleted: section 15.3 asks a merge to
         preserve prior identifiers as lineage, and a row that still resolves as a
         `HISTORICAL_MATCH` is how that is done.
         """
@@ -2038,11 +2089,13 @@ class EntitiesRepository(ABC):
     def serialize_identifier_entity_scopes(
         self, principal_id: str, entity_ids: frozenset[str]
     ) -> None:
-        """Hold transaction locks against new claims on these entities.
+        """Hold participant-wide locks against Entity-reference mutations.
 
-        In-memory repositories execute serially and need no implementation. The
-        PostgreSQL repository overrides this together with the claim-key lock so
-        merge can discover and then re-read the complete identifier population.
+        The compatibility name predates the wider protocol. PostgreSQL now uses
+        this same transaction key for Entity, alias, identifier, assignment,
+        relationship, observation, proposal, and Relationship Memory writers;
+        the separate claim-key lock remains identifier-specific. In-memory
+        repositories execute serially and need no implementation.
         """
         return None
 
@@ -2298,6 +2351,14 @@ class WriteRequestConflictError(PortError):
 
 class ProposalAdmissionConflictError(PortError):
     """A concurrent producer admitted the same open Entity proposal first."""
+
+
+class ProposalReviewScopeConflictError(PortError):
+    """A proposal or indirect target changed while its participant lock waited."""
+
+
+class ProposalEvidenceConflictError(PortError):
+    """A proposal stopped being open while evidence append waited for its scope."""
 
 
 @dataclass(frozen=True, slots=True)

@@ -514,6 +514,7 @@ def plan_entities(survivor_entity_id: str, merged: Sequence[Entity]) -> tuple[_R
                 "superseded_by_entity_id": survivor_entity_id,
                 "version": entity.version,
             },
+            expected_version=entity.version,
         )
         for entity in sorted(merged, key=lambda entity: entity.entity_id)
     )
@@ -1124,7 +1125,10 @@ def plan_observations(
     )
 
 
-def plan_proposals(proposals: Sequence[EntityProposal]) -> tuple[_RowChange, ...]:
+def plan_proposals(
+    proposals: Sequence[EntityProposal],
+    review_snapshots: Mapping[str, tuple[int, str | None, bool]] | None = None,
+) -> tuple[_RowChange, ...]:
     """Invalidate every open proposal whose subject the identity change removed.
 
     **Invalidated rather than reprocessed, and rather than left open.** A
@@ -1189,13 +1193,26 @@ def plan_proposals(proposals: Sequence[EntityProposal]) -> tuple[_RowChange, ...
             )
         )
         if proposal.review_case_id is not None:
+            review_before: dict[str, object] = {"state": proposal.state.value}
+            review_after: dict[str, object] = {"state": _INVALIDATED_STATE}
+            if review_snapshots is not None:
+                review_version, latest_disposition, escalated = review_snapshots[
+                    proposal.review_case_id
+                ]
+                snapshot_state = {
+                    "review_version": review_version,
+                    "latest_disposition": latest_disposition,
+                    "escalated": escalated,
+                }
+                review_before.update(snapshot_state)
+                review_after.update(snapshot_state)
             changes.append(
                 _RowChange(
                     family=IdentityEffectFamily.REVIEW_CASE,
                     record_id=proposal.review_case_id,
                     kind=IdentityEffectKind.DEPENDENT_INVALIDATED,
-                    before_state={"state": proposal.state.value},
-                    after_state={"state": _INVALIDATED_STATE},
+                    before_state=review_before,
+                    after_state=review_after,
                 )
             )
     return tuple(changes)
@@ -1249,6 +1266,13 @@ _ENTITY_REFERENCE_FIELDS_BY_PROPOSAL_KIND: Final[Mapping[EntityProposalKind, fro
     EntityProposalKind.SPLIT_IDENTITY: frozenset({"entity_id"}),
 }
 
+_ASSIGNMENT_REFERENCE_PROPOSAL_KINDS: Final = frozenset(
+    {EntityProposalKind.REVISE_ASSIGNMENT, EntityProposalKind.END_ASSIGNMENT}
+)
+_RELATIONSHIP_REFERENCE_PROPOSAL_KINDS: Final = frozenset(
+    {EntityProposalKind.REVISE_RELATIONSHIP, EntityProposalKind.END_RELATIONSHIP}
+)
+
 if frozenset(_ENTITY_REFERENCE_FIELDS_BY_PROPOSAL_KIND) != frozenset(EntityProposalKind):
     raise RuntimeError("every Entity proposal kind declares its Entity-reference fields")
 if any(
@@ -1275,6 +1299,17 @@ def _names_a_merged_entity(proposal: EntityProposal, merged_entity_ids: frozense
     )
 
 
+def _payload_identifier(proposal: EntityProposal, field: str) -> str | None:
+    return next(
+        (
+            value
+            for name, value in proposal.payload.values
+            if name == field and isinstance(value, str)
+        ),
+        None,
+    )
+
+
 class IdentityCorrectionService:
     """Computes a governed merge, persists what it computed, and performs it once."""
 
@@ -1290,6 +1325,42 @@ class IdentityCorrectionService:
         # `tests/architecture/test_every_capability_reaching_a_memory_row_is_declared.py`
         # exists to make visible rather than convenient.
         self._memories = memories
+
+    def _proposal_is_materially_affected(
+        self,
+        principal_id: str,
+        proposal: EntityProposal,
+        merged_entity_ids: frozenset[str],
+    ) -> bool:
+        """Resolve indirect child targets without treating opaque text as a reference."""
+        if _names_a_merged_entity(proposal, merged_entity_ids):
+            return True
+        if proposal.kind in _ASSIGNMENT_REFERENCE_PROPOSAL_KINDS:
+            assignment_id = _payload_identifier(proposal, "assignment_id")
+            assignment = (
+                None
+                if assignment_id is None
+                else self._entities.assignment(principal_id, assignment_id)
+            )
+            return assignment is not None and bool(
+                {assignment.entity_id, assignment.scope_entity_id} & merged_entity_ids
+            )
+        if proposal.kind in _RELATIONSHIP_REFERENCE_PROPOSAL_KINDS:
+            relationship_id = _payload_identifier(proposal, "relationship_id")
+            relationship = (
+                None
+                if relationship_id is None
+                else self._entities.relationship(principal_id, relationship_id)
+            )
+            return relationship is not None and bool(
+                {
+                    relationship.from_entity_id,
+                    relationship.to_entity_id,
+                    relationship.scope_entity_id,
+                }
+                & merged_entity_ids
+            )
+        return False
 
     # --- preview -------------------------------------------------------------
 
@@ -1429,10 +1500,12 @@ class IdentityCorrectionService:
             preview.expected_survivor_version,
             preview.merged_away,
         )
-        # Analyse once under entity-scope locks to discover the complete claim
-        # population, then lock those opaque claim keys and analyse again. A
-        # claim writer that won before the key lock is visible to the second
-        # analysis; one that arrives after it waits until this transaction ends.
+        # Analyse once under participant-wide Entity-mutation locks to discover
+        # the complete claim population, then lock those opaque identifier claim
+        # keys and analyse again. Any Entity-reference writer that won before the
+        # participant locks is visible here; one arriving later waits for this
+        # transaction. The extra claim keys serialize the cross-Entity normalized
+        # address collision that participant identity alone cannot cover.
         self._analyse(principal_id, survivor, merged, choices={})
         claims = frozenset(
             (identifier.namespace.value, identifier.normalized_value)
@@ -1589,7 +1662,12 @@ class IdentityCorrectionService:
         survivor_entity_id = preview.survivor_entity_id
         for change in sorted(changes, key=_ledger_order):
             if change.kind is IdentityEffectKind.ENTITY_REDIRECTED:
-                self._entities.redirect_entity(principal_id, change.record_id, survivor_entity_id)
+                self._entities.redirect_entity(
+                    principal_id,
+                    change.record_id,
+                    survivor_entity_id,
+                    expected_version=_guarded_version(change),
+                )
             elif change.kind is IdentityEffectKind.DEPENDENT_INVALIDATED:
                 # Guarded on the family because this kind now names two effects
                 # and only one of them is a write. A `REVIEW_CASE` change is
@@ -1771,9 +1849,20 @@ class IdentityCorrectionService:
         open_proposals = [
             proposal
             for proposal in self._entities.proposals(principal_id)
-            if proposal.is_open and _names_a_merged_entity(proposal, merged_entity_ids)
+            if proposal.is_open
+            and self._proposal_is_materially_affected(principal_id, proposal, merged_entity_ids)
         ]
-        proposal_changes = plan_proposals(open_proposals)
+        review_snapshots: dict[str, tuple[int, str | None, bool]] = {}
+        for proposal in open_proposals:
+            if proposal.review_case_id is None:
+                continue
+            snapshot = self._entities.entity_proposal_review_snapshot(
+                principal_id, proposal.review_case_id
+            )
+            if snapshot is None:
+                raise ConflictError(SafeDetail.PREVIEW_STALE)
+            review_snapshots[proposal.review_case_id] = snapshot
+        proposal_changes = plan_proposals(open_proposals, review_snapshots)
         changes.extend(proposal_changes)
         groups.append(
             _group(MergeFamily.ENTITY_PROPOSAL, len(open_proposals), bool(proposal_changes))
@@ -1820,6 +1909,10 @@ class IdentityCorrectionService:
                 self._entities.fact_evidence_links_naming(principal_id, merged_entity_ids),
             )
         )
+        # Canonical, version-owned Relationship Memory Entity context links are
+        # included in the privacy-safe RELATIONSHIP_MEMORY blocker above.  This
+        # family names separate derived cache/index artifacts only; reporting
+        # the canonical links twice would leak structure and double-count them.
         groups.append(
             MergeAffectedGroup(MergeFamily.DERIVED_CONTEXT, FamilyDisposition.NOT_BOUND, 0)
         )

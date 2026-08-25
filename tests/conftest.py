@@ -4555,7 +4555,12 @@ class _Entities(EntitiesRepository):
         )
 
     def redirect_entity(
-        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+        self,
+        principal_id: str,
+        merged_entity_id: str,
+        retained_entity_id: str,
+        *,
+        expected_version: int | None = None,
     ) -> None:
         self._world.fail("entities.redirect_entity")
         self._require_own(principal_id, merged_entity_id, retained_entity_id)
@@ -4573,6 +4578,12 @@ class _Entities(EntitiesRepository):
         ):
             raise ValueError("an entity that others redirect to is not merged away")
         merged = self.get(principal_id, merged_entity_id)
+        if (
+            merged is not None
+            and expected_version is not None
+            and merged.version != expected_version
+        ):
+            raise ValueError("a redirect names an entity this merge read unchanged")
         if merged is not None and merged.status is EntityStatus.MERGED_REDIRECT:
             raise ValueError("an entity that is already merged away is not merged again")
         for index, held in enumerate(self._world.entities):

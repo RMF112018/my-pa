@@ -64,6 +64,7 @@ from my_pa.domain.relationship.governance import (
     EntityProposalState,
 )
 from my_pa.domain.relationship.proposal_payload import schema_for
+from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -327,6 +328,13 @@ def record_entity_proposal_review_decision(
     """
     if decision.principal_id != principal_id:
         raise ValueError("a review decision belongs to the acting Principal")
+    if (
+        SqlEntityRepository(connection).serialize_entity_proposal_scope(
+            principal_id, decision.proposal_id
+        )
+        is None
+    ):
+        raise ValueError("a review decision names no current proposal in this scope")
     values: dict[str, object] = {
         "decision_id": decision.decision_id,
         "proposal_id": decision.proposal_id,
@@ -385,6 +393,11 @@ def invalidate_entity_proposal(
     that is an answer about the world, and the caller turns it into the review
     plane's own conflict.
     """
+    if (
+        SqlEntityRepository(connection).serialize_entity_proposal_scope(principal_id, proposal_id)
+        is None
+    ):
+        return False
     result = connection.execute(
         update(entity_proposals)
         .where(
@@ -413,6 +426,11 @@ def supersede_entity_proposal(
     reprocess creates nothing, which is an answer about the world and not an
     error about scope. The guarded `UPDATE` is what makes it one act.
     """
+    if (
+        SqlEntityRepository(connection).serialize_entity_proposal_scope(principal_id, proposal_id)
+        is None
+    ):
+        return False
     result = connection.execute(
         update(entity_proposals)
         .where(
@@ -435,6 +453,13 @@ def name_entity_proposal_successor(
     successor keeps the first one, and a proposal that is not superseded gets no
     successor at all.
     """
+    if (
+        SqlEntityRepository(connection).serialize_entity_proposals_scope(
+            principal_id, (proposal_id, successor_proposal_id)
+        )
+        is None
+    ):
+        raise ValueError("a successor link names no current proposal in this scope")
     connection.execute(
         update(entity_proposals)
         .where(

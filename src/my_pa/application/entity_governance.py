@@ -126,6 +126,8 @@ from my_pa.contracts.ports import (
     EntitiesRepository,
     EntityMutationAdmission,
     ProposalAdmissionConflictError,
+    ProposalEvidenceConflictError,
+    ProposalReviewScopeConflictError,
     ReviewDecisionRequest,
     ReviewRepository,
     SourceRepository,
@@ -553,23 +555,28 @@ class EntityGovernanceService:
             ProposedEvidence(role=EvidenceRole.DIRECT, entity_observation_id=observation_id)
             for observation_id in proposal.observation_ids
         ]
-        self._entities.merge_proposal_evidence_links(
-            principal_id,
-            proposal.proposal_id,
-            (
-                EntityProposalEvidenceLink(
-                    proposal_id=proposal.proposal_id,
-                    principal_id=principal_id,
-                    sequence=sequence,
-                    role=offered.role,
-                    created_at=at,
-                    entity_observation_id=offered.entity_observation_id,
-                    capture_span_id=offered.capture_span_id,
-                    knowledge_id=offered.knowledge_id,
-                )
-                for sequence, offered in enumerate([*cited, *evidence], start=1)
-            ),
-        )
+        try:
+            self._entities.merge_proposal_evidence_links(
+                principal_id,
+                proposal.proposal_id,
+                (
+                    EntityProposalEvidenceLink(
+                        proposal_id=proposal.proposal_id,
+                        principal_id=principal_id,
+                        sequence=sequence,
+                        role=offered.role,
+                        created_at=at,
+                        entity_observation_id=offered.entity_observation_id,
+                        capture_span_id=offered.capture_span_id,
+                        knowledge_id=offered.knowledge_id,
+                    )
+                    for sequence, offered in enumerate([*cited, *evidence], start=1)
+                ),
+            )
+        except ProposalEvidenceConflictError as exc:
+            raise ProposalNotOpenError(
+                "this proposal stopped being open while evidence was appended"
+            ) from exc
 
     def _admit_evidence(self, principal_id: str, observation_ids: tuple[str, ...]) -> None:
         """Refuse a citation this Principal cannot make. See `propose`."""
@@ -2025,11 +2032,25 @@ class EntityProposalReviewService:
             at=request.decided_at,
             resolve=resolve,
         )
-        case = self._reviews.entity_proposal_case(request.principal_id, request.review_case_id)
-        if case is None:
-            raise ReviewNotFoundError("the request names no stored review case")
-        held = self._entities.proposal(request.principal_id, case.proposal_id)
+        correction_patch = (
+            None if request.correction_patch is None else request.correction_patch.as_mapping()
+        )
+        try:
+            held = self._entities.serialize_entity_proposal_review_scope(
+                request.principal_id,
+                request.review_case_id,
+                correction_patch=correction_patch,
+            )
+        except ProposalReviewScopeConflictError as exc:
+            raise ReviewConflictError(
+                "this proposal changed while the review request was in flight"
+            ) from exc
+        except ProposalPayloadError as exc:
+            raise ReviewCorrectionError(str(exc)) from exc
         if held is None:
+            raise ReviewNotFoundError("the request names no stored review case")
+        case = self._reviews.entity_proposal_case(request.principal_id, request.review_case_id)
+        if case is None or case.proposal_id != held.proposal_id:
             raise ReviewNotFoundError("the request names no stored review case")
         ledger = self._reviews.entity_proposal_decisions(
             request.principal_id, request.review_case_id

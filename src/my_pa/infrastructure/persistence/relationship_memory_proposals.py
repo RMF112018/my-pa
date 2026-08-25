@@ -45,6 +45,7 @@ from sqlalchemy.exc import IntegrityError
 from my_pa.contracts.ports import RelationshipMemoryProposalRepository, UnknownScopeError
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.relationship.entity import EntityStatus
 from my_pa.domain.relationship.memory import (
     MemoryKind,
     MemoryProposalEvidence,
@@ -53,6 +54,7 @@ from my_pa.domain.relationship.memory import (
     RelationshipMemoryProposal,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_mutation_scopes
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -63,6 +65,7 @@ from my_pa.infrastructure.persistence.tables import (
     capture_versions,
     captures,
     enrollments,
+    entities,
     entity_observations,
     extractions,
     relationship_memory_proposal_evidence,
@@ -118,6 +121,21 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
         Principal-bearing parent chains are visible; a missing record and a
         foreign record intentionally receive the same refusal.
         """
+        lock_entity_mutation_scopes(
+            self._connection, proposal.principal_id, (proposal.subject_entity_id,)
+        )
+        subject = self._connection.execute(
+            select(entities.c.status, entities.c.version).where(
+                _mine(entities, proposal.principal_id),
+                entities.c.entity_id == proposal.subject_entity_id,
+            )
+        ).one_or_none()
+        if subject is None:
+            raise UnknownScopeError("a memory proposal names an entity outside this scope")
+        if subject.status == EntityStatus.MERGED_REDIRECT.value:
+            raise ValueError("a merged-away subject cannot receive a memory proposal")
+        if int(subject.version) != proposal.expected_subject_version:
+            raise ValueError("the proposed subject version is stale")
         for link in evidence:
             if link.principal_id != proposal.principal_id:
                 raise ValueError("proposal evidence belongs to the proposal Principal")

@@ -109,6 +109,7 @@ from my_pa.domain.relationship.memory import (
     statement_digest,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_mutation_scopes
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -670,6 +671,18 @@ def decide_relationship_memory_review(
     makes "reject, defer and mark-unresolved leave no memory" and "a refused
     acceptance leaves no decision" the same statement about one transaction.
     """
+    subject_entity_id = connection.execute(
+        select(relationship_memory_proposals.c.subject_entity_id).where(
+            relationship_memory_proposals.c.review_case_id == request.review_case_id,
+            _mine(relationship_memory_proposals, request.principal_id),
+        )
+    ).scalar_one_or_none()
+    if subject_entity_id is None:
+        raise ReviewNotFoundError("the request names no stored review case")
+    # Entity serialization precedes the proposal row lock. Merge takes the
+    # Entity lock before it analyses and invalidates proposals, so reversing
+    # these two locks here would create a proposal-row/Entity-lock deadlock.
+    lock_entity_mutation_scopes(connection, request.principal_id, (str(subject_entity_id),))
     proposal = connection.execute(
         select(
             relationship_memory_proposals.c.memory_proposal_id,

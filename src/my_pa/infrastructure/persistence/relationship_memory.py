@@ -53,6 +53,7 @@ from sqlalchemy import (
     select,
     text,
     tuple_,
+    union,
     update,
 )
 from sqlalchemy.engine import Connection
@@ -91,6 +92,7 @@ from my_pa.domain.relationship.memory import (
     check_kind_permits_subject,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_mutation_scopes
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -338,6 +340,31 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             if held is None:
                 raise UnknownScopeError("a context link names an entity outside this scope")
 
+    @staticmethod
+    def _requested_entity_context_ids(
+        links: tuple[Mapping[str, str], ...],
+    ) -> frozenset[str]:
+        return frozenset(
+            link["target_id"]
+            for link in links
+            if link["target_type"] == ContextLinkTargetType.ENTITY.value
+        )
+
+    def _current_entity_context_ids(
+        self, principal_id: str, memory_version_id: str
+    ) -> frozenset[str]:
+        return frozenset(
+            str(row[0])
+            for row in self._connection.execute(
+                select(relationship_memory_context_links.c.target_id).where(
+                    _mine(relationship_memory_context_links, principal_id),
+                    relationship_memory_context_links.c.memory_version_id == memory_version_id,
+                    relationship_memory_context_links.c.target_type
+                    == ContextLinkTargetType.ENTITY.value,
+                )
+            ).all()
+        )
+
     def _insert_version(
         self,
         request: MemoryWriteRequest,
@@ -438,6 +465,12 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             # and a create reaching here without a subject would then insert a
             # row with a null one.
             raise RelationshipMemoryError("a memory creation names its subject and kind")
+        context_entities = self._requested_entity_context_ids(request.context_links)
+        lock_entity_mutation_scopes(
+            self._connection,
+            request.principal_id,
+            {subject_entity_id, *context_entities},
+        )
         entity_type = self._require_writable_subject(request.principal_id, subject_entity_id)
         # Checked here rather than in the application service because the
         # subject's type is a fact this read already has: asking for it again
@@ -445,6 +478,8 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         # a Person-only kind admitted against an organization.
         check_kind_permits_subject(memory_kind, entity_type)
         self._require_own_context_targets(request.principal_id, request.context_links)
+        for context_entity_id in context_entities:
+            self._require_writable_subject(request.principal_id, context_entity_id)
         memory_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY)
         self._connection.execute(
             insert(relationship_memories).values(
@@ -504,6 +539,23 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         successor version to roll back because none was inserted.
         """
         memory_id = str(request.memory_id)
+        observed = self._connection.execute(
+            select(*_MEMORY_COLUMNS).where(
+                _mine(relationship_memories, request.principal_id),
+                relationship_memories.c.memory_id == memory_id,
+            )
+        ).one_or_none()
+        if observed is None:
+            raise UnknownScopeError("a memory write names a memory outside this scope")
+        observed_context = self._current_entity_context_ids(
+            request.principal_id, str(observed.current_version_id)
+        )
+        requested_context = self._requested_entity_context_ids(request.context_links)
+        lock_entity_mutation_scopes(
+            self._connection,
+            request.principal_id,
+            {str(observed.subject_entity_id), *observed_context, *requested_context},
+        )
         current = self._connection.execute(
             select(*_MEMORY_COLUMNS).where(
                 _mine(relationship_memories, request.principal_id),
@@ -512,12 +564,21 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         ).one_or_none()
         if current is None:
             raise UnknownScopeError("a memory write names a memory outside this scope")
+        if current.subject_entity_id != observed.subject_entity_id:
+            raise StaleMemoryVersionError("the memory subject changed while this write waited")
+        if (
+            self._current_entity_context_ids(request.principal_id, str(current.current_version_id))
+            != observed_context
+        ):
+            raise StaleMemoryVersionError("the memory context changed while this write waited")
         if request.operation is MemoryOperation.RESTORE:
             # Checked on restore and not on archive: returning a memory to the
             # current set against an identity that has since been merged away
             # would put a live note on a person the user did not choose, while
             # withdrawing one from a merged-away subject is always safe.
             self._require_writable_subject(request.principal_id, current.subject_entity_id)
+            for context_entity_id in observed_context:
+                self._require_writable_subject(request.principal_id, context_entity_id)
 
         revising = request.operation is MemoryOperation.REVISE
         memory_kind = request.memory_kind or MemoryKind(current.memory_kind)
@@ -527,6 +588,8 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             )
             check_kind_permits_subject(memory_kind, entity_type)
             self._require_own_context_targets(request.principal_id, request.context_links)
+            for context_entity_id in requested_context:
+                self._require_writable_subject(request.principal_id, context_entity_id)
 
         lifecycle = {
             MemoryOperation.REVISE: MemoryLifecycle(current.lifecycle_state),
@@ -958,16 +1021,30 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         # Sorted so two calls over the same set build the same statement.
         named = sorted(entity_ids)
         subjects = self._connection.execute(
-            select(relationship_memories.c.subject_entity_id)
-            .where(
-                _mine(relationship_memories, principal_id),
-                relationship_memories.c.subject_entity_id.in_(named),
-            )
-            .union(
+            union(
+                select(relationship_memories.c.subject_entity_id).where(
+                    _mine(relationship_memories, principal_id),
+                    relationship_memories.c.subject_entity_id.in_(named),
+                ),
                 select(relationship_memory_proposals.c.subject_entity_id).where(
                     _mine(relationship_memory_proposals, principal_id),
                     relationship_memory_proposals.c.subject_entity_id.in_(named),
+                ),
+                select(relationship_memory_context_links.c.target_id)
+                .select_from(
+                    relationship_memory_context_links.join(
+                        relationship_memories,
+                        relationship_memories.c.current_version_id
+                        == relationship_memory_context_links.c.memory_version_id,
+                    )
                 )
+                .where(
+                    _mine(relationship_memory_context_links, principal_id),
+                    _mine(relationship_memories, principal_id),
+                    relationship_memory_context_links.c.target_type
+                    == ContextLinkTargetType.ENTITY.value,
+                    relationship_memory_context_links.c.target_id.in_(named),
+                ),
             )
         ).all()
         return frozenset(str(row[0]) for row in subjects)

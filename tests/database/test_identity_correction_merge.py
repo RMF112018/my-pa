@@ -27,7 +27,14 @@ from sqlalchemy import Connection, Engine, text
 from sqlalchemy.engine import make_url
 
 from my_pa.application.commands import MergeEntities, PreviewEntityMerge
-from my_pa.application.entity_governance import EntityGovernanceService
+from my_pa.application.entity_authoring import EntityAuthoringService
+from my_pa.application.entity_governance import (
+    EntityGovernanceService,
+    EntityProposalReviewService,
+    ProposalNotOpenError,
+    ProposedEvidence,
+    ReviewConflictError,
+)
 from my_pa.application.errors import ConflictError, DeniedError, InvalidRequestError, NotFoundError
 from my_pa.application.identity_correction import (
     ConflictChoice,
@@ -41,14 +48,24 @@ from my_pa.application.identity_correction import (
 )
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.contracts.ports import UnitOfWork as UnitOfWorkPort
+from my_pa.contracts.ports import (
+    MemoryWriteRequest,
+    ProposalEvidenceConflictError,
+    ReviewDecisionRequest,
+    UnknownScopeError,
+)
+from my_pa.contracts.ports import (
+    UnitOfWork as UnitOfWorkPort,
+)
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
+from my_pa.domain.relationship.authoring import HistoricalEntityError
 from my_pa.domain.relationship.entity import (
     AliasState,
     AliasType,
@@ -63,15 +80,20 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    MergedEndpointError,
     RelationshipState,
 )
 from my_pa.domain.relationship.governance import (
     ActorClass,
+    EntityFactEvidenceLink,
     EntityObservation,
     EntityProposal,
+    EntityProposalEvidenceLink,
     EntityProposalMethod,
     EntityProposalState,
     EntityResolutionDecision,
+    EvidenceRole,
+    MutationAuthority,
     ObservationKind,
     ResolutionDisposition,
 )
@@ -83,7 +105,15 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityOperationState,
 )
 from my_pa.domain.relationship.memory import (
+    MemoryActorClass,
+    MemoryAuthority,
     MemoryKind,
+    MemoryOperation,
+    MemoryProposalMethod,
+    MemoryProposalState,
+    MergedSubjectError,
+    RelationshipMemoryProposal,
+    classification_floor_for,
     memory_proposal_dedupe_digest,
     statement_digest,
 )
@@ -103,7 +133,10 @@ from my_pa.infrastructure.persistence.entity_proposal_review import (
 from my_pa.infrastructure.persistence.relationship_memory import (
     SqlRelationshipMemoryRepository,
 )
-from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from my_pa.infrastructure.persistence.relationship_memory_proposals import (
+    SqlRelationshipMemoryProposalRepository,
+)
+from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork, _Reviews
 
 pytestmark = pytest.mark.database
 
@@ -345,6 +378,23 @@ def _service(connection: Connection) -> IdentityCorrectionService:
     )
 
 
+class _PausingMergeRepository(SqlEntityRepository):
+    """Expose the point after participant locks and before final revalidation."""
+
+    def __init__(self, connection: Connection, locked: Event, release: Event) -> None:
+        super().__init__(connection)
+        self._locked = locked
+        self._release = release
+
+    def serialize_identifier_claim_keys(
+        self, principal_id: str, claims: frozenset[tuple[str, str]]
+    ) -> None:
+        super().serialize_identifier_claim_keys(principal_id, claims)
+        self._locked.set()
+        if not self._release.wait(timeout=5):
+            raise TimeoutError("the deterministic merge race was not released")
+
+
 def _previewed(
     connection: Connection,
     command: MergePreviewCommand | None = None,
@@ -561,6 +611,13 @@ def test_a_merge_redirects_the_merged_entity_and_leaves_the_survivor_alone(
     assert merged is not None
     assert merged.status is EntityStatus.MERGED_REDIRECT
     assert merged.superseded_by_entity_id == SURVIVOR
+    redirected = next(
+        effect
+        for effect in receipt.effects
+        if effect.family is IdentityEffectFamily.ENTITY and effect.record_id == MERGED_ONE
+    )
+    assert redirected.before_state["version"] == 1
+    assert redirected.after_state["version"] == merged.version == 1
     assert receipt.operation.state is IdentityOperationState.COMPLETED
     assert receipt.replayed is False
     # Nothing was deleted: the merged-away entity is still a readable row.
@@ -736,6 +793,419 @@ def test_identifier_writers_wait_for_merge_serialization_across_entity_scopes(
     assert identifier_id in {row.identifier_id for row in claims}
 
 
+@pytest.mark.parametrize(
+    "writer_kind",
+    [
+        "entity",
+        "alias",
+        "assignment",
+        "relationship",
+        "observation",
+        "proposal",
+        "memory",
+        "memory_proposal",
+        "review_invalidate",
+        "review_reprocess",
+        "review_escalate",
+        "review_accept",
+        "fact_link",
+        "memory_context",
+        "memory_revise_context",
+        "proposal_evidence",
+    ],
+)
+def test_a_writer_waiting_after_final_merge_locking_loses_without_partial_state(
+    staged: Engine, writer_kind: str
+) -> None:
+    """The causative interleaving: final analysis owns A, then a writer targets A."""
+    if writer_kind in {"observation", "fact_link", "proposal_evidence"}:
+        with staged.begin() as connection:
+            SqlEntityRepository(connection).record_observation(
+                PRINCIPAL_A,
+                _observation(
+                    "eobs_race0001race01",
+                    MERGED_ONE if writer_kind == "observation" else None,
+                ),
+            )
+    review_case_id = "rvw_race0001race0001"
+    proposal_id = "eprp_race0002race02"
+    revised_memory_id: str | None = None
+    if writer_kind == "memory_revise_context":
+        statement = "Synthetic note before concurrent context revision."
+        with staged.begin() as connection:
+            revised_memory_id = (
+                SqlRelationshipMemoryRepository(connection)
+                .admit(
+                    MemoryWriteRequest(
+                        operation=MemoryOperation.CREATE,
+                        memory_id=None,
+                        memory_version_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+                        expected_version=None,
+                        principal_id=PRINCIPAL_A,
+                        subject_entity_id=TOWER,
+                        memory_kind=MemoryKind.GENERAL_NOTE,
+                        statement=statement,
+                        statement_sha256=statement_digest(statement),
+                        structured_value=None,
+                        authority=MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE,
+                        classification=classification_floor_for(MemoryKind.GENERAL_NOTE),
+                        created_by_actor=MemoryActorClass.USER,
+                        context_links=(),
+                        pinned=False,
+                        observed_at=None,
+                        effective_from=None,
+                        effective_to=None,
+                        correction_reason=None,
+                        idempotency_key="race-memory-before-revise",
+                        correlation_id=CORRELATION,
+                        server_received_at=WHEN,
+                    )
+                )
+                .receipt.memory_id
+            )
+    if writer_kind.startswith("review_"):
+        with staged.begin() as connection:
+            SqlEntityRepository(connection).record_proposal(
+                PRINCIPAL_A,
+                _proposal(proposal_id, MERGED_ONE, review_case_id=review_case_id),
+            )
+    if writer_kind == "proposal_evidence":
+        with staged.begin() as connection:
+            SqlEntityRepository(connection).record_proposal(
+                PRINCIPAL_A,
+                _proposal(
+                    "eprp_race0003race03",
+                    MERGED_ONE,
+                    review_case_id="rvw_race0003race0003",
+                ),
+            )
+    with staged.begin() as connection:
+        report = _previewed(connection)
+
+    merge_locked = Event()
+    release_merge = Event()
+    merge_done = Event()
+    writer_started = Event()
+    writer_done = Event()
+    receipts: list[MergeReceipt] = []
+    merge_failures: list[BaseException] = []
+    writer_failures: list[BaseException] = []
+
+    def apply_merge() -> None:
+        try:
+            with staged.begin() as connection:
+                service = IdentityCorrectionService(
+                    _PausingMergeRepository(connection, merge_locked, release_merge),
+                    SqlRelationshipMemoryRepository(connection),
+                )
+                receipts.append(
+                    service.apply(
+                        MergeCommand(
+                            principal_id=PRINCIPAL_A,
+                            preview_id=report.preview.preview_id,
+                            preview_digest=report.preview.preview_digest,
+                            idempotency_key=f"race-{writer_kind}",
+                            reason=REASON,
+                        ),
+                        at=WHEN,
+                        correlation_id=CORRELATION,
+                        audit_id=AUDIT,
+                        performed_by=OPERATOR,
+                        actor_class=ActorClass.USER,
+                        has_operator_authority=True,
+                    )
+                )
+        except BaseException as error:  # pragma: no cover - asserted below
+            merge_failures.append(error)
+        finally:
+            merge_done.set()
+
+    def write_child() -> None:
+        try:
+            with staged.begin() as connection:
+                writer_started.set()
+                repository = SqlEntityRepository(connection)
+                if writer_kind == "entity":
+                    EntityAuthoringService().update(
+                        repository,
+                        principal_id=PRINCIPAL_A,
+                        entity_id=MERGED_ONE,
+                        expected_version=1,
+                        display_name="Alice Concurrent Synthetic",
+                        canonical_name=None,
+                        status=None,
+                        reason="a synthetic concurrent correction",
+                        idempotency_key="race-entity-update",
+                        correlation_id=CORRELATION,
+                        audit_id=AUDIT,
+                        at=WHEN,
+                    )
+                elif writer_kind == "alias":
+                    repository.record_alias(PRINCIPAL_A, _alias("eals_race0001race01", MERGED_ONE))
+                elif writer_kind == "assignment":
+                    repository.record_assignment(
+                        PRINCIPAL_A, _assignment("asn_race0001race01", MERGED_ONE)
+                    )
+                elif writer_kind == "relationship":
+                    repository.record_relationship(
+                        PRINCIPAL_A,
+                        _edge("erel_race0001race01", MERGED_ONE, TOWER),
+                    )
+                elif writer_kind == "observation":
+                    repository.link_observation(PRINCIPAL_A, "eobs_race0001race01", TOWER)
+                elif writer_kind == "proposal":
+                    repository.record_proposal(
+                        PRINCIPAL_A, _proposal("eprp_race0001race01", MERGED_ONE)
+                    )
+                elif writer_kind == "proposal_evidence":
+                    EntityGovernanceService(repository).propose(
+                        PRINCIPAL_A,
+                        kind=EntityProposalKind.RECORD_ALIAS,
+                        payload={
+                            "entity_id": MERGED_ONE,
+                            "alias_type": "nickname",
+                            "display_value": "Ali",
+                        },
+                        observation_ids=(),
+                        proposed_by="synthetic-producer",
+                        method=EntityProposalMethod.DETERMINISTIC,
+                        method_version="v1",
+                        at=WHEN,
+                        evidence=(
+                            ProposedEvidence(
+                                role=EvidenceRole.DIRECT,
+                                entity_observation_id="eobs_race0001race01",
+                            ),
+                        ),
+                    )
+                elif writer_kind.startswith("review_"):
+                    disposition = {
+                        "review_invalidate": Disposition.INVALIDATE,
+                        "review_reprocess": Disposition.REPROCESS,
+                        "review_escalate": Disposition.ESCALATE,
+                        "review_accept": Disposition.ACCEPT,
+                    }[writer_kind]
+                    review = EntityProposalReviewService(
+                        repository,
+                        _Reviews(
+                            connection,
+                            relationship_memory_enabled=False,
+                            relationship_intelligence_enabled=True,
+                        ),
+                    )
+                    review.decide(
+                        ReviewDecisionRequest(
+                            review_case_id=review_case_id,
+                            expected_review_version=0,
+                            disposition=disposition,
+                            principal_id=PRINCIPAL_A,
+                            correlation_id=CORRELATION,
+                            audit_id=AUDIT,
+                            policy_version="policy-v1",
+                            decided_at=WHEN,
+                            reason=(
+                                "synthetic concurrent disposition"
+                                if disposition in {Disposition.INVALIDATE, Disposition.ESCALATE}
+                                else None
+                            ),
+                        ),
+                        decided_by=OPERATOR,
+                    )
+                elif writer_kind == "fact_link":
+                    repository.record_fact_evidence_link(
+                        PRINCIPAL_A,
+                        EntityFactEvidenceLink(
+                            link_id="efev_race0001race01",
+                            principal_id=PRINCIPAL_A,
+                            role=EvidenceRole.COUNTEREVIDENCE,
+                            authority=MutationAuthority.USER_CONFIRMED_ASSERTION,
+                            created_at=WHEN,
+                            entity_id=MERGED_ONE,
+                            entity_observation_id="eobs_race0001race01",
+                        ),
+                    )
+                elif writer_kind == "memory_revise_context":
+                    revised = "Synthetic note after concurrent context revision."
+                    SqlRelationshipMemoryRepository(connection).admit(
+                        MemoryWriteRequest(
+                            operation=MemoryOperation.REVISE,
+                            memory_id=revised_memory_id,
+                            memory_version_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+                            expected_version=1,
+                            principal_id=PRINCIPAL_A,
+                            subject_entity_id=None,
+                            memory_kind=MemoryKind.GENERAL_NOTE,
+                            statement=revised,
+                            statement_sha256=statement_digest(revised),
+                            structured_value=None,
+                            authority=MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE,
+                            classification=classification_floor_for(MemoryKind.GENERAL_NOTE),
+                            created_by_actor=MemoryActorClass.USER,
+                            context_links=(
+                                {
+                                    "target_type": "entity",
+                                    "target_id": MERGED_ONE,
+                                    "role": "applies_in",
+                                },
+                            ),
+                            pinned=None,
+                            observed_at=None,
+                            effective_from=None,
+                            effective_to=None,
+                            correction_reason="synthetic correction",
+                            idempotency_key="race-memory-revise-context",
+                            correlation_id=CORRELATION,
+                            server_received_at=WHEN,
+                        )
+                    )
+                elif writer_kind in {"memory", "memory_context"}:
+                    statement = "Synthetic concurrent relationship note."
+                    SqlRelationshipMemoryRepository(connection).admit(
+                        MemoryWriteRequest(
+                            operation=MemoryOperation.CREATE,
+                            memory_id=None,
+                            memory_version_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+                            expected_version=None,
+                            principal_id=PRINCIPAL_A,
+                            subject_entity_id=(MERGED_ONE if writer_kind == "memory" else TOWER),
+                            memory_kind=MemoryKind.GENERAL_NOTE,
+                            statement=statement,
+                            statement_sha256=statement_digest(statement),
+                            structured_value=None,
+                            authority=MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE,
+                            classification=classification_floor_for(MemoryKind.GENERAL_NOTE),
+                            created_by_actor=MemoryActorClass.USER,
+                            context_links=(
+                                ()
+                                if writer_kind == "memory"
+                                else (
+                                    {
+                                        "target_type": "entity",
+                                        "target_id": MERGED_ONE,
+                                        "role": "applies_in",
+                                    },
+                                )
+                            ),
+                            pinned=False,
+                            observed_at=None,
+                            effective_from=None,
+                            effective_to=None,
+                            correction_reason=None,
+                            idempotency_key="race-memory",
+                            correlation_id=CORRELATION,
+                            server_received_at=WHEN,
+                        )
+                    )
+                else:
+                    statement = "Synthetic concurrent proposed memory."
+                    proposal_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
+                    proposed_sha = statement_digest(statement)
+                    SqlRelationshipMemoryProposalRepository(connection).record_proposal(
+                        RelationshipMemoryProposal(
+                            memory_proposal_id=proposal_id,
+                            principal_id=PRINCIPAL_A,
+                            subject_entity_id=MERGED_ONE,
+                            expected_subject_version=1,
+                            proposed_kind=MemoryKind.GENERAL_NOTE,
+                            proposed_statement=statement,
+                            proposed_statement_sha256=proposed_sha,
+                            dedupe_sha256=memory_proposal_dedupe_digest(
+                                principal_id=PRINCIPAL_A,
+                                subject_entity_id=MERGED_ONE,
+                                proposed_kind=MemoryKind.GENERAL_NOTE,
+                                proposed_statement_sha256=proposed_sha,
+                                structured_value=None,
+                            ),
+                            state=MemoryProposalState.PROPOSED,
+                            method=MemoryProposalMethod.RULE,
+                            method_version="synthetic-v1",
+                            classification=classification_floor_for(MemoryKind.GENERAL_NOTE),
+                            proposed_at=WHEN,
+                        ),
+                        (),
+                    )
+        except BaseException as error:  # pragma: no cover - asserted below
+            writer_failures.append(error)
+        finally:
+            writer_done.set()
+
+    merge_thread = Thread(target=apply_merge, daemon=True)
+    merge_thread.start()
+    assert merge_locked.wait(timeout=5)
+    writer_thread = Thread(target=write_child, daemon=True)
+    writer_thread.start()
+    assert writer_started.wait(timeout=2)
+    assert not writer_done.wait(timeout=0.25)
+    release_merge.set()
+    assert merge_done.wait(timeout=5)
+    assert writer_done.wait(timeout=5)
+    merge_thread.join(timeout=1)
+    writer_thread.join(timeout=1)
+
+    assert merge_failures == []
+    assert len(receipts) == 1
+    assert receipts[0].operation.state is IdentityOperationState.COMPLETED
+    assert len(writer_failures) == 1
+    expected_failure = {
+        "entity": HistoricalEntityError,
+        "alias": MergedEndpointError,
+        "assignment": MergedEndpointError,
+        "relationship": MergedEndpointError,
+        "observation": UnknownScopeError,
+        "proposal": MergedEndpointError,
+        "memory": MergedSubjectError,
+        "memory_proposal": ValueError,
+        "review_invalidate": ReviewConflictError,
+        "review_reprocess": ReviewConflictError,
+        "review_escalate": ReviewConflictError,
+        "review_accept": ReviewConflictError,
+        "fact_link": MergedEndpointError,
+        "memory_context": MergedSubjectError,
+        "memory_revise_context": MergedSubjectError,
+        "proposal_evidence": ProposalNotOpenError,
+    }[writer_kind]
+    assert type(writer_failures[0]) is expected_failure
+    assert not isinstance(writer_failures[0], TimeoutError)
+    if writer_kind == "memory_proposal":
+        assert "merged-away subject" in str(writer_failures[0])
+    assert _row_count(staged, "entity_identity_operations", "state = 'in_progress'") == 0
+    assert _row_count(staged, "entity_identity_effects") == len(receipts[0].effects)
+    assert _row_count(staged, "entities", "status = 'merged_redirect'") == 1
+    assert _row_count(staged, "entity_aliases", "alias_id = 'eals_race0001race01'") == 0
+    assert _row_count(staged, "entity_assignments", "assignment_id = 'asn_race0001race01'") == 0
+    assert (
+        _row_count(staged, "entity_relationships", "relationship_id = 'erel_race0001race01'") == 0
+    )
+    assert _row_count(staged, "entity_proposals", "proposal_id = 'eprp_race0001race01'") == 0
+    assert _row_count(staged, "relationship_memories") == (
+        1 if writer_kind == "memory_revise_context" else 0
+    )
+    if writer_kind == "memory_revise_context":
+        assert _row_count(staged, "relationship_memory_versions") == 1
+        assert _row_count(staged, "relationship_memory_context_links") == 0
+    assert _row_count(staged, "relationship_memory_proposals") == 0
+    assert _row_count(staged, "entity_fact_evidence_links", "link_id = 'efev_race0001race01'") == 0
+    if writer_kind == "proposal_evidence":
+        assert _row_count(staged, "entity_proposal_evidence_links") == 0
+    if writer_kind.startswith("review_"):
+        assert _row_count(staged, "entity_proposal_review_decisions") == 0
+        assert _row_count(staged, "entity_proposals", "state <> 'invalidated'") == 0
+    if writer_kind == "observation":
+        with staged.connect() as connection:
+            observation = SqlEntityRepository(connection).observation(
+                PRINCIPAL_A, "eobs_race0001race01"
+            )
+        assert observation is not None
+        assert observation.entity_id == SURVIVOR
+        observation_effect = next(
+            effect
+            for effect in receipts[0].effects
+            if effect.family is IdentityEffectFamily.OBSERVATION
+            and effect.record_id == observation.observation_id
+        )
+        assert observation_effect.after_state["entity_id"] == observation.entity_id
+
+
 def test_the_projected_effects_are_what_the_merge_records(staged: Engine) -> None:
     with staged.begin() as connection:
         repository = SqlEntityRepository(connection)
@@ -774,6 +1244,280 @@ def test_a_proposal_added_after_preview_makes_the_plan_stale(staged: Engine) -> 
         _applied(connection, report)
     assert [detail.value for detail in refused.value.safe_details] == ["preview_stale"]
     assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
+
+
+def test_a_ledger_only_review_decision_after_preview_makes_the_plan_stale(
+    staged: Engine,
+) -> None:
+    review_case_id = "rvw_stal0001stal0001"
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).record_proposal(
+            PRINCIPAL_A,
+            _proposal("eprp_stal0001stal01", MERGED_ONE, review_case_id=review_case_id),
+        )
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    with staged.begin() as connection:
+        EntityProposalReviewService(
+            SqlEntityRepository(connection),
+            _Reviews(
+                connection,
+                relationship_memory_enabled=False,
+                relationship_intelligence_enabled=True,
+            ),
+        ).decide(
+            ReviewDecisionRequest(
+                review_case_id=review_case_id,
+                expected_review_version=0,
+                disposition=Disposition.ESCALATE,
+                principal_id=PRINCIPAL_A,
+                correlation_id=CORRELATION,
+                audit_id=AUDIT,
+                policy_version="policy-v1",
+                decided_at=WHEN,
+                reason="synthetic escalation",
+            ),
+            decided_by=OPERATOR,
+        )
+    with pytest.raises(ConflictError) as refused, staged.begin() as connection:
+        _applied(connection, report)
+    assert [detail.value for detail in refused.value.safe_details] == ["preview_stale"]
+    assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
+
+
+def test_a_review_started_after_merge_reports_canonical_conflict(staged: Engine) -> None:
+    review_case_id = "rvw_post0001post0001"
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).record_proposal(
+            PRINCIPAL_A,
+            _proposal("eprp_post0001post01", MERGED_ONE, review_case_id=review_case_id),
+        )
+        report = _previewed(connection)
+    with staged.begin() as connection:
+        _applied(connection, report)
+
+    with pytest.raises(ReviewConflictError), staged.begin() as connection:
+        EntityProposalReviewService(
+            SqlEntityRepository(connection),
+            _Reviews(
+                connection,
+                relationship_memory_enabled=False,
+                relationship_intelligence_enabled=True,
+            ),
+        ).decide(
+            ReviewDecisionRequest(
+                review_case_id=review_case_id,
+                expected_review_version=0,
+                disposition=Disposition.ESCALATE,
+                principal_id=PRINCIPAL_A,
+                correlation_id=CORRELATION,
+                audit_id=AUDIT,
+                policy_version="policy-v1",
+                decided_at=WHEN,
+                reason="synthetic post-merge escalation",
+            ),
+            decided_by=OPERATOR,
+        )
+    assert _row_count(staged, "entity_proposal_review_decisions") == 0
+
+
+def test_a_direct_evidence_append_after_merge_fails_closed(staged: Engine) -> None:
+    proposal_id = "eprp_evap0001evap01"
+    with staged.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.record_observation(PRINCIPAL_A, _observation("eobs_evap0001evap01", None))
+        repository.record_proposal(PRINCIPAL_A, _proposal(proposal_id, MERGED_ONE))
+        report = _previewed(connection)
+    with staged.begin() as connection:
+        _applied(connection, report)
+
+    with pytest.raises(ProposalEvidenceConflictError), staged.begin() as connection:
+        SqlEntityRepository(connection).record_proposal_evidence_link(
+            PRINCIPAL_A,
+            EntityProposalEvidenceLink(
+                proposal_id=proposal_id,
+                principal_id=PRINCIPAL_A,
+                sequence=1,
+                role=EvidenceRole.DIRECT,
+                created_at=WHEN,
+                entity_observation_id="eobs_evap0001evap01",
+            ),
+        )
+    assert _row_count(staged, "entity_proposal_evidence_links") == 0
+
+
+def test_a_direct_evidence_append_waiting_on_review_close_fails_closed(
+    staged: Engine,
+) -> None:
+    proposal_id = "eprp_empty001empty01"
+    review_case_id = "rvw_empty001empty0001"
+    observation_id = "eobs_empty001empty01"
+    with staged.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.record_observation(PRINCIPAL_A, _observation(observation_id, None))
+        repository.record_proposal(
+            PRINCIPAL_A,
+            _typed_proposal(
+                proposal_id,
+                EntityProposalKind.CREATE_ENTITY,
+                {"entity_type": "person", "display_name": "Synthetic Empty Scope"},
+                review_case_id=review_case_id,
+            ),
+        )
+
+    review_decided = Event()
+    release_review = Event()
+    review_done = Event()
+    writer_started = Event()
+    writer_done = Event()
+    review_failures: list[BaseException] = []
+    writer_failures: list[BaseException] = []
+
+    def close_review() -> None:
+        try:
+            with staged.begin() as connection:
+                EntityProposalReviewService(
+                    SqlEntityRepository(connection),
+                    _Reviews(
+                        connection,
+                        relationship_memory_enabled=False,
+                        relationship_intelligence_enabled=True,
+                    ),
+                ).decide(
+                    ReviewDecisionRequest(
+                        review_case_id=review_case_id,
+                        expected_review_version=0,
+                        disposition=Disposition.REJECT,
+                        principal_id=PRINCIPAL_A,
+                        correlation_id=CORRELATION,
+                        audit_id=AUDIT,
+                        policy_version="policy-v1",
+                        decided_at=WHEN,
+                        reason="synthetic review rejection",
+                    ),
+                    decided_by=OPERATOR,
+                )
+                review_decided.set()
+                if not release_review.wait(timeout=5):
+                    raise TimeoutError("the deterministic review race was not released")
+        except BaseException as error:  # pragma: no cover - asserted below
+            review_failures.append(error)
+        finally:
+            review_done.set()
+
+    def append_evidence() -> None:
+        try:
+            with staged.begin() as connection:
+                writer_started.set()
+                SqlEntityRepository(connection).record_proposal_evidence_link(
+                    PRINCIPAL_A,
+                    EntityProposalEvidenceLink(
+                        proposal_id=proposal_id,
+                        principal_id=PRINCIPAL_A,
+                        sequence=1,
+                        role=EvidenceRole.DIRECT,
+                        created_at=WHEN,
+                        entity_observation_id=observation_id,
+                    ),
+                )
+        except BaseException as error:  # pragma: no cover - asserted below
+            writer_failures.append(error)
+        finally:
+            writer_done.set()
+
+    review_thread = Thread(target=close_review, daemon=True)
+    review_thread.start()
+    assert review_decided.wait(timeout=5)
+    writer_thread = Thread(target=append_evidence, daemon=True)
+    writer_thread.start()
+    assert writer_started.wait(timeout=2)
+    assert not writer_done.wait(timeout=0.25)
+    release_review.set()
+    assert review_done.wait(timeout=5)
+    assert writer_done.wait(timeout=5)
+    review_thread.join(timeout=1)
+    writer_thread.join(timeout=1)
+
+    assert review_failures == []
+    assert len(writer_failures) == 1
+    assert type(writer_failures[0]) is ProposalEvidenceConflictError
+    assert not isinstance(writer_failures[0], TimeoutError)
+    assert _row_count(staged, "entity_proposal_evidence_links") == 0
+    assert _row_count(staged, "entity_proposals", "state = 'rejected'") == 1
+
+
+def test_a_source_link_added_after_preview_makes_the_plan_stale(staged: Engine) -> None:
+    with staged.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.record_observation(PRINCIPAL_A, _observation("eobs_link0001link01", None))
+        report = _previewed(connection)
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).record_fact_evidence_link(
+            PRINCIPAL_A,
+            EntityFactEvidenceLink(
+                link_id="efev_link0001link01",
+                principal_id=PRINCIPAL_A,
+                role=EvidenceRole.COUNTEREVIDENCE,
+                authority=MutationAuthority.USER_CONFIRMED_ASSERTION,
+                created_at=WHEN,
+                entity_id=MERGED_ONE,
+                entity_observation_id="eobs_link0001link01",
+            ),
+        )
+    with pytest.raises(ConflictError) as refused, staged.begin() as connection:
+        _applied(connection, report)
+    assert [detail.value for detail in refused.value.safe_details] == ["preview_stale"]
+    assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
+
+
+def test_a_current_memory_context_link_to_the_merged_identity_blocks_privately(
+    staged: Engine,
+) -> None:
+    statement = "Synthetic context-bound note."
+    with staged.begin() as connection:
+        SqlRelationshipMemoryRepository(connection).admit(
+            MemoryWriteRequest(
+                operation=MemoryOperation.CREATE,
+                memory_id=None,
+                memory_version_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+                expected_version=None,
+                principal_id=PRINCIPAL_A,
+                subject_entity_id=TOWER,
+                memory_kind=MemoryKind.GENERAL_NOTE,
+                statement=statement,
+                statement_sha256=statement_digest(statement),
+                structured_value=None,
+                authority=MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE,
+                classification=classification_floor_for(MemoryKind.GENERAL_NOTE),
+                created_by_actor=MemoryActorClass.USER,
+                context_links=(
+                    {
+                        "target_type": "entity",
+                        "target_id": MERGED_ONE,
+                        "role": "applies_in",
+                    },
+                ),
+                pinned=False,
+                observed_at=None,
+                effective_from=None,
+                effective_to=None,
+                correction_reason=None,
+                idempotency_key="context-blocker",
+                correlation_id=CORRELATION,
+                server_received_at=WHEN,
+            )
+        )
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    assert _group(report, MergeFamily.RELATIONSHIP_MEMORY) == (
+        FamilyDisposition.BLOCKED,
+        1,
+    )
+    assert _group(report, MergeFamily.DERIVED_CONTEXT) == (
+        FamilyDisposition.NOT_BOUND,
+        0,
+    )
+    assert all(conflict.record_id == MERGED_ONE for conflict in report.conflicts)
 
 
 def test_an_alias_reparents_and_a_duplicate_one_coalesces(staged: Engine) -> None:
@@ -1170,6 +1914,84 @@ def test_an_entity_id_in_ordinary_payload_text_is_not_a_reference(staged: Engine
     assert reference_after.state is EntityProposalState.INVALIDATED
 
 
+@pytest.mark.parametrize(
+    ("kind", "payload", "proposal_id"),
+    [
+        (
+            EntityProposalKind.REVISE_ASSIGNMENT,
+            {"assignment_id": "asn_aaaa0001aaaa01", "role": "lead"},
+            "eprp_indr0001indr01",
+        ),
+        (
+            EntityProposalKind.END_ASSIGNMENT,
+            {"assignment_id": "asn_aaaa0001aaaa01", "reason": "ended", "end_now": True},
+            "eprp_indr0002indr02",
+        ),
+        (
+            EntityProposalKind.REVISE_RELATIONSHIP,
+            {"relationship_id": "erel_aaaa0001aaaa01", "effective_to": "2027-01-01T00:00:00Z"},
+            "eprp_indr0003indr03",
+        ),
+        (
+            EntityProposalKind.END_RELATIONSHIP,
+            {"relationship_id": "erel_aaaa0001aaaa01", "reason": "ended", "end_now": True},
+            "eprp_indr0004indr04",
+        ),
+    ],
+)
+def test_a_proposal_targeting_a_child_of_the_merged_identity_is_invalidated(
+    staged: Engine,
+    kind: EntityProposalKind,
+    payload: dict[str, str | bool],
+    proposal_id: str,
+) -> None:
+    with staged.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.record_assignment(PRINCIPAL_A, _assignment("asn_aaaa0001aaaa01", MERGED_ONE))
+        repository.record_relationship(PRINCIPAL_A, _edge("erel_aaaa0001aaaa01", MERGED_ONE, TOWER))
+        review_case_id = f"rvw_{proposal_id.removeprefix('eprp_')}"
+        repository.record_proposal(
+            PRINCIPAL_A,
+            _typed_proposal(
+                proposal_id,
+                kind,
+                payload,
+                expected_target_version=1,
+                review_case_id=review_case_id,
+            ),
+        )
+
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    assert _group(report, MergeFamily.ENTITY_PROPOSAL) == (
+        FamilyDisposition.TRANSFORMED,
+        1,
+    )
+    assert _group(report, MergeFamily.REVIEW_CASE) == (FamilyDisposition.TRANSFORMED, 1)
+    with staged.begin() as connection:
+        receipt = _applied(connection, report)
+
+    affected = {(effect.family, effect.record_id, effect.kind) for effect in receipt.effects}
+    assert (
+        IdentityEffectFamily.PROPOSAL,
+        proposal_id,
+        IdentityEffectKind.DEPENDENT_INVALIDATED,
+    ) in affected
+    assert (
+        IdentityEffectFamily.REVIEW_CASE,
+        review_case_id,
+        IdentityEffectKind.DEPENDENT_INVALIDATED,
+    ) in affected
+    with staged.connect() as connection:
+        proposal = SqlEntityRepository(connection).proposal(PRINCIPAL_A, proposal_id)
+        cases = entity_proposal_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+    assert proposal is not None
+    assert proposal.state is EntityProposalState.INVALIDATED
+    case = next(case for case in cases if case.review_case_id == review_case_id)
+    assert case.proposal_state is ProposalState.INVALIDATED
+    assert case.latest_disposition is None
+
+
 def test_a_needs_review_proposal_naming_the_merged_identity_is_invalidated(
     staged: Engine,
 ) -> None:
@@ -1300,8 +2122,13 @@ def test_a_proposal_on_a_review_case_is_invalidated_and_the_case_goes_with_it(
     case_effect = next(
         effect for effect in stored if effect.family is IdentityEffectFamily.REVIEW_CASE
     )
-    assert case_effect.before_state == {"state": "needs_review"}
-    assert case_effect.after_state == {"state": "invalidated"}
+    snapshot = {
+        "review_version": 0,
+        "latest_disposition": None,
+        "escalated": False,
+    }
+    assert case_effect.before_state == {"state": "needs_review", **snapshot}
+    assert case_effect.after_state == {"state": "invalidated", **snapshot}
     # The extra row is inside the gapless sequence, not appended after it.
     assert [effect.sequence for effect in stored] == list(range(1, len(stored) + 1))
     assert stored[-1].family is IdentityEffectFamily.REVIEW_CASE

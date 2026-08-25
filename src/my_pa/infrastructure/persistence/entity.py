@@ -198,6 +198,10 @@ from my_pa.infrastructure.persistence.entity_authoring import (
     arbiter,
     mutation_replay_for,
 )
+from my_pa.infrastructure.persistence.identifier_claim_lock import (
+    lock_identifier_claim_keys,
+    lock_identifier_entity_scopes,
+)
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -887,6 +891,12 @@ class SqlEntityRepository(EntitiesRepository):
             raise ValueError("an external identifier belongs to the acting Principal")
         _require_normalized_identifier(identifier.namespace, identifier.normalized_value)
         self._require_own_entity(principal_id, entity_id)
+        lock_identifier_entity_scopes(self._connection, principal_id, (entity_id,))
+        lock_identifier_claim_keys(
+            self._connection,
+            principal_id,
+            ((identifier.namespace.value, identifier.normalized_value),),
+        )
         # Arbitrated on the *active* binding rather than on a total unique over
         # `(entity_id, namespace, normalized_value)`, which `2fe4e13fb449`
         # dropped: a total unique made recording the replacement of a retired
@@ -2690,6 +2700,20 @@ class SqlEntityRepository(EntitiesRepository):
             )
         ).scalar_one()
         return int(counted)
+
+    def serialize_identifier_entity_scopes(
+        self, principal_id: str, entity_ids: frozenset[str]
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        named = _validated_entity_set(entity_ids)
+        self._require_own_entities(principal_id, *named)
+        lock_identifier_entity_scopes(self._connection, principal_id, named)
+
+    def serialize_identifier_claim_keys(
+        self, principal_id: str, claims: frozenset[tuple[str, str]]
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        lock_identifier_claim_keys(self._connection, principal_id, claims)
 
     def reparent_entity_reference(
         self,

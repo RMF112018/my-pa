@@ -2012,6 +2012,23 @@ class EntitiesRepository(ABC):
         """
         raise NotImplementedError
 
+    def serialize_identifier_entity_scopes(
+        self, principal_id: str, entity_ids: frozenset[str]
+    ) -> None:
+        """Hold transaction locks against new claims on these entities.
+
+        In-memory repositories execute serially and need no implementation. The
+        PostgreSQL repository overrides this together with the claim-key lock so
+        merge can discover and then re-read the complete identifier population.
+        """
+        return None
+
+    def serialize_identifier_claim_keys(
+        self, principal_id: str, claims: frozenset[tuple[str, str]]
+    ) -> None:
+        """Hold transaction locks for every state of these normalized claims."""
+        return None
+
     def reparent_entity_reference(
         self,
         principal_id: str,

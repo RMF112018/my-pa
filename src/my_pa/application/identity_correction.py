@@ -73,7 +73,7 @@ authority and this module has no path from one to the other.
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum
 from typing import Final
@@ -406,6 +406,47 @@ def _plan_digest(analysis: _Analysis) -> str:
 INVALIDATED_BY_MERGE = "the entity this proposal names was merged away by a governed correction"
 
 
+def _effect_timestamp(value: datetime | None) -> str | None:
+    """One server timestamp in the canonical, bounded ledger representation."""
+    if value is None:
+        return None
+    return ensure_utc(value).isoformat().replace("+00:00", "Z")
+
+
+def _materialize_effect_states(
+    changes: Sequence[_RowChange], *, at: datetime, performed_by: str
+) -> tuple[_RowChange, ...]:
+    """Add apply-time columns so each effect equals the row mutation it records.
+
+    Preview planning cannot know the apply timestamp or authenticated performer.
+    Those server-owned values therefore stay outside the preview-plan digest and
+    are materialized exactly once, after the bound plan is revalidated and before
+    either the canonical rows or their effect ledger are written.
+    """
+    timestamp = _effect_timestamp(at)
+    materialized: list[_RowChange] = []
+    versioned_children = {
+        IdentityEffectFamily.ALIAS,
+        IdentityEffectFamily.IDENTIFIER,
+        IdentityEffectFamily.ASSIGNMENT,
+        IdentityEffectFamily.RELATIONSHIP,
+    }
+    for change in changes:
+        after = dict(change.after_state)
+        if change.family in versioned_children:
+            after["updated_at"] = timestamp
+        elif change.family is IdentityEffectFamily.PROPOSAL:
+            after.update(
+                {
+                    "invalidated_reason": INVALIDATED_BY_MERGE,
+                    "decided_by": performed_by,
+                    "decided_at": timestamp,
+                }
+            )
+        materialized.append(replace(change, after_state=after))
+    return tuple(materialized)
+
+
 def _folded(value: str | None) -> str:
     """One descriptive field as the active assignment index compares it.
 
@@ -541,12 +582,14 @@ def _reparented_alias(alias: EntityAlias, survivor_entity_id: str) -> _RowChange
             state=alias.state.value,
             version=alias.version,
             successor=alias.superseded_by_alias_id,
+            updated_at=alias.updated_at,
         ),
         after_state=_alias_state(
             entity_id=survivor_entity_id,
             state=alias.state.value,
             version=alias.version + 1,
             successor=alias.superseded_by_alias_id,
+            updated_at=alias.updated_at,
         ),
         expected_version=alias.version,
     )
@@ -562,12 +605,14 @@ def _coalesced_alias(alias: EntityAlias, counterpart_id: str) -> _RowChange:
             state=alias.state.value,
             version=alias.version,
             successor=alias.superseded_by_alias_id,
+            updated_at=alias.updated_at,
         ),
         after_state=_alias_state(
             entity_id=alias.entity_id,
             state=AliasState.SUPERSEDED.value,
             version=alias.version + 1,
             successor=counterpart_id,
+            updated_at=alias.updated_at,
         ),
         expected_version=alias.version,
         coalesced_into=counterpart_id,
@@ -575,7 +620,12 @@ def _coalesced_alias(alias: EntityAlias, counterpart_id: str) -> _RowChange:
 
 
 def _alias_state(
-    *, entity_id: str, state: str, version: int, successor: str | None
+    *,
+    entity_id: str,
+    state: str,
+    version: int,
+    successor: str | None,
+    updated_at: datetime | None,
 ) -> dict[str, object]:
     """One alias row as the ledger records it, before and after.
 
@@ -596,6 +646,7 @@ def _alias_state(
         "state": state,
         "version": version,
         "superseded_by_alias_id": successor,
+        "updated_at": _effect_timestamp(updated_at),
     }
 
 
@@ -658,12 +709,14 @@ def _reparented_identifier(identifier: ExternalIdentifier, survivor_entity_id: s
             state=identifier.state.value,
             version=identifier.version,
             successor=identifier.superseded_by_identifier_id,
+            updated_at=identifier.updated_at,
         ),
         after_state=_identifier_state(
             entity_id=survivor_entity_id,
             state=identifier.state.value,
             version=identifier.version + 1,
             successor=identifier.superseded_by_identifier_id,
+            updated_at=identifier.updated_at,
         ),
         expected_version=identifier.version,
     )
@@ -679,12 +732,14 @@ def _coalesced_identifier(identifier: ExternalIdentifier, counterpart_id: str) -
             state=identifier.state.value,
             version=identifier.version,
             successor=identifier.superseded_by_identifier_id,
+            updated_at=identifier.updated_at,
         ),
         after_state=_identifier_state(
             entity_id=identifier.entity_id,
             state=IdentifierState.SUPERSEDED.value,
             version=identifier.version + 1,
             successor=counterpart_id,
+            updated_at=identifier.updated_at,
         ),
         expected_version=identifier.version,
         coalesced_into=counterpart_id,
@@ -692,7 +747,12 @@ def _coalesced_identifier(identifier: ExternalIdentifier, counterpart_id: str) -
 
 
 def _identifier_state(
-    *, entity_id: str, state: str, version: int, successor: str | None
+    *,
+    entity_id: str,
+    state: str,
+    version: int,
+    successor: str | None,
+    updated_at: datetime | None,
 ) -> dict[str, object]:
     """One identifier row as the ledger records it, on `_alias_state`'s terms.
 
@@ -705,6 +765,7 @@ def _identifier_state(
         "state": state,
         "version": version,
         "superseded_by_identifier_id": successor,
+        "updated_at": _effect_timestamp(updated_at),
     }
 
 
@@ -761,6 +822,7 @@ def plan_assignments(
                     state=assignment.state.value,
                     version=assignment.version,
                     successor=assignment.superseded_by_assignment_id,
+                    updated_at=assignment.updated_at,
                 ),
                 after_state=_assignment_state(
                     entity_id=entity_id,
@@ -768,6 +830,7 @@ def plan_assignments(
                     state=assignment.state.value,
                     version=assignment.version + 1,
                     successor=assignment.superseded_by_assignment_id,
+                    updated_at=assignment.updated_at,
                 ),
                 expected_version=assignment.version,
             )
@@ -805,6 +868,7 @@ def _coalesced_assignment(assignment: Assignment, counterpart_id: str) -> _RowCh
             state=assignment.state.value,
             version=assignment.version,
             successor=assignment.superseded_by_assignment_id,
+            updated_at=assignment.updated_at,
         ),
         after_state=_assignment_state(
             entity_id=assignment.entity_id,
@@ -812,6 +876,7 @@ def _coalesced_assignment(assignment: Assignment, counterpart_id: str) -> _RowCh
             state=AssignmentState.SUPERSEDED.value,
             version=assignment.version + 1,
             successor=counterpart_id,
+            updated_at=assignment.updated_at,
         ),
         expected_version=assignment.version,
         coalesced_into=counterpart_id,
@@ -825,6 +890,7 @@ def _assignment_state(
     state: str,
     version: int,
     successor: str | None,
+    updated_at: datetime | None,
 ) -> dict[str, object]:
     """One assignment row as the ledger records it. No role, no discipline."""
     return {
@@ -833,6 +899,7 @@ def _assignment_state(
         "state": state,
         "version": version,
         "superseded_by_assignment_id": successor,
+        "updated_at": _effect_timestamp(updated_at),
     }
 
 
@@ -902,6 +969,7 @@ def plan_relationships(
                         # un-folding -- which is why the ledger gives it a kind
                         # of its own rather than reusing `ROW_COALESCED`.
                         successor=None,
+                        updated_at=edge.updated_at,
                     ),
                     expected_version=edge.version,
                 )
@@ -932,6 +1000,7 @@ def plan_relationships(
                     state=edge.state.value,
                     version=edge.version + 1,
                     successor=edge.superseded_by_relationship_id,
+                    updated_at=edge.updated_at,
                 ),
                 expected_version=edge.version,
             )
@@ -975,6 +1044,7 @@ def _coalesced_relationship(edge: EntityRelationship, counterpart_id: str) -> _R
             state=RelationshipState.SUPERSEDED.value,
             version=edge.version + 1,
             successor=counterpart_id,
+            updated_at=edge.updated_at,
         ),
         expected_version=edge.version,
         coalesced_into=counterpart_id,
@@ -990,6 +1060,7 @@ def _edge_state(edge: EntityRelationship) -> dict[str, object]:
         state=edge.state.value,
         version=edge.version,
         successor=edge.superseded_by_relationship_id,
+        updated_at=edge.updated_at,
     )
 
 
@@ -1001,6 +1072,7 @@ def _relationship_state(
     state: str,
     version: int,
     successor: str | None,
+    updated_at: datetime | None,
 ) -> dict[str, object]:
     """One directed edge as the ledger records it. Three endpoints and a state."""
     return {
@@ -1010,6 +1082,7 @@ def _relationship_state(
         "state": state,
         "version": version,
         "superseded_by_relationship_id": successor,
+        "updated_at": _effect_timestamp(updated_at),
     }
 
 
@@ -1098,8 +1171,20 @@ def plan_proposals(proposals: Sequence[EntityProposal]) -> tuple[_RowChange, ...
                 family=IdentityEffectFamily.PROPOSAL,
                 record_id=proposal.proposal_id,
                 kind=IdentityEffectKind.DEPENDENT_INVALIDATED,
-                before_state={"state": proposal.state.value},
-                after_state={"state": _INVALIDATED_STATE},
+                before_state={
+                    "state": proposal.state.value,
+                    "invalidated_reason": proposal.invalidated_reason,
+                    "decided_by": proposal.decided_by,
+                    "decided_at": _effect_timestamp(proposal.decided_at),
+                },
+                after_state={
+                    "state": _INVALIDATED_STATE,
+                    "invalidated_reason": INVALIDATED_BY_MERGE,
+                    # Authenticated apply-time values are materialized only after
+                    # the preview-bound plan has been revalidated.
+                    "decided_by": None,
+                    "decided_at": None,
+                },
             )
         )
         if proposal.review_case_id is not None:
@@ -1297,6 +1382,30 @@ class IdentityCorrectionService:
         if preview.is_consumed:
             raise ConflictError(SafeDetail.IDENTITY_CORRECTION_CONFLICT)
 
+        participant_ids = frozenset(
+            {
+                preview.survivor_entity_id,
+                *(entity_id for entity_id, _ in preview.merged_away),
+            }
+        )
+        self._entities.serialize_identifier_entity_scopes(principal_id, participant_ids)
+        survivor, merged = self._require_current_entities(
+            principal_id,
+            preview.survivor_entity_id,
+            preview.expected_survivor_version,
+            preview.merged_away,
+        )
+        # Analyse once under entity-scope locks to discover the complete claim
+        # population, then lock those opaque claim keys and analyse again. A
+        # claim writer that won before the key lock is visible to the second
+        # analysis; one that arrives after it waits until this transaction ends.
+        self._analyse(principal_id, survivor, merged, choices={})
+        claims = frozenset(
+            (identifier.namespace.value, identifier.normalized_value)
+            for entity_id in sorted(participant_ids)
+            for identifier in self._entities.external_identifiers(principal_id, entity_id)
+        )
+        self._entities.serialize_identifier_claim_keys(principal_id, claims)
         survivor, merged = self._require_current_entities(
             principal_id,
             preview.survivor_entity_id,
@@ -1383,15 +1492,18 @@ class IdentityCorrectionService:
         # performing a whole merge and then discovering the other; and the effect
         # ledger's foreign key means no effect is storable until this row exists.
         self._entities.record_identity_operation(principal_id, opened)
+        materialized_changes = _materialize_effect_states(
+            analysis.changes, at=at, performed_by=performed_by
+        )
         self._write(
             principal_id,
-            analysis.changes,
+            materialized_changes,
             preview=preview,
             at=at,
             performed_by=performed_by,
         )
         effects = sequence_effects(
-            (change.draft for change in analysis.changes),
+            (change.draft for change in materialized_changes),
             identity_operation_id=opened.identity_operation_id,
             principal_id=principal_id,
             recorded_at=at,

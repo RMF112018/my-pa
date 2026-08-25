@@ -24,11 +24,13 @@ from typing import Final
 import pytest
 
 from my_pa.application.identity_correction import (
+    INVALIDATED_BY_MERGE,
     ConflictChoice,
     IdentityCorrectionService,
     MergeCommand,
     MergePreviewCommand,
     _ledger_order,
+    _materialize_effect_states,
     _request_digest,
     plan_aliases,
     plan_assignments,
@@ -600,8 +602,45 @@ def test_a_mention_is_rebound_without_its_resolution_version_advancing() -> None
 def test_an_open_proposal_naming_a_merged_entity_is_invalidated() -> None:
     changes = plan_proposals([_proposal("eprp_aaaa0001aaaa01", MERGED_ONE)])
     assert [change.kind for change in changes] == [IdentityEffectKind.DEPENDENT_INVALIDATED]
-    assert changes[0].before_state == {"state": "proposed"}
-    assert changes[0].after_state == {"state": "invalidated"}
+    assert changes[0].before_state == {
+        "state": "proposed",
+        "invalidated_reason": None,
+        "decided_by": None,
+        "decided_at": None,
+    }
+    assert changes[0].after_state == {
+        "state": "invalidated",
+        "invalidated_reason": INVALIDATED_BY_MERGE,
+        "decided_by": None,
+        "decided_at": None,
+    }
+
+
+def test_apply_materializes_every_server_written_effect_column() -> None:
+    alias_changes, conflicts = plan_aliases(
+        survivor_entity_id=SURVIVOR,
+        survivor_aliases=[],
+        merged_aliases=[_alias("eals_aaaa0001aaaa01", MERGED_ONE)],
+        choices={},
+    )
+    assert conflicts == ()
+    proposal_changes = plan_proposals([_proposal("eprp_aaaa0001aaaa01", MERGED_ONE)])
+
+    materialized = _materialize_effect_states(
+        (*alias_changes, *proposal_changes), at=WHEN, performed_by=PRINCIPAL
+    )
+    alias = materialized[0]
+    proposal = materialized[1]
+    assert alias.after_state == {
+        **alias_changes[0].after_state,
+        "updated_at": "2026-08-24T12:00:00Z",
+    }
+    assert proposal.after_state == {
+        "state": "invalidated",
+        "invalidated_reason": INVALIDATED_BY_MERGE,
+        "decided_by": PRINCIPAL,
+        "decided_at": "2026-08-24T12:00:00Z",
+    }
 
 
 def test_a_proposal_that_opened_no_review_case_records_no_review_case_effect() -> None:

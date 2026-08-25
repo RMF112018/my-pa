@@ -79,6 +79,10 @@ from my_pa.domain.relationship.governance import (
     EvidenceRole,
     MutationRecordFamily,
 )
+from my_pa.infrastructure.persistence.identifier_claim_lock import (
+    lock_identifier_claim_keys,
+    lock_identifier_entity_scopes,
+)
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -290,6 +294,7 @@ def mutation_replay_for(
 
 def admit_mutation(connection: Connection, request: EntityWriteRequest) -> EntityMutationAdmission:
     """Admit one governed entity write. See `EntitiesRepository.admit_mutation`."""
+    _serialize_identifier_request(connection, request)
     if request.operation is EntityWriteOperation.CREATE:
         outcome = _create(connection, request)
     else:
@@ -316,6 +321,45 @@ def admit_mutation(connection: Connection, request: EntityWriteRequest) -> Entit
         ),
         created=True,
     )
+
+
+def _serialize_identifier_request(connection: Connection, request: EntityWriteRequest) -> None:
+    """Acquire the complete identifier lock set before this request's first write."""
+    claims: set[tuple[str, str]] = set()
+    entity_id: str | None = None
+    if request.operation is EntityWriteOperation.CREATE:
+        entity_id = str(request.minted_entity_id)
+    elif request.operation in {
+        EntityWriteOperation.BIND_IDENTIFIER,
+        EntityWriteOperation.RETIRE_IDENTIFIER,
+        EntityWriteOperation.SUPERSEDE_IDENTIFIER,
+    }:
+        entity_id = str(request.entity_id)
+    if entity_id is None:
+        return
+
+    # The scope lock precedes reading a held claim: otherwise a retire or
+    # supersede could read one key, wait, and mutate a row whose key changed
+    # before the lock was acquired.
+    lock_identifier_entity_scopes(connection, request.principal_id, (entity_id,))
+    if request.operation is EntityWriteOperation.CREATE:
+        claims.update(
+            (item.namespace.value, item.normalized_value) for item in request.initial_identifiers
+        )
+    else:
+        if request.operation in {
+            EntityWriteOperation.BIND_IDENTIFIER,
+            EntityWriteOperation.SUPERSEDE_IDENTIFIER,
+        }:
+            claims.add((str(request.namespace), str(request.normalized_value)))
+        if request.operation in {
+            EntityWriteOperation.RETIRE_IDENTIFIER,
+            EntityWriteOperation.SUPERSEDE_IDENTIFIER,
+        }:
+            held = _identifier_claim_for_target(connection, request, str(request.target_child_id))
+            if held is not None:
+                claims.add(held)
+    lock_identifier_claim_keys(connection, request.principal_id, claims)
 
 
 # --- the operations -----------------------------------------------------------
@@ -594,6 +638,15 @@ def _supersede_identifier(
 ) -> _Outcome:
     entity_id = str(request.entity_id)
     replacement = str(request.minted_child_id)
+    target = str(request.target_child_id)
+    lock_identifier_entity_scopes(connection, request.principal_id, (entity_id,))
+    claims = {
+        (str(request.namespace), str(request.normalized_value)),
+    }
+    held_claim = _identifier_claim_for_target(connection, request, target)
+    if held_claim is not None:
+        claims.add(held_claim)
+    lock_identifier_claim_keys(connection, request.principal_id, claims)
     # The replacement is written first, because the row being superseded points
     # at it and a foreign key needs its target. The old row is still `active` at
     # this moment, so a replacement carrying the *same* value is refused by the
@@ -608,6 +661,7 @@ def _supersede_identifier(
         display_value=str(request.display_value),
         effective_from=request.effective_from,
         effective_to=request.effective_to,
+        serialize=False,
     )
     prior = _transition_identifier(
         connection,
@@ -615,6 +669,7 @@ def _supersede_identifier(
         state=IdentifierState.SUPERSEDED,
         retired_at=request.server_received_at,
         superseded_by_identifier_id=replacement,
+        serialize=False,
     )
     return _Outcome(
         entity_id=entity_id,
@@ -794,6 +849,7 @@ def _insert_binding(
     display_value: str,
     effective_from: datetime | None,
     effective_to: datetime | None,
+    serialize: bool = True,
 ) -> None:
     """Write one `active` binding, or refuse with the reason the store holds.
 
@@ -802,6 +858,11 @@ def _insert_binding(
     one absorbs a re-bind of an address the entity already holds, and a governed
     write must not hand back a receipt for a binding it did not make.
     """
+    if serialize:
+        lock_identifier_entity_scopes(connection, request.principal_id, (entity_id,))
+        lock_identifier_claim_keys(
+            connection, request.principal_id, ((namespace, normalized_value),)
+        )
     for _ in range(BIND_ATTEMPTS):
         # The stamp is built inside the statement rather than hoisted above the
         # loop, and that is not incidental:
@@ -926,10 +987,16 @@ def _transition_identifier(
     state: IdentifierState,
     retired_at: datetime,
     superseded_by_identifier_id: str | None,
+    serialize: bool = True,
 ) -> dict[str, Any]:
     """Move one active binding out of service, guarded on its own version."""
     target = str(request.target_child_id)
     expected = int(request.target_child_version or 0)
+    if serialize:
+        lock_identifier_entity_scopes(connection, request.principal_id, (str(request.entity_id),))
+        held_claim = _identifier_claim_for_target(connection, request, target)
+        if held_claim is not None:
+            lock_identifier_claim_keys(connection, request.principal_id, (held_claim,))
     updated = connection.execute(
         update(entity_external_identifiers)
         .where(
@@ -967,6 +1034,24 @@ def _transition_identifier(
     if int(row.version) != expected:
         raise StaleEntityVersionError("the expected identifier version is stale")
     raise DuplicateEntityFactError("that binding has already left service")
+
+
+def _identifier_claim_for_target(
+    connection: Connection, request: EntityWriteRequest, target: str
+) -> tuple[str, str] | None:
+    row = connection.execute(
+        select(
+            entity_external_identifiers.c.namespace,
+            entity_external_identifiers.c.normalized_value,
+        ).where(
+            _mine(entity_external_identifiers, request.principal_id),
+            entity_external_identifiers.c.identifier_id == target,
+            entity_external_identifiers.c.entity_id == request.entity_id,
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    return str(row.namespace), str(row.normalized_value)
 
 
 def _transition_alias(

@@ -17,6 +17,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event, Thread
 from typing import Final
 
 import pytest
@@ -585,6 +586,135 @@ def test_the_effect_ledger_records_every_change_in_a_stable_order(staged: Engine
     assert [effect.effect_id for effect in stored] == [
         effect.effect_id for effect in receipt.effects
     ]
+
+
+def test_effect_after_states_equal_every_column_the_merge_writer_changes(staged: Engine) -> None:
+    """A writer/effect mismatch makes the ledger insufficient for inversion."""
+    with staged.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.record_alias(PRINCIPAL_A, _alias("eals_aaaa0001aaaa01", MERGED_ONE))
+        repository.bind_identifier(
+            PRINCIPAL_A, MERGED_ONE, _identifier("xid_aaaa0001aaaa01", MERGED_ONE)
+        )
+        repository.record_assignment(PRINCIPAL_A, _assignment("asn_aaaa0001aaaa01", MERGED_ONE))
+        repository.record_relationship(PRINCIPAL_A, _edge("erel_aaaa0001aaaa01", MERGED_ONE, TOWER))
+        repository.record_proposal(PRINCIPAL_A, _proposal("eprp_aaaa0001aaaa01", MERGED_ONE))
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    with staged.begin() as connection:
+        receipt = _applied(connection, report)
+
+    effects = {(effect.family, effect.record_id): effect for effect in receipt.effects}
+    with staged.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        alias = next(row for row in repository.aliases(PRINCIPAL_A, SURVIVOR))
+        identifier = next(row for row in repository.external_identifiers(PRINCIPAL_A, SURVIVOR))
+        assignment = next(row for row in repository.assignments(PRINCIPAL_A, SURVIVOR))
+        relationship = next(
+            row
+            for row in repository.relationships(PRINCIPAL_A, SURVIVOR)
+            if row.relationship_id == "erel_aaaa0001aaaa01"
+        )
+        proposal = repository.proposal(PRINCIPAL_A, "eprp_aaaa0001aaaa01")
+
+    def timestamp(value: datetime | None) -> str | None:
+        return value.isoformat().replace("+00:00", "Z") if value is not None else None
+
+    assert effects[(IdentityEffectFamily.ALIAS, alias.alias_id)].after_state == {
+        "entity_id": alias.entity_id,
+        "state": alias.state.value,
+        "version": alias.version,
+        "superseded_by_alias_id": alias.superseded_by_alias_id,
+        "updated_at": timestamp(alias.updated_at),
+    }
+    assert effects[(IdentityEffectFamily.IDENTIFIER, identifier.identifier_id)].after_state == {
+        "entity_id": identifier.entity_id,
+        "state": identifier.state.value,
+        "version": identifier.version,
+        "superseded_by_identifier_id": identifier.superseded_by_identifier_id,
+        "updated_at": timestamp(identifier.updated_at),
+    }
+    assert effects[(IdentityEffectFamily.ASSIGNMENT, assignment.assignment_id)].after_state == {
+        "entity_id": assignment.entity_id,
+        "scope_entity_id": assignment.scope_entity_id,
+        "state": assignment.state.value,
+        "version": assignment.version,
+        "superseded_by_assignment_id": assignment.superseded_by_assignment_id,
+        "updated_at": timestamp(assignment.updated_at),
+    }
+    relationship_effect = effects[(IdentityEffectFamily.RELATIONSHIP, relationship.relationship_id)]
+    assert relationship_effect.after_state == {
+        "from_entity_id": relationship.from_entity_id,
+        "to_entity_id": relationship.to_entity_id,
+        "scope_entity_id": relationship.scope_entity_id,
+        "state": relationship.state.value,
+        "version": relationship.version,
+        "superseded_by_relationship_id": relationship.superseded_by_relationship_id,
+        "updated_at": timestamp(relationship.updated_at),
+    }
+    assert proposal is not None
+    assert effects[(IdentityEffectFamily.PROPOSAL, proposal.proposal_id)].after_state == {
+        "state": proposal.state.value,
+        "invalidated_reason": proposal.invalidated_reason,
+        "decided_by": proposal.decided_by,
+        "decided_at": timestamp(proposal.decided_at),
+    }
+
+
+@pytest.mark.parametrize(
+    ("scope_entities", "claim_entity", "identifier_id"),
+    [
+        ((SURVIVOR, MERGED_ONE), SURVIVOR, "xid_aaaa0003aaaa03"),
+        ((SURVIVOR, MERGED_ONE), TOWER, "xid_aaaa0004aaaa04"),
+    ],
+)
+def test_identifier_writers_wait_for_merge_serialization_across_entity_scopes(
+    staged: Engine,
+    scope_entities: tuple[str, ...],
+    claim_entity: str,
+    identifier_id: str,
+) -> None:
+    """Former survivor claims and same-address outsider claims cannot slip in."""
+    claim = _identifier(
+        identifier_id,
+        claim_entity,
+        value="serialized@example.invalid",
+        state=IdentifierState.RETIRED,
+    )
+    started = Event()
+    finished = Event()
+    failures: list[BaseException] = []
+
+    def bind_claim() -> None:
+        try:
+            with staged.begin() as connection:
+                started.set()
+                SqlEntityRepository(connection).bind_identifier(PRINCIPAL_A, claim_entity, claim)
+        except BaseException as error:  # pragma: no cover - asserted in the parent thread
+            failures.append(error)
+        finally:
+            finished.set()
+
+    with staged.connect() as locker:
+        transaction = locker.begin()
+        repository = SqlEntityRepository(locker)
+        repository.serialize_identifier_entity_scopes(PRINCIPAL_A, scope_entities)
+        repository.serialize_identifier_claim_keys(
+            PRINCIPAL_A,
+            ((claim.namespace.value, claim.normalized_value),),
+        )
+        worker = Thread(target=bind_claim, daemon=True)
+        worker.start()
+        assert started.wait(timeout=2)
+        assert not finished.wait(timeout=0.25)
+        transaction.commit()
+        assert finished.wait(timeout=5)
+        worker.join(timeout=1)
+
+    assert failures == []
+    with staged.connect() as connection:
+        claims = SqlEntityRepository(connection).external_identifiers(PRINCIPAL_A, claim_entity)
+    assert identifier_id in {row.identifier_id for row in claims}
 
 
 def test_the_projected_effects_are_what_the_merge_records(staged: Engine) -> None:

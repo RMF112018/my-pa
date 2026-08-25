@@ -7788,6 +7788,7 @@ class ApplicationService:
                 "preview_id": preview.preview_id,
                 "preview_token": preview.preview_digest,
                 "conflict_digest": preview.conflict_digest,
+                "plan_digest": preview.plan_digest,
                 "expires_at": format_rfc3339(preview.expires_at),
                 "affected_groups": [
                     {

@@ -125,6 +125,7 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityOperationType,
     IdentityPreview,
     conflict_digest_for,
+    plan_digest_for,
     preview_digest_for,
     sequence_effects,
     state_digest,
@@ -381,6 +382,18 @@ class _Analysis:
     groups: tuple[MergeAffectedGroup, ...]
     conflicts: tuple[IdentityConflict, ...]
     changes: tuple[_RowChange, ...]
+
+
+def _plan_digest(analysis: _Analysis) -> str:
+    """Bind every safe, operator-visible consequence of one baseline analysis."""
+    return plan_digest_for(
+        groups=(
+            (group.family.value, group.disposition.value, group.record_count)
+            for group in analysis.groups
+        ),
+        conflicts=analysis.conflicts,
+        projected_effects=(change.draft for change in analysis.changes),
+    )
 
 
 #: The reason recorded on a proposal an identity correction closed.
@@ -1190,6 +1203,7 @@ class IdentityCorrectionService:
             merged_away,
         )
         analysis = self._analyse(principal_id, survivor, merged, choices={})
+        plan_digest = _plan_digest(analysis)
         created_at = ensure_utc(at)
         preview = IdentityPreview(
             preview_id=issue_identifier(IdKind.ENTITY_IDENTITY_PREVIEW),
@@ -1204,8 +1218,10 @@ class IdentityCorrectionService:
                 survivor_entity_id=survivor.entity_id,
                 expected_survivor_version=survivor.version,
                 merged_away=merged_away,
+                plan_digest=plan_digest,
             ),
             conflict_digest=conflict_digest_for(analysis.conflicts),
+            plan_digest=plan_digest,
             created_by=requested_by,
             actor_class=actor_class,
             created_at=created_at,
@@ -1267,6 +1283,7 @@ class IdentityCorrectionService:
             survivor_entity_id=preview.survivor_entity_id,
             expected_survivor_version=preview.expected_survivor_version,
             merged_away=preview.merged_away,
+            plan_digest=preview.plan_digest,
         ):
             # The stored row disagrees with itself. `IdentityPreview` checks the
             # digest's *shape* and not what it is a digest of, so a row edited at
@@ -1286,22 +1303,26 @@ class IdentityCorrectionService:
             preview.expected_survivor_version,
             preview.merged_away,
         )
-        analysis = self._analyse(principal_id, survivor, merged, choices=choices)
-        if conflict_digest_for(analysis.conflicts) != preview.conflict_digest:
+        baseline = self._analyse(principal_id, survivor, merged, choices={})
+        if (
+            conflict_digest_for(baseline.conflicts) != preview.conflict_digest
+            or _plan_digest(baseline) != preview.plan_digest
+        ):
             # The binding still holds and the world moved anyway. A concurrent
             # identifier claim is the case section 27 names, and it is exactly
             # the one the entity versions cannot see: binding an address writes
             # a child row and advances no entity version. Refusing here is what
             # stops a merge from being the write that bypasses the claim.
             raise ConflictError(SafeDetail.PREVIEW_STALE)
-        blockers = tuple(conflict for conflict in analysis.conflicts if conflict.blocks)
+        blockers = tuple(conflict for conflict in baseline.conflicts if conflict.blocks)
         if blockers:
             raise ConflictError(*_blocker_details(blockers))
         required = frozenset(
-            conflict.record_id for conflict in analysis.conflicts if not conflict.blocks
+            conflict.record_id for conflict in baseline.conflicts if not conflict.blocks
         )
         if frozenset(choices) != required:
             raise InvalidRequestError(SafeDetail.IDENTITY_CORRECTION_CONFLICT)
+        analysis = self._analyse(principal_id, survivor, merged, choices=choices)
 
         return self._perform(
             principal_id,
@@ -1352,6 +1373,7 @@ class IdentityCorrectionService:
             actor_class=actor_class,
             correlation_id=correlation_id,
             audit_id=audit_id,
+            receipt_id=issue_identifier(IdKind.RECEIPT),
             state=IdentityOperationState.IN_PROGRESS,
             started_at=at,
         )
@@ -1390,6 +1412,7 @@ class IdentityCorrectionService:
             actor_class=opened.actor_class,
             correlation_id=opened.correlation_id,
             audit_id=opened.audit_id,
+            receipt_id=opened.receipt_id,
             state=IdentityOperationState.COMPLETED,
             started_at=opened.started_at,
             completed_at=at,
@@ -1796,7 +1819,7 @@ class IdentityCorrectionService:
             raise InvalidRequestError(SafeDetail.ENTITY_ID)
         if command.survivor_entity_id in named:
             raise InvalidRequestError(SafeDetail.ENTITY_ID)
-        return tuple(command.merged_away)
+        return tuple(sorted(command.merged_away, key=lambda item: (item[0], item[1])))
 
     def _require_reason(self, reason: str) -> None:
         """A bounded, non-blank explanation, on `EntityMutationEvent`'s bound."""

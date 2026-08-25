@@ -8605,6 +8605,7 @@ entity_identity_previews = Table(
     Column("merged_away", JSONB, nullable=False),
     Column("preview_digest", Text, nullable=False),
     Column("conflict_digest", Text, nullable=False),
+    Column("plan_digest", Text, nullable=False),
     Column("created_by", Text, nullable=False),
     Column("actor_class", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
@@ -8622,6 +8623,10 @@ entity_identity_previews = Table(
     CheckConstraint(
         "conflict_digest ~ '^[0-9a-f]{64}$'",
         name="a_preview_conflict_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "plan_digest ~ '^[0-9a-f]{64}$'",
+        name="a_preview_plan_digest_is_a_sha256_digest",
     ),
     CheckConstraint(
         "length(trim(created_by)) > 0",
@@ -8705,7 +8710,7 @@ entity_identity_operations = Table(
     Column("actor_class", Text, nullable=False),
     Column("correlation_id", Text, nullable=False),
     Column("audit_id", Text, nullable=False),
-    Column("receipt_id", Text),
+    Column("receipt_id", Text, nullable=False),
     Column("state", Text, nullable=False),
     Column("started_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("completed_at", DateTime(timezone=True)),
@@ -8719,7 +8724,7 @@ entity_identity_operations = Table(
     _one_of("state", IdentityOperationState, name="an_identity_operation_state_is_known"),
     _one_of("actor_class", ActorClass, name="an_identity_operation_actor_class_is_known"),
     CheckConstraint(
-        f"receipt_id IS NULL OR receipt_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        f"receipt_id ~ '^rcpt_{_IDENTIFIER_SUFFIX}$'",
         name="an_identity_operation_receipt_id_is_an_opaque_identifier",
     ),
     CheckConstraint(
@@ -8766,6 +8771,7 @@ entity_identity_operations = Table(
         "idempotency_key",
         name="one_identity_operation_per_principal_and_key",
     ),
+    UniqueConstraint("receipt_id", name="one_receipt_per_identity_operation"),
     # The target of the effect ledger's composite reference, on the same argument
     # the preview's identity unique carries: without it an effect row could name
     # one Principal while the operation it records belongs to another.

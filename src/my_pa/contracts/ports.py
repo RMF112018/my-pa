@@ -2130,7 +2130,7 @@ class EntitiesRepository(ABC):
         """Persist one merge preview as the binding an apply is checked against.
 
         Takes the whole record, so the fifteen-minute expiry, the bounded
-        merged-away set and both digests have been through
+        merged-away set and all three digests have been through
         `IdentityPreview.__post_init__` before a row exists.
         """
         raise NotImplementedError

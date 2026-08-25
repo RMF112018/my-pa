@@ -129,9 +129,10 @@ def _stage(engine: Engine) -> None:
                 f"INSERT INTO {SCHEMA}.entity_identity_previews "  # noqa: S608
                 "(preview_id, principal_id, operation_type, survivor_entity_id, "
                 " expected_survivor_version, merged_away, preview_digest, conflict_digest, "
+                " plan_digest, "
                 " created_by, actor_class, created_at, expires_at) "
                 "VALUES (:preview_id, :principal_id, 'merge', :survivor, 1, "
-                " CAST(:merged_away AS jsonb), :preview_digest, :conflict_digest, "
+                " CAST(:merged_away AS jsonb), :preview_digest, :conflict_digest, :plan_digest, "
                 " 'operator', 'user', :created_at, :expires_at)"
             ),
             {
@@ -141,6 +142,7 @@ def _stage(engine: Engine) -> None:
                 "merged_away": '[{"entity_id": "' + MERGED + '", "expected_version": 1}]',
                 "preview_digest": DIGEST,
                 "conflict_digest": OTHER_DIGEST,
+                "plan_digest": OTHER_DIGEST,
                 "created_at": WHEN,
                 "expires_at": WHEN + IDENTITY_PREVIEW_LIFETIME,
             },

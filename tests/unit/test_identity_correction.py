@@ -41,6 +41,7 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityPreview,
     blocks_merge,
     conflict_digest_for,
+    plan_digest_for,
     preview_digest_for,
     sequence_effects,
     state_digest,
@@ -73,6 +74,7 @@ def a_preview(**overrides: object) -> IdentityPreview:
         "merged_away": ((MERGED, 1),),
         "preview_digest": DIGEST,
         "conflict_digest": OTHER_DIGEST,
+        "plan_digest": OTHER_DIGEST,
         "created_by": "operator",
         "actor_class": ActorClass.USER,
         "created_at": WHEN,
@@ -97,6 +99,7 @@ def an_operation(**overrides: object) -> IdentityOperation:
         "actor_class": ActorClass.USER,
         "correlation_id": CORRELATION,
         "audit_id": AUDIT,
+        "receipt_id": "rcpt_aaaa0001aaaa01",
         "state": IdentityOperationState.COMPLETED,
         "started_at": WHEN,
         "completed_at": WHEN + timedelta(seconds=2),
@@ -190,6 +193,8 @@ def test_a_preview_digest_is_a_sha256_digest(digest: str) -> None:
         a_preview(preview_digest=digest)
     with pytest.raises(ValueError, match="sha256 digest"):
         a_preview(conflict_digest=digest)
+    with pytest.raises(ValueError, match="sha256 digest"):
+        a_preview(plan_digest=digest)
 
 
 def test_a_preview_names_a_preview_identifier_and_an_entity_identifier() -> None:
@@ -210,6 +215,7 @@ def test_the_preview_digest_is_over_the_binding_and_is_order_insensitive() -> No
         survivor_entity_id=SURVIVOR,
         expected_survivor_version=3,
         merged_away=((MERGED, 1), (OTHER_MERGED, 2)),
+        plan_digest=OTHER_DIGEST,
     )
     backwards = preview_digest_for(
         operation_type=IdentityOperationType.MERGE,
@@ -217,6 +223,7 @@ def test_the_preview_digest_is_over_the_binding_and_is_order_insensitive() -> No
         survivor_entity_id=SURVIVOR,
         expected_survivor_version=3,
         merged_away=((OTHER_MERGED, 2), (MERGED, 1)),
+        plan_digest=OTHER_DIGEST,
     )
     assert forwards == backwards
 
@@ -241,9 +248,61 @@ def test_the_preview_digest_moves_when_any_part_of_the_binding_moves(
         "survivor_entity_id": SURVIVOR,
         "expected_survivor_version": 3,
         "merged_away": ((MERGED, 1),),
+        "plan_digest": OTHER_DIGEST,
     }
     original = preview_digest_for(**binding)
     assert preview_digest_for(**{**binding, **tampered}) != original
+
+
+def test_the_preview_token_moves_when_the_operator_visible_plan_moves() -> None:
+    binding = {
+        "operation_type": IdentityOperationType.MERGE,
+        "principal_id": PRINCIPAL,
+        "survivor_entity_id": SURVIVOR,
+        "expected_survivor_version": 3,
+        "merged_away": ((MERGED, 1),),
+        "plan_digest": DIGEST,
+    }
+    assert preview_digest_for(**binding) != preview_digest_for(
+        **{**binding, "plan_digest": OTHER_DIGEST}
+    )
+
+
+def test_the_plan_digest_is_order_insensitive_and_binds_counts_and_effect_states() -> None:
+    conflict = IdentityConflict(
+        IdentityConflictKind.AMBIGUOUS_DISPOSITION,
+        IdentityEffectFamily.ALIAS,
+        "alias_aaaa0001aaaa01",
+    )
+    effect = a_draft("alias_bbbb0002bbbb02")
+    first = plan_digest_for(
+        groups=(("alias", "transformed", 1), ("observation", "unchanged", 0)),
+        conflicts=(conflict,),
+        projected_effects=(effect,),
+    )
+    assert first == plan_digest_for(
+        groups=(("observation", "unchanged", 0), ("alias", "transformed", 1)),
+        conflicts=(conflict,),
+        projected_effects=(effect,),
+    )
+    assert first != plan_digest_for(
+        groups=(("alias", "transformed", 2), ("observation", "unchanged", 0)),
+        conflicts=(conflict,),
+        projected_effects=(effect,),
+    )
+    assert first != plan_digest_for(
+        groups=(("alias", "transformed", 1), ("observation", "unchanged", 0)),
+        conflicts=(conflict,),
+        projected_effects=(
+            IdentityEffectDraft(
+                family=effect.family,
+                record_id=effect.record_id,
+                kind=effect.kind,
+                before_state=effect.before_state,
+                after_state={"entity_id": OTHER_MERGED},
+            ),
+        ),
+    )
 
 
 def test_the_conflict_digest_is_over_a_set_and_not_over_a_walk_order() -> None:
@@ -349,6 +408,11 @@ def test_an_operation_names_each_merged_away_entity_once_and_not_the_survivor() 
 def test_an_operation_carries_an_idempotency_key() -> None:
     with pytest.raises(ValueError, match="idempotency key"):
         an_operation(idempotency_key="")
+
+
+def test_an_operation_requires_a_server_receipt_identifier() -> None:
+    with pytest.raises(InvalidIdentifierError):
+        an_operation(receipt_id="audit_aaaa0001aaaa01")
 
 
 # --- the effect ledger -------------------------------------------------------

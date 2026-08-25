@@ -25,7 +25,9 @@ import pytest
 
 from my_pa.application.identity_correction import (
     ConflictChoice,
+    IdentityCorrectionService,
     MergeCommand,
+    MergePreviewCommand,
     _ledger_order,
     _request_digest,
     plan_aliases,
@@ -729,6 +731,18 @@ def _command(**overrides: object) -> MergeCommand:
 def test_the_same_request_digests_the_same_however_its_sets_are_ordered() -> None:
     reversed_refs = _command(evidence_refs=("eobs_bbbb0002bbbb02", "eobs_aaaa0001aaaa01"))
     assert _request_digest(_command()) == _request_digest(reversed_refs)
+
+
+def test_the_preview_normalizes_the_merged_away_set_before_persistence() -> None:
+    service = IdentityCorrectionService(None, None)  # type: ignore[arg-type]
+    command = MergePreviewCommand(
+        principal_id=PRINCIPAL,
+        survivor_entity_id=SURVIVOR,
+        expected_survivor_version=1,
+        merged_away=((MERGED_TWO, 2), (MERGED_ONE, 1)),
+        reason="two synthetic records are one person",
+    )
+    assert service._validated_request(command) == ((MERGED_ONE, 1), (MERGED_TWO, 2))
 
 
 def test_a_different_reason_is_a_different_request() -> None:

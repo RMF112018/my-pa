@@ -142,6 +142,7 @@ def _insert_preview(engine: Engine, **overrides: object) -> None:
         "merged_away": '[{"entity_id": "' + MERGED + '", "expected_version": 1}]',
         "preview_digest": DIGEST,
         "conflict_digest": OTHER_DIGEST,
+        "plan_digest": OTHER_DIGEST,
         "created_by": "operator",
         "actor_class": "user",
         "created_at": WHEN,
@@ -154,10 +155,12 @@ def _insert_preview(engine: Engine, **overrides: object) -> None:
                 f"INSERT INTO {SCHEMA}.entity_identity_previews "  # noqa: S608
                 "(preview_id, principal_id, operation_type, survivor_entity_id, "
                 " expected_survivor_version, merged_away, preview_digest, conflict_digest, "
+                " plan_digest, "
                 " created_by, actor_class, created_at, expires_at) "
                 "VALUES (:preview_id, :principal_id, :operation_type, :survivor_entity_id, "
                 " :expected_survivor_version, CAST(:merged_away AS jsonb), :preview_digest, "
-                " :conflict_digest, :created_by, :actor_class, :created_at, :expires_at)"
+                " :conflict_digest, :plan_digest, :created_by, :actor_class, :created_at, "
+                " :expires_at)"
             ),
             values,
         )
@@ -178,6 +181,7 @@ def _insert_operation(engine: Engine, **overrides: object) -> None:
         "actor_class": "user",
         "correlation_id": CORRELATION,
         "audit_id": AUDIT,
+        "receipt_id": "rcpt_aaaa0001aaaa01",
         "state": "completed",
         "started_at": WHEN,
         "completed_at": WHEN + timedelta(seconds=2),
@@ -189,12 +193,13 @@ def _insert_operation(engine: Engine, **overrides: object) -> None:
                 f"INSERT INTO {SCHEMA}.entity_identity_operations "  # noqa: S608
                 "(identity_operation_id, principal_id, operation_type, survivor_entity_id, "
                 " merged_entity_ids, preview_id, preview_digest, idempotency_key, "
-                " request_digest, performed_by, actor_class, correlation_id, audit_id, "
+                " request_digest, performed_by, actor_class, correlation_id, audit_id, receipt_id, "
                 " state, started_at, completed_at) "
                 "VALUES (:identity_operation_id, :principal_id, :operation_type, "
                 " :survivor_entity_id, CAST(:merged_entity_ids AS jsonb), :preview_id, "
                 " :preview_digest, :idempotency_key, :request_digest, :performed_by, "
-                " :actor_class, :correlation_id, :audit_id, :state, :started_at, :completed_at)"
+                " :actor_class, :correlation_id, :audit_id, :receipt_id, :state, "
+                " :started_at, :completed_at)"
             ),
             values,
         )
@@ -310,6 +315,21 @@ def test_one_idempotency_key_holds_one_operation_per_principal(migrated_engine: 
             request_digest=DIGEST,
         )
     assert "one_identity_operation_per_principal_and_key" in str(refused.value)
+
+
+def test_an_operation_requires_one_unique_server_receipt(migrated_engine: Engine) -> None:
+    _insert_preview(migrated_engine)
+    with pytest.raises(IntegrityError):
+        _insert_operation(migrated_engine, receipt_id=None)
+    _insert_operation(migrated_engine)
+    with pytest.raises(IntegrityError) as refused:
+        _insert_operation(
+            migrated_engine,
+            identity_operation_id="eiop_bbbb0002bbbb02",
+            idempotency_key="merge-0002",
+            request_digest=DIGEST,
+        )
+    assert "one_receipt_per_identity_operation" in str(refused.value)
 
 
 def test_an_operation_in_progress_may_not_name_an_end(migrated_engine: Engine) -> None:

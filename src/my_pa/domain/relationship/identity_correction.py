@@ -71,6 +71,7 @@ __all__ = [
     "IdentityPreview",
     "blocks_merge",
     "conflict_digest_for",
+    "plan_digest_for",
     "preview_digest_for",
     "sequence_effects",
     "state_digest",
@@ -352,33 +353,37 @@ def preview_digest_for(
     survivor_entity_id: str,
     expected_survivor_version: int,
     merged_away: Iterable[tuple[str, int]],
+    plan_digest: str,
 ) -> str:
     """The digest a preview is bound by, over exactly the identity it binds.
 
-    **Over the binding and nothing else.** Principal, operation type, survivor
+    **Over the binding and the safe plan fingerprint.** Principal, operation type, survivor
     with the version it was read at, and every merged-away entity with the
     version it was read at -- sorted, so that two requests naming the same
     entities in different orders are the same preview rather than two.
 
-    Deliberately *not* over the reason, the evidence references, or the affected
-    counts the preview reports. Those describe the request and its findings; this
+    Deliberately *not* over the reason or evidence references. The affected
+    counts and consequences are bound through `plan_digest`; this
     digest exists so that an apply naming a different set of entities, or the
     same entities at different versions, cannot present itself as the preview the
     operator read. Folding the prose in would make an operator who corrected a
     typo in their own reason re-run the whole preview, and would say nothing
     additional about identity.
 
-    The conflicts the preview found are digested separately by `conflict_digest_for`,
+    The conflicts the preview found are also digested separately by `conflict_digest_for`,
     because they change for a different reason than the binding does: the
     binding changes when the request changes, and the conflicts change when the
     world does.
     """
+    if not _SHA256.fullmatch(plan_digest):
+        raise ValueError("a preview plan digest is a sha256 digest")
     return _digest(
         {
             "operation_type": operation_type.value,
             "principal_id": principal_id,
             "survivor": [survivor_entity_id, expected_survivor_version],
             "merged_away": sorted([entity_id, version] for entity_id, version in merged_away),
+            "plan_digest": plan_digest,
         }
     )
 
@@ -408,6 +413,42 @@ def conflict_digest_for(conflicts: Iterable[IdentityConflict]) -> str:
                 for conflict in conflicts
             }
         )
+    )
+
+
+def plan_digest_for(
+    *,
+    groups: Iterable[tuple[str, str, int]],
+    conflicts: Iterable[IdentityConflict],
+    projected_effects: Iterable[IdentityEffectDraft],
+) -> str:
+    """Digest the complete safe plan an operator sees, without narrative text.
+
+    Groups bind every named family, disposition and exact count. Conflicts bind
+    blockers and required choices. Projected effects bind every deterministic
+    canonical consequence and its recovery states. All three collections are
+    sorted so repository walk order cannot move the token.
+    """
+    return _digest(
+        {
+            "groups": sorted((family, disposition, count) for family, disposition, count in groups),
+            "conflicts": sorted(
+                {
+                    (conflict.kind.value, conflict.family.value, conflict.record_id)
+                    for conflict in conflicts
+                }
+            ),
+            "projected_effects": sorted(
+                (
+                    effect.family.value,
+                    effect.record_id,
+                    effect.kind.value,
+                    _canonical(dict(effect.before_state)),
+                    _canonical(dict(effect.after_state)),
+                )
+                for effect in projected_effects
+            ),
+        }
     )
 
 
@@ -442,6 +483,7 @@ class IdentityPreview:
     merged_away: tuple[tuple[str, int], ...]
     preview_digest: str
     conflict_digest: str
+    plan_digest: str
     created_by: str
     actor_class: ActorClass
     created_at: datetime
@@ -473,7 +515,7 @@ class IdentityPreview:
             raise ValueError("a preview names each merged-away entity once")
         if self.survivor_entity_id in merged_ids:
             raise ValueError("a preview does not merge the survivor into itself")
-        for digest in (self.preview_digest, self.conflict_digest):
+        for digest in (self.preview_digest, self.conflict_digest, self.plan_digest):
             if not _SHA256.fullmatch(digest):
                 raise ValueError("a preview digest is a sha256 digest")
         ensure_utc(self.created_at)
@@ -546,10 +588,10 @@ class IdentityOperation:
     actor_class: ActorClass
     correlation_id: str
     audit_id: str
+    receipt_id: str
     state: IdentityOperationState
     started_at: datetime
     reason: str | None = field(default=None, repr=False)
-    receipt_id: str | None = None
     completed_at: datetime | None = None
 
     def __post_init__(self) -> None:
@@ -559,8 +601,7 @@ class IdentityOperation:
         validate_identifier(self.preview_id, IdKind.ENTITY_IDENTITY_PREVIEW)
         validate_identifier(self.correlation_id, IdKind.CORRELATION)
         validate_identifier(self.audit_id, IdKind.AUDIT)
-        if self.receipt_id is not None:
-            validate_identifier(self.receipt_id)
+        validate_identifier(self.receipt_id, IdKind.RECEIPT)
         if not isinstance(self.operation_type, IdentityOperationType):
             raise ValueError("an identity operation has a closed operation type")
         if not isinstance(self.state, IdentityOperationState):

@@ -422,6 +422,16 @@ def test_a_preview_is_persisted_bound_and_expires_in_fifteen_minutes(staged: Eng
     assert stored == report.preview
 
 
+def test_merged_away_entities_are_normalized_before_preview_and_operation(staged: Engine) -> None:
+    command = _preview_command(merged=((MERGED_TWO, 1), (MERGED_ONE, 1)))
+    with staged.begin() as connection:
+        report = _previewed(connection, command)
+    assert report.preview.merged_away == ((MERGED_ONE, 1), (MERGED_TWO, 1))
+    with staged.begin() as connection:
+        receipt = _applied(connection, report)
+    assert receipt.operation.merged_entity_ids == (MERGED_ONE, MERGED_TWO)
+
+
 def test_a_preview_answers_for_every_family_the_contract_names(staged: Engine) -> None:
     """Section 20: do not silently ignore an affected family."""
     with staged.begin() as connection:
@@ -589,6 +599,32 @@ def test_the_projected_effects_are_what_the_merge_records(staged: Engine) -> Non
     assert {(draft.family, draft.record_id, draft.kind) for draft in report.projected_effects} == {
         (effect.family, effect.record_id, effect.kind) for effect in receipt.effects
     }
+
+
+def test_an_observation_added_after_preview_makes_the_plan_stale(staged: Engine) -> None:
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).record_observation(
+            PRINCIPAL_A, _observation("eobs_aaaa0001aaaa01", MERGED_ONE)
+        )
+    with pytest.raises(ConflictError) as refused, staged.begin() as connection:
+        _applied(connection, report)
+    assert [detail.value for detail in refused.value.safe_details] == ["preview_stale"]
+    assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
+
+
+def test_a_proposal_added_after_preview_makes_the_plan_stale(staged: Engine) -> None:
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).record_proposal(
+            PRINCIPAL_A, _proposal("eprp_aaaa0001aaaa01", MERGED_ONE)
+        )
+    with pytest.raises(ConflictError) as refused, staged.begin() as connection:
+        _applied(connection, report)
+    assert [detail.value for detail in refused.value.safe_details] == ["preview_stale"]
+    assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
 
 
 def test_an_alias_reparents_and_a_duplicate_one_coalesces(staged: Engine) -> None:
@@ -1060,6 +1096,23 @@ def test_a_preview_whose_stored_binding_was_edited_is_refused(staged: Engine) ->
     assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
 
 
+def test_a_preview_whose_stored_plan_digest_was_edited_is_refused(staged: Engine) -> None:
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    with staged.begin() as connection:
+        connection.execute(
+            text(
+                f"UPDATE {SCHEMA}.entity_identity_previews "  # noqa: S608
+                "SET plan_digest = :replacement WHERE preview_id = :preview"
+            ),
+            {"replacement": "f" * 64, "preview": report.preview.preview_id},
+        )
+    with pytest.raises(ConflictError) as refused, staged.begin() as connection:
+        _applied(connection, report)
+    assert [detail.value for detail in refused.value.safe_details] == ["preview_stale"]
+    assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
+
+
 def test_a_version_that_moved_after_the_preview_makes_it_stale(staged: Engine) -> None:
     with staged.begin() as connection:
         report = _previewed(connection)
@@ -1387,13 +1440,15 @@ def test_the_published_merge_consumes_that_preview_and_replays_on_retry(
     assert first.result["state"] == IdentityOperationState.COMPLETED.value
     assert first.result["replayed"] is False
     assert first.result["effects"]
-    assert first.result["receipt_id"] is None
+    receipt_id = str(first.result["receipt_id"])
+    assert parse_identifier(receipt_id)[0] is IdKind.RECEIPT
 
     again = composed.invoke(Capability.ENTITIES_MERGE, command)
     assert again.error is None, again.error
     assert again.result is not None
     assert again.result["replayed"] is True
     assert again.result["identity_operation_id"] == first.result["identity_operation_id"]
+    assert again.result["receipt_id"] == receipt_id
     assert _row_count(composed.work_engine, "entity_identity_operations") == 1
 
 

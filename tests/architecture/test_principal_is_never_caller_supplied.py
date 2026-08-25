@@ -202,6 +202,27 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("item", "principal_id"),
         ("raster", "principal_id"),
     ),
+    # Isolated GSQS remote-eval MCP. The header Principal is compared to the
+    # occupying session's stored partition and a mismatch is refused; the MCP
+    # tool JSON has no principal_id field. Session identity on the record is
+    # the occupying store's, not a caller-supplied owner.
+    "adapters/gsqs_remote_eval_mcp.py": (
+        ("principal", "principal_id"),
+        ("session", "principal_id"),
+    ),
+    # Local control-plane prepare/open copy the already-authenticated operator
+    # Principal onto the session record. The remote tools never construct this
+    # request; an empty principal_id fails closed as unauthenticated.
+    "application/goodnotes_gsqs_remote_eval.py": (
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+    ),
+    # Capture/session identity payload fields stamped from the occupying
+    # session, not from eval.submit JSON.
+    "application/goodnotes_gsqs_remote_eval_contracts.py": (
+        ("session", "principal_id"),
+        ("session", "principal_id"),
+    ),
     # Remote grant staging compares the NAS-issued contract Principal with the
     # store's authenticated Principal partition before persisting any bounds.
     "infrastructure/persistence/native_sources.py": (("grant", "principal_id"),),

@@ -52,9 +52,11 @@ SCAFFOLD = "SCAFFOLD_ONLY"
 #: Directories that hold no tracked file. Enumerated rather than inferred from a
 #: leading dot, because `.ai/` and `.github/` are tracked and `.ai/goals/README.md`
 #: is one of the seventeen — excluding every dotted directory would have quietly
-#: removed a real finding from the universe.
+#: removed a real finding from the universe. `.claude` is local agent state and
+#: Cursor worktrees, not authored routing evidence.
 UNTRACKED_DIRECTORIES = frozenset(
     {
+        ".claude",
         ".git",
         ".mypy_cache",
         ".pytest_cache",

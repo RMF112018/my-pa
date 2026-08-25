@@ -125,6 +125,7 @@ from my_pa.contracts.ports import (
     DirectedReceipt,
     EntitiesRepository,
     EntityMutationAdmission,
+    ProposalAdmissionConflictError,
     ReviewDecisionRequest,
     ReviewRepository,
     SourceRepository,
@@ -467,15 +468,26 @@ class EntityGovernanceService:
         """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         checked = EntityProposalPayload.of(kind, payload)
-        self._admit_evidence(principal_id, observation_ids)
+        typed_observation_ids = tuple(
+            offered.entity_observation_id
+            for offered in evidence
+            if offered.entity_observation_id is not None
+        )
+        suppression_observation_ids = tuple(
+            dict.fromkeys([*observation_ids, *typed_observation_ids])
+        )
+        self._admit_evidence(principal_id, suppression_observation_ids)
         # Suppression is decided before dedupe, and the order is deliberate: a
         # producer re-filing evidence a reviewer has already refused is told so,
         # rather than being told what is currently open in a queue it does not
         # decide.
-        self._refuse_a_known_bad_proposal(principal_id, checked, observation_ids)
+        self._refuse_a_known_bad_proposal(
+            principal_id, checked, suppression_observation_ids
+        )
         digest = dedupe_digest(checked)
         open_equivalent = self._open_equivalent(principal_id, digest)
         if open_equivalent is not None:
+            self._record_evidence(principal_id, open_equivalent, evidence, at=ensure_utc(at))
             return _admission(open_equivalent, created=False)
         proposal = EntityProposal(
             proposal_id=issue_identifier(IdKind.ENTITY_PROPOSAL),
@@ -498,7 +510,14 @@ class EntityGovernanceService:
             expected_target_version=expected_target_version,
             review_case_id=_review_case_for(kind),
         )
-        self._entities.record_proposal(principal_id, proposal)
+        try:
+            self._entities.record_proposal(principal_id, proposal)
+        except ProposalAdmissionConflictError:
+            concurrent = self._open_equivalent(principal_id, digest)
+            if concurrent is None:
+                raise
+            self._record_evidence(principal_id, concurrent, evidence, at=proposal.proposed_at)
+            return _admission(concurrent, created=False)
         self._record_evidence(principal_id, proposal, evidence, at=proposal.proposed_at)
         return _admission(proposal, created=True)
 
@@ -536,9 +555,10 @@ class EntityGovernanceService:
             ProposedEvidence(role=EvidenceRole.DIRECT, entity_observation_id=observation_id)
             for observation_id in proposal.observation_ids
         ]
-        for sequence, offered in enumerate([*cited, *evidence], start=1):
-            self._entities.record_proposal_evidence_link(
-                principal_id,
+        self._entities.merge_proposal_evidence_links(
+            principal_id,
+            proposal.proposal_id,
+            (
                 EntityProposalEvidenceLink(
                     proposal_id=proposal.proposal_id,
                     principal_id=principal_id,
@@ -548,8 +568,10 @@ class EntityGovernanceService:
                     entity_observation_id=offered.entity_observation_id,
                     capture_span_id=offered.capture_span_id,
                     knowledge_id=offered.knowledge_id,
-                ),
-            )
+                )
+                for sequence, offered in enumerate([*cited, *evidence], start=1)
+            ),
+        )
 
     def _admit_evidence(self, principal_id: str, observation_ids: tuple[str, ...]) -> None:
         """Refuse a citation this Principal cannot make. See `propose`."""
@@ -2254,16 +2276,24 @@ class EntityProposalReviewService:
         there is nothing to roll back rather than something the transaction has
         to take away.
 
-        **What the successor carries and what it deliberately does not.** The
+        **What the successor carries.** The
         same kind and payload -- the request has not changed, only the moment it
         is being asked at -- with `method` and `method_version` re-stamped from
-        the predecessor, its evidence copied, and no `expected_target_version`.
-        That last is the one real difference and it is the honest one: the
-        predecessor's expected version was read when it was filed, replaying it
-        would be a stale-write check that had stopped checking, and promotion
-        reads the target's version fresh in any case.
+        the predecessor and its evidence copied. Existing-target kinds bind the
+        target's version read in this transaction now; replaying the
+        predecessor's old expectation would turn reprocess into a stale request.
+        The read precedes supersession, so a missing target creates nothing.
         """
         evidence = self._offered_again(request.principal_id, held)
+        expected_target_version: int | None = None
+        target = target_of(held)
+        if target is not None:
+            descriptor, record_id = target
+            expected_target_version = self._entities.proposal_target_version(
+                request.principal_id, descriptor.family, record_id
+            )
+            if expected_target_version is None:
+                raise ReviewConflictError("the proposal target no longer exists")
         if not self._reviews.supersede_entity_proposal(
             request.principal_id, held.proposal_id, at=request.decided_at
         ):
@@ -2280,6 +2310,7 @@ class EntityProposalReviewService:
             evidence=evidence,
             model_id=held.model_id,
             model_version=held.model_version,
+            expected_target_version=expected_target_version,
         )
         self._reviews.name_entity_proposal_successor(
             request.principal_id,

@@ -38,14 +38,21 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import insert, select
+from sqlalchemy import func, insert, select
 from sqlalchemy.engine import Connection
+from sqlalchemy.exc import IntegrityError
 
 from my_pa.contracts.ports import RelationshipMemoryProposalRepository, UnknownScopeError
+from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.relationship.memory import (
+    MemoryKind,
     MemoryProposalEvidence,
+    MemoryProposalMethod,
+    MemoryProposalState,
     RelationshipMemoryProposal,
 )
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
@@ -97,7 +104,7 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
         self,
         proposal: RelationshipMemoryProposal,
         evidence: tuple[MemoryProposalEvidence, ...],
-    ) -> None:
+    ) -> tuple[RelationshipMemoryProposal, int, bool]:
         """Insert one candidate and the exact records it rests on, atomically.
 
         Atomically because both statements run on the caller's transaction and
@@ -156,47 +163,122 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
             if owned is None:
                 raise UnknownScopeError("proposal evidence cites a record outside this scope")
 
-        self._connection.execute(
-            insert(relationship_memory_proposals).values(
-                _bound(
-                    relationship_memory_proposals,
-                    proposal.principal_id,
-                    {
-                        "memory_proposal_id": proposal.memory_proposal_id,
-                        "subject_entity_id": proposal.subject_entity_id,
-                        "expected_subject_version": proposal.expected_subject_version,
-                        "proposed_kind": proposal.proposed_kind.value,
-                        "proposed_statement": proposal.proposed_statement,
-                        "proposed_statement_sha256": proposal.proposed_statement_sha256,
-                        "structured_value": proposal.structured_value,
-                        "state": proposal.state.value,
-                        "method": proposal.method.value,
-                        "method_version": proposal.method_version,
-                        "model_id": proposal.model_id,
-                        "model_version": proposal.model_version,
-                        "classification": proposal.classification.value,
-                        "proposed_at": proposal.proposed_at,
-                        "review_case_id": proposal.review_case_id,
-                        "accepted_memory_id": proposal.accepted_memory_id,
-                        "accepted_memory_version_id": proposal.accepted_memory_version_id,
-                        "invalidated_reason": proposal.invalidated_reason,
-                        "superseded_at": proposal.superseded_at,
-                        "superseded_by_memory_proposal_id": (
-                            proposal.superseded_by_memory_proposal_id
-                        ),
-                    },
+        created = True
+        try:
+            with self._connection.begin_nested():
+                self._connection.execute(
+                    insert(relationship_memory_proposals).values(
+                        _bound(
+                            relationship_memory_proposals,
+                            proposal.principal_id,
+                            {
+                                "memory_proposal_id": proposal.memory_proposal_id,
+                                "subject_entity_id": proposal.subject_entity_id,
+                                "expected_subject_version": proposal.expected_subject_version,
+                                "proposed_kind": proposal.proposed_kind.value,
+                                "proposed_statement": proposal.proposed_statement,
+                                "proposed_statement_sha256": proposal.proposed_statement_sha256,
+                                "dedupe_sha256": proposal.dedupe_sha256,
+                                "structured_value": proposal.structured_value,
+                                "state": proposal.state.value,
+                                "method": proposal.method.value,
+                                "method_version": proposal.method_version,
+                                "model_id": proposal.model_id,
+                                "model_version": proposal.model_version,
+                                "classification": proposal.classification.value,
+                                "proposed_at": proposal.proposed_at,
+                                "review_case_id": proposal.review_case_id,
+                                "accepted_memory_id": proposal.accepted_memory_id,
+                                "accepted_memory_version_id": (
+                                    proposal.accepted_memory_version_id
+                                ),
+                                "invalidated_reason": proposal.invalidated_reason,
+                                "superseded_at": proposal.superseded_at,
+                                "superseded_by_memory_proposal_id": (
+                                    proposal.superseded_by_memory_proposal_id
+                                ),
+                            },
+                        )
+                    )
                 )
+        except IntegrityError as error:
+            diagnostic = getattr(error.orig, "diag", None)
+            if (
+                getattr(diagnostic, "constraint_name", None)
+                != "an_open_equivalent_memory_proposal_is_raised_once"
+            ):
+                raise
+            created = False
+
+        if created:
+            stored = proposal
+            existing: set[tuple[str, str | None]] = set()
+        else:
+            row = self._connection.execute(
+                select(relationship_memory_proposals)
+                .where(
+                    _mine(relationship_memory_proposals, proposal.principal_id),
+                    relationship_memory_proposals.c.dedupe_sha256 == proposal.dedupe_sha256,
+                    relationship_memory_proposals.c.state.in_(
+                        ["proposed", "needs_review", "deferred"]
+                    ),
+                )
+                .with_for_update(of=relationship_memory_proposals)
+            ).one()
+            stored = RelationshipMemoryProposal(
+            memory_proposal_id=str(row.memory_proposal_id),
+            principal_id=str(row.principal_id),
+            subject_entity_id=str(row.subject_entity_id),
+            expected_subject_version=int(row.expected_subject_version),
+            proposed_kind=MemoryKind(row.proposed_kind),
+            proposed_statement=str(row.proposed_statement),
+            proposed_statement_sha256=str(row.proposed_statement_sha256),
+            dedupe_sha256=str(row.dedupe_sha256),
+            structured_value=row.structured_value,
+            state=MemoryProposalState(row.state),
+            method=MemoryProposalMethod(row.method),
+            method_version=str(row.method_version),
+            model_id=row.model_id,
+            model_version=row.model_version,
+            classification=Classification(row.classification),
+            proposed_at=row.proposed_at,
+            review_case_id=row.review_case_id,
+            accepted_memory_id=row.accepted_memory_id,
+            accepted_memory_version_id=row.accepted_memory_version_id,
+            invalidated_reason=row.invalidated_reason,
+            superseded_at=row.superseded_at,
+            superseded_by_memory_proposal_id=row.superseded_by_memory_proposal_id,
             )
-        )
+            existing = {
+                (
+                    str(link.role),
+                    link.entity_observation_id or link.capture_span_id or link.knowledge_id,
+                )
+                for link in self._connection.execute(
+                    select(relationship_memory_proposal_evidence).where(
+                        _mine(relationship_memory_proposal_evidence, proposal.principal_id),
+                        relationship_memory_proposal_evidence.c.memory_proposal_id
+                        == stored.memory_proposal_id,
+                    )
+                )
+            }
         for link in evidence:
+            identity = (
+                link.role.value,
+                link.entity_observation_id or link.capture_span_id or link.knowledge_id,
+            )
+            if identity in existing:
+                continue
             self._connection.execute(
                 insert(relationship_memory_proposal_evidence).values(
                     _bound(
                         relationship_memory_proposal_evidence,
                         link.principal_id,
                         {
-                            "proposal_evidence_id": link.proposal_evidence_id,
-                            "memory_proposal_id": link.memory_proposal_id,
+                            "proposal_evidence_id": issue_identifier(
+                                IdKind.RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE
+                            ),
+                            "memory_proposal_id": stored.memory_proposal_id,
                             "role": link.role.value,
                             "entity_observation_id": link.entity_observation_id,
                             "capture_span_id": link.capture_span_id,
@@ -206,3 +288,17 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
                     )
                 )
             )
+            existing.add(identity)
+        if created:
+            evidence_count = len(existing)
+        else:
+            evidence_count = self._connection.execute(
+                select(func.count())
+                .select_from(relationship_memory_proposal_evidence)
+                .where(
+                    _mine(relationship_memory_proposal_evidence, proposal.principal_id),
+                    relationship_memory_proposal_evidence.c.memory_proposal_id
+                    == stored.memory_proposal_id,
+                )
+            ).scalar_one()
+        return stored, int(evidence_count), created

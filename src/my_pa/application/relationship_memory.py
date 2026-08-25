@@ -43,6 +43,8 @@ producer path names no actor class at all.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -530,6 +532,8 @@ class MemoryProposalReceipt:
     method: MemoryProposalMethod
     proposed_at: datetime
     evidence_count: int
+    dedupe_sha256: str
+    created: bool
 
 
 class RelationshipMemoryProposalService:
@@ -616,6 +620,20 @@ class RelationshipMemoryProposalService:
 
         statement = validate_statement(command.statement)
         structured = validate_structured_value(command.memory_kind, command.structured_value)
+        proposal_dedupe = hashlib.sha256(
+            json.dumps(
+                {
+                    "principal_id": command.principal_id,
+                    "subject_entity_id": command.subject_entity_id,
+                    "expected_subject_version": command.expected_subject_version,
+                    "kind": command.memory_kind.value,
+                    "statement_sha256": statement_digest(statement),
+                    "structured_value": structured,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        ).hexdigest()
         proposal_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
         review_case_id = issue_identifier(IdKind.REVIEW_CASE)
         proposal = RelationshipMemoryProposal(
@@ -626,6 +644,7 @@ class RelationshipMemoryProposalService:
             proposed_kind=command.memory_kind,
             proposed_statement=statement,
             proposed_statement_sha256=statement_digest(statement),
+            dedupe_sha256=proposal_dedupe,
             # `NEEDS_REVIEW` is written as a literal and takes no parameter, so
             # there is no argument a producer could pass to arrive already
             # accepted. `PROPOSED` is the state a candidate would hold if some
@@ -658,15 +677,19 @@ class RelationshipMemoryProposalService:
             )
             for reference in command.evidence
         )
-        repository.record_proposal(proposal, evidence)
+        stored, evidence_count, created = repository.record_proposal(proposal, evidence)
+        if stored.review_case_id is None:
+            raise RelationshipMemoryError("a produced candidate belongs to Review")
         return MemoryProposalReceipt(
-            memory_proposal_id=proposal.memory_proposal_id,
-            review_case_id=review_case_id,
-            subject_entity_id=proposal.subject_entity_id,
-            proposed_kind=proposal.proposed_kind,
-            state=proposal.state,
-            classification=proposal.classification,
-            method=proposal.method,
-            proposed_at=proposal.proposed_at,
-            evidence_count=len(evidence),
+            memory_proposal_id=stored.memory_proposal_id,
+            review_case_id=stored.review_case_id,
+            subject_entity_id=stored.subject_entity_id,
+            proposed_kind=stored.proposed_kind,
+            state=stored.state,
+            classification=stored.classification,
+            method=stored.method,
+            proposed_at=stored.proposed_at,
+            evidence_count=evidence_count,
+            dedupe_sha256=stored.dedupe_sha256,
+            created=created,
         )

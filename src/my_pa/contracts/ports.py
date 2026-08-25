@@ -253,6 +253,7 @@ __all__ = [
     "OperationQueue",
     "PortError",
     "ProjectRepository",
+    "ProposalAdmissionConflictError",
     "PulseRepository",
     "RelationshipEventRepository",
     "RelationshipRepository",
@@ -271,6 +272,10 @@ __all__ = [
     "UnknownScopeError",
     "WorkerHealthRepository",
     "WorkerPlaneStatus",
+    "WriteRequestConflictError",
+    "WriteRequestEvidence",
+    "WriteRequestRepository",
+    "WriteRequestResult",
 ]
 
 
@@ -1425,6 +1430,15 @@ class EntitiesRepository(ABC):
         """One proposal in this Principal's partition, or `None`."""
 
     @abstractmethod
+    def proposal_target_version(
+        self,
+        principal_id: str,
+        family: MutationRecordFamily,
+        record_id: str,
+    ) -> int | None:
+        """The current version of the existing record a reprocess targets."""
+
+    @abstractmethod
     def proposals(
         self, principal_id: str, state: EntityProposalState | None = None
     ) -> list[EntityProposal]:
@@ -1478,6 +1492,15 @@ class EntitiesRepository(ABC):
         self, principal_id: str, proposal_id: str
     ) -> list[EntityProposalEvidenceLink]:
         """Everything one proposal rests on, in the order it was cited."""
+        raise NotImplementedError
+
+    def merge_proposal_evidence_links(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        evidence: Iterable[EntityProposalEvidenceLink],
+    ) -> list[EntityProposalEvidenceLink]:
+        """Atomically append exact new evidence and return the stored set."""
         raise NotImplementedError
 
     def proposal_evidence_for(
@@ -2269,6 +2292,79 @@ class RepositoryFailureError(PortError):
     """
 
 
+class WriteRequestConflictError(PortError):
+    """One server request identity was reused for materially different work."""
+
+
+class ProposalAdmissionConflictError(PortError):
+    """A concurrent producer admitted the same open Entity proposal first."""
+
+
+@dataclass(frozen=True, slots=True)
+class WriteRequestEvidence:
+    """One content-free evidence identity preserved with a proposal receipt."""
+
+    sequence: int
+    role: str
+    entity_observation_id: str | None = None
+    capture_span_id: str | None = None
+    knowledge_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WriteRequestResult:
+    """The safe typed fields required to replay one logical write receipt.
+
+    No request body or Relationship Memory statement can fit this record. Fixed
+    columns preserve identifiers, closed state tokens, counts and digests
+    without creating a generic second response store.
+    """
+
+    result_family: str
+    result_id: str
+    result_secondary_id: str | None = None
+    result_version: int | None = None
+    result_state: str | None = None
+    result_subtype: str | None = None
+    result_requirement: str | None = None
+    result_disposition: str | None = None
+    result_assertion_id: str | None = None
+    result_classification: str | None = None
+    result_method: str | None = None
+    result_at: datetime | None = None
+    result_digest: str | None = None
+    result_count: int | None = None
+    result_created: bool | None = None
+    receipt_id: str | None = None
+    audit_id: str | None = None
+    evidence: tuple[WriteRequestEvidence, ...] = ()
+
+
+class WriteRequestRepository(ABC):
+    """Server-bound replay arbitration shared by proposals and Review."""
+
+    @abstractmethod
+    def reserve(
+        self,
+        principal_id: str,
+        capability: str,
+        request_id: str,
+        request_digest: str,
+    ) -> WriteRequestResult | None:
+        """Reserve this request or return its completed original result."""
+
+    @abstractmethod
+    def complete(
+        self,
+        principal_id: str,
+        capability: str,
+        request_id: str,
+        request_digest: str,
+        result: WriteRequestResult,
+    ) -> None:
+        """Bind the reserved identity to its stable logical receipt."""
+
+
 @dataclass(frozen=True, slots=True)
 class Acceptance:
     """An accepted enrollment, and whether this call is what created it.
@@ -2780,8 +2876,10 @@ class ReviewRepository(ABC):
         """
 
     @abstractmethod
-    def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
-        """Append a disposition; return `None` when evidence was invalidated."""
+    def decide(
+        self, request: ReviewDecisionRequest, *, has_operator_authority: bool = False
+    ) -> ReviewDecision | None:
+        """Append a disposition; authority is authenticated server context."""
 
     # --- the Entity proposal plane's own case read and decision ledger -------
     #
@@ -3345,6 +3443,11 @@ class UnitOfWork(ABC):
     @abstractmethod
     def reviews(self) -> ReviewRepository:
         """The review and promotion plane, inside this transaction."""
+
+    @property
+    def write_requests(self) -> WriteRequestRepository:
+        """Server-bound proposal and Review replay ledger in this transaction."""
+        raise NotImplementedError
 
     @property
     @abstractmethod
@@ -4440,14 +4543,15 @@ class RelationshipMemoryProposalRepository(ABC):
         self,
         proposal: RelationshipMemoryProposal,
         evidence: tuple[MemoryProposalEvidence, ...],
-    ) -> None:
+    ) -> tuple[RelationshipMemoryProposal, int, bool]:
         """Insert one candidate and the exact records it rests on, atomically.
 
         Takes the whole domain records rather than their fields, so what reaches
         storage has been through `RelationshipMemoryProposal.__post_init__` and
         `MemoryProposalEvidence.__post_init__` — which is what refuses a candidate
         naming an accepted memory, a model proposal with no model, or a
-        classification below its kind's floor.
+        classification below its kind's floor. Returns the stored proposal,
+        complete evidence count, and whether this call created it.
         """
 
 

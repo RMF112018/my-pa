@@ -3444,6 +3444,135 @@ entity_observations = Table(
     Index("entity_observations_by_entity", "entity_id"),
 )
 
+#: Server-bound replay arbitration for the two producer writes and canonical
+#: Review. It stores no request body and no generic response document: only the
+#: material digest and the fixed, content-free fields needed to reconstruct the
+#: original logical receipt. Reservation and completion live in the same unit
+#: of work as the governed write, so a failed mutation leaves no claimed key.
+relationship_write_requests = Table(
+    "relationship_write_requests",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("request_id", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("result_family", Text),
+    Column("result_id", Text),
+    Column("result_secondary_id", Text),
+    Column("result_version", Integer),
+    Column("result_state", Text),
+    Column("result_subtype", Text),
+    Column("result_requirement", Text),
+    Column("result_disposition", Text),
+    Column("result_assertion_id", Text),
+    Column("result_classification", Text),
+    Column("result_method", Text),
+    Column("result_at", DateTime(timezone=True)),
+    Column("result_digest", Text),
+    Column("result_count", Integer),
+    Column("result_created", Boolean),
+    Column("receipt_id", Text),
+    Column("audit_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("completed_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "capability",
+        "request_id",
+        name="one_relationship_write_request_identity",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "length(trim(request_id)) BETWEEN 1 AND 200",
+        name="a_relationship_write_request_id_is_bounded",
+    ),
+    CheckConstraint(
+        "capability IN ('entities.proposals.create', 'relationship_memory.propose', "
+        "'review.decide')",
+        name="a_relationship_write_request_capability_is_replay_covered",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_relationship_write_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "result_digest IS NULL OR result_digest ~ '^[0-9a-f]{64}$'",
+        name="a_relationship_write_result_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "result_version IS NULL OR result_version >= 0",
+        name="a_relationship_write_result_version_is_not_negative",
+    ),
+    CheckConstraint(
+        "result_count IS NULL OR result_count >= 0",
+        name="a_relationship_write_result_count_is_not_negative",
+    ),
+    CheckConstraint(
+        "result_family IS NULL OR result_family IN "
+        "('entity_proposal', 'memory_proposal', 'review_decision', 'review_invalidated')",
+        name="a_relationship_write_result_family_is_known",
+    ),
+    CheckConstraint(
+        "(completed_at IS NULL) = (result_family IS NULL)",
+        name="a_relationship_write_request_is_completed_once",
+    ),
+    CheckConstraint(
+        "result_family IS NULL OR result_id IS NOT NULL",
+        name="a_completed_relationship_write_names_its_result",
+    ),
+    CheckConstraint(
+        "result_family <> 'review_decision' OR "
+        "(result_disposition IS NOT NULL AND result_version IS NOT NULL)",
+        name="a_replayed_review_decision_preserves_its_public_identity",
+    ),
+    CheckConstraint(
+        "result_family <> 'review_invalidated' OR "
+        "(result_state = 'invalidated' AND result_disposition IS NULL)",
+        name="a_replayed_invalidation_has_no_invented_decision",
+    ),
+    Index("relationship_write_requests_by_result", "principal_id", "result_family", "result_id"),
+)
+
+
+relationship_write_request_evidence = Table(
+    "relationship_write_request_evidence",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("request_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("entity_observation_id", Text),
+    Column("capture_span_id", Text),
+    Column("knowledge_id", Text),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "capability",
+        "request_id",
+        "sequence",
+        name="one_evidence_position_per_relationship_write_request",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "capability", "request_id"],
+        [
+            f"{SCHEMA}.relationship_write_requests.principal_id",
+            f"{SCHEMA}.relationship_write_requests.capability",
+            f"{SCHEMA}.relationship_write_requests.request_id",
+        ],
+        ondelete="CASCADE",
+        name="relationship_write_evidence_names_its_request",
+    ),
+    CheckConstraint("sequence >= 1", name="relationship_write_evidence_sequence_is_positive"),
+    CheckConstraint(
+        "role IN ('direct', 'supporting', 'counterevidence')",
+        name="relationship_write_evidence_role_is_known",
+    ),
+    CheckConstraint(
+        "num_nonnulls(entity_observation_id, capture_span_id, knowledge_id) = 1",
+        name="relationship_write_evidence_names_exactly_one_record",
+    ),
+)
+
 #: WP-RI-06, widened by WP-RI-B-05: one proposed mutation of the entity plane.
 #:
 #: `decided_by`/`decided_at` are NULL exactly while the proposal is undecided,
@@ -3725,6 +3854,30 @@ entity_proposal_evidence_links = Table(
     ),
     Index("entity_proposal_evidence_links_by_principal", "principal_id"),
     Index("entity_proposal_evidence_links_by_observation", "entity_observation_id"),
+    Index(
+        "one_observation_role_per_entity_proposal",
+        "proposal_id",
+        "role",
+        "entity_observation_id",
+        unique=True,
+        postgresql_where=text("entity_observation_id IS NOT NULL"),
+    ),
+    Index(
+        "one_capture_span_role_per_entity_proposal",
+        "proposal_id",
+        "role",
+        "capture_span_id",
+        unique=True,
+        postgresql_where=text("capture_span_id IS NOT NULL"),
+    ),
+    Index(
+        "one_knowledge_role_per_entity_proposal",
+        "proposal_id",
+        "role",
+        "knowledge_id",
+        unique=True,
+        postgresql_where=text("knowledge_id IS NOT NULL"),
+    ),
 )
 
 #: WP-RI-B-05: what a reviewer decided about one Entity proposal, appended.
@@ -8326,6 +8479,7 @@ relationship_memory_proposals = Table(
     Column("proposed_kind", Text, nullable=False),
     Column("proposed_statement", Text, nullable=False),
     Column("proposed_statement_sha256", Text, nullable=False),
+    Column("dedupe_sha256", Text, nullable=False),
     Column("structured_value", JSONB),
     Column("state", Text, nullable=False),
     Column("method", Text, nullable=False),
@@ -8355,6 +8509,11 @@ relationship_memory_proposals = Table(
         "proposed_statement_sha256",
         DIGEST_PATTERN.pattern,
         name="a_memory_proposal_digest_is_a_sha256_digest",
+    ),
+    _matches(
+        "dedupe_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_memory_proposal_dedupe_is_a_sha256_digest",
     ),
     CheckConstraint(
         f"length(proposed_statement) BETWEEN 1 AND {MAX_STATEMENT_CHARACTERS}",
@@ -8424,6 +8583,13 @@ relationship_memory_proposals = Table(
         "subject_entity_id",
         "state",
     ),
+    Index(
+        "an_open_equivalent_memory_proposal_is_raised_once",
+        "principal_id",
+        "dedupe_sha256",
+        unique=True,
+        postgresql_where=text("state IN ('proposed', 'needs_review', 'deferred')"),
+    ),
 )
 
 #: One exact record a proposal rests on. Same one-target discipline as accepted
@@ -8457,6 +8623,30 @@ relationship_memory_proposal_evidence = Table(
         name="memory_proposal_evidence_names_exactly_one_record",
     ),
     Index("relationship_memory_proposal_evidence_by_proposal", "memory_proposal_id"),
+    Index(
+        "one_observation_role_per_memory_proposal",
+        "memory_proposal_id",
+        "role",
+        "entity_observation_id",
+        unique=True,
+        postgresql_where=text("entity_observation_id IS NOT NULL"),
+    ),
+    Index(
+        "one_capture_span_role_per_memory_proposal",
+        "memory_proposal_id",
+        "role",
+        "capture_span_id",
+        unique=True,
+        postgresql_where=text("capture_span_id IS NOT NULL"),
+    ),
+    Index(
+        "one_knowledge_role_per_memory_proposal",
+        "memory_proposal_id",
+        "role",
+        "knowledge_id",
+        unique=True,
+        postgresql_where=text("knowledge_id IS NOT NULL"),
+    ),
 )
 
 #: One appended reviewer disposition of one memory proposal.

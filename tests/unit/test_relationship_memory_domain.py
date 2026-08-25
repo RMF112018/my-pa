@@ -104,6 +104,7 @@ def a_proposal(**overrides: object) -> RelationshipMemoryProposal:
         "proposed_kind": MemoryKind.GENERAL_NOTE,
         "proposed_statement": statement,
         "proposed_statement_sha256": statement_digest(statement),
+        "dedupe_sha256": "d" * 64,
         "state": MemoryProposalState.PROPOSED,
         "method": MemoryProposalMethod.DETERMINISTIC,
         "method_version": "v1",

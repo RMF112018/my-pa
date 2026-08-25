@@ -108,11 +108,11 @@ import hashlib
 import json
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from itertools import islice
 from types import MappingProxyType
-from typing import Any, ClassVar, Final, assert_never, cast
+from typing import Any, Final, assert_never, cast
 from zoneinfo import ZoneInfo
 
 from my_pa.application.authorization import Authorization, authorize
@@ -299,6 +299,7 @@ from my_pa.application.intelligence import (
 )
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.model_gate import BoundedModelGate
+from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
 from my_pa.application.relationship_memory import (
     ArchiveMemoryCommand,
     CreateMemoryCommand,
@@ -335,6 +336,9 @@ from my_pa.contracts.ports import (
     UnitOfWork,
     UnknownScopeError,
     WorkCursorError,
+    WriteRequestConflictError,
+    WriteRequestEvidence,
+    WriteRequestResult,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
 from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
@@ -2114,6 +2118,52 @@ def _merge_idempotency_key(principal_id: str, preview_id: str) -> str:
     return f"idk_{digest[:32]}"
 
 
+def _relationship_write_digest(command: object) -> str:
+    """Digest only material command fields without persisting their values."""
+    return hashlib.sha256(
+        json.dumps(
+            {"command": type(command).__name__, "material": asdict(command)},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
+
+
+def _reserve_relationship_write(
+    unit_of_work: UnitOfWork,
+    authorization: Authorization,
+    command: Command,
+) -> tuple[str, WriteRequestResult | None]:
+    digest = _relationship_write_digest(command)
+    try:
+        replayed = unit_of_work.write_requests.reserve(
+            authorization.principal.principal_id,
+            command.capability.value,
+            authorization.request_id,
+            digest,
+        )
+    except WriteRequestConflictError:
+        raise ConflictError(SafeDetail.IDEMPOTENCY_CONFLICT) from None
+    return digest, replayed
+
+
+def _complete_relationship_write(
+    unit_of_work: UnitOfWork,
+    authorization: Authorization,
+    command: Command,
+    digest: str,
+    result: WriteRequestResult,
+) -> None:
+    unit_of_work.write_requests.complete(
+        authorization.principal.principal_id,
+        command.capability.value,
+        authorization.request_id,
+        digest,
+        result,
+    )
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -2131,6 +2181,7 @@ class ApplicationService:
         relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
         relationship_identity_correction_enabled: bool = False,
+        producer_origins: ProducerOriginRegistry | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._limits = _effective_limits(limits)
@@ -2172,6 +2223,7 @@ class ApplicationService:
         #: default gate is disabled; an enabled gate cannot be constructed
         #: without its local provider and canonical Review router.
         self._model_gate = model_gate or BoundedModelGate()
+        self._producer_origins = producer_origins or ProducerOriginRegistry()
         #: WP-27's application service, held rather than built per request: it is
         #: stateless, takes its ports as arguments, and constructing one per call
         #: would say it held something.
@@ -3379,6 +3431,35 @@ class ApplicationService:
         server-supplied. There is no field on the command for any of them: a
         caller that could name its own authority would name the one it needed.
         """
+        request_digest, replayed = _reserve_relationship_write(
+            unit_of_work, authorization, command
+        )
+        if replayed is not None:
+            if replayed.result_family == "review_invalidated":
+                return _Result(
+                    payload={"review_case_id": replayed.result_id, "result": "invalidated"},
+                    disclosure=unenrolled_disclosure(
+                        authorization.at,
+                        trust_basis=("review_policy", "source_span_validation"),
+                    ),
+                )
+            if replayed.result_family != "review_decision":
+                raise InternalError()
+            return _Result(
+                payload={
+                    "review_case_id": replayed.result_secondary_id,
+                    "decision_id": replayed.result_id,
+                    "review_version": replayed.result_version,
+                    "disposition": replayed.result_disposition,
+                    "proposal_state": replayed.result_state,
+                    "assertion_id": replayed.result_assertion_id,
+                    "receipt_id": replayed.receipt_id,
+                },
+                disclosure=unenrolled_disclosure(
+                    authorization.at,
+                    trust_basis=("review_policy", "reviewed_promotion"),
+                ),
+            )
         request = ReviewDecisionRequest(
             review_case_id=command.review_case_id,
             expected_review_version=command.expected_review_version,
@@ -3404,7 +3485,10 @@ class ApplicationService:
                     request.principal_id, request.review_case_id
                 )
                 if entity_case is None:
-                    decision = unit_of_work.reviews.decide(request)
+                    decision = unit_of_work.reviews.decide(
+                        request,
+                        has_operator_authority=self._operator_authority(authorization),
+                    )
                 else:
                     decision = self._entity_review(unit_of_work, authorization, request)
             except ReviewConflictError:
@@ -3428,14 +3512,27 @@ class ApplicationService:
         if missing:
             raise NotFoundError(SafeDetail.REVIEW_CASE_ID)
         if decision is None:
-            return _Result(
+            result = _Result(
                 payload={"review_case_id": command.review_case_id, "result": "invalidated"},
                 disclosure=unenrolled_disclosure(
                     authorization.at,
                     trust_basis=("review_policy", "source_span_validation"),
                 ),
             )
-        return _Result(
+            _complete_relationship_write(
+                unit_of_work,
+                authorization,
+                command,
+                request_digest,
+                WriteRequestResult(
+                    result_family="review_invalidated",
+                    result_id=command.review_case_id,
+                    result_state="invalidated",
+                    audit_id=authorization.audit_id,
+                ),
+            )
+            return result
+        result = _Result(
             payload={
                 "review_case_id": decision.review_case_id,
                 "decision_id": decision.decision_id,
@@ -3450,6 +3547,24 @@ class ApplicationService:
                 trust_basis=("review_policy", "reviewed_promotion"),
             ),
         )
+        _complete_relationship_write(
+            unit_of_work,
+            authorization,
+            command,
+            request_digest,
+            WriteRequestResult(
+                result_family="review_decision",
+                result_id=decision.decision_id,
+                result_secondary_id=decision.review_case_id,
+                result_version=decision.sequence,
+                result_state=decision.proposal_state.value,
+                result_disposition=decision.disposition.value,
+                result_assertion_id=decision.assertion_id,
+                receipt_id=decision.receipt_id,
+                audit_id=authorization.audit_id,
+            ),
+        )
+        return result
 
     def _entity_review(
         self,
@@ -7537,12 +7652,9 @@ class ApplicationService:
     #: an authenticated client to its declared method -- which is a grant-profile
     #: change WP-09 owns, not a payload field. `model_id` and `model_version` stay
     #: `None` on every path, so `local_model` is unreachable from any transport.
-    _PROPOSAL_METHOD: ClassVar[EntityProposalMethod] = EntityProposalMethod.RULE
-    _PROPOSAL_METHOD_VERSION: ClassVar[str] = "entity-proposal-dispatch.1"
-    _MEMORY_PROPOSAL_METHOD: ClassVar[MemoryProposalMethod] = MemoryProposalMethod.RULE
-    _MEMORY_PROPOSAL_METHOD_VERSION: ClassVar[str] = "memory-proposal-dispatch.1"
-
-    def _proposal_origin(self) -> tuple[EntityProposalMethod, str]:
+    def _proposal_origin(
+        self, authorization: Authorization
+    ) -> tuple[EntityProposalMethod, str, str | None, str | None]:
         """What the server will record as having produced an entity proposal.
 
         **Takes nothing.** Not the command, not the payload, not the
@@ -7554,18 +7666,33 @@ class ApplicationService:
         `tests/architecture/test_a_producer_cannot_choose_its_own_method.py`
         reads off the signature rather than off a comment.
         """
-        return self._PROPOSAL_METHOD, self._PROPOSAL_METHOD_VERSION
+        try:
+            origin = self._producer_origins.resolve(authorization.principal)
+        except ProducerOriginError:
+            raise DeniedError() from None
+        return (
+            EntityProposalMethod(origin.method),
+            origin.method_version,
+            origin.model_id,
+            origin.model_version,
+        )
 
-    def _memory_proposal_origin(self) -> MemoryProposalOrigin:
+    def _memory_proposal_origin(self, authorization: Authorization) -> MemoryProposalOrigin:
         """What the server will record as having produced a candidate memory.
 
         Takes nothing, for the reason `_proposal_origin` takes nothing. `model_id`
         and `model_version` are left unset, so `local_model` -- the one method
         that would require them -- is unreachable from any transport.
         """
+        try:
+            origin = self._producer_origins.resolve(authorization.principal)
+        except ProducerOriginError:
+            raise DeniedError() from None
         return MemoryProposalOrigin(
-            method=self._MEMORY_PROPOSAL_METHOD,
-            method_version=self._MEMORY_PROPOSAL_METHOD_VERSION,
+            method=MemoryProposalMethod(origin.method),
+            method_version=origin.method_version,
+            model_id=origin.model_id,
+            model_version=origin.model_version,
         )
 
     def _operator_authority(self, authorization: Authorization) -> bool:
@@ -7639,7 +7766,44 @@ class ApplicationService:
         gains a member that contradicts its own definition.
         """
         self._entity_writes()
-        method, method_version = self._proposal_origin()
+        request_digest, replayed = _reserve_relationship_write(
+            unit_of_work, authorization, command
+        )
+        if replayed is not None:
+            if replayed.result_family != "entity_proposal":
+                raise InternalError()
+            return _Result(
+                payload={
+                    "proposal_id": replayed.result_id,
+                    "proposal_version": replayed.result_version,
+                    "kind": replayed.result_subtype,
+                    "state": replayed.result_state,
+                    "review_requirement": replayed.result_requirement,
+                    "review_case_id": replayed.result_secondary_id,
+                    "review_version": 0,
+                    "dedupe_sha256": replayed.result_digest,
+                    "evidence_refs": [
+                        {
+                            "role": link.role,
+                            **(
+                                {"entity_observation_id": link.entity_observation_id}
+                                if link.entity_observation_id is not None
+                                else {"capture_span_id": link.capture_span_id}
+                                if link.capture_span_id is not None
+                                else {"knowledge_id": link.knowledge_id}
+                            ),
+                        }
+                        for link in replayed.evidence
+                    ],
+                    "proposed_at": format_rfc3339(cast("datetime", replayed.result_at)),
+                    "created": replayed.result_created,
+                    "audit_id": replayed.audit_id,
+                },
+                disclosure=unenrolled_disclosure(
+                    authorization.at, trust_basis=_ENTITY_TRUST_BASIS
+                ),
+            )
+        method, method_version, model_id, model_version = self._proposal_origin(authorization)
         with _translated(), _entity_governance_translated():
             admission = EntityGovernanceService(unit_of_work.entities).propose(
                 authorization.principal.principal_id,
@@ -7660,8 +7824,26 @@ class ApplicationService:
                     for entry in command.evidence
                 ),
                 expected_target_version=command.expected_target_version,
+                model_id=model_id,
+                model_version=model_version,
             )
-        return _Result(
+            stored_evidence = unit_of_work.entities.proposal_evidence_links(
+                authorization.principal.principal_id, admission.proposal_id
+            )
+        evidence_refs = [
+            {
+                "role": link.role.value,
+                **(
+                    {"entity_observation_id": link.entity_observation_id}
+                    if link.entity_observation_id is not None
+                    else {"capture_span_id": link.capture_span_id}
+                    if link.capture_span_id is not None
+                    else {"knowledge_id": link.knowledge_id}
+                ),
+            }
+            for link in stored_evidence
+        ]
+        result = _Result(
             payload={
                 "proposal_id": admission.proposal_id,
                 "proposal_version": 1,
@@ -7671,13 +7853,43 @@ class ApplicationService:
                 "review_case_id": admission.review_case_id,
                 "review_version": admission.review_version,
                 "dedupe_sha256": admission.dedupe_sha256,
-                "evidence_refs": [dict(entry) for entry in command.evidence],
+                "evidence_refs": evidence_refs,
                 "proposed_at": format_rfc3339(admission.proposed_at),
                 "created": admission.created,
                 "audit_id": authorization.audit_id,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
         )
+        _complete_relationship_write(
+            unit_of_work,
+            authorization,
+            command,
+            request_digest,
+            WriteRequestResult(
+                result_family="entity_proposal",
+                result_id=admission.proposal_id,
+                result_secondary_id=admission.review_case_id,
+                result_version=1,
+                result_state=admission.state.value,
+                result_subtype=admission.kind.value,
+                result_requirement=admission.requirement.value,
+                result_at=admission.proposed_at,
+                result_digest=admission.dedupe_sha256,
+                result_created=admission.created,
+                audit_id=authorization.audit_id,
+                evidence=tuple(
+                    WriteRequestEvidence(
+                        sequence=link.sequence,
+                        role=link.role.value,
+                        entity_observation_id=link.entity_observation_id,
+                        capture_span_id=link.capture_span_id,
+                        knowledge_id=link.knowledge_id,
+                    )
+                    for link in stored_evidence
+                ),
+            ),
+        )
+        return result
 
     def _relationship_memory_propose(
         self,
@@ -7701,6 +7913,31 @@ class ApplicationService:
         be a second channel for exactly the text the accepted form is withheld on.
         """
         self._relationship_memory_plane()
+        request_digest, replayed = _reserve_relationship_write(
+            unit_of_work, authorization, command
+        )
+        if replayed is not None:
+            if replayed.result_family != "memory_proposal":
+                raise InternalError()
+            return _Result(
+                payload={
+                    "memory_proposal_id": replayed.result_id,
+                    "review_case_id": replayed.result_secondary_id,
+                    "subject_entity_id": command.entity_id,
+                    "kind": replayed.result_subtype,
+                    "state": replayed.result_state,
+                    "classification": replayed.result_classification,
+                    "method": replayed.result_method,
+                    "proposed_at": format_rfc3339(cast("datetime", replayed.result_at)),
+                    "evidence_count": replayed.result_count,
+                    "dedupe_sha256": replayed.result_digest,
+                    "created": replayed.result_created,
+                    "audit_id": replayed.audit_id,
+                },
+                disclosure=unenrolled_disclosure(
+                    authorization.at, trust_basis=_MEMORY_TRUST_BASIS
+                ),
+            )
         principal_id = authorization.principal.principal_id
         with _translated(), _memory_translated(), _entity_translated():
             subject = unit_of_work.entities.get(principal_id, command.entity_id)
@@ -7726,10 +7963,10 @@ class ApplicationService:
                     ),
                 ),
                 subject=subject,
-                origin=self._memory_proposal_origin(),
+                origin=self._memory_proposal_origin(authorization),
                 at=authorization.at,
             )
-        return _Result(
+        result = _Result(
             payload={
                 "memory_proposal_id": receipt.memory_proposal_id,
                 "review_case_id": receipt.review_case_id,
@@ -7740,10 +7977,33 @@ class ApplicationService:
                 "method": receipt.method.value,
                 "proposed_at": format_rfc3339(receipt.proposed_at),
                 "evidence_count": receipt.evidence_count,
+                "dedupe_sha256": receipt.dedupe_sha256,
+                "created": receipt.created,
                 "audit_id": authorization.audit_id,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEMORY_TRUST_BASIS),
         )
+        _complete_relationship_write(
+            unit_of_work,
+            authorization,
+            command,
+            request_digest,
+            WriteRequestResult(
+                result_family="memory_proposal",
+                result_id=receipt.memory_proposal_id,
+                result_secondary_id=receipt.review_case_id,
+                result_state=receipt.state.value,
+                result_subtype=receipt.proposed_kind.value,
+                result_classification=receipt.classification.value,
+                result_method=receipt.method.value,
+                result_at=receipt.proposed_at,
+                result_count=receipt.evidence_count,
+                result_digest=receipt.dedupe_sha256,
+                result_created=receipt.created,
+                audit_id=authorization.audit_id,
+            ),
+        )
+        return result
 
     def _entities_merge_preview(
         self,

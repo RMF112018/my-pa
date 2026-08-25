@@ -49,6 +49,7 @@ from my_pa.application.commands import CreateManagedDocumentCommand
 from my_pa.application.commitments import CommitmentManagementService
 from my_pa.application.intelligence import InMemoryIntelligenceStore
 from my_pa.application.managed_documents import ManagedDocumentService
+from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
 from my_pa.application.tasks import TaskManagementService
 from my_pa.contracts.ports import (
@@ -96,6 +97,7 @@ from my_pa.contracts.ports import (
     PortError,
     PreferenceConflictError,
     ProjectRepository,
+    ProposalAdmissionConflictError,
     PulseRepository,
     RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
@@ -111,6 +113,9 @@ from my_pa.contracts.ports import (
     UnitOfWork,
     UnknownScopeError,
     WorkCursorError,
+    WriteRequestConflictError,
+    WriteRequestRepository,
+    WriteRequestResult,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.disclosure import (
@@ -217,6 +222,7 @@ from my_pa.domain.relationship.entity import (
 )
 from my_pa.domain.relationship.governance import (
     ACCEPTED_PROPOSAL_STATES,
+    OPEN_EQUIVALENT_PROPOSAL_STATES,
     UNDECIDED_PROPOSAL_STATES,
     ActorClass,
     EntityFactEvidenceLink,
@@ -245,6 +251,7 @@ from my_pa.domain.relationship.memory import (
     MemoryLifecycle,
     MemoryOperation,
     MemoryProposalEvidence,
+    MemoryProposalState,
     MemoryReceipt,
     MergedSubjectError,
     RelationshipMemory,
@@ -551,6 +558,10 @@ class World:
     relationship_memory_proposal_evidence: list[MemoryProposalEvidence] = field(
         default_factory=list
     )
+    relationship_write_requests: dict[
+        tuple[str, str, str], tuple[str, WriteRequestResult]
+    ] = field(default_factory=dict)
+    producer_origins: dict[str, ProducerOrigin] = field(default_factory=dict)
     entity_merges: list[EntityMergeRecord] = field(default_factory=list)
     #: The entity plane's three ledgers, shared by every writer on it. Flat
     #: lists for the reason the entity ones are: the fake's only job is the
@@ -1456,7 +1467,10 @@ class _Reviews(ReviewRepository):
             )
             return
 
-    def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
+    def decide(
+        self, request: ReviewDecisionRequest, *, has_operator_authority: bool = False
+    ) -> ReviewDecision | None:
+        del has_operator_authority
         self._world.fail("review_decide")
         case = next(
             (
@@ -4163,6 +4177,13 @@ class _Entities(EntitiesRepository):
         self._world.fail("entities.record_proposal")
         if proposal.principal_id != principal_id:
             raise ValueError("a proposal belongs to the acting Principal")
+        if any(
+            held.principal_id == principal_id
+            and held.dedupe_sha256 == proposal.dedupe_sha256
+            and held.state in OPEN_EQUIVALENT_PROPOSAL_STATES
+            for held in self._world.entity_proposals
+        ):
+            raise ProposalAdmissionConflictError
         # Partitioned, because `SqlEntityRepository` partitions it. Without the
         # predicate the collision read finds another Principal's row and either
         # tells this caller their own identifier is bound to different values --
@@ -4200,6 +4221,43 @@ class _Entities(EntitiesRepository):
             ),
             None,
         )
+
+    def proposal_target_version(
+        self,
+        principal_id: str,
+        family: MutationRecordFamily,
+        record_id: str,
+    ) -> int | None:
+        records: Iterable[object]
+        version_name = "version"
+        id_name = {
+            MutationRecordFamily.ENTITY: "entity_id",
+            MutationRecordFamily.IDENTIFIER: "identifier_id",
+            MutationRecordFamily.ALIAS: "alias_id",
+            MutationRecordFamily.ASSIGNMENT: "assignment_id",
+            MutationRecordFamily.RELATIONSHIP: "relationship_id",
+            MutationRecordFamily.OBSERVATION: "observation_id",
+        }.get(family, "")
+        records = {
+            MutationRecordFamily.ENTITY: self._world.entities,
+            MutationRecordFamily.IDENTIFIER: self._world.entity_identifiers,
+            MutationRecordFamily.ALIAS: self._world.entity_aliases,
+            MutationRecordFamily.ASSIGNMENT: self._world.entity_assignments,
+            MutationRecordFamily.RELATIONSHIP: self._world.entity_relationships,
+            MutationRecordFamily.OBSERVATION: self._world.entity_observations,
+        }.get(family, ())
+        if family is MutationRecordFamily.OBSERVATION:
+            version_name = "resolution_version"
+        held = next(
+            (
+                row
+                for row in records
+                if getattr(row, "principal_id", None) == principal_id
+                and getattr(row, id_name, None) == record_id
+            ),
+            None,
+        )
+        return None if held is None else int(getattr(held, version_name))
 
     def proposals(
         self, principal_id: str, state: EntityProposalState | None = None
@@ -4307,6 +4365,35 @@ class _Entities(EntitiesRepository):
             ),
             key=lambda link: link.sequence,
         )
+
+    def merge_proposal_evidence_links(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        evidence: Iterable[EntityProposalEvidenceLink],
+    ) -> list[EntityProposalEvidenceLink]:
+        stored = self.proposal_evidence_links(principal_id, proposal_id)
+        known = {
+            (
+                link.role,
+                link.entity_observation_id or link.capture_span_id or link.knowledge_id,
+            )
+            for link in stored
+        }
+        for offered in evidence:
+            identity = (
+                offered.role,
+                offered.entity_observation_id
+                or offered.capture_span_id
+                or offered.knowledge_id,
+            )
+            if identity in known:
+                continue
+            appended = replace(offered, sequence=len(stored) + 1)
+            self.record_proposal_evidence_link(principal_id, appended)
+            stored.append(appended)
+            known.add(identity)
+        return stored
 
     def record_proposal_promotion(
         self,
@@ -5186,10 +5273,54 @@ class _RelationshipMemoryProposals(RelationshipMemoryProposalRepository):
         self,
         proposal: RelationshipMemoryProposal,
         evidence: tuple[MemoryProposalEvidence, ...],
-    ) -> None:
+    ) -> tuple[RelationshipMemoryProposal, int, bool]:
         self._world.fail("relationship_memory.record_proposal")
-        self._world.relationship_memory_proposals.append(proposal)
-        self._world.relationship_memory_proposal_evidence.extend(evidence)
+        stored = next(
+            (
+                held
+                for held in self._world.relationship_memory_proposals
+                if held.principal_id == proposal.principal_id
+                and held.dedupe_sha256 == proposal.dedupe_sha256
+                and held.state
+                in {
+                    MemoryProposalState.PROPOSED,
+                    MemoryProposalState.NEEDS_REVIEW,
+                    MemoryProposalState.DEFERRED,
+                }
+            ),
+            None,
+        )
+        created = stored is None
+        if stored is None:
+            stored = proposal
+            self._world.relationship_memory_proposals.append(stored)
+        known = {
+            (
+                link.role,
+                link.entity_observation_id or link.capture_span_id or link.knowledge_id,
+            )
+            for link in self._world.relationship_memory_proposal_evidence
+            if link.memory_proposal_id == stored.memory_proposal_id
+            and link.principal_id == stored.principal_id
+        }
+        for link in evidence:
+            identity = (
+                link.role,
+                link.entity_observation_id or link.capture_span_id or link.knowledge_id,
+            )
+            if identity in known:
+                continue
+            self._world.relationship_memory_proposal_evidence.append(
+                replace(
+                    link,
+                    proposal_evidence_id=issue_identifier(
+                        IdKind.RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE
+                    ),
+                    memory_proposal_id=stored.memory_proposal_id,
+                )
+            )
+            known.add(identity)
+        return stored, len(known), created
 
 
 class _RelationshipMemories(RelationshipMemoryRepository):
@@ -5847,6 +5978,47 @@ def _memory_page(
     )
 
 
+class _WriteRequests(WriteRequestRepository):
+    """Content-free replay arbitration over the synthetic World."""
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def reserve(
+        self,
+        principal_id: str,
+        capability: str,
+        request_id: str,
+        request_digest: str,
+    ) -> WriteRequestResult | None:
+        held = self._world.relationship_write_requests.get(
+            (principal_id, capability, request_id)
+        )
+        if held is None:
+            return None
+        digest, result = held
+        if digest != request_digest:
+            raise WriteRequestConflictError
+        return result
+
+    def complete(
+        self,
+        principal_id: str,
+        capability: str,
+        request_id: str,
+        request_digest: str,
+        result: WriteRequestResult,
+    ) -> None:
+        key = (principal_id, capability, request_id)
+        held = self._world.relationship_write_requests.get(key)
+        if held is not None:
+            digest, _ = held
+            if digest != request_digest:
+                raise WriteRequestConflictError
+            return
+        self._world.relationship_write_requests[key] = (request_digest, result)
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -5897,6 +6069,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return _Reviews(self._world)
+
+    @property
+    def write_requests(self) -> WriteRequestRepository:
+        return _WriteRequests(self._world)
 
     @property
     def situations(self) -> SituationRepository:
@@ -6043,7 +6219,7 @@ def operator(principal_id: str | None = None) -> Principal:
 def metadata_for(capability: Capability, purpose: Purpose, principal: Principal) -> RequestMetadata:
     """The common request metadata a transport would have parsed."""
     return RequestMetadata(
-        request_id=f"req-{capability.value}",
+        request_id=issue_identifier(IdKind.CORRELATION),
         capability=capability,
         purpose=purpose,
         principal_id=principal.principal_id,
@@ -6086,6 +6262,12 @@ class Scene:
     def __init__(self, world: World, root: Path) -> None:
         self.world = world
         self.principal = operator()
+        world.producer_origins[self.principal.principal_id] = ProducerOrigin(
+            principal_id=self.principal.principal_id,
+            principal_kind=self.principal.kind,
+            method="rule",
+            method_version="synthetic-rule-producer.1",
+        )
         self.source = world.add_source()
         self.provider: RecordingProvider = build_provider(root, self.source.source_id)
         children = {
@@ -6194,6 +6376,7 @@ def build_service(
             and relationship_intelligence_writes_enabled
             and relationship_identity_correction_enabled
         ),
+        producer_origins=ProducerOriginRegistry(world.producer_origins),
     )
 
 

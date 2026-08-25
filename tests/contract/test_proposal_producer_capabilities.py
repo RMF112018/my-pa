@@ -190,7 +190,7 @@ def test_the_recorded_method_is_the_servers_and_is_not_deterministic(scene: Scen
 
     stored = scene.world.entity_proposals[-1]
     assert stored.method is EntityProposalMethod.RULE
-    assert stored.method_version == "entity-proposal-dispatch.1"
+    assert stored.method_version == "synthetic-rule-producer.1"
     assert stored.model_id is None
     assert stored.model_version is None
 

@@ -31,6 +31,7 @@ from __future__ import annotations
 import ast
 import copy
 import dataclasses
+from contextlib import nullcontext
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Final
@@ -150,8 +151,9 @@ class RecordingRepository:
         self,
         proposal: RelationshipMemoryProposal,
         evidence: tuple[MemoryProposalEvidence, ...],
-    ) -> None:
+    ) -> tuple[RelationshipMemoryProposal, int, bool]:
         self.recorded.append((proposal, evidence))
+        return proposal, len(evidence), True
 
     def admit(self, request: object) -> object:
         raise AssertionError("the producer path reached a memory write")
@@ -184,6 +186,9 @@ class EvidenceScopeConnection:
             return _FirstResult(None if missing else object())
         self.writes.append(rendered)
         return _FirstResult(None)
+
+    def begin_nested(self) -> Any:  # noqa: ANN401 - SQLAlchemy transaction protocol
+        return nullcontext()
 
 
 def propose(

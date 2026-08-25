@@ -970,6 +970,7 @@ class RelationshipMemoryProposal:
     proposed_kind: MemoryKind
     proposed_statement: str = field(repr=False)
     proposed_statement_sha256: str
+    dedupe_sha256: str
     state: MemoryProposalState
     method: MemoryProposalMethod
     method_version: str
@@ -996,6 +997,10 @@ class RelationshipMemoryProposal:
         validate_statement(self.proposed_statement)
         if self.proposed_statement_sha256 != statement_digest(self.proposed_statement):
             raise RelationshipMemoryError("a proposal's digest is the digest of its own statement")
+        if len(self.dedupe_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in self.dedupe_sha256
+        ):
+            raise RelationshipMemoryError("a proposal carries its canonical dedupe digest")
         if not isinstance(self.state, MemoryProposalState):
             raise RelationshipMemoryError("a memory proposal carries a known state")
         if not isinstance(self.method, MemoryProposalMethod):

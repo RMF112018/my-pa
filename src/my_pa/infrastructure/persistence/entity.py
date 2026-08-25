@@ -119,6 +119,7 @@ from my_pa.contracts.ports import (
     EntityMutationReceipt,
     EntitySummary,
     EntityWriteRequest,
+    ProposalAdmissionConflictError,
     RelationshipWriteRequest,
     UnknownScopeError,
 )
@@ -2173,9 +2174,12 @@ class SqlEntityRepository(EntitiesRepository):
             if existing != proposal:
                 raise ValueError("a proposal identifier cannot be rebound to different values")
             return
-        self._connection.execute(
-            insert(entity_proposals).values(
-                _bound(
+        concurrent = False
+        try:
+            with self._connection.begin_nested():
+                self._connection.execute(
+                    insert(entity_proposals).values(
+                        _bound(
                     entity_proposals,
                     principal_id,
                     proposal_id=proposal.proposal_id,
@@ -2205,9 +2209,15 @@ class SqlEntityRepository(EntitiesRepository):
                     decided_by=proposal.decided_by,
                     decided_at=proposal.decided_at,
                     decision_reason=proposal.decision_reason,
+                        )
+                    )
                 )
-            )
-        )
+        except IntegrityError as error:
+            if _constraint_name(error) != "an_open_equivalent_proposal_is_raised_once":
+                raise
+            concurrent = True
+        if concurrent:
+            raise ProposalAdmissionConflictError
 
     def proposal(self, principal_id: str, proposal_id: str) -> EntityProposal | None:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
@@ -2219,6 +2229,50 @@ class SqlEntityRepository(EntitiesRepository):
             )
         ).one_or_none()
         return None if row is None else _row_to_proposal(row)
+
+    def proposal_target_version(
+        self,
+        principal_id: str,
+        family: MutationRecordFamily,
+        record_id: str,
+    ) -> int | None:
+        target = {
+            MutationRecordFamily.ENTITY: (entities, entities.c.entity_id, entities.c.version),
+            MutationRecordFamily.IDENTIFIER: (
+                entity_external_identifiers,
+                entity_external_identifiers.c.identifier_id,
+                entity_external_identifiers.c.version,
+            ),
+            MutationRecordFamily.ALIAS: (
+                entity_aliases,
+                entity_aliases.c.alias_id,
+                entity_aliases.c.version,
+            ),
+            MutationRecordFamily.ASSIGNMENT: (
+                entity_assignments,
+                entity_assignments.c.assignment_id,
+                entity_assignments.c.version,
+            ),
+            MutationRecordFamily.RELATIONSHIP: (
+                entity_relationships,
+                entity_relationships.c.relationship_id,
+                entity_relationships.c.version,
+            ),
+            MutationRecordFamily.OBSERVATION: (
+                entity_observations,
+                entity_observations.c.observation_id,
+                entity_observations.c.resolution_version,
+            ),
+        }.get(family)
+        if target is None:
+            return None
+        table, identity, version = target
+        row = self._connection.execute(
+            select(version)
+            .where(_mine(table, principal_id), identity == record_id)
+            .with_for_update(of=table)
+        ).one_or_none()
+        return None if row is None else int(row[0])
 
     def proposals(
         self, principal_id: str, state: EntityProposalState | None = None
@@ -2489,6 +2543,56 @@ class SqlEntityRepository(EntitiesRepository):
             .order_by(entity_proposal_evidence_links.c.sequence)
         ).all()
         return [_row_to_proposal_evidence_link(row) for row in rows]
+
+    def merge_proposal_evidence_links(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        evidence: Iterable[EntityProposalEvidenceLink],
+    ) -> list[EntityProposalEvidenceLink]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(proposal_id, IdKind.ENTITY_PROPOSAL)
+        locked = self._connection.execute(
+            select(entity_proposals.c.proposal_id)
+            .where(
+                _mine(entity_proposals, principal_id),
+                entity_proposals.c.proposal_id == proposal_id,
+            )
+            .with_for_update(of=entity_proposals)
+        ).first()
+        if locked is None:
+            raise UnknownScopeError("proposal evidence names a proposal in this scope")
+        stored = self.proposal_evidence_links(principal_id, proposal_id)
+
+        def identity(link: EntityProposalEvidenceLink) -> tuple[object, str]:
+            source = (
+                link.entity_observation_id
+                or link.capture_span_id
+                or link.knowledge_id
+                or ""
+            )
+            return link.role, source
+
+        known = {identity(link) for link in stored}
+        sequence = len(stored)
+        for offered in evidence:
+            if identity(offered) in known:
+                continue
+            sequence += 1
+            appended = EntityProposalEvidenceLink(
+                proposal_id=proposal_id,
+                principal_id=principal_id,
+                sequence=sequence,
+                role=offered.role,
+                created_at=offered.created_at,
+                entity_observation_id=offered.entity_observation_id,
+                capture_span_id=offered.capture_span_id,
+                knowledge_id=offered.knowledge_id,
+            )
+            self.record_proposal_evidence_link(principal_id, appended)
+            stored.append(appended)
+            known.add(identity(appended))
+        return stored
 
     def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
         validate_identifier(principal_id, IdKind.PRINCIPAL)

@@ -93,6 +93,7 @@ from my_pa.contracts.ports import (
     UnknownScopeError,
     WorkerHealthRepository,
     WorkerPlaneStatus,
+    WriteRequestRepository,
 )
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.capture.proposal import ProposalState
@@ -199,6 +200,7 @@ from my_pa.infrastructure.persistence.tables import (
 )
 from my_pa.infrastructure.persistence.task_management import SqlTaskManagementRepository
 from my_pa.infrastructure.persistence.worker_health import worker_plane_health
+from my_pa.infrastructure.persistence.write_requests import SqlWriteRequestRepository
 from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
 __all__ = ["SqlAlchemyUnitOfWork"]
@@ -622,7 +624,9 @@ class _Reviews(ReviewRepository):
 
         return _read(statement)
 
-    def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
+    def decide(
+        self, request: ReviewDecisionRequest, *, has_operator_authority: bool = False
+    ) -> ReviewDecision | None:
         """Route one decision to the plane that opened the case.
 
         With the memory plane uncomposed the memory branch is skipped and the
@@ -645,7 +649,11 @@ class _Reviews(ReviewRepository):
                 review_case_id=request.review_case_id,
                 principal_id=request.principal_id,
             ):
-                return decide_relationship_memory_review(self._connection, request)
+                return decide_relationship_memory_review(
+                    self._connection,
+                    request,
+                    has_operator_authority=has_operator_authority,
+                )
             return decide_review(self._connection, request)
 
         return _read(statement)
@@ -999,6 +1007,10 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
             relationship_memory_enabled=self._relationship_memory_enabled,
             relationship_intelligence_enabled=self._relationship_intelligence_enabled,
         )
+
+    @property
+    def write_requests(self) -> WriteRequestRepository:
+        return SqlWriteRequestRepository(self._open)
 
     @property
     def situations(self) -> SituationRepository:

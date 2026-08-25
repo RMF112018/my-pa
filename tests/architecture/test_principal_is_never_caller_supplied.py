@@ -237,7 +237,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # same shape `MemoryWriteRequest.principal_id` has and the reason
     # `persistence.relationship_memory` is registered below.
     "application/entity_authoring.py": (("request", "principal_id"),) * 2,
-    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 22,
+    # The persistence serializer now reads the same server-composed field once
+    # more to acquire the Entity mutation scope before any identifier read.
+    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 23,
     "application/intelligence.py": (
         ("artifact", "principal_id"),
         ("artifact", "principal_id"),
@@ -292,6 +294,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # methods refuse a record whose `principal_id` is not the acting Principal's
     # before any statement runs, and the mappers read a column out of a statement
     # `_mine` already scoped.
+    # The six additional `request` reads serialize directed assignment and
+    # relationship creation/revision against Entity merge. They are the same
+    # application-composed write requests described above: the new reads pass
+    # the resolved partition to the shared lock and then re-read only rows
+    # constrained by that partition; no transport can supply this field.
     #
     # WP-RI-B-05 adds one of each and nothing new in kind. The second `link`
     # read is `record_proposal_evidence_link` refusing an
@@ -323,6 +330,12 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("proposal", "principal_id"),
         ("record", "principal_id"),
         ("rel", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
@@ -484,14 +497,13 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # row with it, never to trust it. The `row` and `link` reads are stored
     # column values being mapped back onto domain records, from statements that
     # were already scoped by those same calls.
-    # The producer's one insert (`WP-RI-B-05`). Two reads, both arguments to
-    # `_bound` -- the domain record's own `principal_id` handed to
-    # `principal_bound_values`, which is the guard that *refuses* values already
-    # carrying a partition column and stamps the context's identity instead. So
-    # the value is read in order to name which partition context to build, never
-    # to trust: a record whose `principal_id` disagreed with the acting
-    # Principal's context would have its row stamped with the context's, and the
-    # service above it has already refused a subject outside the acting scope.
+    # The producer's insert (`WP-RI-B-05`). Existing reads either compare each
+    # evidence link with the proposal or pass the domain record's identity to
+    # `_mine`/`_bound`; the service constructed both records under the resolved
+    # authorization. The two new reads acquire the proposal subject's Entity
+    # mutation lock and then query that same partition before checking redirect
+    # and version state. They serialize a server-bound scope; they do not select
+    # a Principal from transport input.
     "infrastructure/persistence/relationship_memory_proposals.py": (
         ("link", "principal_id"),
         ("link", "principal_id"),
@@ -504,7 +516,14 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("proposal", "principal_id"),
         ("proposal", "principal_id"),
         ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
     ),
+    # The eight new `request` reads acquire Entity mutation scopes and revalidate
+    # current subject/context rows for create, revise, archive, and restore. A
+    # `MemoryWriteRequest` is built by the application from the resolved
+    # authorization and public memory commands carry no Principal field, so the
+    # lock cannot turn caller input into a partition choice.
     "infrastructure/persistence/relationship_memory.py": (
         ("link", "principal_id"),
         ("request", "principal_id"),
@@ -519,17 +538,30 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),
     ),
-    # The same plane's review and promotion path. All nine reads are of the
+    # The same plane's review and promotion path. All reads are of the
     # `ReviewDecisionRequest.principal_id` the authenticated Review capability
-    # resolved, and eight of them are arguments to `_mine`, `_bound` or the
-    # subject re-validation those two scope — read to constrain a statement to
-    # the partition or to stamp a row with it. The ninth echoes it back onto the
-    # returned `ReviewDecision`, which is the same value the caller was already
-    # authenticated as and carries no partition decision of its own.
+    # resolved. Sixteen are internal scoping, stamping, or helper-composition
+    # reads that constrain statements to the partition or stamp rows with it.
+    # The seventeenth echoes it back onto the returned `ReviewDecision`, which
+    # is the same value the caller was already
+    # authenticated as and carries no partition decision of its own. The two
+    # new reads scope the optimistic subject discovery and the shared Entity
+    # mutation lock before the proposal row lock; they preserve that same
+    # authenticated partition while closing the merge/review race.
     "infrastructure/persistence/relationship_memory_review.py": (
+        ("request", "principal_id"),
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),

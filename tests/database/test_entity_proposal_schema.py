@@ -522,7 +522,16 @@ def test_an_accepted_merge_proposal_naming_no_record_is_admitted(staged: Engine)
 
 def _stage_proposal(engine: Engine) -> None:
     with engine.begin() as connection:
-        _write(connection)
+        # Evidence writers now hydrate and revalidate their open parent before
+        # appending. Stage a domain-valid RECORD_ALIAS rather than the minimal
+        # JSON used by the constraint-only cases above, so evidence ownership —
+        # not payload parsing — remains the behavior these tests exercise.
+        _write(
+            connection,
+            payload=(
+                f'{{"alias_type": "nickname", "display_value": "Ali", "entity_id": "{ALICE}"}}'
+            ),
+        )
 
 
 def _stage_knowledge(connection: Connection, principal_id: str, suffix: str) -> str:

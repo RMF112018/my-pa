@@ -24,6 +24,12 @@ from my_pa.application.goodnotes_gsqs import (
     CorpusPartition,
     MeasurementRecord,
 )
+from my_pa.application.goodnotes_gsqs_b0_acquisition import (
+    MODEL_CLIENT_SYNTHETIC,
+    AcquisitionError,
+    assert_acquisition_permitted,
+    load_acquisition_authorization,
+)
 from my_pa.application.goodnotes_gsqs_b0_disclosure_journal import (
     EVENT_AUTH_PROBE_COMPLETED,
     DisclosureJournal,
@@ -33,12 +39,28 @@ from my_pa.application.goodnotes_gsqs_b0_mcp import (
     CAPTURE_SCHEMA_VERSION,
     EVALUATION_MCP_PURPOSES,
     EVALUATION_MCP_TOOLS,
+    MCP_EVALUATION_BINDING_MODES,
+    MCP_EVALUATION_SURFACE_STDIO,
     CapturedAnalyzerAdapter,
     evaluation_handle_records,
     load_captured_repetitions,
     stage_evaluation_pages,
     validate_mcp_evaluation_bindings,
 )
+from my_pa.application.goodnotes_gsqs_b0_model_client import (
+    RouteLLMClientActivationError,
+    bind_model_client,
+)
+from my_pa.application.goodnotes_gsqs_b0_orchestrator import (
+    OrchestratorError,
+    acquire_repetition,
+)
+from my_pa.application.goodnotes_gsqs_b0_stdio_session import (
+    StdioEvalSession,
+    serve_eval_mcp_command,
+    stdio_env,
+)
+from my_pa.application.goodnotes_gsqs_b0_synthetic_campaign import load_synthetic_campaign
 from my_pa.application.goodnotes_gsqs_corpus import CorpusCase, CorpusManifest, freeze_manifest
 from my_pa.application.goodnotes_gsqs_evaluator_binding import (
     AdmittedEvaluatorPlane,
@@ -370,22 +392,26 @@ def _serve_eval_mcp(args: argparse.Namespace) -> int:
     if args.authorization is None:
         raise ValueError("serve-eval-mcp requires --authorization")
     root = Path(args.repository_root) if args.repository_root else repo_root()
-    authorization = load_execution_authorization(Path(args.authorization))
-    validate_mcp_evaluation_bindings(authorization)
-    report = preflight(
-        root=root,
-        catalog=load_public_catalog(catalog_path(root)),
-        repository=inspect_repository_identity(root),
-        authorization=authorization,
-    )
-    if not report.go:
-        print(json.dumps(_report_dict(report), indent=2, sort_keys=True), file=sys.stderr)
-        return EXIT_REFUSED
     raster_root = os.environ.get(RASTER_ROOT_ENV)
     if not raster_root:
         raise ValueError("MY_PA_GSQS_B0_RASTER_ROOT is required")
-    catalog = load_public_catalog(catalog_path(root))
-    census = partition_b_census(catalog)
+    fixture = getattr(args, "campaign_fixture", None)
+    if fixture:
+        census = _synthetic_eval_census(Path(args.authorization), Path(fixture))
+    else:
+        authorization = load_execution_authorization(Path(args.authorization))
+        validate_mcp_evaluation_bindings(authorization)
+        report = preflight(
+            root=root,
+            catalog=load_public_catalog(catalog_path(root)),
+            repository=inspect_repository_identity(root),
+            authorization=authorization,
+        )
+        if not report.go:
+            print(json.dumps(_report_dict(report), indent=2, sort_keys=True), file=sys.stderr)
+            return EXIT_REFUSED
+        catalog = load_public_catalog(catalog_path(root))
+        census = partition_b_census(catalog)
     principal = _local_operator()
     created_at = datetime.now(UTC)
     pages = stage_evaluation_pages(
@@ -407,6 +433,101 @@ def _serve_eval_mcp(args: argparse.Namespace) -> int:
         allowed_capability_purposes=EVALUATION_MCP_PURPOSES,
     )
     return EXIT_OK
+
+
+def _synthetic_eval_census(authorization_path: Path, fixture: Path) -> B0Census:
+    authorization = load_acquisition_authorization(authorization_path)
+    if authorization.mcp_evaluation_surface != MCP_EVALUATION_SURFACE_STDIO:
+        raise ValueError("synthetic serve-eval-mcp requires stdio-isolated surface")
+    if authorization.mcp_evaluation_binding_mode not in MCP_EVALUATION_BINDING_MODES:
+        raise ValueError("synthetic serve-eval-mcp requires a local stdio binding")
+    census, campaign_id = load_synthetic_campaign(fixture)
+    assert_acquisition_permitted(
+        authorization,
+        repetition=authorization.repetition,
+        corpus_version=census.corpus_version,
+        combined_identity=census.combined_identity,
+        model_identity=authorization.model_identity,
+        prompt_config_identity=authorization.prompt_config_identity,
+        candidate_identity=authorization.candidate_identity,
+        model_client=authorization.model_client,
+    )
+    if authorization.campaign_id != campaign_id:
+        raise ValueError("campaign_id mismatch")
+    return census
+
+
+def _acquire_repetition(args: argparse.Namespace) -> int:
+    if args.authorization is None:
+        raise ValueError("acquire-repetition requires --authorization")
+    if args.output is None:
+        raise ValueError("acquire-repetition requires --output")
+    if args.campaign_fixture is None:
+        raise ValueError("acquire-repetition requires --campaign-fixture")
+    root = Path(args.repository_root) if args.repository_root else repo_root()
+    authorization = load_acquisition_authorization(Path(args.authorization))
+    census, campaign_id = load_synthetic_campaign(Path(args.campaign_fixture))
+    raster_root = Path(args.raster_root).resolve() if args.raster_root else None
+    if raster_root is None:
+        env_root = os.environ.get(RASTER_ROOT_ENV)
+        if not env_root:
+            raise ValueError("MY_PA_GSQS_B0_RASTER_ROOT is required")
+        raster_root = Path(env_root).resolve()
+    candidate = load_route_llm_candidate(root / CANDIDATE_RELATIVE)
+    identity = composite_model_identity(candidate)
+    prompt_id = prompt_config_identity(root)
+    if args.model_client != authorization.model_client:
+        raise ValueError("model-client configuration mismatch")
+    client = bind_model_client(args.model_client)
+    config = frozen_incumbent_config(model_identity=identity, root=root)
+    if config.prompt_config_identity != prompt_id:
+        raise ValueError("prompt identity drift")
+    output_dir = Path(args.output).resolve()
+    evidence_dir = output_dir / "stdio-eval"
+    session = StdioEvalSession(
+        command=serve_eval_mcp_command(
+            python=sys.executable,
+            authorization=Path(args.authorization).resolve(),
+            evidence_dir=evidence_dir,
+            campaign_fixture=Path(args.campaign_fixture).resolve(),
+        ),
+        cwd=root,
+        env=stdio_env(
+            raster_root=raster_root,
+            pythonpath=(root / "src", root),
+        ),
+        evidence_dir=evidence_dir,
+    )
+    result = acquire_repetition(
+        authorization=authorization,
+        census=census,
+        campaign_id=campaign_id,
+        repetition=args.repetition,
+        output_dir=output_dir,
+        config=config,
+        candidate_identity=identity,
+        model_client=client,
+        session=session,
+    )
+    print(
+        json.dumps(
+            {
+                "GSQS_B0_SCORING": "NOT_RUN",
+                "MEASURED_B0": MEASURED_B0_NOT_YET_ESTABLISHED,
+                "capture_path": str(result.capture_path) if result.capture_path else None,
+                "captured": result.captured,
+                "duplicates": result.duplicates,
+                "missing": result.missing,
+                "next_repetition_automatic": False,
+                "repetition": result.repetition,
+                "resumable": result.resumable,
+                "state": result.state.value,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+    )
+    return EXIT_OK if result.state.value == "COMPLETE" else EXIT_REFUSED
 
 
 def run_bound_execute(
@@ -896,7 +1017,15 @@ def build_parser() -> argparse.ArgumentParser:
     score.add_argument("--analyzer-output-dir", required=True)
     score.set_defaults(handler=_score)
     serve_eval = commands.add_parser("serve-eval-mcp", parents=[shared])
+    serve_eval.add_argument("--campaign-fixture", default=None)
     serve_eval.set_defaults(handler=_serve_eval_mcp)
+    acquire = commands.add_parser("acquire-repetition", parents=[shared])
+    acquire.add_argument("--repetition", type=int, required=True)
+    acquire.add_argument("--output", required=True)
+    acquire.add_argument("--campaign-fixture", required=True)
+    acquire.add_argument("--model-client", default=MODEL_CLIENT_SYNTHETIC)
+    acquire.add_argument("--raster-root", default=None)
+    acquire.set_defaults(handler=_acquire_repetition)
     prepare_remote = commands.add_parser("prepare-remote-eval", parents=[shared])
     prepare_remote.add_argument("--state-root", required=True)
     prepare_remote.add_argument("--source-raster-root", required=True)
@@ -942,7 +1071,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         args = build_parser().parse_args(argv)
         return int(args.handler(args))
-    except (OSError, ValueError, json.JSONDecodeError) as error:
+    except (
+        OSError,
+        ValueError,
+        json.JSONDecodeError,
+        AcquisitionError,
+        OrchestratorError,
+        RouteLLMClientActivationError,
+    ) as error:
         print(str(error), file=sys.stderr)
         return EXIT_REFUSED
 

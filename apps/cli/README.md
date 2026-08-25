@@ -34,14 +34,19 @@ covers running it.
 
 ## `gsqs_b0.py` — governed GSQS live-B0 control plane
 
-Preflight never discloses. The commissioned B0 path is an ephemeral
-evaluation MCP (`serve-eval-mcp`) plus local admit-and-score (`score`).
-Direct RouteLLM HTTP `execute` remains in-tree but dormant and still
-fail-closed when `MY_PA_ROUTELLM_*` is unset. Live NAS MCP is not a B0
-image source. `MEASURED_B0` remains `NOT_YET_ESTABLISHED`.
+Preflight never discloses. Prediction acquisition is a local stdio host
+(`acquire-repetition`) that spawns ephemeral `serve-eval-mcp` and writes
+`gsqs-analyzer-capture-v1` files. Local admit-and-score (`score`) remains a
+separate command. Direct RouteLLM HTTP `execute` remains dormant. Hosted
+ChatLLM is not the B0 stdio host. `MEASURED_B0` remains `NOT_YET_ESTABLISHED`.
 
 ```text
 python apps/cli/gsqs_b0.py preflight
+python apps/cli/gsqs_b0.py acquire-repetition \
+  --authorization <gsqs-b0-acquisition-authorization-v1.json> \
+  --repetition 1 \
+  --campaign-fixture <synthetic-campaign.json> \
+  --output <run-dir/rep-001>
 python apps/cli/gsqs_b0.py serve-eval-mcp \
   --authorization <artifact> \
   --evidence-dir <run-dir>

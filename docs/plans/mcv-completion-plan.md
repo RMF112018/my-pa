@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Two hundred and seventy-eight Python modules under `src/my_pa` and three hundred and sixty-two test modules —
+Two hundred and eighty-four Python modules under `src/my_pa` and three hundred and sixty-three test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were

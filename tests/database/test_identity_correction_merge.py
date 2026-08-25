@@ -281,14 +281,27 @@ def _observation(observation_id: str, entity_id: str | None) -> EntityObservatio
 def _proposal(
     proposal_id: str, entity_id: str, *, review_case_id: str | None = None
 ) -> EntityProposal:
-    payload = EntityProposalPayload.of(
+    return _typed_proposal(
+        proposal_id,
         EntityProposalKind.RECORD_ALIAS,
         {"entity_id": entity_id, "alias_type": "nickname", "display_value": "Ali"},
+        review_case_id=review_case_id,
     )
+
+
+def _typed_proposal(
+    proposal_id: str,
+    kind: EntityProposalKind,
+    values: dict[str, str | bool],
+    *,
+    expected_target_version: int | None = None,
+    review_case_id: str | None = None,
+) -> EntityProposal:
+    payload = EntityProposalPayload.of(kind, values)
     return EntityProposal(
         proposal_id=proposal_id,
         principal_id=PRINCIPAL_A,
-        kind=EntityProposalKind.RECORD_ALIAS,
+        kind=kind,
         state=EntityProposalState.PROPOSED,
         payload=payload,
         observation_ids=(),
@@ -297,6 +310,7 @@ def _proposal(
         method=EntityProposalMethod.DETERMINISTIC,
         method_version="v1",
         dedupe_sha256=dedupe_digest(payload),
+        expected_target_version=expected_target_version,
         review_case_id=review_case_id,
     )
 
@@ -948,6 +962,212 @@ def test_an_open_proposal_naming_the_merged_identity_is_invalidated(staged: Engi
     assert closed.decided_by == OPERATOR
     assert untouched is not None
     assert untouched.state is EntityProposalState.PROPOSED
+
+
+def test_every_typed_entity_reference_field_invalidates_an_open_proposal(
+    staged: Engine,
+) -> None:
+    cases: tuple[tuple[str, EntityProposalKind, dict[str, str | bool], int | None], ...] = (
+        (
+            "eprp_refa0001refa01",
+            EntityProposalKind.UPDATE_ENTITY,
+            {"entity_id": MERGED_ONE, "display_name": "Alicia", "reason": "correction"},
+            1,
+        ),
+        (
+            "eprp_refb0002refb02",
+            EntityProposalKind.BIND_IDENTIFIER,
+            {"entity_id": MERGED_ONE, "namespace": "email", "display_value": "a@x.invalid"},
+            None,
+        ),
+        (
+            "eprp_refc0003refc03",
+            EntityProposalKind.RETIRE_IDENTIFIER,
+            {"entity_id": MERGED_ONE, "identifier_id": "xid_aaaa0001aaaa01", "reason": "old"},
+            1,
+        ),
+        (
+            "eprp_refd0004refd04",
+            EntityProposalKind.SUPERSEDE_IDENTIFIER,
+            {
+                "entity_id": MERGED_ONE,
+                "identifier_id": "xid_aaaa0001aaaa01",
+                "namespace": "email",
+                "display_value": "b@x.invalid",
+                "reason": "changed",
+            },
+            1,
+        ),
+        (
+            "eprp_refe0005refe05",
+            EntityProposalKind.RECORD_ALIAS,
+            {"entity_id": MERGED_ONE, "alias_type": "nickname", "display_value": "Ali"},
+            None,
+        ),
+        (
+            "eprp_reff0006reff06",
+            EntityProposalKind.RETIRE_ALIAS,
+            {"entity_id": MERGED_ONE, "alias_id": "eals_aaaa0001aaaa01", "reason": "old"},
+            1,
+        ),
+        (
+            "eprp_refg0007refg07",
+            EntityProposalKind.SUPERSEDE_ALIAS,
+            {
+                "entity_id": MERGED_ONE,
+                "alias_id": "eals_aaaa0001aaaa01",
+                "alias_type": "nickname",
+                "display_value": "Allie",
+                "reason": "changed",
+            },
+            1,
+        ),
+        (
+            "eprp_refh0008refh08",
+            EntityProposalKind.RECORD_ASSIGNMENT,
+            {"entity_id": MERGED_ONE, "assignment_type": "project_assignment"},
+            None,
+        ),
+        (
+            "eprp_refi0009refi09",
+            EntityProposalKind.RECORD_ASSIGNMENT,
+            {
+                "entity_id": SURVIVOR,
+                "assignment_type": "project_assignment",
+                "scope_entity_id": MERGED_ONE,
+            },
+            None,
+        ),
+        (
+            "eprp_refj0010refj10",
+            EntityProposalKind.RECORD_RELATIONSHIP,
+            {
+                "from_entity_id": MERGED_ONE,
+                "relationship_type": "affiliated_with",
+                "to_entity_id": TOWER,
+            },
+            None,
+        ),
+        (
+            "eprp_refk0011refk11",
+            EntityProposalKind.RECORD_RELATIONSHIP,
+            {
+                "from_entity_id": TOWER,
+                "relationship_type": "affiliated_with",
+                "to_entity_id": MERGED_ONE,
+            },
+            None,
+        ),
+        (
+            "eprp_refl0012refl12",
+            EntityProposalKind.RECORD_RELATIONSHIP,
+            {
+                "from_entity_id": SURVIVOR,
+                "relationship_type": "affiliated_with",
+                "to_entity_id": TOWER,
+                "scope_entity_id": MERGED_ONE,
+            },
+            None,
+        ),
+        (
+            "eprp_refm0013refm13",
+            EntityProposalKind.RESOLVE_MENTION,
+            {
+                "observation_id": "eobs_aaaa0001aaaa01",
+                "disposition": "link_existing",
+                "entity_id": MERGED_ONE,
+            },
+            0,
+        ),
+        (
+            "eprp_refn0014refn14",
+            EntityProposalKind.RESOLVE_MENTION,
+            {
+                "observation_id": "eobs_bbbb0002bbbb02",
+                "disposition": "reject",
+                "rejected_entity_id": MERGED_ONE,
+                "reason": "not this person",
+            },
+            0,
+        ),
+        (
+            "eprp_refo0015refo15",
+            EntityProposalKind.MERGE_ENTITIES,
+            {"retained_entity_id": MERGED_ONE, "merged_entity_id": TOWER},
+            None,
+        ),
+        (
+            "eprp_refp0016refp16",
+            EntityProposalKind.MERGE_ENTITIES,
+            {"retained_entity_id": SURVIVOR, "merged_entity_id": MERGED_ONE},
+            None,
+        ),
+        (
+            "eprp_refq0017refq17",
+            EntityProposalKind.SPLIT_IDENTITY,
+            {"entity_id": MERGED_ONE},
+            None,
+        ),
+    )
+    with staged.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        for proposal_id, kind, payload, expected_target_version in cases:
+            repository.record_proposal(
+                PRINCIPAL_A,
+                _typed_proposal(
+                    proposal_id,
+                    kind,
+                    payload,
+                    expected_target_version=expected_target_version,
+                ),
+            )
+
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    assert _group(report, MergeFamily.ENTITY_PROPOSAL) == (
+        FamilyDisposition.TRANSFORMED,
+        len(cases),
+    )
+    with staged.begin() as connection:
+        _applied(connection, report)
+
+    with staged.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        invalidated = [
+            repository.proposal(PRINCIPAL_A, proposal_id) for proposal_id, _, _, _ in cases
+        ]
+    assert all(
+        proposal is not None and proposal.state is EntityProposalState.INVALIDATED
+        for proposal in invalidated
+    )
+
+
+def test_an_entity_id_in_ordinary_payload_text_is_not_a_reference(staged: Engine) -> None:
+    text_match = _typed_proposal(
+        "eprp_text0001text01",
+        EntityProposalKind.CREATE_ENTITY,
+        {"entity_type": "person", "display_name": MERGED_ONE},
+    )
+    actual_reference = _proposal("eprp_refx0001refx01", MERGED_ONE)
+    with staged.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.record_proposal(PRINCIPAL_A, text_match)
+        repository.record_proposal(PRINCIPAL_A, actual_reference)
+
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    assert _group(report, MergeFamily.ENTITY_PROPOSAL) == (FamilyDisposition.TRANSFORMED, 1)
+    with staged.begin() as connection:
+        _applied(connection, report)
+
+    with staged.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        text_after = repository.proposal(PRINCIPAL_A, text_match.proposal_id)
+        reference_after = repository.proposal(PRINCIPAL_A, actual_reference.proposal_id)
+    assert text_after is not None
+    assert text_after.state is EntityProposalState.PROPOSED
+    assert reference_after is not None
+    assert reference_after.state is EntityProposalState.INVALIDATED
 
 
 def test_a_needs_review_proposal_naming_the_merged_identity_is_invalidated(

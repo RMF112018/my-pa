@@ -130,6 +130,7 @@ from my_pa.domain.relationship.identity_correction import (
     sequence_effects,
     state_digest,
 )
+from my_pa.domain.relationship.proposal_payload import EntityProposalKind, schema_for
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
@@ -1226,19 +1227,52 @@ def _substituted_scope(
     return _substituted(entity_id, merged_entity_ids, survivor_entity_id)
 
 
-def _names_a_merged_entity(proposal: EntityProposal, merged_entity_ids: frozenset[str]) -> bool:
-    """Whether one proposal's payload names an entity this merge removes.
+_ENTITY_REFERENCE_FIELDS_BY_PROPOSAL_KIND: Final[Mapping[EntityProposalKind, frozenset[str]]] = {
+    EntityProposalKind.CREATE_ENTITY: frozenset(),
+    EntityProposalKind.UPDATE_ENTITY: frozenset({"entity_id"}),
+    EntityProposalKind.BIND_IDENTIFIER: frozenset({"entity_id"}),
+    EntityProposalKind.RETIRE_IDENTIFIER: frozenset({"entity_id"}),
+    EntityProposalKind.SUPERSEDE_IDENTIFIER: frozenset({"entity_id"}),
+    EntityProposalKind.RECORD_ALIAS: frozenset({"entity_id"}),
+    EntityProposalKind.RETIRE_ALIAS: frozenset({"entity_id"}),
+    EntityProposalKind.SUPERSEDE_ALIAS: frozenset({"entity_id"}),
+    EntityProposalKind.RECORD_ASSIGNMENT: frozenset({"entity_id", "scope_entity_id"}),
+    EntityProposalKind.REVISE_ASSIGNMENT: frozenset(),
+    EntityProposalKind.END_ASSIGNMENT: frozenset(),
+    EntityProposalKind.RECORD_RELATIONSHIP: frozenset(
+        {"from_entity_id", "to_entity_id", "scope_entity_id"}
+    ),
+    EntityProposalKind.REVISE_RELATIONSHIP: frozenset(),
+    EntityProposalKind.END_RELATIONSHIP: frozenset(),
+    EntityProposalKind.RESOLVE_MENTION: frozenset({"entity_id", "rejected_entity_id"}),
+    EntityProposalKind.MERGE_ENTITIES: frozenset({"retained_entity_id", "merged_entity_id"}),
+    EntityProposalKind.SPLIT_IDENTITY: frozenset({"entity_id"}),
+}
 
-    Read over the payload's values rather than over a list of field names that
-    happen to hold entity identifiers. The seventeen kinds name an entity under
-    `entity_id`, `scope_entity_id`, `from_entity_id`, `to_entity_id`,
-    `subject_entity_id`, `retained_entity_id` and `merged_entity_id`, and a
-    field list would go stale the first time a kind is added -- silently, and in
-    the direction that leaves a proposal open against an identity that is gone.
-    Matching on the value cannot: an entity identifier is opaque and globally
-    unique, so a payload value equal to one *is* a reference to it.
+if frozenset(_ENTITY_REFERENCE_FIELDS_BY_PROPOSAL_KIND) != frozenset(EntityProposalKind):
+    raise RuntimeError("every Entity proposal kind declares its Entity-reference fields")
+if any(
+    not fields <= schema_for(kind).admitted
+    for kind, fields in _ENTITY_REFERENCE_FIELDS_BY_PROPOSAL_KIND.items()
+):
+    raise RuntimeError("Entity-reference fields belong to their proposal kind's schema")
+
+
+def _names_a_merged_entity(proposal: EntityProposal, merged_entity_ids: frozenset[str]) -> bool:
+    """Whether the typed payload references an entity this merge removes.
+
+    The closed map is kind-aware because an opaque Entity identifier appearing
+    in ordinary text is still ordinary text: `create_entity.display_name`, for
+    example, creates no reference even when it happens to equal an Entity ID.
+    Today's payload contract is flat (`str | bool`), so it admits no nested or
+    collection references to walk. A future kind cannot silently bypass this
+    decision because module import requires every enum member to have an entry.
     """
-    return any(value in merged_entity_ids for _, value in proposal.payload.values)
+    reference_fields = _ENTITY_REFERENCE_FIELDS_BY_PROPOSAL_KIND[proposal.kind]
+    return any(
+        name in reference_fields and isinstance(value, str) and value in merged_entity_ids
+        for name, value in proposal.payload.values
+    )
 
 
 class IdentityCorrectionService:

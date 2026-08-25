@@ -38,19 +38,26 @@ from __future__ import annotations
 
 from typing import Any
 
-from sqlalchemy import insert
+from sqlalchemy import insert, select
 from sqlalchemy.engine import Connection
 
-from my_pa.contracts.ports import RelationshipMemoryProposalRepository
+from my_pa.contracts.ports import RelationshipMemoryProposalRepository, UnknownScopeError
 from my_pa.domain.relationship.memory import (
     MemoryProposalEvidence,
     RelationshipMemoryProposal,
 )
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
+    partition_criterion,
     principal_bound_values,
 )
 from my_pa.infrastructure.persistence.tables import (
+    capture_spans,
+    capture_versions,
+    captures,
+    enrollments,
+    entity_observations,
+    extractions,
     relationship_memory_proposal_evidence,
     relationship_memory_proposals,
 )
@@ -68,6 +75,10 @@ def _bound(table: Any, principal_id: str, values: dict[str, object]) -> dict[str
     a spelling convenience.
     """
     return principal_bound_values(values, table, capture_context(principal_id))
+
+
+def _mine(table: Any, principal_id: str) -> Any:  # noqa: ANN401 - a SQLAlchemy Table
+    return partition_criterion(table, capture_context(principal_id))
 
 
 class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalRepository):
@@ -95,11 +106,56 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
         `memory_proposal_evidence_names_exactly_one_record` leaves no candidate
         behind either.
 
-        Nothing is validated here. Every rule these rows answer to lives on
-        `RelationshipMemoryProposal.__post_init__`, on
-        `MemoryProposalEvidence.__post_init__` and on the table CHECKs, and a
-        third copy in the writer would be a third thing able to disagree.
+        Domain shape rules live on the proposal and evidence records. Referential
+        scope is necessarily checked here, where the source records and their
+        Principal-bearing parent chains are visible; a missing record and a
+        foreign record intentionally receive the same refusal.
         """
+        for link in evidence:
+            if link.principal_id != proposal.principal_id:
+                raise ValueError("proposal evidence belongs to the proposal Principal")
+            if link.memory_proposal_id != proposal.memory_proposal_id:
+                raise ValueError("proposal evidence belongs to the proposal it names")
+            owned = None
+            if link.entity_observation_id is not None:
+                owned = self._connection.execute(
+                    select(entity_observations.c.observation_id).where(
+                        _mine(entity_observations, proposal.principal_id),
+                        entity_observations.c.observation_id == link.entity_observation_id,
+                    )
+                ).first()
+            elif link.capture_span_id is not None:
+                owned = self._connection.execute(
+                    select(capture_spans.c.span_id)
+                    .select_from(
+                        capture_spans.join(
+                            capture_versions,
+                            capture_versions.c.version_id == capture_spans.c.version_id,
+                        ).join(captures, captures.c.capture_id == capture_versions.c.capture_id)
+                    )
+                    .where(
+                        capture_spans.c.span_id == link.capture_span_id,
+                        _mine(capture_versions, proposal.principal_id),
+                        _mine(captures, proposal.principal_id),
+                    )
+                ).first()
+            elif link.knowledge_id is not None:
+                owned = self._connection.execute(
+                    select(extractions.c.extraction_id)
+                    .select_from(
+                        extractions.join(
+                            enrollments,
+                            enrollments.c.enrollment_id == extractions.c.enrollment_id,
+                        )
+                    )
+                    .where(
+                        extractions.c.extraction_id == link.knowledge_id,
+                        _mine(enrollments, proposal.principal_id),
+                    )
+                ).first()
+            if owned is None:
+                raise UnknownScopeError("proposal evidence cites a record outside this scope")
+
         self._connection.execute(
             insert(relationship_memory_proposals).values(
                 _bound(
@@ -108,6 +164,7 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
                     {
                         "memory_proposal_id": proposal.memory_proposal_id,
                         "subject_entity_id": proposal.subject_entity_id,
+                        "expected_subject_version": proposal.expected_subject_version,
                         "proposed_kind": proposal.proposed_kind.value,
                         "proposed_statement": proposal.proposed_statement,
                         "proposed_statement_sha256": proposal.proposed_statement_sha256,
@@ -123,6 +180,10 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
                         "accepted_memory_id": proposal.accepted_memory_id,
                         "accepted_memory_version_id": proposal.accepted_memory_version_id,
                         "invalidated_reason": proposal.invalidated_reason,
+                        "superseded_at": proposal.superseded_at,
+                        "superseded_by_memory_proposal_id": (
+                            proposal.superseded_by_memory_proposal_id
+                        ),
                     },
                 )
             )

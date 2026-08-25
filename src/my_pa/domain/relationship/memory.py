@@ -966,6 +966,7 @@ class RelationshipMemoryProposal:
     memory_proposal_id: str
     principal_id: str
     subject_entity_id: str
+    expected_subject_version: int
     proposed_kind: MemoryKind
     proposed_statement: str = field(repr=False)
     proposed_statement_sha256: str
@@ -981,11 +982,15 @@ class RelationshipMemoryProposal:
     accepted_memory_id: str | None = None
     accepted_memory_version_id: str | None = None
     invalidated_reason: str | None = None
+    superseded_at: datetime | None = None
+    superseded_by_memory_proposal_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.memory_proposal_id, IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.subject_entity_id, IdKind.ENTITY)
+        if self.expected_subject_version < 1:
+            raise RelationshipMemoryError("a proposal expects a positive subject version")
         if not isinstance(self.proposed_kind, MemoryKind):
             raise RelationshipMemoryError("a memory proposal carries a known kind")
         validate_statement(self.proposed_statement)
@@ -1028,6 +1033,21 @@ class RelationshipMemoryProposal:
             validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
         if self.structured_value is not None and set(self.structured_value) != {"schema", "value"}:
             raise MemoryStructuredValueError("a proposal's structured value is a schema envelope")
+        if (self.state is MemoryProposalState.SUPERSEDED) is not (self.superseded_at is not None):
+            raise RelationshipMemoryError("a superseded proposal records when it was superseded")
+        if self.superseded_at is not None:
+            ensure_utc(self.superseded_at)
+            if self.superseded_at < self.proposed_at:
+                raise RelationshipMemoryError("a proposal is not superseded before it was proposed")
+        if self.superseded_by_memory_proposal_id is not None:
+            validate_identifier(
+                self.superseded_by_memory_proposal_id,
+                IdKind.RELATIONSHIP_MEMORY_PROPOSAL,
+            )
+            if self.superseded_by_memory_proposal_id == self.memory_proposal_id:
+                raise RelationshipMemoryError("a proposal is not its own successor")
+            if self.state is not MemoryProposalState.SUPERSEDED:
+                raise RelationshipMemoryError("only a superseded proposal names a successor")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1126,6 +1146,8 @@ class RelationshipMemoryReviewCase:
     proposal_state: ProposalState = ProposalState.NEEDS_REVIEW
     review_version: int = 0
     latest_disposition: Disposition | None = None
+    escalated: bool = False
+    superseded_by_proposal_id: str | None = None
     accepted_memory_id: str | None = None
     accepted_memory_version_id: str | None = None
 
@@ -1143,6 +1165,13 @@ class RelationshipMemoryReviewCase:
             raise RelationshipMemoryError("a review version is not negative")
         if (self.review_version == 0) is not (self.latest_disposition is None):
             raise RelationshipMemoryError("an undecided case has version zero and no disposition")
+        if not isinstance(self.escalated, bool):
+            raise RelationshipMemoryError("a memory review escalation marker is a flag")
+        if self.superseded_by_proposal_id is not None:
+            validate_identifier(
+                self.superseded_by_proposal_id,
+                IdKind.RELATIONSHIP_MEMORY_PROPOSAL,
+            )
         accepted = self.proposal_state in (
             ProposalState.ACCEPTED,
             ProposalState.CORRECTED_ACCEPTED,
@@ -1162,6 +1191,11 @@ class RelationshipMemoryReviewCase:
     def risk_class(self) -> RiskClass:
         """The one class every candidate memory is reviewed at. See the constant."""
         return MEMORY_REVIEW_RISK_CLASS
+
+    @property
+    def requires_operator_authority(self) -> bool:
+        """Whether escalation raised this still-open case to its operator ceiling."""
+        return self.escalated
 
 
 @dataclass(frozen=True, slots=True)

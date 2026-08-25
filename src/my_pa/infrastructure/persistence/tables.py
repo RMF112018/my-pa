@@ -8322,6 +8322,7 @@ relationship_memory_proposals = Table(
     Column("memory_proposal_id", Text, primary_key=True),
     Column("principal_id", Text, nullable=False),
     Column("subject_entity_id", Text, nullable=False),
+    Column("expected_subject_version", Integer, nullable=False),
     Column("proposed_kind", Text, nullable=False),
     Column("proposed_statement", Text, nullable=False),
     Column("proposed_statement_sha256", Text, nullable=False),
@@ -8337,9 +8338,15 @@ relationship_memory_proposals = Table(
     Column("accepted_memory_id", Text),
     Column("accepted_memory_version_id", Text),
     Column("invalidated_reason", Text),
+    Column("superseded_at", DateTime(timezone=True)),
+    Column("superseded_by_memory_proposal_id", Text),
     _is_identifier("memory_proposal_id", IdKind.RELATIONSHIP_MEMORY_PROPOSAL),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("subject_entity_id", IdKind.ENTITY),
+    CheckConstraint(
+        "expected_subject_version >= 1",
+        name="a_memory_proposal_expected_subject_version_is_positive",
+    ),
     _one_of("proposed_kind", MemoryKind, name="a_memory_proposal_kind_is_known"),
     _one_of("state", MemoryProposalState, name="a_memory_proposal_state_is_known"),
     _one_of("method", MemoryProposalMethod, name="a_memory_proposal_method_is_known"),
@@ -8378,6 +8385,38 @@ relationship_memory_proposals = Table(
     CheckConstraint(
         "(accepted_memory_id IS NULL) = (accepted_memory_version_id IS NULL)",
         name="an_accepted_memory_proposal_names_both_identities",
+    ),
+    CheckConstraint(
+        "(state = 'superseded') = (superseded_at IS NOT NULL)",
+        name="a_superseded_memory_proposal_records_when",
+    ),
+    CheckConstraint(
+        "superseded_at IS NULL OR superseded_at >= proposed_at",
+        name="a_memory_proposal_is_not_superseded_before_it_was_proposed",
+    ),
+    CheckConstraint(
+        "superseded_by_memory_proposal_id IS NULL OR state = 'superseded'",
+        name="only_a_superseded_memory_proposal_names_its_successor",
+    ),
+    CheckConstraint(
+        "superseded_by_memory_proposal_id IS NULL "
+        "OR superseded_by_memory_proposal_id <> memory_proposal_id",
+        name="a_memory_proposal_is_not_its_own_successor",
+    ),
+    UniqueConstraint(
+        "memory_proposal_id",
+        "principal_id",
+        name="a_memory_proposal_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_memory_proposal_id", "principal_id"],
+        [
+            f"{SCHEMA}.relationship_memory_proposals.memory_proposal_id",
+            f"{SCHEMA}.relationship_memory_proposals.principal_id",
+        ],
+        name="a_memory_proposal_is_superseded_within_its_principal",
+        deferrable=True,
+        initially="DEFERRED",
     ),
     Index(
         "relationship_memory_proposals_by_subject",
@@ -8445,16 +8484,11 @@ relationship_memory_proposal_evidence = Table(
 #: sibling plane, named the same way rather than a second convention -- with the
 #: `a_memory_` prefix this table's other constraints already carry.
 #:
-#: **Four dispositions, where the entity plane names five, and the difference is
-#: this plane's own.** `entity_proposal_review_decisions` admits a reason on
-#: `escalate` because that plane routes an escalation -- `requirement_for` gives
-#: some Entity proposal kinds an operator ceiling to raise a case to. This one
-#: does not: the memory plane declares no operator-only decision above
-#: `review.decide`, `decide_relationship_memory_review` refuses `escalate`
-#: outright, and a reason column on this table admitting a disposition no writer
-#: can produce would describe a row that cannot exist. So the vocabulary here is
-#: what *this* table can hold, and `an_invalidation_states_why` narrows to the
-#: one disposition that requires one, rather than restating the pair.
+#: **Escalation is a sticky authority ceiling.** This plane records `escalate`
+#: with a bounded reason and derives the ceiling from the complete immutable
+#: decision chain. A later nonterminal decision therefore cannot erase the fact
+#: that accept/correct now requires operator authority. Invalidation carries the
+#: same reason requirement while retaining its distinct basis-moot semantics.
 #:
 #: **There is a second reason the text must be this table's own rather than the
 #: contract's, and it is worth naming because it is a live hazard.**
@@ -8506,12 +8540,13 @@ relationship_memory_review_decisions = Table(
         name="a_memory_corrected_statement_is_bounded",
     ),
     CheckConstraint(
-        "reason IS NULL OR disposition IN ('reject', 'defer', 'mark_unresolved', 'invalidate')",
+        "reason IS NULL OR disposition IN "
+        "('reject', 'defer', 'mark_unresolved', 'escalate', 'invalidate')",
         name="a_memory_review_reason_explains_a_departure",
     ),
     CheckConstraint(
-        "disposition <> 'invalidate' OR reason IS NOT NULL",
-        name="a_memory_invalidation_states_why",
+        "disposition NOT IN ('escalate', 'invalidate') OR reason IS NOT NULL",
+        name="a_memory_escalation_or_invalidation_states_why",
     ),
     CheckConstraint(
         f"reason IS NULL OR length(trim(reason)) BETWEEN 1 AND {REVIEW_REASON_LIMIT}",

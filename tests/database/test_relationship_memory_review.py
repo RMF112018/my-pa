@@ -74,7 +74,7 @@ from typing import Any, Final
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, Engine, Row, event, insert, select, text
+from sqlalchemy import Connection, Engine, Row, event, func, insert, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
@@ -92,7 +92,6 @@ from my_pa.domain.capture.review import (
     Disposition,
     ReviewConflictError,
     ReviewNotFoundError,
-    ReviewUnsupportedError,
 )
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
@@ -122,6 +121,8 @@ from my_pa.infrastructure.persistence.relationship_memory_review import (
     relationship_memory_review_cases,
 )
 from my_pa.infrastructure.persistence.tables import (
+    entities,
+    relationship_memories,
     relationship_memory_proposal_evidence,
     relationship_memory_proposals,
     relationship_memory_review_decisions,
@@ -278,6 +279,10 @@ def _open_proposal(
     evidence: int = 1,
     capture_spans: int = 0,
     classification: Classification | None = None,
+    method: MemoryProposalMethod = MemoryProposalMethod.RULE,
+    model_id: str | None = None,
+    model_version: str | None = None,
+    expected_subject_version: int = 1,
 ) -> tuple[str, str, tuple[str, ...], tuple[str, ...]]:
     """One routed proposal, its review case, and the evidence it rests on.
 
@@ -296,15 +301,16 @@ def _open_proposal(
             memory_proposal_id=memory_proposal_id,
             principal_id=principal_id,
             subject_entity_id=subject_entity_id,
+            expected_subject_version=expected_subject_version,
             proposed_kind=kind.value,
             proposed_statement=statement,
             proposed_statement_sha256=statement_digest(statement),
             structured_value=None,
             state=MemoryProposalState.NEEDS_REVIEW.value,
-            method=MemoryProposalMethod.RULE.value,
+            method=method.value,
             method_version="synthetic-rule-v1",
-            model_id=None,
-            model_version=None,
+            model_id=model_id,
+            model_version=model_version,
             classification=(classification or classification_floor_for(kind)).value,
             proposed_at=WHEN,
             review_case_id=review_case_id,
@@ -906,27 +912,164 @@ def test_mark_unresolved_leaves_the_stored_state_alone_and_says_so_on_the_case(
     assert cases[0].latest_disposition is Disposition.MARK_UNRESOLVED
 
 
-@pytest.mark.parametrize(
-    "disposition",
-    [Disposition.REPROCESS, Disposition.ESCALATE],
-)
-def test_a_disposition_with_no_route_is_unsupported(
-    two_principals: Engine, disposition: Disposition
+def test_reprocess_supersedes_and_copies_a_successor_at_current_subject_version(
+    two_principals: Engine,
 ) -> None:
-    """Two, not three: `invalidate` left this list under Manager ruling R-8.
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, observations, _ = _open_proposal(
+            connection,
+            evidence=2,
+            method=MemoryProposalMethod.LOCAL_MODEL,
+            model_id="synthetic-local-model",
+            model_version="2026-08-22",
+        )
+        connection.execute(
+            update(entities)
+            .where(entities.c.entity_id == DANA, entities.c.principal_id == PRINCIPAL_A)
+            .values(version=2)
+        )
+        decision = decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.REPROCESS)
+        )
 
-    `reprocess` still has no eligible route — nothing on this plane mints a
-    successor candidate against current evidence — and `escalate` still has no
-    ceiling to raise a memory case to. Both reasons are about this plane and
-    neither was the reason `invalidate` was refused, which was that the ledger
-    had no column for the reason the disposition requires.
-    """
+    with two_principals.connect() as connection:
+        predecessor = _proposal_row(connection, proposal_id)
+        successor = _proposal_row(connection, predecessor.superseded_by_memory_proposal_id)
+        copied = connection.execute(
+            select(relationship_memory_proposal_evidence.c.entity_observation_id)
+            .where(
+                relationship_memory_proposal_evidence.c.memory_proposal_id
+                == successor.memory_proposal_id
+            )
+            .order_by(relationship_memory_proposal_evidence.c.entity_observation_id)
+        ).scalars().all()
+        cases = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+
+    assert decision.proposal_state is ProposalState.SUPERSEDED
+    assert predecessor.state == MemoryProposalState.SUPERSEDED.value
+    assert predecessor.superseded_at == LATER
+    assert successor.expected_subject_version == 2
+    assert successor.review_case_id != review_case_id
+    assert successor.method == predecessor.method
+    assert successor.method_version == predecessor.method_version
+    assert successor.model_id == predecessor.model_id
+    assert successor.model_version == predecessor.model_version
+    assert successor.proposed_statement == predecessor.proposed_statement
+    assert successor.structured_value == predecessor.structured_value
+    assert successor.classification == predecessor.classification
+    assert copied == sorted(observations)
+    old_case = next(case for case in cases if case.review_case_id == review_case_id)
+    assert old_case.superseded_by_proposal_id == successor.memory_proposal_id
+
+
+def test_a_stale_reprocess_writes_nothing(two_principals: Engine) -> None:
     with two_principals.begin() as connection:
         _, review_case_id, _, _ = _open_proposal(connection)
+        decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.DEFER)
+        )
+        before = _counts(connection)
+        proposals_before = connection.execute(
+            select(func.count()).select_from(relationship_memory_proposals)
+        ).scalar_one()
+
+    with (
+        pytest.raises(ReviewConflictError, match="review version is stale"),
+        two_principals.begin() as connection,
+    ):
+        decide_relationship_memory_review(
+            connection,
+            _decision(review_case_id, Disposition.REPROCESS, expected_review_version=0),
+        )
+
+    with two_principals.connect() as connection:
+        assert _counts(connection) == before
+        assert connection.execute(
+            select(func.count()).select_from(relationship_memory_proposals)
+        ).scalar_one() == proposals_before
+
+
+def test_escalation_is_sticky_and_acceptance_requires_operator_authority(
+    two_principals: Engine,
+) -> None:
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(connection)
+        escalated = decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.ESCALATE)
+        )
+        decide_relationship_memory_review(
+            connection,
+            _decision(
+                review_case_id,
+                Disposition.DEFER,
+                expected_review_version=1,
+                reason="awaiting operator review",
+            ),
+        )
+
+    with two_principals.connect() as connection:
+        case = next(
+            case
+            for case in relationship_memory_review_cases(
+                connection, principal_id=PRINCIPAL_A, limit=10
+            )
+            if case.review_case_id == review_case_id
+        )
+    assert escalated.proposal_state is ProposalState.NEEDS_REVIEW
+    assert case.latest_disposition is Disposition.DEFER
+    assert case.requires_operator_authority
+
+    with (
+        pytest.raises(ReviewConflictError, match="requires operator authority"),
+        two_principals.begin() as connection,
+    ):
+        decide_relationship_memory_review(
+            connection,
+            _decision(review_case_id, Disposition.ACCEPT, expected_review_version=2),
+        )
+
+    with two_principals.begin() as connection:
+        accepted = decide_relationship_memory_review(
+            connection,
+            _decision(review_case_id, Disposition.ACCEPT, expected_review_version=2),
+            has_operator_authority=True,
+        )
+    assert accepted.proposal_state is ProposalState.ACCEPTED
+
+
+def test_expected_subject_version_is_proposal_metadata_only() -> None:
+    assert "expected_subject_version" in relationship_memory_proposals.c
+    assert "expected_subject_version" not in relationship_memories.c
+    lineage = next(
+        constraint
+        for constraint in relationship_memory_proposals.foreign_key_constraints
+        if constraint.name == "a_memory_proposal_is_superseded_within_its_principal"
+    )
+    assert lineage.deferrable is True
+    assert lineage.initially == "DEFERRED"
+
+
+def test_a_stale_subject_version_refuses_promotion_before_any_canonical_write(
+    two_principals: Engine,
+) -> None:
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(
+            connection, expected_subject_version=1
+        )
+        connection.execute(
+            update(entities)
+            .where(entities.c.entity_id == DANA, entities.c.principal_id == PRINCIPAL_A)
+            .values(version=2)
+        )
         before = _counts(connection)
 
-    with two_principals.begin() as connection, pytest.raises(ReviewUnsupportedError):
-        decide_relationship_memory_review(connection, _decision(review_case_id, disposition))
+    with (
+        pytest.raises(ReviewConflictError, match="subject version is stale"),
+        two_principals.begin() as connection,
+    ):
+        decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.ACCEPT)
+        )
 
     with two_principals.connect() as connection:
         assert _counts(connection) == before
@@ -1069,22 +1212,19 @@ def test_exactly_one_disposition_leaves_a_rejected_candidate_behind(
     for disposition in Disposition:
         with two_principals.begin() as connection:
             proposal_id, review_case_id, _, _ = _open_proposal(connection)
-        try:
-            with two_principals.begin() as connection:
-                decide_relationship_memory_review(
-                    connection,
-                    _decision(
-                        review_case_id,
-                        disposition,
-                        corrected_value=(
-                            CORRECTED_NOTE
-                            if disposition is Disposition.CORRECT_AND_ACCEPT
-                            else None
-                        ),
+        with two_principals.begin() as connection:
+            decide_relationship_memory_review(
+                connection,
+                _decision(
+                    review_case_id,
+                    disposition,
+                    corrected_value=(
+                        CORRECTED_NOTE
+                        if disposition is Disposition.CORRECT_AND_ACCEPT
+                        else None
                     ),
-                )
-        except ReviewUnsupportedError:
-            continue
+                ),
+            )
         with two_principals.connect() as connection:
             state = str(_proposal_row(connection, proposal_id).state)
         stored.setdefault(state, set()).add(disposition.value)
@@ -1401,8 +1541,14 @@ _TABLES_WRITTEN_PER_DISPOSITION: Final[dict[Disposition, frozenset[str]]] = {
     Disposition.INVALIDATE: frozenset(
         {"relationship_memory_review_decisions", "relationship_memory_proposals"}
     ),
-    Disposition.REPROCESS: frozenset(),
-    Disposition.ESCALATE: frozenset(),
+    Disposition.REPROCESS: frozenset(
+        {
+            "relationship_memory_review_decisions",
+            "relationship_memory_proposal_evidence",
+            "relationship_memory_proposals",
+        }
+    ),
+    Disposition.ESCALATE: frozenset({"relationship_memory_review_decisions"}),
 }
 
 
@@ -1433,24 +1579,22 @@ def test_every_disposition_writes_exactly_the_memory_tables_it_is_declared_to(
     with two_principals.begin() as connection:
         _, review_case_id, _, _ = _open_proposal(connection)
 
-    refused = False
-    with _statements_sent_to(two_principals) as statements:
-        try:
-            with two_principals.begin() as connection:
-                decide_relationship_memory_review(
-                    connection,
-                    _decision(
-                        review_case_id,
-                        disposition,
-                        corrected_value=(
-                            CORRECTED_NOTE
-                            if disposition is Disposition.CORRECT_AND_ACCEPT
-                            else None
-                        ),
-                    ),
-                )
-        except ReviewUnsupportedError:
-            refused = True
+    with (
+        _statements_sent_to(two_principals) as statements,
+        two_principals.begin() as connection,
+    ):
+        decide_relationship_memory_review(
+            connection,
+            _decision(
+                review_case_id,
+                disposition,
+                corrected_value=(
+                    CORRECTED_NOTE
+                    if disposition is Disposition.CORRECT_AND_ACCEPT
+                    else None
+                ),
+            ),
+        )
 
     assert statements, (
         "no statement reached the server at all; the listener is not attached and this "
@@ -1462,13 +1606,6 @@ def test_every_disposition_writes_exactly_the_memory_tables_it_is_declared_to(
         f"{sorted(written)}; it is declared to write {sorted(expected)}. If the router "
         "moved, `RM-API-AC-002`'s sentence for this branch and the architecture guard's "
         "`DECLARED_BRANCH_WRITES` move with it"
-    )
-    assert refused == (not expected), (
-        f"deciding `{disposition.value}` "
-        + ("raised" if refused else "did not raise")
-        + f" `ReviewUnsupportedError` and writes {sorted(written)}. A disposition with no "
-        "route writes nothing because it is refused; a disposition with a route writes "
-        "what its branch declares"
     )
 
 
@@ -1718,6 +1855,7 @@ class _InsertOnlyProposals:
                 memory_proposal_id=proposal.memory_proposal_id,
                 principal_id=proposal.principal_id,
                 subject_entity_id=proposal.subject_entity_id,
+                expected_subject_version=proposal.expected_subject_version,
                 proposed_kind=proposal.proposed_kind.value,
                 proposed_statement=proposal.proposed_statement,
                 proposed_statement_sha256=proposal.proposed_statement_sha256,
@@ -1733,6 +1871,10 @@ class _InsertOnlyProposals:
                 accepted_memory_id=proposal.accepted_memory_id,
                 accepted_memory_version_id=proposal.accepted_memory_version_id,
                 invalidated_reason=proposal.invalidated_reason,
+                superseded_at=proposal.superseded_at,
+                superseded_by_memory_proposal_id=(
+                    proposal.superseded_by_memory_proposal_id
+                ),
             )
         )
         for link in evidence:

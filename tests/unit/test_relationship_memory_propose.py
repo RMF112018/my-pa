@@ -33,7 +33,7 @@ import copy
 import dataclasses
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import pytest
 
@@ -47,6 +47,7 @@ from my_pa.application.relationship_memory import (
     RelationshipMemoryProposalRepository,
     RelationshipMemoryProposalService,
 )
+from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
@@ -70,6 +71,9 @@ from my_pa.domain.relationship.memory import (
     statement_digest,
 )
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.relationship_memory_proposals import (
+    SqlRelationshipMemoryProposalRepository,
+)
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 OTHER_PRINCIPAL: Final = "prn_bbbb0002bbbb0002bbbb0002"
@@ -154,6 +158,32 @@ class RecordingRepository:
 
     def replay_for(self, *args: object, **kwargs: object) -> object:
         raise AssertionError("the producer path reached the memory idempotency plane")
+
+
+class _FirstResult:
+    def __init__(self, value: object | None) -> None:
+        self._value = value
+
+    def first(self) -> object | None:
+        return self._value
+
+
+class EvidenceScopeConnection:
+    """A statement recorder that makes one selected evidence family invisible."""
+
+    def __init__(self, missing_marker: str | None = None) -> None:
+        self.missing_marker = missing_marker
+        self.queries: list[str] = []
+        self.writes: list[str] = []
+
+    def execute(self, statement: Any) -> _FirstResult:  # noqa: ANN401 - SQLAlchemy clause
+        rendered = str(statement)
+        if statement.is_select:
+            self.queries.append(rendered)
+            missing = self.missing_marker is not None and self.missing_marker in rendered
+            return _FirstResult(None if missing else object())
+        self.writes.append(rendered)
+        return _FirstResult(None)
 
 
 def propose(
@@ -250,6 +280,85 @@ def test_every_named_evidence_record_becomes_one_stored_link() -> None:
     assert [link.role for link in evidence] == [reference.role for reference in references]
     assert len({link.proposal_evidence_id for link in evidence}) == 3
     assert [link.created_at for link in evidence] == [WHEN, WHEN, WHEN]
+
+
+def test_persistence_validates_each_evidence_family_through_its_principal_chain() -> None:
+    recording = RecordingRepository()
+    propose(
+        recording,
+        a_command(
+            evidence=(
+                ProposedEvidence(
+                    role=EvidenceLinkRole.DIRECT,
+                    entity_observation_id=issue_identifier(IdKind.ENTITY_OBSERVATION),
+                ),
+                ProposedEvidence(
+                    role=EvidenceLinkRole.SUPPORTING,
+                    capture_span_id=issue_identifier(IdKind.SPAN),
+                ),
+                ProposedEvidence(
+                    role=EvidenceLinkRole.COUNTEREVIDENCE,
+                    knowledge_id=issue_identifier(IdKind.KNOWLEDGE),
+                ),
+            )
+        ),
+    )
+    proposal, evidence = recording.recorded[0]
+    connection = EvidenceScopeConnection()
+
+    SqlRelationshipMemoryProposalRepository(connection).record_proposal(  # type: ignore[arg-type]
+        proposal, evidence
+    )
+
+    assert len(connection.writes) == 4
+    observation, span, knowledge = connection.queries
+    assert "entity_observations.principal_id" in observation
+    assert "capture_versions.owner_principal_id" in span
+    assert "captures.owner_principal_id" in span
+    assert "JOIN knowledge.capture_versions" in span
+    assert "JOIN knowledge.captures" in span
+    assert "enrollments.principal_id" in knowledge
+    assert "JOIN knowledge.enrollments" in knowledge
+
+
+@pytest.mark.parametrize(
+    "missing_marker",
+    ("entity_observations.observation_id", "capture_spans.span_id", "extractions.extraction_id"),
+)
+def test_missing_or_foreign_evidence_is_indistinguishable_and_writes_no_rows(
+    missing_marker: str,
+) -> None:
+    recording = RecordingRepository()
+    propose(
+        recording,
+        a_command(
+            evidence=(
+                ProposedEvidence(
+                    role=EvidenceLinkRole.DIRECT,
+                    entity_observation_id=issue_identifier(IdKind.ENTITY_OBSERVATION),
+                ),
+                ProposedEvidence(
+                    role=EvidenceLinkRole.SUPPORTING,
+                    capture_span_id=issue_identifier(IdKind.SPAN),
+                ),
+                ProposedEvidence(
+                    role=EvidenceLinkRole.COUNTEREVIDENCE,
+                    knowledge_id=issue_identifier(IdKind.KNOWLEDGE),
+                ),
+            )
+        ),
+    )
+    proposal, evidence = recording.recorded[0]
+    connection = EvidenceScopeConnection(missing_marker)
+
+    with pytest.raises(
+        UnknownScopeError, match="proposal evidence cites a record outside this scope"
+    ):
+        SqlRelationshipMemoryProposalRepository(connection).record_proposal(  # type: ignore[arg-type]
+            proposal, evidence
+        )
+
+    assert connection.writes == []
 
 
 def test_a_candidate_with_no_evidence_is_refused_and_nothing_is_recorded() -> None:
@@ -560,6 +669,15 @@ def test_a_stale_subject_version_is_refused() -> None:
         propose(repository, a_command(expected_subject_version=2))
 
     assert repository.recorded == []
+
+
+def test_the_validated_subject_version_is_persisted_on_the_proposal() -> None:
+    repository = RecordingRepository()
+
+    propose(repository, a_command(expected_subject_version=3))
+
+    proposal, _ = repository.recorded[0]
+    assert proposal.expected_subject_version == 3
 
 
 def test_a_merged_away_subject_is_refused_rather_than_followed() -> None:

@@ -622,6 +622,7 @@ class RelationshipMemoryProposalService:
             memory_proposal_id=proposal_id,
             principal_id=command.principal_id,
             subject_entity_id=command.subject_entity_id,
+            expected_subject_version=command.expected_subject_version,
             proposed_kind=command.memory_kind,
             proposed_statement=statement,
             proposed_statement_sha256=statement_digest(statement),

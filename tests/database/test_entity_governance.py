@@ -43,6 +43,7 @@ from my_pa.domain.relationship.governance import (
     ObservationKind,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.relationship.proposal_payload import EntityProposalPayload
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence import tables
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
@@ -145,6 +146,10 @@ def two_principals(migrated_engine: Engine) -> Engine:
         repository.create(PRINCIPAL_A, _entity(ALICE))
         repository.create(PRINCIPAL_A, _entity(ALICE_TWO, name="Alice Chen"))
         repository.create(PRINCIPAL_B, _entity("ent_cccc0003cccc0003", PRINCIPAL_B, "Bob Chen"))
+        repository.create(
+            PRINCIPAL_B,
+            _entity("ent_dddd0004dddd0004", PRINCIPAL_B, "Robert Chen"),
+        )
     return migrated_engine
 
 
@@ -938,14 +943,14 @@ def test_an_observation_limit_reaches_the_server_as_a_limit_clause(
 
 # --- the governance plane's partition, where nothing had reached it ----------
 
-#: The entity Principal B already holds, from the `two_principals` fixture.
+#: The two entities Principal B already holds, from the `two_principals` fixture.
 BEE_ONE: Final = "ent_cccc0003cccc0003"
 BEE_TWO: Final = "ent_dddd0004dddd0004"
 B_MERGE: Final = "emrg_bbbb0002bbbb0002"
 A_MERGE: Final = "emrg_aaaa0001aaaa0001"
 
 
-def _propose_for_b(engine: Engine, *, second_entity: bool = False) -> str:
+def _propose_for_b(engine: Engine) -> str:
     """One open proposal in Principal B's partition, so every read below has a decoy.
 
     Returns the minted identifier. Proposal identifiers are the server's to
@@ -955,8 +960,6 @@ def _propose_for_b(engine: Engine, *, second_entity: bool = False) -> str:
     """
     with engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        if second_entity:
-            repository.create(PRINCIPAL_B, _entity(BEE_TWO, PRINCIPAL_B, "Bob Chen"))
         return (
             EntityGovernanceService(repository)
             .propose(
@@ -980,7 +983,7 @@ def _a_decided_merge_for_b(engine: Engine) -> str:
     what the tests below need is B's *lineage* to exist, and since `WP-RI-B-05`
     accepting the proposal does not produce any.
     """
-    proposal_id = _propose_for_b(engine, second_entity=True)
+    proposal_id = _propose_for_b(engine)
     with engine.begin() as connection:
         EntityGovernanceService(SqlEntityRepository(connection)).accept(
             PRINCIPAL_B,
@@ -1133,6 +1136,11 @@ def test_a_decision_cannot_reach_another_principals_proposal(
     without it A's decision matches B's open proposal exactly and accepts it --
     B's merge authorised by A's operator, recorded as B's own decision, with
     `decided_by` naming someone in a partition B cannot read.
+
+    The direct-repository attack supplies A-owned participant references while
+    retaining B's proposal identifier. That deliberately satisfies the earlier
+    participant-scope guard so this test reaches the proposal partition
+    predicate it exists to prove; B's stored proposal remains unchanged.
     """
     b_proposal = _propose_for_b(two_principals)
     with two_principals.connect() as connection:
@@ -1148,6 +1156,10 @@ def test_a_decision_cannot_reach_another_principals_proposal(
             replace(
                 staged,
                 principal_id=PRINCIPAL_A,
+                payload=EntityProposalPayload.of(
+                    EntityProposalKind.MERGE_ENTITIES,
+                    {"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
+                ),
                 state=EntityProposalState.ACCEPTED,
                 decided_by="A's operator",
                 decided_at=LATER,

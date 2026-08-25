@@ -1989,7 +1989,7 @@ def test_the_ceiling_belongs_to_the_normalisation_and_not_to_a_transport() -> No
         for path in _transport_modules()
         if "MAX_REQUEST_BYTES" in path.read_text(encoding="utf-8")
     ]
-    assert len(bounding) == 4, f"only {[p.name for p in bounding]} bound a request"
+    assert len(bounding) == 5, f"only {[p.name for p in bounding]} bound a request"
     for path in bounding:
         source = path.read_text(encoding="utf-8")
         assert "from my_pa.adapters.normalization import" in source, path.name

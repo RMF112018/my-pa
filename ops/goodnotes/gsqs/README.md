@@ -37,6 +37,7 @@ it does not replace A-X.
   `REJECT_FOR_B0`; kept as a synthetic regression/canary.
 - [`EVALUATOR.md`](EVALUATOR.md) — GSQS formulas, thresholds, and critical
   errors.
+- [`REMOTE_EVALUATION.md`](REMOTE_EVALUATION.md) — isolated ChatLLM remote-eval process. **NOT commissioned.** Not deployed. Not `MEASURED_B0`. Not Phase C. Not ChatLLM connected.
 - [`B0_RUNBOOK.md`](B0_RUNBOOK.md) — governed live-B0 preflight / MCP
   evaluation / admit-and-score contract. The commissioned B0 path is
   RouteLLM-over-MCP against an ephemeral evaluation MCP, then

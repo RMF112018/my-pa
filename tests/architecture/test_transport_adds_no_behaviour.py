@@ -228,7 +228,8 @@ def test_a_transport_contains_no_sql(path: Path) -> None:
     offending = [
         text
         for text in _string_literals(path)
-        if SQL.search(text) and not (path.name == "remote.py" and text == "DELETE")
+        if SQL.search(text)
+        and not (path.name in {"remote.py", "gsqs_remote_eval_mcp.py"} and text == "DELETE")
     ]
     assert not offending, f"{path.relative_to(PACKAGE)} contains SQL"
 

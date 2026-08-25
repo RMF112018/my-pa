@@ -99,11 +99,20 @@ MIRRORED = (
     ROOT / "docs" / "specs" / "quick-capture",
 )
 
-#: Directories that hold no authored prose, and the virtual environment, which
-#: would otherwise put thousands of third-party modules into the shorthand index
-#: and make a unique suffix ambiguous for reasons no author could see.
+#: Directories that hold no authored prose, the virtual environment, and local
+#: Cursor worktrees under `.claude`, which would otherwise duplicate the corpus
+#: into the shorthand index and make a unique suffix ambiguous.
 SKIPPED_DIRECTORIES = frozenset(
-    {".git", ".mypy_cache", ".pytest_cache", ".ruff_cache", ".venv", "__pycache__", "node_modules"}
+    {
+        ".claude",
+        ".git",
+        ".mypy_cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".venv",
+        "__pycache__",
+        "node_modules",
+    }
 )
 
 #: File suffixes a citation may name. Closed, because it is what separates a

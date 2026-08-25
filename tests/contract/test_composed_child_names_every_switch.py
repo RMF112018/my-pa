@@ -44,14 +44,15 @@ import pytest
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, Settings
 
-#: The one attribute `available_capabilities` branches on that is not a boolean
-#: switch: it is the composed byte store itself, which is `None` when no managed
-#: root was configured. It reaches the constructor as `managed_store`, which is
-#: not a `Settings` field, so the name-for-name derivation below cannot resolve
-#: it and it is checked on its own instead -- the child must still be given a
-#: managed root, and `_MANAGED_ROOT_VARIABLE` is what that looks like in the
-#: environment. Named here with its reason rather than skipped silently.
-_COMPOSED_DEPENDENCY_ATTRIBUTES: Final[frozenset[str]] = frozenset({"_managed_store_or_none"})
+#: The two attributes `available_capabilities` branches on that are composed
+#: dependencies rather than boolean settings. The managed byte store comes from
+#: the configured root. Producer origins come from the authenticated local
+#: Principal in `build_gateway_runtime`; an Entra composition deliberately gets
+#: an empty registry and withholds producer tools. Neither is a switch that the
+#: name-for-name setting derivation below should treat as an omitted flag.
+_COMPOSED_DEPENDENCY_ATTRIBUTES: Final[frozenset[str]] = frozenset(
+    {"_managed_store_or_none", "_producer_origins"}
+)
 
 _MANAGED_ROOT_VARIABLE: Final = f"{ENV_PREFIX}MANAGED_DOCUMENT_ROOT"
 
@@ -207,14 +208,13 @@ def test_every_switch_the_child_is_given_is_actually_turned_on() -> None:
 
 
 def test_the_child_is_also_given_the_managed_root_and_a_database(tmp_path: Path) -> None:
-    """The two composed dependencies that are not flags, checked on their own.
+    """The composed dependencies that are not flags, checked on their own.
 
-    `_managed_store_or_none` is excluded from the name-for-name derivation
-    because it reaches the constructor as an object rather than as a setting, so
-    it would otherwise leave the surface it withholds unguarded. The database URL
-    is here for the same reason: composing the byte store reads the configured
-    source roots, which is why that test is marked `database` at all, and a child
-    handed no reachable server would refuse to start rather than publish anything.
+    The byte store and producer-origin registry reach the constructor as objects
+    rather than Settings fields. The all-capability child runs in local mode, so
+    the gateway derives its producer registration from the authenticated local
+    Principal. The database URL is checked here because a child handed no
+    reachable server would refuse to start rather than publish anything.
     """
     assert _attributes_read_by_available_capabilities() >= _COMPOSED_DEPENDENCY_ATTRIBUTES, (
         "the excused attribute is no longer read by the published-surface property, "

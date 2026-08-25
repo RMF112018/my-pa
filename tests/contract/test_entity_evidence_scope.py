@@ -11,9 +11,9 @@ arriving silently.
 
 **The split is by what the schema can prove, not by preference.**
 
-* The eight directed and identifier/alias writes that carry `evidence_refs`
-  admit `eobs_…` only. `entity_fact_evidence_links` carries a composite
-  `(entity_observation_id, principal_id)` foreign key to `entity_observations`,
+* The four directed writes classified by `OBSERVATION_CITERS` carry
+  `evidence_refs` and admit `eobs_…` only. `entity_fact_evidence_links` carries
+  a composite `(entity_observation_id, principal_id)` foreign key to `entity_observations`,
   so an observation belonging to another Principal is refused by the database.
   Nothing rests on an application check.
 * The four identifier and alias writes that carry `evidence` admit `span_…`
@@ -25,8 +25,14 @@ arriving silently.
   admitting spans everywhere would spread the weaker proof across the plane, and
   admitting observations everywhere would silently drop a citation form one
   capability already accepts.
-* `knowledge_id` is admitted by no capability on this plane. The column exists
-  for a producer this build does not have.
+* `entities.proposals.create` is the typed producer surface: each bounded entry
+  names a role and exactly one observation, span, or knowledge record. It is
+  classified separately because it intentionally admits all three kinds rather
+  than one of the directed-write subsets.
+* `knowledge_id` is admitted only by that proposal producer. No canonical
+  directed write can cite it directly.
+* The governed identity-correction pair also cites observations, but through its
+  operator-only preview/execution shape rather than a directed-write command.
 
 **`entities.unresolved_mentions.resolve` cites nothing a caller names.** Its
 evidence links are minted server-side — a rejected pairing is recorded as
@@ -47,6 +53,7 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     Command,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     ReviseEntityAssignment,
     ReviseEntityRelationship,
@@ -62,6 +69,7 @@ from my_pa.domain.relationship.entity import (
     AssignmentType,
     EntityRelationshipType,
 )
+from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 from my_pa.domain.source.registry import issue_identifier
 
 ENTITY: Final = issue_identifier(IdKind.ENTITY)
@@ -194,22 +202,35 @@ SPAN_CITERS: Final[tuple[Capability, ...]] = (
     Capability.ENTITIES_ALIASES_SUPERSEDE,
 )
 
-#: `WP-RI-B-06`'s two, which cite observations and are not in `OBSERVATION_CITERS`.
+MULTI_SOURCE_CITERS: Final[frozenset[Capability]] = frozenset(
+    {Capability.ENTITIES_PROPOSALS_CREATE}
+)
+
+
+def _with_proposal_evidence(kind: str, reference: str) -> CreateEntityProposal:
+    target = {
+        "observation": "entity_observation_id",
+        "capture_span": "capture_span_id",
+        "knowledge": "knowledge_id",
+    }[kind]
+    return CreateEntityProposal(
+        kind=EntityProposalKind.RECORD_ALIAS,
+        payload={
+            "entity_id": ENTITY,
+            "alias_type": "nickname",
+            "display_value": "Ev",
+        },
+        evidence=({"role": "supporting", target: reference},),
+    )
+
+
+#: `WP-RI-B-06`'s two, which cite observations and are not in the producer or
+#: directed-write classifications above.
 #:
-#: **A third tuple rather than a fourth and fifth row in the first one**, because
-#: the two halves above are about a *split* this pair does not belong to: an
-#: assignment cites an observation and an alias cites a span, and each of the two
-#: sweeps drives its capability's own command builder to prove the other two
-#: reference kinds are refused. The governed merge cites observations through
-#: `evidence_refs` like the first half, but its command is built by a different
-#: shape and it is operator-only, so folding it into `OBSERVATION_CITERS` would
-#: put it through a sweep written for the directed writes and prove nothing about
-#: it. What it is here for is the exhaustiveness claim below, which is the only
-#: claim in this file that has to cover the whole plane.
-#:
-#: `entities.proposals.create` is deliberately absent: its bounded typed evidence
-#: tuple is exercised by the dedicated producer/promotion contract suite rather
-#: than by the directed-write command shapes this module sweeps.
+#: A separate classification because the governed merge cites observations
+#: through an operator-only preview/execution shape. Folding it into
+#: `OBSERVATION_CITERS` would put it through a directed-write constructor sweep
+#: that cannot build it and would prove nothing about its actual contract.
 IDENTITY_CITERS: Final[frozenset[Capability]] = frozenset(
     {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
 )
@@ -243,11 +264,16 @@ def test_an_identifier_or_alias_write_cites_a_span_and_refuses_the_other_two(
         _with_span_evidence(capability, (reference,))
 
 
-def test_no_capability_on_the_plane_admits_a_knowledge_record() -> None:
-    """The third column, admitted by nothing, stated once rather than eight times.
+@pytest.mark.parametrize(("kind", "reference"), tuple(CITED_KINDS.items()))
+def test_the_proposal_producer_admits_each_typed_evidence_source(kind: str, reference: str) -> None:
+    assert _with_proposal_evidence(kind, reference) is not None
+
+
+def test_only_the_proposal_producer_admits_a_knowledge_record() -> None:
+    """The third column is producer-only, stated once rather than eight times.
 
     A guard rather than a comment: `entity_fact_evidence_links.knowledge_id`
-    exists, so "no caller can fill it" is a property of the write surface that
+    exists, so which caller can fill it is a property of the write surface that
     can stop being true, and this is where it would.
     """
     knowledge = CITED_KINDS["knowledge"]
@@ -257,16 +283,16 @@ def test_no_capability_on_the_plane_admits_a_knowledge_record() -> None:
     for capability in SPAN_CITERS:
         with pytest.raises(InvalidRequestError):
             _with_span_evidence(capability, (knowledge,))
+    assert _with_proposal_evidence("knowledge", knowledge) is not None
 
 
-def test_the_two_citing_halves_are_the_whole_of_what_a_caller_may_cite() -> None:
+def test_every_entity_citing_shape_is_exhaustively_classified() -> None:
     """The population, read off the commands rather than off this file.
 
     Every write capability whose command declares an `evidence` or
-    `evidence_refs` field is in exactly one of the two tuples above. A ninth
-    citing write added to the plane and not to this module reddens, which is the
-    failure this guard exists for: the two subsets above are only meaningful if
-    they are exhaustive.
+    `evidence_refs` field is in exactly one classification above. A new citing
+    write added to the plane and not to this module reddens, which is the failure
+    this guard exists for: the subsets above are only meaningful if exhaustive.
     """
     citing = {
         capability
@@ -274,7 +300,9 @@ def test_the_two_citing_halves_are_the_whole_of_what_a_caller_may_cite() -> None
         if capability.value.startswith("entities.")
         and ({"evidence", "evidence_refs"} & {f.name for f in dataclasses.fields(shape)})
     }
-    assert citing == set(OBSERVATION_CITERS) | set(SPAN_CITERS) | IDENTITY_CITERS
+    assert citing == (
+        set(OBSERVATION_CITERS) | set(SPAN_CITERS) | MULTI_SOURCE_CITERS | IDENTITY_CITERS
+    )
 
 
 def test_the_resolution_write_names_no_evidence_a_caller_supplied() -> None:

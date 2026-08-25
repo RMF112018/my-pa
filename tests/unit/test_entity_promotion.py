@@ -283,6 +283,16 @@ def a_proposal(
     )
 
 
+def _corrupted_payload(
+    kind: EntityProposalKind, values: tuple[tuple[str, str | bool], ...]
+) -> EntityProposalPayload:
+    """Simulate a corrupt persisted row without weakening payload admission."""
+    payload = object.__new__(EntityProposalPayload)
+    object.__setattr__(payload, "kind", kind)
+    object.__setattr__(payload, "values", values)
+    return payload
+
+
 # --- the table is complete, and complete in both directions ------------------
 
 
@@ -529,9 +539,9 @@ def test_a_stored_value_outside_its_vocabulary_is_refused_at_promotion() -> None
     proposal = a_proposal(EntityProposalKind.RECORD_ALIAS)
     smuggled = dataclasses.replace(
         proposal,
-        payload=EntityProposalPayload(
-            kind=EntityProposalKind.RECORD_ALIAS,
-            values=(
+        payload=_corrupted_payload(
+            EntityProposalKind.RECORD_ALIAS,
+            (
                 ("alias_type", "endearment"),
                 ("display_value", "Ali"),
                 ("entity_id", ALICE),
@@ -546,9 +556,9 @@ def test_a_stored_instant_that_is_not_iso_8601_is_refused_at_promotion() -> None
     proposal = a_proposal(EntityProposalKind.BIND_IDENTIFIER)
     smuggled = dataclasses.replace(
         proposal,
-        payload=EntityProposalPayload(
-            kind=EntityProposalKind.BIND_IDENTIFIER,
-            values=(
+        payload=_corrupted_payload(
+            EntityProposalKind.BIND_IDENTIFIER,
+            (
                 ("display_value", "a.chen@acme.invalid"),
                 ("effective_from", "last Tuesday"),
                 ("entity_id", ALICE),

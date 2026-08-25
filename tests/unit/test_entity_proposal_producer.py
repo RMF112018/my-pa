@@ -209,7 +209,9 @@ def test_the_server_owns_the_state_the_moment_and_the_digest(
     admitted = _propose(governing)
     stored = _entities(world).proposal(PRINCIPAL, admitted.proposal_id)
     assert stored is not None
-    assert stored.state is EntityProposalState.PROPOSED
+    assert stored.state is EntityProposalState.NEEDS_REVIEW
+    assert stored.review_case_id == admitted.review_case_id
+    assert admitted.review_version == 0
     assert stored.proposed_at == WHEN
     assert stored.dedupe_sha256 == dedupe_digest(
         EntityProposalPayload.of(EntityProposalKind.RECORD_ALIAS, ALIAS_PAYLOAD)
@@ -349,6 +351,7 @@ def test_a_deferred_proposal_still_absorbs_an_identical_one(
             method=EntityProposalMethod.DETERMINISTIC,
             method_version="1",
             dedupe_sha256=dedupe_digest(payload),
+            review_case_id="rvw_dddd0004dddd0004",
             decided_by="a reviewer",
             decided_at=LATER,
             decision_reason="ask her first",

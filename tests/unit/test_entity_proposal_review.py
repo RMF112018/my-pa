@@ -45,8 +45,12 @@ from my_pa.application.entity_governance import (
     ProposalAdmission,
     ProposedEvidence,
     ReviewAuthorityError,
+    _review_case_for,
 )
-from my_pa.application.entity_promotion import StaleTargetVersionError
+from my_pa.application.entity_promotion import (
+    StaleTargetVersionError,
+    requires_expected_target_version,
+)
 from my_pa.contracts.ports import ReviewDecisionRequest, UnknownScopeError
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
@@ -57,6 +61,7 @@ from my_pa.domain.capture.review import (
     ReviewNotFoundError,
     ReviewSubjectKind,
 )
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import (
@@ -180,6 +185,8 @@ def _propose(
     evidence: tuple[ProposedEvidence, ...] = (),
     expected_target_version: int | None = None,
 ) -> ProposalAdmission:
+    if expected_target_version is None and requires_expected_target_version(kind):
+        expected_target_version = 1
     return governing.propose(
         PRINCIPAL,
         kind=kind,
@@ -236,10 +243,10 @@ def _staged(entities: FakeEntities, governing: EntityGovernanceService) -> Propo
 # --- the case, and which kinds open one --------------------------------------
 
 
-def test_a_review_requiring_kind_opens_a_case_and_a_threshold_kind_does_not(
+def test_every_producer_kind_opens_a_case_until_an_automatic_promoter_exists(
     entities: FakeEntities, governing: EntityGovernanceService
 ) -> None:
-    """`requirement_for` decides, so a queue of cases is a queue of things awaiting a person."""
+    """Threshold eligibility cannot strand a proposal outside its only execution path."""
     entities.create(PRINCIPAL, an_entity())
     reviewed = _propose(governing)
     automatic = _propose(governing, kind=EntityProposalKind.RECORD_ALIAS, payload=ALIAS_PAYLOAD)
@@ -250,7 +257,14 @@ def test_a_review_requiring_kind_opens_a_case_and_a_threshold_kind_does_not(
     assert held is not None
     assert threshold is not None
     assert held.review_case_id is not None
-    assert threshold.review_case_id is None
+    assert threshold.review_case_id is not None
+
+
+@pytest.mark.parametrize("kind", tuple(EntityProposalKind), ids=lambda kind: kind.value)
+def test_every_producer_kind_is_assigned_a_canonical_review_case(
+    kind: EntityProposalKind,
+) -> None:
+    validate_identifier(_review_case_for(kind), IdKind.REVIEW_CASE)
 
 
 def test_an_entity_case_appears_on_the_one_canonical_surface(

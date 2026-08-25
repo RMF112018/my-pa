@@ -26,15 +26,21 @@ from typing import Final
 
 import pytest
 
+from my_pa.adapters.mcp.tools import payload_schema_for
+from my_pa.adapters.normalization import normalize
+from my_pa.application.commands import CreateEntityProposal
 from my_pa.application.entity_promotion import (
     UnpromotableProposalError,
     evidence_links_for,
     promotion_for,
+    requires_expected_target_version,
 )
+from my_pa.application.errors import InvalidRequestError
 from my_pa.domain.relationship.entity import AliasType, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import (
     IDENTITY_CORRECTION_PROPOSAL_KINDS,
     EntityProposal,
+    EntityProposalEvidenceLink,
     EntityProposalKind,
     EntityProposalMethod,
     EntityProposalState,
@@ -61,6 +67,25 @@ OBSERVATION: Final = "eobs_aaaa0001aaaa0001"
 
 WHEN: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
 LATER: Final = datetime(2026, 8, 18, 13, tzinfo=UTC)
+
+
+def exact_evidence(
+    *observation_ids: str, role: EvidenceRole = EvidenceRole.SUPPORTING
+) -> tuple[EntityProposalEvidenceLink, ...]:
+    return tuple(
+        EntityProposalEvidenceLink(
+            proposal_id=PROPOSAL,
+            principal_id=PRINCIPAL,
+            sequence=sequence,
+            role=role,
+            created_at=WHEN,
+            entity_observation_id=observation_id,
+        )
+        for sequence, observation_id in enumerate(observation_ids, start=1)
+    )
+
+
+PUBLIC_EVIDENCE: Final = ({"role": "supporting", "entity_observation_id": OBSERVATION},)
 
 #: One well-formed payload per ordinary kind.
 #:
@@ -157,6 +182,79 @@ PAYLOADS: Final[dict[EntityProposalKind, dict[str, str | bool]]] = {
 ORDINARY_KINDS: Final = tuple(
     kind for kind in EntityProposalKind if kind not in IDENTITY_CORRECTION_PROPOSAL_KINDS
 )
+
+
+def public_payload(kind: EntityProposalKind) -> dict[str, str | bool]:
+    if kind in PAYLOADS:
+        return PAYLOADS[kind]
+    if kind is EntityProposalKind.MERGE_ENTITIES:
+        return {"retained_entity_id": ALICE, "merged_entity_id": ACME, "reason": "duplicate"}
+    return {"entity_id": ALICE, "reason": "incorrect prior merge"}
+
+
+@pytest.mark.parametrize("kind", tuple(EntityProposalKind), ids=lambda kind: kind.value)
+def test_public_expected_target_version_is_required_exactly_for_existing_targets(
+    kind: EntityProposalKind,
+) -> None:
+    expected = 0 if kind is EntityProposalKind.RESOLVE_MENTION else 1
+    if requires_expected_target_version(kind):
+        with pytest.raises(InvalidRequestError):
+            CreateEntityProposal(kind=kind, payload=public_payload(kind), evidence=PUBLIC_EVIDENCE)
+        CreateEntityProposal(
+            kind=kind,
+            payload=public_payload(kind),
+            evidence=PUBLIC_EVIDENCE,
+            expected_target_version=expected,
+        )
+    else:
+        CreateEntityProposal(kind=kind, payload=public_payload(kind), evidence=PUBLIC_EVIDENCE)
+        with pytest.raises(InvalidRequestError):
+            CreateEntityProposal(
+                kind=kind,
+                payload=public_payload(kind),
+                evidence=PUBLIC_EVIDENCE,
+                expected_target_version=1,
+            )
+
+
+def test_public_proposal_requires_typed_exact_evidence_and_has_no_proposed_by_field() -> None:
+    with pytest.raises(InvalidRequestError):
+        CreateEntityProposal(
+            kind=EntityProposalKind.RECORD_ALIAS,
+            payload=PAYLOADS[EntityProposalKind.RECORD_ALIAS],
+            evidence=(),
+        )
+    assert "proposed_by" not in {field.name for field in dataclasses.fields(CreateEntityProposal)}
+
+
+def test_public_proposal_schema_publishes_bounded_typed_evidence() -> None:
+    schema = payload_schema_for(CreateEntityProposal)
+    assert "evidence" in schema["required"]
+    assert "proposed_by" not in schema["properties"]
+    evidence = schema["properties"]["evidence"]
+    assert evidence["minItems"] == 1
+    assert evidence["maxItems"] == 8
+    assert evidence["items"]["required"] == ["role"]
+    assert len(evidence["items"]["oneOf"]) == 3
+
+
+def test_public_normalization_refuses_caller_controlled_proposed_by() -> None:
+    with pytest.raises(InvalidRequestError):
+        normalize(
+            "entities.proposals.create",
+            {
+                "request_id": "req-entity-proposal",
+                "purpose": "entity_proposal",
+                "principal_id": PRINCIPAL,
+                "requested_at": WHEN.isoformat(),
+                "payload": {
+                    "kind": "record_alias",
+                    "payload": PAYLOADS[EntityProposalKind.RECORD_ALIAS],
+                    "evidence": list(PUBLIC_EVIDENCE),
+                    "proposed_by": "caller-controlled",
+                },
+            },
+        )
 
 
 def a_proposal(
@@ -472,12 +570,8 @@ def test_promoted_evidence_links_cite_the_observations_and_carry_review_authorit
     capture spans — so the observations a producer cited would otherwise be lost
     at exactly the moment the fact becomes canonical.
     """
-    proposal = a_proposal(
-        EntityProposalKind.RECORD_ALIAS,
-        observation_ids=(OBSERVATION, "eobs_bbbb0002bbbb0002"),
-    )
     links = evidence_links_for(
-        proposal,
+        exact_evidence(OBSERVATION, "eobs_bbbb0002bbbb0002"),
         principal_id=PRINCIPAL,
         record_family=MutationRecordFamily.ALIAS,
         record_id=ALIAS,
@@ -494,6 +588,38 @@ def test_promoted_evidence_links_cite_the_observations_and_carry_review_authorit
     assert len({link.link_id for link in links}) == 2
 
 
+def test_promotion_preserves_span_knowledge_and_counterevidence_roles() -> None:
+    evidence = (
+        EntityProposalEvidenceLink(
+            proposal_id=PROPOSAL,
+            principal_id=PRINCIPAL,
+            sequence=1,
+            role=EvidenceRole.DIRECT,
+            created_at=WHEN,
+            capture_span_id="span_aaaa0001aaaa0001",
+        ),
+        EntityProposalEvidenceLink(
+            proposal_id=PROPOSAL,
+            principal_id=PRINCIPAL,
+            sequence=2,
+            role=EvidenceRole.COUNTEREVIDENCE,
+            created_at=WHEN,
+            knowledge_id="kn_aaaa0001aaaa0001",
+        ),
+    )
+    links = evidence_links_for(
+        evidence,
+        principal_id=PRINCIPAL,
+        record_family=MutationRecordFamily.ALIAS,
+        record_id=ALIAS,
+        at=LATER,
+    )
+    assert links[0].capture_span_id == "span_aaaa0001aaaa0001"
+    assert links[0].role is EvidenceRole.DIRECT
+    assert links[1].knowledge_id == "kn_aaaa0001aaaa0001"
+    assert links[1].role is EvidenceRole.COUNTEREVIDENCE
+
+
 def test_a_promotion_authority_is_review_acceptance_and_not_the_users_own() -> None:
     """The value section 14 names, and the two it must not be.
 
@@ -504,7 +630,7 @@ def test_a_promotion_authority_is_review_acceptance_and_not_the_users_own() -> N
     member that is.
     """
     links = evidence_links_for(
-        a_proposal(EntityProposalKind.RECORD_ALIAS, observation_ids=(OBSERVATION,)),
+        exact_evidence(OBSERVATION),
         principal_id=PRINCIPAL,
         record_family=MutationRecordFamily.ALIAS,
         record_id=ALIAS,
@@ -531,7 +657,7 @@ def test_each_promoted_family_fills_its_own_fact_column(
 ) -> None:
     """`EntityFactEvidenceLink` refuses a row naming two facts, so the column matters."""
     (link,) = evidence_links_for(
-        a_proposal(EntityProposalKind.RECORD_ALIAS, observation_ids=(OBSERVATION,)),
+        exact_evidence(OBSERVATION),
         principal_id=PRINCIPAL,
         record_family=family,
         record_id=record_id,
@@ -544,7 +670,7 @@ def test_an_observation_promotion_writes_no_evidence_link() -> None:
     """A `resolve_mention` promotion's subject is the observation. See the source."""
     with pytest.raises(UnpromotableProposalError, match="no promoted evidence link"):
         evidence_links_for(
-            a_proposal(EntityProposalKind.RESOLVE_MENTION, observation_ids=(OBSERVATION,)),
+            exact_evidence(OBSERVATION),
             principal_id=PRINCIPAL,
             record_family=MutationRecordFamily.OBSERVATION,
             record_id=OBSERVATION,
@@ -552,11 +678,10 @@ def test_an_observation_promotion_writes_no_evidence_link() -> None:
         )
 
 
-def test_a_proposal_citing_nothing_promotes_no_evidence_link() -> None:
-    """No links rather than an error: a proposal may legitimately cite nothing."""
+def test_an_empty_exact_evidence_set_produces_no_links() -> None:
     assert (
         evidence_links_for(
-            a_proposal(EntityProposalKind.RECORD_ALIAS),
+            (),
             principal_id=PRINCIPAL,
             record_family=MutationRecordFamily.ALIAS,
             record_id=ALIAS,

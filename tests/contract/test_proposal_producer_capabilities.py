@@ -12,10 +12,10 @@ Three things are asserted that nothing else can assert from a registry:
 * **what the receipt carries, and what it does not.** The entity producer is
   handed a proposal identifier, its state, what it will need before it can be
   accepted, the digest that makes a repeat a refusal rather than a second row,
-  and the audit reference. It is handed **no review case identifier**: a producer
-  holding one would hold half of a reviewer's read. The memory producer is handed
-  a case identifier — its plane mints one at proposal time so a candidate written
-  without one would be invisible to every reviewer — and **no statement**, because
+  the server-minted review case and its initial version, the digest that makes a
+  repeat a refusal rather than a second row, and the audit reference. The memory
+  producer is also handed a case identifier — a candidate written without one
+  would be invisible to every reviewer — and **no statement**, because
   a `sensitivity` candidate floors at `restricted_local` and the read plane
   withholds restricted statements from search.
 * **that a repeat is answered rather than multiplied.** Operator section 11
@@ -42,6 +42,7 @@ from my_pa.application.commands import (
     CreateEntityProposal,
     ProposeRelationshipMemory,
 )
+from my_pa.application.entity_promotion import requires_expected_target_version
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
@@ -71,6 +72,7 @@ def _result(scene: Scene, capability: Capability, purpose: Purpose, command: Com
 
 
 def _proposal(scene: Scene, *, kind: EntityProposalKind, payload: dict[str, str | bool]) -> Any:  # noqa: ANN401 - a canonical envelope payload
+    expected = 1 if requires_expected_target_version(kind) else None
     return _result(
         scene,
         Capability.ENTITIES_PROPOSALS_CREATE,
@@ -78,8 +80,8 @@ def _proposal(scene: Scene, *, kind: EntityProposalKind, payload: dict[str, str 
         CreateEntityProposal(
             kind=kind,
             payload=payload,
-            proposed_by="a-rule",
-            evidence_observation_ids=(staged_mention(scene),),
+            evidence=({"role": "direct", "entity_observation_id": staged_mention(scene)},),
+            expected_target_version=expected,
         ),
     )
 
@@ -103,7 +105,9 @@ def test_a_producer_raises_an_entity_proposal_and_is_told_what_it_will_need(
     assert result["kind"] == EntityProposalKind.RECORD_ALIAS.value
     assert result["created"] is True
     assert result["review_requirement"] == ReviewRequirement.MAY_BE_ACCEPTED_AUTOMATICALLY.value
-    assert result["evidence_refs"] == [staged_mention(scene)]
+    assert result["evidence_refs"] == [
+        {"role": "direct", "entity_observation_id": staged_mention(scene)}
+    ]
     assert result["audit_id"]
     # The digest is the server's, and it is disclosed because a producer has to
     # be able to see that a repeat will be recognised as one.
@@ -111,19 +115,12 @@ def test_a_producer_raises_an_entity_proposal_and_is_told_what_it_will_need(
     assert len(result["dedupe_sha256"]) == 64
 
 
-def test_the_entity_receipt_names_no_review_case(scene: Scene) -> None:
-    """Operator section 11's server-owned list, checked from the producer's side.
-
-    A producer handed a review case identifier holds half of a reviewer's read:
-    it could list the case, watch the decision arrive, and correlate a rejection
-    with the candidate that drew it. `ProposalAdmission` carries none, and this
-    is the assertion that keeps the receipt from growing one.
-    """
+def test_the_entity_receipt_names_its_canonical_review_case(scene: Scene) -> None:
     result = _proposal(scene, kind=EntityProposalKind.RECORD_ALIAS, payload=_alias_payload(scene))
-
+    assert parse_identifier(str(result["review_case_id"]))[0] is IdKind.REVIEW_CASE
+    assert result["review_version"] == 0
+    assert result["proposal_version"] == 1
     for absent in (
-        "review_case_id",
-        "review_version",
         "principal_id",
         "method",
         "method_version",
@@ -347,7 +344,8 @@ def test_a_payload_its_kind_refuses_is_an_invalid_request_and_not_a_crash(
         CreateEntityProposal(
             kind=EntityProposalKind.UPDATE_ENTITY,
             payload=payload,
-            proposed_by="a-rule",
+            evidence=({"role": "direct", "entity_observation_id": staged_mention(scene)},),
+            expected_target_version=1,
         ),
         principal=scene.principal,
     )

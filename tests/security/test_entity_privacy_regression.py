@@ -525,8 +525,12 @@ _EVERY_CAPABILITY: Final = (
                 "alias_type": "nickname",
                 "display_value": "Conf",
             },
-            proposed_by="privacy-producer",
-            expected_target_version=1,
+            evidence=(
+                {
+                    "role": "direct",
+                    "entity_observation_id": "eobs_privacy0001privacy01",
+                },
+            ),
         ),
     ),
     (

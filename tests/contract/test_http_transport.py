@@ -878,7 +878,12 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 "alias_type": "initials",
                 "display_value": "PP",
             },
-            "proposed_by": "http-wire-producer",
+            "evidence": [
+                {
+                    "role": "supporting",
+                    "entity_observation_id": "eobs_httpwire01httpwire01",
+                }
+            ],
             "expected_target_version": person.version,
         },
         # `WP-RI-B-06`'s two, refused at the composition floor. Well formed for
@@ -1437,8 +1442,7 @@ def commands_for(
                 "alias_type": "initials",
                 "display_value": "PP",
             },
-            proposed_by="http-wire-producer",
-            expected_target_version=person.version,
+            evidence=({"role": "direct", "entity_observation_id": "eobs_httpwire01httpwire01"},),
         ),
         Capability.ENTITIES_MERGE_PREVIEW: PreviewEntityMerge(
             survivor_entity_id=person.entity_id,

@@ -1480,6 +1480,19 @@ class EntitiesRepository(ABC):
         """Everything one proposal rests on, in the order it was cited."""
         raise NotImplementedError
 
+    def proposal_evidence_for(
+        self, principal_id: str, proposal_id: str
+    ) -> tuple[EntityProposalEvidenceLink, ...]:
+        """The immutable exact evidence set used by canonical promotion.
+
+        Kept as a promotion-facing read separate from the legacy list-shaped
+        method so callers cannot accidentally fall back to
+        ``EntityProposal.observation_ids``. Existing repositories get the exact
+        behavior through their ordered link read; persistence owners may
+        implement it directly when adding stronger atomicity guarantees.
+        """
+        return tuple(self.proposal_evidence_links(principal_id, proposal_id))
+
     def record_proposal_promotion(
         self,
         principal_id: str,

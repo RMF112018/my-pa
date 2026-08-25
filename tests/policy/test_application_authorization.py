@@ -475,7 +475,12 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
                 "alias_type": "nickname",
                 "display_value": "Ali",
             },
-            proposed_by="policy-producer",
+            evidence=(
+                {
+                    "role": "direct",
+                    "entity_observation_id": issue_identifier(IdKind.ENTITY_OBSERVATION),
+                },
+            ),
         ),
         Capability.RELATIONSHIP_MEMORY_PROPOSE: ProposeRelationshipMemory(
             entity_id=issue_identifier(IdKind.ENTITY),

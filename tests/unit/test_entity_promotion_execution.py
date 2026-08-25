@@ -281,19 +281,21 @@ def test_a_promotion_reads_the_entity_version_now_rather_than_at_proposal_time(
 # --- property 2: no context, no canonical record ------------------------------
 
 
-def test_accepting_without_a_promotion_context_writes_no_canonical_record(
+def test_accepting_an_ordinary_proposal_without_promotion_is_refused(
     world: World, governing: EntityGovernanceService
 ) -> None:
-    """Recording a decision and carrying it out are two acts."""
+    """An ordinary acceptance and its canonical mutation are one transaction."""
     entities = _entities(world)
     entities.create(PRINCIPAL, an_entity())
     admitted = _propose(governing)
 
-    decided = _accept(governing, admitted.proposal_id, promotion=None)
+    with pytest.raises(InvalidPromotionError, match="requires canonical promotion"):
+        _accept(governing, admitted.proposal_id, promotion=None)
 
-    assert decided.state is EntityProposalState.ACCEPTED
-    assert decided.decided_by == "reviewer"
-    assert decided.accepted_record_id is None
+    decided = entities.proposal(PRINCIPAL, admitted.proposal_id)
+    assert decided is not None
+    assert decided.state is EntityProposalState.NEEDS_REVIEW
+    assert decided.decided_by is None
     assert entities.aliases(PRINCIPAL, ALICE) == []
     entity = entities.get(PRINCIPAL, ALICE)
     assert entity is not None
@@ -402,8 +404,40 @@ def test_the_cited_observations_are_linked_to_the_record_the_promotion_produced(
         if link.alias_id == alias.alias_id
     ]
     assert len(linked) == 1
-    assert linked[0].role is EvidenceRole.SUPPORTING
+    assert linked[0].role is EvidenceRole.DIRECT
     assert linked[0].authority is MutationAuthority.REVIEW_ACCEPTED
+
+
+def test_exact_span_and_knowledge_evidence_survive_canonical_promotion(
+    world: World, governing: EntityGovernanceService
+) -> None:
+    entities = _entities(world)
+    entities.create(PRINCIPAL, an_entity())
+    admitted = _propose(
+        governing,
+        evidence=(
+            ProposedEvidence(
+                role=EvidenceRole.SUPPORTING,
+                capture_span_id="span_cccc0003cccc0003",
+            ),
+            ProposedEvidence(
+                role=EvidenceRole.COUNTEREVIDENCE,
+                knowledge_id="kn_cccc0003cccc0003",
+            ),
+        ),
+    )
+
+    _accept(governing, admitted.proposal_id, promotion=a_context())
+
+    alias = entities.aliases(PRINCIPAL, ALICE)[0]
+    links = [
+        link for link in entities.fact_evidence_links(PRINCIPAL) if link.alias_id == alias.alias_id
+    ]
+    assert {(link.capture_span_id, link.knowledge_id, link.role) for link in links} == {
+        ("span_cccc0003cccc0003", None, EvidenceRole.SUPPORTING),
+        (None, "kn_cccc0003cccc0003", EvidenceRole.COUNTEREVIDENCE),
+    }
+    assert all(link.authority is MutationAuthority.REVIEW_ACCEPTED for link in links)
 
 
 def test_the_proposals_own_evidence_is_written_when_it_is_proposed(
@@ -451,6 +485,7 @@ def test_promoting_a_mention_resolution_without_a_resolver_is_refused(
         governing,
         kind=EntityProposalKind.RESOLVE_MENTION,
         payload={"observation_id": OBSERVATION, "disposition": "defer", "reason": "unclear"},
+        expected_target_version=0,
     )
 
     with pytest.raises(InvalidPromotionError):

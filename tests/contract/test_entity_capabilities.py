@@ -754,8 +754,7 @@ _OFF_SWITCH_COMMANDS: dict[Capability, object] = {
     Capability.ENTITIES_PROPOSALS_CREATE: CreateEntityProposal(
         kind=EntityProposalKind.RECORD_ALIAS,
         payload={"entity_id": ALICE, "display_value": "A. Chen", "alias_type": "nickname"},
-        proposed_by="off-switch-producer",
-        expected_target_version=1,
+        evidence=({"role": "direct", "entity_observation_id": "eobs_offswitch0001"},),
     ),
     Capability.ENTITIES_MERGE_PREVIEW: PreviewEntityMerge(
         survivor_entity_id=ALICE,

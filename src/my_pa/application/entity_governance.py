@@ -175,7 +175,6 @@ from my_pa.domain.relationship.governance import (
     ReviewRequirement,
     StaleResolutionVersionError,
     capture_origin_triple,
-    initial_state_for,
     origin_of,
     requirement_for,
 )
@@ -455,24 +454,11 @@ class EntityGovernanceService:
         returned admission says `created=False`, so a caller can tell "recorded"
         from "already open" without the two being one answer.
 
-        **A review case is opened here for the kinds that need one, and the
-        producer is still handed nothing.** This sentence used to read "no review
-        case is opened here and none is named: the Review plane owns that, and a
-        producer that could name a case could name one already decided". The
-        second half is still exactly right and is still enforced: `propose` takes
-        no case identifier, `ProposalAdmission` returns none, and a producer
-        therefore holds no half of a reviewer's read. What was wrong was the
-        first half — a case nothing ever opens is a case no reviewer can ever
-        decide, and `review.list` would have shown an empty Entity plane forever.
-
-        So the case identifier is *minted by the server* here, on exactly the
-        terms `proposal_id`, `proposed_at` and `initial_state_for(kind)` are, and
-        it is minted for exactly the kinds `requirement_for` says a person must
-        look at. That is the same rule `routes_to_review` applies on the capture
-        plane, read off the requirement this plane already derives instead of off
-        a risk label. A kind a configured threshold may accept opens no case and
-        carries no case identifier, which is what makes "has a case" and "is
-        waiting for a person" one fact rather than two.
+        **A review case is opened here for every kind.** No automatic promoter is
+        configured in this build, so a threshold-eligible proposal without a case
+        would be stranded outside every executable path. The producer cannot
+        supply the case identifier; the server mints and returns it as part of
+        the canonical receipt so the proposal can be correlated with Review.
 
         No mutation-ledger row is written, and that is the ledger's own rule
         rather than an omission — `MutationRecordFamily` holds the six canonical
@@ -495,12 +481,11 @@ class EntityGovernanceService:
             proposal_id=issue_identifier(IdKind.ENTITY_PROPOSAL),
             principal_id=principal_id,
             kind=kind,
-            # Derived from the kind's review requirement rather than written as
-            # one literal for all seventeen. `initial_state_for` argues it; what
-            # matters here is that this is still a *server* decision with no
-            # parameter behind it, and that both answers it can give are states
-            # nothing has decided.
-            state=initial_state_for(kind),
+            # Every producer proposal waits on the canonical Review plane. The
+            # configured automatic promoter Phase B would need does not exist,
+            # so leaving threshold-eligible kinds in `proposed` would strand
+            # them outside every executable path.
+            state=EntityProposalState.NEEDS_REVIEW,
             payload=checked,
             observation_ids=observation_ids,
             proposed_at=ensure_utc(at),
@@ -769,6 +754,15 @@ class EntityGovernanceService:
         knows to look for one.
         """
         corrected = corrected_payload is not None
+        if promotion is None:
+            held_for_promotion = self._entities.proposal(principal_id, proposal_id)
+            if (
+                held_for_promotion is not None
+                and held_for_promotion.kind not in IDENTITY_CORRECTION_PROPOSAL_KINDS
+            ):
+                raise InvalidPromotionError(
+                    "an ordinary accepted proposal requires canonical promotion"
+                )
         decided = self._decide(
             principal_id,
             proposal_id,
@@ -911,7 +905,7 @@ class EntityGovernanceService:
         )
         if promoted.record_family is not MutationRecordFamily.OBSERVATION:
             for link in evidence_links_for(
-                proposal,
+                self._entities.proposal_evidence_for(principal_id, proposal.proposal_id),
                 principal_id=principal_id,
                 record_family=promoted.record_family,
                 record_id=promoted.record_id,
@@ -2430,9 +2424,8 @@ class ProposalAdmission:
     for the operator, or may clear a threshold. Reading it off the admission is
     how a producer learns that without guessing from the kind.
 
-    No review case identifier and no review version. The Review plane opens the
-    case, and a producer handed a case identifier by the path that created the
-    proposal would hold half of a reviewer's read.
+    The server-minted review case identifier and its initial version are included
+    so the proposal receipt can be correlated with the canonical Review plane.
     """
 
     proposal_id: str
@@ -2442,27 +2435,23 @@ class ProposalAdmission:
     dedupe_sha256: str
     observation_ids: tuple[str, ...]
     proposed_at: datetime
+    review_case_id: str
+    review_version: int
     #: False when an open-equivalent proposal already said this, in which case
     #: every other field describes *that* proposal. The producer's request was
     #: understood and nothing was written.
     created: bool
 
 
-def _review_case_for(kind: EntityProposalKind) -> str | None:
-    """A freshly issued case identifier for a kind a person must look at.
-
-    `None` for a kind `requirement_for` admits to a configured threshold, which
-    is what keeps a queue of cases equal to a queue of things awaiting a person.
-    Derived from the requirement rather than from a second table, on
-    `initial_state_for`'s terms: a kind added to `_REQUIREMENT_BY_KIND` gets its
-    review case from the same rule on the same day.
-    """
-    if requirement_for(kind) is ReviewRequirement.MAY_BE_ACCEPTED_AUTOMATICALLY:
-        return None
+def _review_case_for(kind: EntityProposalKind) -> str:
+    """A freshly issued canonical Review case for every producer proposal."""
+    requirement_for(kind)  # totality guard for a future kind
     return issue_identifier(IdKind.REVIEW_CASE)
 
 
 def _admission(proposal: EntityProposal, *, created: bool) -> ProposalAdmission:
+    if proposal.review_case_id is None:
+        raise ValueError("a producer proposal belongs to the canonical Review plane")
     return ProposalAdmission(
         proposal_id=proposal.proposal_id,
         kind=proposal.kind,
@@ -2471,6 +2460,8 @@ def _admission(proposal: EntityProposal, *, created: bool) -> ProposalAdmission:
         dedupe_sha256=proposal.dedupe_sha256,
         observation_ids=proposal.observation_ids,
         proposed_at=proposal.proposed_at,
+        review_case_id=proposal.review_case_id,
+        review_version=0,
         created=created,
     )
 

@@ -119,6 +119,7 @@ from my_pa.domain.relationship.governance import (
     ENTITY_CHANGE_REASON_LIMIT,
     MENTION_DISPLAY_NAME_LIMIT,
     OBSERVED_VALUE_LIMIT,
+    EvidenceRole,
     ObservationAuthority,
     ObservationKind,
     ResolutionDisposition,
@@ -5309,6 +5310,38 @@ def _memory_proposal_evidence(value: object) -> tuple[Mapping[str, str], ...]:
     return value
 
 
+def _entity_proposal_evidence(value: object) -> tuple[Mapping[str, str], ...]:
+    """A bounded, non-empty tuple of typed exact evidence references."""
+    if not isinstance(value, tuple) or not value:
+        raise InvalidRequestError(SafeDetail.EVIDENCE)
+    if len(value) > MAX_EVIDENCE_REFERENCES:
+        raise InvalidRequestError(SafeDetail.EVIDENCE)
+    seen: set[tuple[str, str, str]] = set()
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        if set(entry) - set(_MEMORY_EVIDENCE_TARGETS) - {"role"}:
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        role = entry.get("role")
+        if not isinstance(role, str):
+            raise InvalidRequestError(SafeDetail.ROLE)
+        try:
+            EvidenceRole(role)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.ROLE) from None
+        named = [name for name in _MEMORY_EVIDENCE_TARGETS if entry.get(name) is not None]
+        if len(named) != 1:
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        target = named[0]
+        reference = entry[target]
+        _identifier(reference, _MEMORY_EVIDENCE_TARGETS[target], SafeDetail.EVIDENCE)
+        identity = (role, target, reference)
+        if identity in seen:
+            raise InvalidRequestError(SafeDetail.EVIDENCE)
+        seen.add(identity)
+    return value
+
+
 def _merged_away(value: object, survivor_entity_id: str) -> tuple[Mapping[str, object], ...]:
     """One to ten `(entity_id, expected_version)` pairs, distinct, without the survivor.
 
@@ -5404,16 +5437,39 @@ class CreateEntityProposal:
                 ),
                 "additionalProperties": {"type": ["string", "boolean"]},
             },
-            "evidence_observation_ids": {
-                "description": "Entity observation identifiers this proposal rests on."
+            "evidence": {
+                "description": (
+                    "One entry per exact record this proposal rests on. Each names a role "
+                    "and exactly one of entity_observation_id, capture_span_id or knowledge_id."
+                ),
+                "minItems": 1,
+                "maxItems": MAX_EVIDENCE_REFERENCES,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "role": {
+                            "type": "string",
+                            "enum": [role.value for role in EvidenceRole],
+                        },
+                        "entity_observation_id": {"type": "string"},
+                        "capture_span_id": {"type": "string"},
+                        "knowledge_id": {"type": "string"},
+                    },
+                    "required": ["role"],
+                    "oneOf": [
+                        {"required": ["entity_observation_id"]},
+                        {"required": ["capture_span_id"]},
+                        {"required": ["knowledge_id"]},
+                    ],
+                    "additionalProperties": False,
+                },
             },
         }
     )
 
     kind: EntityProposalKind
     payload: Mapping[str, object] = field(repr=False)
-    proposed_by: str
-    evidence_observation_ids: tuple[str, ...] = ()
+    evidence: tuple[Mapping[str, str], ...] = field(repr=False)
     expected_target_version: int | None = None
 
     def __post_init__(self) -> None:
@@ -5424,10 +5480,24 @@ class CreateEntityProposal:
         # a second copy of the schema able to disagree with the one the digest is
         # computed from.
         _proposal_payload(self.payload)
-        _proposed_by(self.proposed_by)
-        _proposal_observation_ids(self.evidence_observation_ids)
+        _entity_proposal_evidence(self.evidence)
+        # Imported locally to keep the one existing-target table in the
+        # promotion router without creating a module-import cycle.
+        from my_pa.application.entity_promotion import requires_expected_target_version
+
+        if requires_expected_target_version(self.kind) != (
+            self.expected_target_version is not None
+        ):
+            raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
         if self.expected_target_version is not None:
-            _expected_version(self.expected_target_version)
+            if self.kind is EntityProposalKind.RESOLVE_MENTION:
+                if (
+                    type(self.expected_target_version) is not int
+                    or self.expected_target_version < 0
+                ):
+                    raise InvalidRequestError(SafeDetail.EXPECTED_VERSION)
+            else:
+                _expected_version(self.expected_target_version)
 
 
 @dataclass(frozen=True, slots=True)

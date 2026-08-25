@@ -207,9 +207,9 @@ SPAN_CITERS: Final[tuple[Capability, ...]] = (
 #: it. What it is here for is the exhaustiveness claim below, which is the only
 #: claim in this file that has to cover the whole plane.
 #:
-#: `entities.proposals.create` is deliberately absent: it names its evidence in
-#: `evidence_observation_ids` rather than in either field this module reads, so
-#: the population derived below does not contain it.
+#: `entities.proposals.create` is deliberately absent: its bounded typed evidence
+#: tuple is exercised by the dedicated producer/promotion contract suite rather
+#: than by the directed-write command shapes this module sweeps.
 IDENTITY_CITERS: Final[frozenset[Capability]] = frozenset(
     {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
 )

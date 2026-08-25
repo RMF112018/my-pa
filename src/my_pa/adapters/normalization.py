@@ -1476,15 +1476,17 @@ def _correction_patch(patch: Any) -> CorrectionPatch:  # noqa: ANN401 - a decode
 
 def _create_entity_proposal(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
+    if "proposed_by" in converted:
+        raise InvalidRequestError(SafeDetail.PROPOSED_BY)
     kind = converted.get("kind")
     if isinstance(kind, str):
         try:
             converted["kind"] = EntityProposalKind(kind)
         except ValueError:
             raise InvalidRequestError(SafeDetail.PROPOSAL_KIND) from None
-    observations = converted.get("evidence_observation_ids")
-    if isinstance(observations, list):
-        converted["evidence_observation_ids"] = tuple(observations)
+    evidence = converted.get("evidence")
+    if isinstance(evidence, list):
+        converted["evidence"] = tuple(evidence)
     return CreateEntityProposal(**converted)
 
 

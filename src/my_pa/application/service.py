@@ -250,6 +250,9 @@ from my_pa.application.entity_governance import (
     UnknownEntityError,
     UnknownObservationError,
 )
+from my_pa.application.entity_governance import (
+    ProposedEvidence as EntityProposedEvidence,
+)
 from my_pa.application.entity_resolution import (
     ACTIVE_ASSIGNMENT_STATUS,
     ACTIVE_RELATIONSHIP_STATE,
@@ -421,6 +424,7 @@ from my_pa.domain.relationship.governance import (
     EntityMutationConflictError,
     EntityObservation,
     EntityProposalMethod,
+    EvidenceRole,
     ObservationAuthorityError,
     ObservationTimeError,
     StaleResolutionVersionError,
@@ -7620,9 +7624,8 @@ class ApplicationService:
 
         The producer's whole write surface on this plane. What comes back says
         what was recorded, what it will need before it can be accepted, and
-        whether this request created it or found the same thing already open --
-        and it carries no review case identifier, because a producer handed one
-        would hold half of a reviewer's read.
+        whether this request created it or found the same thing already open,
+        plus the server-minted canonical review case and its initial version.
 
         **The receipt is the audit event, not a mutation ledger row.**
         `entities.proposals.create` writes no `entity_mutation_events` row and
@@ -7642,21 +7645,33 @@ class ApplicationService:
                 authorization.principal.principal_id,
                 kind=command.kind,
                 payload=cast("Mapping[str, str | bool]", command.payload),
-                observation_ids=command.evidence_observation_ids,
-                proposed_by=command.proposed_by,
+                observation_ids=(),
+                proposed_by=authorization.principal.principal_id,
                 method=method,
                 method_version=method_version,
                 at=authorization.at,
+                evidence=tuple(
+                    EntityProposedEvidence(
+                        role=EvidenceRole(entry["role"]),
+                        entity_observation_id=entry.get("entity_observation_id"),
+                        capture_span_id=entry.get("capture_span_id"),
+                        knowledge_id=entry.get("knowledge_id"),
+                    )
+                    for entry in command.evidence
+                ),
                 expected_target_version=command.expected_target_version,
             )
         return _Result(
             payload={
                 "proposal_id": admission.proposal_id,
+                "proposal_version": 1,
                 "kind": admission.kind.value,
                 "state": admission.state.value,
                 "review_requirement": admission.requirement.value,
+                "review_case_id": admission.review_case_id,
+                "review_version": admission.review_version,
                 "dedupe_sha256": admission.dedupe_sha256,
-                "evidence_refs": list(admission.observation_ids),
+                "evidence_refs": [dict(entry) for entry in command.evidence],
                 "proposed_at": format_rfc3339(admission.proposed_at),
                 "created": admission.created,
                 "audit_id": authorization.audit_id,

@@ -45,7 +45,7 @@ away from.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -86,8 +86,8 @@ from my_pa.domain.relationship.governance import (
     EntityFactEvidenceLink,
     EntityGovernanceError,
     EntityProposal,
+    EntityProposalEvidenceLink,
     EntityProposalKind,
-    EvidenceRole,
     MutationAuthority,
     MutationRecordFamily,
     ResolutionDisposition,
@@ -103,6 +103,7 @@ __all__ = [
     "UnpromotableProposalError",
     "evidence_links_for",
     "promotion_for",
+    "requires_expected_target_version",
     "target_of",
 ]
 
@@ -342,7 +343,7 @@ def promotion_for(proposal: EntityProposal) -> PromotionCall:
 
 
 def evidence_links_for(
-    proposal: EntityProposal,
+    evidence: Sequence[EntityProposalEvidenceLink],
     *,
     principal_id: str,
     record_family: MutationRecordFamily,
@@ -368,9 +369,9 @@ def evidence_links_for(
     make. Nothing is invented here: the third member is the one the vocabulary
     was given for this act.
 
-    The role is `SUPPORTING` rather than `DIRECT`: the observation supports the
-    fact a reviewer accepted, and `DIRECT` is what the plane uses for a record
-    that *is* the fact stated.
+    The role survives unchanged. A reviewer accepted the proposal with both its
+    supporting basis and any counterevidence in view; rewriting every link as
+    supporting would launder the evidence at the promotion boundary.
 
     **The Principal is an argument and is not read off the proposal**, which is
     the rule every write on this plane follows: the owning Principal comes from
@@ -394,7 +395,7 @@ def evidence_links_for(
         EntityFactEvidenceLink(
             link_id=issue_identifier(IdKind.ENTITY_FACT_EVIDENCE_LINK),
             principal_id=principal_id,
-            role=EvidenceRole.SUPPORTING,
+            role=link.role,
             authority=MutationAuthority.REVIEW_ACCEPTED,
             created_at=at,
             entity_id=record_id if record_family is MutationRecordFamily.ENTITY else None,
@@ -404,9 +405,11 @@ def evidence_links_for(
             relationship_id=(
                 record_id if record_family is MutationRecordFamily.RELATIONSHIP else None
             ),
-            entity_observation_id=observation_id,
+            entity_observation_id=link.entity_observation_id,
+            capture_span_id=link.capture_span_id,
+            knowledge_id=link.knowledge_id,
         )
-        for observation_id in proposal.observation_ids
+        for link in evidence
     )
 
 
@@ -474,6 +477,11 @@ _TARGET_BY_KIND: Final[Mapping[EntityProposalKind, PromotionTarget]] = MappingPr
         ),
     }
 )
+
+
+def requires_expected_target_version(kind: EntityProposalKind) -> bool:
+    """Whether ``kind`` changes one existing record and must bind its version."""
+    return kind in _TARGET_BY_KIND
 
 
 def target_of(proposal: EntityProposal) -> tuple[PromotionTarget, str] | None:

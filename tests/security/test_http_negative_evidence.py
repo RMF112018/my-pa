@@ -822,7 +822,12 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
                 "alias_type": "initials",
                 "display_value": "PP",
             },
-            "proposed_by": "wire-producer",
+            "evidence": [
+                {
+                    "role": "supporting",
+                    "entity_observation_id": staged_mention(marked),
+                }
+            ],
             "expected_target_version": person.version,
         },
         Capability.ENTITIES_MERGE_PREVIEW: {

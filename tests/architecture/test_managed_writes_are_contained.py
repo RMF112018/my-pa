@@ -155,6 +155,25 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "caller-supplied evidence directory; it never writes private transcriptions, "
         "image bytes, gold, or managed-document bytes."
     ),
+    "src/my_pa/application/goodnotes_gsqs_remote_eval_storage.py": (
+        "writes only GSQS remote-eval session spool JSON (session, manifest, state, "
+        "captures, receipts) under an explicit caller-supplied state root; it never "
+        "writes private gold, source paths, or managed-document bytes."
+    ),
+    "src/my_pa/application/goodnotes_gsqs_remote_eval_staging.py": (
+        "copies authorized synthetic PNG rasters into an isolated session spool under "
+        "an explicit caller-supplied state root; it rejects symlinks and traversal and "
+        "never writes private gold or managed-document bytes."
+    ),
+    "src/my_pa/application/goodnotes_gsqs_remote_eval_disclosure.py": (
+        "writes only append-only v2 disclosure journal JSONL under the caller-supplied "
+        "state root; it never writes gold, image bytes, paths, or managed-document bytes."
+    ),
+    "ops/goodnotes/gsqs/fixtures/remote-eval/generate.py": (
+        "writes only synthetic 8x8 grayscale PNG canary fixtures into an explicit "
+        "caller-supplied output directory; it never writes gold, personal, or "
+        "managed-document bytes."
+    ),
 }
 
 #: Attribute names that are a filesystem write whatever they are called on,

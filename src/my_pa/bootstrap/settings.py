@@ -5,11 +5,11 @@ out-of-range value raises rather than falling back to a default, so a typo in a
 security-relevant name cannot silently leave the safe setting in place.
 
 No secret is committed. `database_url` and the origin OAuth operator approval
-secret are the two settings whose values may carry credentials; neither has a
-usable default. The messages this module composes never echo either value, and
-both fields are `repr=False` so their values do not ride out in `repr(settings)`
-either — the channel that mattered most, because pytest
-prints the `repr` of a failing assertion's operands.
+secrets (production remote MCP and isolated GSQS remote-eval) are the settings
+whose values may carry credentials; none has a usable default. The messages this
+module composes never echo those values, and the fields are `repr=False` so they
+do not ride out in `repr(settings)` either — the channel that mattered most,
+because pytest prints the `repr` of a failing assertion's operands.
 
 Two channels were open here and are named rather than left to be found. The first
 is closed. Pydantic's own `ValidationError` renders `input_value=`, and for a
@@ -32,7 +32,7 @@ reading `str(exc)`, because reading only the top-level message is what let this
 survive a review.
 
 The second channel is open by design: `model_dump` and `model_dump_json` return
-both credential-bearing fields. They are asked for explicitly rather than
+those credential-bearing fields. They are asked for explicitly rather than
 reached by accident, and callers must not log their output. `repr`, `str` and the
 exception chain are the paths something reaches without meaning to, and those are
 the ones closed.
@@ -217,6 +217,39 @@ def _parse_database_url(url: str) -> URL:
     return parsed
 
 
+def _is_https_origin(value: str) -> bool:
+    """True when `value` is an HTTPS origin with no extra path, query, or userinfo."""
+    parsed = urlsplit(value.strip())
+    return (
+        parsed.scheme == "https"
+        and bool(parsed.hostname)
+        and parsed.path in ("", "/")
+        and not parsed.query
+        and not parsed.fragment
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
+def _is_https_mcp_resource(value: str) -> bool:
+    """True when `value` is an HTTPS origin plus the exact `/mcp` resource path."""
+    parsed = urlsplit(value.strip())
+    return (
+        parsed.scheme == "https"
+        and bool(parsed.hostname)
+        and parsed.path == "/mcp"
+        and not parsed.query
+        and not parsed.fragment
+        and parsed.username is None
+        and parsed.password is None
+    )
+
+
+def _split_allowlist(raw: str) -> tuple[str, ...]:
+    """Split a comma- or space-separated allowlist. Empty input is an empty tuple."""
+    return tuple(token for token in raw.replace(",", " ").split() if token)
+
+
 class Settings(StrictModel):
     """Validated process settings.
 
@@ -390,6 +423,38 @@ class Settings(StrictModel):
     goodnotes_self_improving_optimizer_enabled: bool = False
     goodnotes_rollout_stage: GoodNotesRolloutStage = GoodNotesRolloutStage.OBSERVE_ONLY
     remote_mcp_public_host: str = ""
+    #: Isolated GSQS ChatLLM remote-eval MCP process. Not production MCP.
+    #:
+    #: **Off by default.** An unconfigured process serves `/healthz` only; `/mcp`
+    #: is 404 and `/readyz` is 503. Enabling it is an operator act on a separate
+    #: process (`apps/gsqs_remote_eval.py`) and does not publish production MCP,
+    #: mutate source systems, or admit Phase C.
+    #:
+    #: **`state_root` is empty by default on purpose.** The intended NAS path is
+    #: `/srv/my-pa/gsqs-remote-eval` and is documented on the entrypoint, not
+    #: implicit here. Tests must override to a temporary directory and must never
+    #: use `/srv`. When the switch is on, an empty root fails closed.
+    #:
+    #: **Live OAuth secrets are not required to parse Settings while disabled.**
+    #: The evaluation audience defaults to the public resource URL; it is not a
+    #: credential. Production `oauth_operator_secret` remains the remote-MCP
+    #: secret and is not reused here. Enabling requires a dedicated
+    #: `gsqs_remote_eval_oauth_operator_secret`; it must not equal the
+    #: production secret when both are set.
+    gsqs_remote_eval_enabled: bool = False
+    gsqs_remote_eval_public_origin: str = ""
+    gsqs_remote_eval_port: int = Field(default=8767, ge=1, le=65535)
+    gsqs_remote_eval_state_root: str = ""
+    gsqs_remote_eval_session_ttl_seconds: int = Field(default=259200, ge=3600, le=259200)
+    gsqs_remote_eval_lease_seconds: int = Field(default=3600, ge=900, le=7200)
+    gsqs_remote_eval_retention_seconds: int = Field(default=1_209_600, gt=0)
+    gsqs_remote_eval_max_image_bytes: int = Field(default=8_388_608, gt=0)
+    gsqs_remote_eval_max_result_bytes: int = Field(default=1_048_576, gt=0)
+    gsqs_remote_eval_max_concurrency: int = Field(default=1, ge=1, le=1)
+    gsqs_remote_eval_oauth_scope: str = "my-pa.gsqs.evaluate"
+    gsqs_remote_eval_allowed_origins: str = ""
+    gsqs_remote_eval_oauth_audience: str = "https://my-pa-gsqs.bobby-fetting.me/mcp"
+    gsqs_remote_eval_oauth_operator_secret: str = Field(default="", repr=False)
     #: Legacy Entra verifier inputs remain available only to the dormant
     #: `auth_mode=entra` path. Remote MCP never reads them.
     oauth_issuer: str = Field(default="", repr=False)
@@ -500,6 +565,7 @@ class Settings(StrictModel):
                 raise SettingsError(
                     "remote MCP OAuth requires one exact HTTPS public origin and its /mcp resource"
                 )
+        self._check_gsqs_remote_eval()
         if self.relationship_intelligence_writes_enabled and (
             not self.relationship_intelligence_enabled
         ):
@@ -560,6 +626,75 @@ class Settings(StrictModel):
                 f"{AuthMode.LOCAL_OPERATOR.value!r}: an unconfigured authenticated "
                 "mode would serve every request as the local operator"
             )
+
+    def _check_gsqs_remote_eval(self) -> None:
+        """Fail closed for the isolated eval process. Independent of remote MCP."""
+        if self.gsqs_remote_eval_max_concurrency != 1:
+            raise SettingsError("GSQS remote-eval max concurrency must equal 1")
+        if self.gsqs_remote_eval_lease_seconds > self.gsqs_remote_eval_session_ttl_seconds:
+            raise SettingsError(
+                "GSQS remote-eval lease seconds must not exceed session ttl seconds"
+            )
+        origins = self.gsqs_remote_eval_origin_allowlist()
+        if any(origin == "*" or "*" in origin for origin in origins):
+            raise SettingsError("GSQS remote-eval allowed origins must not contain a wildcard")
+        audience = self.gsqs_remote_eval_oauth_audience.strip()
+        if not _is_https_mcp_resource(audience):
+            raise SettingsError(
+                "GSQS remote-eval OAuth audience must be an HTTPS origin with path /mcp"
+            )
+        public_origin = self.gsqs_remote_eval_public_origin.strip()
+        if public_origin and not _is_https_origin(public_origin):
+            raise SettingsError(
+                "GSQS remote-eval public origin must be an HTTPS origin without "
+                "path, query, or fragment"
+            )
+        if not self.gsqs_remote_eval_oauth_scope.strip():
+            raise SettingsError("GSQS remote-eval OAuth scope is required")
+        eval_secret = self.gsqs_remote_eval_oauth_operator_secret
+        production_secret = self.oauth_operator_secret
+        if eval_secret and production_secret and eval_secret == production_secret:
+            raise SettingsError(
+                "GSQS remote-eval OAuth operator secret must not equal the "
+                "production OAuth operator secret"
+            )
+        if not self.gsqs_remote_eval_enabled:
+            return
+        if not valid_operator_secret(eval_secret):
+            raise SettingsError(
+                "GSQS remote-eval requires MY_PA_GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET "
+                "as a generated URL-safe operator secret"
+            )
+        if not public_origin:
+            raise SettingsError(
+                "GSQS remote-eval requires MY_PA_GSQS_REMOTE_EVAL_PUBLIC_ORIGIN as an "
+                "HTTPS origin without path, query, or fragment"
+            )
+        if not self.gsqs_remote_eval_state_root.strip():
+            raise SettingsError(
+                "GSQS remote-eval requires MY_PA_GSQS_REMOTE_EVAL_STATE_ROOT; the "
+                "intended runtime path is /srv/my-pa/gsqs-remote-eval and tests "
+                "must override it"
+            )
+        origin = urlsplit(public_origin)
+        resource = urlsplit(audience)
+        if resource.netloc != origin.netloc:
+            raise SettingsError(
+                "GSQS remote-eval OAuth audience must be the public HTTPS origin with path /mcp"
+            )
+
+    def gsqs_remote_eval_origin_allowlist(self) -> tuple[str, ...]:
+        """Exact allowed Origin values. Empty means no browser Origin is admitted."""
+        return _split_allowlist(self.gsqs_remote_eval_allowed_origins)
+
+    def gsqs_remote_eval_transport_hosts(self, *, bind_host: str, port: int) -> tuple[str, ...]:
+        """Exact Host values for DNS-rebinding protection. No wildcards."""
+        hosts: list[str] = [bind_host, f"{bind_host}:{port}"]
+        hostname = urlsplit(self.gsqs_remote_eval_public_origin.strip()).hostname
+        if hostname:
+            hosts.append(hostname)
+            hosts.append(f"{hostname}:{port}")
+        return tuple(dict.fromkeys(hosts))
 
     def admissible_client_principal_id(self) -> str | None:
         """The single Principal this process may bind a capture client to, or `None`.

@@ -33,7 +33,7 @@ than the truth in both cases:
 
 **The MCP SDK entered scope with WP-4B2b and is confined the same way Starlette
 is**, not admitted. `mcp` moved off the prohibited list and onto the confined
-one, so `adapters/mcp` may import it and nothing else may — an application or
+one, so `adapters` may import it and nothing else may — an application or
 infrastructure module that reached for it would have taken a transport concern,
 and the layer rules in `test_dependency_direction.py` are about direction rather
 than about libraries. Deleting it from the prohibited list without adding it to
@@ -245,7 +245,7 @@ def _imports(path: Path) -> set[str]:
 #: transport.
 CONFINED_IMPORT_ROOTS = {
     "starlette": "adapters",
-    "mcp": "adapters/mcp",
+    "mcp": "adapters",
     # PyJWT. One module verifies bearer tokens; nothing else in the tree may
     # decode, inspect, or re-verify one, which is what keeps "the token was
     # checked here" a fact about the wiring rather than a convention.
@@ -446,7 +446,7 @@ def test_no_declared_dependency_is_prohibited() -> None:
 
 
 def test_the_only_shipped_module_that_runs_a_server_is_the_composition_root() -> None:
-    """Across `src/` and `apps/`, `uvicorn` appears in exactly one file.
+    """Across `src/` and `apps/`, `uvicorn` appears only in composition roots.
 
     The import rule above says the package may not import it. This says where it
     *is* imported, because "nowhere in the package" is also satisfied by a build
@@ -457,15 +457,25 @@ def test_the_only_shipped_module_that_runs_a_server_is_the_composition_root() ->
     HTTP tests drive a real one rather than calling an ASGI app in process, and
     it imports `apps.gateway`'s own settings so the two configurations cannot
     drift. What is enforced here is that nothing *shipped* starts a server
-    except the composition root, which is the property that matters; a test
+    except a composition root, which is the property that matters; a test
     harness is not shipped, and naming this test after the wider claim would
     have made it read as one it does not check.
+
+    The isolated GSQS remote-eval process is a second composition root
+    (`apps/gsqs_remote_eval.py`), not a package import of the server.
     """
     shipped = [*_modules(), *sorted((ROOT / "apps").rglob("*.py"))]
     importers = sorted(
         path.relative_to(ROOT).as_posix() for path in shipped if "uvicorn" in _imports(path)
     )
-    assert importers == ["apps/gateway.py"]
+    assert importers == ["apps/gateway.py", "apps/gsqs_remote_eval.py"]
+    package_importers = [
+        path.relative_to(PACKAGE).as_posix() for path in _modules() if "uvicorn" in _imports(path)
+    ]
+    assert not package_importers, (
+        "uvicorn leaked into the package; the eval process is a composition root, "
+        "not an in-package server"
+    )
     assert "uvicorn" in _imports(ROOT / "tests" / "wire.py"), (
         "the harness no longer runs a real server; this test's qualifier is stale"
     )

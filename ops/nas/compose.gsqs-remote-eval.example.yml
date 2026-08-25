@@ -1,0 +1,60 @@
+# EXAMPLE ONLY. NOT APPLIED. Phase B does not deploy this file.
+#
+# Isolated GSQS ChatLLM remote-eval MCP process, separate from production
+# MCP (`apps/gateway.py mcp-remote`) and the NAS gateway. Do not merge this
+# service into ops/nas/remote/compose.yml. Do not apply this file.
+#
+# This example:
+# - does not mount private evaluator gold
+# - does not mount a source raster-root beyond the sealed Phase A spool
+# - does not connect ChatLLM, Cloudflare, DNS, NAS live, or OAuth clients
+# - defaults MY_PA_GSQS_REMOTE_EVAL_ENABLED=false
+# - names MY_PA_GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET as a required env-file
+#   key when enabled; the example value is empty and is not a live secret
+#
+# Intended state root (operator-created host directory, not a Settings default):
+#   /srv/my-pa/gsqs-remote-eval
+name: my-pa-gsqs-remote-eval-example
+
+services:
+  my-pa-gsqs-remote-eval:
+    image: "${MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}"
+    platform: linux/amd64
+    user: "${MY_PA_UID:?dedicated non-root uid required}:${MY_PA_GID:?dedicated non-root gid required}"
+    # Example restart policy. "no" matches other undeployed examples.
+    # unless-stopped is an operator choice after a later commissioning decision.
+    restart: "no"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: [python, apps/gsqs_remote_eval.py, --host, 0.0.0.0, --port, "8767"]
+    env_file: ["${MY_PA_GSQS_REMOTE_EVAL_ENV_FILE:?owner-only GSQS remote-eval env file required}"]
+    environment:
+      MY_PA_GSQS_REMOTE_EVAL_ENABLED: "false"
+      MY_PA_GSQS_REMOTE_EVAL_PORT: "8767"
+      MY_PA_GSQS_REMOTE_EVAL_STATE_ROOT: /srv/my-pa/gsqs-remote-eval
+      MY_PA_GSQS_REMOTE_EVAL_PUBLIC_ORIGIN: ""
+      MY_PA_GSQS_REMOTE_EVAL_OAUTH_AUDIENCE: "https://my-pa-gsqs.bobby-fetting.me/mcp"
+      MY_PA_GSQS_REMOTE_EVAL_OAUTH_SCOPE: "my-pa.gsqs.evaluate"
+      MY_PA_GSQS_REMOTE_EVAL_OAUTH_OPERATOR_SECRET: ""
+      MY_PA_GSQS_REMOTE_EVAL_ALLOWED_ORIGINS: ""
+      MY_PA_GSQS_REMOTE_EVAL_MAX_CONCURRENCY: "1"
+      MY_PA_GSQS_REMOTE_EVAL_LEASE_SECONDS: "3600"
+      MY_PA_AUTH_MODE: local_operator
+    expose: ["8767"]
+    volumes:
+      - type: bind
+        source: "${MY_PA_GSQS_REMOTE_EVAL_STATE_ROOT:?operator-created eval spool required}"
+        target: /srv/my-pa/gsqs-remote-eval
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8767/healthz', timeout=2).read()"
+      interval: 15s
+      timeout: 3s
+      retries: 5
+      start_period: 20s
+    labels:
+      io.my-pa.runtime-role: gsqs-remote-eval
+      io.my-pa.deployed: "false"

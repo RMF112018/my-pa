@@ -50,7 +50,7 @@ risk acceptance.
 Corrected 2026-08-23: the paragraph above claimed 30 capabilities and 34
 revisions at head `b4e8d2c7a613`. That pair was self-consistent when it was
 written — `b4e8d2c7a613` is still in this chain and is still its 34th revision —
-and 39 more have landed on top of it since, the last being `b64e29a0f7c1`. The
+and 39 more have landed on top of it since, the last being `3d07af4dc513`. The
 current figures were already stated in [`system-context.md`](system-context.md)
 beside it, which has been kept current through those work packages while this
 index was not, and that is how a figure like this survives: the sibling is the

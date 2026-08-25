@@ -43,6 +43,7 @@ from tests.conftest import FakeProviders, Scene, World, build_service, metadata_
 
 from my_pa.adapters.mcp.remote import remote_tool_names
 from my_pa.adapters.mcp.server import published_tools
+from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import (
     _ENTITY_CAPABILITIES,
     _ENTITY_WRITE_CAPABILITIES,
@@ -50,6 +51,7 @@ from my_pa.application.service import (
 )
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.principal import PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 
 #: The purposes that mean "this capability changes something", read off the
@@ -95,6 +97,16 @@ def _service(*, plane: bool, writes: bool, identity: bool = True) -> Application
         relationship_intelligence_enabled=plane,
         relationship_intelligence_writes_enabled=writes,
         relationship_identity_correction_enabled=identity,
+        producer_origins=ProducerOriginRegistry(
+            {
+                "prn_entity_write_gate": ProducerOrigin(
+                    principal_id="prn_entity_write_gate",
+                    principal_kind=PrincipalKind.OPERATOR,
+                    method="rule",
+                    method_version="entity-write-gate.1",
+                )
+            }
+        ),
     )
 
 

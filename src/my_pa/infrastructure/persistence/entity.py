@@ -2180,35 +2180,35 @@ class SqlEntityRepository(EntitiesRepository):
                 self._connection.execute(
                     insert(entity_proposals).values(
                         _bound(
-                    entity_proposals,
-                    principal_id,
-                    proposal_id=proposal.proposal_id,
-                    kind=proposal.kind.value,
-                    state=proposal.state.value,
-                    payload=proposal.payload.as_mapping(),
-                    observation_ids=list(proposal.observation_ids),
-                    proposed_at=proposal.proposed_at,
-                    proposed_by=proposal.proposed_by,
-                    method=proposal.method.value,
-                    method_version=proposal.method_version,
-                    dedupe_sha256=proposal.dedupe_sha256,
-                    model_id=proposal.model_id,
-                    model_version=proposal.model_version,
-                    expected_target_version=proposal.expected_target_version,
-                    review_case_id=proposal.review_case_id,
-                    accepted_record_type=(
-                        None
-                        if proposal.accepted_record_type is None
-                        else proposal.accepted_record_type.value
-                    ),
-                    accepted_record_id=proposal.accepted_record_id,
-                    accepted_record_version=proposal.accepted_record_version,
-                    invalidated_reason=proposal.invalidated_reason,
-                    superseded_at=proposal.superseded_at,
-                    superseded_by_proposal_id=proposal.superseded_by_proposal_id,
-                    decided_by=proposal.decided_by,
-                    decided_at=proposal.decided_at,
-                    decision_reason=proposal.decision_reason,
+                            entity_proposals,
+                            principal_id,
+                            proposal_id=proposal.proposal_id,
+                            kind=proposal.kind.value,
+                            state=proposal.state.value,
+                            payload=proposal.payload.as_mapping(),
+                            observation_ids=list(proposal.observation_ids),
+                            proposed_at=proposal.proposed_at,
+                            proposed_by=proposal.proposed_by,
+                            method=proposal.method.value,
+                            method_version=proposal.method_version,
+                            dedupe_sha256=proposal.dedupe_sha256,
+                            model_id=proposal.model_id,
+                            model_version=proposal.model_version,
+                            expected_target_version=proposal.expected_target_version,
+                            review_case_id=proposal.review_case_id,
+                            accepted_record_type=(
+                                None
+                                if proposal.accepted_record_type is None
+                                else proposal.accepted_record_type.value
+                            ),
+                            accepted_record_id=proposal.accepted_record_id,
+                            accepted_record_version=proposal.accepted_record_version,
+                            invalidated_reason=proposal.invalidated_reason,
+                            superseded_at=proposal.superseded_at,
+                            superseded_by_proposal_id=proposal.superseded_by_proposal_id,
+                            decided_by=proposal.decided_by,
+                            decided_at=proposal.decided_at,
+                            decision_reason=proposal.decision_reason,
                         )
                     )
                 )
@@ -2565,12 +2565,7 @@ class SqlEntityRepository(EntitiesRepository):
         stored = self.proposal_evidence_links(principal_id, proposal_id)
 
         def identity(link: EntityProposalEvidenceLink) -> tuple[object, str]:
-            source = (
-                link.entity_observation_id
-                or link.capture_span_id
-                or link.knowledge_id
-                or ""
-            )
+            source = link.entity_observation_id or link.capture_span_id or link.knowledge_id or ""
             return link.role, source
 
         known = {identity(link) for link in stored}

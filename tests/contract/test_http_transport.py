@@ -181,6 +181,7 @@ from my_pa.application.commands import (
     WaitingOn,
 )
 from my_pa.application.intelligence import begin_cycle, commit_artifact
+from my_pa.application.producer_origin import ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
 from my_pa.contracts.ports import KnowledgeRecord, WorkCursorError
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
@@ -866,7 +867,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_id": person.entity_id,
             "expected_entity_version": person.version,
             "statement": "A synthetic produced candidate",
-            "evidence": [{"role": "direct", "entity_observation_id": "eobs_httpwire01httpwire01"}],
+            "evidence": [{"role": "direct", "entity_observation_id": staged_mention(scene)}],
             "kind": "personal_detail",
         },
         # `WP-RI-B-05`'s entity producer, which this build *does* serve: it needs
@@ -880,11 +881,10 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             },
             "evidence": [
                 {
-                    "role": "supporting",
-                    "entity_observation_id": "eobs_httpwire01httpwire01",
+                    "role": "direct",
+                    "entity_observation_id": staged_mention(scene),
                 }
             ],
-            "expected_target_version": person.version,
         },
         # `WP-RI-B-06`'s two, refused at the composition floor. Well formed for
         # the reason the memory payloads are.
@@ -1432,7 +1432,7 @@ def commands_for(
             entity_id=person.entity_id,
             expected_entity_version=person.version,
             statement="A synthetic produced candidate",
-            evidence=({"role": "direct", "entity_observation_id": "eobs_httpwire01httpwire01"},),
+            evidence=({"role": "direct", "entity_observation_id": staged_mention(scene)},),
             kind=MemoryKind.PERSONAL_DETAIL,
         ),
         Capability.ENTITIES_PROPOSALS_CREATE: CreateEntityProposal(
@@ -1442,7 +1442,7 @@ def commands_for(
                 "alias_type": "initials",
                 "display_value": "PP",
             },
-            evidence=({"role": "direct", "entity_observation_id": "eobs_httpwire01httpwire01"},),
+            evidence=({"role": "direct", "entity_observation_id": staged_mention(scene)},),
         ),
         Capability.ENTITIES_MERGE_PREVIEW: PreviewEntityMerge(
             survivor_entity_id=person.entity_id,
@@ -1539,6 +1539,7 @@ class RecordingService(ApplicationService):
             # service composed with the plane and without this one would have
             # this suite asserting reachability for names its own build refuses.
             relationship_intelligence_writes_enabled=True,
+            producer_origins=ProducerOriginRegistry(world.producer_origins),
         )
         self.envelopes: list[ResponseEnvelope] = []
 

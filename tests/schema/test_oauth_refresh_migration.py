@@ -78,7 +78,7 @@ PHASE_A_REVISION = "823e23b6cc63"
 #: naming both keeps the chain assertion below a statement about the order
 #: rather than about whichever revision happens to be last.
 PHASE_B_REVISION = "b64e29a0f7c1"
-HEAD_REVISION = PHASE_B_REVISION
+HEAD_REVISION = "3d07af4dc513"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -182,7 +182,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # *order* rather than about whichever revision happens to be last.
     assert script.get_revision(PHASE_A_REVISION).down_revision == LIFECYCLE_REVISION
     assert script.get_heads() == [HEAD_REVISION]
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 74
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 75
 
 
 @pytest.mark.database

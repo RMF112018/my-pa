@@ -283,7 +283,7 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_task_read_plane() 
     # added 1 revision (task-read plane), WP-TM-04 added 1 revision (task-write
     # plane), WP-TM-05 added 1 revision (commitment plane), so the count grew
     # from 40 to 43.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 74
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 75
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

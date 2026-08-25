@@ -481,9 +481,7 @@ class EntityGovernanceService:
         # producer re-filing evidence a reviewer has already refused is told so,
         # rather than being told what is currently open in a queue it does not
         # decide.
-        self._refuse_a_known_bad_proposal(
-            principal_id, checked, suppression_observation_ids
-        )
+        self._refuse_a_known_bad_proposal(principal_id, checked, suppression_observation_ids)
         digest = dedupe_digest(checked)
         open_equivalent = self._open_equivalent(principal_id, digest)
         if open_equivalent is not None:

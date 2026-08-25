@@ -43,7 +43,6 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifierNamespace,
 )
 from my_pa.domain.relationship.governance import (
-    UNDECIDED_PROPOSAL_STATES,
     EntityObservation,
     EntityProposalKind,
     EntityProposalMethod,
@@ -267,14 +266,10 @@ def populated(disposable_database: str) -> Iterator[Engine]:
                     decision_reason="Refused by Cornelius Adeyemi-Blackwood",
                 ),
             )
-            # A third proposal, and it is here to make the open queue cover
-            # *both* undecided states rather than one. `record_alias` is the
-            # kind `requirement_for` admits to a configured threshold, so
-            # `initial_state_for` writes it `proposed`; the merge above is
-            # `requires_operator`, so it is written `needs_review`. A report
-            # that matched a single state literal listed one of these two and
-            # called it the queue, which is the defect this fixture now makes
-            # impossible to reintroduce quietly.
+            # A third proposal makes the open queue contain two independently
+            # reviewable producer candidates. Producers cannot self-promote, so
+            # even the threshold-eligible alias candidate opens a Review case
+            # and is stored `needs_review`.
             EntityGovernanceService(repository).propose(
                 PRINCIPAL_A,
                 kind=EntityProposalKind.RECORD_ALIAS,
@@ -309,13 +304,8 @@ def test_the_report_counts_the_plane(populated: Engine) -> None:
     assert produced["entities_by_status"] == {"active": 2}
     assert produced["entities_by_type"] == {"person": 2}
     assert produced["observations_by_kind"] == {"message_participant": 1}
-    # `needs_review` and not a second `proposed`: `initial_state_for` derives a
-    # proposal's initial state from its kind's review requirement, so the merge
-    # this fixture files is written in the state that says a person must look at
-    # it. The grouping is over the column, so it reddens if that stops holding.
     assert produced["proposals_by_state"] == {
-        "needs_review": 1,
-        "proposed": 1,
+        "needs_review": 2,
         "rejected": 1,
     }
 
@@ -342,18 +332,13 @@ def test_the_report_lists_the_open_proposals_without_their_payloads(
     assert ALICE not in json.dumps(open_proposals)
 
 
-def test_the_open_queue_covers_both_states_that_mean_undecided(populated: Engine) -> None:
+def test_the_open_queue_contains_every_undecided_producer_candidate(populated: Engine) -> None:
     """The queue is the *population*, not one state literal that used to name it.
 
     This is the regression `WP-RI-B-05` shipped and the corrective cycle caught.
-    `_open_proposals` matched `state = 'proposed'`, and `initial_state_for`
-    began writing `needs_review` for every kind a person has to look at -- so
-    the operator's report answered "what is waiting on me" with the subset that
-    was not, and a plane holding only review-requiring proposals reported an
-    empty queue. It under-reported in silence, which is why this asserts over
-    the states the listed rows actually carry rather than over a count: a report
-    that listed two rows in one state would satisfy the test above and still be
-    wrong.
+    Producer-originated candidates all require review now. This still asserts
+    the stored state rather than only a count so a future queue predicate cannot
+    silently omit the state every producer writes.
     """
     listed = report(populated, PRINCIPAL_A)["open_proposals"]
     with populated.connect() as connection:
@@ -361,7 +346,7 @@ def test_the_open_queue_covers_both_states_that_mean_undecided(populated: Engine
         held = [repository.proposal(PRINCIPAL_A, str(row["proposal_id"])) for row in listed]
     assert all(proposal is not None for proposal in held)
     states = {proposal.state for proposal in held if proposal is not None}
-    assert states == set(UNDECIDED_PROPOSAL_STATES)
+    assert states == {EntityProposalState.NEEDS_REVIEW}
     # And every listed proposal is genuinely undecided, so the report cannot
     # start listing decided rows and pass on the set assertion alone.
     assert all(proposal.is_open for proposal in held if proposal is not None)

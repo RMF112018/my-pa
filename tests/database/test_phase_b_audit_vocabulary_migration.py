@@ -57,11 +57,11 @@ SCHEMA: Final = "knowledge"
 #: run beside them without one dropping what another is mid-transaction against.
 DISPOSABLE_DATABASE: Final = "my_pa_phase_b_vocabulary_test"
 
-#: The head this chain ends at, and the revision immediately below it. Written
-#: out rather than read from the revision files: a test that imported the
-#: literal it checks would pass however that literal changed, which is the one
-#: thing this module exists to notice.
-HEAD_REVISION: Final = "b64e29a0f7c1"
+#: The current head and the Phase B vocabulary edge this suite removes. Written
+#: out rather than imported so current chain drift and historical identity are
+#: checked independently.
+HEAD_REVISION: Final = "3d07af4dc513"
+PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PREVIOUS_REVISION: Final = "a1f7d3c85e40"
 
 #: What the revision admits. Restated here for the reason above, and compared
@@ -195,6 +195,8 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     script = ScriptDirectory.from_config(_config())
     heads = list(script.get_heads())
     assert heads == [HEAD_REVISION], f"expected exactly {HEAD_REVISION}, found {heads}"
+    assert script.get_revision(HEAD_REVISION).down_revision == PHASE_B_REVISION
+    assert script.get_revision(PHASE_B_REVISION).down_revision == PREVIOUS_REVISION
     with migrated_engine.begin() as connection:
         rows = connection.execute(text("SELECT version_num FROM alembic_version"))
         stamped = list(rows.scalars())

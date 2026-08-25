@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from sqlalchemy import Connection, func, insert, select, update
+from sqlalchemy import ColumnElement, Connection, Table, func, insert, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from my_pa.contracts.ports import (
@@ -12,12 +12,25 @@ from my_pa.contracts.ports import (
     WriteRequestRepository,
     WriteRequestResult,
 )
+from my_pa.infrastructure.persistence.principal_scope import (
+    capture_context,
+    partition_criterion,
+    principal_bound_values,
+)
 from my_pa.infrastructure.persistence.tables import (
     relationship_write_request_evidence,
     relationship_write_requests,
 )
 
 __all__ = ["SqlWriteRequestRepository"]
+
+
+def _mine(table: Table, principal_id: str) -> ColumnElement[bool]:
+    return partition_criterion(table, capture_context(principal_id))
+
+
+def _bound(table: Table, principal_id: str, values: dict[str, object]) -> dict[str, object]:
+    return principal_bound_values(values, table, capture_context(principal_id))
 
 
 class SqlWriteRequestRepository(WriteRequestRepository):
@@ -36,10 +49,15 @@ class SqlWriteRequestRepository(WriteRequestRepository):
         inserted = self._connection.execute(
             pg_insert(relationship_write_requests)
             .values(
-                principal_id=principal_id,
-                capability=capability,
-                request_id=request_id,
-                request_digest=request_digest,
+                _bound(
+                    relationship_write_requests,
+                    principal_id,
+                    {
+                        "capability": capability,
+                        "request_id": request_id,
+                        "request_digest": request_digest,
+                    },
+                )
             )
             .on_conflict_do_nothing(
                 index_elements=[
@@ -55,7 +73,7 @@ class SqlWriteRequestRepository(WriteRequestRepository):
 
         row = self._connection.execute(
             select(relationship_write_requests).where(
-                relationship_write_requests.c.principal_id == principal_id,
+                _mine(relationship_write_requests, principal_id),
                 relationship_write_requests.c.capability == capability,
                 relationship_write_requests.c.request_id == request_id,
             )
@@ -78,7 +96,7 @@ class SqlWriteRequestRepository(WriteRequestRepository):
             for link in self._connection.execute(
                 select(relationship_write_request_evidence)
                 .where(
-                    relationship_write_request_evidence.c.principal_id == principal_id,
+                    _mine(relationship_write_request_evidence, principal_id),
                     relationship_write_request_evidence.c.capability == capability,
                     relationship_write_request_evidence.c.request_id == request_id,
                 )
@@ -117,7 +135,7 @@ class SqlWriteRequestRepository(WriteRequestRepository):
         completed = self._connection.execute(
             update(relationship_write_requests)
             .where(
-                relationship_write_requests.c.principal_id == principal_id,
+                _mine(relationship_write_requests, principal_id),
                 relationship_write_requests.c.capability == capability,
                 relationship_write_requests.c.request_id == request_id,
                 relationship_write_requests.c.request_digest == request_digest,
@@ -151,16 +169,19 @@ class SqlWriteRequestRepository(WriteRequestRepository):
             self._connection.execute(
                 insert(relationship_write_request_evidence),
                 [
-                    {
-                        "principal_id": principal_id,
-                        "capability": capability,
-                        "request_id": request_id,
-                        "sequence": link.sequence,
-                        "role": link.role,
-                        "entity_observation_id": link.entity_observation_id,
-                        "capture_span_id": link.capture_span_id,
-                        "knowledge_id": link.knowledge_id,
-                    }
+                    _bound(
+                        relationship_write_request_evidence,
+                        principal_id,
+                        {
+                            "capability": capability,
+                            "request_id": request_id,
+                            "sequence": link.sequence,
+                            "role": link.role,
+                            "entity_observation_id": link.entity_observation_id,
+                            "capture_span_id": link.capture_span_id,
+                            "knowledge_id": link.knowledge_id,
+                        },
+                    )
                     for link in result.evidence
                 ],
             )

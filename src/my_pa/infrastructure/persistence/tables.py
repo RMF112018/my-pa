@@ -3668,8 +3668,20 @@ entity_proposals = Table(
         name="a_named_proposal_model_states_its_version",
     ),
     CheckConstraint(
-        "expected_target_version IS NULL OR expected_target_version > 0",
-        name="a_proposal_expected_target_version_is_positive",
+        "kind NOT IN ('create_entity', 'update_entity', 'bind_identifier', "
+        "'retire_identifier', 'supersede_identifier', 'record_alias', "
+        "'retire_alias', 'supersede_alias', 'record_assignment', "
+        "'revise_assignment', 'end_assignment', 'record_relationship', "
+        "'revise_relationship', 'end_relationship', 'resolve_mention', "
+        "'merge_entities', 'split_identity') "
+        "OR (kind IN ('update_entity', 'retire_identifier', 'supersede_identifier', "
+        "'retire_alias', 'supersede_alias', 'revise_assignment', 'end_assignment', "
+        "'revise_relationship', 'end_relationship') AND expected_target_version >= 1) "
+        "OR (kind = 'resolve_mention' AND expected_target_version >= 0) "
+        "OR (kind IN ('create_entity', 'bind_identifier', 'record_alias', "
+        "'record_assignment', 'record_relationship', 'merge_entities', "
+        "'split_identity') AND expected_target_version IS NULL)",
+        name="a_proposal_expected_target_version_matches_kind",
     ),
     # One direction only. An accepted `merge_entities` proposal records reviewed
     # intent and produces no canonical record -- identity mutation is a separate

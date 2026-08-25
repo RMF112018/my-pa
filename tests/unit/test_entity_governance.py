@@ -279,7 +279,7 @@ def test_an_open_proposal_names_nobody_who_decided_it(
         method_version="1",
         at=WHEN,
     )
-    assert admitted.state is EntityProposalState.PROPOSED
+    assert admitted.state is EntityProposalState.NEEDS_REVIEW
     assert admitted.created is True
     proposal = _entities(world).proposal(PRINCIPAL, admitted.proposal_id)
     assert proposal is not None

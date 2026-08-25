@@ -953,14 +953,18 @@ def test_reprocess_supersedes_and_copies_a_successor_at_current_subject_version(
     with two_principals.connect() as connection:
         predecessor = _proposal_row(connection, proposal_id)
         successor = _proposal_row(connection, predecessor.superseded_by_memory_proposal_id)
-        copied = connection.execute(
-            select(relationship_memory_proposal_evidence.c.entity_observation_id)
-            .where(
-                relationship_memory_proposal_evidence.c.memory_proposal_id
-                == successor.memory_proposal_id
+        copied = (
+            connection.execute(
+                select(relationship_memory_proposal_evidence.c.entity_observation_id)
+                .where(
+                    relationship_memory_proposal_evidence.c.memory_proposal_id
+                    == successor.memory_proposal_id
+                )
+                .order_by(relationship_memory_proposal_evidence.c.entity_observation_id)
             )
-            .order_by(relationship_memory_proposal_evidence.c.entity_observation_id)
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
         cases = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
 
     assert decision.proposal_state is ProposalState.SUPERSEDED
@@ -991,9 +995,7 @@ def test_reprocess_supersedes_and_copies_a_successor_at_current_subject_version(
 def test_a_stale_reprocess_writes_nothing(two_principals: Engine) -> None:
     with two_principals.begin() as connection:
         _, review_case_id, _, _ = _open_proposal(connection)
-        decide_relationship_memory_review(
-            connection, _decision(review_case_id, Disposition.DEFER)
-        )
+        decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.DEFER))
         before = _counts(connection)
         proposals_before = connection.execute(
             select(func.count()).select_from(relationship_memory_proposals)
@@ -1010,9 +1012,12 @@ def test_a_stale_reprocess_writes_nothing(two_principals: Engine) -> None:
 
     with two_principals.connect() as connection:
         assert _counts(connection) == before
-        assert connection.execute(
-            select(func.count()).select_from(relationship_memory_proposals)
-        ).scalar_one() == proposals_before
+        assert (
+            connection.execute(
+                select(func.count()).select_from(relationship_memory_proposals)
+            ).scalar_one()
+            == proposals_before
+        )
 
 
 # --- server replay reservation invariants -----------------------------------
@@ -1062,9 +1067,7 @@ def test_same_request_with_changed_material_conflicts(two_principals: Engine) ->
     with two_principals.begin() as connection:
         repository = SqlWriteRequestRepository(connection)
         assert repository.reserve(PRINCIPAL_A, "review.decide", "corr_digest", "a" * 64) is None
-        repository.complete(
-            PRINCIPAL_A, "review.decide", "corr_digest", "a" * 64, _replay_result()
-        )
+        repository.complete(PRINCIPAL_A, "review.decide", "corr_digest", "a" * 64, _replay_result())
 
     with pytest.raises(WriteRequestConflictError), two_principals.begin() as connection:
         SqlWriteRequestRepository(connection).reserve(
@@ -1076,17 +1079,23 @@ def test_rolled_back_reservation_does_not_claim_the_request(two_principals: Engi
     transaction = two_principals.connect()
     try:
         held = transaction.begin()
-        assert SqlWriteRequestRepository(transaction).reserve(
-            PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64
-        ) is None
+        assert (
+            SqlWriteRequestRepository(transaction).reserve(
+                PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64
+            )
+            is None
+        )
         held.rollback()
     finally:
         transaction.close()
 
     with two_principals.begin() as connection:
-        assert SqlWriteRequestRepository(connection).reserve(
-            PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64
-        ) is None
+        assert (
+            SqlWriteRequestRepository(connection).reserve(
+                PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64
+            )
+            is None
+        )
         SqlWriteRequestRepository(connection).complete(
             PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64, _replay_result()
         )
@@ -1097,17 +1106,23 @@ def test_a_pending_reservation_cannot_commit(two_principals: Engine) -> None:
         pytest.raises(DBAPIError, match="remained pending at commit"),
         two_principals.begin() as connection,
     ):
-        assert SqlWriteRequestRepository(connection).reserve(
-            PRINCIPAL_A, "review.decide", "corr_pending", "a" * 64
-        ) is None
+        assert (
+            SqlWriteRequestRepository(connection).reserve(
+                PRINCIPAL_A, "review.decide", "corr_pending", "a" * 64
+            )
+            is None
+        )
 
 
 def test_completed_request_and_replay_evidence_are_immutable(two_principals: Engine) -> None:
     with two_principals.begin() as connection:
         repository = SqlWriteRequestRepository(connection)
-        assert repository.reserve(
-            PRINCIPAL_A, "relationship_memory.propose", "corr_immutable", "a" * 64
-        ) is None
+        assert (
+            repository.reserve(
+                PRINCIPAL_A, "relationship_memory.propose", "corr_immutable", "a" * 64
+            )
+            is None
+        )
         repository.complete(
             PRINCIPAL_A,
             "relationship_memory.propose",
@@ -1142,9 +1157,7 @@ def test_relationship_memory_review_replays_its_durable_exact_decision(
     with two_principals.begin() as connection:
         _, review_case_id, _, _ = _open_proposal(connection)
         repository = SqlWriteRequestRepository(connection)
-        assert repository.reserve(
-            PRINCIPAL_A, "review.decide", "corr_rm_review", "a" * 64
-        ) is None
+        assert repository.reserve(PRINCIPAL_A, "review.decide", "corr_rm_review", "a" * 64) is None
         decision = decide_relationship_memory_review(
             connection, _decision(review_case_id, Disposition.ACCEPT)
         )
@@ -1158,9 +1171,7 @@ def test_relationship_memory_review_replays_its_durable_exact_decision(
             result_assertion_id=decision.assertion_id,
             receipt_id=decision.receipt_id,
         )
-        repository.complete(
-            PRINCIPAL_A, "review.decide", "corr_rm_review", "a" * 64, original
-        )
+        repository.complete(PRINCIPAL_A, "review.decide", "corr_rm_review", "a" * 64, original)
 
     with two_principals.begin() as connection:
         replayed = SqlWriteRequestRepository(connection).reserve(
@@ -1240,9 +1251,7 @@ def test_a_stale_subject_version_refuses_promotion_before_any_canonical_write(
     two_principals: Engine,
 ) -> None:
     with two_principals.begin() as connection:
-        _, review_case_id, _, _ = _open_proposal(
-            connection, expected_subject_version=1
-        )
+        _, review_case_id, _, _ = _open_proposal(connection, expected_subject_version=1)
         connection.execute(
             update(entities)
             .where(entities.c.entity_id == DANA, entities.c.principal_id == PRINCIPAL_A)
@@ -1254,9 +1263,7 @@ def test_a_stale_subject_version_refuses_promotion_before_any_canonical_write(
         pytest.raises(ReviewConflictError, match="subject version is stale"),
         two_principals.begin() as connection,
     ):
-        decide_relationship_memory_review(
-            connection, _decision(review_case_id, Disposition.ACCEPT)
-        )
+        decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.ACCEPT))
 
     with two_principals.connect() as connection:
         assert _counts(connection) == before
@@ -1338,8 +1345,12 @@ def test_an_invalidation_is_not_a_rejection_and_leaves_no_negative_finding(
     reddens here rather than quietly turning invalidations into refusals.
     """
     with two_principals.begin() as connection:
-        invalidated_id, invalidated_case, _, _ = _open_proposal(connection)
-        rejected_id, rejected_case, _, _ = _open_proposal(connection)
+        invalidated_id, invalidated_case, _, _ = _open_proposal(
+            connection, statement=f"{PROPOSED_NOTE} Invalidation candidate."
+        )
+        rejected_id, rejected_case, _, _ = _open_proposal(
+            connection, statement=f"{PROPOSED_NOTE} Rejection candidate."
+        )
 
     with two_principals.begin() as connection:
         decide_relationship_memory_review(
@@ -1398,7 +1409,9 @@ def test_exactly_one_disposition_leaves_a_rejected_candidate_behind(
     stored: dict[str, set[str]] = {}
     for disposition in Disposition:
         with two_principals.begin() as connection:
-            proposal_id, review_case_id, _, _ = _open_proposal(connection)
+            proposal_id, review_case_id, _, _ = _open_proposal(
+                connection, statement=f"{PROPOSED_NOTE} {disposition.value}."
+            )
         with two_principals.begin() as connection:
             decide_relationship_memory_review(
                 connection,
@@ -1406,9 +1419,7 @@ def test_exactly_one_disposition_leaves_a_rejected_candidate_behind(
                     review_case_id,
                     disposition,
                     corrected_value=(
-                        CORRECTED_NOTE
-                        if disposition is Disposition.CORRECT_AND_ACCEPT
-                        else None
+                        CORRECTED_NOTE if disposition is Disposition.CORRECT_AND_ACCEPT else None
                     ),
                 ),
             )
@@ -1510,7 +1521,7 @@ def test_the_ledger_refuses_an_invalidation_that_states_no_reason(
 
     with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
         connection.execute(_ledger_insert(proposal_id, review_case_id, Disposition.INVALIDATE))
-    assert "a_memory_invalidation_states_why" in str(refused.value)
+    assert "a_memory_escalation_or_invalidation_states_why" in str(refused.value)
 
 
 def test_the_ledger_refuses_a_reason_on_a_disposition_that_explains_nothing(
@@ -1569,8 +1580,12 @@ def test_the_reason_column_admits_and_still_permits_an_omitted_reason(
     constraint. Both rows are written and read back.
     """
     with two_principals.begin() as connection:
-        first_id, first_case, _, _ = _open_proposal(connection)
-        second_id, second_case, _, _ = _open_proposal(connection)
+        first_id, first_case, _, _ = _open_proposal(
+            connection, statement=f"{PROPOSED_NOTE} Reason stated."
+        )
+        second_id, second_case, _, _ = _open_proposal(
+            connection, statement=f"{PROPOSED_NOTE} Reason omitted."
+        )
 
     with two_principals.begin() as connection:
         connection.execute(_ledger_insert(first_id, first_case, disposition, reason="stated"))
@@ -1776,9 +1791,7 @@ def test_every_disposition_writes_exactly_the_memory_tables_it_is_declared_to(
                 review_case_id,
                 disposition,
                 corrected_value=(
-                    CORRECTED_NOTE
-                    if disposition is Disposition.CORRECT_AND_ACCEPT
-                    else None
+                    CORRECTED_NOTE if disposition is Disposition.CORRECT_AND_ACCEPT else None
                 ),
             ),
         )
@@ -2036,7 +2049,7 @@ class _InsertOnlyProposals:
         self,
         proposal: RelationshipMemoryProposal,
         evidence: tuple[MemoryProposalEvidence, ...],
-    ) -> None:
+    ) -> tuple[RelationshipMemoryProposal, int, bool]:
         self._connection.execute(
             insert(relationship_memory_proposals).values(
                 memory_proposal_id=proposal.memory_proposal_id,
@@ -2046,6 +2059,7 @@ class _InsertOnlyProposals:
                 proposed_kind=proposal.proposed_kind.value,
                 proposed_statement=proposal.proposed_statement,
                 proposed_statement_sha256=proposal.proposed_statement_sha256,
+                dedupe_sha256=proposal.dedupe_sha256,
                 structured_value=proposal.structured_value,
                 state=proposal.state.value,
                 method=proposal.method.value,
@@ -2059,9 +2073,7 @@ class _InsertOnlyProposals:
                 accepted_memory_version_id=proposal.accepted_memory_version_id,
                 invalidated_reason=proposal.invalidated_reason,
                 superseded_at=proposal.superseded_at,
-                superseded_by_memory_proposal_id=(
-                    proposal.superseded_by_memory_proposal_id
-                ),
+                superseded_by_memory_proposal_id=(proposal.superseded_by_memory_proposal_id),
             )
         )
         for link in evidence:
@@ -2077,6 +2089,7 @@ class _InsertOnlyProposals:
                     created_at=link.created_at,
                 )
             )
+        return proposal, len(evidence), True
 
 
 def _produce(

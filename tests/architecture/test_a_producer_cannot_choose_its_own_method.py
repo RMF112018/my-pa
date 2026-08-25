@@ -38,9 +38,12 @@ def test_registry_resolves_only_the_exact_authenticated_principal() -> None:
         model_version="sha256:0123456789abcdef",
     )
     registry = ProducerOriginRegistry({PRODUCER_ID: origin})
-    assert registry.resolve(
-        Principal(PRODUCER_ID, PrincipalKind.LOCAL_MODEL_GATEWAY, authenticated=True)
-    ) is origin
+    assert (
+        registry.resolve(
+            Principal(PRODUCER_ID, PrincipalKind.LOCAL_MODEL_GATEWAY, authenticated=True)
+        )
+        is origin
+    )
     with pytest.raises(ProducerOriginError):
         registry.resolve(Principal(PRODUCER_ID, PrincipalKind.OPERATOR, authenticated=True))
     with pytest.raises(ProducerOriginError):

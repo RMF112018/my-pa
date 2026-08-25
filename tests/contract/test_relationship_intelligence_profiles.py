@@ -12,14 +12,49 @@ def test_named_local_and_remote_profiles_are_frozen_and_exact() -> None:
     }
 
 
+def test_each_role_has_exactly_its_governed_capability_ceiling() -> None:
+    standard = frozenset(
+        {
+            Capability.ENTITIES_SEARCH,
+            Capability.ENTITIES_GET,
+            Capability.ENTITIES_RESOLVE,
+            Capability.ENTITIES_CONTEXT,
+            Capability.ENTITIES_RELATIONSHIPS,
+            Capability.RELATIONSHIP_MEMORY_LIST,
+            Capability.RELATIONSHIP_MEMORY_GET,
+        }
+    )
+    expected = {
+        "standard": standard,
+        "producer": standard
+        | {
+            Capability.ENTITIES_PROPOSALS_CREATE,
+            Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        },
+        "reviewer": standard | {Capability.REVIEW_LIST, Capability.REVIEW_DECIDE},
+        "operator": standard
+        | {
+            Capability.REVIEW_LIST,
+            Capability.REVIEW_DECIDE,
+            Capability.ENTITIES_UNRESOLVED_MENTIONS,
+            Capability.ENTITIES_MERGE_PREVIEW,
+            Capability.ENTITIES_MERGE,
+        },
+    }
+    for profile in RELATIONSHIP_GRANT_PROFILES.values():
+        assert profile.capabilities == expected[profile.name]
+
+
 def test_only_producer_profiles_can_raise_proposals() -> None:
     proposal_writes = {
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
     for key, profile in RELATIONSHIP_GRANT_PROFILES.items():
-        assert proposal_writes <= profile.capabilities if key.endswith(".producer") else not (
-            proposal_writes & profile.capabilities
+        assert (
+            proposal_writes <= profile.capabilities
+            if key.endswith(".producer")
+            else not (proposal_writes & profile.capabilities)
         )
 
 

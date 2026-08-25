@@ -621,9 +621,11 @@ EXPECTED_MODEL_FIELDS = {
             "memory_proposal_id",
             "principal_id",
             "subject_entity_id",
+            "expected_subject_version",
             "proposed_kind",
             "proposed_statement",
             "proposed_statement_sha256",
+            "dedupe_sha256",
             "state",
             "method",
             "method_version",
@@ -636,6 +638,8 @@ EXPECTED_MODEL_FIELDS = {
             "accepted_memory_id",
             "accepted_memory_version_id",
             "invalidated_reason",
+            "superseded_at",
+            "superseded_by_memory_proposal_id",
         }
     ),
     # No `statement` and no `risk_class`, and both absences are load-bearing.
@@ -654,6 +658,8 @@ EXPECTED_MODEL_FIELDS = {
             "proposal_state",
             "review_version",
             "latest_disposition",
+            "escalated",
+            "superseded_by_proposal_id",
             "accepted_memory_id",
             "accepted_memory_version_id",
         }
@@ -1162,9 +1168,11 @@ EXPECTED_TABLE_COLUMNS = {
             "memory_proposal_id",
             "principal_id",
             "subject_entity_id",
+            "expected_subject_version",
             "proposed_kind",
             "proposed_statement",
             "proposed_statement_sha256",
+            "dedupe_sha256",
             "structured_value",
             "state",
             "method",
@@ -1177,6 +1185,8 @@ EXPECTED_TABLE_COLUMNS = {
             "accepted_memory_id",
             "accepted_memory_version_id",
             "invalidated_reason",
+            "superseded_at",
+            "superseded_by_memory_proposal_id",
         }
     ),
     "relationship_memory_review_decisions": frozenset(
@@ -1207,6 +1217,45 @@ EXPECTED_TABLE_COLUMNS = {
             "memory_version_id",
             "aggregate_version",
             "lifecycle_state",
+        }
+    ),
+    "relationship_write_request_evidence": frozenset(
+        {
+            "principal_id",
+            "capability",
+            "request_id",
+            "sequence",
+            "role",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+        }
+    ),
+    "relationship_write_requests": frozenset(
+        {
+            "principal_id",
+            "capability",
+            "request_id",
+            "request_digest",
+            "result_family",
+            "result_id",
+            "result_secondary_id",
+            "result_version",
+            "result_state",
+            "result_subtype",
+            "result_requirement",
+            "result_disposition",
+            "result_assertion_id",
+            "result_classification",
+            "result_method",
+            "result_at",
+            "result_digest",
+            "result_count",
+            "result_created",
+            "receipt_id",
+            "audit_id",
+            "created_at",
+            "completed_at",
         }
     ),
     "relationship_memory_versions": frozenset(
@@ -1325,11 +1374,10 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
     assert len(actual_model_fields) == 51
-    # Forty-two since `WP-RI-B-05` added `entity_proposal_review_decisions`, the
-    # Entity plane's own review decision ledger. The figure is what makes the
-    # allow-list closed in both directions, so it moves with the declaration and
-    # never ahead of it.
-    assert len(actual_table_columns) == 42
+    # Forty-four after Phase B added the request-replay and replay-evidence
+    # ledgers. The figure makes the allow-list closed in both directions, so it
+    # moves with the declaration and never ahead of it.
+    assert len(actual_table_columns) == 44
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

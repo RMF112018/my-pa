@@ -198,6 +198,79 @@ def _stage_span(connection: Connection, principal_id: str, suffix: str) -> str:
     return span_id
 
 
+def _stage_knowledge(connection: Connection, principal_id: str, suffix: str) -> str:
+    """One extracted knowledge record owned through this Principal's enrollment."""
+    source_id = f"src_{suffix}0001{suffix}0001"
+    object_id = f"obj_{suffix}0001{suffix}0001"
+    version_id = f"ver_{suffix}0001{suffix}0001"
+    enrollment_id = f"enr_{suffix}0001{suffix}0001"
+    knowledge_id = f"kn_{suffix}0001{suffix}0001"
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.sources "  # noqa: S608
+            "(source_id, provider_kind, label, classification, native_root) "
+            "VALUES (:source_id, 'fixture', :label, 'synthetic_test', :root)"
+        ),
+        {"source_id": source_id, "label": f"Fixture {suffix}", "root": f"fixture-{suffix}"},
+    )
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.source_objects "  # noqa: S608
+            "(source_object_id, source_id, kind, native_locator) "
+            "VALUES (:object_id, :source_id, 'file', :locator)"
+        ),
+        {"object_id": object_id, "source_id": source_id, "locator": f"object-{suffix}"},
+    )
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.source_object_versions "  # noqa: S608
+            "(version_id, source_object_id, fingerprint, modified_at) "
+            "VALUES (:version_id, :object_id, :fingerprint, :at)"
+        ),
+        {
+            "version_id": version_id,
+            "object_id": object_id,
+            "fingerprint": suffix * 8,
+            "at": WHEN,
+        },
+    )
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.enrollments "  # noqa: S608
+            "(enrollment_id, source_id, principal_id, purpose, policy_version, "
+            "idempotency_key, request_fingerprint, object_ids, depth, media_types, "
+            "max_items, max_bytes) VALUES (:enrollment_id, :source_id, :principal_id, "
+            "'bounded_enrollment', 'mcv-1', :key, :fingerprint, ARRAY[:object_id], 0, "
+            "ARRAY['text/plain'], 10, 1024)"
+        ),
+        {
+            "enrollment_id": enrollment_id,
+            "source_id": source_id,
+            "principal_id": principal_id,
+            "key": f"evidence-{suffix}",
+            "fingerprint": f"evidence-{suffix}",
+            "object_id": object_id,
+        },
+    )
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.extractions "  # noqa: S608
+            "(extraction_id, enrollment_id, source_object_id, version_id, status, "
+            "media_type, extractor, extractor_version, text, observed_at) VALUES "
+            "(:knowledge_id, :enrollment_id, :object_id, :version_id, 'extracted', "
+            "'text/plain', 'test', '1', 'synthetic text', :at)"
+        ),
+        {
+            "knowledge_id": knowledge_id,
+            "enrollment_id": enrollment_id,
+            "object_id": object_id,
+            "version_id": version_id,
+            "at": WHEN,
+        },
+    )
+    return knowledge_id
+
+
 @pytest.fixture
 def staged(disposable_database: str) -> Iterator[Engine]:
     """A migrated database holding two Principals, their entities and observations."""
@@ -324,7 +397,7 @@ def test_the_promoted_proposal_names_the_record_and_its_evidence_follows(
     assert stored.accepted_record_version == alias.version
     promoted = [link for link in links if link.alias_id == alias.alias_id]
     assert len(promoted) == 1
-    assert promoted[0].role is EvidenceRole.SUPPORTING
+    assert promoted[0].role is EvidenceRole.DIRECT
     assert promoted[0].authority.value == "review_accepted"
 
 
@@ -423,6 +496,7 @@ def test_a_proposal_may_cite_an_observation_a_span_and_a_knowledge_record(
     """Section 17's three evidence kinds, none of which the JSONB array can carry."""
     with staged.begin() as connection:
         span_id = _stage_span(connection, PRINCIPAL_A, "aaaa")
+        knowledge_id = _stage_knowledge(connection, PRINCIPAL_A, "aaaa")
         proposal_id = _propose(
             connection,
             observation_ids=(OBSERVATION_A,),
@@ -430,7 +504,7 @@ def test_a_proposal_may_cite_an_observation_a_span_and_a_knowledge_record(
                 ProposedEvidence(role=EvidenceRole.SUPPORTING, capture_span_id=span_id),
                 ProposedEvidence(
                     role=EvidenceRole.COUNTEREVIDENCE,
-                    knowledge_id=issue_identifier(IdKind.KNOWLEDGE),
+                    knowledge_id=knowledge_id,
                 ),
             ),
         )
@@ -458,7 +532,7 @@ def test_proposal_evidence_may_not_cite_another_principals_observation(
                 proposal_id=proposal_id,
                 principal_id=PRINCIPAL_A,
                 sequence=9,
-                role=EvidenceRole.SUPPORTING,
+                role=EvidenceRole.DIRECT,
                 created_at=LATER,
                 entity_observation_id=OBSERVATION_B,
             ),
@@ -498,7 +572,7 @@ def test_proposal_evidence_may_not_cite_another_principals_proposal(staged: Engi
                 proposal_id=foreign,
                 principal_id=PRINCIPAL_A,
                 sequence=1,
-                role=EvidenceRole.SUPPORTING,
+                role=EvidenceRole.DIRECT,
                 created_at=LATER,
                 entity_observation_id=OBSERVATION_A,
             ),
@@ -677,11 +751,12 @@ def test_a_proposal_a_person_must_look_at_is_stored_needs_review_and_stays_decid
     assert [identifier.display_value for identifier in bound] == ["a.chen@example.invalid"]
 
 
-def test_a_proposal_a_threshold_may_accept_is_stored_proposed(staged: Engine) -> None:
-    """The control: the derivation distinguishes, rather than writing one state twice."""
+def test_a_threshold_eligible_producer_proposal_still_requires_review(staged: Engine) -> None:
+    """A producer cannot convert threshold eligibility into self-promotion authority."""
     with staged.begin() as connection:
         proposal_id = _propose(connection)
     with staged.connect() as connection:
         stored = SqlEntityRepository(connection).proposal(PRINCIPAL_A, proposal_id)
     assert stored is not None
-    assert stored.state is EntityProposalState.PROPOSED
+    assert stored.state is EntityProposalState.NEEDS_REVIEW
+    assert stored.review_case_id is not None

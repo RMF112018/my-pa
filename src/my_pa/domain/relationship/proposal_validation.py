@@ -55,17 +55,13 @@ def _text(values: Mapping[str, str | bool], name: str) -> str | None:
     return value if isinstance(value, str) else None
 
 
-def _member(
-    values: Mapping[str, str | bool], name: str, vocabulary: type[StrEnum]
-) -> None:
+def _member(values: Mapping[str, str | bool], name: str, vocabulary: type[StrEnum]) -> None:
     value = _text(values, name)
     if value is not None and value not in {member.value for member in vocabulary}:
         raise ValueError(f"a payload names a known {name}")
 
 
-def _bounded(
-    values: Mapping[str, str | bool], names: tuple[str, ...], maximum: int
-) -> None:
+def _bounded(values: Mapping[str, str | bool], names: tuple[str, ...], maximum: int) -> None:
     for name in names:
         value = _text(values, name)
         if value is not None and len(value.strip()) > maximum:
@@ -119,22 +115,13 @@ def validate_proposal_target(kind: str, values: Mapping[str, str | bool]) -> Non
         end_now = values.get("end_now", False)
         if not isinstance(end_now, bool) or (effective_end is None) is not end_now:
             raise ValueError("an end payload names exactly one end moment")
-    if (
-        kind == "update_entity"
-        and not {"display_name", "canonical_name", "status"} & values.keys()
-    ):
+    if kind == "update_entity" and not {"display_name", "canonical_name", "status"} & values.keys():
         raise ValueError("an update payload changes at least one field")
     if kind in {"revise_assignment", "revise_relationship"} and len(values) == 1:
         raise ValueError("a revise payload changes at least one field")
-    if (
-        kind == "record_relationship"
-        and values["from_entity_id"] == values["to_entity_id"]
-    ):
+    if kind == "record_relationship" and values["from_entity_id"] == values["to_entity_id"]:
         raise ValueError("a relationship's endpoints are distinct")
-    if (
-        kind == "merge_entities"
-        and values["retained_entity_id"] == values["merged_entity_id"]
-    ):
+    if kind == "merge_entities" and values["retained_entity_id"] == values["merged_entity_id"]:
         raise ValueError("a merge's entities are distinct")
     if kind == "update_entity" and "status" in values:
         proposable_statuses = {status.value for status in CALLER_SETTABLE_STATUSES}
@@ -163,7 +150,5 @@ def validate_proposal_target(kind: str, values: Mapping[str, str | bool]) -> Non
             "defer": {"reason"},
             "quarantine": {"reason"},
         }
-        if not set(values) <= allowed[disposition] or not required[disposition] <= set(
-            values
-        ):
+        if not set(values) <= allowed[disposition] or not required[disposition] <= set(values):
             raise ValueError("a resolution payload matches its disposition")

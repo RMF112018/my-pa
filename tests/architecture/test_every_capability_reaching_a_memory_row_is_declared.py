@@ -375,11 +375,12 @@ BEYOND_THE_EIGHT: Final = {
         "purpose `review_disposition`, and it reads as well as writes. "
         "`review.decide` reads three of the eight "
         "(`relationship_memory_proposals`, `relationship_memory_review_decisions`, "
-        "`relationship_memory_proposal_evidence`) and writes five of the eight "
+        "`relationship_memory_proposal_evidence`) and writes six of the eight "
         "(`relationship_memories`, `relationship_memory_versions`, "
         "`relationship_memory_evidence_links`, "
-        "`relationship_memory_review_decisions`, `relationship_memory_proposals`). "
-        "**That five is a union over branches and no request writes it.** This "
+        "`relationship_memory_review_decisions`, `relationship_memory_proposals`, "
+        "`relationship_memory_proposal_evidence`). "
+        "**That six is a union over branches and no request writes it.** This "
         "string previously said the two non-promotion writes happen on every "
         "disposition; they do not, and claim 10 is what now says so. "
         "`review.decide` on `reject` writes two of the eight "
@@ -499,12 +500,16 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
             }
         ),
     ),
-    # `WP-RI-B-05`. Two writes, no read, and the emptiness of the read set is the
-    # producer boundary made measurable: the port this capability is handed
-    # declares one insert, so there is nothing on this plane it can read back --
-    # not the candidate it just filed, and not what a reviewer did with it.
+    # `WP-RI-B-05`. Two writes and two reads. The reads arbitrate an
+    # open-equivalent retry and merge its exact evidence; neither exposes a
+    # review decision or canonical memory to the producer.
     Capability.RELATIONSHIP_MEMORY_PROPOSE: (
-        frozenset(),
+        frozenset(
+            {
+                "relationship_memory_proposal_evidence",
+                "relationship_memory_proposals",
+            }
+        ),
         frozenset(
             {
                 "relationship_memory_proposal_evidence",
@@ -573,6 +578,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
             {
                 "relationship_memories",
                 "relationship_memory_evidence_links",
+                "relationship_memory_proposal_evidence",
                 "relationship_memory_proposals",
                 "relationship_memory_review_decisions",
                 "relationship_memory_versions",
@@ -683,8 +689,14 @@ DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str
             "invalidate": frozenset(
                 {"relationship_memory_proposals", "relationship_memory_review_decisions"}
             ),
-            "reprocess": frozenset(),
-            "escalate": frozenset(),
+            "reprocess": frozenset(
+                {
+                    "relationship_memory_proposal_evidence",
+                    "relationship_memory_proposals",
+                    "relationship_memory_review_decisions",
+                }
+            ),
+            "escalate": frozenset({"relationship_memory_review_decisions"}),
         }
     },
     "EntityStatus": {
@@ -743,6 +755,18 @@ UNREADABLE_BRANCH_GUARDS: Final[dict[str, dict[tuple[str, str, str], str]]] = {
         "the decision chain. Reading it against the requested member would be wrong, not "
         "merely imprecise; it raises on the true branch, so leaving it unread costs the "
         "split nothing",
+        (
+            "my_pa.infrastructure.persistence.relationship_memory_review",
+            "decide_relationship_memory_review",
+            "request.disposition in _ACCEPTING and escalated and (not has_operator_authority)",
+        ): "the accepting-after-escalation authority guard combines the requested "
+        "Disposition with stored escalation state; the split conservatively unions it",
+        (
+            "my_pa.infrastructure.persistence.relationship_memory_review",
+            "decide_relationship_memory_review",
+            "request.disposition is Disposition.ESCALATE and escalated",
+        ): "the repeated-escalation guard combines the requested Disposition with "
+        "stored escalation state; the split conservatively unions it",
     },
     "EntityStatus": {},
 }

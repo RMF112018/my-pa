@@ -558,9 +558,9 @@ class World:
     relationship_memory_proposal_evidence: list[MemoryProposalEvidence] = field(
         default_factory=list
     )
-    relationship_write_requests: dict[
-        tuple[str, str, str], tuple[str, WriteRequestResult]
-    ] = field(default_factory=dict)
+    relationship_write_requests: dict[tuple[str, str, str], tuple[str, WriteRequestResult]] = field(
+        default_factory=dict
+    )
     producer_origins: dict[str, ProducerOrigin] = field(default_factory=dict)
     entity_merges: list[EntityMergeRecord] = field(default_factory=list)
     #: The entity plane's three ledgers, shared by every writer on it. Flat
@@ -4383,9 +4383,7 @@ class _Entities(EntitiesRepository):
         for offered in evidence:
             identity = (
                 offered.role,
-                offered.entity_observation_id
-                or offered.capture_span_id
-                or offered.knowledge_id,
+                offered.entity_observation_id or offered.capture_span_id or offered.knowledge_id,
             )
             if identity in known:
                 continue
@@ -5991,9 +5989,7 @@ class _WriteRequests(WriteRequestRepository):
         request_id: str,
         request_digest: str,
     ) -> WriteRequestResult | None:
-        held = self._world.relationship_write_requests.get(
-            (principal_id, capability, request_id)
-        )
+        held = self._world.relationship_write_requests.get((principal_id, capability, request_id))
         if held is None:
             return None
         digest, result = held
@@ -6219,7 +6215,7 @@ def operator(principal_id: str | None = None) -> Principal:
 def metadata_for(capability: Capability, purpose: Purpose, principal: Principal) -> RequestMetadata:
     """The common request metadata a transport would have parsed."""
     return RequestMetadata(
-        request_id=issue_identifier(IdKind.CORRELATION),
+        request_id=f"req-{capability.value}",
         capability=capability,
         purpose=purpose,
         principal_id=principal.principal_id,

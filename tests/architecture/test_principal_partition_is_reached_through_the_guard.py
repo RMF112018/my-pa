@@ -116,6 +116,7 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # goes through `partition_criterion` or `principal_bound_values`, so it
         # is registered statement-level below rather than per-module.
         "infrastructure/persistence/entity.py",
+        "infrastructure/persistence/write_requests.py",
         # The same plane's governed write path (`WP-RI-A-02`), separated from the
         # module above because a guarded write is a transaction rather than a
         # statement. Every statement it builds over an entity table goes through
@@ -337,6 +338,11 @@ STATEMENT_LEVEL: Final = frozenset(
 #: modules is reached only through an application path that has already resolved
 #: the Principal, which is the same argument the `QUARANTINED` entries make.
 PER_MODULE_ONLY: Final = {
+    "infrastructure/persistence/write_requests.py": (
+        "every reservation/result read and completion update uses `_mine`, and both "
+        "the reservation and typed evidence inserts use `_bound`; the module has "
+        "not yet joined a dedicated statement-level scanner."
+    ),
     "infrastructure/persistence/goodnotes.py": (
         "all reads use the shared partition criterion and all writes use "
         "principal_bound_values; helper-built joins consume those predicates."
@@ -1081,6 +1087,30 @@ _ENTITY_PLANE_MODULES: Final = (
 #: been a pattern.
 _UNGUARDED_ENTITY_PLANE_STATEMENTS: Final = frozenset({"entity_authoring.py:_record_evidence"})
 
+#: The six closed table choices `proposal_target_version` binds before one
+#: `_mine(table, principal_id)` query. The assignment is not itself a query, so
+#: statement-local scans cannot see the downstream guard. The exact mapping and
+#: guarded consumer are asserted together below; this is not a general dynamic
+#: table exemption.
+_DYNAMIC_PROPOSAL_TARGET_TABLES: Final = frozenset(
+    {
+        "entities",
+        "entity_external_identifiers",
+        "entity_aliases",
+        "entity_assignments",
+        "entity_relationships",
+        "entity_observations",
+    }
+)
+
+
+def _is_dynamic_proposal_target_binding(function: str, statement: ast.stmt) -> bool:
+    if function != "proposal_target_version" or not isinstance(statement, ast.Assign):
+        return False
+    return any(
+        isinstance(target, ast.Name) and target.id == "target" for target in statement.targets
+    )
+
 
 def _entity_plane_statements() -> Iterator[tuple[Path, str, ast.stmt]]:
     """Every statement of every function in the entity plane's two modules."""
@@ -1124,6 +1154,8 @@ def test_every_entity_statement_reaches_the_partition() -> None:
             continue
         checked += 1
         if "_mine(" in rendered or "_bound(" in rendered:
+            continue
+        if _is_dynamic_proposal_target_binding(function, statement):
             continue
         if f"{path.name}:{function}" in _UNGUARDED_ENTITY_PLANE_STATEMENTS:
             continue
@@ -1596,6 +1628,9 @@ def test_every_entity_statement_reaches_the_partition_of_each_table_it_names() -
             if not named:
                 continue
             checked += 1
+            if _is_dynamic_proposal_target_binding(function.name, statement):
+                assert named == _DYNAMIC_PROPOSAL_TARGET_TABLES
+                continue
             for table in sorted(named):
                 reachable = [table, *[a for a, t in aliases.items() if t == table]]
                 guarded = any(
@@ -1616,6 +1651,36 @@ def test_every_entity_statement_reaches_the_partition_of_each_table_it_names() -
         "and whose child side is not answers from another Principal's row under "
         "this Principal's name"
     )
+
+
+def test_the_dynamic_proposal_target_map_is_closed_and_its_consumer_is_scoped() -> None:
+    path = PACKAGE / "infrastructure" / "persistence" / "entity.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "proposal_target_version"
+    )
+    binding = next(
+        statement
+        for statement in function.body
+        if isinstance(statement, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "target" for target in statement.targets
+        )
+    )
+    rendered_binding = ast.unparse(binding)
+    named = {
+        table
+        for table in _DYNAMIC_PROPOSAL_TARGET_TABLES
+        if _names_table(table).search(rendered_binding)
+    }
+    assert named == _DYNAMIC_PROPOSAL_TARGET_TABLES
+
+    rendered_function = ast.unparse(function)
+    assert "_mine(table, principal_id)" in rendered_function
+    assert "identity == record_id" in rendered_function
+    assert ".with_for_update(of=table)" in rendered_function
 
 
 def test_every_corpus_coverage_statement_reaches_the_partition() -> None:

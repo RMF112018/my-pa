@@ -56,6 +56,7 @@ def is_server_replay_capability(capability: Capability) -> bool:
     """Whether remote retries are backed by the canonical request ledger."""
     return capability in _SERVER_REPLAY_REMOTE_CAPABILITIES
 
+
 #: Envelope fields a remote MCP caller may not state. `capability` is already
 #: removed from published schemas because the tool name carries it; it is listed
 #: here so a caller who sends it anyway is refused the same way.

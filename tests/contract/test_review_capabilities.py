@@ -69,7 +69,11 @@ def test_review_decision_appends_and_a_stale_expected_version_conflicts(scene: S
     assert accepted.result["review_version"] == 1
     assert len(scene.world.review_decisions) == 1
 
-    stale = _invoke(scene, Capability.REVIEW_DECIDE, command)
+    service = build_service(scene.world, scene.providers)
+    stale_metadata = metadata_for(
+        Capability.REVIEW_DECIDE, Purpose.REVIEW_DISPOSITION, scene.principal
+    ).model_copy(update={"request_id": f"req-{issue_identifier(IdKind.CORRELATION)}"})
+    stale = service.invoke(stale_metadata, command, principal=scene.principal)
     assert stale.error is not None
     assert stale.error.code is ErrorCode.CONFLICT
     assert stale.error.safe_details == ("expected_review_version",)

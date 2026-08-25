@@ -33,10 +33,11 @@ LIFECYCLE = "2fe4e13fb449"
 #: Phase A's single vocabulary revision, which sat on `LIFECYCLE` and was head
 #: until the Phase B chain stacked on it.
 PHASE_A = "823e23b6cc63"
-#: Phase B's vocabulary revision, which is where `upgrade head` now lands. Named
-#: separately from `PHASE_A` so the chain assertion below stays a statement about
-#: the order rather than about whichever revision happens to be last.
-HEAD = "b64e29a0f7c1"
+#: Phase B's vocabulary revision and the cumulative Relationship Intelligence
+#: revision stacked on it. Named separately so the chain assertion remains a
+#: statement about order rather than conflating an historical edge with head.
+PHASE_B = "b64e29a0f7c1"
+HEAD = "3d07af4dc513"
 REVISION_PATH = (
     ROOT
     / "migrations"
@@ -52,6 +53,8 @@ def test_work_revision_sits_on_the_single_head_chain_after_its_predecessor() -> 
     assert script.get_revision(SUCCESSOR).down_revision == REVISION
     assert script.get_revision(LIFECYCLE).down_revision == SUCCESSOR
     assert script.get_revision(PHASE_A).down_revision == LIFECYCLE
+    assert script.get_revision(PHASE_B).down_revision == "a1f7d3c85e40"
+    assert script.get_revision(HEAD).down_revision == PHASE_B
 
 
 def test_bulk_metadata_matches_the_persisted_preview_and_confirmation_contract() -> None:

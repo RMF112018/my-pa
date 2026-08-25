@@ -57,7 +57,7 @@ def _reconcile_open_memory_proposals(bind: Connection) -> None:
     duplicates = tuple(
         bind.execute(
             text(
-            f"""
+                f"""
             SELECT principal_id, memory_proposal_id,
                    first_value(memory_proposal_id) OVER (
                      PARTITION BY principal_id, dedupe_sha256
@@ -122,7 +122,15 @@ def upgrade() -> None:
           DROP CONSTRAINT a_proposal_expected_target_version_is_positive,
           DROP CONSTRAINT IF EXISTS a_proposal_expected_target_version_matches_kind,
           ADD CONSTRAINT a_proposal_expected_target_version_matches_kind CHECK (
-            (kind IN (
+            kind NOT IN (
+              'create_entity', 'update_entity', 'bind_identifier',
+              'retire_identifier', 'supersede_identifier', 'record_alias',
+              'retire_alias', 'supersede_alias', 'record_assignment',
+              'revise_assignment', 'end_assignment', 'record_relationship',
+              'revise_relationship', 'end_relationship', 'resolve_mention',
+              'merge_entities', 'split_identity'
+            )
+            OR (kind IN (
               'update_entity', 'retire_identifier', 'supersede_identifier',
               'retire_alias', 'supersede_alias', 'revise_assignment',
               'end_assignment', 'revise_relationship', 'end_relationship'
@@ -186,33 +194,57 @@ def upgrade() -> None:
            AND p.expected_subject_version IS NULL;
         """
     )
-    bind = op.get_bind()
-    legacy = bind.execute(
-        text(
-            f"SELECT memory_proposal_id, principal_id, subject_entity_id, proposed_kind, "
-            f"proposed_statement_sha256, structured_value "
-            f"FROM {SCHEMA}.relationship_memory_proposals WHERE dedupe_sha256 IS NULL"
+    if op.get_context().as_sql:
+        # Offline SQL cannot read rows back into the frozen Python digest
+        # function. It remains executable for pristine/current predecessors,
+        # and fails closed rather than inventing a different digest when a
+        # legacy row actually needs the data migration's online path.
+        op.execute(
+            f"""
+            DO $$ BEGIN
+              IF EXISTS (
+                SELECT 1 FROM {SCHEMA}.relationship_memory_proposals
+                 WHERE dedupe_sha256 IS NULL
+              ) THEN
+                RAISE EXCEPTION
+                  '3d07af4dc513 requires online mode to backfill legacy memory proposals';
+              END IF;
+            END $$
+            """
         )
-    ).mappings()
-    update_legacy = text(
-        f"UPDATE {SCHEMA}.relationship_memory_proposals SET dedupe_sha256 = :digest "
-        "WHERE memory_proposal_id = :proposal_id AND dedupe_sha256 IS NULL"
-    )
-    for row in legacy:
-        bind.execute(
-            update_legacy,
-            {
-                "proposal_id": row["memory_proposal_id"],
-                "digest": _frozen_memory_proposal_digest(
-                    principal_id=row["principal_id"],
-                    subject_entity_id=row["subject_entity_id"],
-                    proposed_kind=row["proposed_kind"],
-                    proposed_statement_sha256=row["proposed_statement_sha256"],
-                    structured_value=row["structured_value"],
-                ),
-            },
+    else:
+        bind = op.get_bind()
+        legacy = bind.execute(
+            text(
+                f"SELECT memory_proposal_id, principal_id, subject_entity_id, proposed_kind, "
+                f"proposed_statement_sha256, structured_value "
+                f"FROM {SCHEMA}.relationship_memory_proposals WHERE dedupe_sha256 IS NULL"
+            )
+        ).mappings()
+        update_legacy = text(
+            f"UPDATE {SCHEMA}.relationship_memory_proposals SET dedupe_sha256 = :digest "
+            "WHERE memory_proposal_id = :proposal_id AND dedupe_sha256 IS NULL"
         )
-    _reconcile_open_memory_proposals(bind)
+        for row in legacy:
+            bind.execute(
+                update_legacy,
+                {
+                    "proposal_id": row["memory_proposal_id"],
+                    "digest": _frozen_memory_proposal_digest(
+                        principal_id=row["principal_id"],
+                        subject_entity_id=row["subject_entity_id"],
+                        proposed_kind=row["proposed_kind"],
+                        proposed_statement_sha256=row["proposed_statement_sha256"],
+                        structured_value=row["structured_value"],
+                    ),
+                },
+            )
+        _reconcile_open_memory_proposals(bind)
+        # Reconciliation updates tables with deferred integrity triggers. Fire
+        # those events before the following ALTER TABLE, then restore the
+        # default deferred mode for the rest of this transactional migration.
+        op.execute("SET CONSTRAINTS ALL IMMEDIATE")
+        op.execute("SET CONSTRAINTS ALL DEFERRED")
     op.execute(
         f"""
         ALTER TABLE {SCHEMA}.relationship_memory_proposals

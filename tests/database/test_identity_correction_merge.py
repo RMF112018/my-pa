@@ -82,6 +82,11 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityEffectKind,
     IdentityOperationState,
 )
+from my_pa.domain.relationship.memory import (
+    MemoryKind,
+    memory_proposal_dedupe_digest,
+    statement_digest,
+)
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
 from my_pa.domain.relationship.proposal_payload import (
     EntityProposalKind,
@@ -969,7 +974,11 @@ def test_a_needs_review_proposal_naming_the_merged_identity_is_invalidated(
         EntityGovernanceService(SqlEntityRepository(connection)).propose(
             PRINCIPAL_A,
             kind=EntityProposalKind.UPDATE_ENTITY,
-            payload={"entity_id": MERGED_ONE, "reason": "a synthetic correction"},
+            payload={
+                "entity_id": MERGED_ONE,
+                "display_name": "Alice Synthetic Corrected",
+                "reason": "a synthetic correction",
+            },
             observation_ids=(),
             proposed_by="synthetic-producer",
             method=EntityProposalMethod.DETERMINISTIC,
@@ -1020,7 +1029,11 @@ def test_a_proposal_on_a_review_case_is_invalidated_and_the_case_goes_with_it(
         EntityGovernanceService(SqlEntityRepository(connection)).propose(
             PRINCIPAL_A,
             kind=EntityProposalKind.UPDATE_ENTITY,
-            payload={"entity_id": MERGED_ONE, "reason": "a synthetic correction"},
+            payload={
+                "entity_id": MERGED_ONE,
+                "display_name": "Alice Synthetic Corrected",
+                "reason": "a synthetic correction",
+            },
             observation_ids=(),
             proposed_by="synthetic-producer",
             method=EntityProposalMethod.DETERMINISTIC,
@@ -1116,17 +1129,25 @@ def test_a_relationship_memory_subject_blocks_the_merge_without_naming_the_memor
         connection.execute(
             text(
                 f"INSERT INTO {SCHEMA}.relationship_memory_proposals ("  # noqa: S608
-                "memory_proposal_id, principal_id, subject_entity_id, proposed_kind, "
-                "proposed_statement, proposed_statement_sha256, state, method, "
+                "memory_proposal_id, principal_id, subject_entity_id, "
+                "expected_subject_version, proposed_kind, proposed_statement, "
+                "proposed_statement_sha256, dedupe_sha256, state, method, "
                 "method_version, classification, proposed_at) VALUES ("
-                "'mprop_aaaa0001aaaa01', :principal, :subject, 'general_note', "
-                "'synthetic note', :digest, 'proposed', 'deterministic', 'v1', "
+                "'mprop_aaaa0001aaaa01', :principal, :subject, 1, 'general_note', "
+                "'synthetic note', :digest, :dedupe, 'proposed', 'deterministic', 'v1', "
                 "'synthetic_test', :moment)"
             ),
             {
                 "principal": PRINCIPAL_A,
                 "subject": MERGED_ONE,
-                "digest": "a" * 64,
+                "digest": statement_digest("synthetic note"),
+                "dedupe": memory_proposal_dedupe_digest(
+                    principal_id=PRINCIPAL_A,
+                    subject_entity_id=MERGED_ONE,
+                    proposed_kind=MemoryKind.GENERAL_NOTE,
+                    proposed_statement_sha256=statement_digest("synthetic note"),
+                    structured_value=None,
+                ),
                 "moment": WHEN,
             },
         )

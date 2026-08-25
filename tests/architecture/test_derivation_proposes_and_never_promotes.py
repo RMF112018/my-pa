@@ -28,9 +28,10 @@ source, rule or local-model producer a published way to write, and the thing
 that must stay impossible is for that producer to reach the mutation its own
 proposal describes.
 
-5. **Proposing writes proposals and nothing else.** `EntityGovernanceService.propose`
-   reaches exactly one write on the repository, takes no parameter that could
-   name a decided state, and writes the proposed literal.
+5. **Proposing writes only proposal-plane rows.** `EntityGovernanceService.propose`
+   writes the proposal and its evidence, including evidence merged onto an open
+   equivalent, takes no parameter that could name a decided state, and writes
+   the `needs_review` literal.
 6. **Deciding is a different method that demands an actor**, so there is no
    path from producing to promoting that does not pass through somebody's name.
 7. **No acceptance reaches an identity mutation.** `redirect_entity` and
@@ -257,7 +258,7 @@ IDENTITY_WRITES: Final = frozenset({"redirect_entity", "record_merge"})
 PRODUCER_REPOSITORY_CALLS: Final = frozenset(
     {
         "record_proposal",
-        "record_proposal_evidence_link",
+        "merge_proposal_evidence_links",
         "observation",
         "proposals",
         "proposal_by_dedupe",
@@ -333,7 +334,7 @@ def _repository_calls(node: ast.AST) -> set[str]:
     return found
 
 
-def test_proposing_reaches_one_write_and_it_is_the_proposal_table() -> None:
+def test_proposing_reaches_only_proposal_plane_writes() -> None:
     """Property 5. The producer path's whole reach, read off the source.
 
     `propose` delegates four checks and one write to private helpers, so the
@@ -358,9 +359,10 @@ def test_proposing_reaches_one_write_and_it_is_the_proposal_table() -> None:
         f"the producer allowlist admits {admitted_canonical}, which write canonical fact. "
         "Every call a producer may make writes or reads the proposal plane only"
     )
-    assert "record_proposal_evidence_link" in reached, (
-        "the producer no longer writes the evidence its proposal rests on; section 17's "
-        "evidence role and per-link Principal would be exercised by nothing again"
+    assert "merge_proposal_evidence_links" in reached, (
+        "the producer no longer merges the exact evidence its proposal rests on; "
+        "section 17's evidence role and per-link Principal would be exercised by "
+        "nothing again"
     )
 
 
@@ -418,7 +420,7 @@ def test_promotion_stamps_review_authority_and_never_the_users() -> None:
     )
 
 
-def test_proposing_writes_the_proposed_literal_and_takes_no_state() -> None:
+def test_proposing_writes_the_review_gated_literal_and_takes_no_state() -> None:
     """Property 5, the other half — `propose_*`'s rule on the entity plane.
 
     The state is written as a literal, and there is no parameter through which a
@@ -427,31 +429,19 @@ def test_proposing_writes_the_proposed_literal_and_takes_no_state() -> None:
     tree = _module(GOVERNANCE)
     propose = _function(tree, klass="EntityGovernanceService", name="propose")
     source = ast.dump(propose)
-    # The literal moved to `initial_state_for`, because `WP-RI-B-05` made the
-    # initial state derive from the kind's review requirement rather than being
-    # one literal for all seventeen kinds. So the property is asserted over both
-    # halves -- `propose` calls the derivation and takes no state, and the
-    # derivation writes the two undecided literals and none of the decided ones
-    # -- which covers seventeen kinds where the original covered one literal.
-    assert "initial_state_for" in _called_names(propose), (
-        "propose no longer derives its state. A state written by hand is a state a "
-        "later edit can write as accepted"
-    )
-    initial = _function_or_module_level(tree, "initial_state_for")
-    # Read as member names rather than as substrings of the dump, because
-    # `MAY_BE_ACCEPTED_AUTOMATICALLY` -- the requirement this derives from --
-    # contains "ACCEPTED", and a substring scan would either fail on the correct
-    # source or have to be loosened until it saw nothing.
+    # Phase B has no configured automatic promoter. Every producer proposal is
+    # therefore filed directly into the canonical review queue rather than left
+    # in a threshold state no executable path consumes.
     named = {
         node.attr
-        for node in ast.walk(initial)
+        for node in ast.walk(propose)
         if isinstance(node, ast.Attribute)
         and isinstance(node.value, ast.Name)
         and node.value.id == "EntityProposalState"
     }
-    assert named == {"PROPOSED", "NEEDS_REVIEW"}, (
-        f"initial_state_for can write {sorted(named)}. Every state a new proposal may be "
-        "written in is one nothing has decided"
+    assert named == {"NEEDS_REVIEW"}, (
+        f"propose can write {sorted(named)}. Every producer proposal must enter the "
+        "canonical review queue"
     )
     for decided in ("ACCEPTED", "CORRECTED_ACCEPTED", "REJECTED", "DEFERRED", "INVALIDATED"):
         assert decided not in source, f"propose mentions {decided}"

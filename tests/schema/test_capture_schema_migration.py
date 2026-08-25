@@ -1057,6 +1057,7 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # from a finished one.
             "entity_identity_effects_are_append_only",
             "relationship_write_requests_complete_once",
+            "relationship_write_requests_finish_in_transaction",
             "relationship_write_request_evidence_is_append_only",
             "goodnotes_page_versions_are_immutable",
             "goodnotes_region_proposals_are_immutable",

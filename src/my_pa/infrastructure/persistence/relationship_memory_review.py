@@ -358,10 +358,12 @@ def _writable_subject(
             entities.c.entity_type,
             entities.c.status,
             entities.c.version,
-        ).where(
+        )
+        .where(
             _mine(entities, principal_id),
             entities.c.entity_id == entity_id,
-        ).with_for_update(of=entities)
+        )
+        .with_for_update(of=entities)
     ).one_or_none()
     if row is None:
         raise ReviewConflictError("the promoted subject is no longer in this scope")

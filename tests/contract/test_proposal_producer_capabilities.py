@@ -52,6 +52,7 @@ from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.governance import EntityProposalMethod, ReviewRequirement
 from my_pa.domain.relationship.memory import MemoryKind, MemoryProposalState
 from my_pa.domain.relationship.proposal_payload import EntityProposalKind
+from my_pa.domain.source.registry import issue_identifier
 
 #: The alias a producer proposes. `record_alias` on purpose: it is the one kind
 #: `requirement_for` admits to a configured threshold, so a receipt that reported
@@ -78,8 +79,11 @@ def test_registered_local_composition_serves_both_producer_capabilities(scene: S
 
 def _result(scene: Scene, capability: Capability, purpose: Purpose, command: Command) -> Any:  # noqa: ANN401 - a canonical envelope payload
     service = build_service(scene.world, scene.providers)
+    metadata = metadata_for(capability, purpose, scene.principal).model_copy(
+        update={"request_id": f"req-{issue_identifier(IdKind.CORRELATION)}"}
+    )
     envelope = service.invoke(
-        metadata_for(capability, purpose, scene.principal),
+        metadata,
         command,
         principal=scene.principal,
     )

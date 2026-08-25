@@ -64,6 +64,7 @@ from my_pa.domain.relationship.governance import (
     EntityProposalState,
     EntityResolutionDecision,
     EvidenceRole,
+    MutationRecordFamily,
     ObservationState,
 )
 from my_pa.domain.relationship.resolution import (
@@ -440,6 +441,14 @@ class _CorpusRepository(EntitiesRepository):
 
     def proposal(self, principal_id: str, proposal_id: str) -> EntityProposal | None:
         raise NotImplementedError("resolution decides no proposal")
+
+    def proposal_target_version(
+        self,
+        principal_id: str,
+        family: MutationRecordFamily,
+        record_id: str,
+    ) -> int | None:
+        raise NotImplementedError("resolution reads no proposal target version")
 
     def proposals(
         self, principal_id: str, state: EntityProposalState | None = None

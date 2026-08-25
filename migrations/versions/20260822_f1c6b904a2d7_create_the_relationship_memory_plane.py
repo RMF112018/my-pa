@@ -187,6 +187,67 @@ _IMMUTABLE_TABLES: Final = (
     ),
 )
 
+_PHASE_B_PROPOSAL_CONSTRAINTS: Final = frozenset(
+    {
+        "a_memory_proposal_expected_subject_version_is_positive",
+        "a_memory_proposal_dedupe_is_a_sha256_digest",
+        "a_superseded_memory_proposal_records_when",
+        "a_memory_proposal_is_not_superseded_before_it_was_proposed",
+        "only_a_superseded_memory_proposal_names_its_successor",
+        "a_memory_proposal_is_not_its_own_successor",
+        "a_memory_proposal_is_superseded_within_its_principal",
+    }
+)
+
+
+def _freeze_out_phase_b_memory_columns(copy: Table) -> None:
+    """Keep this historical copy at the schema its revision introduced."""
+    if copy.name == "relationship_memory_proposals":
+        for constraint in [
+            candidate
+            for candidate in copy.constraints
+            if candidate.name in _PHASE_B_PROPOSAL_CONSTRAINTS
+        ]:
+            copy.constraints.discard(constraint)
+        for index in [
+            candidate
+            for candidate in copy.indexes
+            if candidate.name == "an_open_equivalent_memory_proposal_is_raised_once"
+        ]:
+            copy.indexes.discard(index)
+        for name in (
+            "expected_subject_version",
+            "dedupe_sha256",
+            "superseded_at",
+            "superseded_by_memory_proposal_id",
+        ):
+            copy._columns.remove(copy.c[name])
+    elif copy.name == "relationship_memory_proposal_evidence":
+        for index in [
+            candidate
+            for candidate in copy.indexes
+            if candidate.name
+            in {
+                "one_observation_role_per_memory_proposal",
+                "one_capture_span_role_per_memory_proposal",
+                "one_knowledge_role_per_memory_proposal",
+            }
+        ]:
+            copy.indexes.discard(index)
+    elif copy.name == "relationship_memory_review_decisions":
+        for constraint in [
+            candidate
+            for candidate in copy.constraints
+            if candidate.name
+            in {
+                "a_memory_review_reason_explains_a_departure",
+                "a_memory_escalation_or_invalidation_states_why",
+                "a_memory_review_reason_is_bounded",
+            }
+        ]:
+            copy.constraints.discard(constraint)
+        copy._columns.remove(copy.c.reason)
+
 
 def _historical_relationship_memory_tables() -> list[Table]:
     """The eight tables as this revision emits them, with the eighteen sets frozen.
@@ -203,6 +264,7 @@ def _historical_relationship_memory_tables() -> list[Table]:
     frozen = MetaData(schema=SCHEMA)
     copies = [table.to_metadata(frozen) for table in _TABLES]
     for copy in copies:
+        _freeze_out_phase_b_memory_columns(copy)
         replacements = _FROZEN.get(copy.name, {})
         for constraint in [
             candidate for candidate in copy.constraints if candidate.name in replacements

@@ -52,9 +52,8 @@ _OPERATOR = _REVIEWER | frozenset(
         Capability.ENTITIES_MERGE,
     }
 )
-_IDENTITY_MUTATIONS = frozenset(
-    {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
-)
+_IDENTITY_MUTATIONS = frozenset({Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE})
+_TRANSPORTS: Final[tuple[Literal["local", "remote"], ...]] = ("local", "remote")
 
 
 def _profile(
@@ -69,7 +68,7 @@ def _profile(
 RELATIONSHIP_GRANT_PROFILES: Final[Mapping[str, RelationshipGrantProfile]] = MappingProxyType(
     {
         f"{transport}.{name}": _profile(name, transport, capabilities)
-        for transport in ("local", "remote")
+        for transport in _TRANSPORTS
         for name, capabilities in (
             ("standard", _STANDARD),
             ("producer", _PRODUCER),

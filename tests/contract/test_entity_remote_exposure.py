@@ -43,8 +43,10 @@ from tests.conftest import FakeProviders, World, build_service
 
 from my_pa.adapters.mcp.remote import remote_tool_names
 from my_pa.adapters.mcp.server import published_tools
+from my_pa.application.producer_origin import ProducerOrigin
 from my_pa.application.service import ApplicationService
 from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
+from my_pa.domain.identity.principal import PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 
 ENTITY_CAPABILITIES: Final[frozenset[str]] = frozenset(
@@ -87,7 +89,15 @@ def _service(*, enabled: bool) -> ApplicationService:
     this" is true by construction rather than by two hand-written compositions
     that might drift apart.
     """
-    return build_service(World(), FakeProviders(), relationship_intelligence_enabled=enabled)
+    world = World()
+    producer_id = "prn_remote_entity_profile"
+    world.producer_origins[producer_id] = ProducerOrigin(
+        principal_id=producer_id,
+        principal_kind=PrincipalKind.OPERATOR,
+        method="rule",
+        method_version="synthetic-remote-profile.1",
+    )
+    return build_service(world, FakeProviders(), relationship_intelligence_enabled=enabled)
 
 
 def test_the_names_this_file_is_about_are_the_family() -> None:

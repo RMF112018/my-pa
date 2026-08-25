@@ -233,9 +233,12 @@ def test_semantically_invalid_payload_writes_neither_proposal_nor_evidence(stage
                 at=WHEN,
             )
         for table in ("entity_proposals", "entity_proposal_evidence_links"):
-            assert connection.execute(
-                text(f"SELECT count(*) FROM {SCHEMA}.{table}")  # noqa: S608
-            ).scalar_one() == 0
+            assert (
+                connection.execute(
+                    text(f"SELECT count(*) FROM {SCHEMA}.{table}")  # noqa: S608
+                ).scalar_one()
+                == 0
+            )
 
 
 # --- the widened vocabularies -----------------------------------------------
@@ -623,9 +626,12 @@ def test_knowledge_evidence_is_scoped_through_its_enrollment(staged: Engine) -> 
                 ),
             )
     with staged.connect() as connection:
-        assert connection.execute(
-            text(f"SELECT count(*) FROM {SCHEMA}.entity_proposal_evidence_links")  # noqa: S608
-        ).scalar_one() == 1
+        assert (
+            connection.execute(
+                text(f"SELECT count(*) FROM {SCHEMA}.entity_proposal_evidence_links")  # noqa: S608
+            ).scalar_one()
+            == 1
+        )
 
 
 def test_proposal_evidence_names_exactly_one_record(staged: Engine) -> None:

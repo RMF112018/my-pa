@@ -30,8 +30,8 @@ DATABASE: Final = "my_pa_phase_b_memory_dedupe_migration_test"
 SCHEMA: Final = "knowledge"
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 SUBJECT: Final = "ent_aaaa0001aaaa0001"
-WINNER: Final = "mprp_aaaa0001aaaa0001"
-LOSER: Final = "mprp_bbbb0002bbbb0002"
+WINNER: Final = "mprop_aaaa0001aaaa0001"
+LOSER: Final = "mprop_bbbb0002bbbb0002"
 WINNER_CASE: Final = "rvw_aaaa0001aaaa0001"
 LOSER_CASE: Final = "rvw_bbbb0002bbbb0002"
 STATEMENT: Final = "Synthetic predecessor claim."
@@ -103,14 +103,19 @@ def test_upgrade_reconciles_version_drift_duplicates_without_deleting_history(
                 version=2,
             ),
         )
-        # Current source declarations make fresh historical migrations richer
-        # than a database that actually ran the predecessor in its own release.
-        # Remove only those future properties to reproduce that legal shape.
+        # Phase B briefly shipped these two additive columns through the live
+        # table declaration before this dedicated child migration froze them.
+        # Reproduce that legal predecessor shape explicitly; a pristine
+        # predecessor without them is exercised by the ordinary upgrade tests.
         connection.execute(
             text(
-                f"DROP INDEX IF EXISTS {SCHEMA}."
-                "an_open_equivalent_memory_proposal_is_raised_once"
+                f"ALTER TABLE {SCHEMA}.relationship_memory_proposals "
+                "ADD COLUMN IF NOT EXISTS expected_subject_version integer, "
+                "ADD COLUMN IF NOT EXISTS dedupe_sha256 text"
             )
+        )
+        connection.execute(
+            text(f"DROP INDEX IF EXISTS {SCHEMA}.an_open_equivalent_memory_proposal_is_raised_once")
         )
         connection.execute(
             text(
@@ -181,13 +186,17 @@ def test_upgrade_reconciles_version_drift_duplicates_without_deleting_history(
     command.upgrade(_config(), "head")
 
     with predecessor.begin() as connection:
-        proposals = connection.execute(
-            text(
-                f"SELECT memory_proposal_id, state, superseded_by_memory_proposal_id, "
-                f"dedupe_sha256 FROM {SCHEMA}.relationship_memory_proposals "
-                "ORDER BY memory_proposal_id"
+        proposals = (
+            connection.execute(
+                text(
+                    f"SELECT memory_proposal_id, state, superseded_by_memory_proposal_id, "
+                    f"dedupe_sha256 FROM {SCHEMA}.relationship_memory_proposals "
+                    "ORDER BY memory_proposal_id"
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
         evidence_rows = [
             dict(row)
             for row in connection.execute(
@@ -198,11 +207,15 @@ def test_upgrade_reconciles_version_drift_duplicates_without_deleting_history(
                 )
             ).mappings()
         ]
-        decisions = connection.execute(
-            text(
-                f"SELECT memory_proposal_id FROM {SCHEMA}.relationship_memory_review_decisions"
+        decisions = (
+            connection.execute(
+                text(
+                    f"SELECT memory_proposal_id FROM {SCHEMA}.relationship_memory_review_decisions"
+                )
             )
-        ).scalars().all()
+            .scalars()
+            .all()
+        )
 
         assert len(proposals) == 2
         assert proposals[0]["memory_proposal_id"] == WINNER
@@ -243,7 +256,7 @@ def test_upgrade_reconciles_version_drift_duplicates_without_deleting_history(
                       proposed_statement_sha256, dedupe_sha256, state, method,
                       method_version, classification, proposed_at, review_case_id
                     ) VALUES (
-                      'mprp_cccc0003cccc0003', :principal, :subject, 2,
+                      'mprop_cccc0003cccc0003', :principal, :subject, 2,
                       'working_preference', :statement, :statement_digest, :dedupe,
                       'needs_review', 'rule', 'legacy-rule-v1', 'private_local', :at,
                       'rvw_cccc0003cccc0003'

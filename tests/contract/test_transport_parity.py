@@ -1162,8 +1162,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 "alias_type": "initials",
                 "display_value": "PP",
             },
-            "evidence": [{"role": "supporting", "entity_observation_id": MENTION_ID}],
-            "expected_target_version": person.version,
+            "evidence": [{"role": "direct", "entity_observation_id": MENTION_ID}],
         },
         Capability.ENTITIES_MERGE_PREVIEW: {
             "survivor_entity_id": person.entity_id,

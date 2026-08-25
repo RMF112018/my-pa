@@ -237,7 +237,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # same shape `MemoryWriteRequest.principal_id` has and the reason
     # `persistence.relationship_memory` is registered below.
     "application/entity_authoring.py": (("request", "principal_id"),) * 2,
-    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 13,
+    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 22,
     "application/intelligence.py": (
         ("artifact", "principal_id"),
         ("artifact", "principal_id"),
@@ -416,7 +416,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("command", "principal_id"),
         ("held", "principal_id"),
     )
-    + (("request", "principal_id"),) * 11,
+    + (("request", "principal_id"),) * 12,
     # The one read in the application service is the same value on the way back
     # out: `_review_decide` builds the request from
     # `authorization.principal.principal_id` on the line above and then hands
@@ -463,6 +463,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("command", "principal_id"),
         ("command", "principal_id"),
         ("command", "principal_id"),
+        ("command", "principal_id"),
         ("request", "principal_id"),
         ("subject", "principal_id"),
     ),
@@ -493,6 +494,15 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # service above it has already refused a subject outside the acting scope.
     "infrastructure/persistence/relationship_memory_proposals.py": (
         ("link", "principal_id"),
+        ("link", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
         ("proposal", "principal_id"),
     ),
     "infrastructure/persistence/relationship_memory.py": (
@@ -529,7 +539,17 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
     ),
+    # Producer-origin construction compares each mapping key with the immutable
+    # origin record it indexes. Both values are server-composed; a mismatch is
+    # refused before the registry can resolve any authenticated Principal.
+    "application/producer_origin.py": (("origin", "principal_id"),),
     "application/goodnotes.py": (
         ("page", "principal_id"),
         ("page", "principal_id"),

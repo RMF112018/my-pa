@@ -279,16 +279,20 @@ def test_a_review_requiring_proposal_opens_a_case_and_lists_on_the_shared_surfac
         assert case.target_entity_id == ALICE
 
 
-def test_a_threshold_kind_opens_no_case_and_therefore_lists_nowhere(staged: Engine) -> None:
-    """`requirement_for` decides, so the queue is exactly what awaits a person."""
+def test_a_threshold_eligible_producer_kind_still_opens_a_case(staged: Engine) -> None:
+    """Threshold eligibility does not let a producer bypass canonical Review."""
     with staged.begin() as connection:
-        _propose(
+        admitted = _propose(
             connection,
             kind=EntityProposalKind.RECORD_ALIAS,
             payload={"entity_id": ALICE, "alias_type": "nickname", "display_value": "Ali"},
         )
 
-        assert _reviews(connection).cases(limit=10, principal_id=PRINCIPAL_A) == ()
+        cases = _reviews(connection).cases(limit=10, principal_id=PRINCIPAL_A)
+
+    assert len(cases) == 1
+    assert cases[0].proposal_id == admitted.proposal_id
+    assert cases[0].proposal_state is ProposalState.NEEDS_REVIEW
 
 
 def test_the_case_reads_its_version_and_escalation_out_of_the_ledger(staged: Engine) -> None:
@@ -725,9 +729,9 @@ def test_entity_review_replays_its_durable_exact_decision(staged: Engine) -> Non
         admitted = _propose(connection, expected_target_version=1)
         review_case_id = _case_id(connection, admitted.proposal_id)
         repository = SqlWriteRequestRepository(connection)
-        assert repository.reserve(
-            PRINCIPAL_A, "review.decide", "corr_entity_review", "a" * 64
-        ) is None
+        assert (
+            repository.reserve(PRINCIPAL_A, "review.decide", "corr_entity_review", "a" * 64) is None
+        )
         decision = _decide(connection, _request(review_case_id, Disposition.ACCEPT))
         original = WriteRequestResult(
             result_family="review_decision",
@@ -739,9 +743,7 @@ def test_entity_review_replays_its_durable_exact_decision(staged: Engine) -> Non
             result_assertion_id=decision.assertion_id,
             receipt_id=decision.receipt_id,
         )
-        repository.complete(
-            PRINCIPAL_A, "review.decide", "corr_entity_review", "a" * 64, original
-        )
+        repository.complete(PRINCIPAL_A, "review.decide", "corr_entity_review", "a" * 64, original)
 
     with staged.begin() as connection:
         replayed = SqlWriteRequestRepository(connection).reserve(

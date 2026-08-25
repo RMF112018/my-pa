@@ -828,7 +828,6 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
                     "entity_observation_id": staged_mention(marked),
                 }
             ],
-            "expected_target_version": person.version,
         },
         Capability.ENTITIES_MERGE_PREVIEW: {
             "survivor_entity_id": person.entity_id,

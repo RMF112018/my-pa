@@ -267,23 +267,6 @@ ALLOWED: Final[frozenset[tuple[str, str, str, str, tuple[str, ...]]]] = frozense
             "my_pa.domain.extraction.coverage.LimitationReason",
             ("objects_omitted_containment_unproven",),
         ),
-        # `f1c6b904a2d7` creates the RM plane from live Table metadata. The new
-        # cumulative head freezes these literals explicitly, but an empty-to-head
-        # run still observes the historical revision's declared emission first.
-        (
-            "f1c6b904a2d7",
-            "relationship_memory_review_decisions",
-            "a_memory_review_reason_explains_a_departure",
-            "my_pa.application.commands._REASONED_DISPOSITIONS",
-            ("defer", "escalate", "invalidate", "mark_unresolved", "reject"),
-        ),
-        (
-            "f1c6b904a2d7",
-            "relationship_memory_review_decisions",
-            "a_memory_escalation_or_invalidation_states_why",
-            "my_pa.application.commands._REASON_REQUIRED_DISPOSITIONS",
-            ("escalate", "invalidate"),
-        ),
     }
 )
 
@@ -835,8 +818,8 @@ def test_the_allowlist_names_only_revisions_this_package_does_not_edit() -> None
     all. If one appears in the allowlist, the freeze that closed it has been
     undone and the residual class has grown rather than shrunk.
     """
-    assert {revision for revision, *_ in ALLOWED} == {"8b3f5c17d904", "f1c6b904a2d7"}
-    assert len(ALLOWED) == 6
+    assert {revision for revision, *_ in ALLOWED} == {"8b3f5c17d904"}
+    assert len(ALLOWED) == 4
     allowed_sites = {(revision, constraint) for revision, _, constraint, *_ in ALLOWED}
     frozen_sites = {
         (revision, constraint)

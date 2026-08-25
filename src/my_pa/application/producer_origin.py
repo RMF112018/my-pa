@@ -57,11 +57,7 @@ class ProducerOriginRegistry:
 
     def resolve(self, principal: Principal) -> ProducerOrigin:
         held = self._registrations.get(principal.principal_id)
-        if (
-            not principal.authenticated
-            or held is None
-            or held.principal_kind is not principal.kind
-        ):
+        if not principal.authenticated or held is None or held.principal_kind is not principal.kind:
             raise ProducerOriginError
         return held
 

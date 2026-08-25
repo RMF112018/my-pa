@@ -7802,7 +7802,7 @@ class ApplicationService:
                     if link.entity_observation_id is not None
                     else {"capture_span_id": link.capture_span_id}
                     if link.capture_span_id is not None
-                    else {"knowledge_id": link.knowledge_id}
+                    else {"knowledge_id": cast(str, link.knowledge_id)}
                 ),
             }
             for link in stored_evidence

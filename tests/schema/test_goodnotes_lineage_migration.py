@@ -66,7 +66,7 @@ PHASE_A_REVISION: Final = "823e23b6cc63"
 #: naming both keeps the chain assertion below a statement about the order
 #: rather than about whichever revision happens to be last.
 PHASE_B_REVISION: Final = "b64e29a0f7c1"
-HEAD_REVISION: Final = PHASE_B_REVISION
+HEAD_REVISION: Final = "3d07af4dc513"
 PRIOR: Final = "d4a8c1e7b930"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_f8c3a1e6b247_add_goodnotes_notebook_lineage_logical_.py"
@@ -201,7 +201,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # *order* rather than about whichever revision happens to be last.
     assert script.get_revision(PHASE_A_REVISION).down_revision == LIFECYCLE_REVISION
     assert script.get_heads() == [HEAD_REVISION]
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 74
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 75
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -289,7 +289,7 @@ def test_prior_head_to_new_head_preserves_ordinal_pages(disposable_database: str
                     " '2026-08-12T10:00:00+00')"
                 )
             )
-        command.upgrade(_config(), "head")
+        command.upgrade(_config(), REVISION)
         with engine.connect() as connection:
             row = connection.execute(
                 text(
@@ -305,7 +305,7 @@ def test_prior_head_to_new_head_preserves_ordinal_pages(disposable_database: str
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == HEAD_REVISION
+            assert revision == REVISION
         assert _tables(engine) >= NEW_TABLES
     finally:
         engine.dispose()

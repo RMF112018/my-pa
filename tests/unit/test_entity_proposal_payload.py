@@ -388,9 +388,7 @@ def test_payload_identifiers_have_their_exact_kind(
         (EntityProposalKind.RESOLVE_MENTION, "disposition", "guess"),
     ],
 )
-def test_payload_vocabularies_are_closed(
-    kind: EntityProposalKind, field: str, value: str
-) -> None:
+def test_payload_vocabularies_are_closed(kind: EntityProposalKind, field: str, value: str) -> None:
     values = dict(VALID[kind])
     values[field] = value
     with pytest.raises(ProposalPayloadError, match="known"):

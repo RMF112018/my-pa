@@ -73,6 +73,7 @@ from my_pa.application.commands import (
     SearchRelationshipMemories,
 )
 from my_pa.application.errors import InvalidRequestError
+from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import _HANDLERS, ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import ReviewDecisionRequest, UnitOfWork
@@ -102,6 +103,7 @@ from my_pa.domain.relationship.memory import (
     MemoryProposalMethod,
     MemoryProposalState,
     classification_floor_for,
+    memory_proposal_dedupe_digest,
     statement_digest,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
@@ -232,12 +234,23 @@ def _uncomposed_unit_of_work() -> UnitOfWork:
 
 def _service(*, entities: bool, memory: bool) -> ApplicationService:
     """A composed service with the two switches set, and nothing else wired."""
+    producer_id = "prn_remote_memory_profile"
     return ApplicationService(
         unit_of_work=_uncomposed_unit_of_work,
         limits=LIMITS,
         clock=lambda: WHEN,
         relationship_intelligence_enabled=entities,
         relationship_memory_enabled=memory,
+        producer_origins=ProducerOriginRegistry(
+            {
+                producer_id: ProducerOrigin(
+                    principal_id=producer_id,
+                    principal_kind=PrincipalKind.OPERATOR,
+                    method="rule",
+                    method_version="synthetic-remote-profile.1",
+                )
+            }
+        ),
     )
 
 
@@ -1163,6 +1176,13 @@ def _a_promoted_assertion(engine: Engine, subject: str, statement: str) -> str:
                 proposed_kind=MemoryKind.COMMUNICATION_PREFERENCE.value,
                 proposed_statement=statement,
                 proposed_statement_sha256=statement_digest(statement),
+                dedupe_sha256=memory_proposal_dedupe_digest(
+                    principal_id=PRINCIPAL,
+                    subject_entity_id=subject,
+                    proposed_kind=MemoryKind.COMMUNICATION_PREFERENCE,
+                    proposed_statement_sha256=statement_digest(statement),
+                    structured_value=None,
+                ),
                 structured_value=None,
                 state=MemoryProposalState.NEEDS_REVIEW.value,
                 method=MemoryProposalMethod.RULE.value,

@@ -13,10 +13,13 @@ Created: 2026-08-25 05:25:54.244890
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Sequence
 from typing import Final
 
 from alembic import op
+from sqlalchemy import text
 
 revision: str = "3d07af4dc513"
 down_revision: str | None = "b64e29a0f7c1"
@@ -25,6 +28,27 @@ depends_on: str | Sequence[str] | None = None
 
 SCHEMA: Final = "knowledge"
 SUFFIX: Final = "[A-Za-z0-9]{8,64}"
+
+
+def _frozen_memory_proposal_digest(
+    *,
+    principal_id: str,
+    subject_entity_id: str,
+    proposed_kind: str,
+    proposed_statement_sha256: str,
+    structured_value: dict[str, object] | None,
+) -> str:
+    """Frozen open-equivalence algorithm; do not replace with a live import."""
+    material = {
+        "kind": proposed_kind,
+        "principal_id": principal_id,
+        "statement_sha256": proposed_statement_sha256,
+        "structured_value": structured_value,
+        "subject_entity_id": subject_entity_id,
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def upgrade() -> None:
@@ -97,12 +121,36 @@ def upgrade() -> None:
          WHERE e.entity_id = p.subject_entity_id
            AND e.principal_id = p.principal_id
            AND p.expected_subject_version IS NULL;
-        UPDATE {SCHEMA}.relationship_memory_proposals
-           SET dedupe_sha256 = encode(sha256(convert_to(concat_ws(E'\\x1f',
-             principal_id, subject_entity_id, expected_subject_version::text,
-             proposed_kind, proposed_statement_sha256,
-             coalesce(structured_value::text, 'null')), 'UTF8')), 'hex')
-         WHERE dedupe_sha256 IS NULL;
+        """
+    )
+    bind = op.get_bind()
+    legacy = bind.execute(
+        text(
+            f"SELECT memory_proposal_id, principal_id, subject_entity_id, proposed_kind, "
+            f"proposed_statement_sha256, structured_value "
+            f"FROM {SCHEMA}.relationship_memory_proposals WHERE dedupe_sha256 IS NULL"
+        )
+    ).mappings()
+    update_legacy = text(
+        f"UPDATE {SCHEMA}.relationship_memory_proposals SET dedupe_sha256 = :digest "
+        "WHERE memory_proposal_id = :proposal_id AND dedupe_sha256 IS NULL"
+    )
+    for row in legacy:
+        bind.execute(
+            update_legacy,
+            {
+                "proposal_id": row["memory_proposal_id"],
+                "digest": _frozen_memory_proposal_digest(
+                    principal_id=row["principal_id"],
+                    subject_entity_id=row["subject_entity_id"],
+                    proposed_kind=row["proposed_kind"],
+                    proposed_statement_sha256=row["proposed_statement_sha256"],
+                    structured_value=row["structured_value"],
+                ),
+            },
+        )
+    op.execute(
+        f"""
         ALTER TABLE {SCHEMA}.relationship_memory_proposals
           DROP CONSTRAINT IF EXISTS a_memory_proposal_expected_subject_version_is_positive,
           DROP CONSTRAINT IF EXISTS a_memory_proposal_dedupe_is_a_sha256_digest,
@@ -307,6 +355,25 @@ def upgrade() -> None:
           BEFORE UPDATE OR DELETE ON {SCHEMA}.relationship_write_requests
           FOR EACH ROW EXECUTE FUNCTION
             {SCHEMA}.relationship_write_request_completes_once();
+        CREATE FUNCTION {SCHEMA}.relationship_write_request_is_complete_at_commit()
+        RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN
+          PERFORM 1 FROM {SCHEMA}.relationship_write_requests
+           WHERE principal_id = NEW.principal_id
+             AND capability = NEW.capability
+             AND request_id = NEW.request_id
+             AND completed_at IS NULL;
+          IF FOUND THEN
+            RAISE EXCEPTION 'relationship write request remained pending at commit';
+          END IF;
+          RETURN NULL;
+        END;
+        $$;
+        CREATE CONSTRAINT TRIGGER relationship_write_requests_finish_in_transaction
+          AFTER INSERT OR UPDATE ON {SCHEMA}.relationship_write_requests
+          DEFERRABLE INITIALLY DEFERRED
+          FOR EACH ROW EXECUTE FUNCTION
+            {SCHEMA}.relationship_write_request_is_complete_at_commit();
         CREATE FUNCTION {SCHEMA}.relationship_write_evidence_stays_as_written()
         RETURNS trigger LANGUAGE plpgsql AS $$
         BEGIN
@@ -326,9 +393,12 @@ def downgrade() -> None:
         f"""
         DROP TRIGGER IF EXISTS relationship_write_requests_complete_once
           ON {SCHEMA}.relationship_write_requests;
+        DROP TRIGGER IF EXISTS relationship_write_requests_finish_in_transaction
+          ON {SCHEMA}.relationship_write_requests;
         DROP TRIGGER IF EXISTS relationship_write_request_evidence_is_append_only
           ON {SCHEMA}.relationship_write_request_evidence;
         DROP FUNCTION IF EXISTS {SCHEMA}.relationship_write_evidence_stays_as_written();
+        DROP FUNCTION IF EXISTS {SCHEMA}.relationship_write_request_is_complete_at_commit();
         DROP FUNCTION IF EXISTS {SCHEMA}.relationship_write_request_completes_once();
         DROP TABLE IF EXISTS {SCHEMA}.relationship_write_request_evidence;
         DROP TABLE IF EXISTS {SCHEMA}.relationship_write_requests;

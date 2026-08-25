@@ -658,7 +658,10 @@ logical receipt for the same material digest, and refuses reuse with changed
 material. The ledger stores typed identifiers, versions, states, digests and
 evidence references only; it stores no RM statement, correction, reason, or
 generic response JSON. A completed receipt and its evidence cannot be updated
-or deleted.
+or deleted. A reservation is also transaction-bounded at the database: an
+initially deferred constraint trigger refuses commit while it is still pending,
+while permitting the intended reserve-then-complete transition in the same
+transaction. Rollback therefore leaves no claimed identity.
 
 Producer provenance is resolved through an immutable server-injected
 `ProducerOriginRegistry` keyed by the authenticated Principal. The local
@@ -670,7 +673,11 @@ standard/producer/reviewer/operator ceilings are declarations only and activate
 no grants. Equivalent open RM claims are first-origin-wins: later equivalent
 submissions merge new exact evidence into the stored candidate and return that
 candidate's original provenance, rather than laundering it through the later
-producer.
+producer. Open equivalence is the Principal, subject, kind, exact statement
+digest and canonical structured value. The subject's expected version is an
+independent optimistic-promotion guard, not claim identity: version-only drift
+therefore finds the same open claim. Reprocess refreshes that expected version
+and recomputes the canonical semantic digest for the successor.
 
 **Migration limitations.** Historical RM proposals had no stored subject
 version. `3d07af4dc513` approximates that legacy-only value from the subject's

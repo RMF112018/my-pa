@@ -48,13 +48,14 @@ from my_pa.application.entity_governance import (
 from my_pa.application.entity_promotion import StaleTargetVersionError
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
 from my_pa.bootstrap.settings import ENV_PREFIX, Settings, load_settings
-from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.contracts.ports import ReviewDecisionRequest, WriteRequestResult
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
     CorrectionPatch,
     Disposition,
     EntityProposalReviewCase,
     ReviewConflictError,
+    ReviewDecision,
     ReviewNotFoundError,
     ReviewSubjectKind,
 )
@@ -77,6 +78,7 @@ from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 # dispatch could be right, and the thing under test here is the one the server
 # actually runs.
 from my_pa.infrastructure.persistence.unit_of_work import _Reviews
+from my_pa.infrastructure.persistence.write_requests import SqlWriteRequestRepository
 
 pytestmark = pytest.mark.database
 
@@ -233,7 +235,7 @@ def _decide(
     request: ReviewDecisionRequest,
     *,
     has_operator_authority: bool = False,
-) -> object:
+) -> ReviewDecision:
     service = EntityProposalReviewService(SqlEntityRepository(connection), _reviews(connection))
     return service.decide(
         request, decided_by="reviewer", has_operator_authority=has_operator_authority
@@ -498,7 +500,9 @@ def test_a_decision_cannot_pair_a_proposal_with_another_proposals_case(staged: E
         with pytest.raises(
             IntegrityError, match="an_entity_review_decision_names_its_proposals_own_case"
         ):
-            _insert_decision(connection, _case_id(connection, second.proposal_id), first.proposal_id)
+            _insert_decision(
+                connection, _case_id(connection, second.proposal_id), first.proposal_id
+            )
 
 
 def test_another_principals_case_is_neither_listed_nor_decidable(staged: Engine) -> None:
@@ -714,3 +718,42 @@ def test_a_real_build_without_the_plane_lists_no_entity_case(
         runtime.close()
 
     assert listed == ()
+
+
+def test_entity_review_replays_its_durable_exact_decision(staged: Engine) -> None:
+    with staged.begin() as connection:
+        admitted = _propose(connection, expected_target_version=1)
+        review_case_id = _case_id(connection, admitted.proposal_id)
+        repository = SqlWriteRequestRepository(connection)
+        assert repository.reserve(
+            PRINCIPAL_A, "review.decide", "corr_entity_review", "a" * 64
+        ) is None
+        decision = _decide(connection, _request(review_case_id, Disposition.ACCEPT))
+        original = WriteRequestResult(
+            result_family="review_decision",
+            result_id=decision.decision_id,
+            result_secondary_id=decision.review_case_id,
+            result_version=decision.sequence,
+            result_state=decision.proposal_state.value,
+            result_disposition=decision.disposition.value,
+            result_assertion_id=decision.assertion_id,
+            receipt_id=decision.receipt_id,
+        )
+        repository.complete(
+            PRINCIPAL_A, "review.decide", "corr_entity_review", "a" * 64, original
+        )
+
+    with staged.begin() as connection:
+        replayed = SqlWriteRequestRepository(connection).reserve(
+            PRINCIPAL_A, "review.decide", "corr_entity_review", "a" * 64
+        )
+        count = connection.execute(
+            text(
+                f"SELECT count(*) FROM {SCHEMA}.entity_proposal_review_decisions "  # noqa: S608
+                "WHERE review_case_id = :case_id"
+            ),
+            {"case_id": review_case_id},
+        ).scalar_one()
+
+    assert replayed == original
+    assert count == 1

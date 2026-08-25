@@ -103,6 +103,7 @@ __all__ = [
     "RelationshipMemoryVersion",
     "StaleMemoryVersionError",
     "classification_floor_for",
+    "memory_proposal_dedupe_digest",
     "satisfies_floor",
     "statement_digest",
     "validate_statement",
@@ -532,6 +533,35 @@ def statement_digest(statement: str) -> str:
     a digest of something the user did not write.
     """
     return hashlib.sha256(statement.encode("utf-8")).hexdigest()
+
+
+def memory_proposal_dedupe_digest(
+    *,
+    principal_id: str,
+    subject_entity_id: str,
+    proposed_kind: MemoryKind | str,
+    proposed_statement_sha256: str,
+    structured_value: dict[str, Any] | None,
+) -> str:
+    """Identify one semantic open proposal independently of optimistic state.
+
+    ``expected_subject_version`` is intentionally absent.  It protects a later
+    promotion from a stale subject, but a version-only move does not make the
+    same Principal, subject, kind, statement and structured value a new claim.
+    Keeping this material in one helper also prevents producer and reprocess
+    paths from silently acquiring different open-equivalence rules.
+    """
+    kind = proposed_kind.value if isinstance(proposed_kind, MemoryKind) else proposed_kind
+    material = {
+        "kind": kind,
+        "principal_id": principal_id,
+        "statement_sha256": proposed_statement_sha256,
+        "structured_value": structured_value,
+        "subject_entity_id": subject_entity_id,
+    }
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
 
 def _require(condition: bool, message: str) -> None:

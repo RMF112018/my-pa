@@ -43,8 +43,6 @@ producer path names no actor class at all.
 
 from __future__ import annotations
 
-import hashlib
-import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
@@ -77,6 +75,7 @@ from my_pa.domain.relationship.memory import (
     StaleMemoryVersionError,
     check_kind_permits_subject,
     classification_floor_for,
+    memory_proposal_dedupe_digest,
     statement_digest,
     validate_statement,
     validate_structured_value,
@@ -620,20 +619,13 @@ class RelationshipMemoryProposalService:
 
         statement = validate_statement(command.statement)
         structured = validate_structured_value(command.memory_kind, command.structured_value)
-        proposal_dedupe = hashlib.sha256(
-            json.dumps(
-                {
-                    "principal_id": command.principal_id,
-                    "subject_entity_id": command.subject_entity_id,
-                    "expected_subject_version": command.expected_subject_version,
-                    "kind": command.memory_kind.value,
-                    "statement_sha256": statement_digest(statement),
-                    "structured_value": structured,
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode()
-        ).hexdigest()
+        proposal_dedupe = memory_proposal_dedupe_digest(
+            principal_id=command.principal_id,
+            subject_entity_id=command.subject_entity_id,
+            proposed_kind=command.memory_kind,
+            proposed_statement_sha256=statement_digest(statement),
+            structured_value=structured,
+        )
         proposal_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
         review_case_id = issue_identifier(IdKind.REVIEW_CASE)
         proposal = RelationshipMemoryProposal(

@@ -66,6 +66,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
@@ -86,7 +87,13 @@ from my_pa.application.relationship_memory import (
     RelationshipMemoryProposalService,
 )
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.contracts.ports import MemoryWriteRequest, ReviewDecisionRequest
+from my_pa.contracts.ports import (
+    MemoryWriteRequest,
+    ReviewDecisionRequest,
+    WriteRequestConflictError,
+    WriteRequestEvidence,
+    WriteRequestResult,
+)
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
     Disposition,
@@ -107,6 +114,7 @@ from my_pa.domain.relationship.memory import (
     MemoryProposalState,
     RelationshipMemoryProposal,
     classification_floor_for,
+    memory_proposal_dedupe_digest,
     statement_digest,
 )
 from my_pa.domain.relationship.normalization import normalize_name
@@ -126,8 +134,11 @@ from my_pa.infrastructure.persistence.tables import (
     relationship_memory_proposal_evidence,
     relationship_memory_proposals,
     relationship_memory_review_decisions,
+    relationship_write_request_evidence,
+    relationship_write_requests,
 )
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from my_pa.infrastructure.persistence.write_requests import SqlWriteRequestRepository
 
 pytestmark = pytest.mark.database
 
@@ -305,6 +316,13 @@ def _open_proposal(
             proposed_kind=kind.value,
             proposed_statement=statement,
             proposed_statement_sha256=statement_digest(statement),
+            dedupe_sha256=memory_proposal_dedupe_digest(
+                principal_id=principal_id,
+                subject_entity_id=subject_entity_id,
+                proposed_kind=kind,
+                proposed_statement_sha256=statement_digest(statement),
+                structured_value=None,
+            ),
             structured_value=None,
             state=MemoryProposalState.NEEDS_REVIEW.value,
             method=method.value,
@@ -949,6 +967,14 @@ def test_reprocess_supersedes_and_copies_a_successor_at_current_subject_version(
     assert predecessor.state == MemoryProposalState.SUPERSEDED.value
     assert predecessor.superseded_at == LATER
     assert successor.expected_subject_version == 2
+    assert successor.dedupe_sha256 == memory_proposal_dedupe_digest(
+        principal_id=PRINCIPAL_A,
+        subject_entity_id=successor.subject_entity_id,
+        proposed_kind=successor.proposed_kind,
+        proposed_statement_sha256=successor.proposed_statement_sha256,
+        structured_value=successor.structured_value,
+    )
+    assert successor.dedupe_sha256 == predecessor.dedupe_sha256
     assert successor.review_case_id != review_case_id
     assert successor.method == predecessor.method
     assert successor.method_version == predecessor.method_version
@@ -987,6 +1013,167 @@ def test_a_stale_reprocess_writes_nothing(two_principals: Engine) -> None:
         assert connection.execute(
             select(func.count()).select_from(relationship_memory_proposals)
         ).scalar_one() == proposals_before
+
+
+# --- server replay reservation invariants -----------------------------------
+
+
+def _replay_result(*, evidence: bool = False) -> WriteRequestResult:
+    return WriteRequestResult(
+        result_family="memory_proposal",
+        result_id="mprp_aaaa0001aaaa0001",
+        result_state="needs_review",
+        result_digest="d" * 64,
+        result_count=1,
+        result_created=True,
+        evidence=(
+            WriteRequestEvidence(sequence=1, role="direct", knowledge_id="knw_aaaa0001aaaa0001"),
+        )
+        if evidence
+        else (),
+    )
+
+
+def test_concurrent_same_request_reads_back_the_exact_committed_result(
+    two_principals: Engine,
+) -> None:
+    capability = "relationship_memory.propose"
+    request_id = "corr_concurrent_replay"
+    digest = "a" * 64
+
+    def lose() -> WriteRequestResult | None:
+        with two_principals.begin() as connection:
+            return SqlWriteRequestRepository(connection).reserve(
+                PRINCIPAL_A, capability, request_id, digest
+            )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with two_principals.begin() as connection:
+            winner = SqlWriteRequestRepository(connection)
+            assert winner.reserve(PRINCIPAL_A, capability, request_id, digest) is None
+            future = executor.submit(lose)
+            winner.complete(PRINCIPAL_A, capability, request_id, digest, _replay_result())
+        replayed = future.result(timeout=10)
+
+    assert replayed == _replay_result()
+
+
+def test_same_request_with_changed_material_conflicts(two_principals: Engine) -> None:
+    with two_principals.begin() as connection:
+        repository = SqlWriteRequestRepository(connection)
+        assert repository.reserve(PRINCIPAL_A, "review.decide", "corr_digest", "a" * 64) is None
+        repository.complete(
+            PRINCIPAL_A, "review.decide", "corr_digest", "a" * 64, _replay_result()
+        )
+
+    with pytest.raises(WriteRequestConflictError), two_principals.begin() as connection:
+        SqlWriteRequestRepository(connection).reserve(
+            PRINCIPAL_A, "review.decide", "corr_digest", "b" * 64
+        )
+
+
+def test_rolled_back_reservation_does_not_claim_the_request(two_principals: Engine) -> None:
+    transaction = two_principals.connect()
+    try:
+        held = transaction.begin()
+        assert SqlWriteRequestRepository(transaction).reserve(
+            PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64
+        ) is None
+        held.rollback()
+    finally:
+        transaction.close()
+
+    with two_principals.begin() as connection:
+        assert SqlWriteRequestRepository(connection).reserve(
+            PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64
+        ) is None
+        SqlWriteRequestRepository(connection).complete(
+            PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64, _replay_result()
+        )
+
+
+def test_a_pending_reservation_cannot_commit(two_principals: Engine) -> None:
+    with (
+        pytest.raises(DBAPIError, match="remained pending at commit"),
+        two_principals.begin() as connection,
+    ):
+        assert SqlWriteRequestRepository(connection).reserve(
+            PRINCIPAL_A, "review.decide", "corr_pending", "a" * 64
+        ) is None
+
+
+def test_completed_request_and_replay_evidence_are_immutable(two_principals: Engine) -> None:
+    with two_principals.begin() as connection:
+        repository = SqlWriteRequestRepository(connection)
+        assert repository.reserve(
+            PRINCIPAL_A, "relationship_memory.propose", "corr_immutable", "a" * 64
+        ) is None
+        repository.complete(
+            PRINCIPAL_A,
+            "relationship_memory.propose",
+            "corr_immutable",
+            "a" * 64,
+            _replay_result(evidence=True),
+        )
+
+    with (
+        pytest.raises(DBAPIError, match="transition is immutable"),
+        two_principals.begin() as connection,
+    ):
+        connection.execute(
+            update(relationship_write_requests)
+            .where(relationship_write_requests.c.request_id == "corr_immutable")
+            .values(result_count=2)
+        )
+    with (
+        pytest.raises(DBAPIError, match="evidence is immutable"),
+        two_principals.begin() as connection,
+    ):
+        connection.execute(
+            update(relationship_write_request_evidence)
+            .where(relationship_write_request_evidence.c.request_id == "corr_immutable")
+            .values(role="supporting")
+        )
+
+
+def test_relationship_memory_review_replays_its_durable_exact_decision(
+    two_principals: Engine,
+) -> None:
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(connection)
+        repository = SqlWriteRequestRepository(connection)
+        assert repository.reserve(
+            PRINCIPAL_A, "review.decide", "corr_rm_review", "a" * 64
+        ) is None
+        decision = decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.ACCEPT)
+        )
+        original = WriteRequestResult(
+            result_family="review_decision",
+            result_id=decision.decision_id,
+            result_secondary_id=decision.review_case_id,
+            result_version=decision.sequence,
+            result_state=decision.proposal_state.value,
+            result_disposition=decision.disposition.value,
+            result_assertion_id=decision.assertion_id,
+            receipt_id=decision.receipt_id,
+        )
+        repository.complete(
+            PRINCIPAL_A, "review.decide", "corr_rm_review", "a" * 64, original
+        )
+
+    with two_principals.begin() as connection:
+        replayed = SqlWriteRequestRepository(connection).reserve(
+            PRINCIPAL_A, "review.decide", "corr_rm_review", "a" * 64
+        )
+        decision_count = connection.execute(
+            select(func.count())
+            .select_from(relationship_memory_review_decisions)
+            .where(relationship_memory_review_decisions.c.review_case_id == review_case_id)
+        ).scalar_one()
+
+    assert replayed == original
+    assert decision_count == 1
 
 
 def test_escalation_is_sticky_and_acceptance_requires_operator_authority(

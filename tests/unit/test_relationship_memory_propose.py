@@ -33,6 +33,7 @@ import copy
 import dataclasses
 from contextlib import nullcontext
 from datetime import UTC, datetime
+from importlib import import_module
 from pathlib import Path
 from typing import Any, Final
 
@@ -69,6 +70,7 @@ from my_pa.domain.relationship.memory import (
     RelationshipMemoryVersion,
     StaleMemoryVersionError,
     classification_floor_for,
+    memory_proposal_dedupe_digest,
     statement_digest,
 )
 from my_pa.domain.source.registry import issue_identifier
@@ -259,6 +261,42 @@ def test_two_candidates_are_two_proposals_and_two_cases() -> None:
 
     assert first.memory_proposal_id != second.memory_proposal_id
     assert first.review_case_id != second.review_case_id
+
+
+def test_subject_version_is_not_part_of_open_equivalence() -> None:
+    """Optimistic drift does not turn the same semantic claim into a new one."""
+    first_repository = RecordingRepository()
+    second_repository = RecordingRepository()
+
+    propose(first_repository, a_command(expected_subject_version=1), subject=a_subject(version=1))
+    propose(second_repository, a_command(expected_subject_version=2), subject=a_subject(version=2))
+
+    first, _ = first_repository.recorded[0]
+    second, _ = second_repository.recorded[0]
+    assert first.expected_subject_version != second.expected_subject_version
+    assert first.dedupe_sha256 == second.dedupe_sha256
+
+
+@pytest.mark.parametrize("structured", [None, {"channel": "email", "stance": "prefer"}])
+def test_frozen_migration_backfill_uses_the_live_semantic_digest(
+    structured: dict[str, object] | None,
+) -> None:
+    migration = import_module(
+        "migrations.versions.20260825_3d07af4dc513_complete_relationship_intelligence_"
+    )
+    assert migration._frozen_memory_proposal_digest(
+        principal_id=PRINCIPAL,
+        subject_entity_id=SUBJECT,
+        proposed_kind=MemoryKind.COMMUNICATION_PREFERENCE.value,
+        proposed_statement_sha256=statement_digest(STATEMENT),
+        structured_value=structured,
+    ) == memory_proposal_dedupe_digest(
+        principal_id=PRINCIPAL,
+        subject_entity_id=SUBJECT,
+        proposed_kind=MemoryKind.COMMUNICATION_PREFERENCE,
+        proposed_statement_sha256=statement_digest(STATEMENT),
+        structured_value=structured,
+    )
 
 
 def test_every_named_evidence_record_becomes_one_stored_link() -> None:

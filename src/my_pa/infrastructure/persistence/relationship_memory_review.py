@@ -104,6 +104,7 @@ from my_pa.domain.relationship.memory import (
     RelationshipMemoryReviewCase,
     check_kind_permits_subject,
     classification_floor_for,
+    memory_proposal_dedupe_digest,
     satisfies_floor,
     statement_digest,
 )
@@ -589,6 +590,13 @@ def _reprocess(
                     "proposed_kind": proposal.proposed_kind,
                     "proposed_statement": proposal.proposed_statement,
                     "proposed_statement_sha256": proposal.proposed_statement_sha256,
+                    "dedupe_sha256": memory_proposal_dedupe_digest(
+                        principal_id=request.principal_id,
+                        subject_entity_id=proposal.subject_entity_id,
+                        proposed_kind=proposal.proposed_kind,
+                        proposed_statement_sha256=proposal.proposed_statement_sha256,
+                        structured_value=proposal.structured_value,
+                    ),
                     "structured_value": proposal.structured_value,
                     "state": MemoryProposalState.NEEDS_REVIEW.value,
                     "method": proposal.method,

@@ -217,6 +217,8 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "entity_identity_previews",
         "entity_identity_operations",
         "entity_identity_effects",
+        "relationship_write_requests",
+        "relationship_write_request_evidence",
         # The Intelligence Artifact report plane, stacked above the entity plane
         # by `e9b2c4d7a150`. A downgrade to the extraction revision unwinds it
         # too, which is what a linear chain means; naming the tables here keeps

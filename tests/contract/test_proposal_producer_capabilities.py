@@ -112,6 +112,48 @@ def _alias_payload(scene: Scene) -> dict[str, str | bool]:
     }
 
 
+def test_entity_proposal_request_replay_returns_the_exact_original_receipt(
+    scene: Scene,
+) -> None:
+    service = build_service(scene.world, scene.providers)
+    metadata = metadata_for(
+        Capability.ENTITIES_PROPOSALS_CREATE, Purpose.ENTITY_PROPOSAL, scene.principal
+    )
+    command = CreateEntityProposal(
+        kind=EntityProposalKind.RECORD_ALIAS,
+        payload=_alias_payload(scene),
+        evidence=({"role": "direct", "entity_observation_id": staged_mention(scene)},),
+    )
+    first = service.invoke(metadata, command, principal=scene.principal)
+    retry = service.invoke(metadata, command, principal=scene.principal)
+    assert first.error is None and retry.error is None
+    assert retry.result == first.result
+    assert len(scene.world.entity_proposals) == 1
+
+
+def test_same_request_identity_with_changed_material_conflicts(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    metadata = metadata_for(
+        Capability.ENTITIES_PROPOSALS_CREATE, Purpose.ENTITY_PROPOSAL, scene.principal
+    )
+    evidence = ({"role": "direct", "entity_observation_id": staged_mention(scene)},)
+    first = CreateEntityProposal(
+        kind=EntityProposalKind.RECORD_ALIAS,
+        payload=_alias_payload(scene),
+        evidence=evidence,
+    )
+    changed = CreateEntityProposal(
+        kind=EntityProposalKind.RECORD_ALIAS,
+        payload={**_alias_payload(scene), "display_value": "P.P."},
+        evidence=evidence,
+    )
+    assert service.invoke(metadata, first, principal=scene.principal).error is None
+    refused = service.invoke(metadata, changed, principal=scene.principal)
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.CONFLICT
+    assert len(scene.world.entity_proposals) == 1
+
+
 def test_a_producer_raises_an_entity_proposal_and_is_told_what_it_will_need(
     scene: Scene,
 ) -> None:
@@ -258,6 +300,29 @@ def test_a_producer_raises_a_candidate_memory_and_is_told_nothing_it_wrote(
     # `relationship_memory_review_cases` selects on `review_case_id IS NOT NULL`,
     # so a candidate written without one is invisible to every reviewer.
     assert parse_identifier(str(result["review_case_id"]))[0] is IdKind.REVIEW_CASE
+
+
+def test_memory_proposal_request_replay_returns_the_exact_original_receipt(
+    scene: Scene,
+) -> None:
+    person, _organization = staged_entities(scene)
+    service = build_service(scene.world, scene.providers)
+    metadata = metadata_for(
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        Purpose.RELATIONSHIP_MEMORY_PROPOSAL,
+        scene.principal,
+    )
+    command = ProposeRelationshipMemory(
+        entity_id=person.entity_id,
+        expected_entity_version=person.version,
+        statement="A synthetic replay candidate",
+        evidence=({"role": "direct", "entity_observation_id": staged_mention(scene)},),
+    )
+    first = service.invoke(metadata, command, principal=scene.principal)
+    retry = service.invoke(metadata, command, principal=scene.principal)
+    assert first.error is None and retry.error is None
+    assert retry.result == first.result
+    assert len(scene.world.relationship_memory_proposals) == 1
 
 
 def test_the_classification_floor_is_applied_and_not_chosen(scene: Scene) -> None:

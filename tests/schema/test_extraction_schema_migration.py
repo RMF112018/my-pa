@@ -343,6 +343,9 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     # `capture_review_decisions` and `relationship_memory_review_decisions` on the
     # one canonical Review plane.
     "e5b0c94d7182": frozenset({"entity_proposal_review_decisions"}),
+    "3d07af4dc513": frozenset(
+        {"relationship_write_requests", "relationship_write_request_evidence"}
+    ),
     # `a1f7d3c85e40` and `b64e29a0f7c1` create no table: the first widens two
     # frozen disposition CHECKs and the second widens the two `audit_events`
     # vocabularies. They are absent from this map rather than mapped to an empty

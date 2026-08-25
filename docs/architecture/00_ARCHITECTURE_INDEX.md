@@ -40,7 +40,7 @@ MCP, and operator-CLI adapters; a default composition serves fifty-three of
 them, because the `documents.`, `entities.` and `relationship_memory.` families
 each require an environment variable that has no default. The gateway and worker
 composition roots use the same PostgreSQL-backed policy and application seams.
-Alembic owns seventy-four revisions at head `b64e29a0f7c1`. The current candidate
+Alembic owns seventy-five revisions at head `3d07af4dc513`. The current candidate
 also includes the MossAIc web BFF/PWA, managed documents, GoodNotes, the bounded
 model gate, Frontier MCP, and the Apple source host. These documents describe the
 resulting implementation and the accepted, inactive NAS target. They do not

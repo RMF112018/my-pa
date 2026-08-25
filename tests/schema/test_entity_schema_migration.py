@@ -81,12 +81,13 @@ PHASE_A_TABLES: Final = frozenset(
     }
 )
 
-#: Phase B's five, kept separate from the three sets above for the reason
+#: Phase B's seven, kept separate from the three sets above for the reason
 #: `PHASE_A_TABLES` is kept separate from `GOVERNANCE_TABLES`: they arrive on
 #: three further revisions, and a downgrade to `PREVIOUS_REVISION` passes through
 #: all of them. `c7a1f04b9e63` creates the proposal evidence table,
 #: `d38e6b2fa715` the three identity-correction tables and `e5b0c94d7182` the
-#: Entity review-decision ledger.
+#: Entity review-decision ledger. `3d07af4dc513` adds the two shared replay
+#: receipt tables.
 PHASE_B_TABLES: Final = frozenset(
     {
         "entity_proposal_evidence_links",
@@ -94,6 +95,8 @@ PHASE_B_TABLES: Final = frozenset(
         "entity_identity_previews",
         "entity_identity_operations",
         "entity_identity_effects",
+        "relationship_write_requests",
+        "relationship_write_request_evidence",
     }
 )
 

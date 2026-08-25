@@ -2118,7 +2118,7 @@ def _merge_idempotency_key(principal_id: str, preview_id: str) -> str:
     return f"idk_{digest[:32]}"
 
 
-def _relationship_write_digest(command: object) -> str:
+def _relationship_write_digest(command: Command) -> str:
     """Digest only material command fields without persisting their values."""
     return hashlib.sha256(
         json.dumps(
@@ -3437,9 +3437,7 @@ class ApplicationService:
         server-supplied. There is no field on the command for any of them: a
         caller that could name its own authority would name the one it needed.
         """
-        request_digest, replayed = _reserve_relationship_write(
-            unit_of_work, authorization, command
-        )
+        request_digest, replayed = _reserve_relationship_write(unit_of_work, authorization, command)
         if replayed is not None:
             if replayed.result_family == "review_invalidated":
                 return _Result(
@@ -7736,9 +7734,7 @@ class ApplicationService:
         gains a member that contradicts its own definition.
         """
         self._entity_writes()
-        request_digest, replayed = _reserve_relationship_write(
-            unit_of_work, authorization, command
-        )
+        request_digest, replayed = _reserve_relationship_write(unit_of_work, authorization, command)
         if replayed is not None:
             if replayed.result_family != "entity_proposal":
                 raise InternalError()
@@ -7769,9 +7765,7 @@ class ApplicationService:
                     "created": replayed.result_created,
                     "audit_id": replayed.audit_id,
                 },
-                disclosure=unenrolled_disclosure(
-                    authorization.at, trust_basis=_ENTITY_TRUST_BASIS
-                ),
+                disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
             )
         method, method_version, model_id, model_version = self._proposal_origin(authorization)
         with _translated(), _entity_governance_translated():
@@ -7883,9 +7877,7 @@ class ApplicationService:
         be a second channel for exactly the text the accepted form is withheld on.
         """
         self._relationship_memory_plane()
-        request_digest, replayed = _reserve_relationship_write(
-            unit_of_work, authorization, command
-        )
+        request_digest, replayed = _reserve_relationship_write(unit_of_work, authorization, command)
         if replayed is not None:
             if replayed.result_family != "memory_proposal":
                 raise InternalError()
@@ -7904,9 +7896,7 @@ class ApplicationService:
                     "created": replayed.result_created,
                     "audit_id": replayed.audit_id,
                 },
-                disclosure=unenrolled_disclosure(
-                    authorization.at, trust_basis=_MEMORY_TRUST_BASIS
-                ),
+                disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEMORY_TRUST_BASIS),
             )
         principal_id = authorization.principal.principal_id
         with _translated(), _memory_translated(), _entity_translated():

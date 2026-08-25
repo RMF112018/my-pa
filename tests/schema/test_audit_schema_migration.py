@@ -223,7 +223,7 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "entity_mutation_events",
         "entity_fact_evidence_links",
         "entity_resolution_decisions",
-        # Phase B's five, stacked above them: `c7a1f04b9e63` creates the proposal
+        # Phase B's seven, stacked above them: `c7a1f04b9e63` creates the proposal
         # evidence table, `d38e6b2fa715` the three identity-correction tables,
         # and `e5b0c94d7182` the Entity review-decision ledger. A downgrade to
         # the extraction revision unwinds all five, which is what a linear chain
@@ -234,6 +234,8 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "entity_identity_previews",
         "entity_identity_operations",
         "entity_identity_effects",
+        "relationship_write_requests",
+        "relationship_write_request_evidence",
         # The Intelligence Artifact report plane, stacked above the entity plane
         # by `e9b2c4d7a150`. A downgrade to the extraction revision unwinds it
         # too, which is what a linear chain means; naming the tables here keeps

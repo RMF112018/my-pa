@@ -76,6 +76,60 @@ def test_review_decision_appends_and_a_stale_expected_version_conflicts(scene: S
     assert len(scene.world.review_decisions) == 1
 
 
+def test_review_request_replay_returns_the_exact_original_logical_receipt(scene: Scene) -> None:
+    case = staged_review_case(scene)
+    service = build_service(scene.world, scene.providers)
+    metadata = metadata_for(Capability.REVIEW_DECIDE, Purpose.REVIEW_DISPOSITION, scene.principal)
+    command = DecideReviewCase(
+        review_case_id=case.review_case_id,
+        expected_review_version=0,
+        disposition=Disposition.REJECT,
+    )
+    first = service.invoke(metadata, command, principal=scene.principal)
+    retry = service.invoke(metadata, command, principal=scene.principal)
+    assert first.error is None and retry.error is None
+    assert retry.result == first.result
+    assert len(scene.world.review_decisions) == 1
+
+
+def test_review_request_identity_conflicts_when_material_changes(scene: Scene) -> None:
+    case = staged_review_case(scene)
+    service = build_service(scene.world, scene.providers)
+    metadata = metadata_for(Capability.REVIEW_DECIDE, Purpose.REVIEW_DISPOSITION, scene.principal)
+    first = DecideReviewCase(
+        review_case_id=case.review_case_id,
+        expected_review_version=0,
+        disposition=Disposition.REJECT,
+    )
+    changed = DecideReviewCase(
+        review_case_id=case.review_case_id,
+        expected_review_version=0,
+        disposition=Disposition.DEFER,
+        reason="changed decision",
+    )
+    assert service.invoke(metadata, first, principal=scene.principal).error is None
+    refused = service.invoke(metadata, changed, principal=scene.principal)
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.CONFLICT
+    assert len(scene.world.review_decisions) == 1
+
+
+def test_review_replay_arbitration_encloses_the_single_shared_subject_router() -> None:
+    """All four subject branches pass through one reserve/result-complete path."""
+    import inspect
+
+    from my_pa.application.service import ApplicationService
+
+    source = inspect.getsource(ApplicationService._review_decide)
+    reserve = source.index("_reserve_relationship_write")
+    router = source.index("entity_proposal_case")
+    delegated_router = source.index("unit_of_work.reviews.decide")
+    shared_result = source.index('result_family="review_decision"')
+    completion = source.rindex("_complete_relationship_write")
+    assert reserve < router < delegated_router < completion < shared_result
+    assert source.count("unit_of_work.reviews.decide") == 1
+
+
 def test_acceptance_is_terminal_at_the_application_port(scene: Scene) -> None:
     case = staged_review_case(scene)
     accepted = _invoke(

@@ -1056,6 +1056,8 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # what makes a crashed apply legible rather than indistinguishable
             # from a finished one.
             "entity_identity_effects_are_append_only",
+            "relationship_write_requests_complete_once",
+            "relationship_write_request_evidence_is_append_only",
             "goodnotes_page_versions_are_immutable",
             "goodnotes_region_proposals_are_immutable",
             "goodnotes_source_snapshots_are_immutable",

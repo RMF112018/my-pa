@@ -90,7 +90,7 @@ name in it arrived on the withheld side. Corrected 2026-08-19: this sentence rea
 "exposes ninety-nine capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns seventy-four revisions at head `b64e29a0f7c1`, including the merge of
+Alembic owns seventy-five revisions at head `3d07af4dc513`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
 semantic-retrieval gate remains `SEMANTIC_GATE_FAIL` and production semantic
@@ -446,6 +446,18 @@ read/write provider that allows accidental source mutation.
 - **Model-centric authority:** rejected because models are nondeterministic and cannot replace source/provenance/policy authority.
 - **Full NAS indexing:** rejected because it expands privacy, cost, and truthfulness risk without a current acceptance criterion.
 
+
+### Relationship Intelligence write identity
+
+The Phase B proposal and Review write boundary binds replay to the authenticated
+Principal, capability, server-owned request identity, and material digest. It
+persists typed receipt fields rather than request or response documents. Proposal
+origin is likewise composition-owned: exact producer registrations are immutable,
+and a composition with no trusted registration withholds producer capabilities.
+The default local operator is registered as the gateway rule producer; Entra
+producer identities remain withheld until trusted server configuration exists.
+Open-equivalent Relationship Memory candidates retain the first producer's
+origin while merging newly cited exact evidence.
 
 ## 15. Invalidation and next gate
 

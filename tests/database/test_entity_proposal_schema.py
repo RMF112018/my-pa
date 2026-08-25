@@ -33,10 +33,22 @@ from sqlalchemy import Connection, Engine, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
+from my_pa.application.entity_governance import EntityGovernanceService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.ports import UnknownScopeError
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
-from my_pa.domain.relationship.governance import EntityObservation, ObservationKind
+from my_pa.domain.relationship.governance import (
+    EntityObservation,
+    EntityProposalEvidenceLink,
+    EntityProposalKind,
+    EntityProposalMethod,
+    EvidenceRole,
+    ObservationKind,
+)
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.relationship.proposal_payload import ProposalPayloadError
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 
@@ -201,6 +213,29 @@ def _proposal(**overrides: object) -> dict[str, object]:
 
 def _write(connection: Connection, **overrides: object) -> None:
     connection.execute(_INSERT, _proposal(**overrides))
+
+
+def test_semantically_invalid_payload_writes_neither_proposal_nor_evidence(staged: Engine) -> None:
+    with staged.begin() as connection:
+        with pytest.raises(ProposalPayloadError, match="known namespace"):
+            EntityGovernanceService(SqlEntityRepository(connection)).propose(
+                PRINCIPAL_A,
+                kind=EntityProposalKind.BIND_IDENTIFIER,
+                payload={
+                    "entity_id": ALICE,
+                    "namespace": "invented",
+                    "display_value": "alice@example.invalid",
+                },
+                observation_ids=(OBSERVATION_A,),
+                proposed_by="resolver",
+                method=EntityProposalMethod.DETERMINISTIC,
+                method_version="1",
+                at=WHEN,
+            )
+        for table in ("entity_proposals", "entity_proposal_evidence_links"):
+            assert connection.execute(
+                text(f"SELECT count(*) FROM {SCHEMA}.{table}")  # noqa: S608
+            ).scalar_one() == 0
 
 
 # --- the widened vocabularies -----------------------------------------------
@@ -485,6 +520,112 @@ def test_an_accepted_merge_proposal_naming_no_record_is_admitted(staged: Engine)
 def _stage_proposal(engine: Engine) -> None:
     with engine.begin() as connection:
         _write(connection)
+
+
+def _stage_knowledge(connection: Connection, principal_id: str, suffix: str) -> str:
+    source = f"src_{suffix}0001{suffix}0001"
+    object_id = f"obj_{suffix}0001{suffix}0001"
+    version = f"ver_{suffix}0001{suffix}0001"
+    enrollment = f"enr_{suffix}0001{suffix}0001"
+    knowledge = f"kn_{suffix}0001{suffix}0001"
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.sources "  # noqa: S608
+            "(source_id, provider_kind, label, classification, native_root) "
+            "VALUES (:id, 'fixture', :label, 'synthetic_test', :root)"
+        ),
+        {"id": source, "label": f"Fixture {suffix}", "root": f"fixture-{suffix}"},
+    )
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.source_objects "  # noqa: S608
+            "(source_object_id, source_id, kind, native_locator) "
+            "VALUES (:object, :source, 'file', :locator)"
+        ),
+        {"object": object_id, "source": source, "locator": f"object-{suffix}"},
+    )
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.source_object_versions "  # noqa: S608
+            "(version_id, source_object_id, fingerprint, modified_at) "
+            "VALUES (:version, :object, :fingerprint, :at)"
+        ),
+        {"version": version, "object": object_id, "fingerprint": suffix * 8, "at": WHEN},
+    )
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.enrollments "  # noqa: S608
+            "(enrollment_id, source_id, principal_id, purpose, policy_version, "
+            "idempotency_key, request_fingerprint, object_ids, depth, media_types, "
+            "max_items, max_bytes) VALUES (:enrollment, :source, :principal, "
+            "'bounded_enrollment', 'mcv-1', :key, :fingerprint, ARRAY[:object], 0, "
+            "ARRAY['text/plain'], 10, 1024)"
+        ),
+        {
+            "enrollment": enrollment,
+            "source": source,
+            "principal": principal_id,
+            "key": f"evidence-{suffix}",
+            "fingerprint": f"evidence-{suffix}",
+            "object": object_id,
+        },
+    )
+    connection.execute(
+        text(
+            f"INSERT INTO {SCHEMA}.extractions "  # noqa: S608
+            "(extraction_id, enrollment_id, source_object_id, version_id, status, "
+            "media_type, extractor, extractor_version, text, observed_at) VALUES "
+            "(:knowledge, :enrollment, :object, :version, 'extracted', 'text/plain', "
+            "'test', '1', 'text', :at)"
+        ),
+        {
+            "knowledge": knowledge,
+            "enrollment": enrollment,
+            "object": object_id,
+            "version": version,
+            "at": WHEN,
+        },
+    )
+    return knowledge
+
+
+def test_knowledge_evidence_is_scoped_through_its_enrollment(staged: Engine) -> None:
+    _stage_proposal(staged)
+    with staged.begin() as connection:
+        own = _stage_knowledge(connection, PRINCIPAL_A, "aaaa")
+        foreign = _stage_knowledge(connection, PRINCIPAL_B, "bbbb")
+        SqlEntityRepository(connection).record_proposal_evidence_link(
+            PRINCIPAL_A,
+            EntityProposalEvidenceLink(
+                proposal_id="eprp_aaaa0001aaaa0001",
+                principal_id=PRINCIPAL_A,
+                sequence=1,
+                role=EvidenceRole.SUPPORTING,
+                created_at=WHEN,
+                knowledge_id=own,
+            ),
+        )
+
+    for sequence, knowledge in ((2, foreign), (3, issue_identifier(IdKind.KNOWLEDGE))):
+        with (
+            pytest.raises(UnknownScopeError, match="outside this scope"),
+            staged.begin() as connection,
+        ):
+            SqlEntityRepository(connection).record_proposal_evidence_link(
+                PRINCIPAL_A,
+                EntityProposalEvidenceLink(
+                    proposal_id="eprp_aaaa0001aaaa0001",
+                    principal_id=PRINCIPAL_A,
+                    sequence=sequence,
+                    role=EvidenceRole.SUPPORTING,
+                    created_at=WHEN,
+                    knowledge_id=knowledge,
+                ),
+            )
+    with staged.connect() as connection:
+        assert connection.execute(
+            text(f"SELECT count(*) FROM {SCHEMA}.entity_proposal_evidence_links")  # noqa: S608
+        ).scalar_one() == 1
 
 
 def test_proposal_evidence_names_exactly_one_record(staged: Engine) -> None:

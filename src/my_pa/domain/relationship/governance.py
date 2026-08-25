@@ -53,6 +53,7 @@ from my_pa.domain.relationship.proposal_payload import (
     EntityProposalKind,
     EntityProposalPayload,
 )
+from my_pa.domain.relationship.proposal_validation import ResolutionDisposition
 
 __all__ = [
     "ACCEPTED_PROPOSAL_STATES",
@@ -425,27 +426,6 @@ class EvidenceRole(StrEnum):
 #: `SUPPORTING` by accident would record the opposite of what was decided while
 #: still looking like a record of it.
 NEGATIVE_IDENTITY_EVIDENCE_ROLE: EvidenceRole = EvidenceRole.COUNTEREVIDENCE
-
-
-class ResolutionDisposition(StrEnum):
-    """What was decided about one observation.
-
-    Five outcomes, and three of them are refusals. That ratio is the design:
-    section 15.2 requires an ambiguous mention to remain unresolved rather than
-    be forced into the nearest person, so the vocabulary has to make *not*
-    resolving an ordinary recorded decision rather than an absence of one.
-
-    DEFER and REJECT differ in what they say about the future: a deferred
-    observation is expected to be decidable later, and a rejected one has been
-    decided -- it refers to nothing this plane holds. QUARANTINE is the third
-    refusal and is about the observation rather than the match.
-    """
-
-    LINK_EXISTING = "link_existing"
-    CREATE_NEW = "create_new"
-    REJECT = "reject"
-    DEFER = "defer"
-    QUARANTINE = "quarantine"
 
 
 class ActorClass(StrEnum):
@@ -1009,8 +989,14 @@ class EntityProposal:
         # over whatever that producer chose to put there.
         if not _SHA256.fullmatch(self.dedupe_sha256):
             raise ValueError("a proposal's dedupe digest is a sha256 digest")
-        if self.expected_target_version is not None and self.expected_target_version < 1:
-            raise ValueError("an expected target version is a positive integer")
+        if self.expected_target_version is not None:
+            if self.expected_target_version < 0:
+                raise ValueError("an expected target version is not negative")
+            if (
+                self.expected_target_version == 0
+                and self.kind is not EntityProposalKind.RESOLVE_MENTION
+            ):
+                raise ValueError("only mention resolution may expect target version zero")
         if self.review_case_id is not None:
             validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
         self._check_result()

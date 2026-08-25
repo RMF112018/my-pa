@@ -51,7 +51,11 @@ ALICE_TWO: Final = "ent_bbbb0002bbbb0002"
 #: each of them restating seventeen mappings.
 VALID: Final[dict[EntityProposalKind, dict[str, str | bool]]] = {
     EntityProposalKind.CREATE_ENTITY: {"entity_type": "person", "display_name": "Alice Chen"},
-    EntityProposalKind.UPDATE_ENTITY: {"entity_id": ALICE, "reason": "spelling"},
+    EntityProposalKind.UPDATE_ENTITY: {
+        "entity_id": ALICE,
+        "display_name": "Alice Chen-Okafor",
+        "reason": "spelling",
+    },
     EntityProposalKind.BIND_IDENTIFIER: {
         "entity_id": ALICE,
         "namespace": "email",
@@ -111,6 +115,7 @@ VALID: Final[dict[EntityProposalKind, dict[str, str | bool]]] = {
     EntityProposalKind.END_RELATIONSHIP: {
         "relationship_id": "erel_aaaa0001aaaa0001",
         "reason": "edge no longer holds",
+        "end_now": True,
     },
     EntityProposalKind.RESOLVE_MENTION: {
         "observation_id": "eobs_aaaa0001aaaa0001",
@@ -350,6 +355,79 @@ def test_a_payload_names_each_field_once() -> None:
 def test_a_flag_survives_the_round_trip_as_a_flag() -> None:
     payload = a_payload(EntityProposalKind.END_ASSIGNMENT)
     assert payload.as_mapping()["end_now"] is True
+
+
+@pytest.mark.parametrize(
+    ("kind", "values"),
+    [
+        (
+            EntityProposalKind.UPDATE_ENTITY,
+            {"entity_id": "bad", "reason": "x", "status": "active"},
+        ),
+        (
+            EntityProposalKind.RETIRE_IDENTIFIER,
+            {"entity_id": ALICE, "identifier_id": ALICE, "reason": "x"},
+        ),
+    ],
+)
+def test_payload_identifiers_have_their_exact_kind(
+    kind: EntityProposalKind, values: dict[str, str | bool]
+) -> None:
+    with pytest.raises(ProposalPayloadError, match="valid"):
+        EntityProposalPayload.of(kind, values)
+
+
+@pytest.mark.parametrize(
+    ("kind", "field", "value"),
+    [
+        (EntityProposalKind.CREATE_ENTITY, "entity_type", "individual"),
+        (EntityProposalKind.BIND_IDENTIFIER, "namespace", "made_up"),
+        (EntityProposalKind.RECORD_ALIAS, "alias_type", "also_known_as"),
+        (EntityProposalKind.RECORD_ASSIGNMENT, "assignment_type", "boss"),
+        (EntityProposalKind.RECORD_RELATIONSHIP, "relationship_type", "knows"),
+        (EntityProposalKind.RESOLVE_MENTION, "disposition", "guess"),
+    ],
+)
+def test_payload_vocabularies_are_closed(
+    kind: EntityProposalKind, field: str, value: str
+) -> None:
+    values = dict(VALID[kind])
+    values[field] = value
+    with pytest.raises(ProposalPayloadError, match="known"):
+        EntityProposalPayload.of(kind, values)
+
+
+def test_temporal_and_cross_field_rules_are_canonical() -> None:
+    refused = (
+        (EntityProposalKind.UPDATE_ENTITY, {"entity_id": ALICE, "reason": "x"}),
+        (
+            EntityProposalKind.REVISE_RELATIONSHIP,
+            {"relationship_id": "erel_aaaa0001aaaa0001", "effective_from": "2026-01-01"},
+        ),
+        (
+            EntityProposalKind.RECORD_RELATIONSHIP,
+            {"from_entity_id": ALICE, "relationship_type": "works_for", "to_entity_id": ALICE},
+        ),
+        (
+            EntityProposalKind.RESOLVE_MENTION,
+            {
+                "observation_id": "eobs_aaaa0001aaaa0001",
+                "disposition": "link_existing",
+                "entity_type": "person",
+            },
+        ),
+    )
+    for kind, values in refused:
+        with pytest.raises(ProposalPayloadError):
+            EntityProposalPayload.of(kind, values)
+
+
+def test_end_requires_exactly_one_effective_end_or_end_now() -> None:
+    with pytest.raises(ProposalPayloadError, match="exactly one"):
+        EntityProposalPayload.of(
+            EntityProposalKind.END_ASSIGNMENT,
+            {"assignment_id": "asn_aaaa0001aaaa0001", "reason": "ended"},
+        )
 
 
 # --- the dedupe digest --------------------------------------------------------

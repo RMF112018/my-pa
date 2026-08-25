@@ -306,8 +306,20 @@ def test_accepting_a_merge_proposal_records_intent_rather_than_a_record() -> Non
 
 
 def test_an_expected_target_version_is_positive() -> None:
-    with pytest.raises(ValueError, match="positive integer"):
+    with pytest.raises(ValueError, match="only mention resolution"):
         a_proposal(expected_target_version=0)
+
+
+def test_mention_resolution_may_expect_the_initial_zero_version() -> None:
+    payload = EntityProposalPayload.of(
+        EntityProposalKind.RESOLVE_MENTION,
+        {
+            "observation_id": "eobs_aaaa0001aaaa0001",
+            "disposition": "link_existing",
+            "entity_id": ALICE,
+        },
+    )
+    assert a_proposal(payload=payload, expected_target_version=0).expected_target_version == 0
 
 
 def test_a_creating_kind_may_leave_the_expected_target_version_unset() -> None:

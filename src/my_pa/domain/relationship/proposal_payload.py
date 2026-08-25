@@ -67,6 +67,7 @@ from types import MappingProxyType
 from typing import Final
 
 from my_pa.domain.relationship.authoring import CALLER_SETTABLE_STATUSES
+from my_pa.domain.relationship.proposal_validation import validate_proposal_target
 
 __all__ = [
     "FORBIDDEN_PAYLOAD_FIELDS",
@@ -415,6 +416,8 @@ class EntityProposalPayload:
             raise ProposalPayloadError("a payload names every field its kind requires")
         for name, value in self.values:
             if isinstance(value, bool):
+                if name != "end_now":
+                    raise ProposalPayloadError("only end_now is a payload flag")
                 continue
             if not isinstance(value, str):
                 raise ProposalPayloadError("a payload value is a string or a flag")
@@ -424,6 +427,10 @@ class EntityProposalPayload:
                 raise ProposalPayloadError("a payload value is bounded")
             if name == "status" and value not in _PROPOSABLE_STATUSES:
                 raise ProposalPayloadError("a payload proposes a status a caller may ask for")
+        try:
+            validate_proposal_target(self.kind.value, dict(self.values))
+        except ValueError as exc:
+            raise ProposalPayloadError(str(exc)) from exc
 
     @classmethod
     def of(

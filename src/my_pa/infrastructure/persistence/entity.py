@@ -222,6 +222,8 @@ from my_pa.infrastructure.persistence.tables import (
     entity_proposals,
     entity_relationships,
     entity_resolution_decisions,
+    enrollments,
+    extractions,
 )
 
 __all__ = ["SqlEntityRepository"]
@@ -2390,10 +2392,9 @@ class SqlEntityRepository(EntitiesRepository):
         this site needs no entry in the architecture guard's registry of
         hand-written comparisons.
 
-        `knowledge_id` names no table in this declaration and therefore has no
-        ownership to prove here. That residual is the table's own and is stated
-        on it; admitting the column without a writer would have left even the
-        shape unchecked, and `EntityProposalEvidenceLink` checks that much.
+        A knowledge identifier is walked from its extraction to the enrollment
+        whose Principal admitted it. Like a span, an absent record and another
+        Principal's record are deliberately indistinguishable.
         """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         if link.principal_id != principal_id:
@@ -2431,6 +2432,22 @@ class SqlEntityRepository(EntitiesRepository):
                 )
             ).first()
             if spanned is None:
+                raise UnknownScopeError("proposal evidence cites a record outside this scope")
+        if link.knowledge_id is not None:
+            known = self._connection.execute(
+                select(extractions.c.extraction_id)
+                .select_from(
+                    extractions.join(
+                        enrollments,
+                        enrollments.c.enrollment_id == extractions.c.enrollment_id,
+                    )
+                )
+                .where(
+                    extractions.c.extraction_id == link.knowledge_id,
+                    _mine(enrollments, principal_id),
+                )
+            ).first()
+            if known is None:
                 raise UnknownScopeError("proposal evidence cites a record outside this scope")
         self._connection.execute(
             insert(entity_proposal_evidence_links).values(

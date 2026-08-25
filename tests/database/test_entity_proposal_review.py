@@ -483,9 +483,22 @@ def test_a_decision_cannot_name_another_principals_proposal(staged: Engine) -> N
         case_id = _case_id(connection, admitted.proposal_id)
 
         with pytest.raises(
-            IntegrityError, match="an_entity_review_decision_names_a_proposal_of_its_principal"
+            IntegrityError, match="an_entity_review_decision_names_its_proposals_own_case"
         ):
             _insert_decision(connection, case_id, admitted.proposal_id, principal_id=PRINCIPAL_B)
+
+
+def test_a_decision_cannot_pair_a_proposal_with_another_proposals_case(staged: Engine) -> None:
+    with staged.begin() as connection:
+        first = _propose(connection)
+        second = _propose(
+            connection,
+            payload={"entity_id": ALICE, "display_name": "Alicia Chen", "reason": "variant"},
+        )
+        with pytest.raises(
+            IntegrityError, match="an_entity_review_decision_names_its_proposals_own_case"
+        ):
+            _insert_decision(connection, _case_id(connection, second.proposal_id), first.proposal_id)
 
 
 def test_another_principals_case_is_neither_listed_nor_decidable(staged: Engine) -> None:

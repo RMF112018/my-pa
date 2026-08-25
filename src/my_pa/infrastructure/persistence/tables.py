@@ -3626,6 +3626,12 @@ entity_proposals = Table(
         "principal_id",
         name="a_proposal_is_identified_within_its_principal",
     ),
+    UniqueConstraint(
+        "review_case_id",
+        "proposal_id",
+        "principal_id",
+        name="an_entity_proposal_review_case_is_bound_to_its_subject",
+    ),
     Index("entity_proposals_by_principal", "principal_id"),
     Index("entity_proposals_by_state", "principal_id", "state"),
     # WP-RI-B-05: a review case names one proposal. `capture_review_cases`
@@ -3673,8 +3679,8 @@ entity_proposals = Table(
 #: **Same-Principal is structural on one side and a stated residual on the
 #: other**, exactly as its sibling records: the proposal and the observation
 #: carry composite `(id, principal_id)` foreign keys, while `capture_spans` has
-#: no principal partition and `knowledge_id` names no table in this declaration,
-#: so those two are a check the writer must make.
+#: no principal partition and an extraction inherits its Principal from its
+#: enrollment, so those two ownership checks belong to the writer.
 entity_proposal_evidence_links = Table(
     "entity_proposal_evidence_links",
     METADATA,
@@ -3795,13 +3801,14 @@ entity_proposal_review_decisions = Table(
         name="an_entity_review_reason_is_bounded",
     ),
     ForeignKeyConstraint(
-        ["proposal_id", "principal_id"],
+        ["review_case_id", "proposal_id", "principal_id"],
         [
+            f"{SCHEMA}.entity_proposals.review_case_id",
             f"{SCHEMA}.entity_proposals.proposal_id",
             f"{SCHEMA}.entity_proposals.principal_id",
         ],
         ondelete="CASCADE",
-        name="an_entity_review_decision_names_a_proposal_of_its_principal",
+        name="an_entity_review_decision_names_its_proposals_own_case",
     ),
     UniqueConstraint("review_case_id", "sequence", name="one_entity_decision_per_review_sequence"),
     Index("entity_proposal_review_decisions_by_case", "review_case_id", "sequence"),

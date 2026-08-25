@@ -6,9 +6,9 @@ The existing sweep in `tests/unit/test_remote_request.py` says so for a
 population it derives -- and then subtracts `KEYLESS_ENTITY_WRITES` from, which
 is where Phase B's `entities.proposals.create`, `entities.merge.preview` and
 `entities.merge` went. `relationship_memory.propose` was never in that
-population at all: it derives from the `entities.` prefix. So the four
-capabilities this phase publishes are covered by the *schema* half of that
-module and by none of the *runtime refusal* half.
+population at all: it derives from the `entities.` prefix. So every capability
+this phase publishes is covered by the *schema* half of that module and by none
+of the *runtime refusal* half.
 
 A subtraction list is exactly the shape of hole this module exists to close.
 The population here is `Capability` itself with nothing removed, so a capability
@@ -48,7 +48,7 @@ PRINCIPAL: Final = Principal(
 )
 FROZEN: Final = datetime(2026, 8, 15, 9, 30, tzinfo=UTC)
 
-#: The four names Phase B publishes. Written out so the sweep below is provably
+#: The names Phase B publishes. Written out so the sweep below is provably
 #: about them and not merely about a set that happens to be large: a later
 #: subtraction that quietly removed them would leave the population claim true
 #: and this one false.
@@ -161,7 +161,7 @@ def test_phase_b_publishes_no_schema_naming_a_field_the_server_owns(
 ) -> None:
     """The other direction: a published schema must not invite the refusal above.
 
-    The four Phase B names are covered here by capability rather than by prefix,
+    The Phase B names are covered here by capability rather than by prefix,
     because `relationship_memory.propose` does not carry the `entities.` prefix
     the Phase A sweep derives its population from and would otherwise be checked
     nowhere.

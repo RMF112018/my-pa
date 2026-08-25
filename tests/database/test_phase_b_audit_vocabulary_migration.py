@@ -5,8 +5,8 @@ capability that is in the `Capability` enum and absent from the stored
 `capability_is_known` CHECK answers `internal_error` against a migrated
 database while every from-scratch test in the repository passes -- B5 and B6
 both recorded that trap and B7 measured it. The revision that closes it is
-`b64e29a0f7c1`, which admits Phase B's four capability names and its three
-purposes.
+`b64e29a0f7c1`, which admits the capability names Phase B publishes and the
+purposes they carry.
 
 Nothing tested that revision directly. What stood in its place was
 `tests/schema/test_context_feedback_migration.py`, which compares the stored
@@ -21,8 +21,8 @@ this phase can actually fail in is an insert being refused at request time, and
 because a parse would pass on a CHECK that names the right literals in a
 predicate that never fires.
 
-Both directions are asserted for each of the seven names, and the *purpose*
-half is asserted separately from the *capability* half: they are two CHECKs on
+Both directions are asserted for every Phase B name, and the *purpose* half is
+asserted separately from the *capability* half: they are two CHECKs on
 one table and a revision that widened one and forgot the other would leave half
 the surface answering `internal_error`.
 """
@@ -286,8 +286,8 @@ def test_the_stored_vocabulary_is_missing_nothing_the_domain_declares(
 ) -> None:
     """Every declared name, driven through the stored CHECK, one row each.
 
-    The superset direction is harmless -- eleven `native_sources.*` names are
-    stored and are not in `Capability`, and they predate this phase. The
+    The superset direction is harmless -- the `native_sources.*` names are stored
+    and are not in `Capability`, and they predate this phase. The
     direction that breaks a request is a name the domain declares and the
     database has never heard of, and the only way to be sure of it for all
     ninety-nine is to try all ninety-nine.

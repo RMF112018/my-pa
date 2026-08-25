@@ -337,7 +337,7 @@ DECLARED: Final = frozenset(
     }
 )
 
-#: The three that are *not* `relationship_memory.*`, and what each one discloses
+#: The five that are *not* `relationship_memory.*`, and what each one discloses
 #: under a purpose issued for something else. This is the part of
 #: `RM-API-AC-002` that is a disclosure rather than a design, so each entry says
 #: the purpose, the rows and the fields rather than only the name.
@@ -393,28 +393,35 @@ BEYOND_THE_EIGHT: Final = {
     ),
     Capability.ENTITIES_MERGE_PREVIEW: (
         "purpose `entity_identity_correction`, and it is operator-only. "
-        "`entities.merge.preview` reads two of the eight "
-        "(`relationship_memories`, `relationship_memory_proposals`) and writes "
+        "`entities.merge.preview` reads three of the eight "
+        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`) and writes "
         "none of the eight: `IdentityCorrectionService` asks the memory port "
-        "which of the entities being merged are the subject of a memory, because "
-        "`WP-08` owns the Relationship Memory side of an identity change and "
-        "this phase refuses rather than guesses. What the operator learns is a "
-        "count and a blocker and never a statement -- `memory_subject_entity_ids` "
-        "returns entity identifiers and nothing else. Bounded by the operator "
-        "gate, by `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, and by the "
-        "plane composition."
+        "which affected input Entities are a canonical memory subject, a proposal "
+        "subject, or the Entity target of a current canonical version's context "
+        "link, because `WP-08` owns the Relationship Memory side of an identity "
+        "change and this phase refuses rather than guesses. The privacy-safe "
+        "answer is only the subset and count of affected input Entity identifiers: "
+        "`subject_entity_ids` returns the subset, and merge analysis derives its "
+        "aggregate count. Neither returns a memory identifier, per-Entity memory "
+        "count, or statement. "
+        "Bounded by the operator gate, by "
+        "`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, and by the plane "
+        "composition."
     ),
     Capability.ENTITIES_MERGE: (
         "purpose `entity_identity_correction`, and it is operator-only. "
-        "`entities.merge` reads two of the eight "
-        "(`relationship_memories`, `relationship_memory_proposals`) and writes "
-        "none of the eight, for the reason the preview beside it reads them: the "
-        "apply recomputes the same analysis and refuses a merge whose subjects "
-        "carry memories. **A governed merge writes no memory row at all**, which "
-        "is this phase's boundary rather than a gap in it -- `WP-08` owns "
-        "Relationship Memory origin-subject redistribution, and a merge that "
-        "rewrote a memory's subject without it would rewrite whose statement a "
-        "private note is about."
+        "`entities.merge` reads three of the eight "
+        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`) and writes "
+        "none of the eight, for the reason the preview beside it reads them: apply "
+        "recomputes the same privacy-safe affected-input subset and refuses when "
+        "any participant is a canonical memory subject, a proposal subject, or "
+        "the Entity target of a current canonical version's context link. It "
+        "returns no memory identifier or per-Entity memory count. **A governed "
+        "merge writes no memory row at all**, which is this phase's boundary "
+        "rather than a gap in it -- `WP-08` owns Relationship Memory origin-subject "
+        "and context redistribution."
     ),
 }
 
@@ -434,6 +441,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(
             {
                 "relationship_memories",
+                "relationship_memory_context_links",
                 "relationship_memory_submissions",
                 "relationship_memory_versions",
             }
@@ -470,6 +478,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(
             {
                 "relationship_memories",
+                "relationship_memory_context_links",
                 "relationship_memory_submissions",
                 "relationship_memory_versions",
             }
@@ -487,6 +496,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(
             {
                 "relationship_memories",
+                "relationship_memory_context_links",
                 "relationship_memory_submissions",
                 "relationship_memory_versions",
             }
@@ -517,16 +527,29 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
             }
         ),
     ),
-    # `WP-RI-B-06`. Both halves of the governed merge read the same two tables to
+    # `WP-RI-B-06`. Both halves of the governed merge read the same three tables to
     # decide whether they may proceed and write neither. The empty write set is
-    # the Phase B boundary: a merge naming a memory subject is refused, because
-    # `WP-08` owns the redistribution and this phase will not guess it.
+    # the Phase B boundary: a merge naming a memory subject, proposal subject or
+    # current canonical Entity context target is refused, because `WP-08` owns
+    # the redistribution and this phase will not guess it.
     Capability.ENTITIES_MERGE_PREVIEW: (
-        frozenset({"relationship_memories", "relationship_memory_proposals"}),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
         frozenset(),
     ),
     Capability.ENTITIES_MERGE: (
-        frozenset({"relationship_memories", "relationship_memory_proposals"}),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
         frozenset(),
     ),
     Capability.RELATIONSHIP_MEMORY_GET: (
@@ -741,9 +764,10 @@ DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str
 #: that does not exist there — which is the same class of false claim this module
 #: exists to prevent, made about itself.
 #:
-#: `EntityStatus`'s empty mapping is a claim rather than an absence: every guard
-#: on that axis inside a memory-reaching function is a plain `if` this split
-#: reads, and a future one that is not reddens here.
+#: `EntityStatus` has one deliberately unreadable guard: the persistence-layer
+#: merged-subject safety check compares the stored string value with the enum
+#: member's value. The split conservatively unions both arms; the application
+#: service's readable status guard and its unit coverage hold the actual refusal.
 UNREADABLE_BRANCH_GUARDS: Final[dict[str, dict[tuple[str, str, str], str]]] = {
     "Disposition": {
         (
@@ -768,7 +792,17 @@ UNREADABLE_BRANCH_GUARDS: Final[dict[str, dict[tuple[str, str, str], str]]] = {
         ): "the repeated-escalation guard combines the requested Disposition with "
         "stored escalation state; the split conservatively unions it",
     },
-    "EntityStatus": {},
+    "EntityStatus": {
+        (
+            "my_pa.infrastructure.persistence.relationship_memory_proposals",
+            "record_proposal",
+            "subject.status == EntityStatus.MERGED_REDIRECT.value",
+        ): "the persistence backstop compares a stored string with the enum member's "
+        "value, a guard shape the branch evaluator cannot reduce. Conservatively "
+        "unioning both arms does not weaken the runtime refusal; the application-layer "
+        "EntityStatus guard supplies the readable branch split and the repository guard "
+        "remains a fail-closed defense against bypass",
+    },
 }
 
 

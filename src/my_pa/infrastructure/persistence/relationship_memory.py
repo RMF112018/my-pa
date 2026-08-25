@@ -1000,19 +1000,22 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
     def subject_entity_ids(
         self, entity_ids: frozenset[str], *, principal_id: str
     ) -> frozenset[str]:
-        """Which of these entities this plane holds a memory or a proposal about.
+        """Which input entities this plane currently binds into canonical memory state.
 
-        Both tables, because a candidate memory about an identity is as
-        unrecoverable through a governed merge as an accepted one: `WP-RI-08`
-        owns the origin-subject rules for either, and `WP-RI-06`'s effect ledger
-        has no family that could record what a merge did to one.
+        Three binding classes are blockers: canonical memory subjects, proposal
+        subjects, and Entity targets linked from a memory's current canonical
+        version. A candidate memory about an identity, or a current context link
+        to it, is as unrecoverable through a governed merge as an accepted memory:
+        `WP-RI-08` owns the subject and context redistribution rules, and
+        `WP-RI-06`'s effect ledger has no family that could record either rewrite.
 
         **Classification is not read, and that is the point.** Every other read
         on this plane filters or counts restricted rows; this one asks a question
         whose answer must be the same whether the memory is restricted or not,
         because a merge preview that could distinguish them would be a probe.
-        What comes back is the subset of `entity_ids` this plane knows something
-        about -- no memory identifier, no count, no statement.
+        What comes back is only the subset of input `entity_ids` affected by at
+        least one binding -- no memory identifier, no per-Entity memory count, no
+        statement.
         """
         for entity_id in entity_ids:
             validate_identifier(entity_id, IdKind.ENTITY)

@@ -68,7 +68,7 @@
     },
     "review.list": {
       "purpose": "capture_review",
-      "payloadFields": ["page_size", "subject_kind", "state", "entity_id"],
+      "payloadFields": ["page_size", "subject_kind", "state", "entity_id", "after"],
       "probe": { "page_size": 25 }
     },
     "review.decide": {

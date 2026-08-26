@@ -76,7 +76,7 @@ MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
 planes. **A default composition exposes fifty-three of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT`, the
 thirty-one `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
-(and its eighteen writes a second switch beside it), and the
+(and its twenty-one writes a second switch beside it), and the
 nine `relationship_memory.` names require that variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`, because a memory binds an Entity as its
 subject and ownership is proven by reading `knowledge.entities`; none has

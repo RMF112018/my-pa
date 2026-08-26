@@ -391,12 +391,13 @@ class Settings(StrictModel):
     #: A switch of its own rather than a reuse of the plane flag, on the argument
     #: `relationship_memory_enabled` makes beside it: the two admit different
     #: things. The plane flag publishes ten reads over the acting Principal's own
-    #: entities. This one publishes eighteen writes that decide who a person is,
-    #: which external addresses resolve to them, who they report to, and what a
-    #: source said about them — and the remote MCP profile is derived from the
-    #: capability set with no per-capability exclusion list, so "available" and
-    #: "remotely reachable" are one decision. An operator who wants entity reads
-    #: should not have to accept identity authoring to get them.
+    #: entities. This one is a prerequisite for all twenty-one writes that decide
+    #: who a person is, which external addresses resolve to them, who they report
+    #: to, what a source said about them, or stage and apply Phase B governance.
+    #: The merge preview/apply pair additionally requires the identity-correction
+    #: switch; remotely it also requires the exact server-resolved
+    #: `remote.operator` durable capability set. An operator who wants entity
+    #: reads should not have to accept identity authoring to get them.
     #:
     #: **Off is fail-closed on every transport, not only where a tool list is
     #: published.** `ApplicationService.available_capabilities` subtracts
@@ -427,13 +428,14 @@ class Settings(StrictModel):
     #: write switch does.
     #:
     #: A third switch rather than a reuse of the write switch, because the two
-    #: admit different things. The write switch publishes eighteen writes that
-    #: each change one record of one entity, every one of them reversible by its
-    #: own inverse. This publishes a preview and an apply that between them
-    #: collapse up to eleven identities into one, reparent every child they own,
-    #: and are undone only
-    #: by a split this phase does not implement. An operator who wants entity
-    #: authoring should not have to accept identity correction to get it.
+    #: admit different things. The write switch gates all twenty-one Entity
+    #: writes; the eighteen Phase A writes each change one record of one entity
+    #: and are reversible by their own inverse. This additionally publishes a
+    #: preview and an apply that between them collapse up to eleven identities
+    #: into one, reparent every child they own, and are undone only by a split
+    #: this phase does not implement. Remotely the pair still requires the exact
+    #: server-resolved `remote.operator` durable capability set. An operator who
+    #: wants entity authoring should not have to accept identity correction.
     #:
     #: **Off is fail-closed on every transport.**
     #: `ApplicationService.available_capabilities` subtracts

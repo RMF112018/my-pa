@@ -22,20 +22,20 @@ Related: [`docs/plans/relationship-intelligence-implementation-plan.md`](../../d
 ## 2. Turning the plane on
 
 `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED=true` makes the entity plane's ten
-reads available to the process, and nothing else: the eighteen writes need
+reads available to the process, and nothing else: the twenty-one writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it. **The read switch is
 one decision with two consequences**, and both should be intended before it is
 set:
 
 1. the local MCP `tools/list` and `capabilities.get` begin publishing them;
-2. `adapters/mcp/remote.py` derives the remote profile from the capability set
-   with no per-capability exclusion list, so if `MY_PA_REMOTE_MCP_ENABLED` is
-   also true they become reachable remotely. **The reads go out as reads**, so
-   `MY_PA_REMOTE_WRITES_ENABLED` does not gate them; **every write goes out as a
-   write**, so it does. That second half is the one worth checking before
-   setting either variable: a remote client holding `entity_authoring` can
-   decide who a person is and who they work for, and one holding
-   `entity_observation_ingest` can record what a source said about them.
+2. `adapters/mcp/remote.py` derives the ordinary remote profile from the
+   capability set. If `MY_PA_REMOTE_MCP_ENABLED` is also true, the reads are
+   remotely reachable as reads and `MY_PA_REMOTE_WRITES_ENABLED` does not gate
+   them; every write is classified as a write and requires that remote-write
+   switch. The two identity-correction writes require more: the server-resolved
+   durable capability set must exactly equal the frozen `remote.operator`
+   profile. A raw allowlist, subset, superset, reviewer profile, or writes-enabled
+   setting alone cannot publish them.
 
 To serve the plane locally and *not* remotely, leave `MY_PA_REMOTE_MCP_ENABLED`
 off, or grant no `remote_capability_grants` row for the `entities.` names: in
@@ -71,10 +71,13 @@ Both are in `_OPERATOR_ONLY`, which is the first time that set has held a
 knowledge-plane name: the test it applies is whether a capability *widens the
 scope a later request is evaluated against*, and after a merge every alias,
 identifier, assignment, edge, observation, proposal, review case and memory that
-named a merged-away entity is reached through the survivor. Neither reaches a
-remote profile at all — `remote_tool_names` drops an operator-only capability
-before it classifies anything — so a remote client cannot merge identities under
-any combination of these variables.
+named a merged-away entity is reached through the survivor. The ordinary remote
+profile still drops both names. They join the remote surface only when global
+remote writes are enabled and the server-resolved durable capability set exactly
+matches `remote.operator`; the normal allowed-capability intersection, exact
+capability/purpose grant, feature gates, Principal check, and application policy
+then still apply. No configured profile or grant is created by this code, and all
+remote and identity-correction switches remain off by default.
 
 **The preview is a write and is gated as one.** It mutates no canonical record
 and it does persist a bounded control row carrying a digest, an expiry and a
@@ -88,7 +91,10 @@ Remotely a write is gated twice more. A remote client reaches one only with
 permitted purposes with `_WRITE_PURPOSES`, and both `entity_authoring` and
 `entity_observation_ingest` are in that set. The reads stay reachable with the
 write switch off, which is the correct classification and the property
-`tests/contract/test_entity_remote_exposure.py` holds in both directions.
+`tests/contract/test_entity_remote_exposure.py` holds in both directions. For
+merge preview/apply, the complete durable capability set must additionally be
+the exact frozen `remote.operator` set; the purpose grant remains independently
+required at invocation.
 
 ## 2a. What the writes do, and what they refuse
 
@@ -130,21 +136,29 @@ the three free-text fields folded case- and whitespace-insensitively, edges on
 their own active keys. Ending a record frees its key for a replacement, which is
 what makes end-and-replace work.
 
-**Every write appends one row to `entity_mutation_events`, and that row is what
-the caller is handed back.** It carries the capability, the record and its
+**Each of the eighteen Phase A canonical entity writes appends one row to
+`entity_mutation_events`, and that row is what the caller is handed back.** It carries the capability, the record and its
 family, the prior and new version, the before and after state, the authority, the
 actor class, the request digest, the idempotency key and the audit identifier.
 The table is append-only by trigger, and
 `UNIQUE (principal_id, capability, idempotency_key)` is the idempotency store.
 
 **`receipt_id` is null in the ledger, and the `receipt_id` a result returns is
-that row's own `emut_…`.** The two are one decision made once, for all eighteen
-writes. The column exists to point at a separate receipt record and this build
+that row's own `emut_…`.** The two are one decision made once for those eighteen
+Phase A writes. The column exists to point at a separate receipt record and this build
 keeps none, so filling it with the row's own primary key would be a
 self-reference dressed as a reference and would make `receipt_id IS NOT NULL`
 mean nothing to anyone reading the ledger. What the completion contract requires
 is that a mutation *result* carry a `receipt_id`; it does, and it names a
 durable row an operator can go and read.
+
+The three Phase B entity writes use their dedicated governed ledgers rather
+than `entity_mutation_events`. `entities.proposals.create` persists the proposal
+and its evidence and uses the Principal-and-capability-scoped
+`relationship_write_requests` replay ledger. `entities.merge.preview` persists
+the exact-version-bound plan in `entity_identity_previews`; `entities.merge`
+records its operation and append-only effects in `entity_identity_operations`
+and `entity_identity_effects`.
 
 **Evidence is cited from two record families, and which one depends on the
 write.** `entity_fact_evidence_links` admits an entity observation, a capture
@@ -225,53 +239,41 @@ candidates. Nothing is deleted: the observation, its text and the decision all
 remain, which is what section 10.11 requires and what makes the refusal
 auditable.
 
-Proposals are still not decidable from any transport. That is section 4's gap,
-and it is unchanged.
-
 Read `unresolved_mentions` and `open_proposals` first. The first is references
-the system knows it has not placed; the second is decisions waiting on a person
-— and, in this build, waiting indefinitely (section 4).
+the system knows it has not placed; the second is decisions waiting on a person.
+Canonical `review.list` is the transport entry point for Entity and Relationship
+Memory cases; section 4 describes the supported dispositions.
 
 The report names proposals by identifier and kind and prints no `proposed_by`:
 that column is free text a caller supplies, and one free-text column would end
 the guarantee that this report carries no personal data.
 
-## 4. Deciding a proposal — **not yet operable**
+## 4. Deciding a proposal and applying a governed merge
 
-Read this section as a description of the rules, not as a procedure. There is
-**no way to decide a proposal in this build.**
+Entity and Relationship Memory proposals appear on canonical `review.list` and
+are decided through `review.decide`. Supported dispositions are `accept`,
+`correct_and_accept`, `reject`, `defer`, `mark_unresolved`, `reprocess`,
+`escalate`, and `invalidate`. Ordinary accepted Entity proposals promote through
+the canonical Entity authoring services; typed corrections and evidence remain
+attached. `reprocess` creates a successor, while `reject` and `invalidate`
+create no canonical fact. The authenticated producer cannot decide its own
+candidate merely because it produced it.
 
-- There is no capability for it: propose, decide and merge exist on no
-  transport, local or remote. **Corrected after Phase A**, which is the point of
-  reading this section carefully — this list said "observe, propose, decide and
-  merge", and `entities.observe` and `entities.unresolved_mentions.resolve` are
-  capabilities now. Recording what a source said and deciding what one mention
-  refers to are served. Deciding a *proposal* and merging two entities are not.
-- There is also no operator entry point for those two.
-  `EntityReenrichmentService` and the merge and proposal half of
-  `EntityGovernanceService` are composed by **nothing** in `src/` — no bootstrap
-  wiring, no script, no worker. They are in-process contracts with a test suite
-  and no caller.
+Accepting an identity-correction proposal does **not** merge identities. It
+records the review decision only. The operator must separately call
+`entities.merge.preview`, inspect the persisted bounded consequences, and pass
+that exact unexpired preview and digest to `entities.merge`. Both capabilities
+require the identity-correction feature gate, operator authority, exact versions,
+the normal capability/purpose policy, and audit persistence. Remotely they also
+require global remote writes and the exact server-resolved `remote.operator`
+durable capability set described in section 2.
 
-So the queue `scripts/inspect_entity_plane.py` reports can be *read* and cannot
-be *worked*. An operator who needs a proposal decided today has no supported
-action; wiring one is its own work package, with its own authorization gate.
-
-The rules those services encode, for when there is:
-
-- `RECORD_ALIAS`, `RECORD_ASSIGNMENT`, `RECORD_RELATIONSHIP` — may be accepted
-  under a configured threshold.
-- `CREATE_ENTITY`, `BIND_IDENTIFIER` — require review.
-- `MERGE_ENTITIES` — **requires the operator**, and is never eligible for a bulk
-  action (specification section 8.4).
-
-Accepting a merge redirects the merged-away entity at the survivor and writes an
-`entity_merge_records` row naming the actor, reason and moment. It deletes
-nothing: the merged entity still resolves as a `HISTORICAL_MATCH`. The merge
-record is also a precondition rather than a formality — `after_merge` refuses to
-move any observation between two entities no recorded merge connects, in that
-direction, in that Principal's partition. A pass is repeated until
-`more_remains` is false.
+Apply is atomic, preserves merged-away rows as redirects, records lineage and an
+append-only effect ledger, reconciles supported children and affected proposal
+state, and hard-deletes nothing. A stale, expired, consumed with different
+material, conflicted, or tampered preview is refused. `WP-07` still owns split;
+`WP-08` still owns final Relationship Memory redistribution; `WP-10` still owns
+complete cross-plane context and re-enrichment.
 
 ## 5. Reading a resolution answer
 
@@ -308,11 +310,11 @@ candidate is the honest answer.
   unmet for that reason and is ledgered as such.
 - **No split.** Section 15.4's split requirements are not implemented; only
   merge is.
-- **Seven of nine re-enrichment triggers** (section 27.4) are unimplemented,
-  because they need observations from sources this product does not read yet.
-- **No operator entry point for governance.** See section 4: the review plane is
-  implemented and composed by nothing. Reading the queue works; working it does
-  not.
+- **Complete cross-plane re-enrichment is deferred to `WP-10`.** Phase B
+  invalidates or blocks the affected families it can safely account for; it does
+  not claim the final source/context traversal.
+- **Final Relationship Memory redistribution is deferred to `WP-08`.** Phase B
+  blocks unsafe merge plans rather than rewriting memory narrative or history.
 - **`Entity.canonical_name` normalization is unenforced** at the schema level.
   The domain record now refuses an unnormalized `canonical_name`, alias value or
   identifier value at construction, so nothing routed through `Entity`,
@@ -327,15 +329,15 @@ candidate is the honest answer.
   an integrity error rather than a quiet no-op. Closing that needs an
   idempotency key on the write path, which arrives with the work package that
   has something observed to write.
-- **Two of the three ledgers now have a writer, and only two of the three are
-  append-only.** `WP-RI-A-02` made the ten governed writes the first writer of
+- **All three Phase A ledgers now have a writer, and only two of the three are
+  append-only.** `WP-RI-A-02` made the governed writes the first writer of
   `entity_mutation_events` — one row per accepted change, and the same table is
   the plane's idempotency store through
   `UNIQUE (principal_id, capability, idempotency_key)` — and of
-  `entity_fact_evidence_links`, which a write fills only when it cites a capture
-  span. `entity_resolution_decisions` is still unwritten: deciding what an
-  unresolved mention refers to is a governed review, and this package publishes
-  no capability that does it.
+  `entity_fact_evidence_links`, which a write fills only when it cites evidence.
+  `entities.unresolved_mentions.resolve` writes
+  `entity_resolution_decisions`; Phase B's proposal decisions use their own
+  canonical review ledgers rather than this mention-resolution ledger.
   `2fe4e13fb449` names exactly two tables in `_IMMUTABLE_TABLES` —
   `entity_mutation_events` and `entity_resolution_decisions` — and creates one
   `BEFORE UPDATE OR DELETE` trigger on each, so those are append-only at the

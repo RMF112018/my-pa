@@ -204,12 +204,19 @@ def _image_from_result(result: object) -> ImageContent | object | None:
 
     Keyword unpacking is the inspection: a request-derived mapping must not be
     subscripted. Encoded-length mismatch after the other fields match is a
-    sentinel, not a silent text-only success.
+    sentinel, not a silent text-only success. GoodNotes rasters are tried
+    first; GSQS B0 case rasters do not require renderer or page-version fields.
     """
     if not isinstance(result, dict):
         return None
     try:
-        return _image_from_mapping(**result)
+        projected = _image_from_mapping(**result)
+    except TypeError:
+        projected = None
+    if projected is not None:
+        return projected
+    try:
+        return _gsqs_image_from_mapping(**result)
     except TypeError:
         return None
 
@@ -244,6 +251,30 @@ def _image_from_mapping(
         and _non_empty_str(renderer_version)
         and _non_empty_str(render_profile_version)
     ):
+        return None
+    if len(content_base64) != ((byte_length + 2) // 3) * 4:
+        return _INCONSISTENT_RASTER
+    return ImageContent(type="image", data=content_base64, mime_type="image/png")
+
+
+def _gsqs_image_from_mapping(
+    *,
+    raster_role: object = None,
+    media_type: object = None,
+    content_base64: object = None,
+    content_sha256: object = None,
+    byte_length: object = None,
+    **_ignored: object,
+) -> ImageContent | object | None:
+    if raster_role != "gsqs-b0-case":
+        return None
+    if media_type != "image/png":
+        return None
+    if not isinstance(content_base64, str) or not content_base64:
+        return None
+    if not _is_hex64(content_sha256):
+        return None
+    if not isinstance(byte_length, int) or isinstance(byte_length, bool) or byte_length < 1:
         return None
     if len(content_base64) != ((byte_length + 2) // 3) * 4:
         return _INCONSISTENT_RASTER

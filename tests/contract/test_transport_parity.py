@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-ninety-seven capabilities. There are two ways to prove that and only one of them stays
+ninety-eight capabilities. There are two ways to prove that and only one of them stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -27,7 +27,7 @@ as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
-default composition exposes fifty-five: the six managed-document names, the
+default composition exposes fifty-six: the six managed-document names, the
 twenty-eight `entities.` names and the eight Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
@@ -68,6 +68,7 @@ from tests.conftest import (
     FakeUnitOfWork,
     Scene,
     build_service,
+    seed_gsqs_b0_client_driven_workflow,
     seed_gsqs_b0_workflow,
     staged_capture,
     staged_commitment,
@@ -590,6 +591,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
     gsqs_run_id = str(seed_gsqs_b0_workflow()["run_id"])
+    gsqs_step_run_id = str(seed_gsqs_b0_client_driven_workflow()["run_id"])
     at = datetime(2026, 8, 2, 11, tzinfo=UTC)
     cycle_admission = begin_cycle(
         scene.world.intelligence,
@@ -853,6 +855,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "idempotency_key": "parity-gsqs-start",
         },
         Capability.GSQS_STATUS: {"run_id": gsqs_run_id},
+        Capability.GSQS_STEP: {"run_id": gsqs_step_run_id},
         Capability.REPORTS_BEGIN_CYCLE: {
             "cycle_id": CYCLE_MORNING_INTELLIGENCE,
             "business_date": "2026-08-20",
@@ -1317,7 +1320,7 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    assert len(REQUEST_VALUES) == 98, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    assert len(REQUEST_VALUES) == 99, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -1594,13 +1597,18 @@ def masked(answer: Mapping[str, Any], supplied: set[str]) -> Any:  # noqa: ANN40
         counts[kind] = counts.get(kind, 0) + 1
         return f"<minted-{kind}-{counts[kind] - 1}>"
 
-    def walk(value: Any) -> Any:  # noqa: ANN401 - a decoded JSON document
+    def walk(value: Any, *, field: str | None = None) -> Any:  # noqa: ANN401 - a decoded JSON document
+        if field == "submission_token" and isinstance(value, str) and value:
+            if value not in minted:
+                counts["token"] = counts.get("token", 0) + 1
+                minted[value] = f"<minted-token-{counts['token'] - 1}>"
+            return minted[value]
         if isinstance(value, str) and value not in supplied and _identifiers(value):
             if value not in minted:
                 minted[value] = placeholder(value)
             return minted[value]
         if isinstance(value, dict):
-            return {key: walk(item) for key, item in value.items()}
+            return {key: walk(item, field=key) for key, item in value.items()}
         if isinstance(value, list):
             return [walk(item) for item in value]
         return value
@@ -1988,7 +1996,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: ninety-seven capabilities answered from an empty world prove little."""
+    """Guard the matrix: ninety-eight capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

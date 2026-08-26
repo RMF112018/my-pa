@@ -7,11 +7,13 @@ replace the stdio analyzer plane. Real handwriting remains fail-closed.
 
 from __future__ import annotations
 
+import base64
 import fcntl
 import json
 import os
+import secrets
 import threading
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -30,7 +32,7 @@ from my_pa.application.goodnotes_gsqs_b0_acquisition import (
     ACQUISITION_AUTH_SCHEMA,
     CAMPAIGN_CLASS_REAL,
     CAMPAIGN_CLASS_SYNTHETIC,
-    MODEL_CLIENT_ROUTELLM_HTTP,
+    MODEL_CLIENT_CHATLLM,
     MODEL_CLIENT_SYNTHETIC,
     OPERATION_SYNTHETIC,
     OPERATION_SYNTHETIC_ROUTELLM,
@@ -38,7 +40,12 @@ from my_pa.application.goodnotes_gsqs_b0_acquisition import (
     AcquisitionError,
     acquisition_from_mapping,
 )
-from my_pa.application.goodnotes_gsqs_b0_capture import CaptureWriterError, repetition_filename
+from my_pa.application.goodnotes_gsqs_b0_capture import (
+    CaptureBinding,
+    CaptureWriterError,
+    repetition_filename,
+    write_repetition_capture,
+)
 from my_pa.application.goodnotes_gsqs_b0_mcp import (
     MCP_BINDING_OPERATOR_LOCAL_STDIO,
     MCP_EVALUATION_SURFACE_STDIO,
@@ -46,7 +53,6 @@ from my_pa.application.goodnotes_gsqs_b0_mcp import (
 from my_pa.application.goodnotes_gsqs_b0_model_client import (
     B0ModelClient,
     B0ModelClientError,
-    RouteLLMHttpB0ModelClient,
     SyntheticB0ModelClient,
     bind_model_client,
 )
@@ -57,11 +63,7 @@ from my_pa.application.goodnotes_gsqs_b0_orchestrator import (
     acquire_repetition,
 )
 from my_pa.application.goodnotes_gsqs_b0_routellm_activation import (
-    ACTIVATION_PATH_ENV,
-    RouteLLMActivationError,
     RouteLLMClientActivation,
-    admit_activation,
-    load_activation,
 )
 from my_pa.application.goodnotes_gsqs_b0_stdio_session import (
     StdioEvalSession,
@@ -79,9 +81,16 @@ from my_pa.application.goodnotes_gsqs_b0_synthetic_campaign import (
 from my_pa.application.goodnotes_gsqs_harness import (
     INCUMBENT_ANALYZER_NAME,
     INCUMBENT_ANALYZER_VERSION,
+    INTERCHANGE_SCHEMA_VERSION,
+    parse_interchange,
 )
 from my_pa.application.goodnotes_gsqs_live_b0 import (
+    AnalyzerCaseInput,
+    B0Census,
+    B0CensusMember,
+    FrozenAnalyzerConfig,
     frozen_incumbent_config,
+    load_frozen_prompt,
     prompt_config_identity,
     repo_root,
 )
@@ -89,6 +98,7 @@ from my_pa.application.goodnotes_gsqs_routellm_candidate import (
     composite_model_identity,
     load_route_llm_candidate,
 )
+from my_pa.application.goodnotes_gsqs_routellm_envelope import assemble_authoritative_interchange
 from my_pa.domain.common.time import format_rfc3339
 
 WORKFLOW_SCHEMA = "gsqs-b0-workflow-v1"
@@ -106,6 +116,8 @@ STATE_COMPLETE = "COMPLETE"
 STATE_FAILED = "FAILED"
 STATE_INTERRUPTED = "INTERRUPTED"
 STATE_INVALID = "INVALID"
+RASTER_ROLE = "gsqs-b0-case"
+DRIVER_CLIENT_DRIVEN = "client-driven"
 
 _ACQUISITION_TO_WORKFLOW = {
     AcquisitionState.IN_PROGRESS: STATE_RUNNING,
@@ -265,6 +277,11 @@ def start_workflow(
         return status_workflow(workflow_root=root, run_id=reuse_id)
     if run_dir is None:
         raise InvalidRequestError(SafeDetail.RUN_ID)
+    if admitted_model_client == MODEL_CLIENT_CHATLLM:
+        return _prepare_client_driven_run(
+            run_dir=run_dir,
+            repository_root=repository_root,
+        )
     if wait:
         return _execute_run(
             run_dir=run_dir,
@@ -313,6 +330,35 @@ def status_workflow(*, workflow_root: Path, run_id: str) -> dict[str, object]:
     return _public_status(payload)
 
 
+def step_workflow(
+    *,
+    workflow_root: Path,
+    run_id: str,
+    submission_token: str | None = None,
+    segments: tuple[dict[str, object], ...] | None = None,
+    repository_root: Path | None = None,
+) -> dict[str, object]:
+    """Serve the next client-driven case or accept ChatLLM semantic segments."""
+
+    del repository_root
+    root = _require_root(workflow_root)
+    run_dir = root / "runs" / run_id
+    with _root_lock(root):
+        payload = _read_state(run_dir)
+        if payload.get("workflow_driver") != DRIVER_CLIENT_DRIVEN:
+            raise DeniedError()
+        if payload.get("model_client") != MODEL_CLIENT_CHATLLM:
+            raise DeniedError()
+        if submission_token is None:
+            return _serve_client_driven_case(run_dir=run_dir, payload=payload)
+        return _accept_client_driven_segments(
+            run_dir=run_dir,
+            payload=payload,
+            submission_token=submission_token,
+            segments=segments or (),
+        )
+
+
 def _admit_start_authorization(
     *,
     authorization_id: str,
@@ -325,39 +371,11 @@ def _admit_start_authorization(
         return MODEL_CLIENT_SYNTHETIC, OPERATION_SYNTHETIC, None
     if authorization_id != ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID:
         raise DeniedError()
-    activation = ports.activation
-    if activation is None:
-        raw = os.environ.get(ACTIVATION_PATH_ENV, "")
-        if not raw or "\x00" in raw:
-            raise DeniedError()
-        try:
-            activation = load_activation(Path(raw))
-        except (
-            OSError,
-            ValueError,
-            json.JSONDecodeError,
-            RouteLLMActivationError,
-            B0ModelClientError,
-        ):
-            raise DeniedError() from None
-    try:
-        candidate = load_route_llm_candidate(repository_root / CANDIDATE_RELATIVE)
-        identity = composite_model_identity(candidate)
-        prompt_id = prompt_config_identity(repository_root)
-        admit_activation(
-            activation,
-            expected_commit=activation.repository_commit,
-            expected_tree=activation.repository_tree,
-            expected_candidate=identity,
-            expected_prompt=prompt_id,
-            expected_analyzer_name=INCUMBENT_ANALYZER_NAME,
-            expected_analyzer_version=INCUMBENT_ANALYZER_VERSION,
-        )
-    except (RouteLLMActivationError, B0ModelClientError, ValueError):
-        raise DeniedError() from None
-    if ports.model_client is not None and ports.model_client.identity != MODEL_CLIENT_ROUTELLM_HTTP:
+    if ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS != ("synth-b0-001",):
         raise DeniedError()
-    return MODEL_CLIENT_ROUTELLM_HTTP, OPERATION_SYNTHETIC_ROUTELLM, activation
+    if not ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS:
+        raise DeniedError()
+    return MODEL_CLIENT_CHATLLM, OPERATION_SYNTHETIC_ROUTELLM, None
 
 
 def _bind_workflow_client(
@@ -371,11 +389,7 @@ def _bind_workflow_client(
         if client.identity != MODEL_CLIENT_SYNTHETIC:
             raise DeniedError()
         return client
-    if activation is None:
-        raise DeniedError()
-    if ports.model_client is not None and ports.model_client.identity == MODEL_CLIENT_ROUTELLM_HTTP:
-        return ports.model_client
-    return RouteLLMHttpB0ModelClient(activation=activation, poster=ports.poster)
+    raise DeniedError()
 
 
 def _execute_run(
@@ -392,17 +406,8 @@ def _execute_run(
     state = _read_state(run_dir)
     campaign_dir = run_dir / "campaign"
     output_dir = run_dir / "output"
-    if model_client_identity == MODEL_CLIENT_ROUTELLM_HTTP:
-        if activation is None:
-            raise DeniedError()
-        if activation.eligible_case_ids != ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS:
-            raise DeniedError()
-        campaign = build_synthetic_campaign_for_case_ids(
-            campaign_dir, ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS
-        )
-    else:
-        case_count = ports.case_count if ports.case_count is not None else SYNTHETIC_CASE_COUNT
-        campaign = build_synthetic_campaign(campaign_dir, case_count=case_count)
+    case_count = ports.case_count if ports.case_count is not None else SYNTHETIC_CASE_COUNT
+    campaign = build_synthetic_campaign(campaign_dir, case_count=case_count)
     rasters = {
         member.case_id: (campaign.raster_root / f"{member.case_id}.png").read_bytes()
         for member in campaign.census.members
@@ -558,13 +563,19 @@ def _authorization_payload(authorization: AcquisitionAuthorization) -> dict[str,
 
 def _public_status(payload: Mapping[str, object]) -> dict[str, object]:
     artifact = payload.get("capture_artifact")
+    captured = payload.get("captured")
+    accepted = payload.get("accepted_captures")
+    if not isinstance(accepted, int) or isinstance(accepted, bool):
+        accepted = captured
     return {
+        "accepted_captures": accepted,
         "automatic_next_repetition": False,
         "campaign_class": payload.get("campaign_class"),
         "campaign_id": payload.get("campaign_id"),
         "capture_artifact": artifact if isinstance(artifact, dict) else None,
-        "captured": payload.get("captured"),
+        "captured": captured,
         "completed_at": payload.get("completed_at"),
+        "current_ordinal": payload.get("current_ordinal"),
         "duplicates": payload.get("duplicates"),
         "expected_cases": payload.get("expected_cases"),
         "failure_class": payload.get("failure_class"),
@@ -580,6 +591,322 @@ def _public_status(payload: Mapping[str, object]) -> dict[str, object]:
     }
 
 
+def _prepare_client_driven_run(*, run_dir: Path, repository_root: Path) -> dict[str, object]:
+    if ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS != ("synth-b0-001",):
+        raise DeniedError()
+    if not ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS:
+        raise DeniedError()
+    campaign_dir = run_dir / "campaign"
+    try:
+        campaign = build_synthetic_campaign_for_case_ids(
+            campaign_dir, ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS
+        )
+    except ValueError:
+        raise DeniedError() from None
+    candidate = load_route_llm_candidate(repository_root / CANDIDATE_RELATIVE)
+    identity = composite_model_identity(candidate)
+    prompt_id = prompt_config_identity(repository_root)
+    prompt_text = load_frozen_prompt(repository_root)
+    state = _read_state(run_dir)
+    state["state"] = STATE_PREPARED
+    state["workflow_driver"] = DRIVER_CLIENT_DRIVEN
+    state["campaign_id"] = campaign.campaign_id
+    state["expected_cases"] = len(campaign.census.members)
+    state["accepted_captures"] = 0
+    state["captured"] = 0
+    state["missing"] = len(campaign.census.members)
+    state["duplicates"] = 0
+    state["current_ordinal"] = None
+    state["prompt_config_identity"] = prompt_id
+    state["candidate_identity"] = identity
+    state["analyzer_name"] = INCUMBENT_ANALYZER_NAME
+    state["analyzer_version"] = INCUMBENT_ANALYZER_VERSION
+    state["prompt_text"] = prompt_text
+    state["corpus_version"] = campaign.corpus_version
+    state["combined_identity"] = campaign.combined_identity
+    state["corpus_manifest_digest"] = campaign.manifest_digest
+    state["census"] = [
+        {
+            "case_id": member.case_id,
+            "raster_sha256": member.raster_sha256,
+            "ordinal": index,
+        }
+        for index, member in enumerate(campaign.census.members, start=1)
+    ]
+    state["accepted_documents"] = []
+    state["lease"] = None
+    state["updated_at"] = _now()
+    _write_state(run_dir, state)
+    return _public_status(state)
+
+
+def _serve_client_driven_case(*, run_dir: Path, payload: dict[str, object]) -> dict[str, object]:
+    if payload.get("state") == STATE_COMPLETE:
+        raise DeniedError()
+    census = _census_rows(payload)
+    if not census:
+        raise DeniedError()
+    lease = payload.get("lease")
+    if isinstance(lease, dict) and lease.get("consumed") is not True:
+        member = _census_row(census, int(lease["ordinal"]))
+        token = secrets.token_urlsafe(32)
+        payload["lease"] = _lease_record(payload, member, token)
+        payload["state"] = STATE_RUNNING
+        payload["current_ordinal"] = member["ordinal"]
+        _write_state(run_dir, payload)
+        return _case_payload(run_dir=run_dir, payload=payload, member=member, token=token)
+    accepted = payload.get("accepted_documents")
+    accepted_count = len(accepted) if isinstance(accepted, list) else 0
+    if accepted_count >= len(census):
+        raise DeniedError()
+    member = census[accepted_count]
+    token = secrets.token_urlsafe(32)
+    payload["lease"] = _lease_record(payload, member, token)
+    payload["state"] = STATE_RUNNING
+    payload["current_ordinal"] = member["ordinal"]
+    payload["updated_at"] = _now()
+    _write_state(run_dir, payload)
+    return _case_payload(run_dir=run_dir, payload=payload, member=member, token=token)
+
+
+def _accept_client_driven_segments(
+    *,
+    run_dir: Path,
+    payload: dict[str, object],
+    submission_token: str,
+    segments: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    token_digest = sha256(submission_token.encode()).hexdigest()
+    lease = payload.get("lease")
+    accepted = payload.get("accepted_documents")
+    if not isinstance(accepted, list):
+        accepted = []
+    census = _census_rows(payload)
+    if isinstance(lease, dict) and lease.get("token_digest") == token_digest:
+        if lease.get("consumed") is True:
+            return _replay_or_conflict(
+                payload=payload,
+                lease=lease,
+                segments=segments,
+                accepted=accepted,
+            )
+        member = _census_row(census, int(lease["ordinal"]))
+        document = _stamp_interchange(payload=payload, member=member, segments=segments)
+        try:
+            parse_interchange(document)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SEGMENTS) from None
+        accepted.append(document)
+        payload["accepted_documents"] = accepted
+        payload["accepted_captures"] = len(accepted)
+        payload["captured"] = len(accepted)
+        payload["missing"] = max(0, len(census) - len(accepted))
+        payload["lease"] = {**lease, "consumed": True, "document": document}
+        payload["updated_at"] = _now()
+        if len(accepted) >= len(census):
+            capture_path = _write_client_driven_capture(run_dir=run_dir, payload=payload)
+            payload["state"] = STATE_COMPLETE
+            payload["completed_at"] = payload["updated_at"]
+            payload["capture_artifact"] = {
+                "filename": repetition_filename(int(payload["repetition"])),
+                "sha256": sha256(capture_path.read_bytes()).hexdigest(),
+                "schema_version": "gsqs-analyzer-capture-v1",
+            }
+            payload["current_ordinal"] = member["ordinal"]
+            _write_state(run_dir, payload)
+            status = _public_status(payload)
+            status["accepted"] = True
+            status["replayed"] = False
+            status["ordinal"] = member["ordinal"]
+            status["case_id"] = member["case_id"]
+            return status
+        payload["state"] = STATE_RUNNING
+        _write_state(run_dir, payload)
+        status = _public_status(payload)
+        status["accepted"] = True
+        status["replayed"] = False
+        status["ordinal"] = member["ordinal"]
+        status["case_id"] = member["case_id"]
+        return status
+    if isinstance(lease, dict) and lease.get("consumed") is True:
+        if lease.get("token_digest") != token_digest:
+            raise DeniedError()
+        return _replay_or_conflict(
+            payload=payload,
+            lease=lease,
+            segments=segments,
+            accepted=accepted,
+        )
+    raise DeniedError()
+
+
+def _replay_or_conflict(
+    *,
+    payload: Mapping[str, object],
+    lease: Mapping[str, object],
+    segments: Sequence[Mapping[str, object]],
+    accepted: list[object],
+) -> dict[str, object]:
+    stored = lease.get("document")
+    if not isinstance(stored, dict):
+        if accepted:
+            last = accepted[-1]
+            stored = last if isinstance(last, dict) else None
+        else:
+            stored = None
+    if not isinstance(stored, dict):
+        raise DeniedError()
+    census = _census_rows(payload)
+    member = _census_row(census, int(lease["ordinal"]))
+    candidate = _stamp_interchange(payload=payload, member=member, segments=segments)
+    if _canonical_bytes(candidate) == _canonical_bytes(stored):
+        status = _public_status(payload)
+        status["accepted"] = True
+        status["replayed"] = True
+        status["ordinal"] = member["ordinal"]
+        status["case_id"] = member["case_id"]
+        return status
+    raise ConflictError()
+
+
+def _stamp_interchange(
+    *,
+    payload: Mapping[str, object],
+    member: Mapping[str, object],
+    segments: Sequence[Mapping[str, object]],
+) -> dict[str, object]:
+    case = AnalyzerCaseInput(
+        case_id=str(member["case_id"]),
+        corpus_version=str(payload["corpus_version"]),
+        raster_sha256=str(member["raster_sha256"]),
+        interchange_schema_version=INTERCHANGE_SCHEMA_VERSION,
+        image_bytes=None,
+    )
+    stamped_config = FrozenAnalyzerConfig(
+        analyzer_name=str(payload["analyzer_name"]),
+        analyzer_version=str(payload["analyzer_version"]),
+        model_identity=str(payload["candidate_identity"]),
+        prompt_config_identity=str(payload["prompt_config_identity"]),
+        prompt_text=str(payload["prompt_text"]),
+    )
+    return assemble_authoritative_interchange(
+        case,
+        stamped_config,
+        {"segments": [dict(item) for item in segments]},
+        provenance={"model_client": MODEL_CLIENT_CHATLLM},
+    )
+
+
+def _write_client_driven_capture(*, run_dir: Path, payload: Mapping[str, object]) -> Path:
+    accepted = payload.get("accepted_documents")
+    if not isinstance(accepted, list):
+        raise DeniedError()
+    census_rows = _census_rows(payload)
+    members = tuple(
+        B0CensusMember(
+            case_id=str(row["case_id"]),
+            raster_sha256=str(row["raster_sha256"]),
+            case_digest=str(row["raster_sha256"]),
+            file_sha256=str(row["raster_sha256"]),
+        )
+        for row in census_rows
+    )
+    census = B0Census(
+        corpus_version=str(payload["corpus_version"]),
+        manifest_digest=str(payload["corpus_manifest_digest"]),
+        combined_identity=str(payload["combined_identity"]),
+        partition="SYNTHETIC",
+        members=members,
+        census_digest=str(payload["corpus_manifest_digest"]),
+    )
+    binding = CaptureBinding(
+        campaign_id=str(payload["campaign_id"]),
+        corpus_version=str(payload["corpus_version"]),
+        combined_identity=str(payload["combined_identity"]),
+        repetition=int(payload["repetition"]),
+        candidate_identity=str(payload["candidate_identity"]),
+        model_identity=str(payload["candidate_identity"]),
+        analyzer_name=str(payload["analyzer_name"]),
+        analyzer_version=str(payload["analyzer_version"]),
+        prompt_config_identity=str(payload["prompt_config_identity"]),
+    )
+    documents = tuple(item for item in accepted if isinstance(item, Mapping))
+    return write_repetition_capture(
+        run_dir / "output",
+        binding=binding,
+        census=census,
+        documents=documents,
+    )
+
+
+def _case_payload(
+    *,
+    run_dir: Path,
+    payload: Mapping[str, object],
+    member: Mapping[str, object],
+    token: str,
+) -> dict[str, object]:
+    png = (run_dir / "campaign" / "rasters" / f"{member['case_id']}.png").read_bytes()
+    encoded = base64.b64encode(png).decode("ascii")
+    status = _public_status(payload)
+    status.update(
+        {
+            "analyzer_name": payload.get("analyzer_name"),
+            "analyzer_version": payload.get("analyzer_version"),
+            "byte_length": len(png),
+            "candidate_identity": payload.get("candidate_identity"),
+            "case_id": member["case_id"],
+            "content_base64": encoded,
+            "content_sha256": member["raster_sha256"],
+            "media_type": "image/png",
+            "ordinal": member["ordinal"],
+            "prompt_config_identity": payload.get("prompt_config_identity"),
+            "prompt_text": payload.get("prompt_text"),
+            "raster_role": RASTER_ROLE,
+            "submission_token": token,
+        }
+    )
+    return status
+
+
+def _lease_record(
+    payload: Mapping[str, object], member: Mapping[str, object], token: str
+) -> dict[str, object]:
+    return {
+        "candidate_identity": payload.get("candidate_identity"),
+        "case_id": member["case_id"],
+        "consumed": False,
+        "ordinal": member["ordinal"],
+        "prompt_identity": payload.get("prompt_config_identity"),
+        "raster_sha256": member["raster_sha256"],
+        "repetition": payload.get("repetition"),
+        "run_id": payload.get("run_id"),
+        "token_digest": sha256(token.encode()).hexdigest(),
+    }
+
+
+def _census_rows(payload: Mapping[str, object]) -> list[dict[str, object]]:
+    raw = payload.get("census")
+    if not isinstance(raw, list) or not raw:
+        return []
+    rows: list[dict[str, object]] = []
+    for item in raw:
+        if isinstance(item, dict) and isinstance(item.get("case_id"), str):
+            rows.append(item)
+    return rows
+
+
+def _census_row(census: Sequence[Mapping[str, object]], ordinal: int) -> dict[str, object]:
+    for item in census:
+        if item.get("ordinal") == ordinal:
+            return dict(item)
+    raise DeniedError()
+
+
+def _canonical_bytes(document: Mapping[str, object]) -> bytes:
+    return (json.dumps(dict(document), indent=2, sort_keys=True) + "\n").encode("utf-8")
+
+
 def _require_root(root: Path) -> Path:
     if root.is_symlink():
         raise InvalidRequestError(SafeDetail.RUN_ID)
@@ -593,10 +920,8 @@ def _disclosure_census_token(
     activation: RouteLLMClientActivation | None,
     ports: WorkflowPorts,
 ) -> str:
-    if model_client_identity == MODEL_CLIENT_ROUTELLM_HTTP:
-        if activation is None:
-            raise DeniedError()
-        return "routellm-http:" + ",".join(activation.eligible_case_ids)
+    if model_client_identity == MODEL_CLIENT_CHATLLM:
+        return "chatllm-routellm:" + ",".join(ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS)
     count = ports.case_count if ports.case_count is not None else SYNTHETIC_CASE_COUNT
     return f"synthetic-fake:{count}"
 
@@ -658,7 +983,11 @@ def _existing_subject(
 
 
 def _read_state(run_dir: Path) -> dict[str, object]:
-    payload = json.loads((run_dir / STATE_NAME).read_text(encoding="utf-8"))
+    path = run_dir / STATE_NAME
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        raise NotFoundError(SafeDetail.RUN_ID) from None
     if not isinstance(payload, dict):
         raise NotFoundError(SafeDetail.RUN_ID)
     return payload

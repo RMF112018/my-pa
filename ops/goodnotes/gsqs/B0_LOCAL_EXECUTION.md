@@ -12,11 +12,14 @@ LOCAL_AGENT_DIRECT_ROUTELLM_WORKFLOW_INITIATION = NO
 ```
 
 ChatLLM initiates a repetition only through the existing connected MY-PA
-MCP (`gsqs.start` / `gsqs.status` on `https://my-pa-mcp.bobby-fetting.me/mcp`).
-That surface is orchestration, not the B0 semantic analyzer. The analyzer
-plane remains stdio-isolated `python apps/cli/gsqs_b0.py serve-eval-mcp`
-(`goodnotes.work`, `goodnotes.content`). HTTPS `goodnotes.eval.*` is not
-canonical B0.
+MCP (`gsqs.start` / `gsqs.step` / `gsqs.status` on
+`https://my-pa-mcp.bobby-fetting.me/mcp`). ChatLLM is the MCP client
+and drives inference; RouteLLM routes models inside ChatLLM. NAS never
+calls ChatLLM or RouteLLM. That surface is orchestration plus
+client-driven case lease, not a NAS HTTP RouteLLM client. The stdio
+analyzer plane remains `python apps/cli/gsqs_b0.py serve-eval-mcp`
+(`goodnotes.work`, `goodnotes.content`) for the synthetic-fake path.
+HTTPS `goodnotes.eval.*` is not canonical B0.
 
 Historical finding (2026-08-25): hosted ChatLLM MCP cannot read the
 operator raster filesystem, and no local RouteLLM MCP client existed.
@@ -39,11 +42,11 @@ external RouteLLM MCP client already existed.
   stored order. The model does not choose the next case. One CLI
   invocation runs one explicit `--repetition`. Interrupted attempts are
   `INTERRUPTED` or `INVALID` and are not resumable.
-- **Connected-MCP workflow** — production tools `gsqs.start` and
-  `gsqs.status`. ChatLLM initiates; the server resolves identities,
-  reuses B0-EXEC-001/002/003, and persists `repetition-00N.json`.
-  RouteLLM is an internal client, not an operator workflow. Real
-  handwriting remains denied.
+- **Connected-MCP workflow** — production tools `gsqs.start`, `gsqs.step`,
+  and `gsqs.status`. ChatLLM initiates and drives inference; RouteLLM
+  routes inside ChatLLM. The server owns campaign identity, rasters,
+  trusted interchange fields, and capture persistence. NAS RouteLLM HTTP
+  is not the canonical production path. Real handwriting remains denied.
 
 ## Authorization
 

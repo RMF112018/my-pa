@@ -39,7 +39,7 @@ Drive mirrors are review surfaces rather than a competing ledger.
 | Database container | `my-pa-postgres`, `postgres:17.10`, healthy | `docker ps` |
 | Database binding | `127.0.0.1:5433 -> 5432`, loopback only | `docker ps` port map |
 | Logical database | `my_pa` | `select current_database()` |
-| Alembic head | `c4b0a1d9e827` in the repository, seventy revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
+| Alembic head | `d8f3a1c6e942` in the repository, seventy-one revisions; local validation targets disposable databases only | `migrations/versions/*.py`, `alembic heads` |
 | Extensions | `pg_trgm`, `unaccent`, `plpgsql` | `select extname from pg_extension` |
 
 ## 2. Verified corpus claim
@@ -65,8 +65,10 @@ is not a defect.
 
 ## 3. What is implemented
 
-Two hundred and eighty-six Python modules under `src/my_pa` and three hundred and sixty-seven test modules —
-`find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
+Two hundred and eighty-six Python modules under `src/my_pa` and three hundred and sixty-eight test modules —
+`find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. FAST currently
+reports 12,563 passed for
+`pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
 true at WP-4B3 `main@6660dbb`, and each was carried through the packages that
@@ -89,10 +91,10 @@ section disagrees with the tree.
 | `domain/source`, `domain/extraction`, `domain/search` — registry, bounded enrollment, provider port, extraction outcomes, quarantine, coverage, search query | Implemented and tested |
 | `infrastructure/persistence` — registry, enrollment, jobs, extraction, quarantine, coverage, lexical search | Implemented; covered by the database tier |
 | `infrastructure/providers/fixture.py` — read-only fixture source provider | Implemented and tested |
-| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, GoodNotes notebook lineage, GoodNotes NOTE_UNIT occurrence persistence, GoodNotes semantic work/proposal receipts, GoodNotes entity associations with NEW-only delivery receipts, and additive GoodNotes exact visual render digests, additive `goodnotes.content` vocabulary, additive durable-note stage ledger and Principal-bound page rasters, additive GoodNotes server-grounded NOTE_UNIT crop identity with immutable revision provenance, additive GoodNotes Meeting/Agenda association kinds, and an additive dormant GoodNotes delivery-attempt ledger, and the relationship-intelligence entity plane — `entities`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, the additive `entity_aliases` table, and the `entities.*` capability family with the `entity_read` purpose, and the entity observation, proposal, and merge-lineage tables, and the Intelligence Artifact report plane — cycle runs, producer runs, immutable artifacts, commit receipts, pipeline dependencies, and external provenance, with the eight `reports.*` capabilities and the `report_authoring`/`report_read` purposes, and the Work Task/Commitment contract, history digests, and bounded bulk ledger with the three further `commitments.` capabilities, and the Relationship Memory plane — the memory pointer, its immutable version ledger, submissions, context and evidence links, proposals with their evidence, and the append-only review-decision ledger, with the eight `relationship_memory.` capabilities and the `relationship_memory_read`/`relationship_memory_authoring` purposes | Implemented, seventy revisions, head `c4b0a1d9e827` |
+| Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, GoodNotes notebook lineage, GoodNotes NOTE_UNIT occurrence persistence, GoodNotes semantic work/proposal receipts, GoodNotes entity associations with NEW-only delivery receipts, and additive GoodNotes exact visual render digests, additive `goodnotes.content` vocabulary, additive durable-note stage ledger and Principal-bound page rasters, additive GoodNotes server-grounded NOTE_UNIT crop identity with immutable revision provenance, additive GoodNotes Meeting/Agenda association kinds, and an additive dormant GoodNotes delivery-attempt ledger, and the relationship-intelligence entity plane — `entities`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, the additive `entity_aliases` table, and the `entities.*` capability family with the `entity_read` purpose, and the entity observation, proposal, and merge-lineage tables, and the Intelligence Artifact report plane — cycle runs, producer runs, immutable artifacts, commit receipts, pipeline dependencies, and external provenance, with the eight `reports.*` capabilities and the `report_authoring`/`report_read` purposes, and the Work Task/Commitment contract, history digests, and bounded bulk ledger with the three further `commitments.` capabilities, and the Relationship Memory plane — the memory pointer, its immutable version ledger, submissions, context and evidence links, proposals with their evidence, and the append-only review-decision ledger, with the eight `relationship_memory.` capabilities and the `relationship_memory_read`/`relationship_memory_authoring` purposes | Implemented, seventy-one revisions, head `d8f3a1c6e942` |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
-All ninety-seven capability names, their operator-only flags, and their permitted
+All ninety-eight capability names, their operator-only flags, and their permitted
 purposes exist in `domain/identity/operation.py`, alongside thirty-one purposes. The v1 request,
 response, disclosure, and error shapes already exist and are contract-tested.
 

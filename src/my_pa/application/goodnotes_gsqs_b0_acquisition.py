@@ -22,6 +22,7 @@ CAMPAIGN_CLASS_SYNTHETIC = "SYNTHETIC"
 CAMPAIGN_CLASS_REAL = "REAL_HANDWRITING"
 MODEL_CLIENT_SYNTHETIC = "synthetic-fake"
 MODEL_CLIENT_ROUTELLM_HTTP = "routellm-http"
+MODEL_CLIENT_CHATLLM = "chatllm-routellm"
 REAL_HANDWRITING_ACQUISITION_ADMITTED = False
 
 
@@ -124,7 +125,10 @@ def assert_acquisition_permitted(
     elif authorization.operation == OPERATION_SYNTHETIC_ROUTELLM:
         if authorization.campaign_class != CAMPAIGN_CLASS_SYNTHETIC:
             raise AcquisitionError("synthetic campaign_class required")
-        if authorization.model_client != MODEL_CLIENT_ROUTELLM_HTTP:
+        if authorization.model_client not in {
+            MODEL_CLIENT_CHATLLM,
+            MODEL_CLIENT_ROUTELLM_HTTP,
+        }:
             raise AcquisitionError("model-client configuration mismatch")
     else:
         raise AcquisitionError("synthetic acquisition requires SYNTHETIC_B0_ACQUISITION")

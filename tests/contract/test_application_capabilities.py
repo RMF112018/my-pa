@@ -1,4 +1,4 @@
-"""All ninety-seven capabilities execute real behaviour, and disclose what they did.
+"""All ninety-eight capabilities execute real behaviour, and disclose what they did.
 
 Each test below runs one capability through `ApplicationService.invoke` — the
 only public entry point there is — against the real fixture source provider and
@@ -57,6 +57,7 @@ from my_pa.application.commands import (
     Representation,
     SearchKnowledge,
     StartGsqsB0,
+    StepGsqsB0,
     SubmitGoodNotesProposal,
 )
 from my_pa.application.disclosure import Limitation
@@ -1350,3 +1351,32 @@ def test_gsqs_status_returns_the_started_run(scene: Scene) -> None:
     assert result["run_id"] == started["run_id"]
     assert result["state"] == "COMPLETE"
     assert "capture_artifact" in result
+
+
+def test_gsqs_step_serves_the_prepared_client_driven_case(scene: Scene) -> None:
+    started = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.GSQS_START,
+            Purpose.GSQS_B0_EXECUTION,
+            StartGsqsB0(
+                authorization_id="synthetic-routellm-commissioning",
+                campaign_class="SYNTHETIC",
+                repetition=1,
+                idempotency_key="capability-gsqs-step-0001",
+            ),
+        )
+    )
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.GSQS_STEP,
+            Purpose.GSQS_B0_EXECUTION,
+            StepGsqsB0(run_id=str(started["run_id"])),
+        )
+    )
+    assert result["run_id"] == started["run_id"]
+    assert result["case_id"] == "synth-b0-001"
+    assert result["submission_token"]

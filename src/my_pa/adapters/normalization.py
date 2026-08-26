@@ -148,6 +148,7 @@ from my_pa.application.commands import (
     SearchRelationshipMemories,
     SearchTasks,
     StartGsqsB0,
+    StepGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
@@ -748,6 +749,10 @@ def _get_goodnotes_work(payload: Mapping[str, Any]) -> Command:
 
 def _start_gsqs_b0(payload: Mapping[str, Any]) -> Command:
     return StartGsqsB0(**payload)
+
+
+def _step_gsqs_b0(payload: Mapping[str, Any]) -> Command:
+    return StepGsqsB0(**payload)
 
 
 def _get_gsqs_b0_status(payload: Mapping[str, Any]) -> Command:
@@ -1473,6 +1478,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.GOODNOTES_PROPOSE: _submit_goodnotes_proposal,
         Capability.GSQS_START: _start_gsqs_b0,
         Capability.GSQS_STATUS: _get_gsqs_b0_status,
+        Capability.GSQS_STEP: _step_gsqs_b0,
         Capability.REPORTS_BEGIN_CYCLE: _begin_intelligence_cycle,
         Capability.REPORTS_COMMIT: _commit_intelligence_artifact,
         Capability.REPORTS_RECORD_RUN_STATE: _record_intelligence_run_state,
@@ -1526,7 +1532,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a name that is
-            not one of the ninety-seven names nothing.
+            not one of the ninety-eight names nothing.
     """
     try:
         return Capability(capability)

@@ -40,11 +40,12 @@ it does not replace A-X.
 - [`REMOTE_EVALUATION.md`](REMOTE_EVALUATION.md) — isolated ChatLLM remote-eval process. **NOT commissioned.** Not deployed. Not `MEASURED_B0`. Not Phase C. Not ChatLLM connected.
 - [`B0_RUNBOOK.md`](B0_RUNBOOK.md) — governed live-B0 preflight / MCP
   evaluation / admit-and-score contract. The commissioned B0 path is
-  RouteLLM-over-MCP against an ephemeral evaluation MCP, then
-  `gsqs_b0.py score`. Direct RouteLLM HTTP (`MY_PA_ROUTELLM_*`,
-  `GET /v1/models`, `POST /v1/chat/completions`) remains in-tree but
-  dormant. Live NAS MCP
-  (`https://my-pa-mcp.bobby-fetting.me`) is not a B0 image source.
+  ChatLLM-driven production MCP (`gsqs.start` / `gsqs.step` /
+  `gsqs.status`); RouteLLM routes models inside ChatLLM. NAS never
+  calls ChatLLM or RouteLLM. Direct RouteLLM HTTP (`MY_PA_ROUTELLM_*`,
+  `GET /v1/models`, `POST /v1/chat/completions`) remains in-tree as
+  historical transport but is not the canonical production path. Live NAS MCP
+  (`https://my-pa-mcp.bobby-fetting.me`) is the ChatLLM MCP surface, not a B0 image source via NAS HTTP.
   `b0_suitable` is still not disclosure permission. `MEASURED_B0`
   remains `NOT_YET_ESTABLISHED`. Handwriting admit-and-score uses
   `gsqs-evaluator-plane-v2` so public census identity and private

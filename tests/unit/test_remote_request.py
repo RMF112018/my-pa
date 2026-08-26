@@ -441,6 +441,36 @@ def test_compose_stamps_idempotency_for_task_create() -> None:
     assert replay["payload"]["idempotency_key"] == key
 
 
+def test_gsqs_step_accepts_no_caller_idempotency_key() -> None:
+    """The lease token is the retry surface; ChatLLM must not send a key."""
+    assert Capability.GSQS_STEP not in _IDEMPOTENT_REMOTE_CAPABILITIES
+    arguments = {"payload": {"run_id": "b0run_" + "a" * 24}}
+    with pytest.raises(InvalidRequestError):
+        compose_remote_arguments(
+            capability_name=Capability.GSQS_STEP.value,
+            arguments={"payload": {**arguments["payload"], "idempotency_key": "caller-key"}},
+            principal=PRINCIPAL,
+            grants=None,
+            clock=lambda: FROZEN,
+            issue_id=_issue,
+        )
+    composed = compose_remote_arguments(
+        capability_name=Capability.GSQS_STEP.value,
+        arguments=arguments,
+        principal=PRINCIPAL,
+        grants=None,
+        clock=lambda: FROZEN,
+        issue_id=_issue,
+    )
+    assert "idempotency_key" not in composed["payload"]
+    from my_pa.application.commands import StepGsqsB0
+
+    command = StepGsqsB0(**composed["payload"])
+    assert command.run_id == arguments["payload"]["run_id"]
+    assert command.submission_token is None
+    assert command.segments is None
+
+
 # ---- the entity plane's eighteen writes ------------------------------------
 
 

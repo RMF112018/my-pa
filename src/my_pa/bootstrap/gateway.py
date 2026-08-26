@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the ninety-seven capabilities.
+the ninety-eight capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -181,7 +181,6 @@ from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.user_account import TokenClaimsError
 from my_pa.infrastructure.database.engine import create_database_engine
-from my_pa.infrastructure.gsqs_routellm_transport import post_chat_completion
 from my_pa.infrastructure.managed_document_stores.filesystem.store import (
     FilesystemManagedByteStore,
 )
@@ -621,7 +620,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
                 settings.relationship_intelligence_writes_enabled
             ),
             relationship_memory_enabled=settings.relationship_memory_enabled,
-            gsqs_b0_ports=WorkflowPorts(poster=post_chat_completion),
+            gsqs_b0_ports=WorkflowPorts(),
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

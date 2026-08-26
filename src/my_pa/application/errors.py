@@ -161,6 +161,7 @@ class SafeDetail(StrEnum):
     ANALYZER_NAME = "analyzer_name"
     ANALYZER_VERSION = "analyzer_version"
     SEGMENTS = "segments"
+    SUBMISSION_TOKEN = "submission_token"  # noqa: S105
     GEOMETRY = "geometry"
     TRANSCRIPTION = "transcription"
     CANDIDATE_TAGS = "candidate_tags"

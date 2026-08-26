@@ -108,7 +108,11 @@ class TimeoutB0ModelClient(SyntheticB0ModelClient):
 
 
 class RouteLLMHttpB0ModelClient:
-    """Internal RouteLLM HTTP client. Requires an admitted activation artifact."""
+    """HISTORICAL_ONLY internal RouteLLM HTTP client.
+
+    Production GSQS B0 is ChatLLM-client-driven and must not instantiate this
+    client. Unit tests of the dormant HTTP path may still construct it.
+    """
 
     identity = ROUTELLM_HTTP_CLIENT_IDENTITY
 

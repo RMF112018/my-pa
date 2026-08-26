@@ -50,6 +50,7 @@ from my_pa.application.commands import CreateManagedDocumentCommand
 from my_pa.application.commitments import CommitmentManagementService
 from my_pa.application.goodnotes_gsqs_b0_workflow import (
     ADMITTED_SYNTHETIC_AUTHORIZATION_ID,
+    ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
     WORKFLOW_ROOT_ENV,
     DiskContentSession,
     WorkflowPorts,
@@ -5758,6 +5759,22 @@ def build_service(
             session_factory=lambda rasters: DiskContentSession(rasters),
             case_count=2,
         ),
+    )
+
+
+def seed_gsqs_b0_client_driven_workflow(
+    *, idempotency_key: str = "parity-gsqs-step"
+) -> dict[str, object]:
+    """Start one client-driven one-case run in the per-test workflow root."""
+    return start_workflow(
+        workflow_root=Path(os.environ[WORKFLOW_ROOT_ENV]),
+        repository_root=default_repository_root(),
+        authorization_id=ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
+        campaign_class="SYNTHETIC",
+        repetition=1,
+        idempotency_key=idempotency_key,
+        ports=WorkflowPorts(),
+        wait=True,
     )
 
 

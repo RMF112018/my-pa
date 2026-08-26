@@ -54,6 +54,7 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.GOODNOTES_WORK.value in first
     assert Capability.GOODNOTES_CONTENT.value in first
     assert Capability.GSQS_START.value in first
+    assert Capability.GSQS_STEP.value in first
     assert Capability.GSQS_STATUS.value in first
     assert Capability.CONTINUITY_PROJECTS_CREATE.value not in first
     assert Capability.SOURCES_ENROLL.value not in first
@@ -80,6 +81,17 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.TASKS_BULK_PREVIEW.value in enabled
     assert Capability.TASKS_BULK_CONFIRM.value in enabled
     assert Capability.SOURCES_ENROLL.value not in enabled
+
+
+def test_remote_read_profile_tool_budget_includes_gsqs_step(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    names = remote_tool_names(service, writes_enabled=False)
+    assert Capability.GSQS_START.value in names
+    assert Capability.GSQS_STEP.value in names
+    assert Capability.GSQS_STATUS.value in names
+    without_step = [name for name in names if name != Capability.GSQS_STEP.value]
+    assert len(names) == len(without_step) + 1
+    assert len(names) <= 52
 
 
 @pytest.mark.anyio
@@ -166,6 +178,7 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.CONTEXT_FEEDBACK,
         Capability.GOODNOTES_PROPOSE,
         Capability.GSQS_START,
+        Capability.GSQS_STEP,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,
@@ -204,6 +217,7 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.COMMITMENTS_UPDATE,
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_FEEDBACK,
+        Capability.GSQS_STEP,
         Capability.REPORTS_COMMIT,
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,

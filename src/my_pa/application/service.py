@@ -216,6 +216,7 @@ from my_pa.application.commands import (
     SearchRelationshipMemories,
     SearchTasks,
     StartGsqsB0,
+    StepGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
@@ -275,6 +276,7 @@ from my_pa.application.goodnotes_gsqs_b0_workflow import (
     gsqs_b0_wait_in_process,
     start_workflow,
     status_workflow,
+    step_workflow,
     workflow_root_from_env,
 )
 from my_pa.application.goodnotes_semantics import (
@@ -6593,6 +6595,26 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
         )
 
+    def _gsqs_step(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: StepGsqsB0,
+    ) -> _Result:
+        """Serve the next B0 case or accept ChatLLM segments. No gold or scoring."""
+        del unit_of_work
+        payload = step_workflow(
+            workflow_root=workflow_root_from_env(),
+            run_id=command.run_id,
+            submission_token=command.submission_token,
+            segments=command.segments,
+            repository_root=default_repository_root(),
+        )
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
     def _gsqs_status(
         self,
         unit_of_work: UnitOfWork,
@@ -7386,6 +7408,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.GOODNOTES_PROPOSE: ApplicationService._goodnotes_propose,
         Capability.GSQS_START: ApplicationService._gsqs_start,
         Capability.GSQS_STATUS: ApplicationService._gsqs_status,
+        Capability.GSQS_STEP: ApplicationService._gsqs_step,
         Capability.REPORTS_BEGIN_CYCLE: ApplicationService._reports_begin_cycle,
         Capability.REPORTS_COMMIT: ApplicationService._reports_commit,
         Capability.REPORTS_RECORD_RUN_STATE: ApplicationService._reports_record_run_state,

@@ -1,4 +1,9 @@
-"""Stdlib HTTPS helper for RouteLLM. POST is single-attempt. No application types."""
+"""Stdlib HTTPS helper for RouteLLM. POST is single-attempt. No application types.
+
+HISTORICAL_ONLY: production GSQS B0 is ChatLLM-client-driven. This module
+remains for unit tests of the dormant HTTP client. The production workflow
+must not instantiate it.
+"""
 
 from __future__ import annotations
 

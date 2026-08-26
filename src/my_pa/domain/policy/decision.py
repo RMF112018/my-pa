@@ -273,6 +273,7 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.GOODNOTES_CONTENT,
         Capability.GSQS_START,
         Capability.GSQS_STATUS,
+        Capability.GSQS_STEP,
         # Intelligence artifacts name a Principal partition and a cycle run, not
         # a configured source. Requiring an enrollment would make the plane
         # unusable; naming one would be naming a grant this plane cannot hold.

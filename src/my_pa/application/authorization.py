@@ -139,6 +139,7 @@ from my_pa.application.commands import (
     SearchRelationshipMemories,
     SearchTasks,
     StartGsqsB0,
+    StepGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
@@ -318,6 +319,7 @@ def _requested_scope(
             | SubmitGoodNotesProposal()
             | StartGsqsB0()
             | GetGsqsB0Status()
+            | StepGsqsB0()
             | BeginIntelligenceCycle()
             | CommitIntelligenceArtifact()
             | RecordIntelligenceRunState()

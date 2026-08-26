@@ -261,6 +261,7 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL),
         (Capability.GSQS_START, Purpose.GSQS_B0_EXECUTION),
         (Capability.GSQS_STATUS, Purpose.GSQS_B0_OBSERVATION),
+        (Capability.GSQS_STEP, Purpose.GSQS_B0_EXECUTION),
         (Capability.REPORTS_BEGIN_CYCLE, Purpose.REPORT_AUTHORING),
         (Capability.REPORTS_COMMIT, Purpose.REPORT_AUTHORING),
         (Capability.REPORTS_RECORD_RUN_STATE, Purpose.REPORT_AUTHORING),
@@ -360,9 +361,9 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # `entity_observation_ingest` and nothing else, and the other seventeen
     # writes under `entity_authoring` -- so it contributes twenty-two pairs
     # rather than the sixty-six a cross product would give.
-    # Unioned: 97 capabilities, 31 purposes, 99 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 99
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 99 == 2908
+    # Unioned: 98 capabilities, 31 purposes, 100 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 100
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 100 == 2938
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

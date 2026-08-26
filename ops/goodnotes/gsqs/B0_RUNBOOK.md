@@ -147,16 +147,22 @@ Preflight never probes RouteLLM and never opens a disclosure journal.
 
 ## Connected-MCP workflow (ChatLLM initiation)
 
-ChatLLM starts and observes a repetition through production MCP tools
-`gsqs.start` and `gsqs.status`. It does not choose cases, paths, models,
-or endpoints. It does not call RouteLLM. It does not use HTTPS
-`goodnotes.eval.*` as the B0 analyzer. Real handwriting remains
-fail-closed (`authorization_id=synthetic-b0-commissioning` only).
+ChatLLM starts, drives inference, and observes a repetition through
+production MCP tools `gsqs.start`, `gsqs.step`, and `gsqs.status`.
+ChatLLM is the MCP client. RouteLLM routes models inside ChatLLM.
+NAS never calls ChatLLM or RouteLLM and does not require an API key
+or base URL for GSQS. Direct NAS RouteLLM HTTP is not the canonical
+production path. ChatLLM does not choose campaign census, rasters,
+or trusted interchange fields. Real handwriting remains fail-closed.
 
-The server owns campaign identity, stdio analyzer lifecycle, capture
-persistence, idempotency, and status. An MCP request timeout is not a
-workflow failure: production `gsqs.start` returns after recording the
-run, and ChatLLM polls `gsqs.status`.
+The server owns campaign identity, raster materialization, capture
+persistence, and status. `gsqs.start` with
+`authorization_id=synthetic-routellm-commissioning` returns PREPARED.
+ChatLLM then calls `gsqs.step` to receive each case raster and to
+submit semantic segments. `authorization_id=synthetic-b0-commissioning`
+keeps the synthetic-fake server-local path. An MCP request timeout is
+not a workflow failure for that fake path: production `gsqs.start`
+returns after recording the run, and ChatLLM polls `gsqs.status`.
 
 ## Local prediction acquisition (stdio host)
 

@@ -73,7 +73,7 @@ MEMORY_REVISION = "f1c6b904a2d7"
 #: the order rather than about whichever revision happens to be last.
 LIFECYCLE_REVISION = "2fe4e13fb449"
 PHASE_A_REVISION = "823e23b6cc63"
-GSQS_REVISION = "c4b0a1d9e827"
+GSQS_REVISION = "d8f3a1c6e942"
 HEAD_REVISION = GSQS_REVISION
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
@@ -173,8 +173,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(WORK_REVISION).down_revision == INTELLIGENCE_REVISION
     assert script.get_revision(MEMORY_REVISION).down_revision == WORK_REVISION
     assert script.get_revision(PHASE_A_REVISION).down_revision == LIFECYCLE_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == PHASE_A_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 70
+    assert script.get_revision("c4b0a1d9e827").down_revision == PHASE_A_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == "c4b0a1d9e827"
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 71
 
 
 @pytest.mark.database

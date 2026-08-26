@@ -226,6 +226,7 @@ __all__ = [
     "SearchKnowledge",
     "SearchTasks",
     "StartGsqsB0",
+    "StepGsqsB0",
     "SubmitGoodNotesProposal",
     "SupersedeEntityAlias",
     "SupersedeEntityIdentifier",
@@ -2378,6 +2379,51 @@ GetGsqsB0Status.__doc__ = (
     "does not return rasters, gold, credentials, or prediction bodies.\n"
     "\n"
     "The principal is not here. Authority comes from authenticated context."
+)
+
+
+def _gsqs_step_segments(value: object) -> tuple[dict[str, object], ...]:
+    if not isinstance(value, (list, tuple)):
+        raise InvalidRequestError(SafeDetail.SEGMENTS)
+    segments: list[dict[str, object]] = []
+    for item in value:
+        if not isinstance(item, Mapping):
+            raise InvalidRequestError(SafeDetail.SEGMENTS)
+        segments.append(dict(item))
+    return tuple(segments)
+
+
+@dataclass(frozen=True, slots=True)
+class StepGsqsB0:
+    capability: ClassVar[Capability] = Capability.GSQS_STEP
+
+    run_id: str
+    submission_token: str | None = None
+    segments: tuple[dict[str, object], ...] | None = None
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.run_id, "b0run", SafeDetail.RUN_ID)
+        token = self.submission_token
+        raw_segments = self.segments
+        if (token is None) != (raw_segments is None):
+            raise InvalidRequestError(
+                SafeDetail.SUBMISSION_TOKEN if token is None else SafeDetail.SEGMENTS
+            )
+        if token is not None:
+            _bounded_token(token, SafeDetail.SUBMISSION_TOKEN, maximum=256)
+        if raw_segments is not None:
+            object.__setattr__(self, "segments", _gsqs_step_segments(raw_segments))
+
+
+StepGsqsB0.__doc__ = (
+    "`gsqs.step`: serve the next synthetic B0 case or accept ChatLLM semantic "
+    "segments for the outstanding lease. Call this after `gsqs.start` with only "
+    "`run_id` to receive the next raster and frozen prompt, then again with "
+    "`submission_token` and `segments` to persist one case. The server stamps "
+    "trusted identities. This does not access gold and does not score.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context. "
+    "The submission token is the lease; do not send idempotency_key."
 )
 
 
@@ -5204,6 +5250,7 @@ type Command = (
     | GetGoodNotesContent
     | StartGsqsB0
     | GetGsqsB0Status
+    | StepGsqsB0
     | BeginIntelligenceCycle
     | CommitIntelligenceArtifact
     | RecordIntelligenceRunState

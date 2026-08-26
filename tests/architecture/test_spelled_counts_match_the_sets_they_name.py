@@ -891,23 +891,23 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
     # records what deriving it would cost.
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**fifty-five**",
+        "**fifty-six**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
         "`documents.`, six `entities.` and eight `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as ninety-seven",
+        "correctly as ninety-eight",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**fifty-five**",
+        "**fifty-six**",
         "none beginning `documents.`",
         "the same default-publication count, in the line naming the test that measures it",
     ),
     (
         "README.md",
-        "fifty-five tools",
-        "process publishes fifty-five tools",
+        "fifty-six tools",
+        "process publishes fifty-six tools",
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "

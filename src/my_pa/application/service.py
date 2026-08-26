@@ -272,6 +272,7 @@ from my_pa.application.goodnotes_content import content_payload, lookup_content
 from my_pa.application.goodnotes_gsqs_b0_workflow import (
     WorkflowPorts,
     default_repository_root,
+    gsqs_b0_wait_in_process,
     start_workflow,
     status_workflow,
     workflow_root_from_env,
@@ -6585,7 +6586,7 @@ class ApplicationService:
             idempotency_key=command.idempotency_key,
             python=sys.executable,
             ports=self._gsqs_b0_ports,
-            wait=self._gsqs_b0_ports is not None,
+            wait=gsqs_b0_wait_in_process(self._gsqs_b0_ports),
         )
         return _Result(
             payload=payload,

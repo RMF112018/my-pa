@@ -117,12 +117,29 @@ ContentSessionFactory = Callable[[Mapping[str, bytes]], ContentSession]
 
 @dataclass(frozen=True, slots=True)
 class WorkflowPorts:
-    """Optional test seams. Production leaves every field defaulted."""
+    """Optional seams. Production supplies only `poster` from bootstrap."""
 
     model_client: B0ModelClient | None = None
     session_factory: ContentSessionFactory | None = None
     case_count: int | None = None
     activation: RouteLLMClientActivation | None = None
+    poster: Callable[..., object] | None = None
+
+
+def gsqs_b0_wait_in_process(ports: WorkflowPorts | None) -> bool:
+    """True only for test seams that substitute stdio or census size.
+
+    A production `WorkflowPorts(poster=...)` must not switch MCP `gsqs.start`
+    from background execution to in-process wait.
+    """
+
+    if ports is None:
+        return False
+    return (
+        ports.session_factory is not None
+        or ports.model_client is not None
+        or ports.case_count is not None
+    )
 
 
 class DiskContentSession:
@@ -340,7 +357,7 @@ def _bind_workflow_client(
         raise DeniedError()
     if ports.model_client is not None and ports.model_client.identity == MODEL_CLIENT_ROUTELLM_HTTP:
         return ports.model_client
-    return RouteLLMHttpB0ModelClient(activation=activation)
+    return RouteLLMHttpB0ModelClient(activation=activation, poster=ports.poster)
 
 
 def _execute_run(

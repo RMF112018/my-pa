@@ -106,6 +106,13 @@ def test_bind_without_activation_fails_closed() -> None:
         bind_model_client("routellm-http")
 
 
+def test_environment_alone_does_not_bind_routellm_http(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("MY_PA_ROUTELLM_API_KEY", SENTINEL_KEY)
+    monkeypatch.setenv("MY_PA_ROUTELLM_BASE_URL", ORIGIN)
+    with pytest.raises(RouteLLMClientActivationError, match=ROUTELLM_ACTIVATION_BLOCKER):
+        bind_model_client("routellm-http")
+
+
 def test_missing_base_url_and_api_key(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("MY_PA_ROUTELLM_BASE_URL", raising=False)
     monkeypatch.delenv("MY_PA_ROUTELLM_API_KEY", raising=False)

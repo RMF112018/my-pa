@@ -30,13 +30,14 @@ from my_pa.application.goodnotes_gsqs_b0_workflow import (
     DiskContentSession,
     WorkflowPorts,
     default_repository_root,
+    gsqs_b0_wait_in_process,
     start_workflow,
     status_workflow,
 )
 from my_pa.application.goodnotes_gsqs_live_b0 import repo_root
 from my_pa.infrastructure.gsqs_routellm_transport import RouteLLMHttpResult
 from tests.unit.test_gsqs_b0_routellm_activation import load_valid_activation, write_activation
-from tests.unit.test_gsqs_b0_routellm_http_client import SENTINEL_KEY, _success_payload
+from tests.unit.test_gsqs_b0_routellm_http_client import ORIGIN, SENTINEL_KEY, _success_payload
 
 FAKE_PORTS = WorkflowPorts(
     session_factory=lambda rasters: DiskContentSession(rasters),
@@ -332,3 +333,39 @@ def test_synthetic_routellm_workflow_completes_without_gold_or_score(
     )
     assert status["model_client"] == MODEL_CLIENT_ROUTELLM_HTTP
     assert status["scoring"] == "NOT_RUN"
+
+
+def test_poster_only_ports_do_not_force_in_process_wait() -> None:
+    assert gsqs_b0_wait_in_process(None) is False
+    assert gsqs_b0_wait_in_process(WorkflowPorts(poster=lambda **_k: None)) is False
+    assert gsqs_b0_wait_in_process(FAKE_PORTS) is True
+
+
+def test_routellm_workflow_uses_injected_poster_without_prebuilt_client(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    activation = load_valid_activation(tmp_path / "activation")
+    monkeypatch.setenv("MY_PA_ROUTELLM_BASE_URL", ORIGIN)
+    monkeypatch.setenv("MY_PA_ROUTELLM_API_KEY", SENTINEL_KEY)
+    calls = {"n": 0}
+
+    def poster(*, origin: str, api_key: str, body: object) -> RouteLLMHttpResult:
+        del origin, api_key, body
+        calls["n"] += 1
+        return RouteLLMHttpResult(status=200, payload=_success_payload())
+
+    result = _start(
+        tmp_path,
+        authorization_id=ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
+        ports=WorkflowPorts(
+            session_factory=lambda rasters: DiskContentSession(rasters),
+            case_count=2,
+            activation=activation,
+            poster=poster,
+        ),
+    )
+    assert result["state"] == STATE_COMPLETE
+    assert result["model_client"] == MODEL_CLIENT_ROUTELLM_HTTP
+    assert result["captured"] == 2
+    assert calls["n"] == 2
+    assert result["scoring"] == "NOT_RUN"

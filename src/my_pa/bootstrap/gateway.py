@@ -169,6 +169,7 @@ from sqlalchemy import Engine
 
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.apple_machine import AppleBridgeIdentity, AppleMachineControl
+from my_pa.application.goodnotes_gsqs_b0_workflow import WorkflowPorts
 from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
@@ -180,6 +181,7 @@ from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.user_account import TokenClaimsError
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.gsqs_routellm_transport import post_chat_completion
 from my_pa.infrastructure.managed_document_stores.filesystem.store import (
     FilesystemManagedByteStore,
 )
@@ -619,6 +621,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
                 settings.relationship_intelligence_writes_enabled
             ),
             relationship_memory_enabled=settings.relationship_memory_enabled,
+            gsqs_b0_ports=WorkflowPorts(poster=post_chat_completion),
         ),
         principal=principal,
         authenticate=entra_authenticator(settings, work_engine) if entra else None,

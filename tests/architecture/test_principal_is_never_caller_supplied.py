@@ -500,13 +500,15 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # The producer's insert (`WP-RI-B-05`). Existing reads either compare each
     # evidence link with the proposal or pass the domain record's identity to
     # `_mine`/`_bound`; the service constructed both records under the resolved
-    # authorization. The two new reads acquire the proposal subject's Entity
-    # mutation lock and then query that same partition before checking redirect
-    # and version state. They serialize a server-bound scope; they do not select
-    # a Principal from transport input.
+    # authorization. The three new reads acquire the proposal subject/context
+    # Entity mutation locks, query the subject in that same partition, and
+    # validate every context target there before checking redirect and version
+    # state. They serialize a server-bound scope; they do not select a Principal
+    # from transport input.
     "infrastructure/persistence/relationship_memory_proposals.py": (
         ("link", "principal_id"),
         ("link", "principal_id"),
+        ("proposal", "principal_id"),
         ("proposal", "principal_id"),
         ("proposal", "principal_id"),
         ("proposal", "principal_id"),
@@ -555,11 +557,14 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # reads that constrain statements to the partition or stamp rows with it.
     # The seventeenth echoes it back onto the returned `ReviewDecision`, which
     # is the same value the caller was already
-    # authenticated as and carries no partition decision of its own. The two
-    # new reads scope the optimistic subject discovery and the shared Entity
-    # mutation lock before the proposal row lock; they preserve that same
+    # authenticated as and carries no partition decision of its own. The three
+    # new reads scope the optimistic subject discovery, the shared Entity
+    # mutation lock, and the locked proposal re-read; they preserve that same
     # authenticated partition while closing the merge/review race.
     "infrastructure/persistence/relationship_memory_review.py": (
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),

@@ -167,6 +167,11 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # — composes `_mine` or `_bound`, and those two are one-line wrappers
         # over `partition_criterion` and `principal_bound_values` respectively.
         "infrastructure/persistence/relationship_memory.py",
+        # Shared validation for Relationship Memory context targets. Its sole
+        # statement reads `knowledge.entities` through `partition_criterion`
+        # before accepting an Entity target as present and writable for the
+        # already-resolved Principal.
+        "infrastructure/persistence/relationship_memory_context.py",
         # The producer's one insert (`WP-RI-B-05`). Both of its statements are
         # stamped through `principal_bound_values`, which is the stronger half of
         # this guard rather than the weaker one: it *refuses* values that already
@@ -414,6 +419,13 @@ PER_MODULE_ONLY: Final = {
         "per-module rather than statement-level only because this plane has no "
         "bespoke statement-level scan of its own yet; writing one is the work "
         "this entry represents, not a hole it is covering."
+    ),
+    "infrastructure/persistence/relationship_memory_context.py": (
+        "its sole statement reads `knowledge.entities` through "
+        "partition_criterion before treating a context target as present and "
+        "writable for the already-resolved Principal. It is per-module rather "
+        "than statement-level because this shared helper has no bespoke "
+        "statement scanner of its own."
     ),
     "infrastructure/persistence/entity_proposal_review.py": (
         "seven statements of ten — every write and every keyed read — compose "

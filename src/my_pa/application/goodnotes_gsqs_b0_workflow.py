@@ -648,7 +648,7 @@ def _serve_client_driven_case(*, run_dir: Path, payload: dict[str, object]) -> d
         raise DeniedError()
     lease = payload.get("lease")
     if isinstance(lease, dict) and lease.get("consumed") is not True:
-        member = _census_row(census, int(lease["ordinal"]))
+        member = _census_row(census, _require_int(lease, "ordinal"))
         token = secrets.token_urlsafe(32)
         payload["lease"] = _lease_record(payload, member, token)
         payload["state"] = STATE_RUNNING
@@ -690,7 +690,7 @@ def _accept_client_driven_segments(
                 segments=segments,
                 accepted=accepted,
             )
-        member = _census_row(census, int(lease["ordinal"]))
+        member = _census_row(census, _require_int(lease, "ordinal"))
         document = _stamp_interchange(payload=payload, member=member, segments=segments)
         try:
             parse_interchange(document)
@@ -708,7 +708,7 @@ def _accept_client_driven_segments(
             payload["state"] = STATE_COMPLETE
             payload["completed_at"] = payload["updated_at"]
             payload["capture_artifact"] = {
-                "filename": repetition_filename(int(payload["repetition"])),
+                "filename": repetition_filename(_require_int(payload, "repetition")),
                 "sha256": sha256(capture_path.read_bytes()).hexdigest(),
                 "schema_version": "gsqs-analyzer-capture-v1",
             }
@@ -757,7 +757,7 @@ def _replay_or_conflict(
     if not isinstance(stored, dict):
         raise DeniedError()
     census = _census_rows(payload)
-    member = _census_row(census, int(lease["ordinal"]))
+    member = _census_row(census, _require_int(lease, "ordinal"))
     candidate = _stamp_interchange(payload=payload, member=member, segments=segments)
     if _canonical_bytes(candidate) == _canonical_bytes(stored):
         status = _public_status(payload)
@@ -823,7 +823,7 @@ def _write_client_driven_capture(*, run_dir: Path, payload: Mapping[str, object]
         campaign_id=str(payload["campaign_id"]),
         corpus_version=str(payload["corpus_version"]),
         combined_identity=str(payload["combined_identity"]),
-        repetition=int(payload["repetition"]),
+        repetition=_require_int(payload, "repetition"),
         candidate_identity=str(payload["candidate_identity"]),
         model_identity=str(payload["candidate_identity"]),
         analyzer_name=str(payload["analyzer_name"]),
@@ -901,6 +901,13 @@ def _census_row(census: Sequence[Mapping[str, object]], ordinal: int) -> dict[st
         if item.get("ordinal") == ordinal:
             return dict(item)
     raise DeniedError()
+
+
+def _require_int(payload: Mapping[str, object], key: str) -> int:
+    value = payload.get(key)
+    if not isinstance(value, int) or isinstance(value, bool):
+        raise DeniedError()
+    return value
 
 
 def _canonical_bytes(document: Mapping[str, object]) -> bytes:

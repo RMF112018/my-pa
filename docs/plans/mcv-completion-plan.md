@@ -67,7 +67,7 @@ is not a defect.
 
 Two hundred and eighty-six Python modules under `src/my_pa` and three hundred and sixty-eight test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. FAST currently
-reports 12,563 passed for
+reports 12,564 passed for
 `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"`. The figures
 published here have now gone stale twice: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were

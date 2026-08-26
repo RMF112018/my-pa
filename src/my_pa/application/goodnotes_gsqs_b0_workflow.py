@@ -321,7 +321,11 @@ def status_workflow(*, workflow_root: Path, run_id: str) -> dict[str, object]:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if not isinstance(payload, dict):
             raise NotFoundError(SafeDetail.RUN_ID)
-        if payload.get("state") == STATE_RUNNING and not _owner_alive(payload.get("owner_pid")):
+        if (
+            payload.get("state") == STATE_RUNNING
+            and payload.get("workflow_driver") != DRIVER_CLIENT_DRIVEN
+            and not _owner_alive(payload.get("owner_pid"))
+        ):
             payload["state"] = STATE_INTERRUPTED
             payload["failure_class"] = "WORKER_CRASH"
             payload["updated_at"] = _now()

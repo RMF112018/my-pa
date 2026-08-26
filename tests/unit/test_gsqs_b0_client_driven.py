@@ -321,6 +321,27 @@ def test_j_status_states_cover_prepared_running_and_complete(tmp_path: Path) -> 
     assert isinstance(complete["capture_artifact"], dict)
 
 
+def test_k_server_restart_does_not_interrupt_a_client_driven_run(
+    tmp_path: Path,
+) -> None:
+    started, _calls = _start_client(tmp_path)
+    served = _step(tmp_path, str(started["run_id"]))
+    state_path = tmp_path / "workflow" / "runs" / str(started["run_id"]) / "WORKFLOW_STATE.json"
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    payload["owner_pid"] = 1_000_000_000
+    state_path.write_text(json.dumps(payload), encoding="utf-8")
+    observed = status_workflow(workflow_root=tmp_path / "workflow", run_id=str(started["run_id"]))
+    assert observed["state"] == STATE_RUNNING
+    assert observed["failure_class"] is None
+    done = _step(
+        tmp_path,
+        str(started["run_id"]),
+        submission_token=str(served["submission_token"]),
+        segments=(SEGMENT,),
+    )
+    assert done["state"] == STATE_COMPLETE
+
+
 def test_k_resume_re_serves_the_pending_case(tmp_path: Path) -> None:
     started, _calls = _start_client(tmp_path)
     first = _step(tmp_path, str(started["run_id"]))

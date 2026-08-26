@@ -70,8 +70,11 @@ from my_pa.application.goodnotes_gsqs_b0_stdio_session import (
     stdio_env,
 )
 from my_pa.application.goodnotes_gsqs_b0_synthetic_campaign import (
+    ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS,
     SYNTHETIC_CAMPAIGN_ID,
+    SYNTHETIC_CASE_COUNT,
     build_synthetic_campaign,
+    build_synthetic_campaign_for_case_ids,
 )
 from my_pa.application.goodnotes_gsqs_harness import (
     INCUMBENT_ANALYZER_NAME,
@@ -203,8 +206,13 @@ def start_workflow(
         ports=ports,
         repository_root=repository_root,
     )
+    census_token = _disclosure_census_token(
+        model_client_identity=admitted_model_client,
+        activation=activation,
+        ports=ports,
+    )
     root = _require_root(workflow_root)
-    key = _idempotency_digest(authorization_id, repetition, idempotency_key)
+    key = _idempotency_digest(authorization_id, repetition, idempotency_key, census_token)
     reuse_id: str | None = None
     run_dir: Path | None = None
     run_id = ""
@@ -214,7 +222,10 @@ def start_workflow(
             reuse_id = str(existing["run_id"])
         else:
             conflict = _existing_subject(
-                root, authorization_id=authorization_id, repetition=repetition
+                root,
+                authorization_id=authorization_id,
+                repetition=repetition,
+                census_token=census_token,
             )
             if conflict is not None:
                 raise ConflictError(SafeDetail.IDEMPOTENCY_CONFLICT)
@@ -232,6 +243,7 @@ def start_workflow(
                     "campaign_id": SYNTHETIC_CAMPAIGN_ID,
                     "repetition": repetition,
                     "idempotency_key_digest": key,
+                    "census_token": census_token,
                     "state": STATE_PREPARED,
                     "expected_cases": 0,
                     "captured": 0,
@@ -320,7 +332,13 @@ def _admit_start_authorization(
             raise DeniedError()
         try:
             activation = load_activation(Path(raw))
-        except (OSError, ValueError, json.JSONDecodeError):
+        except (
+            OSError,
+            ValueError,
+            json.JSONDecodeError,
+            RouteLLMActivationError,
+            B0ModelClientError,
+        ):
             raise DeniedError() from None
     try:
         candidate = load_route_llm_candidate(repository_root / CANDIDATE_RELATIVE)
@@ -374,8 +392,17 @@ def _execute_run(
     state = _read_state(run_dir)
     campaign_dir = run_dir / "campaign"
     output_dir = run_dir / "output"
-    case_count = ports.case_count if ports.case_count is not None else 73
-    campaign = build_synthetic_campaign(campaign_dir, case_count=case_count)
+    if model_client_identity == MODEL_CLIENT_ROUTELLM_HTTP:
+        if activation is None:
+            raise DeniedError()
+        if activation.eligible_case_ids != ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS:
+            raise DeniedError()
+        campaign = build_synthetic_campaign_for_case_ids(
+            campaign_dir, ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS
+        )
+    else:
+        case_count = ports.case_count if ports.case_count is not None else SYNTHETIC_CASE_COUNT
+        campaign = build_synthetic_campaign(campaign_dir, case_count=case_count)
     rasters = {
         member.case_id: (campaign.raster_root / f"{member.case_id}.png").read_bytes()
         for member in campaign.census.members
@@ -560,8 +587,24 @@ def _require_root(root: Path) -> Path:
     return root.resolve()
 
 
-def _idempotency_digest(authorization_id: str, repetition: int, idempotency_key: str) -> str:
-    material = f"{authorization_id}\n{repetition}\n{idempotency_key}"
+def _disclosure_census_token(
+    *,
+    model_client_identity: str,
+    activation: RouteLLMClientActivation | None,
+    ports: WorkflowPorts,
+) -> str:
+    if model_client_identity == MODEL_CLIENT_ROUTELLM_HTTP:
+        if activation is None:
+            raise DeniedError()
+        return "routellm-http:" + ",".join(activation.eligible_case_ids)
+    count = ports.case_count if ports.case_count is not None else SYNTHETIC_CASE_COUNT
+    return f"synthetic-fake:{count}"
+
+
+def _idempotency_digest(
+    authorization_id: str, repetition: int, idempotency_key: str, census_token: str
+) -> str:
+    material = f"{authorization_id}\n{repetition}\n{idempotency_key}\n{census_token}"
     return sha256(material.encode()).hexdigest()
 
 
@@ -588,7 +631,9 @@ def _read_index(root: Path) -> dict[str, object]:
     return payload if isinstance(payload, dict) else {}
 
 
-def _existing_subject(root: Path, *, authorization_id: str, repetition: int) -> str | None:
+def _existing_subject(
+    root: Path, *, authorization_id: str, repetition: int, census_token: str
+) -> str | None:
     runs = root / "runs"
     if not runs.is_dir():
         return None
@@ -604,6 +649,8 @@ def _existing_subject(root: Path, *, authorization_id: str, repetition: int) -> 
         if payload.get("authorization_id") != authorization_id:
             continue
         if payload.get("repetition") != repetition:
+            continue
+        if payload.get("census_token") != census_token:
             continue
         run_id = payload.get("run_id")
         return str(run_id) if isinstance(run_id, str) else "existing"

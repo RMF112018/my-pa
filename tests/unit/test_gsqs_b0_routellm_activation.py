@@ -53,7 +53,10 @@ def activation_payload(**overrides: object) -> dict[str, object]:
         "external_synthetic_commissioning_status": "NOT_RUN",
         "fallback_policy": "none",
         "https_required": True,
-        "invalidation_rule": "any identity or origin change invalidates this activation",
+        "invalidation_rule": (
+            "any identity, origin, or eligible_case_ids change invalidates this activation"
+        ),
+        "eligible_case_ids": ["synth-b0-001"],
         "model_client": MODEL_CLIENT_ROUTELLM_HTTP,
         "model_identity": identity,
         "operation": ACTIVATION_OPERATION,
@@ -187,3 +190,42 @@ def test_valid_activation_is_admitted(tmp_path: Path) -> None:
     assert activation.route_llm_endpoint_origin == ORIGIN
     assert activation.real_handwriting_admitted is False
     assert activation.https_required is True
+    assert activation.eligible_case_ids == ("synth-b0-001",)
+
+
+def test_missing_eligible_case_ids_are_rejected(tmp_path: Path) -> None:
+    payload = activation_payload()
+    del payload["eligible_case_ids"]
+    path = tmp_path / "activation.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(RouteLLMActivationError, match="eligible_case_ids"):
+        load_activation(path)
+    empty = tmp_path / "empty.json"
+    empty.write_text(json.dumps(activation_payload(eligible_case_ids=[])), encoding="utf-8")
+    with pytest.raises(RouteLLMActivationError, match="eligible_case_ids"):
+        load_activation(empty)
+    wildcard_all = tmp_path / "all.json"
+    wildcard_all.write_text(
+        json.dumps(activation_payload(eligible_case_ids="all")), encoding="utf-8"
+    )
+    with pytest.raises(RouteLLMActivationError, match="eligible_case_ids"):
+        load_activation(wildcard_all)
+
+
+def test_non_admitted_eligible_case_sets_are_rejected(tmp_path: Path) -> None:
+    two = load_valid_activation(
+        tmp_path / "two", eligible_case_ids=["synth-b0-001", "synth-b0-002"]
+    )
+    with pytest.raises(RouteLLMActivationError, match="eligible case set") as raised:
+        _admit(two)
+    assert raised.value.error_class == "ELIGIBLE_CASE_SET"
+    seventy_three = [f"synth-b0-{ordinal:03d}" for ordinal in range(1, 74)]
+    all_cases = load_valid_activation(tmp_path / "all", eligible_case_ids=seventy_three)
+    with pytest.raises(RouteLLMActivationError, match="eligible case set"):
+        _admit(all_cases)
+    with pytest.raises(RouteLLMActivationError, match="not synthetic"):
+        load_valid_activation(tmp_path / "unknown", eligible_case_ids=["synth-b0-9999"])
+    with pytest.raises(RouteLLMActivationError, match="not synthetic"):
+        load_valid_activation(tmp_path / "wildcard", eligible_case_ids=["*"])
+    with pytest.raises(RouteLLMActivationError, match="not synthetic"):
+        load_valid_activation(tmp_path / "real", eligible_case_ids=["gsqs-hw-001"])

@@ -14,7 +14,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import Connection, make_url
 from sqlalchemy.exc import IntegrityError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
@@ -86,30 +86,41 @@ def _proposal_values(
     }
 
 
+PHASE_B_HEAD_OBJECTS: Final = {
+    "column:relationship_memory_proposals.context_links",
+    "column:relationship_memory_review_decisions.corrected_payload",
+    "constraint:a_memory_corrected_payload_matches_its_disposition",
+}
+
+
+def _phase_b_head_objects(connection: Connection) -> set[str]:
+    """The two typed JSON columns and their dependent IFF constraint."""
+    return set(
+        connection.execute(
+            text(
+                "SELECT 'column:' || table_name || '.' || column_name "
+                "FROM information_schema.columns "
+                "WHERE table_schema = :schema AND ("
+                "(table_name = 'relationship_memory_proposals' "
+                " AND column_name = 'context_links') OR "
+                "(table_name = 'relationship_memory_review_decisions' "
+                " AND column_name = 'corrected_payload')) "
+                "UNION ALL "
+                "SELECT 'constraint:' || conname FROM pg_constraint "
+                "WHERE conrelid = 'knowledge.relationship_memory_review_decisions'::regclass "
+                "AND conname = 'a_memory_corrected_payload_matches_its_disposition'"
+            ),
+            {"schema": SCHEMA},
+        ).scalars()
+    )
+
+
 def test_upgrade_backfills_context_and_typed_memory_correction_payload(
     predecessor: Engine,
 ) -> None:
     """A current predecessor reaches the new proposal/review shape without loss."""
     with predecessor.begin() as connection:
-        # `f1c6b904a2d7` historically copied the live table declarations. A
-        # database deployed when that revision was current has neither Phase-B
-        # column, while asking today's code to construct the same revision sees
-        # both through current `tables.py`. Reproduce the legally deployed
-        # physical predecessor rather than testing a rewritten history.
-        connection.execute(
-            text(
-                f"ALTER TABLE {SCHEMA}.relationship_memory_review_decisions "
-                "DROP CONSTRAINT IF EXISTS "
-                "a_memory_corrected_payload_matches_its_disposition, "
-                "DROP COLUMN IF EXISTS corrected_payload"
-            )
-        )
-        connection.execute(
-            text(
-                f"ALTER TABLE {SCHEMA}.relationship_memory_proposals "
-                "DROP COLUMN IF EXISTS context_links"
-            )
-        )
+        assert _phase_b_head_objects(connection) == set()
         SqlEntityRepository(connection).create(
             PRINCIPAL,
             Entity(
@@ -169,6 +180,7 @@ def test_upgrade_backfills_context_and_typed_memory_correction_payload(
     command.upgrade(_config(), "head")
 
     with predecessor.begin() as connection:
+        assert _phase_b_head_objects(connection) == PHASE_B_HEAD_OBJECTS
         proposal_context = connection.execute(
             text(
                 f"SELECT context_links FROM {SCHEMA}.relationship_memory_proposals "
@@ -230,21 +242,7 @@ def test_upgrade_backfills_context_and_typed_memory_correction_payload(
 
     command.downgrade(_config(), "b64e29a0f7c1")
     with predecessor.connect() as connection:
-        remaining = set(
-            connection.execute(
-                text(
-                    "SELECT table_name || '.' || column_name "
-                    "FROM information_schema.columns "
-                    "WHERE table_schema = :schema AND ("
-                    "(table_name = 'relationship_memory_proposals' "
-                    " AND column_name = 'context_links') OR "
-                    "(table_name = 'relationship_memory_review_decisions' "
-                    " AND column_name = 'corrected_payload'))"
-                ),
-                {"schema": SCHEMA},
-            ).scalars()
-        )
-    assert remaining == set()
+        assert _phase_b_head_objects(connection) == set()
 
 
 def test_upgrade_reconciles_version_drift_duplicates_without_deleting_history(

@@ -220,6 +220,7 @@ def _freeze_out_phase_b_memory_columns(copy: Table) -> None:
             "dedupe_sha256",
             "superseded_at",
             "superseded_by_memory_proposal_id",
+            "context_links",
         ):
             copy._columns.remove(copy.c[name])
     elif copy.name == "relationship_memory_proposal_evidence":
@@ -240,12 +241,14 @@ def _freeze_out_phase_b_memory_columns(copy: Table) -> None:
             for candidate in copy.constraints
             if candidate.name
             in {
+                "a_memory_corrected_payload_matches_its_disposition",
                 "a_memory_review_reason_explains_a_departure",
                 "a_memory_escalation_or_invalidation_states_why",
                 "a_memory_review_reason_is_bounded",
             }
         ]:
             copy.constraints.discard(constraint)
+        copy._columns.remove(copy.c.corrected_payload)
         copy._columns.remove(copy.c.reason)
 
 

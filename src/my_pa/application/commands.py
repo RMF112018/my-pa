@@ -1174,6 +1174,7 @@ class ListReviewCases:
     subject_kind: ReviewSubjectKind | None = None
     state: ProposalState | None = None
     entity_id: str | None = None
+    after: str | None = None
 
     def __post_init__(self) -> None:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
@@ -1183,6 +1184,8 @@ class ListReviewCases:
             raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE)
         if self.entity_id is not None:
             _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        if self.after is not None and (not self.after or len(self.after) > 512):
+            raise InvalidRequestError(SafeDetail.CURSOR)
 
 
 @dataclass(frozen=True, slots=True)

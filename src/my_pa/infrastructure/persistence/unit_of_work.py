@@ -553,6 +553,8 @@ class _Reviews(ReviewRepository):
         subject_kind: ReviewSubjectKind | None = None,
         state: ProposalState | None = None,
         entity_id: str | None = None,
+        after_opened_at: datetime | None = None,
+        after_review_case_id: str | None = None,
     ) -> tuple[_ReviewCaseVariant, ...]:
         """One page merged from the planes that open cases on this surface.
 
@@ -574,16 +576,14 @@ class _Reviews(ReviewRepository):
         is set. That is the filter meaning what it says rather than two planes
         returning everything and a merge hiding it.
 
-        **`state` is applied in SQL for the Entity plane and in Python for the
-        other three, and the asymmetry is stated rather than hidden.** It is a
-        stored column on `entity_proposals`; on the other three a case's state is
-        derived from its decision chain, and `goodnotes.py` is not this work
-        package's module to change. The consequence is real and bounded: a
-        state-filtered page can come back short of `limit` while more matching
-        cases exist further down those three planes' own pages. `WP-RI-B-05`
-        records it for whoever owns those readers next rather than pretending the
-        filter is uniform.
+        Every plane applies `state` and the decoded keyset before its own LIMIT.
+        The merge can therefore take the oldest `limit` globally without losing
+        a later match behind an earlier non-match or repeating the tie at a page
+        boundary.
         """
+
+        if (after_opened_at is None) != (after_review_case_id is None):
+            raise ValueError("a review cursor position is complete or absent")
 
         def statement() -> tuple[_ReviewCaseVariant, ...]:
             asked = self._asked(subject_kind)
@@ -591,20 +591,37 @@ class _Reviews(ReviewRepository):
             if entity_id is None and ReviewSubjectKind.CAPTURE_PROPOSAL in asked:
                 found.extend(
                     review_cases(
-                        self._connection, limit=limit, context=capture_context(principal_id)
+                        self._connection,
+                        limit=limit,
+                        context=capture_context(principal_id),
+                        state=state,
+                        after_opened_at=after_opened_at,
+                        after_review_case_id=after_review_case_id,
                     )
                 )
             if entity_id is None and ReviewSubjectKind.GOODNOTES_REGION in asked:
                 found.extend(
-                    goodnotes_review_cases(self._connection, principal_id=principal_id, limit=limit)
+                    goodnotes_review_cases(
+                        self._connection,
+                        principal_id=principal_id,
+                        limit=limit,
+                        state=state,
+                        after_opened_at=after_opened_at,
+                        after_review_case_id=after_review_case_id,
+                    )
                 )
             if ReviewSubjectKind.RELATIONSHIP_MEMORY in asked:
                 found.extend(
                     case
                     for case in relationship_memory_review_cases(
-                        self._connection, principal_id=principal_id, limit=limit
+                        self._connection,
+                        principal_id=principal_id,
+                        limit=limit,
+                        state=state,
+                        entity_id=entity_id,
+                        after_opened_at=after_opened_at,
+                        after_review_case_id=after_review_case_id,
                     )
-                    if entity_id is None or case.subject_entity_id == entity_id
                 )
             if ReviewSubjectKind.ENTITY_PROPOSAL in asked:
                 found.extend(
@@ -614,10 +631,12 @@ class _Reviews(ReviewRepository):
                         limit=limit,
                         state=state,
                         entity_id=entity_id,
+                        after_opened_at=after_opened_at,
+                        after_review_case_id=after_review_case_id,
                     )
                 )
             combined: list[_ReviewCaseVariant] = sorted(
-                (case for case in found if state is None or case.proposal_state is state),
+                found,
                 key=lambda case: (case.opened_at, case.review_case_id),
             )
             return tuple(combined[:limit])

@@ -2910,6 +2910,8 @@ class ReviewRepository(ABC):
         subject_kind: ReviewSubjectKind | None = None,
         state: ProposalState | None = None,
         entity_id: str | None = None,
+        after_opened_at: datetime | None = None,
+        after_review_case_id: str | None = None,
     ) -> tuple[
         ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase | EntityProposalReviewCase,
         ...,
@@ -2934,6 +2936,11 @@ class ReviewRepository(ABC):
         those and a plane that cannot answer it contributes nothing rather than
         contributing everything. Every filter is applied where the rows are, so a
         narrowed page is still a full page of `limit` and not the remains of one.
+
+        `after_opened_at` and `after_review_case_id` are one decoded keyset
+        position and therefore either both present or both absent. The public
+        opaque cursor never crosses this port; authority and filter binding are
+        checked in the application layer before the position reaches storage.
         """
 
     @abstractmethod

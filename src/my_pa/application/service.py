@@ -104,6 +104,7 @@ publishes and what every clamp below reads. There is no second copy to drift
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 from collections.abc import Callable, Iterator, Mapping
@@ -365,6 +366,7 @@ from my_pa.domain.capture.errors import (
     CaptureError,
     EmptyCaptureError,
 )
+from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.reveal import EvidenceState
 from my_pa.domain.capture.review import (
     EntityProposalReviewCase,
@@ -380,7 +382,7 @@ from my_pa.domain.capture.submission import CaptureKind, CaptureTransport
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
-from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.common.time import format_rfc3339, utc_now
 from my_pa.domain.documents.managed import (
@@ -680,6 +682,87 @@ def _memory_view(detail: MemoryDetail, *, include_statement: bool) -> dict[str, 
     if detail.canonical_entity_id is not None:
         view["canonical_subject_entity_id"] = detail.canonical_entity_id
     return view
+
+
+_REVIEW_CURSOR_ORDER: Final = "opened_at_asc_review_case_id_asc_v1"
+_MAX_REVIEW_CURSOR_CHARACTERS: Final = 512
+
+
+def _review_cursor_binding(
+    *,
+    principal_id: str,
+    page_size: int,
+    subject_kind: ReviewSubjectKind | None,
+    state: ProposalState | None,
+    entity_id: str | None,
+) -> str:
+    """Bind a continuation to every input that gives its position meaning."""
+    canonical = json.dumps(
+        {
+            "entity_id": entity_id,
+            "order": _REVIEW_CURSOR_ORDER,
+            "page_size": page_size,
+            "principal_id": principal_id,
+            "state": None if state is None else state.value,
+            "subject_kind": None if subject_kind is None else subject_kind.value,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _encode_review_cursor(*, binding: str, opened_at: datetime, review_case_id: str) -> str:
+    """Encode one text-free keyset position using the repository cursor shape."""
+    payload = json.dumps(
+        {
+            "b": binding,
+            "o": format_rfc3339(opened_at),
+            "r": review_case_id,
+            "v": 1,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return base64.urlsafe_b64encode(payload.encode("ascii")).decode("ascii").rstrip("=")
+
+
+def _decode_review_cursor(token: str, *, expected_binding: str) -> tuple[datetime, str] | None:
+    """Decode one bound position; every malformed or mismatched token is identical."""
+    if not token or len(token) > _MAX_REVIEW_CURSOR_CHARACTERS:
+        return None
+    padded = token + "=" * (-len(token) % 4)
+    try:
+        decoded = json.loads(
+            base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+        )
+    except (binascii.Error, UnicodeEncodeError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(decoded, dict) or set(decoded) != {"b", "o", "r", "v"}:
+        return None
+    binding, opened_value, review_case_id, version = (
+        decoded["b"],
+        decoded["o"],
+        decoded["r"],
+        decoded["v"],
+    )
+    if (
+        binding != expected_binding
+        or not isinstance(opened_value, str)
+        or not isinstance(review_case_id, str)
+        or version != 1
+    ):
+        return None
+    try:
+        opened_at = datetime.fromisoformat(opened_value)
+        if opened_at.tzinfo is None:
+            return None
+        validate_identifier(review_case_id, IdKind.REVIEW_CASE)
+    except (InvalidIdentifierError, ValueError, OverflowError):
+        return None
+    return opened_at.astimezone(UTC), review_case_id
 
 
 def _review_case_payload(
@@ -3398,25 +3481,50 @@ class ApplicationService:
         have made two planes that cannot answer it read everything first.
         """
         page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
+        binding = _review_cursor_binding(
+            principal_id=principal_id,
+            page_size=page_size,
+            subject_kind=command.subject_kind,
+            state=command.state,
+            entity_id=command.entity_id,
+        )
+        position: tuple[datetime, str] | None = None
+        if command.after is not None:
+            position = _decode_review_cursor(command.after, expected_binding=binding)
+            if position is None:
+                raise ConflictError(SafeDetail.CURSOR)
         with _translated():
             found = unit_of_work.reviews.cases(
                 limit=page_size + 1,
-                principal_id=authorization.principal.principal_id,
+                principal_id=principal_id,
                 subject_kind=command.subject_kind,
                 state=command.state,
                 entity_id=command.entity_id,
+                after_opened_at=None if position is None else position[0],
+                after_review_case_id=None if position is None else position[1],
             )
         truncated = len(found) > page_size
+        page = found[:page_size]
+        next_cursor = (
+            _encode_review_cursor(
+                binding=binding,
+                opened_at=page[-1].opened_at,
+                review_case_id=page[-1].review_case_id,
+            )
+            if truncated and page
+            else None
+        )
         return _Result(
-            payload={"review_cases": [_review_case_payload(case) for case in found[:page_size]]},
+            payload={"review_cases": [_review_case_payload(case) for case in page]},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=("review_policy",),
                 truncation=Truncation(
                     is_truncated=truncated,
                     reason="page_size_reached" if truncated else None,
+                    next_cursor=next_cursor,
                 ),
-                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
             ),
         )
 

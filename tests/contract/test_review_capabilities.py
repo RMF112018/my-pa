@@ -2,12 +2,16 @@
 
 from __future__ import annotations
 
-from tests.conftest import Scene, build_service, metadata_for, staged_review_case
+from dataclasses import replace
+
+import pytest
+from tests.conftest import Scene, build_service, metadata_for, operator, staged_review_case
 
 from my_pa.application.commands import DecideReviewCase, ListReviewCases
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
-from my_pa.domain.capture.review import Disposition
+from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import Disposition, ReviewSubjectKind
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
@@ -53,6 +57,99 @@ def test_review_list_returns_case_metadata_without_capture_content(scene: Scene)
     rendered = answer.to_canonical_json()
     assert "a synthetic note" not in rendered
     assert "normalized_value" not in rendered
+
+
+def _staged_ordered_review_cases(scene: Scene, count: int = 5) -> list[str]:
+    base = staged_review_case(scene)
+    cases = [base]
+    for _ in range(count - 1):
+        cases.append(
+            replace(
+                base,
+                review_case_id=issue_identifier(IdKind.REVIEW_CASE),
+                proposal_id=issue_identifier(IdKind.PROPOSAL),
+            )
+        )
+    scene.world.review_cases[:] = reversed(cases)
+    return sorted(case.review_case_id for case in cases)
+
+
+def test_review_list_walks_stable_ties_without_gap_duplicate_or_false_limitation(
+    scene: Scene,
+) -> None:
+    expected = _staged_ordered_review_cases(scene)
+    seen: list[str] = []
+    after: str | None = None
+    while True:
+        answer = _invoke(
+            scene,
+            Capability.REVIEW_LIST,
+            ListReviewCases(page_size=2, after=after),
+        )
+        assert answer.error is None
+        assert answer.result is not None
+        seen.extend(str(case["review_case_id"]) for case in answer.result["review_cases"])
+        assert answer.disclosure is not None
+        assert "listing_has_no_continuation_cursor" not in answer.disclosure.limitations
+        after = answer.disclosure.truncation.next_cursor
+        if after is None:
+            assert answer.disclosure.truncation.is_truncated is False
+            break
+        assert answer.disclosure.truncation.is_truncated is True
+    assert seen == expected
+
+
+@pytest.mark.parametrize(
+    "changed",
+    [
+        ListReviewCases(page_size=3),
+        ListReviewCases(page_size=2, state=ProposalState.NEEDS_REVIEW),
+        ListReviewCases(page_size=2, subject_kind=ReviewSubjectKind.CAPTURE_PROPOSAL),
+        ListReviewCases(page_size=2, entity_id="ent_aaaa0001aaaa0001"),
+    ],
+)
+def test_review_cursor_is_bound_to_page_and_filters(scene: Scene, changed: ListReviewCases) -> None:
+    _staged_ordered_review_cases(scene)
+    first = _invoke(scene, Capability.REVIEW_LIST, ListReviewCases(page_size=2))
+    assert first.disclosure is not None
+    after = first.disclosure.truncation.next_cursor
+    assert after is not None
+
+    refused = _invoke(scene, Capability.REVIEW_LIST, replace(changed, after=after))
+
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.CONFLICT
+    assert refused.error.safe_details == ("cursor",)
+
+
+def test_review_cursor_is_bound_to_the_authenticated_principal(scene: Scene) -> None:
+    _staged_ordered_review_cases(scene)
+    first = _invoke(scene, Capability.REVIEW_LIST, ListReviewCases(page_size=2))
+    assert first.disclosure is not None
+    after = first.disclosure.truncation.next_cursor
+    assert after is not None
+    other = operator("prn_bbbb0002bbbb0002bbbb0002")
+
+    refused = build_service(scene.world, scene.providers).invoke(
+        metadata_for(Capability.REVIEW_LIST, Purpose.CAPTURE_REVIEW, other),
+        ListReviewCases(page_size=2, after=after),
+        principal=other,
+    )
+
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.CONFLICT
+    assert refused.error.safe_details == ("cursor",)
+
+
+def test_review_list_refuses_an_unreadable_cursor(scene: Scene) -> None:
+    refused = _invoke(
+        scene,
+        Capability.REVIEW_LIST,
+        ListReviewCases(after="not-a-server-review-cursor"),
+    )
+    assert refused.error is not None
+    assert refused.error.code is ErrorCode.CONFLICT
+    assert refused.error.safe_details == ("cursor",)
 
 
 def test_review_decision_appends_and_a_stale_expected_version_conflicts(scene: Scene) -> None:

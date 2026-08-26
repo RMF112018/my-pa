@@ -40,6 +40,7 @@ from sqlalchemy.engine import make_url
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import Disposition, ReviewNotFoundError
 from my_pa.domain.capture.version import digest_of
 from my_pa.domain.common.identifiers import IdKind
@@ -220,6 +221,58 @@ def test_a_review_case_lists_only_under_the_capture_owners_partition(engine: Eng
     assert {case.review_case_id for case in theirs} == {case_b}
     assert all(case.principal_id == PRINCIPAL_A for case in mine)
     assert all(case.principal_id == PRINCIPAL_B for case in theirs)
+
+
+def test_capture_state_filter_reaches_a_match_beyond_the_unfiltered_plane_limit(
+    engine: Engine,
+) -> None:
+    """The state predicate belongs before LIMIT, not on the returned Python page."""
+    with engine.begin() as connection:
+        for ordinal in range(1, 4):
+            proposal = _seed_consequential_proposal(connection, PRINCIPAL_A, ordinal)
+            assert open_review_case(connection, proposal) is not None
+        ordered = review_cases(connection, limit=10, context=capture_context(PRINCIPAL_A))
+        for case in ordered[:2]:
+            decide_review(
+                connection,
+                _decision(case.review_case_id, PRINCIPAL_A, Disposition.REJECT),
+            )
+
+        [found] = review_cases(
+            connection,
+            limit=1,
+            context=capture_context(PRINCIPAL_A),
+            state=ProposalState.NEEDS_REVIEW,
+        )
+
+    assert found.review_case_id == ordered[2].review_case_id
+
+
+def test_capture_review_keyset_reaches_the_next_same_timestamp_case_without_repeating(
+    engine: Engine,
+) -> None:
+    """The SQL keyset, not a fake merge, advances across an opened-at tie."""
+    with engine.begin() as connection:
+        for ordinal in range(1, 4):
+            proposal = _seed_consequential_proposal(connection, PRINCIPAL_A, ordinal)
+            assert open_review_case(connection, proposal) is not None
+
+        expected = review_cases(connection, limit=3, context=capture_context(PRINCIPAL_A))
+        first = review_cases(connection, limit=2, context=capture_context(PRINCIPAL_A))
+        second = review_cases(
+            connection,
+            limit=2,
+            context=capture_context(PRINCIPAL_A),
+            after_opened_at=first[-1].opened_at,
+            after_review_case_id=first[-1].review_case_id,
+        )
+
+    assert len({case.opened_at for case in expected}) == 1
+    first_ids = [case.review_case_id for case in first]
+    second_ids = [case.review_case_id for case in second]
+    assert set(first_ids).isdisjoint(second_ids)
+    assert first_ids + second_ids == [case.review_case_id for case in expected]
+    assert len(second_ids) == 1
 
 
 def test_a_foreign_decision_is_refused_and_writes_nothing(engine: Engine) -> None:

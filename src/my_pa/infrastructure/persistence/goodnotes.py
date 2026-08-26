@@ -4,15 +4,19 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
+from datetime import datetime
 from decimal import Decimal
 
 from sqlalchemy import (
     ColumnElement,
     Table,
+    and_,
     any_,
+    case,
     func,
     insert,
     literal,
+    or_,
     select,
     text,
     update,
@@ -1875,10 +1879,18 @@ def _run_note_change(row: object) -> GoodNotesRunNoteChange:
 
 
 def goodnotes_review_cases(
-    connection: Connection, *, principal_id: str, limit: int
+    connection: Connection,
+    *,
+    principal_id: str,
+    limit: int,
+    state: ProposalState | None = None,
+    after_opened_at: datetime | None = None,
+    after_review_case_id: str | None = None,
 ) -> tuple[GoodNotesReviewCase, ...]:
     if limit < 1:
         raise ValueError("a review page contains at least one case")
+    if (after_opened_at is None) != (after_review_case_id is None):
+        raise ValueError("a review cursor position is complete or absent")
     latest_sequence = (
         select(func.max(goodnotes_review_decisions.c.sequence))
         .where(
@@ -1899,6 +1911,34 @@ def goodnotes_review_cases(
         .correlate(goodnotes_region_proposals)
         .scalar_subquery()
     )
+    derived_state = case(
+        (latest_disposition.is_(None), ProposalState.NEEDS_REVIEW.value),
+        (latest_disposition == Disposition.ACCEPT.value, ProposalState.ACCEPTED.value),
+        (
+            latest_disposition == Disposition.CORRECT_AND_ACCEPT.value,
+            ProposalState.CORRECTED_ACCEPTED.value,
+        ),
+        (latest_disposition == Disposition.REJECT.value, ProposalState.REJECTED.value),
+        (latest_disposition == Disposition.DEFER.value, ProposalState.DEFERRED.value),
+        (
+            latest_disposition == Disposition.MARK_UNRESOLVED.value,
+            ProposalState.UNRESOLVED.value,
+        ),
+        else_=ProposalState.NEEDS_REVIEW.value,
+    )
+    criteria = [_mine(goodnotes_region_proposals, principal_id)]
+    if state is not None:
+        criteria.append(derived_state == state.value)
+    if after_opened_at is not None and after_review_case_id is not None:
+        criteria.append(
+            or_(
+                goodnotes_region_proposals.c.opened_at > after_opened_at,
+                and_(
+                    goodnotes_region_proposals.c.opened_at == after_opened_at,
+                    goodnotes_region_proposals.c.review_case_id > after_review_case_id,
+                ),
+            )
+        )
     rows = connection.execute(
         select(
             goodnotes_region_proposals.c.review_case_id,
@@ -1911,7 +1951,7 @@ def goodnotes_review_cases(
             func.coalesce(latest_sequence, 0).label("review_version"),
             latest_disposition.label("latest_disposition"),
         )
-        .where(_mine(goodnotes_region_proposals, principal_id))
+        .where(*criteria)
         .order_by(
             goodnotes_region_proposals.c.opened_at,
             goodnotes_region_proposals.c.review_case_id,

@@ -535,6 +535,33 @@ def test_a_review_case_carries_no_statement_text_for_a_reviewer_to_leak(
     assert "dispute" not in repr(cases[0])
 
 
+def test_memory_state_filter_reaches_a_match_beyond_the_unfiltered_plane_limit(
+    two_principals: Engine,
+) -> None:
+    """Derived decision state is constrained in SQL before the plane LIMIT."""
+    with two_principals.begin() as connection:
+        for ordinal in range(3):
+            _open_proposal(
+                connection,
+                statement=f"Synthetic bounded continuation candidate {ordinal}.",
+            )
+        ordered = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+        for case in ordered[:2]:
+            decide_relationship_memory_review(
+                connection,
+                _decision(case.review_case_id, Disposition.REJECT),
+            )
+
+        [found] = relationship_memory_review_cases(
+            connection,
+            principal_id=PRINCIPAL_A,
+            limit=1,
+            state=ProposalState.NEEDS_REVIEW,
+        )
+
+    assert found.review_case_id == ordered[2].review_case_id
+
+
 # --- acceptance promotes ------------------------------------------------------
 
 

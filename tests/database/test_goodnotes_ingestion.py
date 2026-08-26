@@ -6,19 +6,20 @@ import io
 import os
 from collections.abc import Iterator
 from dataclasses import replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine, insert, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.sql import Executable
 
 from my_pa.application.goodnotes import GoodNotesService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import ReviewDecisionRequest
+from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import Disposition, ReviewNotFoundError
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
@@ -38,6 +39,10 @@ from my_pa.infrastructure.persistence.goodnotes import (
 )
 from my_pa.infrastructure.persistence.registry import observe_object, register_source
 from my_pa.infrastructure.persistence.search import search_extractions
+from my_pa.infrastructure.persistence.tables import (
+    goodnotes_region_proposals,
+    goodnotes_review_decisions,
+)
 
 pytestmark = pytest.mark.database
 ROOT = Path(__file__).resolve().parents[2]
@@ -170,6 +175,49 @@ def test_two_principals_reconcile_review_correct_and_search_without_an_oracle(
                     decided_at=WHEN,
                 ),
             )
+
+        for ordinal in range(2):
+            region_id = f"gregion_b10_{ordinal:018d}"
+            review_case_id = issue_identifier(IdKind.REVIEW_CASE)
+            connection.execute(
+                insert(goodnotes_region_proposals).values(
+                    principal_id=A,
+                    region_id=region_id,
+                    proposal_id=issue_identifier(IdKind.PROPOSAL),
+                    review_case_id=review_case_id,
+                    page_version_id=case_a.page_version_id,
+                    ordinal=100 + ordinal,
+                    box={"x": 0, "y": 0, "width": 1, "height": 1},
+                    transcription=f"Synthetic prior candidate {ordinal}",
+                    confidence=0.5,
+                    extractor="synthetic-review-filter",
+                    extractor_version="1",
+                    opened_at=WHEN - timedelta(minutes=2 - ordinal),
+                )
+            )
+            connection.execute(
+                insert(goodnotes_review_decisions).values(
+                    principal_id=A,
+                    decision_id=issue_identifier(IdKind.REVIEW_DECISION),
+                    region_id=region_id,
+                    review_case_id=review_case_id,
+                    sequence=1,
+                    disposition=Disposition.REJECT.value,
+                    corrected_text=None,
+                    knowledge_id=None,
+                    correlation_id=issue_identifier(IdKind.CORRELATION),
+                    audit_id=issue_identifier(IdKind.AUDIT),
+                    decided_at=WHEN,
+                )
+            )
+
+        [open_case] = goodnotes_review_cases(
+            connection,
+            principal_id=A,
+            limit=1,
+            state=ProposalState.NEEDS_REVIEW,
+        )
+        assert open_case.review_case_id == case_a.review_case_id
 
     with engine.begin() as connection:
         decision = decide_goodnotes_review(

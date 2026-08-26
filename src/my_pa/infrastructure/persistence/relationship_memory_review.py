@@ -77,9 +77,10 @@ the same `_mine`/`_bound` one-line wrappers `relationship_memory.py` uses.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any
 
-from sqlalchemy import func, insert, select, update
+from sqlalchemy import and_, case, func, insert, or_, select, true, update
 from sqlalchemy.engine import Connection
 
 from my_pa.contracts.ports import ReviewDecisionRequest
@@ -206,7 +207,14 @@ def _memory_review_state(disposition: Disposition | None) -> ProposalState:
 
 
 def relationship_memory_review_cases(
-    connection: Connection, *, principal_id: str, limit: int
+    connection: Connection,
+    *,
+    principal_id: str,
+    limit: int,
+    state: ProposalState | None = None,
+    entity_id: str | None = None,
+    after_opened_at: datetime | None = None,
+    after_review_case_id: str | None = None,
 ) -> tuple[RelationshipMemoryReviewCase, ...]:
     """One bounded page of this Principal's memory proposals, oldest first.
 
@@ -221,6 +229,8 @@ def relationship_memory_review_cases(
     """
     if limit < 1:
         raise ValueError("a review page contains at least one case")
+    if (after_opened_at is None) != (after_review_case_id is None):
+        raise ValueError("a review cursor position is complete or absent")
     latest_sequence = (
         select(func.max(relationship_memory_review_decisions.c.sequence))
         .where(
@@ -251,6 +261,14 @@ def relationship_memory_review_cases(
         .correlate(relationship_memory_proposals)
         .scalar_subquery()
     )
+    derived_state = case(
+        (latest_disposition.is_(None), ProposalState.NEEDS_REVIEW.value),
+        *(
+            (latest_disposition == disposition.value, proposal_state.value)
+            for disposition, proposal_state in _CASE_STATE.items()
+        ),
+        else_=ProposalState.NEEDS_REVIEW.value,
+    )
     rows = connection.execute(
         select(
             relationship_memory_proposals.c.review_case_id,
@@ -269,6 +287,23 @@ def relationship_memory_review_cases(
         .where(
             _mine(relationship_memory_proposals, principal_id),
             relationship_memory_proposals.c.review_case_id.is_not(None),
+            derived_state == state.value if state is not None else true(),
+            (
+                relationship_memory_proposals.c.subject_entity_id == entity_id
+                if entity_id is not None
+                else true()
+            ),
+            (
+                or_(
+                    relationship_memory_proposals.c.proposed_at > after_opened_at,
+                    and_(
+                        relationship_memory_proposals.c.proposed_at == after_opened_at,
+                        relationship_memory_proposals.c.review_case_id > after_review_case_id,
+                    ),
+                )
+                if after_opened_at is not None and after_review_case_id is not None
+                else true()
+            ),
         )
         .order_by(
             relationship_memory_proposals.c.proposed_at,

@@ -48,7 +48,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, Final
 
-from sqlalchemy import func, insert, or_, select, update
+from sqlalchemy import and_, func, insert, or_, select, update
 from sqlalchemy.engine import Connection
 
 from my_pa.domain.capture.proposal import ProposalState
@@ -228,6 +228,8 @@ def entity_proposal_review_cases(
     limit: int,
     state: ProposalState | None = None,
     entity_id: str | None = None,
+    after_opened_at: datetime | None = None,
+    after_review_case_id: str | None = None,
 ) -> tuple[EntityProposalReviewCase, ...]:
     """One bounded page of this Principal's Entity proposal cases, oldest first.
 
@@ -249,6 +251,8 @@ def entity_proposal_review_cases(
     """
     if limit < 1:
         raise ValueError("a review page contains at least one case")
+    if (after_opened_at is None) != (after_review_case_id is None):
+        raise ValueError("a review cursor position is complete or absent")
     criteria = [
         _mine(entity_proposals, principal_id),
         entity_proposals.c.review_case_id.is_not(None),
@@ -262,6 +266,16 @@ def entity_proposal_review_cases(
                     entity_proposals.c.payload[name].astext == entity_id
                     for name in ENTITY_PAYLOAD_FIELDS
                 ]
+            )
+        )
+    if after_opened_at is not None and after_review_case_id is not None:
+        criteria.append(
+            or_(
+                entity_proposals.c.proposed_at > after_opened_at,
+                and_(
+                    entity_proposals.c.proposed_at == after_opened_at,
+                    entity_proposals.c.review_case_id > after_review_case_id,
+                ),
             )
         )
     rows = connection.execute(

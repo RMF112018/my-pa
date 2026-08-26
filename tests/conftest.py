@@ -1279,6 +1279,8 @@ class _Reviews(ReviewRepository):
         subject_kind: ReviewSubjectKind | None = None,
         state: ProposalState | None = None,
         entity_id: str | None = None,
+        after_opened_at: datetime | None = None,
+        after_review_case_id: str | None = None,
     ) -> tuple[
         ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase | EntityProposalReviewCase,
         ...,
@@ -1294,6 +1296,13 @@ class _Reviews(ReviewRepository):
         a database test can prove the storage separately.
         """
         self._world.fail("review_cases")
+        if (after_opened_at is None) != (after_review_case_id is None):
+            raise ValueError("a review cursor position is complete or absent")
+        after_key = (
+            None
+            if after_opened_at is None or after_review_case_id is None
+            else (after_opened_at, after_review_case_id)
+        )
         owned = {
             version.capture_id
             for version in self._world.capture_versions
@@ -1309,7 +1318,15 @@ class _Reviews(ReviewRepository):
             found.extend(case for case in self._world.review_cases if case.capture_id in owned)
         if subject_kind in (None, ReviewSubjectKind.ENTITY_PROPOSAL):
             found.extend(self._entity_cases(principal_id, entity_id=entity_id))
-        confined = [case for case in found if state is None or case.proposal_state is state]
+        confined = sorted(
+            (
+                case
+                for case in found
+                if (state is None or case.proposal_state is state)
+                and (after_key is None or (case.opened_at, case.review_case_id) > after_key)
+            ),
+            key=lambda case: (case.opened_at, case.review_case_id),
+        )
         return tuple(confined[:limit])
 
     # --- the Entity proposal plane's case read and decision ledger -----------

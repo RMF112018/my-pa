@@ -21,6 +21,7 @@ from my_pa.application.goodnotes_gsqs_b0_acquisition import (
     MODEL_CLIENT_SYNTHETIC,
     OPERATION_REAL,
     OPERATION_SYNTHETIC,
+    OPERATION_SYNTHETIC_ROUTELLM,
     AcquisitionError,
     assert_acquisition_permitted,
     is_real_handwriting_campaign,
@@ -51,7 +52,11 @@ from my_pa.application.goodnotes_gsqs_b0_orchestrator import (
     OrchestratorError,
     acquire_repetition,
 )
-from my_pa.application.goodnotes_gsqs_b0_stdio_session import StdioEvalSession, StdioHostError
+from my_pa.application.goodnotes_gsqs_b0_stdio_session import (
+    StdioEvalSession,
+    StdioHostError,
+    stdio_env,
+)
 from my_pa.application.goodnotes_gsqs_b0_synthetic_campaign import (
     SYNTHETIC_CASE_COUNT,
     SyntheticCampaign,
@@ -250,6 +255,60 @@ def test_real_corpus_fails_closed_without_authorization_a(tmp_path: Path) -> Non
 def test_routellm_http_client_is_not_activated() -> None:
     with pytest.raises(RouteLLMClientActivationError, match=ROUTELLM_ACTIVATION_BLOCKER):
         bind_model_client(MODEL_CLIENT_ROUTELLM_HTTP)
+
+
+def test_synthetic_routellm_acquisition_requires_routellm_client(tmp_path: Path) -> None:
+    campaign = build_synthetic_campaign(tmp_path / "campaign", case_count=2)
+    identity, prompt, _config = _identities()
+    auth = load_acquisition_authorization(
+        _write_auth(
+            tmp_path / "ok",
+            campaign,
+            operation=OPERATION_SYNTHETIC_ROUTELLM,
+            model_client=MODEL_CLIENT_ROUTELLM_HTTP,
+        )
+    )
+    assert_acquisition_permitted(
+        auth,
+        repetition=1,
+        corpus_version=campaign.corpus_version,
+        combined_identity=campaign.combined_identity,
+        model_identity=identity,
+        prompt_config_identity=prompt,
+        candidate_identity=identity,
+        model_client=MODEL_CLIENT_ROUTELLM_HTTP,
+    )
+    fake = load_acquisition_authorization(
+        _write_auth(
+            tmp_path / "fake",
+            campaign,
+            operation=OPERATION_SYNTHETIC_ROUTELLM,
+            model_client=MODEL_CLIENT_SYNTHETIC,
+        )
+    )
+    with pytest.raises(AcquisitionError, match="model-client"):
+        assert_acquisition_permitted(
+            fake,
+            repetition=1,
+            corpus_version=campaign.corpus_version,
+            combined_identity=campaign.combined_identity,
+            model_identity=identity,
+            prompt_config_identity=prompt,
+            candidate_identity=identity,
+            model_client=MODEL_CLIENT_SYNTHETIC,
+        )
+    with pytest.raises(AcquisitionError, match="REAL_HANDWRITING_B0_EXECUTION"):
+        assert_acquisition_permitted(
+            auth,
+            repetition=1,
+            corpus_version=HANDWRITING_CORPUS_VERSION,
+            combined_identity=APPROVED_COMBINED_IDENTITY,
+            model_identity=identity,
+            prompt_config_identity=prompt,
+            candidate_identity=identity,
+            model_client=MODEL_CLIENT_ROUTELLM_HTTP,
+        )
+    del identity, prompt
 
 
 def test_capture_writer_contract(tmp_path: Path) -> None:
@@ -507,6 +566,8 @@ def test_acquisition_modules_do_not_import_private_gold() -> None:
         "goodnotes_gsqs_b0_model_client.py",
         "goodnotes_gsqs_b0_stdio_session.py",
         "goodnotes_gsqs_b0_synthetic_campaign.py",
+        "goodnotes_gsqs_b0_routellm_activation.py",
+        "goodnotes_gsqs_b0_workflow.py",
     ):
         tree = ast.parse((root / name).read_text(encoding="utf-8"))
         imported: set[str] = set()
@@ -597,3 +658,16 @@ def test_parser_exposes_acquire_repetition() -> None:
         ["serve-eval-mcp", "--authorization", "auth.json", "--campaign-fixture", "campaign.json"]
     )
     assert serve.campaign_fixture == "campaign.json"
+
+
+def test_stdio_env_strips_routellm_parent_secrets(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_PA_ROUTELLM_API_KEY", "TEST-SENTINEL-API-KEY-NOT-A-SECRET")
+    monkeypatch.setenv("MY_PA_ROUTELLM_BASE_URL", "https://route.example")
+    monkeypatch.setenv("MY_PA_GSQS_B0_ROUTELLM_ACTIVATION", str(tmp_path / "activation.json"))
+    env = stdio_env(raster_root=tmp_path, pythonpath=(tmp_path,))
+    assert "MY_PA_ROUTELLM_API_KEY" not in env
+    assert "MY_PA_ROUTELLM_BASE_URL" not in env
+    assert "MY_PA_GSQS_B0_ROUTELLM_ACTIVATION" not in env
+    assert env["MY_PA_GSQS_B0_RASTER_ROOT"] == str(tmp_path)

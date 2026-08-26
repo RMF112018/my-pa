@@ -1350,4 +1350,3 @@ def test_gsqs_status_returns_the_started_run(scene: Scene) -> None:
     assert result["run_id"] == started["run_id"]
     assert result["state"] == "COMPLETE"
     assert "capture_artifact" in result
-

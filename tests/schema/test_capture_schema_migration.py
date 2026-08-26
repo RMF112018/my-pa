@@ -300,6 +300,10 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "entities.restore",
         "entities.unresolved_mentions.resolve",
         "entities.update",
+        # Connected-MCP B0 workflow. `c4b0a1d9e827` is the forward `ALTER`
+        # that admits the pair on `capability_is_known`.
+        "gsqs.start",
+        "gsqs.status",
     }
 )
 

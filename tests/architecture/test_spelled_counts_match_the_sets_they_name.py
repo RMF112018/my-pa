@@ -654,6 +654,21 @@ def stated(number: str) -> int:
 #: distinctive fragment of the block, so an entry excuses one occurrence rather
 #: than every occurrence of the same words in the same file.
 EXCUSED: tuple[tuple[str, str, str, str], ...] = (
+    (
+        "tests/schema/test_capture_schema_migration.py",
+        "ninety-five capabilities",
+        "emits what it emitted on the day it merged",
+        "historical freeze of a merged revision's vocabulary, not the live "
+        "`Capability` size -- the next sentence names twenty-nine purposes the "
+        "same way",
+    ),
+    (
+        "tests/schema/test_capture_schema_migration.py",
+        "twenty-nine purposes",
+        "now declared in the domain",
+        "the same historical freeze: that merged revision's purpose CHECK, not "
+        "the live `Purpose` enum",
+    ),
     # --- what WP-RI-05 added, on the day it merged ---------------------------
     #
     # Four claims that used to be checked against the entity plane's size and
@@ -876,23 +891,23 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
     # records what deriving it would cost.
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**fifty-three**",
+        "**fifty-five**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
         "`documents.`, six `entities.` and eight `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as seventy-six",
+        "correctly as ninety-seven",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**fifty-three**",
+        "**fifty-five**",
         "none beginning `documents.`",
         "the same default-publication count, in the line naming the test that measures it",
     ),
     (
         "README.md",
-        "fifty-three tools",
-        "process publishes fifty-three tools",
+        "fifty-five tools",
+        "process publishes fifty-five tools",
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "

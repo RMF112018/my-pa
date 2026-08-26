@@ -30,7 +30,8 @@ SUCCESSOR = "f1c6b904a2d7"
 LIFECYCLE = "2fe4e13fb449"
 #: And Phase A's single vocabulary revision, which stacked on `LIFECYCLE` and is
 #: where the single head now sits. Named on the same terms as the two above.
-HEAD = "823e23b6cc63"
+PHASE_A = "823e23b6cc63"
+HEAD = "c4b0a1d9e827"
 REVISION_PATH = (
     ROOT
     / "migrations"
@@ -45,7 +46,8 @@ def test_work_revision_sits_on_the_single_head_chain_after_its_predecessor() -> 
     assert script.get_revision(REVISION).down_revision == PREVIOUS
     assert script.get_revision(SUCCESSOR).down_revision == REVISION
     assert script.get_revision(LIFECYCLE).down_revision == SUCCESSOR
-    assert script.get_revision(HEAD).down_revision == LIFECYCLE
+    assert script.get_revision(PHASE_A).down_revision == LIFECYCLE
+    assert script.get_revision(HEAD).down_revision == PHASE_A
 
 
 def test_bulk_metadata_matches_the_persisted_preview_and_confirmation_contract() -> None:

@@ -1,4 +1,4 @@
-"""The ports the ninety-five capability use cases call, and nothing else.
+"""The ports the ninety-seven capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`

@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes ninety-five capability names and none of them
+  ends: the transport routes ninety-seven capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -55,6 +55,7 @@ from tests.conftest import (
     build_provider,
     build_service,
     operator,
+    seed_gsqs_b0_workflow,
     staged_capture,
     staged_commitment,
     staged_goodnotes_raster,
@@ -248,6 +249,7 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
     document = staged_managed_document(marked, body=MARKER_CONTENT.encode())
     task = staged_task(marked)
     commitment = staged_commitment(marked)
+    gsqs_run_id = str(seed_gsqs_b0_workflow(idempotency_key="wire-gsqs-start-0001")["run_id"])
     bulk_mutations = [
         {
             "kind": "update",
@@ -515,6 +517,13 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
                 }
             ],
         },
+        Capability.GSQS_START: {
+            "authorization_id": "synthetic-b0-commissioning",
+            "campaign_class": "SYNTHETIC",
+            "repetition": 1,
+            "idempotency_key": "wire-gsqs-start-0001",
+        },
+        Capability.GSQS_STATUS: {"run_id": gsqs_run_id},
         Capability.REPORTS_BEGIN_CYCLE: {
             "cycle_id": "morning_intelligence",
             "business_date": "2026-08-20",
@@ -1078,6 +1087,8 @@ SCOPED_CAPABILITIES = [
         Capability.GOODNOTES_WORK,
         Capability.GOODNOTES_CONTENT,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GSQS_START,
+        Capability.GSQS_STATUS,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,

@@ -366,6 +366,15 @@ class Capability(StrEnum):
     # admits the live vocabulary. Not operator-only: it reads the acting
     # Principal's own partition and grants no authority.
     GOODNOTES_CONTENT = "goodnotes.content"
+    # Connected-MCP B0 prediction-acquisition workflow. A pair of names rather than a
+    # widening of `goodnotes.work` / `goodnotes.content` (`D-91`): those remain
+    # the stdio-isolated analyzer plane. ChatLLM initiates a repetition through
+    # production `my-pa` MCP; the server owns campaign identity, stdio lifecycle,
+    # and capture persistence. Alembic revision `c4b0a1d9e827` admits the live
+    # vocabulary. Neither is operator-only: each operates on the acting
+    # Principal's own partition. Real handwriting remains fail-closed.
+    GSQS_START = "gsqs.start"
+    GSQS_STATUS = "gsqs.status"
     # Intelligence Artifact / Report plane. Eight `reports.*` names rather than a
     # widening of `capture.*`, `documents.*`, `knowledge.*`, or `context.*`
     # (`D-91`). Capture is user-authored notes. Documents are managed bytes.
@@ -830,6 +839,8 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.GOODNOTES_WORK: frozenset({Purpose.GOODNOTES_WORK}),
         Capability.GOODNOTES_PROPOSE: frozenset({Purpose.GOODNOTES_PROPOSAL}),
         Capability.GOODNOTES_CONTENT: frozenset({Purpose.GOODNOTES_CONTENT}),
+        Capability.GSQS_START: frozenset({Purpose.GSQS_B0_EXECUTION}),
+        Capability.GSQS_STATUS: frozenset({Purpose.GSQS_B0_OBSERVATION}),
         Capability.REPORTS_BEGIN_CYCLE: frozenset({Purpose.REPORT_AUTHORING}),
         Capability.REPORTS_COMMIT: frozenset({Purpose.REPORT_AUTHORING}),
         Capability.REPORTS_RECORD_RUN_STATE: frozenset({Purpose.REPORT_AUTHORING}),
@@ -964,6 +975,7 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_FEEDBACK,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GSQS_START,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,
@@ -1006,6 +1018,7 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.TASKS_BULK_PREVIEW,
         Capability.COMMITMENTS_CREATE,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GSQS_START,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_RECORD_RUN_STATE,
         Capability.RELATIONSHIP_MEMORY_CREATE,

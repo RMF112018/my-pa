@@ -255,3 +255,11 @@ class Purpose(StrEnum):
     # readable in a profile and absent from a broad search under the same grant.
     RELATIONSHIP_MEMORY_READ = "relationship_memory_read"
     RELATIONSHIP_MEMORY_AUTHORING = "relationship_memory_authoring"
+    # Connected-MCP B0 workflow purposes. Two rather than one, on the same rule
+    # as the capture and managed-document planes: a purpose wide enough to cover
+    # starting a repetition and observing it is a purpose that grants both.
+    # Neither reuses `goodnotes_work` / `goodnotes_content` (`D-91`): those are
+    # the stdio analyzer plane. This pair is the ChatLLM-facing orchestration
+    # surface on production `my-pa` MCP.
+    GSQS_B0_EXECUTION = "gsqs_b0_execution"
+    GSQS_B0_OBSERVATION = "gsqs_b0_observation"

@@ -1,13 +1,29 @@
 # Local B0 execution infrastructure
 
 This document describes the repository-owned stdio host that closes
-B0-EXEC-001/002/003. It does **not** authorize real handwriting, private
-gold, scoring, or `MEASURED_B0`.
+B0-EXEC-001/002/003, and the production-MCP workflow that later invokes it.
+It does **not** authorize real handwriting, private gold, scoring, or
+`MEASURED_B0`.
+
+```text
+CHATLLM_AS_B0_ANALYZER_PLANE = NO
+CHATLLM_AS_CONNECTED_MCP_WORKFLOW_INITIATOR = YES
+LOCAL_AGENT_DIRECT_ROUTELLM_WORKFLOW_INITIATION = NO
+```
+
+ChatLLM initiates a repetition only through the existing connected MY-PA
+MCP (`gsqs.start` / `gsqs.status` on `https://my-pa-mcp.bobby-fetting.me/mcp`).
+That surface is orchestration, not the B0 semantic analyzer. The analyzer
+plane remains stdio-isolated `python apps/cli/gsqs_b0.py serve-eval-mcp`
+(`goodnotes.work`, `goodnotes.content`). HTTPS `goodnotes.eval.*` is not
+canonical B0.
 
 Historical finding (2026-08-25): hosted ChatLLM MCP cannot read the
 operator raster filesystem, and no local RouteLLM MCP client existed.
-That finding stands. This infrastructure replaces the disproven
-assumption that an external RouteLLM MCP client already existed.
+That finding stands for the **analyzer** plane. It does not mean ChatLLM
+is absent from the workflow: ChatLLM remains the operator initiation
+surface. This infrastructure replaces the disproven assumption that an
+external RouteLLM MCP client already existed.
 
 ## Components
 
@@ -23,10 +39,11 @@ assumption that an external RouteLLM MCP client already existed.
   stored order. The model does not choose the next case. One CLI
   invocation runs one explicit `--repetition`. Interrupted attempts are
   `INTERRUPTED` or `INVALID` and are not resumable.
-- **B0-EXEC-003** — `write_repetition_capture` emits
-  `gsqs-analyzer-capture-v1` containing `gsqs-analyzer-output-v1`
-  documents as `repetition-00N.json`, atomically, with identical-replay
-  idempotency and conflicting-replay rejection.
+- **Connected-MCP workflow** — production tools `gsqs.start` and
+  `gsqs.status`. ChatLLM initiates; the server resolves identities,
+  reuses B0-EXEC-001/002/003, and persists `repetition-00N.json`.
+  RouteLLM is an internal client, not an operator workflow. Real
+  handwriting remains denied.
 
 ## Authorization
 

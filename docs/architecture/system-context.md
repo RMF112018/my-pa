@@ -71,9 +71,9 @@ hash.
 
 
 The repository is an executable local candidate, not a documentation scaffold.
-The `my_pa` application defines and wires ninety-five capabilities through HTTP,
+The `my_pa` application defines and wires ninety-seven capabilities through HTTP,
 MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
-planes. **A default composition exposes fifty-three of them.** The six
+planes. **A default composition exposes fifty-five of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT`, the
 twenty-eight `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
 (and its eighteen writes a second switch beside it), and the
@@ -87,10 +87,10 @@ fifty-three when WP-FE-03 admitted `commitments.history`, `commitments.search`
 and `commitments.update`, which arrive on the served side of that split; it did
 not move when WP-29 admitted the `relationship_memory.` family, because every
 name in it arrived on the withheld side. Corrected 2026-08-19: this sentence read
-"exposes ninety-five capabilities" under a heading claiming authenticated
+"exposes ninety-seven capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns sixty-nine revisions at head `823e23b6cc63`, including the merge of
+Alembic owns seventy revisions at head `c4b0a1d9e827`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
 semantic-retrieval gate remains `SEMANTIC_GATE_FAIL` and production semantic

@@ -429,18 +429,18 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    assert default == 53 and total == 95 and withheld == 42
+    assert default == 55 and total == 97 and withheld == 42
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "ninety-five capabilities" in system_context
-    assert "exposes fifty-three of them" in system_context
+    assert "ninety-seven capabilities" in system_context
+    assert "exposes fifty-five of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "ninety-five capabilities" in module_boundaries
+    assert "ninety-seven capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

@@ -53,6 +53,8 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.GOODNOTES_PROPOSE.value not in first
     assert Capability.GOODNOTES_WORK.value in first
     assert Capability.GOODNOTES_CONTENT.value in first
+    assert Capability.GSQS_START.value in first
+    assert Capability.GSQS_STATUS.value in first
     assert Capability.CONTINUITY_PROJECTS_CREATE.value not in first
     assert Capability.SOURCES_ENROLL.value not in first
     assert Capability.DOCUMENTS_CREATE.value not in first
@@ -78,6 +80,63 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.TASKS_BULK_PREVIEW.value in enabled
     assert Capability.TASKS_BULK_CONFIRM.value in enabled
     assert Capability.SOURCES_ENROLL.value not in enabled
+
+
+@pytest.mark.anyio
+async def test_remote_gsqs_start_completes_without_a_caller_idempotency_key(
+    scene: Scene,
+) -> None:
+    """ChatLLM's production MCP path must construct StartGsqsB0 after stamping."""
+    app = create_remote_mcp_app(
+        build_service(scene.world, scene.providers),
+        resolve_access=lambda _authorization: RemoteAccessContext(
+            scene.principal,
+            allowed_capabilities=frozenset(
+                {Capability.GSQS_START.value, Capability.GSQS_STATUS.value}
+            ),
+            capability_purposes=frozenset(
+                {
+                    (Capability.GSQS_START, Purpose.GSQS_B0_EXECUTION),
+                    (Capability.GSQS_STATUS, Purpose.GSQS_B0_OBSERVATION),
+                }
+            ),
+        ),
+        allowed_hosts=("testserver",),
+        remote_enabled=True,
+        writes_enabled=False,
+        resource="https://mcp.example.invalid",
+        authorization_servers=("https://issuer.example.invalid",),
+        scopes=frozenset({"my-pa.read"}),
+    )
+    request = remote_arguments(
+        {
+            "authorization_id": "synthetic-b0-commissioning",
+            "campaign_class": "SYNTHETIC",
+            "repetition": 1,
+        }
+    )
+    async with (
+        app.router.lifespan_context(app),
+        httpx2.AsyncClient(
+            transport=httpx2.ASGITransport(app=app),
+            base_url="http://testserver",
+            headers={"Authorization": "Bearer synthetic"},
+        ) as http,
+        streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+        ClientSession(*streams[:2]) as session,
+    ):
+        await session.initialize()
+        names = {tool.name for tool in (await session.list_tools()).tools}
+        assert Capability.GSQS_START.value in names
+        started = await session.call_tool(Capability.GSQS_START.value, request)
+    assert started.is_error is False
+    envelope = json.loads(started.content[0].text)
+    result = envelope["result"]
+    assert result["state"] in {"PREPARED", "RUNNING", "COMPLETE"}
+    assert result["campaign_class"] == "SYNTHETIC"
+    assert result["scoring"] == "NOT_RUN"
+    assert result["gold"] == "NOT_ACCESSED"
+    assert result["automatic_next_repetition"] is False
 
 
 def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) -> None:
@@ -106,6 +165,7 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_FEEDBACK,
         Capability.GOODNOTES_PROPOSE,
+        Capability.GSQS_START,
         Capability.REPORTS_BEGIN_CYCLE,
         Capability.REPORTS_COMMIT,
         Capability.REPORTS_RECORD_RUN_STATE,

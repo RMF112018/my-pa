@@ -194,6 +194,11 @@ REGISTERED_WRITERS: Final[dict[str, str]] = {
         "an explicit caller-supplied directory; it refuses real-handwriting "
         "identities and never writes gold or managed-document bytes."
     ),
+    "src/my_pa/application/goodnotes_gsqs_b0_workflow.py": (
+        "writes only workflow-state JSON, an idempotency index, a lock file, and "
+        "synthetic campaign/capture artifacts under MY_PA_GSQS_B0_WORKFLOW_ROOT; "
+        "it never writes gold, real handwriting, or managed-document bytes."
+    ),
 }
 
 #: Attribute names that are a filesystem write whatever they are called on,

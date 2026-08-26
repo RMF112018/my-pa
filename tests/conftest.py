@@ -34,6 +34,7 @@ Everything is synthetic: no real path, no real person, no live source.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -47,6 +48,14 @@ import pytest
 
 from my_pa.application.commands import CreateManagedDocumentCommand
 from my_pa.application.commitments import CommitmentManagementService
+from my_pa.application.goodnotes_gsqs_b0_workflow import (
+    ADMITTED_SYNTHETIC_AUTHORIZATION_ID,
+    WORKFLOW_ROOT_ENV,
+    DiskContentSession,
+    WorkflowPorts,
+    default_repository_root,
+    start_workflow,
+)
 from my_pa.application.intelligence import InMemoryIntelligenceStore
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.service import ApplicationService
@@ -5612,6 +5621,20 @@ def metadata_for(capability: Capability, purpose: Purpose, principal: Principal)
     )
 
 
+@pytest.fixture(autouse=True)
+def gsqs_b0_workflow_root(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Isolate B0 workflow state per test without occupying the test `tmp_path`.
+
+    Grove and other fixtures list `tmp_path` itself. A sibling directory there
+    would become an extra child and steal the enrollment root.
+    """
+    root = tmp_path_factory.mktemp("gsqs-b0-workflow")
+    monkeypatch.setenv(WORKFLOW_ROOT_ENV, str(root))
+    return root
+
+
 @pytest.fixture
 def world() -> World:
     return World()
@@ -5730,6 +5753,26 @@ def build_service(
         # memory plane off with it and does not have to say so twice.
         relationship_memory_enabled=(
             relationship_intelligence_enabled and relationship_memory_enabled
+        ),
+        gsqs_b0_ports=WorkflowPorts(
+            session_factory=lambda rasters: DiskContentSession(rasters),
+            case_count=2,
+        ),
+    )
+
+
+def seed_gsqs_b0_workflow(*, idempotency_key: str = "parity-gsqs-start") -> dict[str, object]:
+    """Start one synthetic 2-case run in the per-test workflow root."""
+    return start_workflow(
+        workflow_root=Path(os.environ[WORKFLOW_ROOT_ENV]),
+        repository_root=default_repository_root(),
+        authorization_id=ADMITTED_SYNTHETIC_AUTHORIZATION_ID,
+        campaign_class="SYNTHETIC",
+        repetition=1,
+        idempotency_key=idempotency_key,
+        ports=WorkflowPorts(
+            session_factory=lambda rasters: DiskContentSession(rasters),
+            case_count=2,
         ),
     )
 

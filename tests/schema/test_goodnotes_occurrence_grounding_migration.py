@@ -55,7 +55,8 @@ LIFECYCLE_REVISION: Final = "2fe4e13fb449"
 #: naming both keeps the chain assertion below a statement about the order
 #: rather than about whichever revision happens to be last.
 PHASE_A_REVISION: Final = "823e23b6cc63"
-HEAD_REVISION: Final = PHASE_A_REVISION
+GSQS_REVISION: Final = "c4b0a1d9e827"
+HEAD_REVISION: Final = GSQS_REVISION
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_b7f2c9e4a618_ground_goodnotes_note_unit_visual_identity.py"
 )
@@ -131,8 +132,9 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(INTELLIGENCE_REVISION).down_revision == MENTION_REVISION
     assert script.get_revision(WORK_REVISION).down_revision == INTELLIGENCE_REVISION
     assert script.get_revision(MEMORY_REVISION).down_revision == WORK_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == LIFECYCLE_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 69
+    assert script.get_revision(PHASE_A_REVISION).down_revision == LIFECYCLE_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == PHASE_A_REVISION
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 70
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

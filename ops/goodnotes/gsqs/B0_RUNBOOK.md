@@ -145,6 +145,19 @@ without making a model call. `--evidence-dir` writes public control files
 only. Verdict is `GO` or `NO-GO`. `disclosure_would_occur` is always false.
 Preflight never probes RouteLLM and never opens a disclosure journal.
 
+## Connected-MCP workflow (ChatLLM initiation)
+
+ChatLLM starts and observes a repetition through production MCP tools
+`gsqs.start` and `gsqs.status`. It does not choose cases, paths, models,
+or endpoints. It does not call RouteLLM. It does not use HTTPS
+`goodnotes.eval.*` as the B0 analyzer. Real handwriting remains
+fail-closed (`authorization_id=synthetic-b0-commissioning` only).
+
+The server owns campaign identity, stdio analyzer lifecycle, capture
+persistence, idempotency, and status. An MCP request timeout is not a
+workflow failure: production `gsqs.start` returns after recording the
+run, and ChatLLM polls `gsqs.status`.
+
 ## Local prediction acquisition (stdio host)
 
 Hosted ChatLLM cannot spawn `serve-eval-mcp` against the operator raster

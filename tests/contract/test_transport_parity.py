@@ -2,14 +2,14 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-ninety-nine capabilities. There are two ways to prove that and only one of them stays
+one hundred one capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
 **Structural: there is one normalisation, and all three call it.** A comparison
 of three snapshots proves that three implementations agreed on the day the
 snapshots were taken. What actually holds the property is that there is nothing
-to disagree: `RequestMetadata` and the sixty-six commands are constructed in exactly
+to disagree: `RequestMetadata` and the commands are constructed in exactly
 one module, `adapters/normalization.py`, and every transport reaches the
 application by handing that module a capability name and a document. The rules
 below check both halves by parsing — no transport builds a request value of its
@@ -27,8 +27,8 @@ as bytes: `RequestMetadata` through the contract's own canonical encoding, the
 command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
-default composition exposes fifty-three: the six managed-document names, the
-thirty-one `entities.` names and the eight Relationship Memory names are
+default composition exposes fifty-five: the six managed-document names, the
+thirty-one `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
 second switch over the `entities.` family and withholds its eighteen writes on
@@ -68,6 +68,7 @@ from tests.conftest import (
     FakeUnitOfWork,
     Scene,
     build_service,
+    seed_gsqs_b0_workflow,
     staged_capture,
     staged_commitment,
     staged_goodnotes_raster,
@@ -588,6 +589,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     assert isinstance(bulk_operation_id, str)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    gsqs_run_id = str(seed_gsqs_b0_workflow()["run_id"])
     at = datetime(2026, 8, 2, 11, tzinfo=UTC)
     cycle_admission = begin_cycle(
         scene.world.intelligence,
@@ -844,6 +846,13 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 }
             ],
         },
+        Capability.GSQS_START: {
+            "authorization_id": "synthetic-b0-commissioning",
+            "campaign_class": "SYNTHETIC",
+            "repetition": 1,
+            "idempotency_key": "parity-gsqs-start",
+        },
+        Capability.GSQS_STATUS: {"run_id": gsqs_run_id},
         Capability.REPORTS_BEGIN_CYCLE: {
             "cycle_id": CYCLE_MORNING_INTELLIGENCE,
             "business_date": "2026-08-20",
@@ -1352,9 +1361,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # A hundred since `WP-RI-B-05` and `WP-RI-B-06`: the ninety-nine commands and
-    # `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 100, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred one commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 102, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2068,7 +2076,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: ninety-nine capabilities answered from an empty world prove little."""
+    """Guard the matrix: 101 capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

@@ -152,6 +152,9 @@ class SafeDetail(StrEnum):
     #: The GoodNotes semantic plane's own fields (GN-04). Each names a field and
     #: never its value. Transcription is data and is never echoed here.
     RUN_ID = "run_id"
+    AUTHORIZATION_ID = "authorization_id"
+    CAMPAIGN_CLASS = "campaign_class"
+    REPETITION = "repetition"
     PAGE_VERSION_ID = "page_version_id"
     CONTENT_SHA256 = "content_sha256"
     SCHEMA_VERSION = "schema_version"

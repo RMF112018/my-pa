@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all ninety-nine capabilities.
+`tests/contract/test_transport_parity.py` holds it over all one hundred one capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -119,6 +119,13 @@ remote-write switch. Operator-only merge additionally requires the
 server-resolved exact `remote.operator` durable capability set. This repository
 state configures no live client or grant and does not activate, publish, or
 deploy that ingress.
+
+`gsqs.start` is the deliberate exception to the remote write classification:
+it remains visible when remote writes are disabled so an authenticated ChatLLM
+caller can start the bounded synthetic B0 workflow. The server still supplies
+its idempotency value and enforces the durable capability/purpose grant. This
+does not widen any Entity write; `entities.merge.preview` and `entities.merge`
+still require global remote writes and the exact `remote.operator` profile.
 
 It is not usually run by hand. An MCP client launches it as a child process and
 owns both pipes. The equivalent client configuration is a command and its
@@ -174,9 +181,9 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build implements ninety-nine, one
-per capability name. A default process publishes **fifty-three**. That is the
-ninety-nine, less the six `documents.` names, the thirty-one `entities.` names
+same as the tools this build implements. The build implements one hundred one, one
+per capability name. A default process publishes **fifty-five**. That is the
+101, less the six `documents.` names, the thirty-one `entities.` names
 and the nine `relationship_memory.` names a default composition withholds.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
@@ -184,15 +191,15 @@ configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes those six, reaching fifty-nine of the ninety-nine. The
-remaining thirty-six are the thirty-one `entities.` names, which `D-RI-20`
+same child publishes those six, reaching sixty-one of the one hundred one. The
+remaining forty are the thirty-one `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 — and whose twenty-one writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it, so a process with
-the plane switch alone publishes seventy — and the nine
+the plane switch alone publishes seventy-one — and the nine
 `relationship_memory.` names, which need the plane variable *and*
-`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all ninety-nine has
-all four variables set. An operator who expects `documents.create`
+`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred one has
+all required feature gates and composition dependencies satisfied. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -201,7 +208,7 @@ the same gating and the plane's limits.)
 Measured at this head against a real child process — `.venv/bin/python
 apps/gateway.py mcp` — by
 `tests/contract/test_mcp_transport.py::test_a_real_child_process_publishes_only_what_it_was_composed_with`
-(unset: **fifty-three**, none beginning `documents.`) and
+(unset: **fifty-five**, none beginning `documents.`) and
 `::test_a_child_with_a_managed_root_publishes_every_capability` (set:
 sixty-five).
 
@@ -263,8 +270,10 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-23):** the tool list is derived from all
-**ninety-nine** current capabilities, and the schema has **seventy-five**
-revisions at head `3d07af4dc513`. `capabilities.get` also reports content-free
+**one hundred one** current capabilities, and the schema has **seventy-six**
+revisions at head `3d07af4dc513`; the
+merged chain admits GSQS at `c4b0a1d9e827` immediately before Phase B continues
+at `c7a1f04b9e63`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its
 stated head.
 

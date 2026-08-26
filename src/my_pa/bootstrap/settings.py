@@ -481,6 +481,10 @@ class Settings(StrictModel):
     gsqs_remote_eval_allowed_origins: str = ""
     gsqs_remote_eval_oauth_audience: str = "https://my-pa-gsqs.bobby-fetting.me/mcp"
     gsqs_remote_eval_oauth_operator_secret: str = Field(default="", repr=False)
+    #: Connected-MCP B0 workflow state root. Empty refuses `gsqs.start` /
+    #: `gsqs.status`. Not a source root, not a managed-document root, and not
+    #: the isolated GSQS remote-eval spool.
+    gsqs_b0_workflow_root: str = ""
     #: Legacy Entra verifier inputs remain available only to the dormant
     #: `auth_mode=entra` path. Remote MCP never reads them.
     oauth_issuer: str = Field(default="", repr=False)

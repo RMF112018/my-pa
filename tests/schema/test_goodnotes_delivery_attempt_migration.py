@@ -59,7 +59,10 @@ PHASE_A_REVISION: Final = "823e23b6cc63"
 #: naming both keeps the chain assertion below a statement about the order
 #: rather than about whichever revision happens to be last.
 PHASE_B_REVISION: Final = "b64e29a0f7c1"
-HEAD_REVISION: Final = "3d07af4dc513"
+PHASE_B_HEAD: Final = "3d07af4dc513"
+GSQS_REVISION: Final = "c4b0a1d9e827"
+PHASE_B_START: Final = "c7a1f04b9e63"
+HEAD_REVISION: Final = PHASE_B_HEAD
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_f4c1a8e6b205_add_goodnotes_delivery_attempt_ledger.py"
@@ -149,15 +152,15 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(INTELLIGENCE_REVISION).down_revision == MENTION_REVISION
     assert script.get_revision(WORK_REVISION).down_revision == INTELLIGENCE_REVISION
     assert script.get_revision(MEMORY_REVISION).down_revision == WORK_REVISION
-    # Phase A's revision still sits on the lifecycle plane; the Phase B chain
-    # stacked five more on top of it, and `HEAD_REVISION` is the last of those.
-    # Both halves are asserted, so the chain claim stays a statement about the
-    # *order* rather than about whichever revision happens to be last.
     assert script.get_revision(PHASE_A_REVISION).down_revision == LIFECYCLE_REVISION
+    assert script.get_revision(GSQS_REVISION).down_revision == PHASE_A_REVISION
+    assert script.get_revision(PHASE_B_START).down_revision == GSQS_REVISION
+    assert script.get_revision(PHASE_B_REVISION).down_revision == "a1f7d3c85e40"
+    assert script.get_revision(PHASE_B_HEAD).down_revision == PHASE_B_REVISION
     assert script.get_heads() == [HEAD_REVISION]
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(PRIOR).down_revision == GROUNDING_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 75
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 76
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

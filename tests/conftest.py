@@ -34,6 +34,7 @@ Everything is synthetic: no real path, no real person, no live source.
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import sys
 from collections.abc import Callable, Iterable, Iterator, Mapping
@@ -47,6 +48,14 @@ import pytest
 
 from my_pa.application.commands import CreateManagedDocumentCommand
 from my_pa.application.commitments import CommitmentManagementService
+from my_pa.application.goodnotes_gsqs_b0_workflow import (
+    ADMITTED_SYNTHETIC_AUTHORIZATION_ID,
+    WORKFLOW_ROOT_ENV,
+    DiskContentSession,
+    WorkflowPorts,
+    default_repository_root,
+    start_workflow,
+)
 from my_pa.application.intelligence import InMemoryIntelligenceStore
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
@@ -6251,6 +6260,20 @@ def metadata_for(capability: Capability, purpose: Purpose, principal: Principal)
     )
 
 
+@pytest.fixture(autouse=True)
+def gsqs_b0_workflow_root(
+    tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
+) -> Path:
+    """Isolate B0 workflow state per test without occupying the test `tmp_path`.
+
+    Grove and other fixtures list `tmp_path` itself. A sibling directory there
+    would become an extra child and steal the enrollment root.
+    """
+    root = tmp_path_factory.mktemp("gsqs-b0-workflow")
+    monkeypatch.setenv(WORKFLOW_ROOT_ENV, str(root))
+    return root
+
+
 @pytest.fixture
 def world() -> World:
     return World()
@@ -6360,7 +6383,7 @@ def build_service(
         relationship_intelligence_enabled=relationship_intelligence_enabled,
         # Enabled by the same default reasoning, and conjoined with the plane
         # switch for the reason the memory one below is: `ApplicationService`
-        # refuses the plane's eighteen writes unless *both* are on, and a
+        # refuses the plane's twenty-one writes unless *both* are on, and a
         # test that turns the plane off should not have to say so twice. A test
         # about the *read-only* build passes `False` explicitly and says so --
         # `tests/contract/test_entity_write_gate.py` is the one that does.
@@ -6386,9 +6409,9 @@ def build_service(
         #
         # **What "enabled" buys here is publication and not execution**, and the
         # difference is worth stating rather than discovering. With this on,
-        # `capabilities.get`, the local tool list and the remote profile all
-        # answer about `entities.merge.preview` and `entities.merge`, which is
-        # what the manifest and annotation tests are for. Neither one can be
+        # `capabilities.get` and the local tool list answer about
+        # `entities.merge.preview` and `entities.merge`; the separately gated
+        # exact `remote.operator` profile can publish them as well. Neither can be
         # *executed* against this `World`: `_Entities` implements none of the
         # sixteen identity-correction port methods, and a fake that
         # approximated a governed merge would let a unit test prove something
@@ -6405,6 +6428,26 @@ def build_service(
             ProducerOriginRegistry(world.producer_origins)
             if producer_origins is None
             else producer_origins
+        ),
+        gsqs_b0_ports=WorkflowPorts(
+            session_factory=lambda rasters: DiskContentSession(rasters),
+            case_count=2,
+        ),
+    )
+
+
+def seed_gsqs_b0_workflow(*, idempotency_key: str = "parity-gsqs-start") -> dict[str, object]:
+    """Start one synthetic 2-case run in the per-test workflow root."""
+    return start_workflow(
+        workflow_root=Path(os.environ[WORKFLOW_ROOT_ENV]),
+        repository_root=default_repository_root(),
+        authorization_id=ADMITTED_SYNTHETIC_AUTHORIZATION_ID,
+        campaign_class="SYNTHETIC",
+        repetition=1,
+        idempotency_key=idempotency_key,
+        ports=WorkflowPorts(
+            session_factory=lambda rasters: DiskContentSession(rasters),
+            case_count=2,
         ),
     )
 

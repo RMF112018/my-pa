@@ -69,7 +69,7 @@ def test_the_process_acts_as_one_authenticated_local_operator(runtime: GatewayRu
 
     `OPERATOR` rather than `GATEWAY` is load-bearing rather than incidental: a
     `GATEWAY` principal may not invoke `sources.enroll`, so the alternative is a
-    transport that cannot reach one of the ninety-nine capabilities.
+    transport that cannot reach one of the one hundred one capabilities.
     """
     assert runtime.principal.kind is PrincipalKind.OPERATOR
     assert runtime.principal.authenticated is True
@@ -130,6 +130,23 @@ def test_the_runtime_releases_both_pools() -> None:
     # `dispose` replaces the pool; a second call must stay safe, because a
     # failed start calls it on the way out too.
     built.close()
+
+
+def test_gsqs_b0_ports_supply_routellm_poster_without_forcing_in_process_wait(
+    runtime: GatewayRuntime,
+) -> None:
+    """Production supplies the RouteLLM poster; MCP `gsqs.start` stays background."""
+    from my_pa.application.goodnotes_gsqs_b0_workflow import gsqs_b0_wait_in_process
+    from my_pa.infrastructure.gsqs_routellm_transport import post_chat_completion
+
+    ports = runtime.service._gsqs_b0_ports
+    assert ports is not None
+    assert ports.poster is post_chat_completion
+    assert ports.model_client is None
+    assert ports.session_factory is None
+    assert ports.case_count is None
+    assert ports.activation is None
+    assert gsqs_b0_wait_in_process(ports) is False
 
 
 def test_the_composition_wires_task_management_writes(runtime: GatewayRuntime) -> None:

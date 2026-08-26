@@ -259,6 +259,8 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.GOODNOTES_WORK, Purpose.GOODNOTES_WORK),
         (Capability.GOODNOTES_CONTENT, Purpose.GOODNOTES_CONTENT),
         (Capability.GOODNOTES_PROPOSE, Purpose.GOODNOTES_PROPOSAL),
+        (Capability.GSQS_START, Purpose.GSQS_B0_EXECUTION),
+        (Capability.GSQS_STATUS, Purpose.GSQS_B0_OBSERVATION),
         (Capability.REPORTS_BEGIN_CYCLE, Purpose.REPORT_AUTHORING),
         (Capability.REPORTS_COMMIT, Purpose.REPORT_AUTHORING),
         (Capability.REPORTS_RECORD_RUN_STATE, Purpose.REPORT_AUTHORING),
@@ -367,12 +369,13 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # `entity_observation_ingest` and nothing else, and the other seventeen
     # writes under `entity_authoring` -- so it contributes twenty-two pairs
     # rather than the sixty-six a cross product would give.
-    # Phase B added 4 capabilities and 3 purposes: two producer paths with a
-    # purpose each, and a governed merge whose two halves share one -- so it
-    # contributes four pairs rather than the twelve a cross product would give.
-    # Unioned: 99 capabilities, 32 purposes, 101 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 101
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 101 == 3067
+    # Phase B added both producer paths and the governed merge pair, with one
+    # purpose per producer and one shared by preview/apply -- so it contributes
+    # four pairs rather than the twelve a cross product would give.
+    # GSQS B0 adds its start/status capability-purpose pairs. Unioned: 101 capabilities,
+    # 34 purposes, 103 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 103
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 103 == 3331
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

@@ -1,4 +1,4 @@
-"""All ninety-nine capabilities execute real behaviour, and disclose what they did.
+"""All one hundred one capabilities execute real behaviour and disclose what they did.
 
 Each test below runs one capability through `ApplicationService.invoke` — the
 only public entry point there is — against the real fixture source provider and
@@ -47,6 +47,7 @@ from my_pa.application.commands import (
     GetCapabilities,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetGsqsB0Status,
     GetSourceMetadata,
     GetSourceStatus,
     ListSources,
@@ -55,6 +56,7 @@ from my_pa.application.commands import (
     RecordContextFeedback,
     Representation,
     SearchKnowledge,
+    StartGsqsB0,
     SubmitGoodNotesProposal,
 )
 from my_pa.application.disclosure import Limitation
@@ -1297,3 +1299,54 @@ def test_goodnotes_propose_admits_a_receipt_without_reconciling(scene: Scene) ->
     assert str(result["proposal_id"]).startswith("gnprp_")
     assert "transcription" not in result
     assert scene.world.goodnotes_proposals
+
+
+def test_gsqs_start_completes_a_synthetic_run(scene: Scene) -> None:
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.GSQS_START,
+            Purpose.GSQS_B0_EXECUTION,
+            StartGsqsB0(
+                authorization_id="synthetic-b0-commissioning",
+                campaign_class="SYNTHETIC",
+                repetition=1,
+                idempotency_key="capability-gsqs-start-0001",
+            ),
+        )
+    )
+    assert result["state"] == "COMPLETE"
+    assert result["captured"] == 2
+    assert result["scoring"] == "NOT_RUN"
+    assert result["gold"] == "NOT_ACCESSED"
+    assert result["automatic_next_repetition"] is False
+
+
+def test_gsqs_status_returns_the_started_run(scene: Scene) -> None:
+    started = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.GSQS_START,
+            Purpose.GSQS_B0_EXECUTION,
+            StartGsqsB0(
+                authorization_id="synthetic-b0-commissioning",
+                campaign_class="SYNTHETIC",
+                repetition=1,
+                idempotency_key="capability-gsqs-status-0001",
+            ),
+        )
+    )
+    result = succeeded(
+        run(
+            build_service(scene.world, scene.providers),
+            scene,
+            Capability.GSQS_STATUS,
+            Purpose.GSQS_B0_OBSERVATION,
+            GetGsqsB0Status(run_id=str(started["run_id"])),
+        )
+    )
+    assert result["run_id"] == started["run_id"]
+    assert result["state"] == "COMPLETE"
+    assert "capture_artifact" in result

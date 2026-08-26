@@ -1,7 +1,7 @@
 """Widen the entity proposal record and give it its own evidence table.
 
 Revision ID: c7a1f04b9e63
-Revises: 823e23b6cc63
+Revises: c4b0a1d9e827
 Create Date: 2026-08-24
 
 **Why B1 did not land this.** `823e23b6cc63`'s docstring records the rule: three
@@ -80,7 +80,7 @@ from typing import Final
 from alembic import op
 
 revision: str = "c7a1f04b9e63"
-down_revision: str | None = "823e23b6cc63"
+down_revision: str | None = "c4b0a1d9e827"
 branch_labels: str | None = None
 depends_on: str | None = None
 

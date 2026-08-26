@@ -97,6 +97,11 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.COMMITMENTS_CLOSE,
         Capability.CONTEXT_FEEDBACK,
         Capability.GOODNOTES_PROPOSE,
+        # Domain write published on the read-only remote profile so ChatLLM can
+        # initiate synthetic B0 without `remote_writes_enabled`. The command
+        # still requires `idempotency_key`; the server stamps it because the
+        # caller must not.
+        Capability.GSQS_START,
         # The entity plane's eighteen writes (Phase A). Every one of them
         # carries an `idempotency_key` its command validates and its repository
         # arbitrates against

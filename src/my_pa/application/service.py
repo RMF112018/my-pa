@@ -107,6 +107,7 @@ import base64
 import binascii
 import hashlib
 import json
+import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
@@ -156,6 +157,7 @@ from my_pa.application.commands import (
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetGsqsB0Status,
     GetLatestIntelligenceArtifact,
     GetPulse,
     GetRelationshipMemory,
@@ -218,6 +220,7 @@ from my_pa.application.commands import (
     SearchKnowledge,
     SearchRelationshipMemories,
     SearchTasks,
+    StartGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
@@ -276,6 +279,14 @@ from my_pa.application.errors import (
     problem_detail,
 )
 from my_pa.application.goodnotes_content import content_payload, lookup_content
+from my_pa.application.goodnotes_gsqs_b0_workflow import (
+    WorkflowPorts,
+    default_repository_root,
+    gsqs_b0_wait_in_process,
+    start_workflow,
+    status_workflow,
+    workflow_root_from_env,
+)
 from my_pa.application.goodnotes_semantics import (
     lookup_work,
     proposal_payload,
@@ -2265,6 +2276,7 @@ class ApplicationService:
         relationship_memory_enabled: bool = False,
         relationship_identity_correction_enabled: bool = False,
         producer_origins: ProducerOriginRegistry | None = None,
+        gsqs_b0_ports: WorkflowPorts | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
         self._limits = _effective_limits(limits)
@@ -2302,6 +2314,7 @@ class ApplicationService:
         # that has not said the operation is composed gets a process that does
         # not serve it.
         self._relationship_identity_correction_enabled = relationship_identity_correction_enabled
+        self._gsqs_b0_ports = gsqs_b0_ports
         #: Explicit production composition of the optional proposal plane. The
         #: default gate is disabled; an enabled gate cannot be constructed
         #: without its local provider and canonical Review router.
@@ -7000,6 +7013,47 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
         )
 
+    def _gsqs_start(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: StartGsqsB0,
+    ) -> _Result:
+        """Start or reuse one synthetic B0 repetition. Real handwriting is denied."""
+        del unit_of_work
+        payload = start_workflow(
+            workflow_root=workflow_root_from_env(),
+            repository_root=default_repository_root(),
+            authorization_id=command.authorization_id,
+            campaign_class=command.campaign_class,
+            repetition=command.repetition,
+            idempotency_key=command.idempotency_key,
+            python=sys.executable,
+            ports=self._gsqs_b0_ports,
+            wait=gsqs_b0_wait_in_process(self._gsqs_b0_ports),
+        )
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
+    def _gsqs_status(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetGsqsB0Status,
+    ) -> _Result:
+        """Return durable B0 workflow status. No rasters, gold, or credentials."""
+        del unit_of_work
+        payload = status_workflow(
+            workflow_root=workflow_root_from_env(),
+            run_id=command.run_id,
+        )
+        return _Result(
+            payload=payload,
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_TASK_TRUST_BASIS),
+        )
+
     def _admit(
         self,
         unit_of_work: UnitOfWork,
@@ -8284,6 +8338,8 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.GOODNOTES_WORK: ApplicationService._goodnotes_work,
         Capability.GOODNOTES_CONTENT: ApplicationService._goodnotes_content,
         Capability.GOODNOTES_PROPOSE: ApplicationService._goodnotes_propose,
+        Capability.GSQS_START: ApplicationService._gsqs_start,
+        Capability.GSQS_STATUS: ApplicationService._gsqs_status,
         Capability.REPORTS_BEGIN_CYCLE: ApplicationService._reports_begin_cycle,
         Capability.REPORTS_COMMIT: ApplicationService._reports_commit,
         Capability.REPORTS_RECORD_RUN_STATE: ApplicationService._reports_record_run_state,

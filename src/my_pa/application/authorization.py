@@ -84,6 +84,7 @@ from my_pa.application.commands import (
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetGsqsB0Status,
     GetLatestIntelligenceArtifact,
     GetPulse,
     GetRelationshipMemory,
@@ -141,6 +142,7 @@ from my_pa.application.commands import (
     SearchKnowledge,
     SearchRelationshipMemories,
     SearchTasks,
+    StartGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
@@ -329,6 +331,8 @@ def _requested_scope(
             | GetGoodNotesWork()
             | GetGoodNotesContent()
             | SubmitGoodNotesProposal()
+            | StartGsqsB0()
+            | GetGsqsB0Status()
             | BeginIntelligenceCycle()
             | CommitIntelligenceArtifact()
             | RecordIntelligenceRunState()

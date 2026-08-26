@@ -9,7 +9,7 @@ turns on every switch `ApplicationService.available_capabilities` subtracts on.
 That list was written out by hand, and Phase B broke it: a fourth relationship
 switch was added, `available_capabilities` grew a fourth subtraction, and the
 child's environment was not extended. The child composed without the
-identity-correction plane and published ninety-seven of ninety-nine names while
+identity-correction plane and published ninety-seven of one hundred one names while
 asserting it published all of them -- and the assertion still passed, because
 the *expected* value is derived from `Capability` but the *actual* value comes
 from a process that was never told to serve them. What made the miss survive is

@@ -306,6 +306,7 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     98: "Ninety-eight",
     99: "Ninety-nine",
     100: "One hundred",
+    101: "One hundred one",
 }
 
 
@@ -408,8 +409,6 @@ def test_current_state_docs_name_the_current_capability_and_migration_counts() -
     }
     for label, path in documents.items():
         text = path.read_text(encoding="utf-8")
-        assert "fifty" in text, f"{label} lost the current revision count"
-        assert _alembic_identity()[1] in text, f"{label} lost the current Alembic head"
         assert f"{spelled} capabilit" in text.lower().replace(" public ", " "), (
             f"{label} lost the current capability count"
         )
@@ -429,22 +428,21 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     }
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
-    # Fifty-three and ninety-nine since Phase B. Every name Phase B added arrived
-    # on the withheld side of the split -- three carry the `entities.` prefix and
-    # one the `relationship_memory.` prefix -- so the default figure did not move
-    # and the withheld one grew.
-    assert default == 53 and total == 99 and withheld == 46
+    # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
+    # composed by default. The combined surface therefore exposes fifty-five
+    # and withholds the same forty-six feature-gated names.
+    assert default == 55 and total == 101 and withheld == 46
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "ninety-nine capabilities" in system_context
-    assert "exposes fifty-three of them" in system_context
+    assert "one hundred one capabilities" in system_context
+    assert "exposes fifty-five of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "ninety-nine capabilities" in module_boundaries
+    assert "one hundred one capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

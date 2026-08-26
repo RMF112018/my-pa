@@ -301,3 +301,11 @@ class Purpose(StrEnum):
     # separate again: a producer proposes and does not read back, so neither of
     # the plane's existing pair is widened.
     RELATIONSHIP_MEMORY_PROPOSAL = "relationship_memory_proposal"
+    # Connected-MCP B0 workflow purposes. Two rather than one, on the same rule
+    # as the capture and managed-document planes: a purpose wide enough to cover
+    # starting a repetition and observing it is a purpose that grants both.
+    # Neither reuses `goodnotes_work` / `goodnotes_content` (`D-91`): those are
+    # the stdio analyzer plane. This pair is the ChatLLM-facing orchestration
+    # surface on production `my-pa` MCP.
+    GSQS_B0_EXECUTION = "gsqs_b0_execution"
+    GSQS_B0_OBSERVATION = "gsqs_b0_observation"

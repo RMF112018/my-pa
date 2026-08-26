@@ -71,9 +71,9 @@ hash.
 
 
 The repository is an executable local candidate, not a documentation scaffold.
-The `my_pa` application defines and wires ninety-nine capabilities through HTTP,
+The `my_pa` application defines and wires one hundred one capabilities through HTTP,
 MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
-planes. **A default composition exposes fifty-three of them.** The six
+planes. **A default composition exposes fifty-five of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT`, the
 thirty-one `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
 (and its twenty-one writes a second switch beside it), and the
@@ -86,11 +86,17 @@ HTTP, and reports readiness `degraded`. The default figure moved from fifty to
 fifty-three when WP-FE-03 admitted `commitments.history`, `commitments.search`
 and `commitments.update`, which arrive on the served side of that split; it did
 not move when WP-29 admitted the `relationship_memory.` family, because every
-name in it arrived on the withheld side. Corrected 2026-08-19: this sentence read
-"exposes ninety-nine capabilities" under a heading claiming authenticated
+name in it arrived on the withheld side. It then moved from fifty-three to
+fifty-five when the default-served `gsqs.start` and `gsqs.status` capabilities
+were admitted; `gsqs.start` deliberately remains remote-visible when remote
+writes are disabled, while governed merge still requires global remote writes
+and the server-resolved exact `remote.operator` durable capability set.
+Corrected 2026-08-19: this sentence read
+"exposes one hundred one capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns seventy-five revisions at head `3d07af4dc513`, including the merge of
+Alembic owns seventy-six revisions at head `3d07af4dc513`; its linear history places the GSQS admission
+`c4b0a1d9e827` immediately before Phase B's `c7a1f04b9e63`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
 semantic-retrieval gate remains `SEMANTIC_GATE_FAIL` and production semantic

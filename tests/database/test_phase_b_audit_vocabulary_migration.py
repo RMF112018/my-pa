@@ -292,7 +292,7 @@ def test_the_stored_vocabulary_is_missing_nothing_the_domain_declares(
     and are not in `Capability`, and they predate this phase. The
     direction that breaks a request is a name the domain declares and the
     database has never heard of, and the only way to be sure of it for all
-    ninety-nine is to try all ninety-nine.
+    one hundred one is to try all one hundred one.
     """
     for capability in sorted(member.value for member in Capability):
         _audit(migrated_engine, capability=capability, purpose=SETTLED_PURPOSE)

@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the ninety-nine capabilities is addressable
+**Reachability.** Every one of the one hundred one capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a hundredth capability added to the domain arrives as a
-failing row instead of as an untested one. Eight of the ninety-five answer a
+written here, so a one-hundred-second capability added to the domain arrives as
+a failing row instead of as an untested one. Nine of the one hundred one answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -54,6 +54,7 @@ from tests.conftest import (
     build_service,
     metadata_for,
     operator,
+    seed_gsqs_b0_workflow,
     staged_capture,
     staged_commitment,
     staged_goodnotes_raster,
@@ -113,6 +114,7 @@ from my_pa.application.commands import (
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetGsqsB0Status,
     GetLatestIntelligenceArtifact,
     GetPulse,
     GetRelationshipMemory,
@@ -171,6 +173,7 @@ from my_pa.application.commands import (
     SearchKnowledge,
     SearchRelationshipMemories,
     SearchTasks,
+    StartGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
@@ -340,6 +343,7 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    gsqs_run_id = str(seed_gsqs_b0_workflow(idempotency_key="http-gsqs-start")["run_id"])
     at = datetime(2026, 8, 2, 11, tzinfo=UTC)
     cycle_admission = begin_cycle(
         scene.world.intelligence,
@@ -588,6 +592,13 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
                 }
             ],
         },
+        Capability.GSQS_START: {
+            "authorization_id": "synthetic-b0-commissioning",
+            "campaign_class": "SYNTHETIC",
+            "repetition": 1,
+            "idempotency_key": "http-gsqs-start",
+        },
+        Capability.GSQS_STATUS: {"run_id": gsqs_run_id},
         Capability.REPORTS_BEGIN_CYCLE: {
             "cycle_id": CYCLE_MORNING_INTELLIGENCE,
             "business_date": "2026-08-20",
@@ -958,6 +969,7 @@ def commands_for(
     commitment = staged_commitment(scene)
     work = staged_goodnotes_work(scene)
     raster = staged_goodnotes_raster(scene)
+    gsqs_run_id = str(seed_gsqs_b0_workflow(idempotency_key="http-gsqs-start")["run_id"])
     at = datetime(2026, 8, 2, 11, tzinfo=UTC)
     cycle_admission = begin_cycle(
         scene.world.intelligence,
@@ -1193,6 +1205,13 @@ def commands_for(
                 },
             ),
         ),
+        Capability.GSQS_START: StartGsqsB0(
+            authorization_id="synthetic-b0-commissioning",
+            campaign_class="SYNTHETIC",
+            repetition=1,
+            idempotency_key="http-gsqs-start",
+        ),
+        Capability.GSQS_STATUS: GetGsqsB0Status(run_id=gsqs_run_id),
         Capability.REPORTS_BEGIN_CYCLE: BeginIntelligenceCycle(
             cycle_id=CYCLE_MORNING_INTELLIGENCE,
             business_date="2026-08-20",

@@ -145,13 +145,57 @@ without making a model call. `--evidence-dir` writes public control files
 only. Verdict is `GO` or `NO-GO`. `disclosure_would_occur` is always false.
 Preflight never probes RouteLLM and never opens a disclosure journal.
 
+## Connected-MCP workflow (ChatLLM initiation)
+
+ChatLLM starts and observes a repetition through production MCP tools
+`gsqs.start` and `gsqs.status`. It does not choose cases, paths, models,
+or endpoints. It does not call RouteLLM. It does not use HTTPS
+`goodnotes.eval.*` as the B0 analyzer. Real handwriting remains
+fail-closed (`authorization_id=synthetic-b0-commissioning` only).
+
+The server owns campaign identity, stdio analyzer lifecycle, capture
+persistence, idempotency, and status. An MCP request timeout is not a
+workflow failure: production `gsqs.start` returns after recording the
+run, and ChatLLM polls `gsqs.status`.
+
+## Local prediction acquisition (stdio host)
+
+Hosted ChatLLM cannot spawn `serve-eval-mcp` against the operator raster
+root. An external RouteLLM MCP client is **not** assumed to exist. The
+repository now owns a local execution host that:
+
+- spawns `python apps/cli/gsqs_b0.py serve-eval-mcp` on the workstation
+  that can read the checkout and raster root;
+- enumerates the frozen census in exact order;
+- writes `gsqs-analyzer-capture-v1` / `repetition-00N.json` for `score`.
+
+Synthetic commissioning uses a generated 73-case fixture and the
+`synthetic-fake` model client. Real RouteLLM HTTP remains uncommissioned
+(`BLOCKED_ROUTELLM_CLIENT_ACTIVATION_AUTHORIZATION_REQUIRED`). Real
+Partition-B acquisition requires a later `REAL_HANDWRITING_B0_EXECUTION`
+authorization that this implementation does not admit.
+
+```text
+python apps/cli/gsqs_b0.py acquire-repetition \
+  --authorization <gsqs-b0-acquisition-authorization-v1.json> \
+  --repetition 1 \
+  --campaign-fixture <synthetic-campaign.json> \
+  --output ops/goodnotes/gsqs/b0/runs/<run_id>/rep-001 \
+  --model-client synthetic-fake
+```
+
+The command runs **one** repetition, does not score, and does not start
+the next repetition. Interruption invalidates the attempt; partial
+evidence is preserved and is not resumable. See
+[`B0_LOCAL_EXECUTION.md`](B0_LOCAL_EXECUTION.md).
+
 ## Commissioned path (RouteLLM-over-MCP evaluation, then admit-and-score)
 
-The analyzer is RouteLLM acting as an MCP client of an **ephemeral
-evaluation MCP**, not of live NAS and not of a direct `/v1/chat/completions`
-API. `serve-eval-mcp` publishes `goodnotes.work` and `goodnotes.content`
-(ImageContent PNG) only. `goodnotes.propose` is withheld. Captured
-`gsqs-analyzer-output-v1` documents are admitted and scored locally:
+The analyzer plane is **stdio-isolated**. `serve-eval-mcp` publishes
+`goodnotes.work` and `goodnotes.content` (ImageContent PNG) only.
+`goodnotes.propose` is withheld. A local host (above) must own the stdio
+child; hosted ChatLLM is not that host. Captured `gsqs-analyzer-output-v1`
+documents are admitted and scored locally:
 
 ```text
 python apps/cli/gsqs_b0.py serve-eval-mcp \

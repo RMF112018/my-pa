@@ -181,6 +181,7 @@ __all__ = [
     "GetCorpusCoverage",
     "GetGoodNotesContent",
     "GetGoodNotesWork",
+    "GetGsqsB0Status",
     "GetLatestIntelligenceArtifact",
     "GetPulse",
     "GetSourceMetadata",
@@ -228,6 +229,7 @@ __all__ = [
     "SearchIntelligenceArtifacts",
     "SearchKnowledge",
     "SearchTasks",
+    "StartGsqsB0",
     "SubmitGoodNotesProposal",
     "SupersedeEntityAlias",
     "SupersedeEntityIdentifier",
@@ -2438,6 +2440,56 @@ GetGoodNotesWork.__doc__ = (
     "The principal is not here. Authority comes from authenticated context, "
     "exactly as every other member of Command. A caller-supplied principal_id "
     "would be a stated identity one is_operator away from being trusted."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StartGsqsB0:
+    capability: ClassVar[Capability] = Capability.GSQS_START
+
+    authorization_id: str
+    campaign_class: str
+    repetition: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _bounded_token(self.authorization_id, SafeDetail.AUTHORIZATION_ID, maximum=128)
+        _bounded_token(self.campaign_class, SafeDetail.CAMPAIGN_CLASS, maximum=32)
+        if isinstance(self.repetition, bool) or not isinstance(self.repetition, int):
+            raise InvalidRequestError(SafeDetail.REPETITION)
+        if self.repetition < 1:
+            raise InvalidRequestError(SafeDetail.REPETITION)
+        _idempotency_key(self.idempotency_key)
+
+
+StartGsqsB0.__doc__ = (
+    "`gsqs.start`: start or reuse one governed B0 prediction-acquisition "
+    "repetition. Call this to initiate a synthetic commissioning run. The server "
+    "resolves corpus, case order, analyzer, model client, and capture location. "
+    "This does not process real handwriting, does not access gold, and does not score.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context. "
+    "idempotency_key is required. The client does not name paths, endpoints, "
+    "model IDs, or raster files."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class GetGsqsB0Status:
+    capability: ClassVar[Capability] = Capability.GSQS_STATUS
+
+    run_id: str
+
+    def __post_init__(self) -> None:
+        _goodnotes_id(self.run_id, "b0run", SafeDetail.RUN_ID)
+
+
+GetGsqsB0Status.__doc__ = (
+    "`gsqs.status`: return durable B0 workflow status for one run. Call this to "
+    "observe progress and, when complete, the capture artifact identity. This "
+    "does not return rasters, gold, credentials, or prediction bodies.\n"
+    "\n"
+    "The principal is not here. Authority comes from authenticated context."
 )
 
 
@@ -5712,6 +5764,8 @@ type Command = (
     | GetGoodNotesWork
     | SubmitGoodNotesProposal
     | GetGoodNotesContent
+    | StartGsqsB0
+    | GetGsqsB0Status
     | BeginIntelligenceCycle
     | CommitIntelligenceArtifact
     | RecordIntelligenceRunState

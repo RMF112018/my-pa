@@ -93,6 +93,7 @@ from my_pa.application.commands import (
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
+    GetGsqsB0Status,
     GetLatestIntelligenceArtifact,
     GetPulse,
     GetRelationshipMemory,
@@ -151,6 +152,7 @@ from my_pa.application.commands import (
     SearchKnowledge,
     SearchRelationshipMemories,
     SearchTasks,
+    StartGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
@@ -776,6 +778,14 @@ def _record_context_feedback(payload: Mapping[str, Any]) -> Command:
 
 def _get_goodnotes_work(payload: Mapping[str, Any]) -> Command:
     return GetGoodNotesWork(**payload)
+
+
+def _start_gsqs_b0(payload: Mapping[str, Any]) -> Command:
+    return StartGsqsB0(**payload)
+
+
+def _get_gsqs_b0_status(payload: Mapping[str, Any]) -> Command:
+    return GetGsqsB0Status(**payload)
 
 
 def _search_entities(payload: Mapping[str, Any]) -> Command:
@@ -1584,6 +1594,8 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.GOODNOTES_WORK: _get_goodnotes_work,
         Capability.GOODNOTES_CONTENT: _get_goodnotes_content,
         Capability.GOODNOTES_PROPOSE: _submit_goodnotes_proposal,
+        Capability.GSQS_START: _start_gsqs_b0,
+        Capability.GSQS_STATUS: _get_gsqs_b0_status,
         Capability.REPORTS_BEGIN_CYCLE: _begin_intelligence_cycle,
         Capability.REPORTS_COMMIT: _commit_intelligence_artifact,
         Capability.REPORTS_RECORD_RUN_STATE: _record_intelligence_run_state,
@@ -1640,8 +1652,8 @@ def _named(capability: str) -> Capability:
     """The capability this request names, or a refusal.
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
-    says this build does not serve a capability that exists, and a name that is
-    not one of the ninety-nine names nothing.
+    says this build does not serve a capability that exists, and a value outside
+    the 101 canonical names refers to nothing.
     """
     try:
         return Capability(capability)

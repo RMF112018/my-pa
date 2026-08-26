@@ -370,6 +370,8 @@ _ORDINAL_UNITS = (
     "ninety-eighth",
     "ninety-ninth",
     "hundredth",
+    "hundred-first",
+    "hundred-second",
 )
 
 
@@ -876,23 +878,23 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
     # records what deriving it would cost.
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**fifty-three**",
+        "**fifty-five**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
         "`documents.`, six `entities.` and eight `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as seventy-six",
+        "correctly as ninety-seven",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
-        "**fifty-three**",
+        "**fifty-five**",
         "none beginning `documents.`",
         "the same default-publication count, in the line naming the test that measures it",
     ),
     (
         "README.md",
-        "fifty-three tools",
-        "process publishes fifty-three tools",
+        "fifty-five tools",
+        "process publishes fifty-five tools",
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "

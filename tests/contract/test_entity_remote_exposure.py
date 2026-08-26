@@ -67,12 +67,9 @@ ENTITY_READS: Final[frozenset[str]] = frozenset(
 ENTITY_WRITES: Final[frozenset[str]] = ENTITY_CAPABILITIES - ENTITY_READS
 
 
-#: The identity-correction pair, which is *also* operator-only and so never joins a remote
-#: profile at all. `remote_tool_names` drops an operator-only capability before it
-#: classifies read from write, so every assertion below about the remote surface
-#: has to subtract them: they are withheld by a gate that is not the one this file
-#: is about, and asserting they appear when writes are enabled would be asserting
-#: the operator boundary away.
+#: The identity-correction pair, which is *also* operator-only and therefore joins
+#: only the exact ``remote.operator`` profile. Every ordinary remote profile still
+#: subtracts them: writes-enabled alone is deliberately insufficient.
 OPERATOR_ONLY_WRITES: Final[frozenset[str]] = frozenset(
     {"entities.merge.preview", "entities.merge"}
 )
@@ -208,9 +205,29 @@ def test_a_build_with_the_plane_withholds_every_write_until_writes_are_enabled()
     assert withheld & ENTITY_WRITES == frozenset()
     granted = remote_tool_names(_service(enabled=True), writes_enabled=True)
     assert granted >= REMOTE_REACHABLE_WRITES
-    # And the two operator-only writes are still absent with writes enabled,
-    # which is the second gate rather than this one.
+    # And the two operator-only writes are still absent with writes enabled but
+    # no server-resolved operator profile, which is the second gate.
     assert not granted & OPERATOR_ONLY_WRITES
+
+
+def test_only_the_exact_remote_operator_profile_adds_the_governed_merge() -> None:
+    service = _service(enabled=True)
+    writes_off = remote_tool_names(
+        service,
+        writes_enabled=False,
+        relationship_grant_profile="remote.operator",
+    )
+    ordinary = remote_tool_names(service, writes_enabled=True)
+    operator = remote_tool_names(
+        service,
+        writes_enabled=True,
+        relationship_grant_profile="remote.operator",
+    )
+
+    assert writes_off.isdisjoint(OPERATOR_ONLY_WRITES)
+    assert ordinary.isdisjoint(OPERATOR_ONLY_WRITES)
+    assert operator & OPERATOR_ONLY_WRITES == OPERATOR_ONLY_WRITES
+    assert Capability.SOURCES_ENROLL.value not in operator
 
 
 def test_the_read_half_is_classified_as_a_read_and_the_write_half_as_a_write() -> None:

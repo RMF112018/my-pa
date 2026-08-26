@@ -72,7 +72,7 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Final
+from typing import Final, Literal
 
 import uvicorn
 
@@ -81,13 +81,29 @@ from my_pa.adapters.http.oauth import build_origin_oauth_routes
 from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
 from my_pa.adapters.mcp.server import SERVER_NAME
 from my_pa.bootstrap.gateway import build_gateway_runtime
+from my_pa.bootstrap.relationship_intelligence_profiles import RELATIONSHIP_GRANT_PROFILES
 from my_pa.bootstrap.settings import load_settings
+from my_pa.domain.identity.operation import Capability
 from my_pa.infrastructure.security import RemoteAuthenticationError, RemoteAuthenticator
 from my_pa.infrastructure.security.origin_authorization import OriginOAuthServer
 
 #: The safe default address. Container binding is a validated deployment mode,
 #: not a CLI host argument, and Compose publishes no gateway host port.
 HOST: Final = "127.0.0.1"
+
+
+def _remote_relationship_grant_profile(
+    capabilities: frozenset[Capability], *, write_allowed: bool
+) -> Literal["remote.operator"] | None:
+    """Recognize the one durable grant ceiling that may publish identity correction."""
+
+    if (
+        write_allowed
+        and capabilities == RELATIONSHIP_GRANT_PROFILES["remote.operator"].capabilities
+    ):
+        return "remote.operator"
+    return None
+
 
 #: An unassigned high port, changeable with `--port`. Nothing depends on the
 #: number; it is here so that starting the process needs no arguments.
@@ -255,9 +271,13 @@ def _mcp_remote(args: argparse.Namespace) -> int:
             # deterministic intersection, so no write name is recreated here.
             capabilities &= remote_tool_names(runtime.service, writes_enabled=False)
         return RemoteAccessContext(
-            authenticated.principal,
-            capabilities,
-            authenticated.capability_purposes,
+            principal=authenticated.principal,
+            allowed_capabilities=capabilities,
+            capability_purposes=authenticated.capability_purposes,
+            relationship_grant_profile=_remote_relationship_grant_profile(
+                authenticated.capabilities,
+                write_allowed=authenticated.write_allowed,
+            ),
         )
 
     from my_pa.adapters.mcp.remote import remote_tool_names

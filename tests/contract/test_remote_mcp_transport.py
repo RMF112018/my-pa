@@ -8,9 +8,11 @@ import json
 import threading
 import time
 from base64 import b64decode, b64encode
+from typing import Literal
 
 import httpx2
 import pytest
+from apps.gateway import _remote_relationship_grant_profile
 from mcp.client.session import ClientSession
 from mcp.client.streamable_http import streamable_http_client
 from tests.conftest import (
@@ -29,6 +31,7 @@ from my_pa.adapters.mcp.remote import RemoteAccessContext, create_remote_mcp_app
 from my_pa.adapters.mcp.server import published_tools
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES
 from my_pa.adapters.remote_request import SERVER_OWNED_REMOTE_FIELDS
+from my_pa.bootstrap.relationship_intelligence_profiles import RELATIONSHIP_GRANT_PROFILES
 from my_pa.domain.identity.operation import Capability, is_operator_only, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 
@@ -78,6 +81,142 @@ def test_remote_profile_is_deterministic_read_only(scene: Scene) -> None:
     assert Capability.TASKS_BULK_PREVIEW.value in enabled
     assert Capability.TASKS_BULK_CONFIRM.value in enabled
     assert Capability.SOURCES_ENROLL.value not in enabled
+
+
+def test_only_an_exact_write_enabled_durable_operator_ceiling_sets_the_marker() -> None:
+    operator = RELATIONSHIP_GRANT_PROFILES["remote.operator"].capabilities
+    reviewer = RELATIONSHIP_GRANT_PROFILES["remote.reviewer"].capabilities
+
+    assert _remote_relationship_grant_profile(operator, write_allowed=True) == "remote.operator"
+    assert _remote_relationship_grant_profile(operator, write_allowed=False) is None
+    assert _remote_relationship_grant_profile(reviewer, write_allowed=True) is None
+    assert (
+        _remote_relationship_grant_profile(
+            operator - {Capability.ENTITIES_MERGE}, write_allowed=True
+        )
+        is None
+    )
+    assert (
+        _remote_relationship_grant_profile(
+            operator | {Capability.SOURCES_ENROLL}, write_allowed=True
+        )
+        is None
+    )
+
+
+@pytest.mark.anyio
+async def test_remote_operator_merge_requires_both_gates_and_server_owned_grants(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from my_pa.application.commands import GetCapabilities
+
+    merge_capabilities = frozenset({Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE})
+    merge_names = frozenset(capability.value for capability in merge_capabilities)
+    merge_grants = frozenset(
+        (capability, Purpose.ENTITY_IDENTITY_CORRECTION) for capability in merge_capabilities
+    )
+    service = build_service(scene.world, scene.providers)
+    original_invoke = service.invoke
+    invoked: list[Capability] = []
+
+    def synthetic_merge_invoke(metadata: object, _command: object, **kwargs: object) -> object:
+        capability = metadata.capability
+        assert capability in merge_capabilities
+        invoked.append(capability)
+        substitute = metadata.model_copy(
+            update={
+                "capability": Capability.CAPABILITIES_GET,
+                "purpose": Purpose.STATUS_OBSERVATION,
+            }
+        )
+        return original_invoke(substitute, GetCapabilities(), **kwargs)
+
+    monkeypatch.setattr(service, "invoke", synthetic_merge_invoke)
+
+    def application(
+        *,
+        writes_enabled: bool,
+        marker: Literal["remote.operator"] | None,
+        grants: frozenset[tuple[Capability, Purpose | None]] | None = merge_grants,
+    ) -> object:
+        return create_remote_mcp_app(
+            service,
+            resolve_access=lambda _authorization: RemoteAccessContext(
+                principal=scene.principal,
+                allowed_capabilities=merge_names,
+                capability_purposes=grants,
+                relationship_grant_profile=marker,
+            ),
+            allowed_hosts=("testserver",),
+            remote_enabled=True,
+            writes_enabled=writes_enabled,
+            resource="https://mcp.example.invalid",
+            authorization_servers=("https://issuer.example.invalid",),
+            scopes=frozenset({"my-pa.write"}),
+        )
+
+    async def exercise(app: object) -> tuple[set[str], object, object]:
+        async with (
+            app.router.lifespan_context(app),
+            httpx2.AsyncClient(
+                transport=httpx2.ASGITransport(app=app),
+                base_url="http://testserver",
+                headers={"Authorization": "Bearer synthetic"},
+            ) as http,
+            streamable_http_client("http://testserver/mcp", http_client=http) as streams,
+            ClientSession(*streams[:2]) as session,
+        ):
+            await session.initialize()
+            names = {tool.name for tool in (await session.list_tools()).tools}
+            preview = await session.call_tool(
+                Capability.ENTITIES_MERGE_PREVIEW.value,
+                remote_arguments(
+                    {
+                        "survivor_entity_id": "ent_alice0001alice0001",
+                        "expected_survivor_version": 1,
+                        "merged_away": [
+                            {
+                                "entity_id": "ent_alice0002alice0002",
+                                "expected_version": 1,
+                            }
+                        ],
+                        "reason": "Synthetic remote operator preview.",
+                    }
+                ),
+            )
+            applied = await session.call_tool(
+                Capability.ENTITIES_MERGE.value,
+                remote_arguments(
+                    {
+                        "preview_id": "eipv_offswitch0001",
+                        "preview_digest": "0" * 64,
+                        "reason": "Synthetic remote operator merge.",
+                    }
+                ),
+            )
+        return names, preview, applied
+
+    raw_names, raw_preview, _ = await exercise(application(writes_enabled=True, marker=None))
+    off_names, off_preview, _ = await exercise(
+        application(writes_enabled=False, marker="remote.operator")
+    )
+    no_purpose_names, no_purpose_preview, _ = await exercise(
+        application(writes_enabled=True, marker="remote.operator", grants=frozenset())
+    )
+    operator_names, operator_preview, operator_apply = await exercise(
+        application(writes_enabled=True, marker="remote.operator")
+    )
+
+    assert raw_names.isdisjoint(merge_names) and raw_preview.is_error is True
+    assert off_names.isdisjoint(merge_names) and off_preview.is_error is True
+    assert no_purpose_names >= merge_names and no_purpose_preview.is_error is True
+    assert operator_names >= merge_names
+    assert Capability.SOURCES_ENROLL.value not in operator_names
+    assert operator_preview.is_error is False and operator_apply.is_error is False
+    assert invoked == [
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+    ]
 
 
 def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) -> None:
@@ -203,11 +342,10 @@ def test_the_governed_merge_is_gated_on_two_axes_and_neither_is_derived_from_the
     names permit `entity_identity_correction`, which is in that set. That makes
     the preview remote-write-gated because it *shares a purpose* with the apply --
     the coupling R-7 tells this package to accept rather than work around. It is
-    also moot in the same breath and deliberately not left implicit: both are
-    operator-only, and `remote_tool_names` drops an operator-only capability
-    before it classifies anything, so neither reaches a remote profile at all.
-    The membership is what keeps the classification true if the operator gate is
-    ever the thing that changes.
+    also independently operator-gated and deliberately not left implicit:
+    neither reaches an ordinary remote profile, while the exact server-resolved
+    ``remote.operator`` profile can admit both. The membership is what keeps the
+    write classification true after that operator gate is satisfied.
 
     **Axis two, the tool annotation.** `adapters.mcp.tools` derives
     `read_only_hint` from `is_write_capability` and `destructive_hint` from

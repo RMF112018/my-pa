@@ -16,6 +16,7 @@ from my_pa.application.goodnotes_gsqs_live_b0 import APPROVED_COMBINED_IDENTITY
 
 ACQUISITION_AUTH_SCHEMA = "gsqs-b0-acquisition-authorization-v1"
 OPERATION_SYNTHETIC = "SYNTHETIC_B0_ACQUISITION"
+OPERATION_SYNTHETIC_ROUTELLM = "SYNTHETIC_ROUTELLM_COMMISSIONING"
 OPERATION_REAL = "REAL_HANDWRITING_B0_EXECUTION"
 CAMPAIGN_CLASS_SYNTHETIC = "SYNTHETIC"
 CAMPAIGN_CLASS_REAL = "REAL_HANDWRITING"
@@ -117,10 +118,16 @@ def assert_acquisition_permitted(
             raise AcquisitionError(
                 "REAL_HANDWRITING_B0_EXECUTION is not admitted in this implementation"
             )
-    elif authorization.operation != OPERATION_SYNTHETIC:
+    elif authorization.operation == OPERATION_SYNTHETIC:
+        if authorization.campaign_class != CAMPAIGN_CLASS_SYNTHETIC:
+            raise AcquisitionError("synthetic campaign_class required")
+    elif authorization.operation == OPERATION_SYNTHETIC_ROUTELLM:
+        if authorization.campaign_class != CAMPAIGN_CLASS_SYNTHETIC:
+            raise AcquisitionError("synthetic campaign_class required")
+        if authorization.model_client != MODEL_CLIENT_ROUTELLM_HTTP:
+            raise AcquisitionError("model-client configuration mismatch")
+    else:
         raise AcquisitionError("synthetic acquisition requires SYNTHETIC_B0_ACQUISITION")
-    elif authorization.campaign_class != CAMPAIGN_CLASS_SYNTHETIC:
-        raise AcquisitionError("synthetic campaign_class required")
     if authorization.repetition != repetition:
         raise AcquisitionError("authorization repetition mismatch")
     if authorization.corpus_version != corpus_version:

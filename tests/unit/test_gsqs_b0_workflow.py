@@ -12,11 +12,17 @@ from my_pa.application.errors import ConflictError, DeniedError, InvalidRequestE
 from my_pa.application.goodnotes_gsqs_b0_acquisition import (
     CAMPAIGN_CLASS_REAL,
     CAMPAIGN_CLASS_SYNTHETIC,
+    MODEL_CLIENT_ROUTELLM_HTTP,
+    MODEL_CLIENT_SYNTHETIC,
     REAL_HANDWRITING_ACQUISITION_ADMITTED,
 )
-from my_pa.application.goodnotes_gsqs_b0_model_client import TimeoutB0ModelClient
+from my_pa.application.goodnotes_gsqs_b0_model_client import (
+    RouteLLMHttpB0ModelClient,
+    TimeoutB0ModelClient,
+)
 from my_pa.application.goodnotes_gsqs_b0_workflow import (
     ADMITTED_SYNTHETIC_AUTHORIZATION_ID,
+    ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
     STATE_COMPLETE,
     STATE_INTERRUPTED,
     STATE_PREPARED,
@@ -28,6 +34,9 @@ from my_pa.application.goodnotes_gsqs_b0_workflow import (
     status_workflow,
 )
 from my_pa.application.goodnotes_gsqs_live_b0 import repo_root
+from my_pa.infrastructure.gsqs_routellm_transport import RouteLLMHttpResult
+from tests.unit.test_gsqs_b0_routellm_activation import load_valid_activation, write_activation
+from tests.unit.test_gsqs_b0_routellm_http_client import SENTINEL_KEY, _success_payload
 
 FAKE_PORTS = WorkflowPorts(
     session_factory=lambda rasters: DiskContentSession(rasters),
@@ -190,3 +199,136 @@ def test_dead_owner_pid_marks_running_interrupted(tmp_path: Path) -> None:
     )
     assert status["state"] == STATE_INTERRUPTED
     assert status["failure_class"] == "WORKER_CRASH"
+
+
+def _routellm_ports(tmp_path: Path) -> WorkflowPorts:
+    activation = load_valid_activation(tmp_path / "activation")
+
+    def poster(
+        *,
+        origin: str,
+        api_key: str,
+        body: dict[str, object],
+        **_kwargs: object,
+    ) -> RouteLLMHttpResult:
+        del origin, api_key, body
+        return RouteLLMHttpResult(status=200, payload=_success_payload())
+
+    client = RouteLLMHttpB0ModelClient(
+        activation=activation,
+        origin="https://route.example",
+        api_key=SENTINEL_KEY,
+        poster=poster,
+    )
+    return WorkflowPorts(
+        model_client=client,
+        session_factory=lambda rasters: DiskContentSession(rasters),
+        case_count=2,
+        activation=activation,
+    )
+
+
+def test_synthetic_b0_commissioning_ignores_routellm_env(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("MY_PA_ROUTELLM_API_KEY", SENTINEL_KEY)
+    monkeypatch.setenv("MY_PA_ROUTELLM_BASE_URL", "https://route.example")
+    result = _start(tmp_path)
+    assert result["state"] == STATE_COMPLETE
+    assert result["model_client"] == MODEL_CLIENT_SYNTHETIC
+    assert result["scoring"] == "NOT_RUN"
+    dumped = json.dumps(result)
+    assert SENTINEL_KEY not in dumped
+    assert "https://route.example" not in dumped
+
+
+def test_synthetic_routellm_requires_activation_artifact(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("MY_PA_GSQS_B0_ROUTELLM_ACTIVATION", raising=False)
+    monkeypatch.setenv("MY_PA_ROUTELLM_API_KEY", SENTINEL_KEY)
+    monkeypatch.setenv("MY_PA_ROUTELLM_BASE_URL", "https://route.example")
+    with pytest.raises(DeniedError):
+        _start(
+            tmp_path,
+            authorization_id=ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
+        )
+
+
+def test_synthetic_routellm_wrong_schema_is_denied(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = write_activation(tmp_path / "act", schema_version="other")
+    monkeypatch.setenv("MY_PA_GSQS_B0_ROUTELLM_ACTIVATION", str(path))
+    with pytest.raises(DeniedError):
+        _start(
+            tmp_path,
+            authorization_id=ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
+            ports=WorkflowPorts(
+                session_factory=lambda rasters: DiskContentSession(rasters),
+                case_count=2,
+            ),
+        )
+
+
+def test_synthetic_routellm_candidate_mismatch_is_denied(tmp_path: Path) -> None:
+    activation = load_valid_activation(tmp_path, candidate_identity="other-candidate")
+    with pytest.raises(DeniedError):
+        _start(
+            tmp_path,
+            authorization_id=ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
+            ports=WorkflowPorts(
+                session_factory=lambda rasters: DiskContentSession(rasters),
+                case_count=2,
+                activation=activation,
+            ),
+        )
+
+
+def test_real_campaign_with_synthetic_routellm_auth_is_denied(tmp_path: Path) -> None:
+    assert REAL_HANDWRITING_ACQUISITION_ADMITTED is False
+    with pytest.raises(DeniedError):
+        _start(
+            tmp_path,
+            authorization_id=ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
+            campaign_class=CAMPAIGN_CLASS_REAL,
+            ports=_routellm_ports(tmp_path / "ports"),
+        )
+
+
+def test_synthetic_routellm_repetition_two_is_denied(tmp_path: Path) -> None:
+    with pytest.raises(DeniedError):
+        _start(
+            tmp_path,
+            authorization_id=ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
+            repetition=2,
+            ports=_routellm_ports(tmp_path / "ports"),
+        )
+
+
+def test_synthetic_routellm_workflow_completes_without_gold_or_score(
+    tmp_path: Path,
+) -> None:
+    result = _start(
+        tmp_path,
+        authorization_id=ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
+        ports=_routellm_ports(tmp_path / "ports"),
+        idempotency_key="cmcp-routellm-0001",
+    )
+    assert result["state"] == STATE_COMPLETE
+    assert result["model_client"] == MODEL_CLIENT_ROUTELLM_HTTP
+    assert result["expected_cases"] == 2
+    assert result["captured"] == 2
+    assert result["missing"] == 0
+    assert result["scoring"] == "NOT_RUN"
+    assert result["gold"] == "NOT_ACCESSED"
+    dumped = json.dumps(result)
+    assert SENTINEL_KEY not in dumped
+    assert "https://route.example" not in dumped
+    assert "MY_PA_ROUTELLM" not in dumped
+    status = status_workflow(
+        workflow_root=tmp_path / "workflow",
+        run_id=str(result["run_id"]),
+    )
+    assert status["model_client"] == MODEL_CLIENT_ROUTELLM_HTTP
+    assert status["scoring"] == "NOT_RUN"

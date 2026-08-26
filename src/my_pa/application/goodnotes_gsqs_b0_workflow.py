@@ -30,8 +30,10 @@ from my_pa.application.goodnotes_gsqs_b0_acquisition import (
     ACQUISITION_AUTH_SCHEMA,
     CAMPAIGN_CLASS_REAL,
     CAMPAIGN_CLASS_SYNTHETIC,
+    MODEL_CLIENT_ROUTELLM_HTTP,
     MODEL_CLIENT_SYNTHETIC,
     OPERATION_SYNTHETIC,
+    OPERATION_SYNTHETIC_ROUTELLM,
     AcquisitionAuthorization,
     AcquisitionError,
     acquisition_from_mapping,
@@ -44,6 +46,7 @@ from my_pa.application.goodnotes_gsqs_b0_mcp import (
 from my_pa.application.goodnotes_gsqs_b0_model_client import (
     B0ModelClient,
     B0ModelClientError,
+    RouteLLMHttpB0ModelClient,
     SyntheticB0ModelClient,
     bind_model_client,
 )
@@ -52,6 +55,13 @@ from my_pa.application.goodnotes_gsqs_b0_orchestrator import (
     ContentSession,
     OrchestratorError,
     acquire_repetition,
+)
+from my_pa.application.goodnotes_gsqs_b0_routellm_activation import (
+    ACTIVATION_PATH_ENV,
+    RouteLLMActivationError,
+    RouteLLMClientActivation,
+    admit_activation,
+    load_activation,
 )
 from my_pa.application.goodnotes_gsqs_b0_stdio_session import (
     StdioEvalSession,
@@ -81,6 +91,7 @@ from my_pa.domain.common.time import format_rfc3339
 WORKFLOW_SCHEMA = "gsqs-b0-workflow-v1"
 WORKFLOW_ROOT_ENV = "MY_PA_GSQS_B0_WORKFLOW_ROOT"
 ADMITTED_SYNTHETIC_AUTHORIZATION_ID = "synthetic-b0-commissioning"
+ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID = "synthetic-routellm-commissioning"
 CANDIDATE_RELATIVE = Path("ops/goodnotes/gsqs/b0/routellm-goodnotes-b0-v1.json")
 STATE_NAME = "WORKFLOW_STATE.json"
 INDEX_NAME = "IDEMPOTENCY_INDEX.json"
@@ -111,6 +122,7 @@ class WorkflowPorts:
     model_client: B0ModelClient | None = None
     session_factory: ContentSessionFactory | None = None
     case_count: int | None = None
+    activation: RouteLLMClientActivation | None = None
 
 
 class DiskContentSession:
@@ -167,10 +179,13 @@ def start_workflow(
         raise DeniedError()
     if campaign_class != CAMPAIGN_CLASS_SYNTHETIC:
         raise InvalidRequestError(SafeDetail.CAMPAIGN_CLASS)
-    if authorization_id != ADMITTED_SYNTHETIC_AUTHORIZATION_ID:
-        raise DeniedError()
     if repetition != 1:
         raise DeniedError()
+    admitted_model_client, operation, activation = _admit_start_authorization(
+        authorization_id=authorization_id,
+        ports=ports,
+        repository_root=repository_root,
+    )
     root = _require_root(workflow_root)
     key = _idempotency_digest(authorization_id, repetition, idempotency_key)
     reuse_id: str | None = None
@@ -213,7 +228,7 @@ def start_workflow(
                     "completed_at": None,
                     "scoring": "NOT_RUN",
                     "automatic_next_repetition": False,
-                    "model_client": MODEL_CLIENT_SYNTHETIC,
+                    "model_client": admitted_model_client,
                 },
             )
             _record_idempotency(root, key, run_id)
@@ -227,6 +242,10 @@ def start_workflow(
             repository_root=repository_root,
             python=python,
             ports=ports,
+            authorization_id=authorization_id,
+            operation=operation,
+            model_client_identity=admitted_model_client,
+            activation=activation,
         )
     worker = threading.Thread(
         target=_execute_run,
@@ -235,6 +254,10 @@ def start_workflow(
             "repository_root": repository_root,
             "python": python,
             "ports": ports,
+            "authorization_id": authorization_id,
+            "operation": operation,
+            "model_client_identity": admitted_model_client,
+            "activation": activation,
         },
         name=f"gsqs-b0-{run_id}",
         daemon=False,
@@ -261,12 +284,75 @@ def status_workflow(*, workflow_root: Path, run_id: str) -> dict[str, object]:
     return _public_status(payload)
 
 
+def _admit_start_authorization(
+    *,
+    authorization_id: str,
+    ports: WorkflowPorts,
+    repository_root: Path,
+) -> tuple[str, str, RouteLLMClientActivation | None]:
+    if authorization_id == ADMITTED_SYNTHETIC_AUTHORIZATION_ID:
+        if ports.model_client is not None and ports.model_client.identity != MODEL_CLIENT_SYNTHETIC:
+            raise DeniedError()
+        return MODEL_CLIENT_SYNTHETIC, OPERATION_SYNTHETIC, None
+    if authorization_id != ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID:
+        raise DeniedError()
+    activation = ports.activation
+    if activation is None:
+        raw = os.environ.get(ACTIVATION_PATH_ENV, "")
+        if not raw or "\x00" in raw:
+            raise DeniedError()
+        try:
+            activation = load_activation(Path(raw))
+        except (OSError, ValueError, json.JSONDecodeError):
+            raise DeniedError() from None
+    try:
+        candidate = load_route_llm_candidate(repository_root / CANDIDATE_RELATIVE)
+        identity = composite_model_identity(candidate)
+        prompt_id = prompt_config_identity(repository_root)
+        admit_activation(
+            activation,
+            expected_commit=activation.repository_commit,
+            expected_tree=activation.repository_tree,
+            expected_candidate=identity,
+            expected_prompt=prompt_id,
+            expected_analyzer_name=INCUMBENT_ANALYZER_NAME,
+            expected_analyzer_version=INCUMBENT_ANALYZER_VERSION,
+        )
+    except (RouteLLMActivationError, B0ModelClientError, ValueError):
+        raise DeniedError() from None
+    if ports.model_client is not None and ports.model_client.identity != MODEL_CLIENT_ROUTELLM_HTTP:
+        raise DeniedError()
+    return MODEL_CLIENT_ROUTELLM_HTTP, OPERATION_SYNTHETIC_ROUTELLM, activation
+
+
+def _bind_workflow_client(
+    *,
+    ports: WorkflowPorts,
+    model_client_identity: str,
+    activation: RouteLLMClientActivation | None,
+) -> B0ModelClient:
+    if model_client_identity == MODEL_CLIENT_SYNTHETIC:
+        client = ports.model_client or SyntheticB0ModelClient()
+        if client.identity != MODEL_CLIENT_SYNTHETIC:
+            raise DeniedError()
+        return client
+    if activation is None:
+        raise DeniedError()
+    if ports.model_client is not None and ports.model_client.identity == MODEL_CLIENT_ROUTELLM_HTTP:
+        return ports.model_client
+    return RouteLLMHttpB0ModelClient(activation=activation)
+
+
 def _execute_run(
     *,
     run_dir: Path,
     repository_root: Path,
     python: str | None,
     ports: WorkflowPorts,
+    authorization_id: str,
+    operation: str,
+    model_client_identity: str,
+    activation: RouteLLMClientActivation | None,
 ) -> dict[str, object]:
     state = _read_state(run_dir)
     campaign_dir = run_dir / "campaign"
@@ -284,8 +370,8 @@ def _execute_run(
     authorization = acquisition_from_mapping(
         {
             "schema_version": ACQUISITION_AUTH_SCHEMA,
-            "authorization_id": ADMITTED_SYNTHETIC_AUTHORIZATION_ID,
-            "operation": OPERATION_SYNTHETIC,
+            "authorization_id": authorization_id,
+            "operation": operation,
             "campaign_id": campaign.campaign_id,
             "campaign_class": CAMPAIGN_CLASS_SYNTHETIC,
             "repetition": 1,
@@ -297,15 +383,17 @@ def _execute_run(
             "prompt_config_identity": prompt_id,
             "analyzer_name": INCUMBENT_ANALYZER_NAME,
             "analyzer_version": INCUMBENT_ANALYZER_VERSION,
-            "model_client": MODEL_CLIENT_SYNTHETIC,
+            "model_client": model_client_identity,
             "mcp_evaluation_surface": MCP_EVALUATION_SURFACE_STDIO,
             "mcp_evaluation_binding_mode": MCP_BINDING_OPERATOR_LOCAL_STDIO,
             "mcp_evaluation_evidence_id": f"workflow-{state['run_id']}",
         }
     )
-    client = ports.model_client or SyntheticB0ModelClient()
-    if client.identity != MODEL_CLIENT_SYNTHETIC:
-        raise DeniedError()
+    client = _bind_workflow_client(
+        ports=ports,
+        model_client_identity=model_client_identity,
+        activation=activation,
+    )
     auth_path = run_dir / "authorization.json"
     auth_path.write_text(
         json.dumps(_authorization_payload(authorization), indent=2, sort_keys=True) + "\n",

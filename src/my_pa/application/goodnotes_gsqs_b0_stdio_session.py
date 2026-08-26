@@ -276,4 +276,5 @@ def stdio_env(*, raster_root: Path, pythonpath: Sequence[Path]) -> dict[str, str
     env["PYTHONPATH"] = os.pathsep.join(str(item) for item in pythonpath)
     env.pop("MY_PA_ROUTELLM_API_KEY", None)
     env.pop("MY_PA_ROUTELLM_BASE_URL", None)
+    env.pop("MY_PA_GSQS_B0_ROUTELLM_ACTIVATION", None)
     return env

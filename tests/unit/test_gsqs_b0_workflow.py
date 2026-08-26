@@ -224,7 +224,7 @@ def _routellm_ports(tmp_path: Path) -> WorkflowPorts:
     return WorkflowPorts(
         model_client=client,
         session_factory=lambda rasters: DiskContentSession(rasters),
-        case_count=2,
+        case_count=73,
         activation=activation,
     )
 
@@ -318,8 +318,8 @@ def test_synthetic_routellm_workflow_completes_without_gold_or_score(
     )
     assert result["state"] == STATE_COMPLETE
     assert result["model_client"] == MODEL_CLIENT_ROUTELLM_HTTP
-    assert result["expected_cases"] == 2
-    assert result["captured"] == 2
+    assert result["expected_cases"] == 1
+    assert result["captured"] == 1
     assert result["missing"] == 0
     assert result["scoring"] == "NOT_RUN"
     assert result["gold"] == "NOT_ACCESSED"
@@ -359,13 +359,13 @@ def test_routellm_workflow_uses_injected_poster_without_prebuilt_client(
         authorization_id=ADMITTED_SYNTHETIC_ROUTELLM_AUTHORIZATION_ID,
         ports=WorkflowPorts(
             session_factory=lambda rasters: DiskContentSession(rasters),
-            case_count=2,
+            case_count=73,
             activation=activation,
             poster=poster,
         ),
     )
     assert result["state"] == STATE_COMPLETE
     assert result["model_client"] == MODEL_CLIENT_ROUTELLM_HTTP
-    assert result["captured"] == 2
-    assert calls["n"] == 2
+    assert result["captured"] == 1
+    assert calls["n"] == 1
     assert result["scoring"] == "NOT_RUN"

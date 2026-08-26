@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import re
 import zlib
 from dataclasses import dataclass
 from hashlib import sha256
@@ -19,6 +20,8 @@ SYNTHETIC_CAMPAIGN_ID = "gsqs-b0-synthetic-exec-v1"
 SYNTHETIC_CORPUS_VERSION = "gsqs-b0-synthetic-exec-v1"
 SYNTHETIC_PARTITION = "SYNTHETIC"
 SYNTHETIC_CASE_COUNT = 73
+SYNTHETIC_CASE_ID_PATTERN = re.compile(r"^synth-b0-([0-9]{3})$")
+ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS = ("synth-b0-001",)
 
 
 @dataclass(frozen=True, slots=True)
@@ -48,18 +51,30 @@ def synthetic_png(index: int) -> bytes:
     )
 
 
-def build_synthetic_campaign(
-    directory: Path, *, case_count: int = SYNTHETIC_CASE_COUNT
+def synthetic_case_ordinal(case_id: str) -> int:
+    matched = SYNTHETIC_CASE_ID_PATTERN.fullmatch(case_id)
+    if matched is None:
+        raise ValueError("synthetic case id is not admitted")
+    ordinal = int(matched.group(1))
+    if ordinal < 1:
+        raise ValueError("synthetic case id is not admitted")
+    return ordinal
+
+
+def build_synthetic_campaign_for_case_ids(
+    directory: Path, case_ids: tuple[str, ...]
 ) -> SyntheticCampaign:
-    if case_count < 1:
+    if not case_ids:
         raise ValueError("synthetic campaign needs at least one case")
+    if len(case_ids) != len(set(case_ids)):
+        raise ValueError("synthetic campaign has duplicate case ids")
     if directory.is_symlink():
         raise ValueError("synthetic raster root must not be a symlink")
     rasters = directory / "rasters"
     rasters.mkdir(parents=True, exist_ok=True)
     members: list[B0CensusMember] = []
-    for ordinal in range(1, case_count + 1):
-        case_id = f"synth-b0-{ordinal:03d}"
+    for case_id in case_ids:
+        ordinal = synthetic_case_ordinal(case_id)
         png = synthetic_png(ordinal)
         digest = sha256(png).hexdigest()
         (rasters / f"{case_id}.png").write_bytes(png)
@@ -118,6 +133,15 @@ def build_synthetic_campaign(
         census=census,
         raster_root=rasters,
     )
+
+
+def build_synthetic_campaign(
+    directory: Path, *, case_count: int = SYNTHETIC_CASE_COUNT
+) -> SyntheticCampaign:
+    if case_count < 1:
+        raise ValueError("synthetic campaign needs at least one case")
+    ids = tuple(f"synth-b0-{ordinal:03d}" for ordinal in range(1, case_count + 1))
+    return build_synthetic_campaign_for_case_ids(directory, ids)
 
 
 def load_synthetic_campaign(path: Path) -> tuple[B0Census, str]:

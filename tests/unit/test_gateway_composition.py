@@ -146,6 +146,7 @@ def test_gsqs_b0_ports_supply_routellm_poster_without_forcing_in_process_wait(
     assert ports.session_factory is None
     assert ports.case_count is None
     assert ports.activation is None
+    assert not hasattr(ports, "eligible_case_ids")
     assert gsqs_b0_wait_in_process(ports) is False
 
 

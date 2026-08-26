@@ -13,6 +13,10 @@ from my_pa.application.goodnotes_gsqs_b0_acquisition import (
     MODEL_CLIENT_ROUTELLM_HTTP,
 )
 from my_pa.application.goodnotes_gsqs_b0_model_client import B0ModelClientError
+from my_pa.application.goodnotes_gsqs_b0_synthetic_campaign import (
+    ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS,
+    SYNTHETIC_CASE_ID_PATTERN,
+)
 
 ACTIVATION_SCHEMA = "gsqs-b0-routellm-client-activation-v1"
 ACTIVATION_OPERATION = "ACTIVATE_INTERNAL_ROUTELLM_B0_CLIENT"
@@ -57,6 +61,7 @@ class RouteLLMClientActivation:
     route_llm_endpoint_origin: str
     https_required: bool
     fallback_policy: str
+    eligible_case_ids: tuple[str, ...]
     external_synthetic_commissioning_status: str
     real_handwriting_admitted: bool
     invalidation_rule: str
@@ -113,6 +118,7 @@ def load_activation(path: Path) -> RouteLLMClientActivation:
         route_llm_endpoint_origin=origin,
         https_required=_bool(payload, "https_required"),
         fallback_policy=_token(payload, "fallback_policy"),
+        eligible_case_ids=_eligible_case_ids(payload),
         external_synthetic_commissioning_status=_token(
             payload, "external_synthetic_commissioning_status"
         ),
@@ -169,6 +175,10 @@ def admit_activation(
         raise RouteLLMActivationError("fallback_policy must be none")
     if activation.real_handwriting_admitted is not False:
         raise RouteLLMActivationError("real handwriting is not admitted")
+    if activation.eligible_case_ids != ROUTELLM_EXTERNAL_ELIGIBLE_CASE_IDS:
+        raise RouteLLMActivationError(
+            "eligible case set is not admitted", error_class="ELIGIBLE_CASE_SET"
+        )
     parse_https_origin(activation.route_llm_endpoint_origin)
     if activation.candidate_identity != expected_candidate:
         raise RouteLLMActivationError(
@@ -192,6 +202,28 @@ def _reject_forbidden_fields(payload: object) -> None:
     elif isinstance(payload, list):
         for item in payload:
             _reject_forbidden_fields(item)
+
+
+def _eligible_case_ids(payload: dict[str, object]) -> tuple[str, ...]:
+    raw = payload.get("eligible_case_ids")
+    if not isinstance(raw, list) or not raw:
+        raise RouteLLMActivationError("activation missing eligible_case_ids")
+    ids: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        if not isinstance(item, str) or not item or "\x00" in item:
+            raise RouteLLMActivationError("activation missing eligible_case_ids")
+        if SYNTHETIC_CASE_ID_PATTERN.fullmatch(item) is None:
+            raise RouteLLMActivationError(
+                "eligible case is not synthetic", error_class="ELIGIBLE_CASE_SET"
+            )
+        if item in seen:
+            raise RouteLLMActivationError(
+                "eligible case ids are not unique", error_class="ELIGIBLE_CASE_SET"
+            )
+        seen.add(item)
+        ids.append(item)
+    return tuple(ids)
 
 
 def _token(payload: dict[str, object], key: str) -> str:

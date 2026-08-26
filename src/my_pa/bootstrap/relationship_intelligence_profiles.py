@@ -22,32 +22,76 @@ class RelationshipGrantProfile:
     denied: frozenset[Capability]
 
 
-_STANDARD = frozenset(
+_ENTITY_READS = frozenset(
+    {
+        Capability.ENTITIES_SEARCH,
+        Capability.ENTITIES_GET,
+        Capability.ENTITIES_RESOLVE,
+        Capability.ENTITIES_CONTEXT,
+        Capability.ENTITIES_IDENTIFIERS_LIST,
+        Capability.ENTITIES_ALIASES_LIST,
+        Capability.ENTITIES_ASSIGNMENTS_LIST,
+        Capability.ENTITIES_RELATIONSHIPS,
+        Capability.ENTITIES_OBSERVATIONS_LIST,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS,
+    }
+)
+_ROUTINE_ENTITY_AUTHORING = frozenset(
+    {
+        Capability.ENTITIES_CREATE,
+        Capability.ENTITIES_UPDATE,
+        Capability.ENTITIES_ARCHIVE,
+        Capability.ENTITIES_RESTORE,
+        Capability.ENTITIES_IDENTIFIERS_BIND,
+        Capability.ENTITIES_IDENTIFIERS_RETIRE,
+        Capability.ENTITIES_IDENTIFIERS_SUPERSEDE,
+        Capability.ENTITIES_ALIASES_ADD,
+        Capability.ENTITIES_ALIASES_RETIRE,
+        Capability.ENTITIES_ALIASES_SUPERSEDE,
+        Capability.ENTITIES_ASSIGNMENTS_CREATE,
+        Capability.ENTITIES_ASSIGNMENTS_REVISE,
+        Capability.ENTITIES_ASSIGNMENTS_END,
+        Capability.ENTITIES_RELATIONSHIPS_CREATE,
+        Capability.ENTITIES_RELATIONSHIPS_REVISE,
+        Capability.ENTITIES_RELATIONSHIPS_END,
+        Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+    }
+)
+_RELATIONSHIP_MEMORY = frozenset(
+    {
+        Capability.RELATIONSHIP_MEMORY_CREATE,
+        Capability.RELATIONSHIP_MEMORY_LIST,
+        Capability.RELATIONSHIP_MEMORY_GET,
+        Capability.RELATIONSHIP_MEMORY_SEARCH,
+        Capability.RELATIONSHIP_MEMORY_HISTORY,
+        Capability.RELATIONSHIP_MEMORY_REVISE,
+        Capability.RELATIONSHIP_MEMORY_ARCHIVE,
+        Capability.RELATIONSHIP_MEMORY_RESTORE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+    }
+)
+_STANDARD = (
+    _ENTITY_READS
+    | _ROUTINE_ENTITY_AUTHORING
+    | _RELATIONSHIP_MEMORY
+    | frozenset({Capability.ENTITIES_PROPOSALS_CREATE, Capability.REVIEW_LIST})
+)
+_PRODUCER = frozenset(
     {
         Capability.ENTITIES_SEARCH,
         Capability.ENTITIES_GET,
         Capability.ENTITIES_RESOLVE,
         Capability.ENTITIES_CONTEXT,
         Capability.ENTITIES_RELATIONSHIPS,
-        Capability.RELATIONSHIP_MEMORY_LIST,
-        Capability.RELATIONSHIP_MEMORY_GET,
-    }
-)
-_PRODUCER = _STANDARD | frozenset(
-    {
+        Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
-    }
-)
-_REVIEWER = _STANDARD | frozenset(
-    {
         Capability.REVIEW_LIST,
-        Capability.REVIEW_DECIDE,
     }
 )
+_REVIEWER = _STANDARD | frozenset({Capability.REVIEW_DECIDE})
 _OPERATOR = _REVIEWER | frozenset(
     {
-        Capability.ENTITIES_UNRESOLVED_MENTIONS,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
     }

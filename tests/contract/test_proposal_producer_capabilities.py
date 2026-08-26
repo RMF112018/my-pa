@@ -37,6 +37,7 @@ import pytest
 from tests.conftest import Scene, build_service, metadata_for
 from tests.contract.test_transport_parity import staged_entities, staged_mention
 
+from my_pa.adapters.mcp.tools import payload_schema_for
 from my_pa.application.commands import (
     Command,
     CreateEntityProposal,
@@ -59,6 +60,23 @@ from my_pa.domain.source.registry import issue_identifier
 #: `requires_review` for it would be reporting the requirement map wrongly rather
 #: than reporting a conservative default.
 ALIAS_VALUE: Final = "PP"
+
+
+def test_memory_proposal_transport_schema_admits_context_but_no_server_owned_fields() -> None:
+    schema = payload_schema_for(ProposeRelationshipMemory)
+    assert schema["additionalProperties"] is False
+    assert "context_links" in schema["properties"]
+    assert not set(schema["properties"]) & {
+        "principal_id",
+        "method",
+        "model_id",
+        "classification",
+        "state",
+        "authority",
+        "cloud_eligible",
+        "review_case_id",
+        "proposed_at",
+    }
 
 
 def test_unregistered_composition_withholds_both_producer_capabilities(scene: Scene) -> None:
@@ -273,7 +291,7 @@ def test_a_producer_raises_a_candidate_memory_and_is_told_nothing_it_wrote(
     receipt that carried them for one kind and not the other would be a filter
     rather than an absence.
     """
-    person, _organization = staged_entities(scene)
+    person, organization = staged_entities(scene)
     statement = "Parity Person prefers written follow-ups"
     result = _result(
         scene,
@@ -285,6 +303,13 @@ def test_a_producer_raises_a_candidate_memory_and_is_told_nothing_it_wrote(
             statement=statement,
             evidence=({"role": "direct", "entity_observation_id": staged_mention(scene)},),
             kind=kind,
+            context_links=(
+                {
+                    "target_type": "entity",
+                    "target_id": organization.entity_id,
+                    "role": "applies_in",
+                },
+            ),
         ),
     )
 
@@ -297,8 +322,15 @@ def test_a_producer_raises_a_candidate_memory_and_is_told_nothing_it_wrote(
     assert result["evidence_count"] == 1
     assert result["audit_id"]
     assert statement not in str(result), "the producer's receipt echoed the candidate statement"
-    for absent in ("statement", "proposed_statement", "structured_value"):
+    for absent in ("statement", "proposed_statement", "structured_value", "context_links"):
         assert absent not in result, f"the producer's receipt discloses {absent}"
+    assert scene.world.relationship_memory_proposals[-1].context_links == (
+        {
+            "target_type": "entity",
+            "target_id": organization.entity_id,
+            "role": "applies_in",
+        },
+    )
     # The case identifier *is* disclosed here and is not on the entity plane, and
     # the asymmetry is the plane's rather than an inconsistency:
     # `relationship_memory_review_cases` selects on `review_case_id IS NOT NULL`,

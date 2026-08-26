@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 from tests.conftest import Scene, build_service, metadata_for, operator, staged_review_case
 
+from my_pa.adapters.mcp.tools import payload_schema_for
 from my_pa.application.commands import DecideReviewCase, ListReviewCases
 from my_pa.contracts.v1.envelope import ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
@@ -57,6 +58,15 @@ def test_review_list_returns_case_metadata_without_capture_content(scene: Scene)
     rendered = answer.to_canonical_json()
     assert "a synthetic note" not in rendered
     assert "normalized_value" not in rendered
+
+
+def test_review_correction_schema_exposes_only_the_typed_client_patch() -> None:
+    schema = payload_schema_for(DecideReviewCase)
+    patch = schema["properties"]["correction_patch"]
+    assert patch["type"] == "object"
+    assert "object" in patch["additionalProperties"]["type"]
+    assert "array" in patch["additionalProperties"]["type"]
+    assert "corrected_payload" not in schema["properties"]
 
 
 def _staged_ordered_review_cases(scene: Scene, count: int = 5) -> list[str]:

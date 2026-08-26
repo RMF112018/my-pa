@@ -88,6 +88,7 @@ from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
     Disposition,
     ReviewConflictError,
+    ReviewCorrectionError,
     ReviewDecision,
     ReviewNotFoundError,
 )
@@ -95,6 +96,7 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.relationship.entity import EntityStatus, EntityType
 from my_pa.domain.relationship.memory import (
+    ContextLinkAuthority,
     EvidenceLinkRole,
     MemoryActorClass,
     MemoryAuthority,
@@ -102,12 +104,16 @@ from my_pa.domain.relationship.memory import (
     MemoryKindNotPermittedError,
     MemoryLifecycle,
     MemoryProposalState,
+    RelationshipMemoryError,
     RelationshipMemoryReviewCase,
     check_kind_permits_subject,
     classification_floor_for,
     memory_proposal_dedupe_digest,
     satisfies_floor,
     statement_digest,
+    validate_context_links,
+    validate_statement,
+    validate_structured_value,
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_mutation_scopes
@@ -116,9 +122,14 @@ from my_pa.infrastructure.persistence.principal_scope import (
     partition_criterion,
     principal_bound_values,
 )
+from my_pa.infrastructure.persistence.relationship_memory_context import (
+    requested_entity_context_ids,
+    require_own_writable_context_targets,
+)
 from my_pa.infrastructure.persistence.tables import (
     entities,
     relationship_memories,
+    relationship_memory_context_links,
     relationship_memory_evidence_links,
     relationship_memory_proposal_evidence,
     relationship_memory_proposals,
@@ -381,6 +392,54 @@ def _promotion_classification(stored: Classification, kind: MemoryKind) -> Class
     return classification_floor_for(kind)
 
 
+def _promotion_content(
+    proposal: Any,  # noqa: ANN401 - a SQLAlchemy Row with proposal content
+    request: ReviewDecisionRequest,
+) -> tuple[
+    str,
+    MemoryKind,
+    dict[str, Any] | None,
+    tuple[dict[str, str], ...],
+    dict[str, Any] | None,
+]:
+    """Merge an RM patch over proposed content and validate the complete target shape."""
+    kind = MemoryKind(proposal.proposed_kind)
+    statement: object = proposal.proposed_statement
+    structured: object = (
+        None if proposal.structured_value is None else proposal.structured_value["value"]
+    )
+    links: object = tuple(proposal.context_links)
+    corrected_payload: dict[str, Any] | None = None
+    if request.disposition is Disposition.CORRECT_AND_ACCEPT:
+        if request.correction_patch is None or request.corrected_value is not None:
+            raise ReviewCorrectionError("a memory correction is a typed patch")
+        patch = request.correction_patch.as_mapping()
+        if not set(patch) <= {"statement", "kind", "structured_value", "context_links"}:
+            raise ReviewCorrectionError("a memory correction names only target content fields")
+        statement = patch.get("statement", statement)
+        raw_kind = patch.get("kind", kind.value)
+        try:
+            kind = MemoryKind(raw_kind)
+        except (TypeError, ValueError):
+            raise ReviewCorrectionError("a memory correction names a known kind") from None
+        structured = patch.get("structured_value", structured)
+        links = patch.get("context_links", links)
+    try:
+        validated_statement = validate_statement(statement)  # type: ignore[arg-type]
+        validated_structured = validate_structured_value(kind, structured)  # type: ignore[arg-type]
+        validated_links = validate_context_links(links)
+    except (RelationshipMemoryError, TypeError, ValueError):
+        raise ReviewCorrectionError("a memory correction satisfies the target schema") from None
+    if request.disposition is Disposition.CORRECT_AND_ACCEPT:
+        corrected_payload = {
+            "statement": validated_statement,
+            "kind": kind.value,
+            "structured_value": validated_structured,
+            "context_links": list(validated_links),
+        }
+    return validated_statement, kind, validated_structured, validated_links, corrected_payload
+
+
 def _writable_subject(
     connection: Connection,
     *,
@@ -483,7 +542,7 @@ def _promote(
     is not a replayable client write. Its idempotency is the terminal-acceptance
     rule above plus the unique `(review_case_id, sequence)` on the ledger.
     """
-    kind = MemoryKind(proposal.proposed_kind)
+    statement, kind, structured_value, context_links, _ = _promotion_content(proposal, request)
     entity_type, _ = _writable_subject(
         connection,
         principal_id=request.principal_id,
@@ -495,8 +554,9 @@ def _promote(
     except MemoryKindNotPermittedError as exc:
         raise ReviewConflictError("the proposed kind does not describe this subject") from exc
 
-    corrected = request.disposition is Disposition.CORRECT_AND_ACCEPT
-    statement = str(request.corrected_value) if corrected else str(proposal.proposed_statement)
+    require_own_writable_context_targets(
+        connection, request.principal_id, context_links, reject_merged=True
+    )
     evidence_count = int(
         connection.execute(
             select(func.count())
@@ -542,7 +602,7 @@ def _promote(
                     "version_number": 1,
                     "statement_text": statement,
                     "statement_sha256": statement_digest(statement),
-                    "structured_value": proposal.structured_value,
+                    "structured_value": structured_value,
                     "memory_kind": kind.value,
                     "authority": _promotion_authority(
                         request.disposition, evidence_count=evidence_count
@@ -566,6 +626,26 @@ def _promote(
             )
         )
     )
+    for link in context_links:
+        connection.execute(
+            insert(relationship_memory_context_links).values(
+                _bound(
+                    relationship_memory_context_links,
+                    request.principal_id,
+                    {
+                        "context_link_id": issue_identifier(
+                            IdKind.RELATIONSHIP_MEMORY_CONTEXT_LINK
+                        ),
+                        "memory_version_id": memory_version_id,
+                        "target_type": link["target_type"],
+                        "target_id": link["target_id"],
+                        "role": link["role"],
+                        "authority": ContextLinkAuthority.REVIEW_ACCEPTED.value,
+                        "created_at": request.decided_at,
+                    },
+                )
+            )
+        )
     _copy_evidence(
         connection,
         principal_id=request.principal_id,
@@ -581,6 +661,12 @@ def _reprocess(
     proposal: Any,  # noqa: ANN401 - a SQLAlchemy Row
 ) -> str:
     """Supersede one candidate with a fresh case over current subject state."""
+    require_own_writable_context_targets(
+        connection,
+        request.principal_id,
+        validate_context_links(tuple(proposal.context_links)),
+        reject_merged=True,
+    )
     entity_type, current_subject_version = _writable_subject(
         connection,
         principal_id=request.principal_id,
@@ -634,8 +720,10 @@ def _reprocess(
                         proposed_kind=proposal.proposed_kind,
                         proposed_statement_sha256=proposal.proposed_statement_sha256,
                         structured_value=proposal.structured_value,
+                        context_links=tuple(proposal.context_links),
                     ),
                     "structured_value": proposal.structured_value,
+                    "context_links": proposal.context_links,
                     "state": MemoryProposalState.NEEDS_REVIEW.value,
                     "method": proposal.method,
                     "method_version": proposal.method_version,
@@ -706,18 +794,29 @@ def decide_relationship_memory_review(
     makes "reject, defer and mark-unresolved leave no memory" and "a refused
     acceptance leaves no decision" the same statement about one transaction.
     """
-    subject_entity_id = connection.execute(
-        select(relationship_memory_proposals.c.subject_entity_id).where(
+    preflight = connection.execute(
+        select(
+            relationship_memory_proposals.c.subject_entity_id,
+            relationship_memory_proposals.c.proposed_kind,
+            relationship_memory_proposals.c.proposed_statement,
+            relationship_memory_proposals.c.structured_value,
+            relationship_memory_proposals.c.context_links,
+        ).where(
             relationship_memory_proposals.c.review_case_id == request.review_case_id,
             _mine(relationship_memory_proposals, request.principal_id),
         )
-    ).scalar_one_or_none()
-    if subject_entity_id is None:
+    ).one_or_none()
+    if preflight is None:
         raise ReviewNotFoundError("the request names no stored review case")
+    _, _, _, requested_context, _ = _promotion_content(preflight, request)
     # Entity serialization precedes the proposal row lock. Merge takes the
     # Entity lock before it analyses and invalidates proposals, so reversing
     # these two locks here would create a proposal-row/Entity-lock deadlock.
-    lock_entity_mutation_scopes(connection, request.principal_id, (str(subject_entity_id),))
+    lock_entity_mutation_scopes(
+        connection,
+        request.principal_id,
+        {str(preflight.subject_entity_id), *requested_entity_context_ids(requested_context)},
+    )
     proposal = connection.execute(
         select(
             relationship_memory_proposals.c.memory_proposal_id,
@@ -726,6 +825,7 @@ def decide_relationship_memory_review(
             relationship_memory_proposals.c.proposed_statement,
             relationship_memory_proposals.c.proposed_statement_sha256,
             relationship_memory_proposals.c.structured_value,
+            relationship_memory_proposals.c.context_links,
             relationship_memory_proposals.c.classification,
             relationship_memory_proposals.c.expected_subject_version,
             relationship_memory_proposals.c.method,
@@ -769,28 +869,37 @@ def decide_relationship_memory_review(
 
     sequence = current + 1
     decision_id = issue_identifier(IdKind.REVIEW_DECISION)
+    corrected_payload = _promotion_content(proposal, request)[4]
     promoted: tuple[str, str] | None = None
     if request.disposition in _ACCEPTING:
         promoted = _promote(connection, request, proposal, decision_id=decision_id)
     elif request.disposition is Disposition.REPROCESS:
         _reprocess(connection, request, proposal)
+    decision_values: dict[str, object] = {
+        "decision_id": decision_id,
+        "memory_proposal_id": proposal.memory_proposal_id,
+        "review_case_id": request.review_case_id,
+        "sequence": sequence,
+        "disposition": request.disposition.value,
+        "corrected_statement": (
+            None if corrected_payload is None else corrected_payload["statement"]
+        ),
+        "reason": request.reason,
+        "correlation_id": request.correlation_id,
+        "audit_id": request.audit_id,
+        "decided_at": request.decided_at,
+    }
+    # SQLAlchemy JSONB encodes Python `None` as JSON `null`, which is SQL
+    # non-null and would violate the disposition/payload CHECK. Omission is the
+    # database NULL that means this non-correction decision has no patch.
+    if corrected_payload is not None:
+        decision_values["corrected_payload"] = corrected_payload
     connection.execute(
         insert(relationship_memory_review_decisions).values(
             _bound(
                 relationship_memory_review_decisions,
                 request.principal_id,
-                {
-                    "decision_id": decision_id,
-                    "memory_proposal_id": proposal.memory_proposal_id,
-                    "review_case_id": request.review_case_id,
-                    "sequence": sequence,
-                    "disposition": request.disposition.value,
-                    "corrected_statement": request.corrected_value,
-                    "reason": request.reason,
-                    "correlation_id": request.correlation_id,
-                    "audit_id": request.audit_id,
-                    "decided_at": request.decided_at,
-                },
+                decision_values,
             )
         )
     )
@@ -830,5 +939,5 @@ def decide_relationship_memory_review(
         audit_id=request.audit_id,
         decided_at=request.decided_at,
         proposal_state=_memory_review_state(request.disposition),
-        normalized_value=request.corrected_value,
+        normalized_value=(None if corrected_payload is None else corrected_payload["statement"]),
     )

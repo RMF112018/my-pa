@@ -38,6 +38,7 @@ STATEMENT: Final = "Synthetic predecessor claim."
 STATEMENT_DIGEST: Final = hashlib.sha256(STATEMENT.encode()).hexdigest()
 EARLIER: Final = datetime(2026, 8, 24, 12, tzinfo=UTC)
 LATER: Final = EARLIER + timedelta(hours=1)
+CORRECTED: Final = "C" * 300
 
 
 def _config() -> Config:
@@ -83,6 +84,167 @@ def _proposal_values(
         "statement_digest": STATEMENT_DIGEST,
         "at": at,
     }
+
+
+def test_upgrade_backfills_context_and_typed_memory_correction_payload(
+    predecessor: Engine,
+) -> None:
+    """A current predecessor reaches the new proposal/review shape without loss."""
+    with predecessor.begin() as connection:
+        # `f1c6b904a2d7` historically copied the live table declarations. A
+        # database deployed when that revision was current has neither Phase-B
+        # column, while asking today's code to construct the same revision sees
+        # both through current `tables.py`. Reproduce the legally deployed
+        # physical predecessor rather than testing a rewritten history.
+        connection.execute(
+            text(
+                f"ALTER TABLE {SCHEMA}.relationship_memory_review_decisions "
+                "DROP CONSTRAINT IF EXISTS "
+                "a_memory_corrected_payload_matches_its_disposition, "
+                "DROP COLUMN IF EXISTS corrected_payload"
+            )
+        )
+        connection.execute(
+            text(
+                f"ALTER TABLE {SCHEMA}.relationship_memory_proposals "
+                "DROP COLUMN IF EXISTS context_links"
+            )
+        )
+        SqlEntityRepository(connection).create(
+            PRINCIPAL,
+            Entity(
+                entity_id=SUBJECT,
+                principal_id=PRINCIPAL,
+                entity_type=EntityType.PERSON,
+                canonical_name=normalize_name("Synthetic Person"),
+                display_name="Synthetic Person",
+                status=EntityStatus.ACTIVE,
+                created_at=EARLIER,
+                updated_at=EARLIER,
+                version=1,
+            ),
+        )
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO {SCHEMA}.relationship_memory_proposals (
+                  memory_proposal_id, principal_id, subject_entity_id,
+                  proposed_kind, proposed_statement, proposed_statement_sha256,
+                  structured_value, state, method, method_version, classification,
+                  proposed_at, review_case_id
+                ) VALUES (
+                  'mprop_cccc0003cccc0003', :principal, :subject,
+                  'general_note', :statement, :statement_digest, NULL,
+                  'needs_review', 'rule', 'legacy-rule-v1', 'private_local', :at,
+                  'rvw_cccc0003cccc0003'
+                )
+                """
+            ),
+            {
+                "principal": PRINCIPAL,
+                "subject": SUBJECT,
+                "statement": STATEMENT,
+                "statement_digest": STATEMENT_DIGEST,
+                "at": EARLIER,
+            },
+        )
+        connection.execute(
+            text(
+                f"""
+                INSERT INTO {SCHEMA}.relationship_memory_review_decisions (
+                  decision_id, memory_proposal_id, review_case_id, principal_id,
+                  sequence, disposition, corrected_statement, correlation_id,
+                  audit_id, decided_at
+                ) VALUES (
+                  'rdec_cccc0003cccc0003', 'mprop_cccc0003cccc0003',
+                  'rvw_cccc0003cccc0003', :principal, 1, 'correct_and_accept',
+                  :corrected, 'corr_cccc0003cccc0003',
+                  'audit_cccc0003cccc0003', :at
+                )
+                """
+            ),
+            {"principal": PRINCIPAL, "corrected": CORRECTED, "at": LATER},
+        )
+
+    command.upgrade(_config(), "head")
+
+    with predecessor.begin() as connection:
+        proposal_context = connection.execute(
+            text(
+                f"SELECT context_links FROM {SCHEMA}.relationship_memory_proposals "
+                "WHERE memory_proposal_id = 'mprop_cccc0003cccc0003'"
+            )
+        ).scalar_one()
+        corrected_payload = connection.execute(
+            text(
+                f"SELECT corrected_payload FROM "
+                f"{SCHEMA}.relationship_memory_review_decisions "
+                "WHERE decision_id = 'rdec_cccc0003cccc0003'"
+            )
+        ).scalar_one()
+        assert proposal_context == []
+        assert corrected_payload == {
+            "statement": CORRECTED,
+            "kind": "general_note",
+            "structured_value": None,
+            "context_links": [],
+        }
+        with (
+            pytest.raises(
+                IntegrityError,
+                match="append only",
+            ),
+            connection.begin_nested(),
+        ):
+            connection.execute(
+                text(
+                    f"UPDATE {SCHEMA}.relationship_memory_review_decisions "
+                    "SET corrected_payload = corrected_payload "
+                    "WHERE decision_id = 'rdec_cccc0003cccc0003'"
+                )
+            )
+        with (
+            pytest.raises(
+                IntegrityError,
+                match="a_memory_corrected_payload_matches_its_disposition",
+            ),
+            connection.begin_nested(),
+        ):
+            connection.execute(
+                text(
+                    f"""
+                    INSERT INTO {SCHEMA}.relationship_memory_review_decisions (
+                      decision_id, memory_proposal_id, review_case_id, principal_id,
+                      sequence, disposition, corrected_payload, correlation_id,
+                      audit_id, decided_at
+                    ) VALUES (
+                      'rdec_dddd0004dddd0004', 'mprop_cccc0003cccc0003',
+                      'rvw_cccc0003cccc0003', :principal, 2, 'defer',
+                      '{{}}'::jsonb, 'corr_dddd0004dddd0004',
+                      'audit_dddd0004dddd0004', :at
+                    )
+                    """
+                ),
+                {"principal": PRINCIPAL, "at": LATER},
+            )
+
+    command.downgrade(_config(), "b64e29a0f7c1")
+    with predecessor.connect() as connection:
+        remaining = set(
+            connection.execute(
+                text(
+                    "SELECT table_name || '.' || column_name "
+                    "FROM information_schema.columns "
+                    "WHERE table_schema = :schema AND ("
+                    "(table_name = 'relationship_memory_proposals' "
+                    " AND column_name = 'context_links') OR "
+                    "(table_name = 'relationship_memory_review_decisions' "
+                    " AND column_name = 'corrected_payload'))"
+                ),
+                {"schema": SCHEMA},
+            ).scalars()
+        )
+    assert remaining == set()
 
 
 def test_upgrade_reconciles_version_drift_duplicates_without_deleting_history(

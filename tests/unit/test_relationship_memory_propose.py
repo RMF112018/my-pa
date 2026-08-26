@@ -50,11 +50,21 @@ from my_pa.application.relationship_memory import (
     RelationshipMemoryProposalRepository,
     RelationshipMemoryProposalService,
 )
-from my_pa.contracts.ports import UnknownScopeError
+from my_pa.contracts.ports import ReviewDecisionRequest, UnknownScopeError
+from my_pa.domain.capture.review import (
+    CORRECTION_PATCH_VALUE_LIMIT,
+    CorrectionPatch,
+    Disposition,
+    ReviewCorrectionError,
+    ReviewError,
+)
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.memory import (
+    MAX_CONTEXT_LINKS_PER_VERSION,
+    MAX_QUALIFIER_CHARACTERS,
+    MAX_STATEMENT_CHARACTERS,
     EvidenceLinkRole,
     MemoryActorClass,
     MemoryAuthority,
@@ -78,6 +88,7 @@ from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.relationship_memory_proposals import (
     SqlRelationshipMemoryProposalRepository,
 )
+from my_pa.infrastructure.persistence.relationship_memory_review import _promotion_content
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 OTHER_PRINCIPAL: Final = "prn_bbbb0002bbbb0002bbbb0002"
@@ -290,6 +301,176 @@ def test_subject_version_is_not_part_of_open_equivalence() -> None:
     second, _ = second_repository.recorded[0]
     assert first.expected_subject_version != second.expected_subject_version
     assert first.dedupe_sha256 == second.dedupe_sha256
+
+
+def test_context_links_round_trip_and_participate_in_open_equivalence() -> None:
+    """A producer's canonical scopes survive staging and distinguish its claim."""
+    context = (
+        {
+            "target_type": "entity",
+            "target_id": OTHER_SUBJECT,
+            "role": "applies_in",
+        },
+    )
+    with_context = RecordingRepository()
+    without_context = RecordingRepository()
+
+    propose(with_context, a_command(context_links=context))
+    propose(without_context, a_command())
+
+    staged, evidence = with_context.recorded[0]
+    plain, _ = without_context.recorded[0]
+    assert staged.context_links == context
+    assert len(evidence) == 1
+    assert staged.dedupe_sha256 != plain.dedupe_sha256
+
+
+def _memory_review_request(patch: dict[str, Any]) -> ReviewDecisionRequest:
+    return ReviewDecisionRequest(
+        review_case_id=issue_identifier(IdKind.REVIEW_CASE),
+        expected_review_version=0,
+        disposition=Disposition.CORRECT_AND_ACCEPT,
+        principal_id=PRINCIPAL,
+        correlation_id=issue_identifier(IdKind.CORRELATION),
+        audit_id=issue_identifier(IdKind.AUDIT),
+        policy_version="policy-v1",
+        decided_at=WHEN,
+        correction_patch=CorrectionPatch.of(patch),
+    )
+
+
+def _proposed_content() -> SimpleNamespace:
+    return SimpleNamespace(
+        proposed_kind=MemoryKind.COMMUNICATION_PREFERENCE.value,
+        proposed_statement=STATEMENT,
+        structured_value={
+            "schema": "relationship_memory.communication_preference.v1",
+            "value": {"channel": "email", "preference": "preferred"},
+        },
+        context_links=(),
+    )
+
+
+def test_typed_memory_correction_accepts_a_300_character_statement_and_context() -> None:
+    statement = "x" * 300
+    context = [{"target_type": "entity", "target_id": OTHER_SUBJECT, "role": "related_to"}]
+
+    corrected = _promotion_content(
+        _proposed_content(),
+        _memory_review_request({"statement": statement, "context_links": context}),
+    )
+
+    assert corrected[:4] == (
+        statement,
+        MemoryKind.COMMUNICATION_PREFERENCE,
+        {
+            "schema": "relationship_memory.communication_preference.v1",
+            "value": {"channel": "email", "preference": "preferred"},
+        },
+        tuple(context),
+    )
+
+
+def test_typed_memory_correction_can_clear_optional_structured_and_context_values() -> None:
+    corrected = _promotion_content(
+        _proposed_content(),
+        _memory_review_request({"structured_value": None, "context_links": []}),
+    )
+
+    assert corrected[2] is None
+    assert corrected[3] == ()
+
+
+@pytest.mark.parametrize(
+    "character",
+    ["a", "é", "😀"],
+    ids=["ascii", "bmp", "astral"],
+)
+def test_typed_memory_correction_accepts_the_exact_statement_character_ceiling(
+    character: str,
+) -> None:
+    statement = character * MAX_STATEMENT_CHARACTERS
+
+    corrected = _promotion_content(
+        _proposed_content(),
+        _memory_review_request({"statement": statement}),
+    )
+
+    assert corrected[0] == statement
+
+
+@pytest.mark.parametrize(
+    "character",
+    ["a", "é", "😀"],
+    ids=["ascii", "bmp", "astral"],
+)
+def test_typed_memory_correction_leaves_one_past_the_statement_ceiling_to_target_validation(
+    character: str,
+) -> None:
+    patch = CorrectionPatch.of({"statement": character * (MAX_STATEMENT_CHARACTERS + 1)})
+
+    with pytest.raises(ReviewCorrectionError, match="target schema"):
+        _promotion_content(_proposed_content(), _memory_review_request(patch.as_mapping()))
+
+
+def test_typed_memory_correction_accepts_maximum_valid_structured_and_context_content() -> None:
+    contexts = [
+        {
+            "target_type": "entity",
+            "target_id": f"ent_{index:064x}",
+            "role": "related_to",
+        }
+        for index in range(MAX_CONTEXT_LINKS_PER_VERSION)
+    ]
+    structured = {
+        "channel": "email",
+        "preference": "preferred",
+        "qualifiers": "é" * MAX_QUALIFIER_CHARACTERS,
+    }
+
+    corrected = _promotion_content(
+        _proposed_content(),
+        _memory_review_request(
+            {
+                "statement": "😀" * MAX_STATEMENT_CHARACTERS,
+                "structured_value": structured,
+                "context_links": contexts,
+            }
+        ),
+    )
+
+    assert corrected[0] == "😀" * MAX_STATEMENT_CHARACTERS
+    assert corrected[2] == {
+        "schema": "relationship_memory.communication_preference.v1",
+        "value": structured,
+    }
+    assert corrected[3] == tuple(contexts)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [
+        {"x" * (CORRECTION_PATCH_VALUE_LIMIT + 1): True},
+        {"structured_value": {"payload": "😀" * CORRECTION_PATCH_VALUE_LIMIT}},
+    ],
+    ids=["oversized-key", "oversized-object"],
+)
+def test_correction_patch_refuses_oversized_json_even_before_target_routing(
+    patch: dict[str, Any],
+) -> None:
+    with pytest.raises(ReviewError, match="bounded"):
+        CorrectionPatch.of(patch)
+
+
+@pytest.mark.parametrize(
+    "patch",
+    [{"principal_id": PRINCIPAL}, {"structured_value": {"preference": "bogus"}}],
+)
+def test_typed_memory_correction_refuses_smuggled_or_invalid_target_content(
+    patch: dict[str, Any],
+) -> None:
+    with pytest.raises(ReviewCorrectionError):
+        _promotion_content(_proposed_content(), _memory_review_request(patch))
 
 
 @pytest.mark.parametrize("structured", [None, {"channel": "email", "stance": "prefer"}])
@@ -635,6 +816,7 @@ def test_the_command_declares_none_of_the_server_owned_fields() -> None:
         "statement",
         "structured_value",
         "evidence",
+        "context_links",
     }
     assert declared & SERVER_OWNED_FIELDS == set()
 

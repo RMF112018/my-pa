@@ -2797,10 +2797,11 @@ class ReviewDecisionRequest:
     **Two shapes of correction, and they never travel together.**
     `corrected_value` is the capture and GoodNotes shape and is unchanged: those
     subjects have one normalized value, so a correction to one is one bounded
-    string. `correction_patch` is the Entity shape: an Entity proposal asks for a
-    mutation with *named arguments*, so a correction has to say which of them the
-    reviewer changed, and it is validated against the target command's schema by
-    the plane that owns the subject before anything commits. Exactly one of the
+    string. `correction_patch` is the typed-target shape: Entity and Relationship
+    Memory proposals ask for mutations with *named arguments*, so a correction
+    has to say which of them the reviewer changed, and it is routed and validated
+    against that target command's schema by the plane that owns the subject before
+    anything commits. Exactly one of the
     two accompanies `correct_and_accept` and neither accompanies anything else --
     which is what stops a widening of the Entity shape from quietly relaxing the
     bound the capture plane has always had on its one string.

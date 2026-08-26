@@ -8020,6 +8020,7 @@ class ApplicationService:
                     memory_kind=command.kind,
                     statement=command.statement,
                     structured_value=command.structured_value,
+                    context_links=_memory_links(command.context_links),
                     evidence=tuple(
                         ProposedEvidence(
                             role=EvidenceLinkRole(entry["role"]),

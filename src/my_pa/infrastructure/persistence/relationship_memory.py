@@ -46,12 +46,14 @@ from sqlalchemy import (
     Row,
     Text,
     bindparam,
+    column,
     func,
     insert,
     not_,
     or_,
     select,
     text,
+    true,
     tuple_,
     union,
     update,
@@ -71,7 +73,6 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.relationship.entity import EntityStatus, EntityType
 from my_pa.domain.relationship.memory import (
-    CONTEXT_TARGET_ID_KINDS,
     ContextLinkAuthority,
     ContextLinkRole,
     ContextLinkTargetType,
@@ -83,6 +84,7 @@ from my_pa.domain.relationship.memory import (
     MemoryKind,
     MemoryLifecycle,
     MemoryOperation,
+    MemoryProposalState,
     MemoryReceipt,
     MergedSubjectError,
     RelationshipMemory,
@@ -97,6 +99,10 @@ from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
     partition_criterion,
     principal_bound_values,
+)
+from my_pa.infrastructure.persistence.relationship_memory_context import (
+    requested_entity_context_ids,
+    require_own_writable_context_targets,
 )
 from my_pa.infrastructure.persistence.tables import (
     entities,
@@ -325,30 +331,13 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         prevent. The enum keeps the three, so admitting them later is a
         repository change and not a schema migration.
         """
-        for link in links:
-            target_type = ContextLinkTargetType(link["target_type"])
-            target_id = link["target_id"]
-            validate_identifier(target_id, CONTEXT_TARGET_ID_KINDS[target_type])
-            if target_type is not ContextLinkTargetType.ENTITY:
-                raise UnknownScopeError("this build validates only entity context targets")
-            held = self._connection.execute(
-                select(entities.c.entity_id).where(
-                    _mine(entities, principal_id),
-                    entities.c.entity_id == target_id,
-                )
-            ).scalar_one_or_none()
-            if held is None:
-                raise UnknownScopeError("a context link names an entity outside this scope")
+        require_own_writable_context_targets(self._connection, principal_id, links)
 
     @staticmethod
     def _requested_entity_context_ids(
         links: tuple[Mapping[str, str], ...],
     ) -> frozenset[str]:
-        return frozenset(
-            link["target_id"]
-            for link in links
-            if link["target_type"] == ContextLinkTargetType.ENTITY.value
-        )
+        return requested_entity_context_ids(links)
 
     def _current_entity_context_ids(
         self, principal_id: str, memory_version_id: str
@@ -1002,12 +991,13 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
     ) -> frozenset[str]:
         """Which input entities this plane currently binds into canonical memory state.
 
-        Three binding classes are blockers: canonical memory subjects, proposal
-        subjects, and Entity targets linked from a memory's current canonical
-        version. A candidate memory about an identity, or a current context link
-        to it, is as unrecoverable through a governed merge as an accepted memory:
-        `WP-RI-08` owns the subject and context redistribution rules, and
-        `WP-RI-06`'s effect ledger has no family that could record either rewrite.
+        Four binding classes are blockers: canonical memory subjects, proposal
+        subjects, Entity targets linked from a memory's current canonical version,
+        and Entity context targets on an open proposal. A candidate memory about
+        an identity, an open candidate scoped to it, or a current canonical context
+        link to it is as unrecoverable through a governed merge as an accepted
+        memory: `WP-RI-08` owns the subject and context redistribution rules, and
+        `WP-RI-06`'s effect ledger has no family that could record any rewrite.
 
         **Classification is not read, and that is the point.** Every other read
         on this plane filters or counts restricted rows; this one asks a question
@@ -1023,6 +1013,11 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             return frozenset()
         # Sorted so two calls over the same set build the same statement.
         named = sorted(entity_ids)
+        proposal_context = (
+            func.jsonb_array_elements(relationship_memory_proposals.c.context_links)
+            .table_valued(column("value", relationship_memory_proposals.c.context_links.type))
+            .lateral()
+        )
         subjects = self._connection.execute(
             union(
                 select(relationship_memories.c.subject_entity_id).where(
@@ -1047,6 +1042,21 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
                     relationship_memory_context_links.c.target_type
                     == ContextLinkTargetType.ENTITY.value,
                     relationship_memory_context_links.c.target_id.in_(named),
+                ),
+                select(proposal_context.c.value["target_id"].astext)
+                .select_from(relationship_memory_proposals.join(proposal_context, true()))
+                .where(
+                    _mine(relationship_memory_proposals, principal_id),
+                    relationship_memory_proposals.c.state.in_(
+                        [
+                            MemoryProposalState.PROPOSED.value,
+                            MemoryProposalState.NEEDS_REVIEW.value,
+                            MemoryProposalState.DEFERRED.value,
+                        ]
+                    ),
+                    proposal_context.c.value["target_type"].astext
+                    == ContextLinkTargetType.ENTITY.value,
+                    proposal_context.c.value["target_id"].astext.in_(named),
                 ),
             )
         ).all()

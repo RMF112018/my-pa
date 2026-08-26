@@ -60,6 +60,10 @@ from my_pa.infrastructure.persistence.principal_scope import (
     partition_criterion,
     principal_bound_values,
 )
+from my_pa.infrastructure.persistence.relationship_memory_context import (
+    requested_entity_context_ids,
+    require_own_writable_context_targets,
+)
 from my_pa.infrastructure.persistence.tables import (
     capture_spans,
     capture_versions,
@@ -121,8 +125,11 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
         Principal-bearing parent chains are visible; a missing record and a
         foreign record intentionally receive the same refusal.
         """
+        context_entities = requested_entity_context_ids(proposal.context_links)
         lock_entity_mutation_scopes(
-            self._connection, proposal.principal_id, (proposal.subject_entity_id,)
+            self._connection,
+            proposal.principal_id,
+            {proposal.subject_entity_id, *context_entities},
         )
         subject = self._connection.execute(
             select(entities.c.status, entities.c.version).where(
@@ -136,6 +143,12 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
             raise ValueError("a merged-away subject cannot receive a memory proposal")
         if int(subject.version) != proposal.expected_subject_version:
             raise ValueError("the proposed subject version is stale")
+        require_own_writable_context_targets(
+            self._connection,
+            proposal.principal_id,
+            proposal.context_links,
+            reject_merged=True,
+        )
         for link in evidence:
             if link.principal_id != proposal.principal_id:
                 raise ValueError("proposal evidence belongs to the proposal Principal")
@@ -198,6 +211,7 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
                                 "proposed_statement_sha256": proposal.proposed_statement_sha256,
                                 "dedupe_sha256": proposal.dedupe_sha256,
                                 "structured_value": proposal.structured_value,
+                                "context_links": list(proposal.context_links),
                                 "state": proposal.state.value,
                                 "method": proposal.method.value,
                                 "method_version": proposal.method_version,
@@ -251,6 +265,7 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
                 proposed_statement_sha256=str(row.proposed_statement_sha256),
                 dedupe_sha256=str(row.dedupe_sha256),
                 structured_value=row.structured_value,
+                context_links=tuple(row.context_links),
                 state=MemoryProposalState(row.state),
                 method=MemoryProposalMethod(row.method),
                 method_version=str(row.method_version),

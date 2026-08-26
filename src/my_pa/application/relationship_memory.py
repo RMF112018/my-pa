@@ -77,6 +77,7 @@ from my_pa.domain.relationship.memory import (
     classification_floor_for,
     memory_proposal_dedupe_digest,
     statement_digest,
+    validate_context_links,
     validate_statement,
     validate_structured_value,
 )
@@ -157,6 +158,7 @@ class RelationshipMemoryService:
         """Record the first immutable version of a new memory."""
         statement = validate_statement(command.statement)
         structured = validate_structured_value(command.memory_kind, command.structured_value)
+        context_links = validate_context_links(command.context_links)
         request = self._request(
             MemoryOperation.CREATE,
             principal_id=command.principal_id,
@@ -166,7 +168,7 @@ class RelationshipMemoryService:
             memory_kind=command.memory_kind,
             statement=statement,
             structured_value=structured,
-            context_links=command.context_links,
+            context_links=context_links,
             pinned=command.pinned,
             observed_at=command.observed_at,
             effective_from=command.effective_from,
@@ -478,6 +480,7 @@ class ProposeMemoryCommand:
     statement: str = field(repr=False)
     structured_value: dict[str, Any] | None = field(repr=False)
     evidence: tuple[ProposedEvidence, ...]
+    context_links: tuple[dict[str, str], ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -619,12 +622,14 @@ class RelationshipMemoryProposalService:
 
         statement = validate_statement(command.statement)
         structured = validate_structured_value(command.memory_kind, command.structured_value)
+        context_links = validate_context_links(command.context_links)
         proposal_dedupe = memory_proposal_dedupe_digest(
             principal_id=command.principal_id,
             subject_entity_id=command.subject_entity_id,
             proposed_kind=command.memory_kind,
             proposed_statement_sha256=statement_digest(statement),
             structured_value=structured,
+            context_links=context_links,
         )
         proposal_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
         review_case_id = issue_identifier(IdKind.REVIEW_CASE)
@@ -652,6 +657,7 @@ class RelationshipMemoryProposalService:
             classification=classification_floor_for(command.memory_kind),
             proposed_at=at,
             structured_value=structured,
+            context_links=context_links,
             model_id=origin.model_id,
             model_version=origin.model_version,
             review_case_id=review_case_id,

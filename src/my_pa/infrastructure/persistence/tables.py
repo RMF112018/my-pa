@@ -8493,6 +8493,7 @@ relationship_memory_proposals = Table(
     Column("proposed_statement_sha256", Text, nullable=False),
     Column("dedupe_sha256", Text, nullable=False),
     Column("structured_value", JSONB),
+    Column("context_links", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("state", Text, nullable=False),
     Column("method", Text, nullable=False),
     Column("method_version", Text, nullable=False),
@@ -8719,6 +8720,7 @@ relationship_memory_review_decisions = Table(
     Column("sequence", Integer, nullable=False),
     Column("disposition", Text, nullable=False),
     Column("corrected_statement", Text),
+    Column("corrected_payload", JSONB),
     Column("reason", Text),
     Column("correlation_id", Text, nullable=False),
     Column("audit_id", Text, nullable=False),
@@ -8735,6 +8737,10 @@ relationship_memory_review_decisions = Table(
         "(disposition = 'correct_and_accept' AND length(trim(corrected_statement)) > 0) OR "
         "(disposition <> 'correct_and_accept' AND corrected_statement IS NULL)",
         name="a_memory_correction_matches_its_disposition",
+    ),
+    CheckConstraint(
+        "(disposition = 'correct_and_accept') = (corrected_payload IS NOT NULL)",
+        name="a_memory_corrected_payload_matches_its_disposition",
     ),
     CheckConstraint(
         f"corrected_statement IS NULL OR length(corrected_statement) "

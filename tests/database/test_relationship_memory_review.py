@@ -70,6 +70,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, Thread
 from typing import Any, Final
 
 import pytest
@@ -79,6 +80,13 @@ from sqlalchemy import Connection, Engine, Row, event, func, insert, select, tex
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
+from my_pa.application.errors import ConflictError
+from my_pa.application.identity_correction import (
+    IdentityCorrectionService,
+    MergeCommand,
+    MergePreviewCommand,
+    MergeReceipt,
+)
 from my_pa.application.relationship_memory import (
     MemoryProposalOrigin,
     MemoryProposalReceipt,
@@ -90,12 +98,14 @@ from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import (
     MemoryWriteRequest,
     ReviewDecisionRequest,
+    UnknownScopeError,
     WriteRequestConflictError,
     WriteRequestEvidence,
     WriteRequestResult,
 )
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
+    CorrectionPatch,
     Disposition,
     ReviewConflictError,
     ReviewNotFoundError,
@@ -103,6 +113,7 @@ from my_pa.domain.capture.review import (
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
+from my_pa.domain.relationship.governance import ActorClass
 from my_pa.domain.relationship.memory import (
     EvidenceLinkRole,
     MemoryActorClass,
@@ -123,6 +134,9 @@ from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.relationship_memory import SqlRelationshipMemoryRepository
+from my_pa.infrastructure.persistence.relationship_memory_proposals import (
+    SqlRelationshipMemoryProposalRepository,
+)
 from my_pa.infrastructure.persistence.relationship_memory_review import (
     decide_relationship_memory_review,
     is_relationship_memory_review_case,
@@ -168,6 +182,9 @@ PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"
 DANA: Final = "ent_aaaa0001aaaa0001"
 OLD_DANA: Final = "ent_eeee0005eeee0005"
 FOREIGN_PERSON: Final = "ent_bbbb0002bbbb0002"
+MISSING_CONTEXT: Final = "ent_cccc0003cccc0003"
+MERGE_SURVIVOR: Final = "ent_dddd0004dddd0004"
+MERGE_CONTEXT: Final = "ent_ffff0006ffff0006"
 
 PROPOSED_NOTE: Final = "Synthetic subject asked for closeout updates in writing."
 CORRECTED_NOTE: Final = "Synthetic subject asked for weekly closeout updates in writing."
@@ -294,6 +311,8 @@ def _open_proposal(
     model_id: str | None = None,
     model_version: str | None = None,
     expected_subject_version: int = 1,
+    structured_value: dict[str, Any] | None = None,
+    context_links: tuple[dict[str, str], ...] = (),
 ) -> tuple[str, str, tuple[str, ...], tuple[str, ...]]:
     """One routed proposal, its review case, and the evidence it rests on.
 
@@ -321,9 +340,11 @@ def _open_proposal(
                 subject_entity_id=subject_entity_id,
                 proposed_kind=kind,
                 proposed_statement_sha256=statement_digest(statement),
-                structured_value=None,
+                structured_value=structured_value,
+                context_links=context_links,
             ),
-            structured_value=None,
+            structured_value=structured_value,
+            context_links=list(context_links),
             state=MemoryProposalState.NEEDS_REVIEW.value,
             method=method.value,
             method_version="synthetic-rule-v1",
@@ -378,6 +399,7 @@ def _decision(
     expected_review_version: int = 0,
     principal_id: str = PRINCIPAL_A,
     corrected_value: str | None = None,
+    correction_patch: CorrectionPatch | None = None,
     reason: str | None = None,
     at: datetime = LATER,
 ) -> ReviewDecisionRequest:
@@ -402,7 +424,11 @@ def _decision(
         audit_id=issue_identifier(IdKind.AUDIT),
         policy_version="policy-v1",
         decided_at=at,
-        corrected_value=corrected_value,
+        correction_patch=(
+            CorrectionPatch.of({"statement": corrected_value})
+            if corrected_value is not None
+            else correction_patch
+        ),
         reason=reason,
     )
 
@@ -854,6 +880,132 @@ def test_a_corrected_acceptance_is_user_confirmed_and_commits_the_reviewers_word
     assert evidence == 1
 
 
+def test_typed_correction_promotes_exact_content_context_and_evidence_without_mutating_proposal(
+    two_principals: Engine,
+) -> None:
+    """The complete corrected target is audited and promoted atomically."""
+    original_structured = {
+        "schema": "relationship_memory.communication_preference.v1",
+        "value": {"channel": "email", "preference": "preferred"},
+    }
+    original_context = ({"target_type": "entity", "target_id": DANA, "role": "arose_from"},)
+    corrected_statement = "x" * 300
+    corrected_context = [{"target_type": "entity", "target_id": DANA, "role": "applies_in"}]
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(
+            connection,
+            kind=MemoryKind.COMMUNICATION_PREFERENCE,
+            structured_value=original_structured,
+            context_links=original_context,
+        )
+
+    request = _decision(
+        review_case_id,
+        Disposition.CORRECT_AND_ACCEPT,
+        correction_patch=CorrectionPatch.of(
+            {
+                "statement": corrected_statement,
+                "structured_value": {"channel": "teams", "preference": "avoid"},
+                "context_links": corrected_context,
+            }
+        ),
+    )
+    with two_principals.begin() as connection:
+        decide_relationship_memory_review(connection, request)
+
+    with two_principals.connect() as connection:
+        proposal = _proposal_row(connection, proposal_id)
+        version = _version_of(connection, proposal.accepted_memory_id)
+        links = (
+            connection.execute(
+                text(
+                    f"SELECT target_type, target_id, role, authority "  # noqa: S608
+                    f"FROM {SCHEMA}.relationship_memory_context_links "
+                    "WHERE memory_version_id = :version_id"
+                ),
+                {"version_id": version.memory_version_id},
+            )
+            .mappings()
+            .all()
+        )
+        decision = connection.execute(
+            select(relationship_memory_review_decisions.c.corrected_payload).where(
+                relationship_memory_review_decisions.c.review_case_id == review_case_id
+            )
+        ).scalar_one()
+        evidence_count = connection.execute(
+            text(
+                f"SELECT count(*) FROM {SCHEMA}.relationship_memory_evidence_links "  # noqa: S608
+                "WHERE memory_version_id = :version_id"
+            ),
+            {"version_id": version.memory_version_id},
+        ).scalar_one()
+        before_replay = _counts(connection)
+
+    assert proposal.proposed_statement == PROPOSED_NOTE
+    assert proposal.structured_value == original_structured
+    assert proposal.context_links == list(original_context)
+    assert version.statement_text == corrected_statement
+    assert version.structured_value == {
+        "schema": "relationship_memory.communication_preference.v1",
+        "value": {"channel": "teams", "preference": "avoid"},
+    }
+    assert [dict(link) for link in links] == [
+        {
+            **corrected_context[0],
+            "authority": "review_accepted",
+        }
+    ]
+    assert decision["statement"] == corrected_statement
+    assert decision["context_links"] == corrected_context
+    assert evidence_count == 1
+
+    with two_principals.connect() as connection:
+        with pytest.raises(ReviewConflictError):
+            decide_relationship_memory_review(connection, request)
+        assert _counts(connection) == before_replay
+
+
+@pytest.mark.parametrize(
+    "target_id",
+    [FOREIGN_PERSON, MISSING_CONTEXT, OLD_DANA],
+    ids=("foreign", "missing", "merged"),
+)
+def test_typed_correction_refuses_invalid_context_atomically(
+    two_principals: Engine,
+    target_id: str,
+) -> None:
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+        before = _counts(connection)
+        original = _proposal_row(connection, proposal_id)
+        with pytest.raises(UnknownScopeError):
+            decide_relationship_memory_review(
+                connection,
+                _decision(
+                    review_case_id,
+                    Disposition.CORRECT_AND_ACCEPT,
+                    correction_patch=CorrectionPatch.of(
+                        {
+                            "context_links": [
+                                {
+                                    "target_type": "entity",
+                                    "target_id": target_id,
+                                    "role": "applies_in",
+                                }
+                            ]
+                        }
+                    ),
+                ),
+            )
+        assert _counts(connection) == before
+        unchanged = _proposal_row(connection, proposal_id)
+
+    assert unchanged.proposed_statement == original.proposed_statement
+    assert unchanged.state == original.state
+    assert unchanged.accepted_memory_id is None
+
+
 def test_an_acceptance_with_no_evidence_is_confirmed_rather_than_source_backed(
     two_principals: Engine,
 ) -> None:
@@ -917,6 +1069,11 @@ def test_a_non_accepting_disposition_leaves_no_memory(
     with two_principals.connect() as connection:
         after = _counts(connection)
         stamped = _proposal_row(connection, proposal_id)
+        corrected_payload_is_sql_null = connection.execute(
+            select(relationship_memory_review_decisions.c.corrected_payload.is_(None)).where(
+                relationship_memory_review_decisions.c.review_case_id == review_case_id
+            )
+        ).scalar_one()
         page = SqlRelationshipMemoryRepository(connection).page_for_entity(
             DANA, principal_id=PRINCIPAL_A, limit=10
         )
@@ -928,6 +1085,7 @@ def test_a_non_accepting_disposition_leaves_no_memory(
     }
     assert stamped.accepted_memory_id is None
     assert stamped.accepted_memory_version_id is None
+    assert corrected_payload_is_sql_null is True
     assert page.memories == ()
 
 
@@ -2066,6 +2224,395 @@ def test_deciding_a_memory_case_in_an_uncomposed_build_answers_as_an_absent_one(
 # that implementation: an insert of the domain records, unaltered.
 
 
+def _context_proposal(target_id: str, role: str) -> RelationshipMemoryProposal:
+    links = ({"target_type": "entity", "target_id": target_id, "role": role},)
+    digest = statement_digest(PROPOSED_NOTE)
+    return RelationshipMemoryProposal(
+        memory_proposal_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL),
+        principal_id=PRINCIPAL_A,
+        subject_entity_id=DANA,
+        expected_subject_version=1,
+        proposed_kind=MemoryKind.WORKING_PREFERENCE,
+        proposed_statement=PROPOSED_NOTE,
+        proposed_statement_sha256=digest,
+        dedupe_sha256=memory_proposal_dedupe_digest(
+            principal_id=PRINCIPAL_A,
+            subject_entity_id=DANA,
+            proposed_kind=MemoryKind.WORKING_PREFERENCE,
+            proposed_statement_sha256=digest,
+            structured_value=None,
+            context_links=links,
+        ),
+        state=MemoryProposalState.NEEDS_REVIEW,
+        method=MemoryProposalMethod.RULE,
+        method_version="synthetic-rule-v1",
+        classification=Classification.PRIVATE_LOCAL,
+        proposed_at=WHEN,
+        context_links=links,
+        review_case_id=issue_identifier(IdKind.REVIEW_CASE),
+    )
+
+
+def test_proposal_context_lock_serializes_against_a_merge_of_that_entity(
+    two_principals: Engine,
+) -> None:
+    """A proposal validated before a merge cannot commit a stale context target.
+
+    The proposal writer pauses after its Entity-context validation and advisory
+    locks, immediately before PostgreSQL receives the proposal INSERT.  A merge
+    previewed before that proposal then races to merge the context Entity away.
+    The context lock must hold the merge until the proposal commits, after which
+    merge reanalysis must refuse the now-materially-affected identity.
+
+    Removing the context Entity from ``record_proposal``'s lock union lets the
+    merge finish while the INSERT is paused, leaving a committed proposal whose
+    context names a redirect.  This is deliberately a behavioral lock test, not
+    an assertion over the lock helper's arguments.
+    """
+    with two_principals.begin() as connection:
+        entities_repository = SqlEntityRepository(connection)
+        entities_repository.create(
+            PRINCIPAL_A,
+            an_entity(MERGE_SURVIVOR, PRINCIPAL_A, "Context Survivor Synthetic"),
+        )
+        entities_repository.create(
+            PRINCIPAL_A,
+            an_entity(MERGE_CONTEXT, PRINCIPAL_A, "Context Candidate Synthetic"),
+        )
+        identity = IdentityCorrectionService(
+            entities_repository, SqlRelationshipMemoryRepository(connection)
+        )
+        report = identity.preview(
+            MergePreviewCommand(
+                principal_id=PRINCIPAL_A,
+                survivor_entity_id=MERGE_SURVIVOR,
+                expected_survivor_version=1,
+                merged_away=((MERGE_CONTEXT, 1),),
+                reason="two synthetic context identities describe one subject",
+                evidence_refs=(),
+            ),
+            at=WHEN,
+            requested_by=PRINCIPAL_A,
+            actor_class=ActorClass.USER,
+            has_operator_authority=True,
+        )
+    assert report.blockers == ()
+
+    proposal = _context_proposal(MERGE_CONTEXT, "applies_in")
+    insert_reached = Event()
+    release_insert = Event()
+    proposal_done = Event()
+    merge_done = Event()
+    proposal_failures: list[BaseException] = []
+    merge_failures: list[BaseException] = []
+    merge_receipts: list[MergeReceipt] = []
+
+    def stage_proposal() -> None:
+        try:
+            with two_principals.begin() as connection:
+
+                def pause_before_proposal_insert(
+                    _connection: object,
+                    _cursor: object,
+                    statement: str,
+                    _parameters: object,
+                    _context: object,
+                    _executemany: bool,
+                ) -> None:
+                    if "INSERT INTO knowledge.relationship_memory_proposals" not in statement:
+                        return
+                    insert_reached.set()
+                    if not release_insert.wait(timeout=5):
+                        raise TimeoutError("the proposal/merge race was not released")
+
+                event.listen(connection, "before_cursor_execute", pause_before_proposal_insert)
+                try:
+                    SqlRelationshipMemoryProposalRepository(connection).record_proposal(
+                        proposal, ()
+                    )
+                finally:
+                    event.remove(connection, "before_cursor_execute", pause_before_proposal_insert)
+        except BaseException as error:  # pragma: no cover - asserted in parent thread
+            proposal_failures.append(error)
+        finally:
+            proposal_done.set()
+
+    def apply_merge() -> None:
+        try:
+            with two_principals.begin() as connection:
+                identity = IdentityCorrectionService(
+                    SqlEntityRepository(connection),
+                    SqlRelationshipMemoryRepository(connection),
+                )
+                merge_receipts.append(
+                    identity.apply(
+                        MergeCommand(
+                            principal_id=PRINCIPAL_A,
+                            preview_id=report.preview.preview_id,
+                            preview_digest=report.preview.preview_digest,
+                            idempotency_key="relationship-memory-proposal-context-race",
+                            reason="two synthetic context identities describe one subject",
+                        ),
+                        at=WHEN,
+                        correlation_id="corr_context01context01",
+                        audit_id="audit_context01context01",
+                        performed_by=PRINCIPAL_A,
+                        actor_class=ActorClass.USER,
+                        has_operator_authority=True,
+                    )
+                )
+        except BaseException as error:  # pragma: no cover - asserted in parent thread
+            merge_failures.append(error)
+        finally:
+            merge_done.set()
+
+    proposal_thread = Thread(target=stage_proposal, daemon=True)
+    proposal_thread.start()
+    assert insert_reached.wait(timeout=5)
+    merge_thread = Thread(target=apply_merge, daemon=True)
+    merge_thread.start()
+    assert not merge_done.wait(timeout=0.25), (
+        "the merge did not wait for the proposal's context-Entity mutation lock"
+    )
+    release_insert.set()
+    assert proposal_done.wait(timeout=5)
+    assert merge_done.wait(timeout=5)
+    proposal_thread.join(timeout=1)
+    merge_thread.join(timeout=1)
+
+    assert proposal_failures == []
+    assert merge_receipts == []
+    assert len(merge_failures) == 1
+    assert isinstance(merge_failures[0], ConflictError)
+    with two_principals.connect() as connection:
+        context_entity = SqlEntityRepository(connection).get(PRINCIPAL_A, MERGE_CONTEXT)
+        stored_context = connection.execute(
+            select(relationship_memory_proposals.c.context_links).where(
+                relationship_memory_proposals.c.memory_proposal_id == proposal.memory_proposal_id
+            )
+        ).scalar_one()
+    assert context_entity is not None
+    assert context_entity.status is EntityStatus.ACTIVE
+    assert stored_context == list(proposal.context_links)
+
+
+def test_corrected_context_lock_serializes_against_a_merge_of_that_entity(
+    two_principals: Engine,
+) -> None:
+    """A correction cannot promote a context target concurrently merged away.
+
+    The original proposal does not name the merge participant, so its persisted
+    preview is valid.  ``correct_and_accept`` then introduces that Entity and
+    pauses after validation and participant locking, before the canonical memory
+    INSERT.  The merge must wait, reanalyse the committed current context link,
+    and refuse instead of leaving an accepted memory pointing at a redirect.
+    """
+    with two_principals.begin() as connection:
+        entities_repository = SqlEntityRepository(connection)
+        entities_repository.create(
+            PRINCIPAL_A,
+            an_entity(MERGE_SURVIVOR, PRINCIPAL_A, "Context Survivor Synthetic"),
+        )
+        entities_repository.create(
+            PRINCIPAL_A,
+            an_entity(MERGE_CONTEXT, PRINCIPAL_A, "Context Candidate Synthetic"),
+        )
+        _, review_case_id, _, _ = _open_proposal(connection)
+        identity = IdentityCorrectionService(
+            entities_repository, SqlRelationshipMemoryRepository(connection)
+        )
+        report = identity.preview(
+            MergePreviewCommand(
+                principal_id=PRINCIPAL_A,
+                survivor_entity_id=MERGE_SURVIVOR,
+                expected_survivor_version=1,
+                merged_away=((MERGE_CONTEXT, 1),),
+                reason="two synthetic context identities describe one subject",
+                evidence_refs=(),
+            ),
+            at=WHEN,
+            requested_by=PRINCIPAL_A,
+            actor_class=ActorClass.USER,
+            has_operator_authority=True,
+        )
+    assert report.blockers == ()
+
+    corrected_context = [
+        {
+            "target_type": "entity",
+            "target_id": MERGE_CONTEXT,
+            "role": "applies_in",
+        }
+    ]
+    review_request = _decision(
+        review_case_id,
+        Disposition.CORRECT_AND_ACCEPT,
+        correction_patch=CorrectionPatch.of({"context_links": corrected_context}),
+    )
+    promotion_insert_reached = Event()
+    release_promotion_insert = Event()
+    review_done = Event()
+    merge_done = Event()
+    review_failures: list[BaseException] = []
+    merge_failures: list[BaseException] = []
+    merge_receipts: list[MergeReceipt] = []
+
+    def accept_correction() -> None:
+        try:
+            with two_principals.begin() as connection:
+
+                def pause_before_memory_insert(
+                    _connection: object,
+                    _cursor: object,
+                    statement: str,
+                    _parameters: object,
+                    _context: object,
+                    _executemany: bool,
+                ) -> None:
+                    if "INSERT INTO knowledge.relationship_memories" not in statement:
+                        return
+                    promotion_insert_reached.set()
+                    if not release_promotion_insert.wait(timeout=5):
+                        raise TimeoutError("the review/merge race was not released")
+
+                event.listen(connection, "before_cursor_execute", pause_before_memory_insert)
+                try:
+                    decide_relationship_memory_review(connection, review_request)
+                finally:
+                    event.remove(connection, "before_cursor_execute", pause_before_memory_insert)
+        except BaseException as error:  # pragma: no cover - asserted in parent thread
+            review_failures.append(error)
+        finally:
+            review_done.set()
+
+    def apply_merge() -> None:
+        try:
+            with two_principals.begin() as connection:
+                identity = IdentityCorrectionService(
+                    SqlEntityRepository(connection),
+                    SqlRelationshipMemoryRepository(connection),
+                )
+                merge_receipts.append(
+                    identity.apply(
+                        MergeCommand(
+                            principal_id=PRINCIPAL_A,
+                            preview_id=report.preview.preview_id,
+                            preview_digest=report.preview.preview_digest,
+                            idempotency_key="relationship-memory-review-context-race",
+                            reason="two synthetic context identities describe one subject",
+                        ),
+                        at=WHEN,
+                        correlation_id="corr_cccc0003cccc0003",
+                        audit_id="audit_cccc0003cccc0003",
+                        performed_by=PRINCIPAL_A,
+                        actor_class=ActorClass.USER,
+                        has_operator_authority=True,
+                    )
+                )
+        except BaseException as error:  # pragma: no cover - asserted in parent thread
+            merge_failures.append(error)
+        finally:
+            merge_done.set()
+
+    review_thread = Thread(target=accept_correction, daemon=True)
+    review_thread.start()
+    assert promotion_insert_reached.wait(timeout=5)
+    merge_thread = Thread(target=apply_merge, daemon=True)
+    merge_thread.start()
+    assert not merge_done.wait(timeout=0.25), (
+        "the merge did not wait for the review correction's context-Entity mutation lock"
+    )
+    release_promotion_insert.set()
+    assert review_done.wait(timeout=5)
+    assert merge_done.wait(timeout=5)
+    review_thread.join(timeout=1)
+    merge_thread.join(timeout=1)
+
+    assert review_failures == []
+    assert merge_receipts == []
+    assert len(merge_failures) == 1
+    assert isinstance(merge_failures[0], ConflictError)
+    with two_principals.connect() as connection:
+        context_entity = SqlEntityRepository(connection).get(PRINCIPAL_A, MERGE_CONTEXT)
+        proposal = connection.execute(
+            select(relationship_memory_proposals).where(
+                relationship_memory_proposals.c.review_case_id == review_case_id
+            )
+        ).one()
+        promoted_context = (
+            connection.execute(
+                text(
+                    f"SELECT target_type, target_id, role "  # noqa: S608
+                    f"FROM {SCHEMA}.relationship_memory_context_links "
+                    "WHERE memory_version_id = :memory_version_id"
+                ),
+                {"memory_version_id": proposal.accepted_memory_version_id},
+            )
+            .mappings()
+            .all()
+        )
+    assert context_entity is not None
+    assert context_entity.status is EntityStatus.ACTIVE
+    assert proposal.state == MemoryProposalState.CORRECTED_ACCEPTED.value
+    assert [dict(link) for link in promoted_context] == corrected_context
+
+
+def test_proposal_context_round_trips_and_changes_database_dedupe_identity(
+    two_principals: Engine,
+) -> None:
+    """Two otherwise-equal proposals with different scopes remain distinct and exact."""
+    first = _context_proposal(DANA, "applies_in")
+    second = _context_proposal(DANA, "related_to")
+    with two_principals.begin() as connection:
+        repository = SqlRelationshipMemoryProposalRepository(connection)
+        repository.record_proposal(first, ())
+        repository.record_proposal(second, ())
+
+    with two_principals.connect() as connection:
+        rows = connection.execute(
+            select(
+                relationship_memory_proposals.c.memory_proposal_id,
+                relationship_memory_proposals.c.context_links,
+                relationship_memory_proposals.c.dedupe_sha256,
+            ).where(
+                relationship_memory_proposals.c.memory_proposal_id.in_(
+                    (first.memory_proposal_id, second.memory_proposal_id)
+                )
+            )
+        ).all()
+    assert {row.memory_proposal_id for row in rows} == {
+        first.memory_proposal_id,
+        second.memory_proposal_id,
+    }
+    assert {row.dedupe_sha256 for row in rows} == {first.dedupe_sha256, second.dedupe_sha256}
+    assert {tuple(tuple(sorted(link.items())) for link in row.context_links) for row in rows} == {
+        tuple(tuple(sorted(link.items())) for link in first.context_links),
+        tuple(tuple(sorted(link.items())) for link in second.context_links),
+    }
+
+
+@pytest.mark.parametrize(
+    "target_id",
+    [FOREIGN_PERSON, MISSING_CONTEXT, OLD_DANA],
+    ids=("foreign", "missing", "merged"),
+)
+def test_proposal_context_refuses_unowned_or_unwritable_targets_without_a_row(
+    two_principals: Engine,
+    target_id: str,
+) -> None:
+    proposal = _context_proposal(target_id, "applies_in")
+    with two_principals.begin() as connection:
+        before = connection.execute(
+            select(func.count()).select_from(relationship_memory_proposals)
+        ).scalar_one()
+        with pytest.raises(UnknownScopeError):
+            SqlRelationshipMemoryProposalRepository(connection).record_proposal(proposal, ())
+        after = connection.execute(
+            select(func.count()).select_from(relationship_memory_proposals)
+        ).scalar_one()
+    assert after == before
+
+
 class _InsertOnlyProposals:
     """`RelationshipMemoryProposalRepository`, over the two tables PR #147 created."""
 
@@ -2088,6 +2635,7 @@ class _InsertOnlyProposals:
                 proposed_statement_sha256=proposal.proposed_statement_sha256,
                 dedupe_sha256=proposal.dedupe_sha256,
                 structured_value=proposal.structured_value,
+                context_links=list(proposal.context_links),
                 state=proposal.state.value,
                 method=proposal.method.value,
                 method_version=proposal.method_version,

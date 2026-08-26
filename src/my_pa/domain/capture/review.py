@@ -89,11 +89,12 @@ action. The port and architecture test make that absence structural.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
-from typing import Final
+from typing import Any, Final
 
 from my_pa.domain.capture.proposal import ProposalState, ProposalType, RiskClass
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -179,7 +180,7 @@ def requires_review(subject: ConsequentialClass) -> bool:
     return True
 
 
-#: How long one field of a correction patch may be.
+#: How many canonical UTF-8 JSON bytes one correction patch may occupy.
 #:
 #: Restated rather than imported from `PROPOSAL_PAYLOAD_VALUE_LIMIT`, which it
 #: equals today, for the reason that constant states about its own siblings:
@@ -192,7 +193,13 @@ def requires_review(subject: ConsequentialClass) -> bool:
 #: it commits anything. What this bounds is the failure an unbounded structural
 #: record always has: a caller putting the document it could not fit anywhere
 #: else into the one shape with no schema attached to it yet.
-CORRECTION_PATCH_VALUE_LIMIT: Final = 500
+#: Worst-case valid RM content is 16,000 UTF-8 bytes for a 4,000-character
+#: astral statement, plus a 2,048-byte structured envelope, ten maximum-width
+#: context links and the small field/vocabulary overhead. 32 KiB leaves margin
+#: above that complete canonical target while remaining a firm pre-schema abuse
+#: bound. Measure real wire bytes below: JSON's ASCII escape expansion is not a
+#: property of the target and must not reject otherwise valid Unicode content.
+CORRECTION_PATCH_VALUE_LIMIT: Final = 32_768
 
 #: How many fields one correction patch may name. Larger than any target
 #: command's field count, deliberately: this is not the schema's job, it is the
@@ -274,7 +281,7 @@ class CorrectionPatch:
 
     **What this is and, more importantly, what it is not.** It is the *shape* a
     typed correction takes on the way to a decision: named fields, each holding
-    a string or a flag, bounded and in name order. It is emphatically not a
+    a bounded JSON value, in name order. It is emphatically not a
     second schema. Whether `display_name` is a field the target command takes,
     and whether the value is a name that command would accept, is the target
     command schema's answer and is checked by the plane that owns the subject —
@@ -291,7 +298,10 @@ class CorrectionPatch:
     and a single string cannot say which of them the reviewer changed. Repurposing
     `corrected_value` to carry an encoded mapping would have made one column mean
     two things and would have left the capture plane's bound guarding a document.
-    So this is added beside it and the two never travel together.
+    Relationship Memory also uses the patch because its canonical target has
+    structured and context values; its plane admits only that target's content
+    fields. So this is added beside `corrected_value` and the two never travel
+    together.
 
     `values` is a sorted tuple rather than a mapping for the reason
     `EntityProposalPayload.values` is: it makes the record hashable and
@@ -299,7 +309,7 @@ class CorrectionPatch:
     the iteration order of whatever mapping a caller happened to build.
     """
 
-    values: tuple[tuple[str, str | bool], ...]
+    values: tuple[tuple[str, Any], ...]
 
     def __post_init__(self) -> None:
         if not self.values:
@@ -314,21 +324,27 @@ class CorrectionPatch:
         for name, value in self.values:
             if not name.strip():
                 raise ReviewError("a correction patch names each field")
-            if isinstance(value, bool):
-                continue
-            if not isinstance(value, str):
-                raise ReviewError("a correction patch value is a string or a flag")
-            if not value.strip():
+            if isinstance(value, str) and not value.strip():
                 raise ReviewError("a correction patch names no blank value")
-            if len(value) > CORRECTION_PATCH_VALUE_LIMIT:
-                raise ReviewError("a correction patch value is bounded")
+        try:
+            encoded = json.dumps(
+                dict(self.values),
+                sort_keys=True,
+                separators=(",", ":"),
+                ensure_ascii=False,
+                allow_nan=False,
+            ).encode("utf-8")
+        except (TypeError, UnicodeEncodeError, ValueError):
+            raise ReviewError("a correction patch contains JSON values") from None
+        if len(encoded) > CORRECTION_PATCH_VALUE_LIMIT:
+            raise ReviewError("a correction patch is bounded")
 
     @classmethod
-    def of(cls, values: Mapping[str, str | bool]) -> CorrectionPatch:
+    def of(cls, values: Mapping[str, Any]) -> CorrectionPatch:
         """`values` as a patch, in the name order the record requires."""
         return cls(values=tuple(sorted(values.items())))
 
-    def as_mapping(self) -> dict[str, str | bool]:
+    def as_mapping(self) -> dict[str, Any]:
         """The correction as the keyword arguments its target command takes."""
         return dict(self.values)
 

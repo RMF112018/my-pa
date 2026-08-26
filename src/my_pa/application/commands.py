@@ -126,19 +126,13 @@ from my_pa.domain.relationship.governance import (
 )
 from my_pa.domain.relationship.identity_correction import MAX_MERGED_AWAY_ENTITIES
 from my_pa.domain.relationship.memory import (
-    CONTEXT_TARGET_ID_KINDS,
-    MAX_CONTEXT_LINKS_PER_VERSION,
     MAX_CORRECTION_REASON_CHARACTERS,
     MAX_STATEMENT_CHARACTERS,
     EvidenceLinkRole,
     MemoryKind,
     MemoryLifecycle,
-)
-from my_pa.domain.relationship.memory import (
-    ContextLinkRole as MemoryContextRole,
-)
-from my_pa.domain.relationship.memory import (
-    ContextLinkTargetType as MemoryContextTargetType,
+    RelationshipMemoryError,
+    validate_context_links,
 )
 from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 from my_pa.domain.search.query import MAX_QUERY_CHARACTERS, SearchQuery, SearchQueryError
@@ -1195,12 +1189,12 @@ class DecideReviewCase:
     **Two correction shapes, and exactly one of them accompanies an acceptance
     that corrects.** `corrected_value` is unchanged and is what a capture or
     GoodNotes subject takes: one normalized value, one bounded string.
-    `correction_patch` is what an Entity proposal takes, because it asks for a
-    mutation with named arguments and a single string cannot say which of them
-    the reviewer changed. The plane that owns the subject validates the patch
-    against that mutation's own command schema before anything commits; this
-    checks only that a correction was supplied at all, and that it was not
-    supplied twice or to a disposition that corrects nothing.
+    `correction_patch` is what an Entity or Relationship Memory proposal takes,
+    because each target has named content fields and a single string cannot say
+    which of them the reviewer changed. The plane that owns the subject routes
+    and validates the patch against that target's own command schema before
+    anything commits; this checks only that a correction was supplied at all,
+    and that it was not supplied twice or to a disposition that corrects nothing.
 
     `reason` is refused on `accept`, `correct_and_accept` and `reprocess`, which
     section 13 gives no reason, and required on `escalate` and `invalidate`,
@@ -1226,13 +1220,13 @@ class DecideReviewCase:
         {
             "correction_patch": {
                 "type": "object",
-                "additionalProperties": {"type": ["string", "boolean"]},
+                "additionalProperties": {"type": ["string", "boolean", "object", "array", "null"]},
                 "description": (
-                    "The corrected fields of an entity proposal's requested mutation, "
-                    "named one by one. Validated against the schema of the canonical "
-                    "command that carries that mutation out before anything is written. "
-                    "Accompanies correct_and_accept for an entity proposal; a capture or "
-                    "GoodNotes subject takes corrected_value instead, and never both."
+                    "The corrected target fields, named one by one and validated against "
+                    "the canonical command for the review subject before anything is "
+                    "written. Entity proposals take their mutation fields. Relationship "
+                    "Memory proposals take statement, kind, structured_value and/or "
+                    "context_links. Capture and GoodNotes take corrected_value instead."
                 ),
             }
         }
@@ -4037,7 +4031,7 @@ def _memory_structured_value(value: object) -> dict[str, Any] | None:
     return dict(value)
 
 
-def _memory_context_links(value: object) -> tuple[dict[str, object], ...]:
+def _memory_context_links(value: object) -> tuple[dict[str, str], ...]:
     """The context links a write declares, shape-checked and bounded.
 
     Each entry names a target type from the closed set, an identifier of the kind
@@ -4045,31 +4039,10 @@ def _memory_context_links(value: object) -> tuple[dict[str, object], ...]:
     belongs to the acting Principal — is not decidable here and is proven by the
     repository before the insert, which is the only place it can be proven.
     """
-    if not isinstance(value, tuple | list):
-        raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
-    if len(value) > MAX_CONTEXT_LINKS_PER_VERSION:
-        raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
-    links: list[dict[str, object]] = []
-    for entry in value:
-        if not isinstance(entry, Mapping):
-            raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
-        if set(entry) != {"target_type", "target_id", "role"}:
-            raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
-        raw_type = entry["target_type"]
-        raw_role = entry["role"]
-        raw_target = entry["target_id"]
-        if not isinstance(raw_type, str) or not isinstance(raw_role, str):
-            raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
-        if not isinstance(raw_target, str):
-            raise InvalidRequestError(SafeDetail.CONTEXT_LINKS)
-        try:
-            target_type = MemoryContextTargetType(raw_type)
-            MemoryContextRole(raw_role)
-        except ValueError:
-            raise InvalidRequestError(SafeDetail.CONTEXT_LINKS) from None
-        _identifier(raw_target, CONTEXT_TARGET_ID_KINDS[target_type], SafeDetail.CONTEXT_LINKS)
-        links.append({"target_type": raw_type, "target_id": raw_target, "role": raw_role})
-    return tuple(links)
+    try:
+        return validate_context_links(value)
+    except RelationshipMemoryError:
+        raise InvalidRequestError(SafeDetail.CONTEXT_LINKS) from None
 
 
 def _memory_kinds_filter(value: object) -> tuple[MemoryKind, ...] | None:
@@ -5553,6 +5526,7 @@ class ProposeRelationshipMemory:
             "structured_value": {
                 "description": "The kind's own structured envelope, when it takes one."
             },
+            "context_links": _MEMORY_FIELD_DOCS["context_links"],
         }
     )
 
@@ -5562,6 +5536,7 @@ class ProposeRelationshipMemory:
     evidence: tuple[Mapping[str, str], ...] = field(repr=False)
     kind: MemoryKind = MemoryKind.GENERAL_NOTE
     structured_value: dict[str, Any] | None = field(default=None, repr=False)
+    context_links: tuple[dict[str, object], ...] = ()
 
     def __post_init__(self) -> None:
         _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.SUBJECT_ENTITY_ID)
@@ -5571,6 +5546,7 @@ class ProposeRelationshipMemory:
         _memory_proposal_evidence(self.evidence)
         if self.structured_value is not None and not isinstance(self.structured_value, dict):
             raise InvalidRequestError(SafeDetail.STRUCTURED_VALUE)
+        _memory_context_links(self.context_links)
 
 
 @dataclass(frozen=True, slots=True)

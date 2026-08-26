@@ -375,12 +375,12 @@ BEYOND_THE_EIGHT: Final = {
         "purpose `review_disposition`, and it reads as well as writes. "
         "`review.decide` reads three of the eight "
         "(`relationship_memory_proposals`, `relationship_memory_review_decisions`, "
-        "`relationship_memory_proposal_evidence`) and writes six of the eight "
+        "`relationship_memory_proposal_evidence`) and writes seven of the eight "
         "(`relationship_memories`, `relationship_memory_versions`, "
-        "`relationship_memory_evidence_links`, "
+        "`relationship_memory_context_links`, `relationship_memory_evidence_links`, "
         "`relationship_memory_review_decisions`, `relationship_memory_proposals`, "
         "`relationship_memory_proposal_evidence`). "
-        "**That six is a union over branches and no request writes it.** This "
+        "**That seven is a union over branches and no request writes it.** This "
         "string previously said the two non-promotion writes happen on every "
         "disposition; they do not, and claim 10 is what now says so. "
         "`review.decide` on `reject` writes two of the eight "
@@ -600,6 +600,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(
             {
                 "relationship_memories",
+                "relationship_memory_context_links",
                 "relationship_memory_evidence_links",
                 "relationship_memory_proposal_evidence",
                 "relationship_memory_proposals",
@@ -644,6 +645,14 @@ UNCLASSIFIED_TABLE_MENTIONS: Final[dict[tuple[str, str, str], str]] = {
         "summaries_for_context",
         "current = relationship_memory_versions.alias('current')",
     ): "the same alias, for the context card",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "subject_entity_ids",
+        "proposal_context = func.jsonb_array_elements(relationship_memory_proposals.c."
+        "context_links).table_valued(column('value', relationship_memory_proposals.c."
+        "context_links.type)).lateral()",
+    ): "the lateral JSONB row source is held in a local and joined into the `select` "
+    "below it; this assignment only derives rows from the proposal table and cannot write it",
 }
 
 #: The enums whose members the walk splits a capability's writes by.
@@ -671,7 +680,7 @@ DECLARED_BRANCH_AXES: Final = frozenset({"Disposition", "EntityStatus"})
 #:
 #: This is the itinerary `DECLARED_TABLE_REACH` deliberately is not. The union of
 #: the rows below is that declaration's write set, and the difference between
-#: them is exactly the false sentence this claim exists to have caught: five
+#: them is exactly the false sentence this claim exists to have caught: six
 #: tables is what `review.decide` can write, one table is what `mark_unresolved`
 #: does write, and the row is now required to say both.
 DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str]]]]] = {
@@ -680,6 +689,7 @@ DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str
             "accept": frozenset(
                 {
                     "relationship_memories",
+                    "relationship_memory_context_links",
                     "relationship_memory_evidence_links",
                     "relationship_memory_proposals",
                     "relationship_memory_review_decisions",
@@ -689,6 +699,7 @@ DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str
             "correct_and_accept": frozenset(
                 {
                     "relationship_memories",
+                    "relationship_memory_context_links",
                     "relationship_memory_evidence_links",
                     "relationship_memory_proposals",
                     "relationship_memory_review_decisions",

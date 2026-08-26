@@ -282,6 +282,35 @@ def upgrade() -> None:
     )
     op.execute(
         f"""
+        ALTER TABLE {SCHEMA}.relationship_memory_proposals
+          ADD COLUMN IF NOT EXISTS context_links jsonb NOT NULL DEFAULT '[]'::jsonb;
+        ALTER TABLE {SCHEMA}.relationship_memory_review_decisions
+          ADD COLUMN IF NOT EXISTS corrected_payload jsonb;
+        ALTER TABLE {SCHEMA}.relationship_memory_review_decisions
+          DISABLE TRIGGER relationship_memory_decisions_are_append_only;
+        UPDATE {SCHEMA}.relationship_memory_review_decisions d
+           SET corrected_payload = jsonb_build_object(
+                 'statement', d.corrected_statement,
+                 'kind', p.proposed_kind,
+                 'structured_value', p.structured_value,
+                 'context_links', p.context_links
+               )
+          FROM {SCHEMA}.relationship_memory_proposals p
+         WHERE p.memory_proposal_id = d.memory_proposal_id
+           AND p.principal_id = d.principal_id
+           AND d.disposition = 'correct_and_accept'
+           AND d.corrected_payload IS NULL;
+        ALTER TABLE {SCHEMA}.relationship_memory_review_decisions
+          ENABLE TRIGGER relationship_memory_decisions_are_append_only;
+        ALTER TABLE {SCHEMA}.relationship_memory_review_decisions
+          DROP CONSTRAINT IF EXISTS a_memory_corrected_payload_matches_its_disposition,
+          ADD CONSTRAINT a_memory_corrected_payload_matches_its_disposition CHECK (
+            (disposition = 'correct_and_accept') = (corrected_payload IS NOT NULL)
+          );
+        """
+    )
+    op.execute(
+        f"""
         ALTER TABLE {SCHEMA}.relationship_memory_review_decisions
           ADD COLUMN IF NOT EXISTS reason text,
           DROP CONSTRAINT IF EXISTS a_memory_review_reason_explains_a_departure,
@@ -526,6 +555,11 @@ def downgrade() -> None:
           DROP COLUMN superseded_at,
           DROP COLUMN dedupe_sha256,
           DROP COLUMN expected_subject_version;
+        ALTER TABLE {SCHEMA}.relationship_memory_review_decisions
+          DROP CONSTRAINT a_memory_corrected_payload_matches_its_disposition,
+          DROP COLUMN corrected_payload;
+        ALTER TABLE {SCHEMA}.relationship_memory_proposals
+          DROP COLUMN context_links;
         ALTER TABLE {SCHEMA}.relationship_memory_review_decisions
           DROP CONSTRAINT a_memory_review_reason_explains_a_departure,
           DROP CONSTRAINT a_memory_escalation_or_invalidation_states_why,

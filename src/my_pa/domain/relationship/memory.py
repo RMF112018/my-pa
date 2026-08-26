@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -106,6 +107,7 @@ __all__ = [
     "memory_proposal_dedupe_digest",
     "satisfies_floor",
     "statement_digest",
+    "validate_context_links",
     "validate_statement",
     "validate_structured_value",
 ]
@@ -542,6 +544,7 @@ def memory_proposal_dedupe_digest(
     proposed_kind: MemoryKind | str,
     proposed_statement_sha256: str,
     structured_value: dict[str, Any] | None,
+    context_links: tuple[Mapping[str, str], ...] = (),
 ) -> str:
     """Identify one semantic open proposal independently of optimistic state.
 
@@ -552,13 +555,15 @@ def memory_proposal_dedupe_digest(
     paths from silently acquiring different open-equivalence rules.
     """
     kind = proposed_kind.value if isinstance(proposed_kind, MemoryKind) else proposed_kind
-    material = {
+    material: dict[str, Any] = {
         "kind": kind,
         "principal_id": principal_id,
         "statement_sha256": proposed_statement_sha256,
         "structured_value": structured_value,
         "subject_entity_id": subject_entity_id,
     }
+    if context_links:
+        material["context_links"] = [dict(sorted(link.items())) for link in context_links]
     return hashlib.sha256(
         json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
@@ -725,6 +730,38 @@ def validate_structured_value(
     if len(encoded) > MAX_STRUCTURED_VALUE_BYTES:
         raise MemoryBoundsError(f"a structured value is at most {MAX_STRUCTURED_VALUE_BYTES} bytes")
     return envelope
+
+
+def validate_context_links(value: object) -> tuple[dict[str, str], ...]:
+    """Return the canonical bounded link set shared by direct and reviewed writes."""
+    if not isinstance(value, tuple | list) or len(value) > MAX_CONTEXT_LINKS_PER_VERSION:
+        raise RelationshipMemoryError("memory context links are a bounded list")
+    links: list[dict[str, str]] = []
+    identities: set[tuple[str, str, str]] = set()
+    for entry in value:
+        if not isinstance(entry, Mapping) or set(entry) != {"target_type", "target_id", "role"}:
+            raise RelationshipMemoryError("a context link carries its canonical fields")
+        raw_type, target_id, raw_role = (
+            entry["target_type"],
+            entry["target_id"],
+            entry["role"],
+        )
+        if not all(isinstance(item, str) for item in (raw_type, target_id, raw_role)):
+            raise RelationshipMemoryError("a context link carries text vocabulary values")
+        try:
+            target_type = ContextLinkTargetType(raw_type)
+            role = ContextLinkRole(raw_role)
+            validate_identifier(target_id, CONTEXT_TARGET_ID_KINDS[target_type])
+        except (ValueError, KeyError):
+            raise RelationshipMemoryError("a context link names a valid target and role") from None
+        identity = (target_type.value, target_id, role.value)
+        if identity in identities:
+            raise RelationshipMemoryError("a memory version names each context link once")
+        identities.add(identity)
+        links.append({"target_type": target_type.value, "target_id": target_id, "role": role.value})
+    return tuple(
+        sorted(links, key=lambda link: (link["target_type"], link["target_id"], link["role"]))
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -1007,6 +1044,7 @@ class RelationshipMemoryProposal:
     classification: Classification
     proposed_at: datetime
     structured_value: dict[str, Any] | None = field(default=None, repr=False)
+    context_links: tuple[dict[str, str], ...] = field(default=(), repr=False)
     model_id: str | None = None
     model_version: str | None = None
     review_case_id: str | None = None
@@ -1068,6 +1106,8 @@ class RelationshipMemoryProposal:
             validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
         if self.structured_value is not None and set(self.structured_value) != {"schema", "value"}:
             raise MemoryStructuredValueError("a proposal's structured value is a schema envelope")
+        if self.context_links != validate_context_links(self.context_links):
+            raise RelationshipMemoryError("proposal context links use canonical order")
         if (self.state is MemoryProposalState.SUPERSEDED) is not (self.superseded_at is not None):
             raise RelationshipMemoryError("a superseded proposal records when it was superseded")
         if self.superseded_at is not None:

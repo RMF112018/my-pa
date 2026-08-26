@@ -1454,9 +1454,9 @@ def _correction_patch(patch: Any) -> CorrectionPatch:  # noqa: ANN401 - a decode
     """One decoded JSON object as a typed correction patch, or a refusal."""
     if not isinstance(patch, Mapping):
         raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
-    values: dict[str, str | bool] = {}
+    values: dict[str, Any] = {}
     for name, value in patch.items():
-        if not isinstance(name, str) or not isinstance(value, str | bool):
+        if not isinstance(name, str):
             raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
         values[name] = value
     try:
@@ -1502,6 +1502,9 @@ def _propose_relationship_memory(payload: Mapping[str, Any]) -> Command:
     evidence = converted.get("evidence")
     if isinstance(evidence, list):
         converted["evidence"] = tuple(evidence)
+    context_links = converted.get("context_links")
+    if isinstance(context_links, list):
+        converted["context_links"] = tuple(context_links)
     return ProposeRelationshipMemory(**converted)
 
 

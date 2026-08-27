@@ -6,7 +6,7 @@ source-, rule- or model-derived candidate becomes memory only when a reviewer
 decides so (`RM-AC-005`, `RM-AC-016`, `RM-API-AC-011`, `RM-API-AC-012`,
 `RM-P-AC-008`).
 
-Six claims carry this path and each is asserted against the server rather than
+Eight claims carry this path and each is asserted against the server rather than
 against the code that usually calls it:
 
 * **A proposal is not memory.** Its invisibility to `page_for_entity` and
@@ -39,6 +39,23 @@ against the code that usually calls it:
   UPDATE while every one of that module's forty tests, and every one of the
   twenty-four here, stayed green. The population is `Disposition`'s own members,
   so a disposition the router grows arrives here unstated.
+* **An invalidation is not a rejection.** The eighth claim, and the newest
+  (Manager ruling R-8, `WP-RI-B-05`). `invalidate` says the basis went away and
+  `reject` says the reviewer judged the claim wrong, so the two are driven side
+  by side and every trace a later suppression rule could key on — the stored
+  state, the candidate's `invalidated_reason`, the disposition on the decision
+  chain, the state the case presents — is asserted to differ. The structural half
+  is driven rather than read: every disposition with a route is decided against
+  the server on a candidate of its own, and exactly one is allowed to leave
+  `rejected` behind. The reason column's own CHECKs are asked directly, including
+  the two that were already there, because the change is additive and "it takes
+  what it took before" is a claim about the server.
+* **The producer writes a row this database takes.** The seventh claim:
+  `RelationshipMemoryProposalService` fills the proposal columns, and the
+  last section drives it through an insert-only adapter so the conditional
+  pairings the schema enforces — the model triple, the sensitivity floor — are
+  checked against the service that fills them rather than against a fixture
+  written to match them.
 
 Everything is synthetic: two invented Principals, invented entities, invented
 notes. The database is created and dropped by this module's own fixture and is
@@ -49,39 +66,66 @@ from __future__ import annotations
 
 import re
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from datetime import UTC, datetime
 from pathlib import Path
+from threading import Event, Thread
 from typing import Any, Final
 
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, Engine, Row, event, insert, select, text
+from sqlalchemy import Connection, Engine, Row, event, func, insert, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError
 
+from my_pa.application.errors import ConflictError
+from my_pa.application.identity_correction import (
+    IdentityCorrectionService,
+    MergeCommand,
+    MergePreviewCommand,
+    MergeReceipt,
+)
+from my_pa.application.relationship_memory import (
+    MemoryProposalOrigin,
+    MemoryProposalReceipt,
+    ProposedEvidence,
+    ProposeMemoryCommand,
+    RelationshipMemoryProposalService,
+)
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.contracts.ports import MemoryWriteRequest, ReviewDecisionRequest
+from my_pa.contracts.ports import (
+    MemoryWriteRequest,
+    ReviewDecisionRequest,
+    UnknownScopeError,
+    WriteRequestConflictError,
+    WriteRequestEvidence,
+    WriteRequestResult,
+)
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.review import (
+    CorrectionPatch,
     Disposition,
     ReviewConflictError,
     ReviewNotFoundError,
-    ReviewUnsupportedError,
 )
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
+from my_pa.domain.relationship.governance import ActorClass
 from my_pa.domain.relationship.memory import (
     EvidenceLinkRole,
     MemoryActorClass,
     MemoryAuthority,
     MemoryKind,
     MemoryOperation,
+    MemoryProposalEvidence,
     MemoryProposalMethod,
     MemoryProposalState,
+    RelationshipMemoryProposal,
     classification_floor_for,
+    memory_proposal_dedupe_digest,
     statement_digest,
 )
 from my_pa.domain.relationship.normalization import normalize_name
@@ -90,16 +134,25 @@ from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.audit import SqlAlchemyAuditSink
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.relationship_memory import SqlRelationshipMemoryRepository
+from my_pa.infrastructure.persistence.relationship_memory_proposals import (
+    SqlRelationshipMemoryProposalRepository,
+)
 from my_pa.infrastructure.persistence.relationship_memory_review import (
     decide_relationship_memory_review,
     is_relationship_memory_review_case,
     relationship_memory_review_cases,
 )
 from my_pa.infrastructure.persistence.tables import (
+    entities,
+    relationship_memories,
     relationship_memory_proposal_evidence,
     relationship_memory_proposals,
+    relationship_memory_review_decisions,
+    relationship_write_request_evidence,
+    relationship_write_requests,
 )
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from my_pa.infrastructure.persistence.write_requests import SqlWriteRequestRepository
 
 pytestmark = pytest.mark.database
 
@@ -129,6 +182,9 @@ PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"
 DANA: Final = "ent_aaaa0001aaaa0001"
 OLD_DANA: Final = "ent_eeee0005eeee0005"
 FOREIGN_PERSON: Final = "ent_bbbb0002bbbb0002"
+MISSING_CONTEXT: Final = "ent_cccc0003cccc0003"
+MERGE_SURVIVOR: Final = "ent_dddd0004dddd0004"
+MERGE_CONTEXT: Final = "ent_ffff0006ffff0006"
 
 PROPOSED_NOTE: Final = "Synthetic subject asked for closeout updates in writing."
 CORRECTED_NOTE: Final = "Synthetic subject asked for weekly closeout updates in writing."
@@ -136,6 +192,17 @@ CORRECTED_NOTE: Final = "Synthetic subject asked for weekly closeout updates in 
 #: A note the user writes themselves, sharing the proposal's search term so one
 #: `search` matches both and the two rows differ in nothing but authority.
 OWN_NOTE: Final = "Synthetic subject reads closeout mail on Fridays."
+
+#: The reason an invalidation states, and it is a statement about the *basis*
+#: rather than about the claim. A rejection's reason would be the opposite kind
+#: of sentence, which is the distinction `WP-RI-B-05` exists to keep.
+MOOT_BASIS: Final = "the source capture was retracted, so the basis no longer stands"
+
+#: The dispositions `ReviewDecisionRequest` refuses to be built without a reason
+#: for. Restated rather than imported from the request's own private class
+#: attribute, on `tests/unit/test_entity_proposal_review.py`'s precedent: a
+#: constant read out of the object under test agrees with it by construction.
+_REASON_REQUIRED: Final = frozenset({Disposition.ESCALATE, Disposition.INVALIDATE})
 
 WHEN: Final = datetime(2026, 8, 22, 12, tzinfo=UTC)
 LATER: Final = datetime(2026, 8, 22, 13, tzinfo=UTC)
@@ -213,10 +280,21 @@ def two_principals(migrated_engine: Engine) -> Engine:
 
 # --- fixtures that put a candidate in front of a reviewer ---------------------
 #
-# Written as direct inserts rather than through a producer, because no producer
-# exists yet and inventing one here would make this suite a test of the
-# invention. The rows are exactly what a deterministic, rule or local-model
-# producer would have to write, and the schema's own CHECKs police that.
+# Written as direct inserts, and *still* direct inserts now that
+# `RelationshipMemoryProposalService` exists. The earlier reason recorded here —
+# "no producer exists yet" — has expired, and this is the reason that replaced
+# it: this fixture has to be able to write rows a producer refuses, and several
+# tests below depend on that. It seeds candidates for a foreign Principal and
+# candidates whose classification is stated rather than taken from the kind's
+# floor; the producer refuses both by construction. A fixture that could only
+# write well-formed candidates could not set up the refusals this suite is about.
+#
+# The producer is not thereby left unchecked against the schema. The last
+# section of this module drives `RelationshipMemoryProposalService` through an
+# insert-only adapter and asserts the row it writes survives every CHECK and
+# arrives on the canonical Review surface — the claim these hand-written rows
+# cannot make, because they were written to match the columns rather than
+# derived from the service that has to fill them.
 
 
 def _open_proposal(
@@ -229,6 +307,12 @@ def _open_proposal(
     evidence: int = 1,
     capture_spans: int = 0,
     classification: Classification | None = None,
+    method: MemoryProposalMethod = MemoryProposalMethod.RULE,
+    model_id: str | None = None,
+    model_version: str | None = None,
+    expected_subject_version: int = 1,
+    structured_value: dict[str, Any] | None = None,
+    context_links: tuple[dict[str, str], ...] = (),
 ) -> tuple[str, str, tuple[str, ...], tuple[str, ...]]:
     """One routed proposal, its review case, and the evidence it rests on.
 
@@ -247,15 +331,25 @@ def _open_proposal(
             memory_proposal_id=memory_proposal_id,
             principal_id=principal_id,
             subject_entity_id=subject_entity_id,
+            expected_subject_version=expected_subject_version,
             proposed_kind=kind.value,
             proposed_statement=statement,
             proposed_statement_sha256=statement_digest(statement),
-            structured_value=None,
+            dedupe_sha256=memory_proposal_dedupe_digest(
+                principal_id=principal_id,
+                subject_entity_id=subject_entity_id,
+                proposed_kind=kind,
+                proposed_statement_sha256=statement_digest(statement),
+                structured_value=structured_value,
+                context_links=context_links,
+            ),
+            structured_value=structured_value,
+            context_links=list(context_links),
             state=MemoryProposalState.NEEDS_REVIEW.value,
-            method=MemoryProposalMethod.RULE.value,
+            method=method.value,
             method_version="synthetic-rule-v1",
-            model_id=None,
-            model_version=None,
+            model_id=model_id,
+            model_version=model_version,
             classification=(classification or classification_floor_for(kind)).value,
             proposed_at=WHEN,
             review_case_id=review_case_id,
@@ -305,8 +399,22 @@ def _decision(
     expected_review_version: int = 0,
     principal_id: str = PRINCIPAL_A,
     corrected_value: str | None = None,
+    correction_patch: CorrectionPatch | None = None,
+    reason: str | None = None,
     at: datetime = LATER,
 ) -> ReviewDecisionRequest:
+    """One request, with the reason the *request* refuses to be built without.
+
+    `ReviewDecisionRequest` requires a reason on `escalate` and `invalidate` and
+    refuses one on `accept`, `correct_and_accept` and `reprocess`, so a helper
+    that took no reason could not build half of `Disposition` and a helper that
+    always supplied one could not build the other half. `_REASON_REQUIRED`
+    restates the two, in the shape `tests/unit/test_entity_proposal_review.py`
+    restates its own: a test that imported the request's private class attribute
+    would agree with it by construction and prove nothing about it.
+    """
+    if reason is None and disposition in _REASON_REQUIRED:
+        reason = MOOT_BASIS
     return ReviewDecisionRequest(
         review_case_id=review_case_id,
         expected_review_version=expected_review_version,
@@ -316,7 +424,12 @@ def _decision(
         audit_id=issue_identifier(IdKind.AUDIT),
         policy_version="policy-v1",
         decided_at=at,
-        corrected_value=corrected_value,
+        correction_patch=(
+            CorrectionPatch.of({"statement": corrected_value})
+            if corrected_value is not None
+            else correction_patch
+        ),
+        reason=reason,
     )
 
 
@@ -346,6 +459,48 @@ def _proposal_row(connection: Connection, memory_proposal_id: str) -> Row[Any]:
             relationship_memory_proposals.c.memory_proposal_id == memory_proposal_id
         )
     ).one()
+
+
+def _ledger_rows(connection: Connection, review_case_id: str) -> list[Row[Any]]:
+    """One case's decision chain, oldest first."""
+    return list(
+        connection.execute(
+            select(relationship_memory_review_decisions)
+            .where(relationship_memory_review_decisions.c.review_case_id == review_case_id)
+            .order_by(relationship_memory_review_decisions.c.sequence)
+        ).all()
+    )
+
+
+def _ledger_insert(
+    memory_proposal_id: str,
+    review_case_id: str,
+    disposition: Disposition,
+    *,
+    reason: str | None = None,
+    corrected_statement: str | None = None,
+    sequence: int = 1,
+) -> Any:  # noqa: ANN401 - a SQLAlchemy Insert
+    """One ledger row built by hand, so the CHECKs are asked and not the writer.
+
+    `decide_relationship_memory_review` refuses several of these shapes before
+    the server sees them, and that refusal is the application's. What a CHECK
+    claims is that no row of that shape can exist at all, which is only checkable
+    by trying to insert one.
+    """
+    return insert(relationship_memory_review_decisions).values(
+        decision_id=issue_identifier(IdKind.REVIEW_DECISION),
+        memory_proposal_id=memory_proposal_id,
+        review_case_id=review_case_id,
+        principal_id=PRINCIPAL_A,
+        sequence=sequence,
+        disposition=disposition.value,
+        corrected_statement=corrected_statement,
+        reason=reason,
+        correlation_id=issue_identifier(IdKind.CORRELATION),
+        audit_id=issue_identifier(IdKind.AUDIT),
+        decided_at=LATER,
+    )
 
 
 # --- a proposal is not memory -------------------------------------------------
@@ -404,6 +559,33 @@ def test_a_review_case_carries_no_statement_text_for_a_reviewer_to_leak(
     assert not hasattr(cases[0], "proposed_statement")
     assert not hasattr(cases[0], "statement")
     assert "dispute" not in repr(cases[0])
+
+
+def test_memory_state_filter_reaches_a_match_beyond_the_unfiltered_plane_limit(
+    two_principals: Engine,
+) -> None:
+    """Derived decision state is constrained in SQL before the plane LIMIT."""
+    with two_principals.begin() as connection:
+        for ordinal in range(3):
+            _open_proposal(
+                connection,
+                statement=f"Synthetic bounded continuation candidate {ordinal}.",
+            )
+        ordered = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+        for case in ordered[:2]:
+            decide_relationship_memory_review(
+                connection,
+                _decision(case.review_case_id, Disposition.REJECT),
+            )
+
+        [found] = relationship_memory_review_cases(
+            connection,
+            principal_id=PRINCIPAL_A,
+            limit=1,
+            state=ProposalState.NEEDS_REVIEW,
+        )
+
+    assert found.review_case_id == ordered[2].review_case_id
 
 
 # --- acceptance promotes ------------------------------------------------------
@@ -698,6 +880,132 @@ def test_a_corrected_acceptance_is_user_confirmed_and_commits_the_reviewers_word
     assert evidence == 1
 
 
+def test_typed_correction_promotes_exact_content_context_and_evidence_without_mutating_proposal(
+    two_principals: Engine,
+) -> None:
+    """The complete corrected target is audited and promoted atomically."""
+    original_structured = {
+        "schema": "relationship_memory.communication_preference.v1",
+        "value": {"channel": "email", "preference": "preferred"},
+    }
+    original_context = ({"target_type": "entity", "target_id": DANA, "role": "arose_from"},)
+    corrected_statement = "x" * 300
+    corrected_context = [{"target_type": "entity", "target_id": DANA, "role": "applies_in"}]
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(
+            connection,
+            kind=MemoryKind.COMMUNICATION_PREFERENCE,
+            structured_value=original_structured,
+            context_links=original_context,
+        )
+
+    request = _decision(
+        review_case_id,
+        Disposition.CORRECT_AND_ACCEPT,
+        correction_patch=CorrectionPatch.of(
+            {
+                "statement": corrected_statement,
+                "structured_value": {"channel": "teams", "preference": "avoid"},
+                "context_links": corrected_context,
+            }
+        ),
+    )
+    with two_principals.begin() as connection:
+        decide_relationship_memory_review(connection, request)
+
+    with two_principals.connect() as connection:
+        proposal = _proposal_row(connection, proposal_id)
+        version = _version_of(connection, proposal.accepted_memory_id)
+        links = (
+            connection.execute(
+                text(
+                    f"SELECT target_type, target_id, role, authority "  # noqa: S608
+                    f"FROM {SCHEMA}.relationship_memory_context_links "
+                    "WHERE memory_version_id = :version_id"
+                ),
+                {"version_id": version.memory_version_id},
+            )
+            .mappings()
+            .all()
+        )
+        decision = connection.execute(
+            select(relationship_memory_review_decisions.c.corrected_payload).where(
+                relationship_memory_review_decisions.c.review_case_id == review_case_id
+            )
+        ).scalar_one()
+        evidence_count = connection.execute(
+            text(
+                f"SELECT count(*) FROM {SCHEMA}.relationship_memory_evidence_links "  # noqa: S608
+                "WHERE memory_version_id = :version_id"
+            ),
+            {"version_id": version.memory_version_id},
+        ).scalar_one()
+        before_replay = _counts(connection)
+
+    assert proposal.proposed_statement == PROPOSED_NOTE
+    assert proposal.structured_value == original_structured
+    assert proposal.context_links == list(original_context)
+    assert version.statement_text == corrected_statement
+    assert version.structured_value == {
+        "schema": "relationship_memory.communication_preference.v1",
+        "value": {"channel": "teams", "preference": "avoid"},
+    }
+    assert [dict(link) for link in links] == [
+        {
+            **corrected_context[0],
+            "authority": "review_accepted",
+        }
+    ]
+    assert decision["statement"] == corrected_statement
+    assert decision["context_links"] == corrected_context
+    assert evidence_count == 1
+
+    with two_principals.connect() as connection:
+        with pytest.raises(ReviewConflictError):
+            decide_relationship_memory_review(connection, request)
+        assert _counts(connection) == before_replay
+
+
+@pytest.mark.parametrize(
+    "target_id",
+    [FOREIGN_PERSON, MISSING_CONTEXT, OLD_DANA],
+    ids=("foreign", "missing", "merged"),
+)
+def test_typed_correction_refuses_invalid_context_atomically(
+    two_principals: Engine,
+    target_id: str,
+) -> None:
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+        before = _counts(connection)
+        original = _proposal_row(connection, proposal_id)
+        with pytest.raises(UnknownScopeError):
+            decide_relationship_memory_review(
+                connection,
+                _decision(
+                    review_case_id,
+                    Disposition.CORRECT_AND_ACCEPT,
+                    correction_patch=CorrectionPatch.of(
+                        {
+                            "context_links": [
+                                {
+                                    "target_type": "entity",
+                                    "target_id": target_id,
+                                    "role": "applies_in",
+                                }
+                            ]
+                        }
+                    ),
+                ),
+            )
+        assert _counts(connection) == before
+        unchanged = _proposal_row(connection, proposal_id)
+
+    assert unchanged.proposed_statement == original.proposed_statement
+    assert unchanged.state == original.state
+    assert unchanged.accepted_memory_id is None
+
+
 def test_an_acceptance_with_no_evidence_is_confirmed_rather_than_source_backed(
     two_principals: Engine,
 ) -> None:
@@ -761,6 +1069,11 @@ def test_a_non_accepting_disposition_leaves_no_memory(
     with two_principals.connect() as connection:
         after = _counts(connection)
         stamped = _proposal_row(connection, proposal_id)
+        corrected_payload_is_sql_null = connection.execute(
+            select(relationship_memory_review_decisions.c.corrected_payload.is_(None)).where(
+                relationship_memory_review_decisions.c.review_case_id == review_case_id
+            )
+        ).scalar_one()
         page = SqlRelationshipMemoryRepository(connection).page_for_entity(
             DANA, principal_id=PRINCIPAL_A, limit=10
         )
@@ -772,6 +1085,7 @@ def test_a_non_accepting_disposition_leaves_no_memory(
     }
     assert stamped.accepted_memory_id is None
     assert stamped.accepted_memory_version_id is None
+    assert corrected_payload_is_sql_null is True
     assert page.memories == ()
 
 
@@ -801,22 +1115,699 @@ def test_mark_unresolved_leaves_the_stored_state_alone_and_says_so_on_the_case(
     assert cases[0].latest_disposition is Disposition.MARK_UNRESOLVED
 
 
-@pytest.mark.parametrize(
-    "disposition",
-    [Disposition.REPROCESS, Disposition.ESCALATE],
-)
-def test_a_disposition_with_no_route_is_unsupported(
-    two_principals: Engine, disposition: Disposition
+def test_reprocess_supersedes_and_copies_a_successor_at_current_subject_version(
+    two_principals: Engine,
 ) -> None:
     with two_principals.begin() as connection:
-        _, review_case_id, _, _ = _open_proposal(connection)
-        before = _counts(connection)
+        proposal_id, review_case_id, observations, _ = _open_proposal(
+            connection,
+            evidence=2,
+            method=MemoryProposalMethod.LOCAL_MODEL,
+            model_id="synthetic-local-model",
+            model_version="2026-08-22",
+        )
+        connection.execute(
+            update(entities)
+            .where(entities.c.entity_id == DANA, entities.c.principal_id == PRINCIPAL_A)
+            .values(version=2)
+        )
+        decision = decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.REPROCESS)
+        )
 
-    with two_principals.begin() as connection, pytest.raises(ReviewUnsupportedError):
-        decide_relationship_memory_review(connection, _decision(review_case_id, disposition))
+    with two_principals.connect() as connection:
+        predecessor = _proposal_row(connection, proposal_id)
+        successor = _proposal_row(connection, predecessor.superseded_by_memory_proposal_id)
+        copied = (
+            connection.execute(
+                select(relationship_memory_proposal_evidence.c.entity_observation_id)
+                .where(
+                    relationship_memory_proposal_evidence.c.memory_proposal_id
+                    == successor.memory_proposal_id
+                )
+                .order_by(relationship_memory_proposal_evidence.c.entity_observation_id)
+            )
+            .scalars()
+            .all()
+        )
+        cases = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+
+    assert decision.proposal_state is ProposalState.SUPERSEDED
+    assert predecessor.state == MemoryProposalState.SUPERSEDED.value
+    assert predecessor.superseded_at == LATER
+    assert successor.expected_subject_version == 2
+    assert successor.dedupe_sha256 == memory_proposal_dedupe_digest(
+        principal_id=PRINCIPAL_A,
+        subject_entity_id=successor.subject_entity_id,
+        proposed_kind=successor.proposed_kind,
+        proposed_statement_sha256=successor.proposed_statement_sha256,
+        structured_value=successor.structured_value,
+    )
+    assert successor.dedupe_sha256 == predecessor.dedupe_sha256
+    assert successor.review_case_id != review_case_id
+    assert successor.method == predecessor.method
+    assert successor.method_version == predecessor.method_version
+    assert successor.model_id == predecessor.model_id
+    assert successor.model_version == predecessor.model_version
+    assert successor.proposed_statement == predecessor.proposed_statement
+    assert successor.structured_value == predecessor.structured_value
+    assert successor.classification == predecessor.classification
+    assert copied == sorted(observations)
+    old_case = next(case for case in cases if case.review_case_id == review_case_id)
+    assert old_case.superseded_by_proposal_id == successor.memory_proposal_id
+
+
+def test_a_stale_reprocess_writes_nothing(two_principals: Engine) -> None:
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(connection)
+        decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.DEFER))
+        before = _counts(connection)
+        proposals_before = connection.execute(
+            select(func.count()).select_from(relationship_memory_proposals)
+        ).scalar_one()
+
+    with (
+        pytest.raises(ReviewConflictError, match="review version is stale"),
+        two_principals.begin() as connection,
+    ):
+        decide_relationship_memory_review(
+            connection,
+            _decision(review_case_id, Disposition.REPROCESS, expected_review_version=0),
+        )
 
     with two_principals.connect() as connection:
         assert _counts(connection) == before
+        assert (
+            connection.execute(
+                select(func.count()).select_from(relationship_memory_proposals)
+            ).scalar_one()
+            == proposals_before
+        )
+
+
+# --- server replay reservation invariants -----------------------------------
+
+
+def _replay_result(*, evidence: bool = False) -> WriteRequestResult:
+    return WriteRequestResult(
+        result_family="memory_proposal",
+        result_id="mprp_aaaa0001aaaa0001",
+        result_state="needs_review",
+        result_digest="d" * 64,
+        result_count=1,
+        result_created=True,
+        evidence=(
+            WriteRequestEvidence(sequence=1, role="direct", knowledge_id="knw_aaaa0001aaaa0001"),
+        )
+        if evidence
+        else (),
+    )
+
+
+def test_concurrent_same_request_reads_back_the_exact_committed_result(
+    two_principals: Engine,
+) -> None:
+    capability = "relationship_memory.propose"
+    request_id = "corr_concurrent_replay"
+    digest = "a" * 64
+
+    def lose() -> WriteRequestResult | None:
+        with two_principals.begin() as connection:
+            return SqlWriteRequestRepository(connection).reserve(
+                PRINCIPAL_A, capability, request_id, digest
+            )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        with two_principals.begin() as connection:
+            winner = SqlWriteRequestRepository(connection)
+            assert winner.reserve(PRINCIPAL_A, capability, request_id, digest) is None
+            future = executor.submit(lose)
+            winner.complete(PRINCIPAL_A, capability, request_id, digest, _replay_result())
+        replayed = future.result(timeout=10)
+
+    assert replayed == _replay_result()
+
+
+def test_same_request_with_changed_material_conflicts(two_principals: Engine) -> None:
+    with two_principals.begin() as connection:
+        repository = SqlWriteRequestRepository(connection)
+        assert repository.reserve(PRINCIPAL_A, "review.decide", "corr_digest", "a" * 64) is None
+        repository.complete(PRINCIPAL_A, "review.decide", "corr_digest", "a" * 64, _replay_result())
+
+    with pytest.raises(WriteRequestConflictError), two_principals.begin() as connection:
+        SqlWriteRequestRepository(connection).reserve(
+            PRINCIPAL_A, "review.decide", "corr_digest", "b" * 64
+        )
+
+
+def test_rolled_back_reservation_does_not_claim_the_request(two_principals: Engine) -> None:
+    transaction = two_principals.connect()
+    try:
+        held = transaction.begin()
+        assert (
+            SqlWriteRequestRepository(transaction).reserve(
+                PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64
+            )
+            is None
+        )
+        held.rollback()
+    finally:
+        transaction.close()
+
+    with two_principals.begin() as connection:
+        assert (
+            SqlWriteRequestRepository(connection).reserve(
+                PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64
+            )
+            is None
+        )
+        SqlWriteRequestRepository(connection).complete(
+            PRINCIPAL_A, "review.decide", "corr_rollback", "a" * 64, _replay_result()
+        )
+
+
+def test_a_pending_reservation_cannot_commit(two_principals: Engine) -> None:
+    with (
+        pytest.raises(DBAPIError, match="remained pending at commit"),
+        two_principals.begin() as connection,
+    ):
+        assert (
+            SqlWriteRequestRepository(connection).reserve(
+                PRINCIPAL_A, "review.decide", "corr_pending", "a" * 64
+            )
+            is None
+        )
+
+
+def test_completed_request_and_replay_evidence_are_immutable(two_principals: Engine) -> None:
+    with two_principals.begin() as connection:
+        repository = SqlWriteRequestRepository(connection)
+        assert (
+            repository.reserve(
+                PRINCIPAL_A, "relationship_memory.propose", "corr_immutable", "a" * 64
+            )
+            is None
+        )
+        repository.complete(
+            PRINCIPAL_A,
+            "relationship_memory.propose",
+            "corr_immutable",
+            "a" * 64,
+            _replay_result(evidence=True),
+        )
+
+    with (
+        pytest.raises(DBAPIError, match="transition is immutable"),
+        two_principals.begin() as connection,
+    ):
+        connection.execute(
+            update(relationship_write_requests)
+            .where(relationship_write_requests.c.request_id == "corr_immutable")
+            .values(result_count=2)
+        )
+    with (
+        pytest.raises(DBAPIError, match="evidence is immutable"),
+        two_principals.begin() as connection,
+    ):
+        connection.execute(
+            update(relationship_write_request_evidence)
+            .where(relationship_write_request_evidence.c.request_id == "corr_immutable")
+            .values(role="supporting")
+        )
+
+
+def test_relationship_memory_review_replays_its_durable_exact_decision(
+    two_principals: Engine,
+) -> None:
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(connection)
+        repository = SqlWriteRequestRepository(connection)
+        assert repository.reserve(PRINCIPAL_A, "review.decide", "corr_rm_review", "a" * 64) is None
+        decision = decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.ACCEPT)
+        )
+        original = WriteRequestResult(
+            result_family="review_decision",
+            result_id=decision.decision_id,
+            result_secondary_id=decision.review_case_id,
+            result_version=decision.sequence,
+            result_state=decision.proposal_state.value,
+            result_disposition=decision.disposition.value,
+            result_assertion_id=decision.assertion_id,
+            receipt_id=decision.receipt_id,
+        )
+        repository.complete(PRINCIPAL_A, "review.decide", "corr_rm_review", "a" * 64, original)
+
+    with two_principals.begin() as connection:
+        replayed = SqlWriteRequestRepository(connection).reserve(
+            PRINCIPAL_A, "review.decide", "corr_rm_review", "a" * 64
+        )
+        decision_count = connection.execute(
+            select(func.count())
+            .select_from(relationship_memory_review_decisions)
+            .where(relationship_memory_review_decisions.c.review_case_id == review_case_id)
+        ).scalar_one()
+
+    assert replayed == original
+    assert decision_count == 1
+
+
+def test_escalation_is_sticky_and_acceptance_requires_operator_authority(
+    two_principals: Engine,
+) -> None:
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(connection)
+        escalated = decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.ESCALATE)
+        )
+        decide_relationship_memory_review(
+            connection,
+            _decision(
+                review_case_id,
+                Disposition.DEFER,
+                expected_review_version=1,
+                reason="awaiting operator review",
+            ),
+        )
+
+    with two_principals.connect() as connection:
+        case = next(
+            case
+            for case in relationship_memory_review_cases(
+                connection, principal_id=PRINCIPAL_A, limit=10
+            )
+            if case.review_case_id == review_case_id
+        )
+    assert escalated.proposal_state is ProposalState.NEEDS_REVIEW
+    assert case.latest_disposition is Disposition.DEFER
+    assert case.requires_operator_authority
+
+    with (
+        pytest.raises(ReviewConflictError, match="requires operator authority"),
+        two_principals.begin() as connection,
+    ):
+        decide_relationship_memory_review(
+            connection,
+            _decision(review_case_id, Disposition.ACCEPT, expected_review_version=2),
+        )
+
+    with two_principals.begin() as connection:
+        accepted = decide_relationship_memory_review(
+            connection,
+            _decision(review_case_id, Disposition.ACCEPT, expected_review_version=2),
+            has_operator_authority=True,
+        )
+    assert accepted.proposal_state is ProposalState.ACCEPTED
+
+
+def test_expected_subject_version_is_proposal_metadata_only() -> None:
+    assert "expected_subject_version" in relationship_memory_proposals.c
+    assert "expected_subject_version" not in relationship_memories.c
+    lineage = next(
+        constraint
+        for constraint in relationship_memory_proposals.foreign_key_constraints
+        if constraint.name == "a_memory_proposal_is_superseded_within_its_principal"
+    )
+    assert lineage.deferrable is True
+    assert lineage.initially == "DEFERRED"
+
+
+def test_a_stale_subject_version_refuses_promotion_before_any_canonical_write(
+    two_principals: Engine,
+) -> None:
+    with two_principals.begin() as connection:
+        _, review_case_id, _, _ = _open_proposal(connection, expected_subject_version=1)
+        connection.execute(
+            update(entities)
+            .where(entities.c.entity_id == DANA, entities.c.principal_id == PRINCIPAL_A)
+            .values(version=2)
+        )
+        before = _counts(connection)
+
+    with (
+        pytest.raises(ReviewConflictError, match="subject version is stale"),
+        two_principals.begin() as connection,
+    ):
+        decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.ACCEPT))
+
+    with two_principals.connect() as connection:
+        assert _counts(connection) == before
+
+
+# --- invalidate: the basis went away, and it is not a rejection ---------------
+#
+# Manager ruling R-8. `invalidate` is a disposition `review.decide` publishes and
+# `relationship_memory.propose` is a subject kind this phase creates, so an
+# unreachable disposition here was a hole in this phase's own surface. The four
+# properties the ruling names are asserted separately below because they fail for
+# different reasons: the reason is recorded; no canonical record is created; the
+# lineage is retained; and — the one the ruling turns on — the act is *not* a
+# rejection and files no negative finding a later suppression rule could read.
+
+
+def test_an_invalidation_records_why_and_creates_no_canonical_record(
+    two_principals: Engine,
+) -> None:
+    """State, reason, and the three promotion tables untouched.
+
+    The reason is written twice and to two different records, which is deliberate
+    rather than duplication: `relationship_memory_review_decisions.reason` is the
+    reviewer's act, and `relationship_memory_proposals.invalidated_reason` is the
+    candidate's own record of why it stopped standing — the column
+    `RelationshipMemoryProposal` has always declared and that nothing wrote until
+    `WP-RI-B-05`. A state written with the reason dropped would record that a
+    basis failed without recording how.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+        before = _counts(connection)
+
+    with two_principals.begin() as connection:
+        decision = decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.INVALIDATE)
+        )
+
+    with two_principals.connect() as connection:
+        after = _counts(connection)
+        stamped = _proposal_row(connection, proposal_id)
+        ledger = _ledger_rows(connection, review_case_id)
+        page = SqlRelationshipMemoryRepository(connection).page_for_entity(
+            DANA, principal_id=PRINCIPAL_A, limit=10
+        )
+
+    assert decision.disposition is Disposition.INVALIDATE
+    assert decision.proposal_state is ProposalState.INVALIDATED
+    assert after == {
+        **before,
+        "relationship_memory_review_decisions": before["relationship_memory_review_decisions"] + 1,
+    }
+    assert page.memories == (), "an invalidation creates no memory"
+    assert stamped.state == MemoryProposalState.INVALIDATED.value
+    assert stamped.invalidated_reason == MOOT_BASIS
+    assert stamped.accepted_memory_id is None
+    assert stamped.accepted_memory_version_id is None
+    assert [(row.disposition, row.reason) for row in ledger] == [
+        (Disposition.INVALIDATE.value, MOOT_BASIS)
+    ]
+
+
+def test_an_invalidation_is_not_a_rejection_and_leaves_no_negative_finding(
+    two_principals: Engine,
+) -> None:
+    """The distinction Manager ruling R-8 turns on, asserted rather than argued.
+
+    `reject` means "I looked and judged this wrong" and is this plane's negative
+    finding about the claim: it is the signal a suppression rule reads back to
+    stop re-offering a known-bad candidate. `invalidate` means the basis went
+    away and judges the claim not at all. If a reviewer had to spend `reject` on
+    a moot candidate, the row left behind would be a negative finding nobody
+    made — so the two are compared side by side here, against a real server, and
+    every readable trace a suppression rule could key on is asserted to differ.
+
+    The last assertion is the structural one: exactly one disposition leaves
+    `rejected` behind. It is derived from the router's own map by driving every
+    member that has a route, so a later change sending `invalidate` to `rejected`
+    reddens here rather than quietly turning invalidations into refusals.
+    """
+    with two_principals.begin() as connection:
+        invalidated_id, invalidated_case, _, _ = _open_proposal(
+            connection, statement=f"{PROPOSED_NOTE} Invalidation candidate."
+        )
+        rejected_id, rejected_case, _, _ = _open_proposal(
+            connection, statement=f"{PROPOSED_NOTE} Rejection candidate."
+        )
+
+    with two_principals.begin() as connection:
+        decide_relationship_memory_review(
+            connection, _decision(invalidated_case, Disposition.INVALIDATE)
+        )
+        decide_relationship_memory_review(
+            connection, _decision(rejected_case, Disposition.REJECT, reason="the claim is wrong")
+        )
+
+    with two_principals.connect() as connection:
+        invalidated = _proposal_row(connection, invalidated_id)
+        rejected = _proposal_row(connection, rejected_id)
+        invalidated_ledger = _ledger_rows(connection, invalidated_case)
+        rejected_ledger = _ledger_rows(connection, rejected_case)
+        cases = {
+            case.review_case_id: case
+            for case in relationship_memory_review_cases(
+                connection, principal_id=PRINCIPAL_A, limit=10
+            )
+        }
+
+    assert invalidated.state == MemoryProposalState.INVALIDATED.value
+    assert rejected.state == MemoryProposalState.REJECTED.value
+    assert invalidated.state != rejected.state, (
+        "an invalidated candidate and a rejected one are indistinguishable on the "
+        "column every later read of the proposal keys on"
+    )
+    assert invalidated.invalidated_reason == MOOT_BASIS
+    assert rejected.invalidated_reason is None, (
+        "a rejection is a finding about the claim and records no invalidation reason"
+    )
+    assert [row.disposition for row in invalidated_ledger] == [Disposition.INVALIDATE.value]
+    assert Disposition.REJECT.value not in {row.disposition for row in invalidated_ledger}, (
+        "an invalidation files a `reject` row, which is the false negative-evidence "
+        "signal this disposition exists to avoid"
+    )
+    assert [row.disposition for row in rejected_ledger] == [Disposition.REJECT.value]
+    assert cases[invalidated_case].proposal_state is ProposalState.INVALIDATED
+    assert cases[rejected_case].proposal_state is ProposalState.REJECTED
+
+
+def test_exactly_one_disposition_leaves_a_rejected_candidate_behind(
+    two_principals: Engine,
+) -> None:
+    """The structural half of the distinction, driven rather than read off a map.
+
+    `rejected` is the stored state a suppression rule would key on to stop
+    re-offering a known-bad candidate. Every disposition with a route is driven
+    against the server on a candidate of its own and the stored state is read
+    back, so the claim is about what the router *does* and not about what
+    `_STORED_STATE` says it does. If a later change sent `invalidate` to
+    `rejected` — the substitution Manager ruling R-8 refuses — this is what goes
+    red, and it goes red whether the change is made in the map or anywhere else
+    on the path.
+    """
+    stored: dict[str, set[str]] = {}
+    for disposition in Disposition:
+        with two_principals.begin() as connection:
+            proposal_id, review_case_id, _, _ = _open_proposal(
+                connection, statement=f"{PROPOSED_NOTE} {disposition.value}."
+            )
+        with two_principals.begin() as connection:
+            decide_relationship_memory_review(
+                connection,
+                _decision(
+                    review_case_id,
+                    disposition,
+                    corrected_value=(
+                        CORRECTED_NOTE if disposition is Disposition.CORRECT_AND_ACCEPT else None
+                    ),
+                ),
+            )
+        with two_principals.connect() as connection:
+            state = str(_proposal_row(connection, proposal_id).state)
+        stored.setdefault(state, set()).add(disposition.value)
+
+    assert stored[MemoryProposalState.REJECTED.value] == {Disposition.REJECT.value}, (
+        f"{sorted(stored[MemoryProposalState.REJECTED.value])} leave a `rejected` "
+        "candidate behind. Only a rejection may: `rejected` is this plane's negative "
+        "finding about the claim, and a second disposition arriving there makes a moot "
+        "basis indistinguishable from a refusal on every later read"
+    )
+    assert stored[MemoryProposalState.INVALIDATED.value] == {Disposition.INVALIDATE.value}
+
+
+def test_an_invalidated_case_keeps_its_candidate_evidence_and_decision_chain(
+    two_principals: Engine,
+) -> None:
+    """Retain lineage: nothing is deleted and the case stays readable.
+
+    The candidate row, the exact evidence it rested on and the decision that
+    closed it are all still there afterwards, and the case is still on the
+    canonical Review listing carrying the disposition and the review version. An
+    invalidation that removed the candidate would destroy the record of what was
+    proposed and on what, which is the opposite of what "the basis is moot"
+    means.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, observations, _ = _open_proposal(connection, evidence=2)
+
+    with two_principals.begin() as connection:
+        decide_relationship_memory_review(
+            connection, _decision(review_case_id, Disposition.INVALIDATE)
+        )
+
+    with two_principals.connect() as connection:
+        held = _proposal_row(connection, proposal_id)
+        evidence = connection.execute(
+            select(relationship_memory_proposal_evidence.c.entity_observation_id)
+            .where(relationship_memory_proposal_evidence.c.memory_proposal_id == proposal_id)
+            .order_by(relationship_memory_proposal_evidence.c.entity_observation_id)
+        ).scalars()
+        cases = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+
+    assert held.memory_proposal_id == proposal_id
+    assert held.proposed_statement == PROPOSED_NOTE
+    assert list(evidence) == sorted(observations)
+    assert [case.review_case_id for case in cases] == [review_case_id]
+    assert cases[0].latest_disposition is Disposition.INVALIDATE
+    assert cases[0].review_version == 1
+
+
+def test_an_accepted_case_cannot_then_be_invalidated(two_principals: Engine) -> None:
+    """The terminal-acceptance guard covers the new disposition too.
+
+    Worth asserting rather than assuming: an invalidation stamps the proposal's
+    state, and stamping `invalidated` over an accepted candidate would leave a
+    promoted memory whose proposal denies having produced it — and would have to
+    strip `accepted_memory_id` to satisfy the schema. The case is terminal, so
+    nothing of the sort happens.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+    with two_principals.begin() as connection:
+        decide_relationship_memory_review(connection, _decision(review_case_id, Disposition.ACCEPT))
+    with two_principals.connect() as connection:
+        after_acceptance = _counts(connection)
+
+    with two_principals.begin() as connection, pytest.raises(ReviewConflictError):
+        decide_relationship_memory_review(
+            connection,
+            _decision(review_case_id, Disposition.INVALIDATE, expected_review_version=1),
+        )
+
+    with two_principals.connect() as connection:
+        stamped = _proposal_row(connection, proposal_id)
+        assert _counts(connection) == after_acceptance
+    assert stamped.state == MemoryProposalState.ACCEPTED.value
+    assert stamped.accepted_memory_id is not None
+    assert stamped.invalidated_reason is None
+
+
+# --- the reason column's own constraints --------------------------------------
+
+
+def test_the_ledger_refuses_an_invalidation_that_states_no_reason(
+    two_principals: Engine,
+) -> None:
+    """Asked of the server, not of the request that would have refused first.
+
+    `ReviewDecisionRequest` will not build an invalidation without a reason, but
+    a request object is not what a database enforces. The CHECK is what makes
+    "an invalidated candidate says why" true of every row that exists, including
+    rows a later writer inserts by some other route.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(_ledger_insert(proposal_id, review_case_id, Disposition.INVALIDATE))
+    assert "a_memory_escalation_or_invalidation_states_why" in str(refused.value)
+
+
+def test_the_ledger_refuses_a_reason_on_a_disposition_that_explains_nothing(
+    two_principals: Engine,
+) -> None:
+    """A reason explains a departure; an acceptance is not one.
+
+    The same sentence `entity_proposal_review_decisions` makes, and the reason it
+    matters here: a reason attached to an acceptance would attribute a refusal to
+    a decision nobody refused, which is the class of false record this ledger's
+    other CHECKs exist to refuse.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            _ledger_insert(proposal_id, review_case_id, Disposition.ACCEPT, reason=MOOT_BASIS)
+        )
+    assert "a_memory_review_reason_explains_a_departure" in str(refused.value)
+
+
+@pytest.mark.parametrize(("reason", "label"), [("   ", "blank"), ("m" * 501, "over the bound")])
+def test_the_ledger_refuses_a_reason_that_is_blank_or_unbounded(
+    two_principals: Engine, reason: str, label: str
+) -> None:
+    """`REVIEW_REASON_LIMIT` is 500, and a whitespace reason says nothing.
+
+    Both halves, because a bound that admitted `'   '` would let an invalidation
+    satisfy "states why" with no statement in it — which is the failure the
+    column was added to prevent, arrived at from the other side.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            _ledger_insert(proposal_id, review_case_id, Disposition.INVALIDATE, reason=reason)
+        )
+    assert "a_memory_review_reason_is_bounded" in str(refused.value), label
+
+
+@pytest.mark.parametrize(
+    "disposition",
+    [Disposition.REJECT, Disposition.DEFER, Disposition.MARK_UNRESOLVED],
+)
+def test_the_reason_column_admits_and_still_permits_an_omitted_reason(
+    two_principals: Engine, disposition: Disposition
+) -> None:
+    """The additive half: what the ledger took before, it still takes.
+
+    The three dispositions section 13 gives a reason may state one and may leave
+    it out, exactly as they could before the column existed — every capture and
+    GoodNotes reviewer that ships today sends no reason on any of them, and a
+    column that made one mandatory would have been a regression dressed as a
+    constraint. Both rows are written and read back.
+    """
+    with two_principals.begin() as connection:
+        first_id, first_case, _, _ = _open_proposal(
+            connection, statement=f"{PROPOSED_NOTE} Reason stated."
+        )
+        second_id, second_case, _, _ = _open_proposal(
+            connection, statement=f"{PROPOSED_NOTE} Reason omitted."
+        )
+
+    with two_principals.begin() as connection:
+        connection.execute(_ledger_insert(first_id, first_case, disposition, reason="stated"))
+        connection.execute(_ledger_insert(second_id, second_case, disposition))
+
+    with two_principals.connect() as connection:
+        stated = _ledger_rows(connection, first_case)
+        silent = _ledger_rows(connection, second_case)
+
+    assert [row.reason for row in stated] == ["stated"]
+    assert [row.reason for row in silent] == [None]
+
+
+def test_a_correction_still_matches_its_disposition_beside_the_new_column(
+    two_principals: Engine,
+) -> None:
+    """The CHECK that was already here is untouched, proved by asking it again.
+
+    `WP-RI-B-05` adds a column and three constraints to this table and relaxes
+    none. `a_memory_correction_matches_its_disposition` still refuses a
+    corrected statement on any disposition but `correct_and_accept`, including
+    the new one, so the additive claim is measured rather than asserted.
+    """
+    with two_principals.begin() as connection:
+        proposal_id, review_case_id, _, _ = _open_proposal(connection)
+
+    with two_principals.connect() as connection, pytest.raises(DBAPIError) as refused:
+        connection.execute(
+            _ledger_insert(
+                proposal_id,
+                review_case_id,
+                Disposition.INVALIDATE,
+                reason=MOOT_BASIS,
+                corrected_statement=CORRECTED_NOTE,
+            )
+        )
+    assert "a_memory_correction_matches_its_disposition" in str(refused.value)
 
 
 # --- what each disposition sends to the server --------------------------------
@@ -930,8 +1921,21 @@ _TABLES_WRITTEN_PER_DISPOSITION: Final[dict[Disposition, frozenset[str]]] = {
         {"relationship_memory_review_decisions", "relationship_memory_proposals"}
     ),
     Disposition.MARK_UNRESOLVED: frozenset({"relationship_memory_review_decisions"}),
-    Disposition.REPROCESS: frozenset(),
-    Disposition.ESCALATE: frozenset(),
+    #: `WP-RI-B-05`, Manager ruling R-8. `reject`'s two tables and none of the
+    #: three promotion tables, which is "invalidate creates no canonical record"
+    #: read off the wire. That it is not *the same act* as a reject is a claim
+    #: about the values written and is held next door.
+    Disposition.INVALIDATE: frozenset(
+        {"relationship_memory_review_decisions", "relationship_memory_proposals"}
+    ),
+    Disposition.REPROCESS: frozenset(
+        {
+            "relationship_memory_review_decisions",
+            "relationship_memory_proposal_evidence",
+            "relationship_memory_proposals",
+        }
+    ),
+    Disposition.ESCALATE: frozenset({"relationship_memory_review_decisions"}),
 }
 
 
@@ -962,24 +1966,20 @@ def test_every_disposition_writes_exactly_the_memory_tables_it_is_declared_to(
     with two_principals.begin() as connection:
         _, review_case_id, _, _ = _open_proposal(connection)
 
-    refused = False
-    with _statements_sent_to(two_principals) as statements:
-        try:
-            with two_principals.begin() as connection:
-                decide_relationship_memory_review(
-                    connection,
-                    _decision(
-                        review_case_id,
-                        disposition,
-                        corrected_value=(
-                            CORRECTED_NOTE
-                            if disposition is Disposition.CORRECT_AND_ACCEPT
-                            else None
-                        ),
-                    ),
-                )
-        except ReviewUnsupportedError:
-            refused = True
+    with (
+        _statements_sent_to(two_principals) as statements,
+        two_principals.begin() as connection,
+    ):
+        decide_relationship_memory_review(
+            connection,
+            _decision(
+                review_case_id,
+                disposition,
+                corrected_value=(
+                    CORRECTED_NOTE if disposition is Disposition.CORRECT_AND_ACCEPT else None
+                ),
+            ),
+        )
 
     assert statements, (
         "no statement reached the server at all; the listener is not attached and this "
@@ -991,13 +1991,6 @@ def test_every_disposition_writes_exactly_the_memory_tables_it_is_declared_to(
         f"{sorted(written)}; it is declared to write {sorted(expected)}. If the router "
         "moved, `RM-API-AC-002`'s sentence for this branch and the architecture guard's "
         "`DECLARED_BRANCH_WRITES` move with it"
-    )
-    assert refused == (not expected), (
-        f"deciding `{disposition.value}` "
-        + ("raised" if refused else "did not raise")
-        + f" `ReviewUnsupportedError` and writes {sorted(written)}. A disposition with no "
-        "route writes nothing because it is refused; a disposition with a route writes "
-        "what its branch declares"
     )
 
 
@@ -1213,3 +2206,594 @@ def test_deciding_a_memory_case_in_an_uncomposed_build_answers_as_an_absent_one(
         decision = composed.reviews.decide(_decision(review_case_id, Disposition.ACCEPT))
     assert decision is not None
     assert decision.proposal_state is ProposalState.ACCEPTED
+
+
+# --- the producer, against the schema it has to satisfy -----------------------
+#
+# Every other test in this module seeds its candidate by hand. That is the right
+# fixture for a suite about *decisions*, and it is the wrong evidence for one
+# claim: that the record `RelationshipMemoryProposalService` builds is a record
+# this database will actually take. A hand-written row proves the columns accept
+# some value; it cannot prove the service fills them, because the service was not
+# involved in writing it.
+#
+# `_InsertOnlyProposals` is the producer's whole persistence surface — one
+# insert, exactly as `RelationshipMemoryProposalRepository` declares it — and it
+# lives here rather than in `src/` because the infrastructure implementation
+# lands with the capability that routes to it. It is also the reference shape for
+# that implementation: an insert of the domain records, unaltered.
+
+
+def _context_proposal(target_id: str, role: str) -> RelationshipMemoryProposal:
+    links = ({"target_type": "entity", "target_id": target_id, "role": role},)
+    digest = statement_digest(PROPOSED_NOTE)
+    return RelationshipMemoryProposal(
+        memory_proposal_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL),
+        principal_id=PRINCIPAL_A,
+        subject_entity_id=DANA,
+        expected_subject_version=1,
+        proposed_kind=MemoryKind.WORKING_PREFERENCE,
+        proposed_statement=PROPOSED_NOTE,
+        proposed_statement_sha256=digest,
+        dedupe_sha256=memory_proposal_dedupe_digest(
+            principal_id=PRINCIPAL_A,
+            subject_entity_id=DANA,
+            proposed_kind=MemoryKind.WORKING_PREFERENCE,
+            proposed_statement_sha256=digest,
+            structured_value=None,
+            context_links=links,
+        ),
+        state=MemoryProposalState.NEEDS_REVIEW,
+        method=MemoryProposalMethod.RULE,
+        method_version="synthetic-rule-v1",
+        classification=Classification.PRIVATE_LOCAL,
+        proposed_at=WHEN,
+        context_links=links,
+        review_case_id=issue_identifier(IdKind.REVIEW_CASE),
+    )
+
+
+def test_proposal_context_lock_serializes_against_a_merge_of_that_entity(
+    two_principals: Engine,
+) -> None:
+    """A proposal validated before a merge cannot commit a stale context target.
+
+    The proposal writer pauses after its Entity-context validation and advisory
+    locks, immediately before PostgreSQL receives the proposal INSERT.  A merge
+    previewed before that proposal then races to merge the context Entity away.
+    The context lock must hold the merge until the proposal commits, after which
+    merge reanalysis must refuse the now-materially-affected identity.
+
+    Removing the context Entity from ``record_proposal``'s lock union lets the
+    merge finish while the INSERT is paused, leaving a committed proposal whose
+    context names a redirect.  This is deliberately a behavioral lock test, not
+    an assertion over the lock helper's arguments.
+    """
+    with two_principals.begin() as connection:
+        entities_repository = SqlEntityRepository(connection)
+        entities_repository.create(
+            PRINCIPAL_A,
+            an_entity(MERGE_SURVIVOR, PRINCIPAL_A, "Context Survivor Synthetic"),
+        )
+        entities_repository.create(
+            PRINCIPAL_A,
+            an_entity(MERGE_CONTEXT, PRINCIPAL_A, "Context Candidate Synthetic"),
+        )
+        identity = IdentityCorrectionService(
+            entities_repository, SqlRelationshipMemoryRepository(connection)
+        )
+        report = identity.preview(
+            MergePreviewCommand(
+                principal_id=PRINCIPAL_A,
+                survivor_entity_id=MERGE_SURVIVOR,
+                expected_survivor_version=1,
+                merged_away=((MERGE_CONTEXT, 1),),
+                reason="two synthetic context identities describe one subject",
+                evidence_refs=(),
+            ),
+            at=WHEN,
+            requested_by=PRINCIPAL_A,
+            actor_class=ActorClass.USER,
+            has_operator_authority=True,
+        )
+    assert report.blockers == ()
+
+    proposal = _context_proposal(MERGE_CONTEXT, "applies_in")
+    insert_reached = Event()
+    release_insert = Event()
+    proposal_done = Event()
+    merge_done = Event()
+    proposal_failures: list[BaseException] = []
+    merge_failures: list[BaseException] = []
+    merge_receipts: list[MergeReceipt] = []
+
+    def stage_proposal() -> None:
+        try:
+            with two_principals.begin() as connection:
+
+                def pause_before_proposal_insert(
+                    _connection: object,
+                    _cursor: object,
+                    statement: str,
+                    _parameters: object,
+                    _context: object,
+                    _executemany: bool,
+                ) -> None:
+                    if "INSERT INTO knowledge.relationship_memory_proposals" not in statement:
+                        return
+                    insert_reached.set()
+                    if not release_insert.wait(timeout=5):
+                        raise TimeoutError("the proposal/merge race was not released")
+
+                event.listen(connection, "before_cursor_execute", pause_before_proposal_insert)
+                try:
+                    SqlRelationshipMemoryProposalRepository(connection).record_proposal(
+                        proposal, ()
+                    )
+                finally:
+                    event.remove(connection, "before_cursor_execute", pause_before_proposal_insert)
+        except BaseException as error:  # pragma: no cover - asserted in parent thread
+            proposal_failures.append(error)
+        finally:
+            proposal_done.set()
+
+    def apply_merge() -> None:
+        try:
+            with two_principals.begin() as connection:
+                identity = IdentityCorrectionService(
+                    SqlEntityRepository(connection),
+                    SqlRelationshipMemoryRepository(connection),
+                )
+                merge_receipts.append(
+                    identity.apply(
+                        MergeCommand(
+                            principal_id=PRINCIPAL_A,
+                            preview_id=report.preview.preview_id,
+                            preview_digest=report.preview.preview_digest,
+                            idempotency_key="relationship-memory-proposal-context-race",
+                            reason="two synthetic context identities describe one subject",
+                        ),
+                        at=WHEN,
+                        correlation_id="corr_context01context01",
+                        audit_id="audit_context01context01",
+                        performed_by=PRINCIPAL_A,
+                        actor_class=ActorClass.USER,
+                        has_operator_authority=True,
+                    )
+                )
+        except BaseException as error:  # pragma: no cover - asserted in parent thread
+            merge_failures.append(error)
+        finally:
+            merge_done.set()
+
+    proposal_thread = Thread(target=stage_proposal, daemon=True)
+    proposal_thread.start()
+    assert insert_reached.wait(timeout=5)
+    merge_thread = Thread(target=apply_merge, daemon=True)
+    merge_thread.start()
+    assert not merge_done.wait(timeout=0.25), (
+        "the merge did not wait for the proposal's context-Entity mutation lock"
+    )
+    release_insert.set()
+    assert proposal_done.wait(timeout=5)
+    assert merge_done.wait(timeout=5)
+    proposal_thread.join(timeout=1)
+    merge_thread.join(timeout=1)
+
+    assert proposal_failures == []
+    assert merge_receipts == []
+    assert len(merge_failures) == 1
+    assert isinstance(merge_failures[0], ConflictError)
+    with two_principals.connect() as connection:
+        context_entity = SqlEntityRepository(connection).get(PRINCIPAL_A, MERGE_CONTEXT)
+        stored_context = connection.execute(
+            select(relationship_memory_proposals.c.context_links).where(
+                relationship_memory_proposals.c.memory_proposal_id == proposal.memory_proposal_id
+            )
+        ).scalar_one()
+    assert context_entity is not None
+    assert context_entity.status is EntityStatus.ACTIVE
+    assert stored_context == list(proposal.context_links)
+
+
+def test_corrected_context_lock_serializes_against_a_merge_of_that_entity(
+    two_principals: Engine,
+) -> None:
+    """A correction cannot promote a context target concurrently merged away.
+
+    The original proposal does not name the merge participant, so its persisted
+    preview is valid.  ``correct_and_accept`` then introduces that Entity and
+    pauses after validation and participant locking, before the canonical memory
+    INSERT.  The merge must wait, reanalyse the committed current context link,
+    and refuse instead of leaving an accepted memory pointing at a redirect.
+    """
+    with two_principals.begin() as connection:
+        entities_repository = SqlEntityRepository(connection)
+        entities_repository.create(
+            PRINCIPAL_A,
+            an_entity(MERGE_SURVIVOR, PRINCIPAL_A, "Context Survivor Synthetic"),
+        )
+        entities_repository.create(
+            PRINCIPAL_A,
+            an_entity(MERGE_CONTEXT, PRINCIPAL_A, "Context Candidate Synthetic"),
+        )
+        _, review_case_id, _, _ = _open_proposal(connection)
+        identity = IdentityCorrectionService(
+            entities_repository, SqlRelationshipMemoryRepository(connection)
+        )
+        report = identity.preview(
+            MergePreviewCommand(
+                principal_id=PRINCIPAL_A,
+                survivor_entity_id=MERGE_SURVIVOR,
+                expected_survivor_version=1,
+                merged_away=((MERGE_CONTEXT, 1),),
+                reason="two synthetic context identities describe one subject",
+                evidence_refs=(),
+            ),
+            at=WHEN,
+            requested_by=PRINCIPAL_A,
+            actor_class=ActorClass.USER,
+            has_operator_authority=True,
+        )
+    assert report.blockers == ()
+
+    corrected_context = [
+        {
+            "target_type": "entity",
+            "target_id": MERGE_CONTEXT,
+            "role": "applies_in",
+        }
+    ]
+    review_request = _decision(
+        review_case_id,
+        Disposition.CORRECT_AND_ACCEPT,
+        correction_patch=CorrectionPatch.of({"context_links": corrected_context}),
+    )
+    promotion_insert_reached = Event()
+    release_promotion_insert = Event()
+    review_done = Event()
+    merge_done = Event()
+    review_failures: list[BaseException] = []
+    merge_failures: list[BaseException] = []
+    merge_receipts: list[MergeReceipt] = []
+
+    def accept_correction() -> None:
+        try:
+            with two_principals.begin() as connection:
+
+                def pause_before_memory_insert(
+                    _connection: object,
+                    _cursor: object,
+                    statement: str,
+                    _parameters: object,
+                    _context: object,
+                    _executemany: bool,
+                ) -> None:
+                    if "INSERT INTO knowledge.relationship_memories" not in statement:
+                        return
+                    promotion_insert_reached.set()
+                    if not release_promotion_insert.wait(timeout=5):
+                        raise TimeoutError("the review/merge race was not released")
+
+                event.listen(connection, "before_cursor_execute", pause_before_memory_insert)
+                try:
+                    decide_relationship_memory_review(connection, review_request)
+                finally:
+                    event.remove(connection, "before_cursor_execute", pause_before_memory_insert)
+        except BaseException as error:  # pragma: no cover - asserted in parent thread
+            review_failures.append(error)
+        finally:
+            review_done.set()
+
+    def apply_merge() -> None:
+        try:
+            with two_principals.begin() as connection:
+                identity = IdentityCorrectionService(
+                    SqlEntityRepository(connection),
+                    SqlRelationshipMemoryRepository(connection),
+                )
+                merge_receipts.append(
+                    identity.apply(
+                        MergeCommand(
+                            principal_id=PRINCIPAL_A,
+                            preview_id=report.preview.preview_id,
+                            preview_digest=report.preview.preview_digest,
+                            idempotency_key="relationship-memory-review-context-race",
+                            reason="two synthetic context identities describe one subject",
+                        ),
+                        at=WHEN,
+                        correlation_id="corr_cccc0003cccc0003",
+                        audit_id="audit_cccc0003cccc0003",
+                        performed_by=PRINCIPAL_A,
+                        actor_class=ActorClass.USER,
+                        has_operator_authority=True,
+                    )
+                )
+        except BaseException as error:  # pragma: no cover - asserted in parent thread
+            merge_failures.append(error)
+        finally:
+            merge_done.set()
+
+    review_thread = Thread(target=accept_correction, daemon=True)
+    review_thread.start()
+    assert promotion_insert_reached.wait(timeout=5)
+    merge_thread = Thread(target=apply_merge, daemon=True)
+    merge_thread.start()
+    assert not merge_done.wait(timeout=0.25), (
+        "the merge did not wait for the review correction's context-Entity mutation lock"
+    )
+    release_promotion_insert.set()
+    assert review_done.wait(timeout=5)
+    assert merge_done.wait(timeout=5)
+    review_thread.join(timeout=1)
+    merge_thread.join(timeout=1)
+
+    assert review_failures == []
+    assert merge_receipts == []
+    assert len(merge_failures) == 1
+    assert isinstance(merge_failures[0], ConflictError)
+    with two_principals.connect() as connection:
+        context_entity = SqlEntityRepository(connection).get(PRINCIPAL_A, MERGE_CONTEXT)
+        proposal = connection.execute(
+            select(relationship_memory_proposals).where(
+                relationship_memory_proposals.c.review_case_id == review_case_id
+            )
+        ).one()
+        promoted_context = (
+            connection.execute(
+                text(
+                    f"SELECT target_type, target_id, role "  # noqa: S608
+                    f"FROM {SCHEMA}.relationship_memory_context_links "
+                    "WHERE memory_version_id = :memory_version_id"
+                ),
+                {"memory_version_id": proposal.accepted_memory_version_id},
+            )
+            .mappings()
+            .all()
+        )
+    assert context_entity is not None
+    assert context_entity.status is EntityStatus.ACTIVE
+    assert proposal.state == MemoryProposalState.CORRECTED_ACCEPTED.value
+    assert [dict(link) for link in promoted_context] == corrected_context
+
+
+def test_proposal_context_round_trips_and_changes_database_dedupe_identity(
+    two_principals: Engine,
+) -> None:
+    """Two otherwise-equal proposals with different scopes remain distinct and exact."""
+    first = _context_proposal(DANA, "applies_in")
+    second = _context_proposal(DANA, "related_to")
+    with two_principals.begin() as connection:
+        repository = SqlRelationshipMemoryProposalRepository(connection)
+        repository.record_proposal(first, ())
+        repository.record_proposal(second, ())
+
+    with two_principals.connect() as connection:
+        rows = connection.execute(
+            select(
+                relationship_memory_proposals.c.memory_proposal_id,
+                relationship_memory_proposals.c.context_links,
+                relationship_memory_proposals.c.dedupe_sha256,
+            ).where(
+                relationship_memory_proposals.c.memory_proposal_id.in_(
+                    (first.memory_proposal_id, second.memory_proposal_id)
+                )
+            )
+        ).all()
+    assert {row.memory_proposal_id for row in rows} == {
+        first.memory_proposal_id,
+        second.memory_proposal_id,
+    }
+    assert {row.dedupe_sha256 for row in rows} == {first.dedupe_sha256, second.dedupe_sha256}
+    assert {tuple(tuple(sorted(link.items())) for link in row.context_links) for row in rows} == {
+        tuple(tuple(sorted(link.items())) for link in first.context_links),
+        tuple(tuple(sorted(link.items())) for link in second.context_links),
+    }
+
+
+@pytest.mark.parametrize(
+    "target_id",
+    [FOREIGN_PERSON, MISSING_CONTEXT, OLD_DANA],
+    ids=("foreign", "missing", "merged"),
+)
+def test_proposal_context_refuses_unowned_or_unwritable_targets_without_a_row(
+    two_principals: Engine,
+    target_id: str,
+) -> None:
+    proposal = _context_proposal(target_id, "applies_in")
+    with two_principals.begin() as connection:
+        before = connection.execute(
+            select(func.count()).select_from(relationship_memory_proposals)
+        ).scalar_one()
+        with pytest.raises(UnknownScopeError):
+            SqlRelationshipMemoryProposalRepository(connection).record_proposal(proposal, ())
+        after = connection.execute(
+            select(func.count()).select_from(relationship_memory_proposals)
+        ).scalar_one()
+    assert after == before
+
+
+class _InsertOnlyProposals:
+    """`RelationshipMemoryProposalRepository`, over the two tables PR #147 created."""
+
+    def __init__(self, connection: Connection) -> None:
+        self._connection = connection
+
+    def record_proposal(
+        self,
+        proposal: RelationshipMemoryProposal,
+        evidence: tuple[MemoryProposalEvidence, ...],
+    ) -> tuple[RelationshipMemoryProposal, int, bool]:
+        self._connection.execute(
+            insert(relationship_memory_proposals).values(
+                memory_proposal_id=proposal.memory_proposal_id,
+                principal_id=proposal.principal_id,
+                subject_entity_id=proposal.subject_entity_id,
+                expected_subject_version=proposal.expected_subject_version,
+                proposed_kind=proposal.proposed_kind.value,
+                proposed_statement=proposal.proposed_statement,
+                proposed_statement_sha256=proposal.proposed_statement_sha256,
+                dedupe_sha256=proposal.dedupe_sha256,
+                structured_value=proposal.structured_value,
+                context_links=list(proposal.context_links),
+                state=proposal.state.value,
+                method=proposal.method.value,
+                method_version=proposal.method_version,
+                model_id=proposal.model_id,
+                model_version=proposal.model_version,
+                classification=proposal.classification.value,
+                proposed_at=proposal.proposed_at,
+                review_case_id=proposal.review_case_id,
+                accepted_memory_id=proposal.accepted_memory_id,
+                accepted_memory_version_id=proposal.accepted_memory_version_id,
+                invalidated_reason=proposal.invalidated_reason,
+                superseded_at=proposal.superseded_at,
+                superseded_by_memory_proposal_id=(proposal.superseded_by_memory_proposal_id),
+            )
+        )
+        for link in evidence:
+            self._connection.execute(
+                insert(relationship_memory_proposal_evidence).values(
+                    proposal_evidence_id=link.proposal_evidence_id,
+                    memory_proposal_id=link.memory_proposal_id,
+                    principal_id=link.principal_id,
+                    role=link.role.value,
+                    entity_observation_id=link.entity_observation_id,
+                    capture_span_id=link.capture_span_id,
+                    knowledge_id=link.knowledge_id,
+                    created_at=link.created_at,
+                )
+            )
+        return proposal, len(evidence), True
+
+
+def _produce(
+    connection: Connection,
+    *,
+    kind: MemoryKind = MemoryKind.WORKING_PREFERENCE,
+    statement: str = PROPOSED_NOTE,
+    origin: MemoryProposalOrigin | None = None,
+) -> MemoryProposalReceipt:
+    """One candidate, written the way a producer writes it and nowhere else."""
+    return RelationshipMemoryProposalService().propose(
+        _InsertOnlyProposals(connection),
+        ProposeMemoryCommand(
+            principal_id=PRINCIPAL_A,
+            subject_entity_id=DANA,
+            expected_subject_version=1,
+            memory_kind=kind,
+            statement=statement,
+            structured_value=None,
+            evidence=(
+                ProposedEvidence(
+                    role=EvidenceLinkRole.DIRECT,
+                    entity_observation_id=issue_identifier(IdKind.ENTITY_OBSERVATION),
+                ),
+                ProposedEvidence(
+                    role=EvidenceLinkRole.SUPPORTING,
+                    capture_span_id=issue_identifier(IdKind.SPAN),
+                ),
+            ),
+        ),
+        subject=an_entity(DANA, PRINCIPAL_A, "Dana Synthetic"),
+        origin=origin
+        or MemoryProposalOrigin(
+            method=MemoryProposalMethod.LOCAL_MODEL,
+            method_version="synthetic-extractor-v1",
+            model_id="synthetic-local-model",
+            model_version="2026.08",
+        ),
+        at=WHEN,
+    )
+
+
+def test_a_candidate_the_producer_writes_is_accepted_by_every_schema_check(
+    two_principals: Engine,
+) -> None:
+    """The columns the service fills are the columns the CHECKs police.
+
+    A local-model origin is used rather than a rule, because it is the shape with
+    the most to get wrong: `a_model_proposal_names_its_model` and
+    `a_named_proposal_model_states_its_version` are conditional pairings between
+    three columns, and a producer that filled two of them would be refused here
+    rather than in a later review.
+    """
+    with two_principals.begin() as connection:
+        receipt = _produce(connection)
+
+    with two_principals.connect() as connection:
+        row = _proposal_row(connection, receipt.memory_proposal_id)
+        links = connection.execute(
+            select(relationship_memory_proposal_evidence).where(
+                relationship_memory_proposal_evidence.c.memory_proposal_id
+                == receipt.memory_proposal_id
+            )
+        ).all()
+
+    assert row.state == MemoryProposalState.NEEDS_REVIEW.value
+    assert row.method == MemoryProposalMethod.LOCAL_MODEL.value
+    assert row.model_id == "synthetic-local-model"
+    assert row.model_version == "2026.08"
+    assert row.classification == Classification.PRIVATE_LOCAL.value
+    assert row.accepted_memory_id is None
+    assert row.review_case_id == receipt.review_case_id
+    assert len(links) == 2
+    assert {link.role for link in links} == {
+        EvidenceLinkRole.DIRECT.value,
+        EvidenceLinkRole.SUPPORTING.value,
+    }
+
+
+def test_a_produced_candidate_reaches_review_and_no_memory_read(
+    two_principals: Engine,
+) -> None:
+    """The producer's whole purpose, end to end: reviewable, and not yet memory.
+
+    `search` is asked for a term the candidate's own statement contains, so the
+    empty answer is the two record sets being different tables rather than a
+    query that matches nothing.
+    """
+    with two_principals.begin() as connection:
+        receipt = _produce(connection)
+
+    with two_principals.connect() as connection:
+        cases = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+        memories = SqlRelationshipMemoryRepository(connection)
+        page = memories.page_for_entity(DANA, principal_id=PRINCIPAL_A, limit=10)
+        found = memories.search("closeout", principal_id=PRINCIPAL_A, limit=10)
+
+    assert [case.review_case_id for case in cases] == [receipt.review_case_id]
+    assert cases[0].proposal_state is ProposalState.NEEDS_REVIEW
+    assert cases[0].subject_entity_id == DANA
+    assert cases[0].accepted_memory_id is None
+    assert page.memories == ()
+    assert page.withheld_by_policy == 0
+    assert found.memories == ()
+
+
+def test_a_produced_sensitivity_candidate_meets_the_floor_the_schema_demands(
+    two_principals: Engine,
+) -> None:
+    """`a_sensitivity_proposal_is_at_least_restricted` and `classification_floor_for`
+    are two statements of one rule, in two layers. This is where they are compared.
+
+    The service chooses the classification; the CHECK decides whether the choice
+    was right. If the floor were computed anywhere but from the kind, the insert
+    would be refused here rather than at a review.
+    """
+    with two_principals.begin() as connection:
+        receipt = _produce(
+            connection,
+            kind=MemoryKind.SENSITIVITY,
+            statement="Synthetic subject declines evening closeout calls.",
+        )
+
+    with two_principals.connect() as connection:
+        row = _proposal_row(connection, receipt.memory_proposal_id)
+        cases = relationship_memory_review_cases(connection, principal_id=PRINCIPAL_A, limit=10)
+
+    assert row.classification == Classification.RESTRICTED_LOCAL.value
+    assert receipt.classification is Classification.RESTRICTED_LOCAL
+    # And the reviewer still gets no statement to leak, which is the disclosure
+    # control this candidate is the sharpest case of.
+    assert not hasattr(cases[0], "proposed_statement")

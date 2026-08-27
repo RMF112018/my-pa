@@ -59,6 +59,7 @@ from my_pa.application.goodnotes_gsqs_b0_workflow import (
 )
 from my_pa.application.intelligence import InMemoryIntelligenceStore
 from my_pa.application.managed_documents import ManagedDocumentService
+from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
 from my_pa.application.tasks import TaskManagementService
 from my_pa.contracts.ports import (
@@ -106,7 +107,9 @@ from my_pa.contracts.ports import (
     PortError,
     PreferenceConflictError,
     ProjectRepository,
+    ProposalAdmissionConflictError,
     PulseRepository,
+    RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RelationshipWriteRequest,
     ReviewDecisionRequest,
@@ -120,6 +123,9 @@ from my_pa.contracts.ports import (
     UnitOfWork,
     UnknownScopeError,
     WorkCursorError,
+    WriteRequestConflictError,
+    WriteRequestRepository,
+    WriteRequestResult,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.disclosure import (
@@ -148,10 +154,13 @@ from my_pa.domain.capture.reveal import (
 )
 from my_pa.domain.capture.review import (
     Disposition,
+    EntityProposalReviewCase,
+    EntityProposalReviewDecision,
     ReviewCase,
     ReviewConflictError,
     ReviewDecision,
     ReviewNotFoundError,
+    ReviewSubjectKind,
     ReviewUnsupportedError,
 )
 from my_pa.domain.capture.submission import CaptureReceipt
@@ -160,7 +169,7 @@ from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
 from my_pa.domain.common.identifiers import IdKind, parse_identifier, validate_identifier
 from my_pa.domain.common.provenance import Provenance, TrustLevel
-from my_pa.domain.common.time import utc_now
+from my_pa.domain.common.time import ensure_utc, utc_now
 from my_pa.domain.context.preference import (
     ContextPreferenceAction,
     ContextPreferenceAdmission,
@@ -222,6 +231,9 @@ from my_pa.domain.relationship.entity import (
     descriptor_key,
 )
 from my_pa.domain.relationship.governance import (
+    ACCEPTED_PROPOSAL_STATES,
+    OPEN_EQUIVALENT_PROPOSAL_STATES,
+    UNDECIDED_PROPOSAL_STATES,
     ActorClass,
     EntityFactEvidenceLink,
     EntityMergeRecord,
@@ -229,6 +241,7 @@ from my_pa.domain.relationship.governance import (
     EntityMutationEvent,
     EntityObservation,
     EntityProposal,
+    EntityProposalEvidenceLink,
     EntityProposalState,
     EntityResolutionDecision,
     EvidenceRole,
@@ -247,10 +260,13 @@ from my_pa.domain.relationship.memory import (
     MemoryKind,
     MemoryLifecycle,
     MemoryOperation,
+    MemoryProposalEvidence,
+    MemoryProposalState,
     MemoryReceipt,
     MergedSubjectError,
     RelationshipMemory,
     RelationshipMemoryError,
+    RelationshipMemoryProposal,
     RelationshipMemoryReviewCase,
     RelationshipMemoryVersion,
     StaleMemoryVersionError,
@@ -530,6 +546,32 @@ class World:
     entity_aliases: list[EntityAlias] = field(default_factory=list)
     entity_observations: list[EntityObservation] = field(default_factory=list)
     entity_proposals: list[EntityProposal] = field(default_factory=list)
+    #: The exact records each proposal rests on. A real field since `WP-RI-B-05`
+    #: put the five proposal-plane methods on `_Entities`: they were a subclass
+    #: in `tests/unit/` while `tests/conftest.py` was frozen for the worker that
+    #: needed them, and the links lived on an attribute stapled to `World` from
+    #: outside. One fake and one field, so a test that reaches `propose` through
+    #: `FakeUnitOfWork(world).entities` finds the methods rather than a
+    #: `NotImplementedError`.
+    entity_proposal_evidence: list[EntityProposalEvidenceLink] = field(default_factory=list)
+    #: The Entity plane's own review decision ledger, which is what a case's
+    #: `review_version` is the count of. Separate from `review_decisions` because
+    #: they are two tables about two subjects, exactly as they are in the schema.
+    entity_review_decisions: list[EntityProposalReviewDecision] = field(default_factory=list)
+    #: The Relationship Memory producer's two tables (`WP-RI-B-05`). Flat lists
+    #: for the reason every other ledger here is one: this fake's whole job is
+    #: the partition predicate and the shape, and a list a filter runs over is
+    #: the clearest place to see one of them missing. They are separate fields
+    #: from `entity_proposals` because they are a different plane's tables about
+    #: a different subject, exactly as they are in the schema.
+    relationship_memory_proposals: list[RelationshipMemoryProposal] = field(default_factory=list)
+    relationship_memory_proposal_evidence: list[MemoryProposalEvidence] = field(
+        default_factory=list
+    )
+    relationship_write_requests: dict[tuple[str, str, str], tuple[str, WriteRequestResult]] = field(
+        default_factory=dict
+    )
+    producer_origins: dict[str, ProducerOrigin] = field(default_factory=dict)
     entity_merges: list[EntityMergeRecord] = field(default_factory=list)
     #: The entity plane's three ledgers, shared by every writer on it. Flat
     #: lists for the reason the entity ones are: the fake's only job is the
@@ -1240,29 +1282,222 @@ class _Reviews(ReviewRepository):
         self._world = world
 
     def cases(
-        self, *, limit: int, principal_id: str
-    ) -> tuple[ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase, ...]:
-        """This fake holds capture cases only, and says so in its return type.
+        self,
+        *,
+        limit: int,
+        principal_id: str,
+        subject_kind: ReviewSubjectKind | None = None,
+        state: ProposalState | None = None,
+        entity_id: str | None = None,
+        after_opened_at: datetime | None = None,
+        after_review_case_id: str | None = None,
+    ) -> tuple[
+        ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase | EntityProposalReviewCase,
+        ...,
+    ]:
+        """Capture cases and Entity proposal cases; the other two are database-only.
 
-        The port admits three subject kinds now — capture proposals, GoodNotes
-        regions and Relationship Memory candidates — and a `tuple[ReviewCase,
-        ...]` still satisfies it, because a tuple of a narrower element type is a
-        tuple of the wider one. It is widened here anyway so a reader is not left
-        thinking the port is narrower than it is: the other two planes are
-        exercised against a real database, where their SQL and their promotion
-        are the thing under test, and adding them to `World` would be a second
-        implementation of promotion for the fake to disagree with.
+        The port admits four subject kinds now. GoodNotes and Relationship
+        Memory are exercised against a real database, where their SQL and their
+        promotion are the thing under test, and adding them to `World` would be a
+        second implementation of promotion for the fake to disagree with. The
+        Entity plane is here because its *decision* is application code rather
+        than SQL, so a unit test can drive the whole of it against this fake and
+        a database test can prove the storage separately.
         """
         self._world.fail("review_cases")
+        if (after_opened_at is None) != (after_review_case_id is None):
+            raise ValueError("a review cursor position is complete or absent")
+        after_key = (
+            None
+            if after_opened_at is None or after_review_case_id is None
+            else (after_opened_at, after_review_case_id)
+        )
         owned = {
             version.capture_id
             for version in self._world.capture_versions
             if version.owner_principal_id == principal_id
         }
-        confined = [case for case in self._world.review_cases if case.capture_id in owned]
+        found: list[
+            ReviewCase
+            | GoodNotesReviewCase
+            | RelationshipMemoryReviewCase
+            | EntityProposalReviewCase
+        ] = []
+        if subject_kind in (None, ReviewSubjectKind.CAPTURE_PROPOSAL) and entity_id is None:
+            found.extend(case for case in self._world.review_cases if case.capture_id in owned)
+        if subject_kind in (None, ReviewSubjectKind.ENTITY_PROPOSAL):
+            found.extend(self._entity_cases(principal_id, entity_id=entity_id))
+        confined = sorted(
+            (
+                case
+                for case in found
+                if (state is None or case.proposal_state is state)
+                and (after_key is None or (case.opened_at, case.review_case_id) > after_key)
+            ),
+            key=lambda case: (case.opened_at, case.review_case_id),
+        )
         return tuple(confined[:limit])
 
-    def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
+    # --- the Entity proposal plane's case read and decision ledger -----------
+
+    def _entity_cases(
+        self, principal_id: str, *, entity_id: str | None = None
+    ) -> list[EntityProposalReviewCase]:
+        """Every Entity proposal case this Principal holds, oldest first.
+
+        Derived from the proposals and the ledger exactly as the SQL derives it:
+        the case's version is the count of its decisions and its escalation is
+        whether one of them raised it, so a fake that stored either would be able
+        to disagree with a ledger the server reads.
+        """
+        cases: list[EntityProposalReviewCase] = []
+        for held in self._world.entity_proposals:
+            if held.principal_id != principal_id or held.review_case_id is None:
+                continue
+            named = {
+                value
+                for name, value in held.payload.values
+                if name.endswith("entity_id") and isinstance(value, str)
+            }
+            if entity_id is not None and entity_id not in named:
+                continue
+            ledger = self.entity_proposal_decisions(principal_id, held.review_case_id)
+            subject = next(
+                (
+                    value
+                    for name in ("entity_id", "retained_entity_id", "from_entity_id")
+                    for key, value in held.payload.values
+                    if key == name and isinstance(value, str)
+                ),
+                None,
+            )
+            cases.append(
+                EntityProposalReviewCase(
+                    review_case_id=held.review_case_id,
+                    proposal_id=held.proposal_id,
+                    principal_id=held.principal_id,
+                    proposed_kind=held.kind,
+                    method=held.method,
+                    opened_at=held.proposed_at,
+                    target_entity_id=subject,
+                    proposal_state=ProposalState(held.state.value),
+                    review_version=len(ledger),
+                    latest_disposition=ledger[-1] if ledger else None,
+                    escalated=Disposition.ESCALATE in ledger,
+                    accepted_record_id=held.accepted_record_id,
+                )
+            )
+        return sorted(cases, key=lambda case: (case.opened_at, case.review_case_id))
+
+    def entity_proposal_case(
+        self, principal_id: str, review_case_id: str
+    ) -> EntityProposalReviewCase | None:
+        self._world.fail("entity_proposal_case")
+        return next(
+            (
+                case
+                for case in self._entity_cases(principal_id)
+                if case.review_case_id == review_case_id
+            ),
+            None,
+        )
+
+    def entity_proposal_decisions(
+        self, principal_id: str, review_case_id: str
+    ) -> tuple[Disposition, ...]:
+        return tuple(
+            decision.disposition
+            for decision in sorted(
+                (
+                    decision
+                    for decision in self._world.entity_review_decisions
+                    if decision.principal_id == principal_id
+                    and decision.review_case_id == review_case_id
+                ),
+                key=lambda decision: decision.sequence,
+            )
+        )
+
+    def record_entity_proposal_decision(
+        self, principal_id: str, decision: EntityProposalReviewDecision
+    ) -> None:
+        self._world.fail("record_entity_proposal_decision")
+        if decision.principal_id != principal_id:
+            raise ValueError("a review decision belongs to the acting Principal")
+        # Mirrors `UNIQUE (review_case_id, sequence)`, which is what makes two
+        # reviewers racing on one case produce one decision rather than two.
+        if any(
+            held.review_case_id == decision.review_case_id and held.sequence == decision.sequence
+            for held in self._world.entity_review_decisions
+        ):
+            raise ValueError("one decision per review sequence")
+        self._world.entity_review_decisions.append(decision)
+
+    def invalidate_entity_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        reason: str,
+        decided_by: str,
+        decided_at: datetime,
+    ) -> bool:
+        """The state, the reason and the decider in one act, like the guarded `UPDATE`."""
+        self._world.fail("invalidate_entity_proposal")
+        for index, held in enumerate(self._world.entity_proposals):
+            if held.proposal_id != proposal_id or held.principal_id != principal_id:
+                continue
+            if held.state not in UNDECIDED_PROPOSAL_STATES:
+                return False
+            self._world.entity_proposals[index] = replace(
+                held,
+                state=EntityProposalState.INVALIDATED,
+                invalidated_reason=reason,
+                decision_reason=reason,
+                decided_by=decided_by,
+                decided_at=ensure_utc(decided_at),
+            )
+            return True
+        return False
+
+    def supersede_entity_proposal(
+        self, principal_id: str, proposal_id: str, *, at: datetime
+    ) -> bool:
+        """State only, naming no successor. See the port for why it is two acts."""
+        self._world.fail("supersede_entity_proposal")
+        for index, held in enumerate(self._world.entity_proposals):
+            if held.proposal_id != proposal_id or held.principal_id != principal_id:
+                continue
+            if held.state not in UNDECIDED_PROPOSAL_STATES:
+                return False
+            self._world.entity_proposals[index] = replace(
+                held, state=EntityProposalState.SUPERSEDED, superseded_at=ensure_utc(at)
+            )
+            return True
+        return False
+
+    def name_entity_proposal_successor(
+        self, principal_id: str, proposal_id: str, *, successor_proposal_id: str
+    ) -> None:
+        self._world.fail("name_entity_proposal_successor")
+        for index, held in enumerate(self._world.entity_proposals):
+            if held.proposal_id != proposal_id or held.principal_id != principal_id:
+                continue
+            if (
+                held.state is not EntityProposalState.SUPERSEDED
+                or held.superseded_by_proposal_id is not None
+            ):
+                return
+            self._world.entity_proposals[index] = replace(
+                held, superseded_by_proposal_id=successor_proposal_id
+            )
+            return
+
+    def decide(
+        self, request: ReviewDecisionRequest, *, has_operator_authority: bool = False
+    ) -> ReviewDecision | None:
+        del has_operator_authority
         self._world.fail("review_decide")
         case = next(
             (
@@ -3969,6 +4204,13 @@ class _Entities(EntitiesRepository):
         self._world.fail("entities.record_proposal")
         if proposal.principal_id != principal_id:
             raise ValueError("a proposal belongs to the acting Principal")
+        if any(
+            held.principal_id == principal_id
+            and held.dedupe_sha256 == proposal.dedupe_sha256
+            and held.state in OPEN_EQUIVALENT_PROPOSAL_STATES
+            for held in self._world.entity_proposals
+        ):
+            raise ProposalAdmissionConflictError
         # Partitioned, because `SqlEntityRepository` partitions it. Without the
         # predicate the collision read finds another Principal's row and either
         # tells this caller their own identifier is bound to different values --
@@ -4007,6 +4249,43 @@ class _Entities(EntitiesRepository):
             None,
         )
 
+    def proposal_target_version(
+        self,
+        principal_id: str,
+        family: MutationRecordFamily,
+        record_id: str,
+    ) -> int | None:
+        records: Iterable[object]
+        version_name = "version"
+        id_name = {
+            MutationRecordFamily.ENTITY: "entity_id",
+            MutationRecordFamily.IDENTIFIER: "identifier_id",
+            MutationRecordFamily.ALIAS: "alias_id",
+            MutationRecordFamily.ASSIGNMENT: "assignment_id",
+            MutationRecordFamily.RELATIONSHIP: "relationship_id",
+            MutationRecordFamily.OBSERVATION: "observation_id",
+        }.get(family, "")
+        records = {
+            MutationRecordFamily.ENTITY: self._world.entities,
+            MutationRecordFamily.IDENTIFIER: self._world.entity_identifiers,
+            MutationRecordFamily.ALIAS: self._world.entity_aliases,
+            MutationRecordFamily.ASSIGNMENT: self._world.entity_assignments,
+            MutationRecordFamily.RELATIONSHIP: self._world.entity_relationships,
+            MutationRecordFamily.OBSERVATION: self._world.entity_observations,
+        }.get(family, ())
+        if family is MutationRecordFamily.OBSERVATION:
+            version_name = "resolution_version"
+        held = next(
+            (
+                row
+                for row in records
+                if getattr(row, "principal_id", None) == principal_id
+                and getattr(row, id_name, None) == record_id
+            ),
+            None,
+        )
+        return None if held is None else int(getattr(held, version_name))
+
     def proposals(
         self, principal_id: str, state: EntityProposalState | None = None
     ) -> list[EntityProposal]:
@@ -4026,15 +4305,229 @@ class _Entities(EntitiesRepository):
             raise ValueError("a proposal belongs to the acting Principal")
         for index, held in enumerate(self._world.entity_proposals):
             if held.proposal_id == proposal.proposal_id and held.principal_id == principal_id:
-                # Mirrors the SQL `state = 'proposed'` predicate. Without it a
-                # unit test could assert the repository's one-time-decision rule
-                # against a fake that has no such rule and pass, which is the
-                # hazard `redirect_entity` names two methods above.
-                if held.state is not EntityProposalState.PROPOSED:
+                # Mirrors the SQL predicate, which `WP-RI-B-05` widened from the
+                # `proposed` literal to both undecided states when
+                # `initial_state_for` began writing `needs_review`. Read from the
+                # domain rather than restated, so the fake and the guarded
+                # `UPDATE` cannot disagree about what "open" means -- and without
+                # the predicate at all a unit test could assert the repository's
+                # one-time-decision rule against a fake that has no such rule and
+                # pass, which is the hazard `redirect_entity` names above.
+                if held.state not in UNDECIDED_PROPOSAL_STATES:
                     raise UnknownScopeError("a decision names an open proposal in this scope")
                 self._world.entity_proposals[index] = proposal
                 return
         raise UnknownScopeError("a decision names an open proposal in this scope")
+
+    # --- the proposal plane's other readers and writers ----------------------
+    #
+    # Five moved here from `tests/unit/entity_proposal_fakes.py`, which
+    # subclassed this fake only because this file was frozen for the worker that
+    # needed them; `invalidate_proposal` is the sixth and was never faked
+    # anywhere. Each mirrors `SqlEntityRepository`, and the mirroring is the
+    # whole value of the fake: a unit test that proves a rule against a fake with
+    # no such rule proves the opposite of what the server does — and a port
+    # method with no fake at all is worse still, because the divergence has
+    # nowhere below the database tier to show up. `invalidate_proposal` is here
+    # for exactly that: its guarded `UPDATE` carried a stale one-state predicate
+    # to an integration head, catchable only against a real server.
+    #
+    # Two mirrorings are deliberately partial and are stated rather than
+    # implied. `record_proposal_evidence_link` checks the proposal and the
+    # observation against this partition but does not walk a `capture_span_id`
+    # to the capture that owns it, which the server does; `World` holds no
+    # capture-span plane to walk. `record_proposal_promotion` reaches the
+    # server's "a promoted record version starts at one" through
+    # `EntityProposal.__post_init__` rather than by restating it, so the refusal
+    # happens with a different message.
+
+    def proposal_by_dedupe(
+        self,
+        principal_id: str,
+        dedupe_sha256: str,
+        states: Iterable[EntityProposalState],
+    ) -> EntityProposal | None:
+        """The open-equivalent read the partial unique index is over."""
+        self._world.fail("entities.proposal_by_dedupe")
+        wanted = set(states)
+        if not wanted:
+            return None
+        ordered = sorted(self._world.entity_proposals, key=lambda held: held.proposal_id)
+        return next(
+            (
+                held
+                for held in ordered
+                if held.principal_id == principal_id
+                and held.dedupe_sha256 == dedupe_sha256
+                and held.state in wanted
+            ),
+            None,
+        )
+
+    def record_proposal_evidence_link(
+        self, principal_id: str, link: EntityProposalEvidenceLink
+    ) -> None:
+        """One exact record a proposal rests on, admitted against this partition."""
+        self._world.fail("entities.record_proposal_evidence_link")
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if link.principal_id != principal_id:
+            raise ValueError("proposal evidence belongs to the acting Principal")
+        if self.proposal(principal_id, link.proposal_id) is None:
+            raise UnknownScopeError("proposal evidence names a proposal in this scope")
+        if link.entity_observation_id is not None and (
+            self.observation(principal_id, link.entity_observation_id) is None
+        ):
+            raise UnknownScopeError("proposal evidence cites a record outside this scope")
+        self._world.entity_proposal_evidence.append(link)
+
+    def proposal_evidence_links(
+        self, principal_id: str, proposal_id: str
+    ) -> list[EntityProposalEvidenceLink]:
+        self._world.fail("entities.proposal_evidence_links")
+        return sorted(
+            (
+                link
+                for link in self._world.entity_proposal_evidence
+                if link.principal_id == principal_id and link.proposal_id == proposal_id
+            ),
+            key=lambda link: link.sequence,
+        )
+
+    def merge_proposal_evidence_links(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        evidence: Iterable[EntityProposalEvidenceLink],
+    ) -> list[EntityProposalEvidenceLink]:
+        stored = self.proposal_evidence_links(principal_id, proposal_id)
+        known = {
+            (
+                link.role,
+                link.entity_observation_id or link.capture_span_id or link.knowledge_id,
+            )
+            for link in stored
+        }
+        for offered in evidence:
+            identity = (
+                offered.role,
+                offered.entity_observation_id or offered.capture_span_id or offered.knowledge_id,
+            )
+            if identity in known:
+                continue
+            appended = replace(offered, sequence=len(stored) + 1)
+            self.record_proposal_evidence_link(principal_id, appended)
+            stored.append(appended)
+            known.add(identity)
+        return stored
+
+    def record_proposal_promotion(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        record_family: MutationRecordFamily,
+        record_id: str,
+        record_version: int,
+    ) -> None:
+        """Name the canonical record an accepted proposal became.
+
+        Guarded on the accepted states and on `accepted_record_id IS NULL`, like
+        the `UPDATE` it mirrors, so this is an append rather than a re-point.
+        """
+        self._world.fail("entities.record_proposal_promotion")
+        for index, held in enumerate(self._world.entity_proposals):
+            if held.proposal_id != proposal_id or held.principal_id != principal_id:
+                continue
+            if held.state not in ACCEPTED_PROPOSAL_STATES or held.accepted_record_id is not None:
+                break
+            self._world.entity_proposals[index] = replace(
+                held,
+                accepted_record_type=record_family,
+                accepted_record_id=record_id,
+                accepted_record_version=record_version,
+            )
+            return
+        raise UnknownScopeError("a promotion names an accepted proposal in this scope")
+
+    def supersede_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        successor_proposal_id: str,
+        at: datetime,
+    ) -> bool:
+        """State and successor pointer in one act, for a successor that exists.
+
+        `False` rather than an exception when the proposal was decided in
+        flight: that is an answer about the world, not an error about scope.
+        """
+        self._world.fail("entities.supersede_proposal")
+        if successor_proposal_id == proposal_id:
+            raise ValueError("a proposal is not its own successor")
+        for index, held in enumerate(self._world.entity_proposals):
+            if held.proposal_id != proposal_id or held.principal_id != principal_id:
+                continue
+            if held.state not in UNDECIDED_PROPOSAL_STATES:
+                return False
+            self._world.entity_proposals[index] = replace(
+                held,
+                state=EntityProposalState.SUPERSEDED,
+                superseded_at=ensure_utc(at),
+                superseded_by_proposal_id=successor_proposal_id,
+            )
+            return True
+        return False
+
+    def invalidate_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        reason: str,
+        decided_by: str,
+        decided_at: datetime,
+    ) -> None:
+        """Close one open proposal a governed merge took the subject out from under.
+
+        **The merge's writer, and not the reviewer's**: `_Reviews.
+        invalidate_entity_proposal` is the disposition a person records on a
+        review case, and it writes `decision_reason` beside this column because
+        somebody decided something. Nobody decided anything here — the identity
+        the proposal named stopped existing under that name — so only
+        `invalidated_reason` is written, exactly as `SqlEntityRepository.
+        invalidate_proposal` does.
+
+        **`UNDECIDED_PROPOSAL_STATES` is the predicate, read from the domain
+        rather than restated**, and it is why this method is here at all. The
+        guarded `UPDATE` it mirrors carried the `proposed` literal until
+        `WP-RI-B-05` made `initial_state_for` write `needs_review`, and the
+        resulting mismatch — a merge planning an invalidation the statement then
+        matched zero rows for — reached an integration head because no fake on
+        this plane declared the method, so nothing below the database tier could
+        see it. A fake that mirrors the predicate is what makes the next such
+        divergence a FAST failure. `DEFERRED` stays outside it for the server's
+        own stated reason: this statement overwrites `decided_by`, and a deferred
+        proposal already names the reviewer who deferred it.
+
+        `UnknownScopeError` rather than a `False` return, because that is the
+        rowcount-zero answer the port gives.
+        """
+        self._world.fail("entities.invalidate_proposal")
+        for index, held in enumerate(self._world.entity_proposals):
+            if held.proposal_id != proposal_id or held.principal_id != principal_id:
+                continue
+            if held.state not in UNDECIDED_PROPOSAL_STATES:
+                break
+            self._world.entity_proposals[index] = replace(
+                held,
+                state=EntityProposalState.INVALIDATED,
+                invalidated_reason=reason,
+                decided_by=decided_by,
+                decided_at=ensure_utc(decided_at),
+            )
+            return
+        raise UnknownScopeError("an invalidation names an open proposal in this scope")
 
     def record_merge(self, principal_id: str, record: EntityMergeRecord) -> None:
         self._world.fail("entities.record_merge")
@@ -4089,7 +4582,12 @@ class _Entities(EntitiesRepository):
         )
 
     def redirect_entity(
-        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+        self,
+        principal_id: str,
+        merged_entity_id: str,
+        retained_entity_id: str,
+        *,
+        expected_version: int | None = None,
     ) -> None:
         self._world.fail("entities.redirect_entity")
         self._require_own(principal_id, merged_entity_id, retained_entity_id)
@@ -4107,6 +4605,12 @@ class _Entities(EntitiesRepository):
         ):
             raise ValueError("an entity that others redirect to is not merged away")
         merged = self.get(principal_id, merged_entity_id)
+        if (
+            merged is not None
+            and expected_version is not None
+            and merged.version != expected_version
+        ):
+            raise ValueError("a redirect names an entity this merge read unchanged")
         if merged is not None and merged.status is EntityStatus.MERGED_REDIRECT:
             raise ValueError("an entity that is already merged away is not merged again")
         for index, held in enumerate(self._world.entities):
@@ -4775,6 +5279,86 @@ def _refuse_websearch_control(query: str) -> None:
         )
 
 
+class _RelationshipMemoryProposals(RelationshipMemoryProposalRepository):
+    """The producer's one insert over `World` (`WP-RI-B-05`).
+
+    One method, because the port declares one. That is the whole of what this
+    fake has to reproduce and the whole of what it is allowed to: a producer
+    handed this object cannot reach `relationship_memories`, and a fake with a
+    convenience read on it would let a unit test prove a producer can do
+    something the server's port has no method for.
+
+    **What it reproduces.** The insert is atomic in the sense that matters here:
+    the two lists are appended together, so a run that raised part-way would not
+    leave a candidate with no evidence. The domain records arrive already
+    validated -- `RelationshipMemoryProposal.__post_init__` and
+    `MemoryProposalEvidence.__post_init__` have run -- and nothing is re-checked,
+    exactly as `SqlRelationshipMemoryProposalRepository` re-checks nothing.
+
+    **What it cannot prove.** There is no unique constraint, no partition
+    predicate enforced by a server and no foreign key, so a unit test cannot
+    learn from this fake that a candidate naming a foreign subject is refused --
+    the scoped entity read in the handler is what refuses that, and
+    `tests/database/` is where the server's own guarantees are proved.
+    """
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def record_proposal(
+        self,
+        proposal: RelationshipMemoryProposal,
+        evidence: tuple[MemoryProposalEvidence, ...],
+    ) -> tuple[RelationshipMemoryProposal, int, bool]:
+        self._world.fail("relationship_memory.record_proposal")
+        stored = next(
+            (
+                held
+                for held in self._world.relationship_memory_proposals
+                if held.principal_id == proposal.principal_id
+                and held.dedupe_sha256 == proposal.dedupe_sha256
+                and held.state
+                in {
+                    MemoryProposalState.PROPOSED,
+                    MemoryProposalState.NEEDS_REVIEW,
+                    MemoryProposalState.DEFERRED,
+                }
+            ),
+            None,
+        )
+        created = stored is None
+        if stored is None:
+            stored = proposal
+            self._world.relationship_memory_proposals.append(stored)
+        known = {
+            (
+                link.role,
+                link.entity_observation_id or link.capture_span_id or link.knowledge_id,
+            )
+            for link in self._world.relationship_memory_proposal_evidence
+            if link.memory_proposal_id == stored.memory_proposal_id
+            and link.principal_id == stored.principal_id
+        }
+        for link in evidence:
+            identity = (
+                link.role,
+                link.entity_observation_id or link.capture_span_id or link.knowledge_id,
+            )
+            if identity in known:
+                continue
+            self._world.relationship_memory_proposal_evidence.append(
+                replace(
+                    link,
+                    proposal_evidence_id=issue_identifier(
+                        IdKind.RELATIONSHIP_MEMORY_PROPOSAL_EVIDENCE
+                    ),
+                    memory_proposal_id=stored.memory_proposal_id,
+                )
+            )
+            known.add(identity)
+        return stored, len(known), created
+
+
 class _RelationshipMemories(RelationshipMemoryRepository):
     """The Relationship Memory plane over `World`, partition-first.
 
@@ -5430,6 +6014,45 @@ def _memory_page(
     )
 
 
+class _WriteRequests(WriteRequestRepository):
+    """Content-free replay arbitration over the synthetic World."""
+
+    def __init__(self, world: World) -> None:
+        self._world = world
+
+    def reserve(
+        self,
+        principal_id: str,
+        capability: str,
+        request_id: str,
+        request_digest: str,
+    ) -> WriteRequestResult | None:
+        held = self._world.relationship_write_requests.get((principal_id, capability, request_id))
+        if held is None:
+            return None
+        digest, result = held
+        if digest != request_digest:
+            raise WriteRequestConflictError
+        return result
+
+    def complete(
+        self,
+        principal_id: str,
+        capability: str,
+        request_id: str,
+        request_digest: str,
+        result: WriteRequestResult,
+    ) -> None:
+        key = (principal_id, capability, request_id)
+        held = self._world.relationship_write_requests.get(key)
+        if held is not None:
+            digest, _ = held
+            if digest != request_digest:
+                raise WriteRequestConflictError
+            return
+        self._world.relationship_write_requests[key] = (request_digest, result)
+
+
 class FakeUnitOfWork(UnitOfWork):
     """One transaction over a `World`, counting how it ended."""
 
@@ -5480,6 +6103,10 @@ class FakeUnitOfWork(UnitOfWork):
     @property
     def reviews(self) -> ReviewRepository:
         return _Reviews(self._world)
+
+    @property
+    def write_requests(self) -> WriteRequestRepository:
+        return _WriteRequests(self._world)
 
     @property
     def situations(self) -> SituationRepository:
@@ -5534,6 +6161,18 @@ class FakeUnitOfWork(UnitOfWork):
     def entities(self) -> EntitiesRepository:
         """The relationship-intelligence entity plane over this `World`."""
         return _Entities(self._world)
+
+    @property
+    def relationship_memory_proposals(self) -> RelationshipMemoryProposalRepository:
+        """The producer's one insert over this `World` (`WP-RI-B-05`).
+
+        Composed unconditionally, for the reason `relationship_memory` below is:
+        the base class's own property raises, so a unit of work that did not
+        override it turns the producer handler into a crash rather than an
+        answer, and `ApplicationService` reads the plane switches to decide
+        whether to reach for it.
+        """
+        return _RelationshipMemoryProposals(self._world)
 
     @property
     def relationship_memory(self) -> RelationshipMemoryRepository:
@@ -5671,6 +6310,12 @@ class Scene:
     def __init__(self, world: World, root: Path) -> None:
         self.world = world
         self.principal = operator()
+        world.producer_origins[self.principal.principal_id] = ProducerOrigin(
+            principal_id=self.principal.principal_id,
+            principal_kind=self.principal.kind,
+            method="rule",
+            method_version="synthetic-rule-producer.1",
+        )
         self.source = world.add_source()
         self.provider: RecordingProvider = build_provider(root, self.source.source_id)
         children = {
@@ -5702,6 +6347,8 @@ def build_service(
     relationship_intelligence_enabled: bool = True,
     relationship_intelligence_writes_enabled: bool = True,
     relationship_memory_enabled: bool = True,
+    relationship_identity_correction_enabled: bool = True,
+    producer_origins: ProducerOriginRegistry | None = None,
 ) -> ApplicationService:
     """The service under test, with a fixed clock and in-memory repositories.
 
@@ -5728,7 +6375,7 @@ def build_service(
         # names its own service refuses.
         task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
         commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
-        # Enabled by the same default reasoning: the twenty-eight `entities.` names are
+        # Enabled by the same default reasoning: the thirty-one `entities.` names are
         # withheld from a build that has not turned the plane on, and a suite
         # that quantifies over `Capability` would be quantifying over names its
         # own service refuses. A test about the *withheld* build passes `False`
@@ -5737,7 +6384,7 @@ def build_service(
         relationship_intelligence_enabled=relationship_intelligence_enabled,
         # Enabled by the same default reasoning, and conjoined with the plane
         # switch for the reason the memory one below is: `ApplicationService`
-        # refuses the plane's eighteen writes unless *both* are on, and a
+        # refuses the plane's twenty-one writes unless *both* are on, and a
         # test that turns the plane off should not have to say so twice. A test
         # about the *read-only* build passes `False` explicitly and says so --
         # `tests/contract/test_entity_write_gate.py` is the one that does.
@@ -5746,7 +6393,7 @@ def build_service(
         ),
         # Enabled by the same default reasoning again, and requiring the switch
         # above rather than standing alone: `ApplicationService` refuses the
-        # eight `relationship_memory.` names unless *both* are on, because a
+        # nine `relationship_memory.` names unless *both* are on, because a
         # memory's subject is an Entity whose ownership the memory repository
         # proves by reading the entity partition. A build serving memories
         # without the plane that owns their subjects would be serving writes it
@@ -5754,6 +6401,34 @@ def build_service(
         # memory plane off with it and does not have to say so twice.
         relationship_memory_enabled=(
             relationship_intelligence_enabled and relationship_memory_enabled
+        ),
+        # Enabled by the same default reasoning, and conjoined with the write
+        # switch above it for the reason that one is conjoined with the plane:
+        # `Settings._check` refuses a process that turns this on without the
+        # gates below it, and a test that turns the plane or the writes off
+        # should not have to say so twice.
+        #
+        # **What "enabled" buys here is publication and not execution**, and the
+        # difference is worth stating rather than discovering. With this on,
+        # `capabilities.get` and the local tool list answer about
+        # `entities.merge.preview` and `entities.merge`; the separately gated
+        # exact `remote.operator` profile can publish them as well. Neither can be
+        # *executed* against this `World`: `_Entities` implements none of the
+        # sixteen identity-correction port methods, and a fake that
+        # approximated a governed merge would let a unit test prove something
+        # the server does not do. The merge is proved against a real server, in
+        # `tests/database/test_identity_correction_merge.py` and
+        # `tests/recovery/test_identity_correction_recovery.py`. A sweep that
+        # *invokes* every capability passes `False` here and says so.
+        relationship_identity_correction_enabled=(
+            relationship_intelligence_enabled
+            and relationship_intelligence_writes_enabled
+            and relationship_identity_correction_enabled
+        ),
+        producer_origins=(
+            ProducerOriginRegistry(world.producer_origins)
+            if producer_origins is None
+            else producer_origins
         ),
         gsqs_b0_ports=WorkflowPorts(
             session_factory=lambda rasters: DiskContentSession(rasters),

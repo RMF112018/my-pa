@@ -149,7 +149,7 @@ def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     assert len(list(script.get_heads())) == 1
     assert HEAD_REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(HEAD_REVISION).down_revision == PREVIOUS
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 71
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 77
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

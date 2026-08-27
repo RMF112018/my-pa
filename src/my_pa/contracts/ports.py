@@ -1,4 +1,4 @@
-"""The ports the ninety-eight capability use cases call, and nothing else.
+"""The ports the one hundred and two capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -47,14 +47,23 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
 from types import TracebackType
-from typing import Any
+from typing import Any, ClassVar
 
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.audit.events import AuditEvent
-from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS
+from my_pa.domain.capture.proposal import MAX_NORMALIZED_VALUE_CHARACTERS, ProposalState
 from my_pa.domain.capture.reveal import Reveal
-from my_pa.domain.capture.review import Disposition, ReviewCase, ReviewDecision
+from my_pa.domain.capture.review import (
+    REVIEW_REASON_LIMIT,
+    CorrectionPatch,
+    Disposition,
+    EntityProposalReviewCase,
+    EntityProposalReviewDecision,
+    ReviewCase,
+    ReviewDecision,
+    ReviewSubjectKind,
+)
 from my_pa.domain.capture.submission import CaptureKind, CaptureReceipt, CaptureTransport
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
@@ -109,15 +118,20 @@ from my_pa.domain.relationship.entity import (
 )
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.relationship.governance import (
+    DEFAULT_MUTATION_ACTOR_CLASS,
+    DEFAULT_MUTATION_AUTHORITY,
     ENTITY_CHANGE_REASON_LIMIT,
+    ActorClass,
     EntityFactEvidenceLink,
     EntityMergeRecord,
     EntityMutationEvent,
     EntityObservation,
     EntityProposal,
+    EntityProposalEvidenceLink,
     EntityProposalState,
     EntityResolutionDecision,
     EvidenceRole,
+    MutationAuthority,
     MutationRecordFamily,
     ObservationState,
 )
@@ -128,6 +142,12 @@ from my_pa.domain.relationship.identity import (
     ResolutionAction,
     UnresolvedMention,
 )
+from my_pa.domain.relationship.identity_correction import (
+    IdentityEffect,
+    IdentityEffectFamily,
+    IdentityOperation,
+    IdentityPreview,
+)
 from my_pa.domain.relationship.memory import (
     MemoryActorClass,
     MemoryAdmission,
@@ -136,8 +156,10 @@ from my_pa.domain.relationship.memory import (
     MemoryKind,
     MemoryLifecycle,
     MemoryOperation,
+    MemoryProposalEvidence,
     MemoryReceipt,
     RelationshipMemory,
+    RelationshipMemoryProposal,
     RelationshipMemoryReviewCase,
     RelationshipMemoryVersion,
 )
@@ -231,6 +253,7 @@ __all__ = [
     "OperationQueue",
     "PortError",
     "ProjectRepository",
+    "ProposalAdmissionConflictError",
     "PulseRepository",
     "RelationshipEventRepository",
     "RelationshipRepository",
@@ -249,6 +272,10 @@ __all__ = [
     "UnknownScopeError",
     "WorkerHealthRepository",
     "WorkerPlaneStatus",
+    "WriteRequestConflictError",
+    "WriteRequestEvidence",
+    "WriteRequestRepository",
+    "WriteRequestResult",
 ]
 
 
@@ -422,16 +449,61 @@ class InitialIdentifier:
             raise ValueError("an initial external identifier carries both of its forms")
 
 
+def _check_write_authority(authority: MutationAuthority, actor_class: ActorClass) -> None:
+    """The one rule the three write requests share about the pair they carry.
+
+    **The two halves are checked against each other rather than each against a
+    list**, because either alone is satisfiable by a value that makes the other
+    a lie. `review_accepted` says a review case was dispositioned and
+    `review_promotion` says the act was that disposition being carried out; a
+    row claiming the first under `user` would attribute a source's conclusion to
+    the person who merely accepted it, and a row claiming `review_promotion`
+    under `user_confirmed_assertion` would say the user asserted what a promotion
+    executed. `MutationAuthority.SYSTEM_DETERMINISTIC` is refused outright on
+    these three requests: it "may never, by itself, create or merge an identity"
+    by its own definition, and every operation these requests carry is either an
+    identity assertion or a fact about one.
+
+    Stated once and called from three `__post_init__`s rather than written three
+    times, on `_directed_digest`'s argument: two copies of a rule are two things
+    that can start disagreeing.
+    """
+    if not isinstance(authority, MutationAuthority):
+        raise ValueError("an entity write names a known mutation authority")
+    if not isinstance(actor_class, ActorClass):
+        raise ValueError("an entity write names a known actor class")
+    if authority is MutationAuthority.SYSTEM_DETERMINISTIC:
+        raise ValueError("a governed entity write is not system-deterministic")
+    if (authority is MutationAuthority.REVIEW_ACCEPTED) is not (
+        actor_class is ActorClass.REVIEW_PROMOTION
+    ):
+        raise ValueError("review-accepted authority is carried by a review promotion, and only it")
+
+
 @dataclass(frozen=True, slots=True)
 class EntityWriteRequest:
     """One governed change to the entity plane, already normalized and stamped.
 
     **Nothing a caller may not choose has a field it could arrive in.** There is
-    no `principal_id` a transport controls, no `authority`, no `actor_class`, no
-    `version` and no `superseded_by_entity_id`: the first is the authenticated
-    partition the application supplies, and the rest are the server's. A payload
-    naming one is refused by the command constructor before this record is
-    built, because the command has no such field either.
+    no `principal_id` a transport controls, no `version` and no
+    `superseded_by_entity_id`: the first is the authenticated partition the
+    application supplies, and the rest are the server's. A payload naming one is
+    refused by the command constructor before this record is built, because the
+    command has no such field either.
+
+    **`authority` and `actor_class` are fields, and `WP-RI-B-05` is why.** This
+    record carried neither until review promotion had to execute: the writers
+    stamped `user_confirmed_assertion` from a module constant, so a fact a
+    reviewer accepted from a source or a local model would have been recorded as
+    one the user asserted, which section 14 forbids in as many words. They are
+    still not caller-supplied and cannot become so -- the transport commands
+    have no such field, `FORBIDDEN_PAYLOAD_FIELDS` refuses both names inside a
+    proposal payload, and the only two constructors of this record are
+    `application.entity_authoring` and the promotion path in
+    `application.entity_governance`. What changed is that the *server* now has
+    two honest values to choose between instead of one, and `__post_init__`
+    keeps the pair consistent: `review_accepted` appears exactly with
+    `review_promotion`, so neither half can be stamped without the other.
 
     `entity_id` is `None` exactly on a create, where `minted_entity_id` carries
     the identifier the server issued instead. `expected_version` is required for
@@ -486,12 +558,18 @@ class EntityWriteRequest:
     #: Minted link identifiers, one per evidence reference and in the same
     #: order. Excluded from the digest with every other minted identifier.
     minted_evidence_link_ids: tuple[str, ...] = ()
+    #: What admitted this change, and under whose class it is recorded. The
+    #: defaults are the direct authoring path's, so every existing construction
+    #: means what it meant before this pair existed.
+    authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY
+    actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.correlation_id, IdKind.CORRELATION)
         validate_identifier(self.audit_id, IdKind.AUDIT)
         validate_identifier(self.event_id, IdKind.ENTITY_MUTATION_EVENT)
+        _check_write_authority(self.authority, self.actor_class)
         creating = self.operation is EntityWriteOperation.CREATE
         if creating is (self.entity_id is not None):
             raise ValueError("an entity creation names no entity; every other operation does")
@@ -759,11 +837,21 @@ class AssignmentWriteRequest:
     correlation_id: str
     audit_id: str
     server_received_at: datetime
+    #: What admitted this change, and under whose class it is recorded. See
+    #: `EntityWriteRequest` for why the pair is a field rather than a constant
+    #: at the writer, and `_check_write_authority` for the rule between them.
+    #: Deliberately outside `payload_digest`: the digest is over what a *caller*
+    #: supplied, and this pair is chosen by the server from which path is
+    #: executing, so including it would make an idempotency key mean something
+    #: different depending on who replayed it.
+    authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY
+    actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.correlation_id, IdKind.CORRELATION)
         validate_identifier(self.audit_id, IdKind.AUDIT)
+        _check_write_authority(self.authority, self.actor_class)
         creating = self.operation is DirectedWriteOperation.CREATE
         if creating is (self.assignment_id is not None):
             raise ValueError("an assignment creation names no assignment; the others do")
@@ -865,11 +953,16 @@ class RelationshipWriteRequest:
     correlation_id: str
     audit_id: str
     server_received_at: datetime
+    #: `AssignmentWriteRequest`'s pair, on its terms and outside the digest for
+    #: the same reason.
+    authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY
+    actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS
 
     def __post_init__(self) -> None:
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.correlation_id, IdKind.CORRELATION)
         validate_identifier(self.audit_id, IdKind.AUDIT)
+        _check_write_authority(self.authority, self.actor_class)
         creating = self.operation is DirectedWriteOperation.CREATE
         if creating is (self.relationship_id is not None):
             raise ValueError("an edge creation names no edge; the others do")
@@ -1337,10 +1430,183 @@ class EntitiesRepository(ABC):
         """One proposal in this Principal's partition, or `None`."""
 
     @abstractmethod
+    def proposal_target_version(
+        self,
+        principal_id: str,
+        family: MutationRecordFamily,
+        record_id: str,
+    ) -> int | None:
+        """The current version of the existing record a reprocess targets."""
+
+    @abstractmethod
     def proposals(
         self, principal_id: str, state: EntityProposalState | None = None
     ) -> list[EntityProposal]:
         """Proposals in this Principal's partition, optionally by state."""
+
+    def serialize_entity_proposal_review_scope(
+        self,
+        principal_id: str,
+        review_case_id: str,
+        *,
+        correction_patch: Mapping[str, str | bool] | None = None,
+    ) -> EntityProposal | None:
+        """Lock every Entity participant a proposal review could mutate.
+
+        The implementation performs its own optimistic read, acquires the
+        participant locks in stable order, then re-reads and validates the
+        proposal and any indirect child target before returning it.  A corrected
+        acceptance contributes its corrected payload references to the same
+        lock union, so promotion cannot acquire a new participant after the
+        proposal row or review ledger has been touched.
+
+        Non-abstract because external in-memory repositories execute serially;
+        SQL implementations must override it before composing Entity review.
+        """
+        proposal = next(
+            (row for row in self.proposals(principal_id) if row.review_case_id == review_case_id),
+            None,
+        )
+        return proposal
+
+    def entity_proposal_review_snapshot(
+        self, principal_id: str, review_case_id: str
+    ) -> tuple[int, str | None, bool] | None:
+        """Return a text-free, Principal-scoped case ledger snapshot.
+
+        The members are review version, latest disposition and whether the case
+        was ever escalated. Identity-correction planning binds this bounded
+        derived state so any ledger-only decision makes a preview stale without
+        exposing decision narrative.
+        """
+        return (
+            (0, None, False)
+            if any(
+                proposal.review_case_id == review_case_id
+                for proposal in self.proposals(principal_id)
+            )
+            else None
+        )
+
+    def proposal_by_dedupe(
+        self,
+        principal_id: str,
+        dedupe_sha256: str,
+        states: Iterable[EntityProposalState],
+    ) -> EntityProposal | None:
+        """The proposal this Principal already has under `dedupe_sha256` in `states`.
+
+        The read the open-equivalent unique index is already over. `propose` did
+        this as one `proposals(principal_id, state)` call per open-equivalent
+        state and compared the digests in Python, which is correct -- the partial
+        unique is the authority either way -- and is a scan of every open
+        proposal on every create.
+
+        `states` is a parameter rather than `OPEN_EQUIVALENT_PROPOSAL_STATES`
+        read here, because a port that named the set would make widening the
+        set a change to the port. The caller that owns the rule passes it.
+
+        Non-abstract with a `NotImplementedError` default, on the terms the
+        identity-correction methods below are: this port has implementations
+        outside this package's own repository.
+        """
+        raise NotImplementedError
+
+    def record_proposal_evidence_link(
+        self, principal_id: str, link: EntityProposalEvidenceLink
+    ) -> None:
+        """Bind one proposal to a single record it rests on.
+
+        The writer `knowledge.entity_proposal_evidence_links` was created
+        without. `EntityProposal.observation_ids` can say "these observations
+        were cited"; it cannot cite the capture span a user's own note came
+        from, cannot cite a knowledge record, and cannot say that one of the
+        records it lists argues *against* the proposal.
+
+        **Same-Principal is proved before the write on the half the schema
+        cannot prove.** The proposal and the observation carry composite
+        `(id, principal_id)` foreign keys; `capture_spans` carries no principal
+        partition, so a span is walked to the capture that owns it, exactly as
+        `entity_fact_evidence_links`' writer does. A span behind another
+        Principal's capture answers what an absent span answers.
+        """
+        raise NotImplementedError
+
+    def proposal_evidence_links(
+        self, principal_id: str, proposal_id: str
+    ) -> list[EntityProposalEvidenceLink]:
+        """Everything one proposal rests on, in the order it was cited."""
+        raise NotImplementedError
+
+    def merge_proposal_evidence_links(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        evidence: Iterable[EntityProposalEvidenceLink],
+    ) -> list[EntityProposalEvidenceLink]:
+        """Atomically append exact new evidence and return the stored set."""
+        raise NotImplementedError
+
+    def proposal_evidence_for(
+        self, principal_id: str, proposal_id: str
+    ) -> tuple[EntityProposalEvidenceLink, ...]:
+        """The immutable exact evidence set used by canonical promotion.
+
+        Kept as a promotion-facing read separate from the legacy list-shaped
+        method so callers cannot accidentally fall back to
+        ``EntityProposal.observation_ids``. Existing repositories get the exact
+        behavior through their ordered link read; persistence owners may
+        implement it directly when adding stronger atomicity guarantees.
+        """
+        return tuple(self.proposal_evidence_links(principal_id, proposal_id))
+
+    def record_proposal_promotion(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        record_family: MutationRecordFamily,
+        record_id: str,
+        record_version: int,
+    ) -> None:
+        """Name the canonical record an accepted proposal became.
+
+        Separate from `decide_proposal` because the two happen at different
+        moments and one of them can fail: the decision is claimed first, under
+        the guarded `UPDATE` that makes deciding a one-time act, and the record
+        it produced can only be named once the canonical service has returned a
+        receipt. A single call that carried both would have to be issued *after*
+        the write, which would leave the window in which a second reviewer could
+        decide the same proposal and promote it again.
+
+        Refuses a proposal that is not accepted and refuses one already carrying
+        a record, so this cannot become a way to re-point an acceptance at a
+        different canonical row.
+        """
+        raise NotImplementedError
+
+    def supersede_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        successor_proposal_id: str,
+        at: datetime,
+    ) -> bool:
+        """Retire one undecided proposal in favour of the successor that replaced it.
+
+        Section 13's `reprocess`: "creates successor proposal against current
+        evidence/method; predecessor remains historical/superseded". This writes
+        the predecessor half. `WP-RI-B-05` provides it and deliberately does not
+        provide `reprocess` -- the disposition, the successor's production and
+        the review case are the Review plane's, and a repository method that
+        also minted the successor would be that plane living here.
+
+        Returns whether a row moved. `False` means the proposal was already
+        decided or superseded, which is what makes a stale reprocess create
+        nothing rather than overwrite a decision.
+        """
+        raise NotImplementedError
 
     @abstractmethod
     def decide_proposal(self, principal_id: str, proposal: EntityProposal) -> None:
@@ -1361,12 +1627,19 @@ class EntitiesRepository(ABC):
 
     @abstractmethod
     def redirect_entity(
-        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
+        self,
+        principal_id: str,
+        merged_entity_id: str,
+        retained_entity_id: str,
+        *,
+        expected_version: int | None = None,
     ) -> None:
         """Point one entity at the entity it was merged into.
 
         Sets `status` to `merged_redirect` and `superseded_by_entity_id` to the
-        survivor.  The merged entity is not deleted: section 15.3 asks a merge to
+        survivor. Governed correction supplies ``expected_version`` and is
+        refused unless the row is still current at that version. The merged
+        entity is not deleted: section 15.3 asks a merge to
         preserve prior identifiers as lineage, and a row that still resolves as a
         `HISTORICAL_MATCH` is how that is done.
         """
@@ -1750,6 +2023,290 @@ class EntitiesRepository(ABC):
     def end_relationship(self, request: RelationshipWriteRequest) -> DirectedReceipt:
         """Move one directed edge to `ended`, on `end_assignment`'s terms."""
 
+    # --- governed identity correction (WP-RI-06) ----------------------------
+    #
+    # **These sixteen are declared with a default that raises rather than as
+    # `@abstractmethod`, and the reason is the one `UnitOfWork.continuity_read`
+    # and `UnitOfWork.worker_health` already state.** Identity correction is a
+    # bounded operator-only surface reached by `entities.merge.preview` and
+    # `entities.merge` alone. The older in-memory doubles implement the entity
+    # plane a resolver and a context card need and nothing else; making these
+    # abstract would make every one of them unconstructable in order to serve a
+    # path none of them reaches.
+    # The canonical PostgreSQL repository overrides every one of them, so the
+    # production composition is total, and a double that does not implement one
+    # fails loudly on the call rather than answering an empty result -- which is
+    # the difference between "this store does not serve merge" and "this merge
+    # found nothing to do".
+    #
+    # `principal_id` is the acting Principal on every one of them, on the terms
+    # this port's preamble states.
+
+    def assignments_scoped_by(
+        self, principal_id: str, scope_entity_id: str, *, limit: int | None = None
+    ) -> list[Assignment]:
+        """Assignments whose *scope* names one entity.
+
+        Separate from `assignments`, which reads the rows an entity *holds*. A
+        merge has to find both: an assignment of somebody else scoped to a
+        merged-away project is as materially affected as the project's own, and
+        a preview that read only the first would move an identity out from under
+        a row it never mentioned.
+        """
+        raise NotImplementedError
+
+    def relationships_scoped_by(
+        self, principal_id: str, scope_entity_id: str, *, limit: int | None = None
+    ) -> list[EntityRelationship]:
+        """Directed edges whose *scope* names one entity.
+
+        `relationships` reads `from` and `to`; `scope_entity_id` is the third
+        entity reference on the row and no existing read reaches it.
+        """
+        raise NotImplementedError
+
+    def resolution_decisions_naming(self, principal_id: str, entity_ids: frozenset[str]) -> int:
+        """How many resolution decisions name one of these entities.
+
+        **A count, not the rows, and that is a disclosure decision rather than a
+        convenience.** A merge preview reports what a merge would touch;
+        `entity_resolution_decisions` carries a reason a person wrote about why
+        one mention was or was not somebody, and the preview has no business
+        rendering those. What the operator needs is the fact that decisions
+        exist and that this merge leaves every one of them exactly as recorded.
+        """
+        raise NotImplementedError
+
+    def fact_evidence_links_naming(self, principal_id: str, entity_ids: frozenset[str]) -> int:
+        """How many evidence links name one of these entities directly.
+
+        A count for `resolution_decisions_naming`'s reason. These links are the
+        source-link family: they record which evidence supported which fact at
+        the moment it was recorded, and a merge does not rewrite them.
+        """
+        raise NotImplementedError
+
+    def serialize_identifier_entity_scopes(
+        self, principal_id: str, entity_ids: frozenset[str]
+    ) -> None:
+        """Hold participant-wide locks against Entity-reference mutations.
+
+        The compatibility name predates the wider protocol. PostgreSQL now uses
+        this same transaction key for Entity, alias, identifier, assignment,
+        relationship, observation, proposal, and Relationship Memory writers;
+        the separate claim-key lock remains identifier-specific. In-memory
+        repositories execute serially and need no implementation.
+        """
+        return None
+
+    def serialize_identifier_claim_keys(
+        self, principal_id: str, claims: frozenset[tuple[str, str]]
+    ) -> None:
+        """Hold transaction locks for every state of these normalized claims."""
+        return None
+
+    def reparent_entity_reference(
+        self,
+        principal_id: str,
+        *,
+        family: IdentityEffectFamily,
+        record_id: str,
+        from_entity_ids: frozenset[str],
+        to_entity_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Rewrite every reference this row makes to a merged-away entity.
+
+        One method over five families rather than one per family, and the shape
+        is what makes it correct rather than merely shorter. A directed edge can
+        name a merged-away entity in `from`, in `to` and in `scope` at once, and
+        the row's own CHECK forbids `from = to`: a per-column writer would need
+        three statements against a row whose intermediate states the server
+        refuses. This substitutes every reference in one `UPDATE`, so the row is
+        never momentarily illegal.
+
+        `from_entity_ids` is the whole merged-away set and not the single
+        identifier the caller happened to walk in on, for the same reason.
+
+        **The `WHERE` names the version and the references it expects to find.**
+        A row somebody else moved or revised between the preview's read and this
+        write matches nothing, and the method raises rather than reporting a
+        rewrite it did not perform -- which is the concurrency rule this plane
+        applies everywhere: no state-dependent write may silently
+        last-write-wins.
+
+        `expected_version` is the row's `version` for the four records that
+        carry one, and an observation's `resolution_version`. The first four are
+        advanced by one because their content changed; a rebinding does *not*
+        advance an observation's resolution version, because moving a mention to
+        the surviving identity is a consequence of a merge rather than a new
+        decision about what the mention referred to.
+
+        Admits `ALIAS`, `IDENTIFIER`, `ASSIGNMENT`, `RELATIONSHIP` and
+        `OBSERVATION`. `ENTITY` is refused: an entity's own identity is changed
+        by `redirect_entity`, and the other three families of
+        `IdentityEffectFamily` name records this method does not own.
+        """
+        raise NotImplementedError
+
+    def supersede_child_record(
+        self,
+        principal_id: str,
+        *,
+        family: IdentityEffectFamily,
+        record_id: str,
+        superseded_by_record_id: str | None,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Take one child row out of service, optionally naming what replaced it.
+
+        Two merge outcomes share one statement because they are one row change
+        with and without a successor. A row the survivor already held an
+        equivalent of is *coalesced*: it is superseded and
+        `superseded_by_record_id` names the counterpart, so a later inversion can
+        revive this row and know which row to stop treating as its replacement.
+        A directed edge whose two ends became the same entity is *superseded with
+        no successor*: it was folded into nothing, and the row's own
+        `from <> to` CHECK is why it cannot simply be reparented.
+
+        Nothing is deleted. Section 10.11's rule holds through a merge exactly as
+        it holds everywhere else, and a merged-away entity keeps every row it
+        ever held.
+
+        `expected_version` guards the write on `reparent_entity_reference`'s
+        terms and is advanced by one, because a row that left service changed.
+
+        Admits `ALIAS`, `IDENTIFIER`, `ASSIGNMENT` and `RELATIONSHIP` -- the four
+        families whose records carry a `state` and a successor column.
+        `OBSERVATION` is refused: an observation is rebound, never superseded,
+        because superseding it would change what a source said.
+        """
+        raise NotImplementedError
+
+    def invalidate_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        reason: str,
+        decided_by: str,
+        decided_at: datetime,
+    ) -> None:
+        """Close one open proposal whose subject an identity correction changed.
+
+        Separate from `decide_proposal`, which replaces a whole record a reviewer
+        decided and has no column for `invalidated_reason`. This is not a review
+        decision: nobody looked at the proposal and refused it, the identity it
+        named stopped existing under that name. The reason is recorded because
+        `EntityProposal` refuses an invalidated proposal that does not carry one.
+
+        **The undecided states are part of the predicate**, on
+        `decide_proposal`'s argument: a proposal a reviewer decided between the
+        preview and the apply is not this merge's to close, and a rowcount of
+        zero says so.
+
+        That predicate was the `proposed` literal until `WP-RI-B-05` began
+        writing `needs_review` for every kind a person has to look at, which
+        made it refuse exactly the proposals a merge most often has to close.
+        It reads `UNDECIDED_PROPOSAL_STATES` now -- the same tuple
+        `EntityProposal.is_open` returns, which is what the planner selects on,
+        so the plan and the statement cannot disagree about which proposals are
+        open. `DEFERRED` stays outside it: a deferral is a decision, and this
+        statement overwrites `decided_by`, so matching a deferred row would
+        replace the deferring reviewer with the merging operator.
+        """
+        raise NotImplementedError
+
+    def record_identity_preview(self, principal_id: str, preview: IdentityPreview) -> None:
+        """Persist one merge preview as the binding an apply is checked against.
+
+        Takes the whole record, so the fifteen-minute expiry, the bounded
+        merged-away set and all three digests have been through
+        `IdentityPreview.__post_init__` before a row exists.
+        """
+        raise NotImplementedError
+
+    def identity_preview(self, principal_id: str, preview_id: str) -> IdentityPreview | None:
+        """One preview in this Principal's partition, or `None`.
+
+        Foreign and absent are one answer, on this port's standing rule. A
+        preview names exact entity identifiers, and an error that distinguished
+        the two would let a caller enumerate another Principal's identities by
+        guessing preview identifiers.
+        """
+        raise NotImplementedError
+
+    def consume_identity_preview(self, principal_id: str, preview_id: str, *, at: datetime) -> bool:
+        """Claim one preview for exactly one operation, or answer `False`.
+
+        A guarded `UPDATE` with `consumed_at IS NULL` in the predicate, so two
+        applies racing on one preview settle at the database: one writes the
+        stamp and proceeds, the other matches no row and is refused. The claim
+        happens in the transaction that writes the operation, which is what makes
+        "a consumed preview cannot produce a materially different second
+        operation" a property of the schema rather than of call order.
+        """
+        raise NotImplementedError
+
+    def record_identity_operation(self, principal_id: str, operation: IdentityOperation) -> None:
+        """Open one identity operation before the work it records.
+
+        Written first for two reasons that are both structural.
+        `UNIQUE (principal_id, idempotency_key)` is what makes two concurrent
+        applies under one key serialise here rather than each perform a whole
+        merge and then discover the other; and the effect ledger's foreign key
+        means no effect can be stored until this row exists.
+        """
+        raise NotImplementedError
+
+    def complete_identity_operation(self, principal_id: str, operation: IdentityOperation) -> None:
+        """Settle one open operation at its outcome.
+
+        `state = 'in_progress'` is part of the predicate: an operation is settled
+        once, and a second settlement would overwrite the moment and the receipt
+        of the first.
+        """
+        raise NotImplementedError
+
+    def identity_operation_for_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> IdentityOperation | None:
+        """The operation this Principal's key is already bound to, or `None`.
+
+        Returns the record rather than a receipt, because the caller has to
+        compare `request_digest` itself: the same key carrying the same digest is
+        a retry and is answered with the first result, and the same key carrying
+        a different digest is a caller reusing a key for a different merge and is
+        refused. A lookup that decided that here would have to know what
+        "materially the same request" means, which is the application's question.
+        """
+        raise NotImplementedError
+
+    def record_identity_effects(
+        self, principal_id: str, effects: tuple[IdentityEffect, ...]
+    ) -> None:
+        """Append one operation's whole effect ledger.
+
+        The tuple rather than a row at a time, because the ledger is complete or
+        it is not evidence: `UNIQUE (operation_id, sequence)` and the append-only
+        trigger both assume the sequence arrives whole, and a writer that could
+        append one effect later could append it out of order.
+        """
+        raise NotImplementedError
+
+    def identity_effects(
+        self, principal_id: str, identity_operation_id: str
+    ) -> list[IdentityEffect]:
+        """One operation's effects, in sequence order.
+
+        Read back by an idempotent retry, which has to answer with the *prior*
+        result rather than with a fresh analysis of a world the first attempt
+        already changed.
+        """
+        raise NotImplementedError
+
 
 class PortError(Exception):
     """A failure an implementation of one of these ports may report.
@@ -1786,6 +2343,87 @@ class RepositoryFailureError(PortError):
     Separated from unavailability because telling a caller to retry a missing
     column would be a lie with a retry budget attached.
     """
+
+
+class WriteRequestConflictError(PortError):
+    """One server request identity was reused for materially different work."""
+
+
+class ProposalAdmissionConflictError(PortError):
+    """A concurrent producer admitted the same open Entity proposal first."""
+
+
+class ProposalReviewScopeConflictError(PortError):
+    """A proposal or indirect target changed while its participant lock waited."""
+
+
+class ProposalEvidenceConflictError(PortError):
+    """A proposal stopped being open while evidence append waited for its scope."""
+
+
+@dataclass(frozen=True, slots=True)
+class WriteRequestEvidence:
+    """One content-free evidence identity preserved with a proposal receipt."""
+
+    sequence: int
+    role: str
+    entity_observation_id: str | None = None
+    capture_span_id: str | None = None
+    knowledge_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class WriteRequestResult:
+    """The safe typed fields required to replay one logical write receipt.
+
+    No request body or Relationship Memory statement can fit this record. Fixed
+    columns preserve identifiers, closed state tokens, counts and digests
+    without creating a generic second response store.
+    """
+
+    result_family: str
+    result_id: str
+    result_secondary_id: str | None = None
+    result_version: int | None = None
+    result_state: str | None = None
+    result_subtype: str | None = None
+    result_requirement: str | None = None
+    result_disposition: str | None = None
+    result_assertion_id: str | None = None
+    result_classification: str | None = None
+    result_method: str | None = None
+    result_at: datetime | None = None
+    result_digest: str | None = None
+    result_count: int | None = None
+    result_created: bool | None = None
+    receipt_id: str | None = None
+    audit_id: str | None = None
+    evidence: tuple[WriteRequestEvidence, ...] = ()
+
+
+class WriteRequestRepository(ABC):
+    """Server-bound replay arbitration shared by proposals and Review."""
+
+    @abstractmethod
+    def reserve(
+        self,
+        principal_id: str,
+        capability: str,
+        request_id: str,
+        request_digest: str,
+    ) -> WriteRequestResult | None:
+        """Reserve this request or return its completed original result."""
+
+    @abstractmethod
+    def complete(
+        self,
+        principal_id: str,
+        capability: str,
+        request_id: str,
+        request_digest: str,
+        result: WriteRequestResult,
+    ) -> None:
+        """Bind the reserved identity to its stable logical receipt."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -2154,7 +2792,32 @@ class CaptureRepository(ABC):
 
 @dataclass(frozen=True, slots=True)
 class ReviewDecisionRequest:
-    """Everything one review transition needs inside a single transaction."""
+    """Everything one review transition needs inside a single transaction.
+
+    **Two shapes of correction, and they never travel together.**
+    `corrected_value` is the capture and GoodNotes shape and is unchanged: those
+    subjects have one normalized value, so a correction to one is one bounded
+    string. `correction_patch` is the typed-target shape: Entity and Relationship
+    Memory proposals ask for mutations with *named arguments*, so a correction
+    has to say which of them the reviewer changed, and it is routed and validated
+    against that target command's schema by the plane that owns the subject before
+    anything commits. Exactly one of the
+    two accompanies `correct_and_accept` and neither accompanies anything else --
+    which is what stops a widening of the Entity shape from quietly relaxing the
+    bound the capture plane has always had on its one string.
+
+    **`reason` explains a departure.** Section 13 states one for `reject`,
+    `defer`, `mark_unresolved`, `escalate` and `invalidate`; it states none for
+    `accept`, `correct_and_accept` or `reprocess`, and a reason attached to those
+    would attribute a refusal to a decision nobody refused. So a reason is
+    refused on the three and permitted on the five -- and *required* on
+    `invalidate` and `escalate`, the two this package makes reachable and that
+    therefore have no caller to regress. Requiring it on the other three would
+    refuse every capture and GoodNotes reviewer that exists today, so the planes
+    that can require it do: `EntityProposalReviewService` requires a reason on all
+    five, because it is new and nothing calls it yet. That asymmetry is a
+    fact about what already ships, and it is recorded here rather than hidden.
+    """
 
     review_case_id: str
     expected_review_version: int
@@ -2165,6 +2828,25 @@ class ReviewDecisionRequest:
     policy_version: str
     decided_at: datetime
     corrected_value: str | None = field(default=None, repr=False)
+    correction_patch: CorrectionPatch | None = field(default=None, repr=False)
+    reason: str | None = field(default=None, repr=False)
+
+    #: The dispositions section 13 gives a reason. `accept`,
+    #: `correct_and_accept` and `reprocess` are deliberately absent.
+    _REASONED: ClassVar[frozenset[Disposition]] = frozenset(
+        {
+            Disposition.REJECT,
+            Disposition.DEFER,
+            Disposition.MARK_UNRESOLVED,
+            Disposition.ESCALATE,
+            Disposition.INVALIDATE,
+        }
+    )
+
+    #: The dispositions that cannot be recorded without one.
+    _REQUIRES_REASON: ClassVar[frozenset[Disposition]] = frozenset(
+        {Disposition.ESCALATE, Disposition.INVALIDATE}
+    )
 
     def __post_init__(self) -> None:
         validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
@@ -2177,39 +2859,166 @@ class ReviewDecisionRequest:
             raise ValueError("the expected review version is a non-negative integer")
         if not isinstance(self.disposition, Disposition):
             raise ValueError("a review request names one disposition")
+        self._check_correction()
+        self._check_reason()
+
+    def _check_correction(self) -> None:
         corrected = self.disposition is Disposition.CORRECT_AND_ACCEPT
-        if corrected is not (self.corrected_value is not None):
-            raise ValueError("a correction value belongs only to correct-and-accept")
+        supplied = (self.corrected_value is not None) + (self.correction_patch is not None)
+        if corrected is not (supplied == 1):
+            raise ValueError("correct-and-accept carries exactly one correction, and only it")
+        if self.correction_patch is not None and not isinstance(
+            self.correction_patch, CorrectionPatch
+        ):
+            raise ValueError("a correction patch is a typed patch")
         if self.corrected_value is not None and (
             not self.corrected_value.strip()
             or len(self.corrected_value) > MAX_NORMALIZED_VALUE_CHARACTERS
         ):
             raise ValueError("a correction value is bounded and not blank")
 
+    def _check_reason(self) -> None:
+        if self.reason is None:
+            if self.disposition in self._REQUIRES_REASON:
+                raise ValueError("this disposition states the reason for it")
+            return
+        if self.disposition not in self._REASONED:
+            raise ValueError("a reason explains a departure, and this disposition is not one")
+        if not self.reason.strip() or len(self.reason) > REVIEW_REASON_LIMIT:
+            raise ValueError("a reason is bounded and not blank")
+
 
 class ReviewRepository(ABC):
-    """Review cases and the only port capable of canonical promotion."""
+    """Review cases, and the storage every decision on them needs.
+
+    This said "the only port capable of canonical promotion", and for three of
+    the four subject kinds on this surface it still is: a capture proposal, a
+    GoodNotes region and a Relationship Memory candidate are each promoted inside
+    `decide`, because everything their promotion does is SQL. An accepted Entity
+    proposal is not. It is executed through the canonical Phase A mutation
+    services, which live in the application layer, so the promotion `review.decide`
+    performs for that subject reaches `EntitiesRepository` and never this port --
+    which is what section 14's "do not duplicate mutation logic inside Review"
+    asks for, and is why the sentence had to change rather than be repeated.
+    """
 
     @abstractmethod
     def cases(
-        self, *, limit: int, principal_id: str
-    ) -> tuple[ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase, ...]:
+        self,
+        *,
+        limit: int,
+        principal_id: str,
+        subject_kind: ReviewSubjectKind | None = None,
+        state: ProposalState | None = None,
+        entity_id: str | None = None,
+        after_opened_at: datetime | None = None,
+        after_review_case_id: str | None = None,
+    ) -> tuple[
+        ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase | EntityProposalReviewCase,
+        ...,
+    ]:
         """One bounded page for this Principal, oldest case first.
 
         `principal_id` is the authenticated caller's identifier: the page is
         confined to that Principal's partition, and a case belonging to any
         other Principal is unreachable through this port (MU-AC-04).
 
-        Three variants and one surface. A capture proposal, a GoodNotes region
-        and a Relationship Memory candidate are decided by the same reviewer
-        through the same capability; the union is what keeps that one surface
-        from becoming three, and each variant carries only the subject facts its
-        own decision needs.
+        Four variants and one surface. A capture proposal, a GoodNotes region, a
+        Relationship Memory candidate and an Entity proposal are decided by the
+        same reviewer through the same capability; the union is what keeps that
+        one surface from becoming four, and each variant carries only the subject
+        facts its own decision needs.
+
+        **The three filters narrow one page; they do not open a second listing.**
+        `subject_kind` selects which planes are asked at all, `state` is the
+        shared `ProposalState` every variant already presents, and `entity_id`
+        selects the cases that are *about* one entity -- which only the two
+        entity-bearing variants can answer, so a filtered page contains only
+        those and a plane that cannot answer it contributes nothing rather than
+        contributing everything. Every filter is applied where the rows are, so a
+        narrowed page is still a full page of `limit` and not the remains of one.
+
+        `after_opened_at` and `after_review_case_id` are one decoded keyset
+        position and therefore either both present or both absent. The public
+        opaque cursor never crosses this port; authority and filter binding are
+        checked in the application layer before the position reaches storage.
         """
 
     @abstractmethod
-    def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
-        """Append a disposition; return `None` when evidence was invalidated."""
+    def decide(
+        self, request: ReviewDecisionRequest, *, has_operator_authority: bool = False
+    ) -> ReviewDecision | None:
+        """Append a disposition; authority is authenticated server context."""
+
+    # --- the Entity proposal plane's own case read and decision ledger -------
+    #
+    # Five methods rather than a `decide` branch, and the split is section 14's.
+    # The other three subject kinds are decided *inside* this port, because
+    # everything their decision does is SQL. An accepted Entity proposal is
+    # executed through the canonical Phase A mutation services, which live in
+    # the application layer and which infrastructure may not import -- so the
+    # ordering of a decision belongs to `EntityProposalReviewService` and what
+    # is left here is exactly the storage that service cannot reach any other
+    # way. Non-abstract with a `NotImplementedError` default, on the terms
+    # `EntitiesRepository` uses for the same reason: this port has
+    # implementations outside the package.
+
+    def entity_proposal_case(
+        self, principal_id: str, review_case_id: str
+    ) -> EntityProposalReviewCase | None:
+        """The Entity proposal case `review_case_id` names, or `None`.
+
+        `None` is also the answer for another Principal's case, which is what
+        makes it indistinguishable from an identifier that names nothing.
+        """
+        raise NotImplementedError
+
+    def entity_proposal_decisions(
+        self, principal_id: str, review_case_id: str
+    ) -> tuple[Disposition, ...]:
+        """Every decision already appended to this case, in sequence order."""
+        raise NotImplementedError
+
+    def record_entity_proposal_decision(
+        self, principal_id: str, decision: EntityProposalReviewDecision
+    ) -> None:
+        """Append one decision to an Entity proposal's case."""
+        raise NotImplementedError
+
+    def invalidate_entity_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        reason: str,
+        decided_by: str,
+        decided_at: datetime,
+    ) -> bool:
+        """Close an open proposal a reviewer invalidated, naming why, in one act.
+
+        Distinct from `EntitiesRepository.invalidate_proposal`, which is the
+        merge's writer and records no `decision_reason` because no reviewer
+        decided anything. `False` when the proposal was decided in flight.
+        """
+        raise NotImplementedError
+
+    def supersede_entity_proposal(
+        self, principal_id: str, proposal_id: str, *, at: datetime
+    ) -> bool:
+        """Take an open proposal out of the open set, naming no successor yet.
+
+        `False` when it was decided in flight: a stale reprocess creates nothing.
+        Two statements rather than one because the successor pointer's foreign
+        key cannot name a row that does not exist yet, and the successor cannot
+        be inserted while the predecessor is still open-equivalent.
+        """
+        raise NotImplementedError
+
+    def name_entity_proposal_successor(
+        self, principal_id: str, proposal_id: str, *, successor_proposal_id: str
+    ) -> None:
+        """Point a superseded proposal at the successor that replaced it."""
+        raise NotImplementedError
 
 
 class SourceRepository(ABC):
@@ -2705,6 +3514,11 @@ class UnitOfWork(ABC):
         """The review and promotion plane, inside this transaction."""
 
     @property
+    def write_requests(self) -> WriteRequestRepository:
+        """Server-bound proposal and Review replay ledger in this transaction."""
+        raise NotImplementedError
+
+    @property
     @abstractmethod
     def situations(self) -> SituationRepository:
         """The Situation plane, inside this transaction.
@@ -2900,6 +3714,23 @@ class UnitOfWork(ABC):
 
         `principal_id` remains a parameter on every method of the port and is
         the authenticated caller's partition, never a caller-supplied field.
+        """
+        raise NotImplementedError
+
+    @property
+    def relationship_memory_proposals(self) -> RelationshipMemoryProposalRepository:
+        """The producer's one insert on the memory plane, inside this transaction.
+
+        A property of its own beside `relationship_memory` rather than a method
+        on it, and the separation is what operator §12 rests on: the object
+        `relationship_memory.propose` is handed cannot reach
+        `relationship_memories`, so "a producer must not create active memory
+        directly" is a fact about the port rather than a branch a later writer
+        might add.
+
+        Non-abstract with a refusal, exactly as `relationship_memory` above is
+        and for the same reason: the narrow doubles in `tests/schema` and
+        `tests/concurrency` implement only the ports their subject needs.
         """
         raise NotImplementedError
 
@@ -3718,6 +4549,78 @@ class RelationshipMemoryRepository(ABC):
         list, because "there are none", "there are more" and "some are withheld"
         are different facts and a card that could not tell them apart would let a
         reader infer absence from a policy decision.
+        """
+
+    def subject_entity_ids(
+        self, entity_ids: frozenset[str], *, principal_id: str
+    ) -> frozenset[str]:
+        """Which of these entities a memory or a memory proposal is about (WP-RI-06).
+
+        **Entity identifiers out, never memory identifiers, and never a count per
+        entity.** Restricted memory must not be distinguishable through a merge
+        preview, and a count would be exactly that channel: an operator who could
+        see "three memories" for one identity and "none" for another would learn
+        what this plane holds without being permitted to read it. Existence per
+        *entity* is the only thing a merge needs, because the whole Relationship
+        Memory family is refused as unsupported when any row names a merged-away
+        entity -- `WP-RI-08` owns origin-subject redistribution and `WP-RI-06`'s
+        effect ledger has no family that could record what a merge did to a
+        memory.
+
+        **On this port and not on `EntitiesRepository`**, although the question is
+        asked by the entity plane and the answer is entity identifiers. Every
+        statement over a memory table belongs to the two modules
+        `tests/architecture/test_every_capability_reaching_a_memory_row_is_declared.py`
+        enumerates, and a read of `relationship_memories` issued from the entity
+        repository would make a third -- which is exactly the reach that guard
+        exists to make visible rather than convenient.
+
+        Declared with a default that raises rather than as `@abstractmethod`, on
+        the terms `UnitOfWork.continuity_read` states: the older doubles implement
+        the plane the memory capabilities need and this is reached by one
+        operator-only path none of them serves.
+        """
+        raise NotImplementedError
+
+
+class RelationshipMemoryProposalRepository(ABC):
+    """The producer's whole persistence surface on the memory plane: one insert.
+
+    **One method, and the count is the contract.** Operator §16 requires that a
+    source, rule or model worker never accept its own proposal, and this is where
+    that is structural rather than asserted: the port a producer's use case is
+    handed declares no `decide`, no `accept`, no `promote` and no memory write, so
+    a producer holding it has nothing to call. `RelationshipMemoryRepository` is a
+    different port reached by a different service, and promotion lives in the
+    Review path.
+
+    **Declared here rather than beside its use case, and that is a change from
+    the wave that wrote it.** `RelationshipMemoryProposalService` shipped against
+    an identical `Protocol` in `application/relationship_memory.py`, on the
+    `GoodNotesCorrectionRepository` precedent — a port whose only implementor and
+    only caller are one use case is a port the use case may own. That reasoning
+    held while nothing exposed it on the unit of work. It stops holding here:
+    `ApplicationService` reaches this through `UnitOfWork`, and a port a
+    dispatcher reaches has to be declared where `UnitOfWork` can name it, because
+    `contracts` may not import `application`. The application module now imports
+    this name so the service's own argument about it stays readable next to the
+    service.
+    """
+
+    @abstractmethod
+    def record_proposal(
+        self,
+        proposal: RelationshipMemoryProposal,
+        evidence: tuple[MemoryProposalEvidence, ...],
+    ) -> tuple[RelationshipMemoryProposal, int, bool]:
+        """Insert one candidate and the exact records it rests on, atomically.
+
+        Takes the whole domain records rather than their fields, so what reaches
+        storage has been through `RelationshipMemoryProposal.__post_init__` and
+        `MemoryProposalEvidence.__post_init__` — which is what refuses a candidate
+        naming an accepted memory, a model proposal with no model, or a
+        classification below its kind's floor. Returns the stored proposal,
+        complete evidence count, and whether this call created it.
         """
 
 

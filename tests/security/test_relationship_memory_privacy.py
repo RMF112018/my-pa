@@ -73,7 +73,11 @@ from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
-from my_pa.domain.relationship.memory import MemoryKind, statement_digest
+from my_pa.domain.relationship.memory import (
+    MemoryKind,
+    memory_proposal_dedupe_digest,
+    statement_digest,
+)
 from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -820,11 +824,12 @@ def _stage_sensitivity_proposal(runtime: _Runtime, classification: Classificatio
         connection.execute(
             text(
                 "INSERT INTO knowledge.relationship_memory_proposals ("
-                "memory_proposal_id, principal_id, subject_entity_id, proposed_kind, "
-                "proposed_statement, proposed_statement_sha256, state, method, "
+                "memory_proposal_id, principal_id, subject_entity_id, "
+                "expected_subject_version, proposed_kind, proposed_statement, "
+                "proposed_statement_sha256, dedupe_sha256, state, method, "
                 "method_version, classification, proposed_at) VALUES ("
-                ":proposal_id, :principal_id, :subject_entity_id, 'sensitivity', "
-                ":statement, :digest, 'proposed', 'deterministic', 'v1', "
+                ":proposal_id, :principal_id, :subject_entity_id, 1, 'sensitivity', "
+                ":statement, :digest, :dedupe, 'proposed', 'deterministic', 'v1', "
                 ":classification, now())"
             ),
             {
@@ -833,6 +838,13 @@ def _stage_sensitivity_proposal(runtime: _Runtime, classification: Classificatio
                 "subject_entity_id": NOOR,
                 "statement": FLOOR_PROBE,
                 "digest": statement_digest(FLOOR_PROBE),
+                "dedupe": memory_proposal_dedupe_digest(
+                    principal_id=PRINCIPAL,
+                    subject_entity_id=NOOR,
+                    proposed_kind=MemoryKind.SENSITIVITY,
+                    proposed_statement_sha256=statement_digest(FLOOR_PROBE),
+                    structured_value=None,
+                ),
                 "classification": classification.value,
             },
         )

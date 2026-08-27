@@ -116,7 +116,7 @@ from my_pa.domain.capture.proposal import (
     ProposalType,
     RiskClass,
 )
-from my_pa.domain.capture.review import Disposition
+from my_pa.domain.capture.review import REVIEW_REASON_LIMIT, Disposition
 from my_pa.domain.capture.span import (
     MAX_MAPPING_VERSION_CHARACTERS,
     OffsetBasis,
@@ -200,8 +200,11 @@ from my_pa.domain.relationship.entity import (
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.relationship.governance import (
     ENTITY_CHANGE_REASON_LIMIT,
+    OPEN_EQUIVALENT_PROPOSAL_STATES,
+    PROPOSAL_METHOD_VERSION_LIMIT,
     ActorClass,
     EntityProposalKind,
+    EntityProposalMethod,
     EntityProposalState,
     EvidenceRole,
     MutationAuthority,
@@ -212,6 +215,13 @@ from my_pa.domain.relationship.governance import (
     ResolutionDisposition,
 )
 from my_pa.domain.relationship.identity import ResolutionAction
+from my_pa.domain.relationship.identity_correction import (
+    MAX_MERGED_AWAY_ENTITIES,
+    IdentityEffectFamily,
+    IdentityEffectKind,
+    IdentityOperationState,
+    IdentityOperationType,
+)
 from my_pa.domain.relationship.memory import (
     MAX_CORRECTION_REASON_CHARACTERS,
     MAX_STATEMENT_CHARACTERS,
@@ -3434,12 +3444,163 @@ entity_observations = Table(
     Index("entity_observations_by_entity", "entity_id"),
 )
 
-#: WP-RI-06: one proposed mutation of the entity plane.
-#: `decided_by`/`decided_at` are NULL exactly while the proposal is open, and a
-#: CHECK says so: "nothing has decided this" is then a shape rather than a
-#: convention. `payload` is JSONB because a proposal is a request to call one of
-#: six repository writes and their argument shapes differ; the service that
-#: applies one is where the shape is checked.
+#: Server-bound replay arbitration for the two producer writes and canonical
+#: Review. It stores no request body and no generic response document: only the
+#: material digest and the fixed, content-free fields needed to reconstruct the
+#: original logical receipt. Reservation and completion live in the same unit
+#: of work as the governed write, so a failed mutation leaves no claimed key.
+relationship_write_requests = Table(
+    "relationship_write_requests",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("request_id", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("result_family", Text),
+    Column("result_id", Text),
+    Column("result_secondary_id", Text),
+    Column("result_version", Integer),
+    Column("result_state", Text),
+    Column("result_subtype", Text),
+    Column("result_requirement", Text),
+    Column("result_disposition", Text),
+    Column("result_assertion_id", Text),
+    Column("result_classification", Text),
+    Column("result_method", Text),
+    Column("result_at", DateTime(timezone=True)),
+    Column("result_digest", Text),
+    Column("result_count", Integer),
+    Column("result_created", Boolean),
+    Column("receipt_id", Text),
+    Column("audit_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("completed_at", DateTime(timezone=True)),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "capability",
+        "request_id",
+        name="one_relationship_write_request_identity",
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "length(trim(request_id)) BETWEEN 1 AND 200",
+        name="a_relationship_write_request_id_is_bounded",
+    ),
+    CheckConstraint(
+        "capability IN ('entities.proposals.create', 'relationship_memory.propose', "
+        "'review.decide')",
+        name="a_relationship_write_request_capability_is_replay_covered",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="a_relationship_write_request_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "result_digest IS NULL OR result_digest ~ '^[0-9a-f]{64}$'",
+        name="a_relationship_write_result_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "result_version IS NULL OR result_version >= 0",
+        name="a_relationship_write_result_version_is_not_negative",
+    ),
+    CheckConstraint(
+        "result_count IS NULL OR result_count >= 0",
+        name="a_relationship_write_result_count_is_not_negative",
+    ),
+    CheckConstraint(
+        "result_family IS NULL OR result_family IN "
+        "('entity_proposal', 'memory_proposal', 'review_decision', 'review_invalidated')",
+        name="a_relationship_write_result_family_is_known",
+    ),
+    CheckConstraint(
+        "(completed_at IS NULL) = (result_family IS NULL)",
+        name="a_relationship_write_request_is_completed_once",
+    ),
+    CheckConstraint(
+        "result_family IS NULL OR result_id IS NOT NULL",
+        name="a_completed_relationship_write_names_its_result",
+    ),
+    CheckConstraint(
+        "result_family <> 'review_decision' OR "
+        "(result_disposition IS NOT NULL AND result_version IS NOT NULL)",
+        name="a_replayed_review_decision_preserves_its_public_identity",
+    ),
+    CheckConstraint(
+        "result_family <> 'review_invalidated' OR "
+        "(result_state = 'invalidated' AND result_disposition IS NULL)",
+        name="a_replayed_invalidation_has_no_invented_decision",
+    ),
+    Index("relationship_write_requests_by_result", "principal_id", "result_family", "result_id"),
+)
+
+
+relationship_write_request_evidence = Table(
+    "relationship_write_request_evidence",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("capability", Text, nullable=False),
+    Column("request_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("entity_observation_id", Text),
+    Column("capture_span_id", Text),
+    Column("knowledge_id", Text),
+    PrimaryKeyConstraint(
+        "principal_id",
+        "capability",
+        "request_id",
+        "sequence",
+        name="one_evidence_position_per_relationship_write_request",
+    ),
+    ForeignKeyConstraint(
+        ["principal_id", "capability", "request_id"],
+        [
+            f"{SCHEMA}.relationship_write_requests.principal_id",
+            f"{SCHEMA}.relationship_write_requests.capability",
+            f"{SCHEMA}.relationship_write_requests.request_id",
+        ],
+        ondelete="CASCADE",
+        name="relationship_write_evidence_names_its_request",
+    ),
+    CheckConstraint("sequence >= 1", name="relationship_write_evidence_sequence_is_positive"),
+    CheckConstraint(
+        "role IN ('direct', 'supporting', 'counterevidence')",
+        name="relationship_write_evidence_role_is_known",
+    ),
+    CheckConstraint(
+        "num_nonnulls(entity_observation_id, capture_span_id, knowledge_id) = 1",
+        name="relationship_write_evidence_names_exactly_one_record",
+    ),
+)
+
+#: WP-RI-06, widened by WP-RI-B-05: one proposed mutation of the entity plane.
+#:
+#: `decided_by`/`decided_at` are NULL exactly while the proposal is undecided,
+#: and a CHECK says so: "nothing has decided this" is then a shape rather than a
+#: convention. Five states are decisions rather than two, because a deferral, an
+#: invalidation and a corrected acceptance are all a reviewer having made the
+#: call. `superseded` is deliberately not among them and carries `superseded_at`
+#: instead: a proposal a successor overtook was disposed of by nobody, and
+#: putting it in the decision columns would attach an actor to an event with
+#: none. `WP-RI-B-05` adds `superseded_by_proposal_id` beside it, so that the
+#: successor `review.decide`'s `reprocess` produces can be *named* rather than
+#: inferred from two rows carrying the same dedupe digest.
+#:
+#: `payload` is still JSONB and is no longer unstructured. WP-RI-06 stored
+#: caller-free string pairs and checked their shape where a proposal was
+#: applied; `entities.proposals.create` makes the payload a remote caller's
+#: mapping, so `EntityProposalPayload` checks the field set where the value is
+#: admitted. The column cannot express that -- a per-kind field set is not a
+#: CHECK -- which is why the constraints here cover the columns that *are*
+#: closed sets and the payload's own rule lives in the domain.
+#:
+#: **`(principal_id, dedupe_sha256)` is unique over the open-equivalent states
+#: only, and the partial predicate is the whole point.** A total unique would
+#: mean a proposal refused once could never be raised again on new evidence,
+#: which section 15.2 requires to be possible; no unique at all would let a
+#: producer put the same candidate in front of a reviewer on every run. The
+#: three states named are the ones nothing has finally disposed of, `deferred`
+#: among them -- otherwise re-filing would clear a deferral.
 entity_proposals = Table(
     "entity_proposals",
     METADATA,
@@ -3451,6 +3612,19 @@ entity_proposals = Table(
     Column("observation_ids", JSONB, nullable=False),
     Column("proposed_at", DateTime(timezone=True), nullable=False),
     Column("proposed_by", Text, nullable=False),
+    Column("method", Text, nullable=False),
+    Column("method_version", Text, nullable=False),
+    Column("dedupe_sha256", Text, nullable=False),
+    Column("model_id", Text),
+    Column("model_version", Text),
+    Column("expected_target_version", Integer),
+    Column("review_case_id", Text),
+    Column("accepted_record_type", Text),
+    Column("accepted_record_id", Text),
+    Column("accepted_record_version", Integer),
+    Column("invalidated_reason", Text),
+    Column("superseded_at", DateTime(timezone=True)),
+    Column("superseded_by_proposal_id", Text),
     Column("decided_by", Text),
     Column("decided_at", DateTime(timezone=True)),
     Column("decision_reason", Text),
@@ -3458,12 +3632,124 @@ entity_proposals = Table(
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _one_of("kind", EntityProposalKind, name="a_proposal_kind_is_known"),
     _one_of("state", EntityProposalState, name="a_proposal_state_is_known"),
+    _one_of("method", EntityProposalMethod, name="a_proposal_method_is_known"),
+    _one_of(
+        "accepted_record_type",
+        MutationRecordFamily,
+        name="an_accepted_proposal_record_family_is_known",
+    ),
+    _matches(
+        "dedupe_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_proposal_dedupe_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        f"length(method_version) BETWEEN 1 AND {PROPOSAL_METHOD_VERSION_LIMIT} "
+        f"AND (model_id IS NULL OR length(model_id) "
+        f"BETWEEN 1 AND {PROPOSAL_METHOD_VERSION_LIMIT}) "
+        f"AND (model_version IS NULL OR length(model_version) "
+        f"BETWEEN 1 AND {PROPOSAL_METHOD_VERSION_LIMIT})",
+        name="proposal_method_and_model_versions_are_bounded_tokens",
+    ),
     CheckConstraint(
         "length(trim(proposed_by)) > 0",
         name="a_proposal_names_what_proposed_it",
     ),
+    # The rule `relationship_memory_proposals` states about the same pair, and
+    # the reason is section 21.4's: a deterministic proposal naming a model
+    # claims a model ran, and a model proposal naming none is a model conclusion
+    # filed under no authority a reviewer could weigh.
     CheckConstraint(
-        "(state IN ('accepted', 'rejected')) = (decided_by IS NOT NULL)",
+        "(method = 'local_model') = (model_id IS NOT NULL)",
+        name="a_model_proposal_names_its_model",
+    ),
+    CheckConstraint(
+        "(model_id IS NULL) = (model_version IS NULL)",
+        name="a_named_proposal_model_states_its_version",
+    ),
+    CheckConstraint(
+        "kind NOT IN ('create_entity', 'update_entity', 'bind_identifier', "
+        "'retire_identifier', 'supersede_identifier', 'record_alias', "
+        "'retire_alias', 'supersede_alias', 'record_assignment', "
+        "'revise_assignment', 'end_assignment', 'record_relationship', "
+        "'revise_relationship', 'end_relationship', 'resolve_mention', "
+        "'merge_entities', 'split_identity') "
+        "OR (kind IN ('update_entity', 'retire_identifier', 'supersede_identifier', "
+        "'retire_alias', 'supersede_alias', 'revise_assignment', 'end_assignment', "
+        "'revise_relationship', 'end_relationship') AND expected_target_version >= 1) "
+        "OR (kind = 'resolve_mention' AND expected_target_version >= 0) "
+        "OR (kind IN ('create_entity', 'bind_identifier', 'record_alias', "
+        "'record_assignment', 'record_relationship', 'merge_entities', "
+        "'split_identity') AND expected_target_version IS NULL)",
+        name="a_proposal_expected_target_version_matches_kind",
+    ),
+    # One direction only. An accepted `merge_entities` proposal records reviewed
+    # intent and produces no canonical record -- identity mutation is a separate
+    # operator act -- so acceptance cannot imply a named record. A named record
+    # under any other state would be a promotion with no acceptance behind it.
+    CheckConstraint(
+        "accepted_record_id IS NULL OR state IN ('accepted', 'corrected_accepted')",
+        name="a_proposal_names_its_record_only_when_accepted",
+    ),
+    CheckConstraint(
+        "accepted_record_id IS NULL OR kind NOT IN ('merge_entities', 'split_identity')",
+        name="an_accepted_identity_correction_names_no_record",
+    ),
+    CheckConstraint(
+        "(accepted_record_type IS NULL) = (accepted_record_id IS NULL) "
+        "AND (accepted_record_id IS NULL) = (accepted_record_version IS NULL)",
+        name="an_accepted_proposal_record_is_named_in_full",
+    ),
+    CheckConstraint(
+        "accepted_record_version IS NULL OR accepted_record_version > 0",
+        name="an_accepted_proposal_record_version_is_positive",
+    ),
+    CheckConstraint(
+        "(state = 'invalidated') = (invalidated_reason IS NOT NULL)",
+        name="an_invalidated_proposal_records_why",
+    ),
+    CheckConstraint(
+        f"invalidated_reason IS NULL OR length(invalidated_reason) "
+        f"BETWEEN 1 AND {ENTITY_CHANGE_REASON_LIMIT}",
+        name="a_proposal_invalidation_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "(state = 'superseded') = (superseded_at IS NOT NULL)",
+        name="a_superseded_proposal_records_when",
+    ),
+    CheckConstraint(
+        "superseded_at IS NULL OR superseded_at >= proposed_at",
+        name="a_proposal_is_not_superseded_before_it_was_proposed",
+    ),
+    # One direction, like the accepted-record rule above. A successor pointer on
+    # a proposal still awaiting a decision would say it had been replaced while
+    # it was still live; a superseded proposal with nothing to point at is the
+    # ordinary case where whatever overtook it was not another proposal.
+    CheckConstraint(
+        "superseded_by_proposal_id IS NULL OR state = 'superseded'",
+        name="only_a_superseded_proposal_names_its_successor",
+    ),
+    CheckConstraint(
+        "superseded_by_proposal_id IS NULL OR superseded_by_proposal_id <> proposal_id",
+        name="a_proposal_is_not_its_own_successor",
+    ),
+    # The successor is partitioned too, and the composite reference is what
+    # proves it: a predecessor pointing into another Principal's partition would
+    # present that Principal's proposal as this one's replacement. The reference
+    # also makes the identifier's *shape* structural, which is why this column
+    # carries no `_is_identifier` CHECK of its own -- an existing
+    # `entity_proposals.proposal_id` has already been through one.
+    ForeignKeyConstraint(
+        ["superseded_by_proposal_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_proposals.proposal_id",
+            f"{SCHEMA}.entity_proposals.principal_id",
+        ],
+        name="a_proposal_is_superseded_within_its_principal",
+    ),
+    CheckConstraint(
+        "(state IN ('accepted', 'corrected_accepted', 'rejected', 'deferred', 'invalidated')) "
+        "= (decided_by IS NOT NULL)",
         name="a_proposal_is_decided_exactly_when_something_decided_it",
     ),
     CheckConstraint(
@@ -3481,8 +3767,217 @@ entity_proposals = Table(
         "principal_id",
         name="a_proposal_is_identified_within_its_principal",
     ),
+    UniqueConstraint(
+        "review_case_id",
+        "proposal_id",
+        "principal_id",
+        name="an_entity_proposal_review_case_is_bound_to_its_subject",
+    ),
     Index("entity_proposals_by_principal", "principal_id"),
     Index("entity_proposals_by_state", "principal_id", "state"),
+    # WP-RI-B-05: a review case names one proposal. `capture_review_cases`
+    # makes that structural with a `UNIQUE` on its own `proposal_id`; this plane
+    # keeps the case identifier on the proposal instead, so the same sentence is
+    # a unique index on the nullable column -- and nullable is the point, because
+    # a kind a configured threshold may accept opens no case at all and many
+    # such rows carry `NULL` together.
+    Index(
+        "a_review_case_names_one_entity_proposal",
+        "review_case_id",
+        unique=True,
+        postgresql_where=text("review_case_id IS NOT NULL"),
+    ),
+    Index(
+        "an_open_equivalent_proposal_is_raised_once",
+        "principal_id",
+        "dedupe_sha256",
+        unique=True,
+        postgresql_where=text(
+            "state IN ("
+            f"{_literals(frozenset(state.value for state in OPEN_EQUIVALENT_PROPOSAL_STATES))})"
+        ),
+    ),
+)
+
+#: WP-RI-B-05: one exact record a proposal rests on.
+#:
+#: The same one-evidence discipline `entity_fact_evidence_links` states for a
+#: canonical fact and `relationship_memory_proposal_evidence` states for a
+#: memory candidate, applied to the third subject that needed it. Three evidence
+#: kinds where `entity_proposals.observation_ids` holds one, and an
+#: `EvidenceRole` where it holds none -- a JSONB array of observation
+#: identifiers cannot cite the capture span a note came from, and cannot say
+#: that one of the records it lists argues *against* the proposal.
+#:
+#: **No `link_id`, and no `authority`.** This plane issues an identifier prefix
+#: when something has to point at the record: `entity_fact_evidence_links`
+#: carries one because `entity_resolution_decisions.evidence_link_ids` cites
+#: links by identifier, and nothing cites one of these. `(proposal_id, sequence)`
+#: is the ordering key `entity_resolution_decisions` already uses. `authority` is
+#: absent because a proposal has none -- that is what makes it a proposal --
+#: and the authority a promotion carries is recorded on the fact it produces.
+#:
+#: **Same-Principal is structural on one side and a stated residual on the
+#: other**, exactly as its sibling records: the proposal and the observation
+#: carry composite `(id, principal_id)` foreign keys, while `capture_spans` has
+#: no principal partition and an extraction inherits its Principal from its
+#: enrollment, so those two ownership checks belong to the writer.
+entity_proposal_evidence_links = Table(
+    "entity_proposal_evidence_links",
+    METADATA,
+    Column("proposal_id", Text, primary_key=True),
+    Column("sequence", Integer, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("role", Text, nullable=False),
+    Column("entity_observation_id", Text),
+    Column("capture_span_id", Text),
+    Column("knowledge_id", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("proposal_id", IdKind.ENTITY_PROPOSAL),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("role", EvidenceRole, name="a_proposal_evidence_role_is_known"),
+    CheckConstraint(
+        "sequence > 0",
+        name="proposal_evidence_is_numbered_from_one",
+    ),
+    CheckConstraint(
+        "(entity_observation_id IS NOT NULL)::int "
+        "+ (capture_span_id IS NOT NULL)::int "
+        "+ (knowledge_id IS NOT NULL)::int = 1",
+        name="proposal_evidence_names_exactly_one_record",
+    ),
+    ForeignKeyConstraint(
+        ["proposal_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_proposals.proposal_id",
+            f"{SCHEMA}.entity_proposals.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="proposal_evidence_names_a_proposal_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_observation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_observations.observation_id",
+            f"{SCHEMA}.entity_observations.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="proposal_evidence_cites_an_observation_of_its_principal",
+    ),
+    Index("entity_proposal_evidence_links_by_principal", "principal_id"),
+    Index("entity_proposal_evidence_links_by_observation", "entity_observation_id"),
+    Index(
+        "one_observation_role_per_entity_proposal",
+        "proposal_id",
+        "role",
+        "entity_observation_id",
+        unique=True,
+        postgresql_where=text("entity_observation_id IS NOT NULL"),
+    ),
+    Index(
+        "one_capture_span_role_per_entity_proposal",
+        "proposal_id",
+        "role",
+        "capture_span_id",
+        unique=True,
+        postgresql_where=text("capture_span_id IS NOT NULL"),
+    ),
+    Index(
+        "one_knowledge_role_per_entity_proposal",
+        "proposal_id",
+        "role",
+        "knowledge_id",
+        unique=True,
+        postgresql_where=text("knowledge_id IS NOT NULL"),
+    ),
+)
+
+#: WP-RI-B-05: what a reviewer decided about one Entity proposal, appended.
+#:
+#: **The plane's own decision ledger, which is what the canonical Review surface
+#: has asked of every subject kind that joined it.** `capture_review_decisions`
+#: is the capture plane's, `goodnotes_review_decisions` is GoodNotes',
+#: `relationship_memory_review_decisions` is the memory plane's, and this is the
+#: Entity plane's. One shared table would have needed a foreign key able to name
+#: four different proposal tables, which is the polymorphic reference this
+#: schema refuses everywhere else.
+#:
+#: **`review_version` is the count of rows here, and that is why the table
+#: exists rather than a column on the proposal.** Section 27 requires that a
+#: stale review version write nothing, and a version derived from "has this
+#: proposal been decided" can only ever be zero or one -- which would make
+#: `escalate` unrecordable, because an escalated case is one a reviewer has
+#: acted on *and* an operator has still to decide. Rows here are the only place
+#: that sequence is kept, and `UNIQUE (review_case_id, sequence)` is what makes
+#: two concurrent reviewers produce one decision rather than two.
+#:
+#: **`corrected_payload` is the reviewer's correction and never overwrites the
+#: proposal's own.** `entity_proposals.payload` is what a producer asserted and
+#: stays exactly that; a correction is the reviewer saying it was wrong, and
+#: writing it over the proposal would rewrite the record the decision was taken
+#: against and would leave `dedupe_sha256` -- a digest over the *proposed* kind
+#: and payload -- describing something nobody proposed. Promotion reads this
+#: column when it is present. It is the same argument
+#: `relationship_memory_review_decisions.corrected_statement` makes, about a
+#: subject whose correction has named fields instead of one string.
+#:
+#: **`reason` is required for exactly the dispositions section 13 gives one**,
+#: and refused for the three it does not, spelled out here rather than derived
+#: from the enum for the reason every closed-set CHECK in this file is spelled
+#: out: a constraint that read a Python set would change meaning the day the set
+#: did, against rows already stored under the old one.
+entity_proposal_review_decisions = Table(
+    "entity_proposal_review_decisions",
+    METADATA,
+    Column("decision_id", Text, primary_key=True),
+    Column("proposal_id", Text, nullable=False),
+    Column("review_case_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("disposition", Text, nullable=False),
+    Column("reason", Text),
+    Column("corrected_payload", JSONB),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("decided_at", DateTime(timezone=True), nullable=False),
+    _is_identifier("decision_id", IdKind.REVIEW_DECISION),
+    _is_identifier("proposal_id", IdKind.ENTITY_PROPOSAL),
+    _is_identifier("review_case_id", IdKind.REVIEW_CASE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of("disposition", Disposition, name="an_entity_review_disposition_is_known"),
+    CheckConstraint("sequence >= 1", name="an_entity_review_sequence_is_positive"),
+    CheckConstraint(
+        "(disposition = 'correct_and_accept') = (corrected_payload IS NOT NULL)",
+        name="an_entity_correction_matches_its_disposition",
+    ),
+    CheckConstraint(
+        "reason IS NULL OR disposition IN "
+        "('reject', 'defer', 'mark_unresolved', 'escalate', 'invalidate')",
+        name="an_entity_review_reason_explains_a_departure",
+    ),
+    CheckConstraint(
+        "disposition NOT IN ('escalate', 'invalidate') OR reason IS NOT NULL",
+        name="an_escalation_or_invalidation_states_why",
+    ),
+    CheckConstraint(
+        f"reason IS NULL OR length(trim(reason)) BETWEEN 1 AND {REVIEW_REASON_LIMIT}",
+        name="an_entity_review_reason_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["review_case_id", "proposal_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_proposals.review_case_id",
+            f"{SCHEMA}.entity_proposals.proposal_id",
+            f"{SCHEMA}.entity_proposals.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="an_entity_review_decision_names_its_proposals_own_case",
+    ),
+    UniqueConstraint("review_case_id", "sequence", name="one_entity_decision_per_review_sequence"),
+    Index("entity_proposal_review_decisions_by_case", "review_case_id", "sequence"),
+    Index("entity_proposal_review_decisions_by_principal", "principal_id"),
 )
 
 #: WP-RI-06: the lineage one accepted merge left behind (section 15.3).
@@ -7992,10 +8487,13 @@ relationship_memory_proposals = Table(
     Column("memory_proposal_id", Text, primary_key=True),
     Column("principal_id", Text, nullable=False),
     Column("subject_entity_id", Text, nullable=False),
+    Column("expected_subject_version", Integer, nullable=False),
     Column("proposed_kind", Text, nullable=False),
     Column("proposed_statement", Text, nullable=False),
     Column("proposed_statement_sha256", Text, nullable=False),
+    Column("dedupe_sha256", Text, nullable=False),
     Column("structured_value", JSONB),
+    Column("context_links", JSONB, nullable=False, server_default=text("'[]'::jsonb")),
     Column("state", Text, nullable=False),
     Column("method", Text, nullable=False),
     Column("method_version", Text, nullable=False),
@@ -8007,9 +8505,15 @@ relationship_memory_proposals = Table(
     Column("accepted_memory_id", Text),
     Column("accepted_memory_version_id", Text),
     Column("invalidated_reason", Text),
+    Column("superseded_at", DateTime(timezone=True)),
+    Column("superseded_by_memory_proposal_id", Text),
     _is_identifier("memory_proposal_id", IdKind.RELATIONSHIP_MEMORY_PROPOSAL),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("subject_entity_id", IdKind.ENTITY),
+    CheckConstraint(
+        "expected_subject_version >= 1",
+        name="a_memory_proposal_expected_subject_version_is_positive",
+    ),
     _one_of("proposed_kind", MemoryKind, name="a_memory_proposal_kind_is_known"),
     _one_of("state", MemoryProposalState, name="a_memory_proposal_state_is_known"),
     _one_of("method", MemoryProposalMethod, name="a_memory_proposal_method_is_known"),
@@ -8018,6 +8522,11 @@ relationship_memory_proposals = Table(
         "proposed_statement_sha256",
         DIGEST_PATTERN.pattern,
         name="a_memory_proposal_digest_is_a_sha256_digest",
+    ),
+    _matches(
+        "dedupe_sha256",
+        DIGEST_PATTERN.pattern,
+        name="a_memory_proposal_dedupe_is_a_sha256_digest",
     ),
     CheckConstraint(
         f"length(proposed_statement) BETWEEN 1 AND {MAX_STATEMENT_CHARACTERS}",
@@ -8049,11 +8558,50 @@ relationship_memory_proposals = Table(
         "(accepted_memory_id IS NULL) = (accepted_memory_version_id IS NULL)",
         name="an_accepted_memory_proposal_names_both_identities",
     ),
+    CheckConstraint(
+        "(state = 'superseded') = (superseded_at IS NOT NULL)",
+        name="a_superseded_memory_proposal_records_when",
+    ),
+    CheckConstraint(
+        "superseded_at IS NULL OR superseded_at >= proposed_at",
+        name="a_memory_proposal_is_not_superseded_before_it_was_proposed",
+    ),
+    CheckConstraint(
+        "superseded_by_memory_proposal_id IS NULL OR state = 'superseded'",
+        name="only_a_superseded_memory_proposal_names_its_successor",
+    ),
+    CheckConstraint(
+        "superseded_by_memory_proposal_id IS NULL "
+        "OR superseded_by_memory_proposal_id <> memory_proposal_id",
+        name="a_memory_proposal_is_not_its_own_successor",
+    ),
+    UniqueConstraint(
+        "memory_proposal_id",
+        "principal_id",
+        name="a_memory_proposal_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_memory_proposal_id", "principal_id"],
+        [
+            f"{SCHEMA}.relationship_memory_proposals.memory_proposal_id",
+            f"{SCHEMA}.relationship_memory_proposals.principal_id",
+        ],
+        name="a_memory_proposal_is_superseded_within_its_principal",
+        deferrable=True,
+        initially="DEFERRED",
+    ),
     Index(
         "relationship_memory_proposals_by_subject",
         "principal_id",
         "subject_entity_id",
         "state",
+    ),
+    Index(
+        "an_open_equivalent_memory_proposal_is_raised_once",
+        "principal_id",
+        "dedupe_sha256",
+        unique=True,
+        postgresql_where=text("state IN ('proposed', 'needs_review', 'deferred')"),
     ),
 )
 
@@ -8088,6 +8636,30 @@ relationship_memory_proposal_evidence = Table(
         name="memory_proposal_evidence_names_exactly_one_record",
     ),
     Index("relationship_memory_proposal_evidence_by_proposal", "memory_proposal_id"),
+    Index(
+        "one_observation_role_per_memory_proposal",
+        "memory_proposal_id",
+        "role",
+        "entity_observation_id",
+        unique=True,
+        postgresql_where=text("entity_observation_id IS NOT NULL"),
+    ),
+    Index(
+        "one_capture_span_role_per_memory_proposal",
+        "memory_proposal_id",
+        "role",
+        "capture_span_id",
+        unique=True,
+        postgresql_where=text("capture_span_id IS NOT NULL"),
+    ),
+    Index(
+        "one_knowledge_role_per_memory_proposal",
+        "memory_proposal_id",
+        "role",
+        "knowledge_id",
+        unique=True,
+        postgresql_where=text("knowledge_id IS NOT NULL"),
+    ),
 )
 
 #: One appended reviewer disposition of one memory proposal.
@@ -8102,6 +8674,35 @@ relationship_memory_proposal_evidence = Table(
 #: `sequence` is the optimistic-concurrency control a reviewer states as
 #: `expected_review_version`, and the unique `(review_case_id, sequence)` is what
 #: makes a stale second decision the server's refusal rather than the writer's.
+#:
+#: **`reason` is `WP-RI-B-05`'s, and it is what makes `invalidate` recordable on
+#: this plane.** The disposition means "the basis is moot" -- evidence retracted,
+#: subject archived, source superseded -- and it is not `reject`, which means "I
+#: looked and judged this wrong" and is the plane's negative-evidence signal.
+#: Spending `reject` on a moot candidate would record a refusal nobody made, so
+#: the two have to be tellable apart in the ledger; a state written with the
+#: reason dropped would say a basis failed without saying how, which is the shape
+#: `EntityProposal` refuses outright. The column, the bound and the two CHECK
+#: sentences are `entity_proposal_review_decisions`' -- the same act on the
+#: sibling plane, named the same way rather than a second convention -- with the
+#: `a_memory_` prefix this table's other constraints already carry.
+#:
+#: **Escalation is a sticky authority ceiling.** This plane records `escalate`
+#: with a bounded reason and derives the ceiling from the complete immutable
+#: decision chain. A later nonterminal decision therefore cannot erase the fact
+#: that accept/correct now requires operator authority. Invalidation carries the
+#: same reason requirement while retaining its distinct basis-moot semantics.
+#:
+#: **There is a second reason the text must be this table's own rather than the
+#: contract's, and it is worth naming because it is a live hazard.**
+#: `f1c6b904a2d7` builds this table by copying the *live* declaration through
+#: `to_metadata`, so whatever is written here is what an already-merged revision
+#: emits on a fresh database. Written as the contract's five, the emitted
+#: vocabulary would be exactly `application.commands._REASONED_DISPOSITIONS` --
+#: which `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py`
+#: reports, correctly, as a merged revision deriving a closed set from a Python
+#: set that can move under it. The four here are not any live set and nothing
+#: derives them. B7's migration requirement records both halves.
 relationship_memory_review_decisions = Table(
     "relationship_memory_review_decisions",
     METADATA,
@@ -8119,6 +8720,8 @@ relationship_memory_review_decisions = Table(
     Column("sequence", Integer, nullable=False),
     Column("disposition", Text, nullable=False),
     Column("corrected_statement", Text),
+    Column("corrected_payload", JSONB),
+    Column("reason", Text),
     Column("correlation_id", Text, nullable=False),
     Column("audit_id", Text, nullable=False),
     Column("decided_at", DateTime(timezone=True), nullable=False),
@@ -8136,10 +8739,379 @@ relationship_memory_review_decisions = Table(
         name="a_memory_correction_matches_its_disposition",
     ),
     CheckConstraint(
+        "(disposition = 'correct_and_accept') = (corrected_payload IS NOT NULL)",
+        name="a_memory_corrected_payload_matches_its_disposition",
+    ),
+    CheckConstraint(
         f"corrected_statement IS NULL OR length(corrected_statement) "
         f"BETWEEN 1 AND {MAX_STATEMENT_CHARACTERS}",
         name="a_memory_corrected_statement_is_bounded",
     ),
+    CheckConstraint(
+        "reason IS NULL OR disposition IN "
+        "('reject', 'defer', 'mark_unresolved', 'escalate', 'invalidate')",
+        name="a_memory_review_reason_explains_a_departure",
+    ),
+    CheckConstraint(
+        "disposition NOT IN ('escalate', 'invalidate') OR reason IS NOT NULL",
+        name="a_memory_escalation_or_invalidation_states_why",
+    ),
+    CheckConstraint(
+        f"reason IS NULL OR length(trim(reason)) BETWEEN 1 AND {REVIEW_REASON_LIMIT}",
+        name="a_memory_review_reason_is_bounded",
+    ),
     UniqueConstraint("review_case_id", "sequence", name="one_memory_decision_per_review_sequence"),
     Index("relationship_memory_review_decisions_by_case", "review_case_id", "sequence"),
+)
+
+#: WP-RI-06: the expiring binding between an operator's approval and the world
+#: state the preview read.
+#:
+#: **A preview is stored because an apply has to be checkable against it.** The
+#: operator prompt makes `entities.merge.preview` persist what it looked at:
+#: which entities, at which versions, and a digest over both. Computed and
+#: discarded, the preview would be a report, and an apply arriving with "the
+#: same" identities at different versions would be indistinguishable from a
+#: replay of the one an operator actually read. That is the reason this
+#: capability is classified a write despite reading nothing canonical: it leaves
+#: a durable control row behind, and a classification derived from anything other
+#: than persistence behaviour would say otherwise.
+#:
+#: **`expires_at` is a stored column with a CHECK against `created_at`, and the
+#: fifteen minutes are written out here rather than derived.** The domain refuses
+#: any other value in `IdentityPreview`; this refuses it at the server, so a
+#: preview whose lifetime was extended around the repository is not storable
+#: either. The interval is spelled as a literal for the reason every closed set
+#: in this file's revisions is spelled as a literal: a constraint that read a
+#: Python constant would change meaning the day the constant did, against rows
+#: already stored under the old one.
+#:
+#: **`consumed_at` is what stops one approval producing two merges.** The
+#: repository claims it in the same transaction that writes the operation, so
+#: two concurrent applies against one preview serialise on this row rather than
+#: on the entities.
+#:
+#: No column here can hold narrative text. The reason a merge is being performed
+#: belongs to the operation that performs it; a preview is a binding, and a
+#: bounded prose column on a record whose subject is somebody's identity is where
+#: source text eventually lands.
+entity_identity_previews = Table(
+    "entity_identity_previews",
+    METADATA,
+    Column("preview_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("operation_type", Text, nullable=False),
+    Column("survivor_entity_id", Text, nullable=False),
+    Column("expected_survivor_version", Integer, nullable=False),
+    #: `[{"entity_id": …, "expected_version": …}, …]`. JSONB rather than a child
+    #: table because the set is bounded at ten, is written once, is never queried
+    #: by element, and dies with the preview fifteen minutes later -- a child
+    #: table would add a second row lifetime for a value with no independent
+    #: identity. The CHECK below bounds the array; the *pairing* of an entity to
+    #: the version it was read at is proved by `IdentityPreview`, and that split
+    #: is stated rather than implied.
+    Column("merged_away", JSONB, nullable=False),
+    Column("preview_digest", Text, nullable=False),
+    Column("conflict_digest", Text, nullable=False),
+    Column("plan_digest", Text, nullable=False),
+    Column("created_by", Text, nullable=False),
+    Column("actor_class", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("expires_at", DateTime(timezone=True), nullable=False),
+    Column("consumed_at", DateTime(timezone=True)),
+    _is_identifier("preview_id", IdKind.ENTITY_IDENTITY_PREVIEW),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("survivor_entity_id", IdKind.ENTITY),
+    _one_of("operation_type", IdentityOperationType, name="a_preview_operation_type_is_known"),
+    _one_of("actor_class", ActorClass, name="a_preview_actor_class_is_known"),
+    CheckConstraint(
+        "preview_digest ~ '^[0-9a-f]{64}$'",
+        name="a_preview_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "conflict_digest ~ '^[0-9a-f]{64}$'",
+        name="a_preview_conflict_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "plan_digest ~ '^[0-9a-f]{64}$'",
+        name="a_preview_plan_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "length(trim(created_by)) > 0",
+        name="a_preview_names_who_asked_for_it",
+    ),
+    CheckConstraint(
+        "expected_survivor_version >= 1",
+        name="a_preview_expects_a_survivor_version_that_could_exist",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(merged_away) = 'array' AND jsonb_array_length(merged_away) "
+        f"BETWEEN 1 AND {MAX_MERGED_AWAY_ENTITIES}",
+        name="a_preview_merges_away_a_bounded_set_of_entities",
+    ),
+    CheckConstraint(
+        "expires_at = created_at + INTERVAL '15 minutes'",
+        name="a_preview_expires_fifteen_minutes_after_it_was_created",
+    ),
+    CheckConstraint(
+        "consumed_at IS NULL OR consumed_at >= created_at",
+        name="a_preview_is_not_consumed_before_it_was_created",
+    ),
+    # The target of the operation table's composite reference, and the reason it
+    # can be composite at all. Declared for the reason
+    # `an_entity_is_identified_within_its_principal` is declared: a single-column
+    # reference spans every Principal, so an operation owned by one Principal
+    # could consume another's preview and the only thing between that and a
+    # merge would be a predicate the writer has to remember.
+    UniqueConstraint(
+        "preview_id",
+        "principal_id",
+        name="a_preview_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["survivor_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="a_preview_retains_an_entity_of_its_principal",
+    ),
+    Index("entity_identity_previews_by_principal", "principal_id"),
+)
+
+#: WP-RI-06: one admitted identity correction -- what was asked, under what
+#: authority, and how it ended.
+#:
+#: **`preview_digest` and `idempotency_key` are both columns and they are not the
+#: same mechanism.** The digest is a claim about the world (these entities held
+#: these versions); the key is a claim about the request (this is the call I made
+#: before). The frozen contract states it as a rule -- the preview token is not
+#: the mutation idempotency key -- and this table is where the rule is structural:
+#: `UNIQUE (principal_id, idempotency_key)` makes a replay find its own earlier
+#: row, `request_digest` is what tells a replay from a caller reusing one key for
+#: a different merge, and neither is `preview_digest`.
+#:
+#: The unique carries no `capability` column, unlike
+#: `one_entity_mutation_per_key_and_capability`. That key is shared by the whole
+#: entity plane and one idempotency key replayed against a different capability is
+#: a different request; this table is written by exactly one capability, and a
+#: constant column inside a unique index is a column that only looks like it is
+#: deciding something.
+#:
+#: **This table is not append-only, and the difference from the effects beside it
+#: is deliberate.** An operation is written before the work and updated when the
+#: work ends, which is what makes a crashed apply legible as `in_progress`
+#: instead of indistinguishable from a completed merge. The effects it produced
+#: are the append-only half, because those are evidence rather than status.
+entity_identity_operations = Table(
+    "entity_identity_operations",
+    METADATA,
+    Column("identity_operation_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("operation_type", Text, nullable=False),
+    Column("survivor_entity_id", Text, nullable=False),
+    Column("merged_entity_ids", JSONB, nullable=False),
+    Column("preview_id", Text, nullable=False),
+    Column("preview_digest", Text, nullable=False),
+    Column("idempotency_key", Text, nullable=False),
+    Column("request_digest", Text, nullable=False),
+    Column("reason", Text),
+    Column("performed_by", Text, nullable=False),
+    Column("actor_class", Text, nullable=False),
+    Column("correlation_id", Text, nullable=False),
+    Column("audit_id", Text, nullable=False),
+    Column("receipt_id", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("started_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("completed_at", DateTime(timezone=True)),
+    _is_identifier("identity_operation_id", IdKind.ENTITY_IDENTITY_OPERATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _is_identifier("survivor_entity_id", IdKind.ENTITY),
+    _is_identifier("preview_id", IdKind.ENTITY_IDENTITY_PREVIEW),
+    _is_identifier("correlation_id", IdKind.CORRELATION),
+    _is_identifier("audit_id", IdKind.AUDIT),
+    _one_of("operation_type", IdentityOperationType, name="an_identity_operation_type_is_known"),
+    _one_of("state", IdentityOperationState, name="an_identity_operation_state_is_known"),
+    _one_of("actor_class", ActorClass, name="an_identity_operation_actor_class_is_known"),
+    CheckConstraint(
+        f"receipt_id ~ '^rcpt_{_IDENTIFIER_SUFFIX}$'",
+        name="an_identity_operation_receipt_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "preview_digest ~ '^[0-9a-f]{64}$'",
+        name="an_identity_operation_preview_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "request_digest ~ '^[0-9a-f]{64}$'",
+        name="an_identity_operation_request_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        f"length(idempotency_key) BETWEEN 1 AND {MAX_IDEMPOTENCY_KEY_CHARACTERS}",
+        name="an_identity_operation_idempotency_key_is_bounded",
+    ),
+    CheckConstraint(
+        "length(trim(performed_by)) > 0",
+        name="an_identity_operation_names_who_performed_it",
+    ),
+    CheckConstraint(
+        "reason IS NULL OR (length(trim(reason)) > 0 "
+        f"AND length(reason) <= {ENTITY_CHANGE_REASON_LIMIT})",
+        name="an_identity_operation_reason_is_bounded",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(merged_entity_ids) = 'array' AND "
+        "jsonb_array_length(merged_entity_ids) "
+        f"BETWEEN 1 AND {MAX_MERGED_AWAY_ENTITIES}",
+        name="an_identity_operation_merges_away_a_bounded_set_of_entities",
+    ),
+    # Finished exactly when it has stopped being in progress, stated as an
+    # equivalence so that "still running" is a shape a reader can query for
+    # rather than the absence of one -- and so a crashed apply cannot be read as
+    # a completed merge by a retry that only looked at the state.
+    CheckConstraint(
+        "(state <> 'in_progress') = (completed_at IS NOT NULL)",
+        name="an_identity_operation_is_finished_exactly_when_it_names_an_end",
+    ),
+    CheckConstraint(
+        "completed_at IS NULL OR completed_at >= started_at",
+        name="an_identity_operation_does_not_end_before_it_started",
+    ),
+    UniqueConstraint(
+        "principal_id",
+        "idempotency_key",
+        name="one_identity_operation_per_principal_and_key",
+    ),
+    UniqueConstraint("receipt_id", name="one_receipt_per_identity_operation"),
+    # The target of the effect ledger's composite reference, on the same argument
+    # the preview's identity unique carries: without it an effect row could name
+    # one Principal while the operation it records belongs to another.
+    UniqueConstraint(
+        "identity_operation_id",
+        "principal_id",
+        name="an_identity_operation_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["preview_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_identity_previews.preview_id",
+            f"{SCHEMA}.entity_identity_previews.principal_id",
+        ],
+        name="an_identity_operation_consumes_a_preview_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["survivor_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="an_identity_operation_retains_an_entity_of_its_principal",
+    ),
+    Index("entity_identity_operations_by_principal", "principal_id"),
+    Index("entity_identity_operations_by_preview", "preview_id"),
+)
+
+#: WP-RI-06: the append-only ledger a split has to invert a merge from.
+#:
+#: **Both states are NOT NULL, and that is the constraint the whole record is
+#: for.** The frozen contract calls recording only redirects "faking
+#: invertibility"; a row holding only the state after the change is the same
+#: failure one row at a time, because it says something happened and not what it
+#: was. No effect kind this plane declares creates or destroys a row -- every one
+#: of them transforms an existing one -- so requiring both states costs nothing
+#: that a real effect would have to omit, and admitting a nullable pair would let
+#: every other effect be written with half its evidence.
+#:
+#: **The digests are integrity, not identity.** `IdentityEffect` recomputes both
+#: on construction and refuses a row whose state and digest disagree, so a state
+#: edited without its digest cannot be read back into the domain. That is the
+#: half the trigger below cannot cover: the trigger refuses an `UPDATE` through
+#: the ordinary path, and the digest refuses a row that arrived some other way.
+#:
+#: **`UPDATE` and `DELETE` are refused by trigger, not by convention.** No CHECK
+#: can express "no UPDATE", and a rule enforced only by the current writer is a
+#: rule the next writer does not inherit. This is the mechanism `f1c6b904a2d7`
+#: installs on `relationship_memory_versions` and `2fe4e13fb449` reuses for
+#: `entity_mutation_events` and `entity_resolution_decisions`, reused here with
+#: its own function so that dropping one plane's trigger cannot silently disarm
+#: another's.
+#:
+#: `principal_id` is carried rather than reached through `identity_operation_id`.
+#: The composite foreign key makes an effect of one Principal's operation
+#: unstorable under another, and it keeps this table out of the unpartitioned
+#: residual `tests/architecture/test_user_owned_tables_are_partitioned.py`
+#: registers -- a ledger of what happened to somebody's identities is the last
+#: table that should be reachable by id alone.
+#:
+#: `record_id` carries no foreign key: it names a row in whichever of nine
+#: families `record_family` says, and no single reference can express that. What
+#: the server can still refuse is a value that is not an opaque identifier at
+#: all, which is `entity_mutation_events`' own rule for the same column shape.
+entity_identity_effects = Table(
+    "entity_identity_effects",
+    METADATA,
+    Column("effect_id", Text, primary_key=True),
+    Column("identity_operation_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("record_family", Text, nullable=False),
+    Column("record_id", Text, nullable=False),
+    Column("effect_kind", Text, nullable=False),
+    Column("before_state", JSONB, nullable=False),
+    Column("after_state", JSONB, nullable=False),
+    Column("before_sha256", Text, nullable=False),
+    Column("after_sha256", Text, nullable=False),
+    Column("recorded_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("effect_id", IdKind.ENTITY_IDENTITY_EFFECT),
+    _is_identifier("identity_operation_id", IdKind.ENTITY_IDENTITY_OPERATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("record_family", IdentityEffectFamily, name="an_identity_effect_family_is_known"),
+    _one_of("effect_kind", IdentityEffectKind, name="an_identity_effect_kind_is_known"),
+    CheckConstraint(
+        f"record_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="an_identity_effect_record_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint("sequence >= 1", name="an_identity_effect_sequence_is_positive"),
+    CheckConstraint(
+        "jsonb_typeof(before_state) = 'object' AND before_state <> '{}'::jsonb",
+        name="an_identity_effect_before_state_says_something",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(after_state) = 'object' AND after_state <> '{}'::jsonb",
+        name="an_identity_effect_after_state_says_something",
+    ),
+    CheckConstraint(
+        "before_state <> after_state",
+        name="an_identity_effect_records_a_change",
+    ),
+    CheckConstraint(
+        "before_sha256 ~ '^[0-9a-f]{64}$'",
+        name="an_identity_effect_before_digest_is_a_sha256_digest",
+    ),
+    CheckConstraint(
+        "after_sha256 ~ '^[0-9a-f]{64}$'",
+        name="an_identity_effect_after_digest_is_a_sha256_digest",
+    ),
+    UniqueConstraint(
+        "identity_operation_id",
+        "sequence",
+        name="one_identity_effect_per_operation_and_sequence",
+    ),
+    # One effect per record per operation. Two rows about the same record would
+    # be a merge that transformed it twice, and the ledger could not say which
+    # state a split should restore -- which is the completeness the effect ledger
+    # exists to have. `sequence_effects` refuses the same pair before it numbers
+    # anything; this refuses it at the server.
+    UniqueConstraint(
+        "identity_operation_id",
+        "record_family",
+        "record_id",
+        name="one_identity_effect_per_operation_and_record",
+    ),
+    ForeignKeyConstraint(
+        ["identity_operation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_identity_operations.identity_operation_id",
+            f"{SCHEMA}.entity_identity_operations.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="an_identity_effect_records_an_operation_of_its_principal",
+    ),
+    Index("entity_identity_effects_by_principal", "principal_id"),
+    Index("entity_identity_effects_by_operation", "identity_operation_id", "sequence"),
 )

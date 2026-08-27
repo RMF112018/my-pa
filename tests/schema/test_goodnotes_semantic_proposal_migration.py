@@ -71,8 +71,15 @@ LIFECYCLE_REVISION: Final = "2fe4e13fb449"
 #: naming both keeps the chain assertion below a statement about the order
 #: rather than about whichever revision happens to be last.
 PHASE_A_REVISION: Final = "823e23b6cc63"
-GSQS_REVISION: Final = "d8f3a1c6e942"
-HEAD_REVISION: Final = GSQS_REVISION
+#: Phase B's vocabulary revision, then `d8f3a1c6e942` admits `gsqs.step`.
+#: Naming both keeps the chain assertion a statement about order rather than
+#: about whichever revision happens to be last.
+PHASE_B_REVISION: Final = "b64e29a0f7c1"
+PHASE_B_HEAD: Final = "3d07af4dc513"
+GSQS_REVISION: Final = "c4b0a1d9e827"
+PHASE_B_START: Final = "c7a1f04b9e63"
+GSQS_STEP_REVISION: Final = "d8f3a1c6e942"
+HEAD_REVISION: Final = GSQS_STEP_REVISION
 PREVIOUS: Final = "c9e2b6a4d813"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_d7e1a4c8b926_admit_goodnotes_work_and_propose.py"
@@ -202,9 +209,13 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(WORK_REVISION).down_revision == INTELLIGENCE_REVISION
     assert script.get_revision(MEMORY_REVISION).down_revision == WORK_REVISION
     assert script.get_revision(PHASE_A_REVISION).down_revision == LIFECYCLE_REVISION
-    assert script.get_revision("c4b0a1d9e827").down_revision == PHASE_A_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == "c4b0a1d9e827"
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 71
+    assert script.get_revision(GSQS_REVISION).down_revision == PHASE_A_REVISION
+    assert script.get_revision(PHASE_B_START).down_revision == GSQS_REVISION
+    assert script.get_revision(PHASE_B_REVISION).down_revision == "a1f7d3c85e40"
+    assert script.get_revision(PHASE_B_HEAD).down_revision == PHASE_B_REVISION
+    assert script.get_revision(HEAD_REVISION).down_revision == PHASE_B_HEAD
+    assert script.get_heads() == [HEAD_REVISION]
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 77
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

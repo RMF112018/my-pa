@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the ninety-eight capabilities.
+the one hundred and two capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -171,6 +171,7 @@ from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.apple_machine import AppleBridgeIdentity, AppleMachineControl
 from my_pa.application.goodnotes_gsqs_b0_workflow import WorkflowPorts
 from my_pa.application.native_sources import NativeSourceController
+from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
 from my_pa.bootstrap.settings import AuthMode, Settings
@@ -253,6 +254,29 @@ def local_principal() -> Principal:
         principal_id=capture_principal_id(LOCAL_OPERATOR_UUID),
         kind=PrincipalKind.OPERATOR,
         authenticated=True,
+    )
+
+
+def relationship_producer_origins(principal: Principal | None) -> ProducerOriginRegistry:
+    """Trusted producer registration for this process composition.
+
+    Local-operator mode has one durable authenticated identity and registers it
+    as the gateway's rule producer. Entra mode has no single process Principal;
+    until trusted producer identities are configured, the empty registry makes
+    the application withhold producer capabilities instead of publishing an
+    unusable surface.
+    """
+    if principal is None:
+        return ProducerOriginRegistry()
+    return ProducerOriginRegistry(
+        {
+            principal.principal_id: ProducerOrigin(
+                principal_id=principal.principal_id,
+                principal_kind=principal.kind,
+                method="rule",
+                method_version="gateway.relationship-producer.1",
+            )
+        }
     )
 
 
@@ -578,6 +602,18 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             work_engine,
             audit=audit,
             relationship_memory_enabled=relationship_memory_composed,
+            # The Entity half of the Review surface, and it is the same one
+            # switch `ApplicationService` is given below rather than a
+            # conjunction: an Entity proposal's subject is an entity of this
+            # plane and nothing else, so the plane's own flag is the whole
+            # composition. Until `WP-RI-B-07` this argument was not passed at
+            # all, so `_Reviews` defaulted closed and `review.list` returned no
+            # Entity case in any real build however the flag was set — a silent
+            # failure rather than a loud one, which is why
+            # `tests/contract/test_review_capabilities.py` now proves the wiring
+            # end to end through `build_gateway_runtime` instead of by reading
+            # this line.
+            relationship_intelligence_enabled=settings.relationship_intelligence_enabled,
         )
 
     def task_management_unit_of_work() -> SqlAlchemyTaskManagementUnitOfWork:
@@ -588,6 +624,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
 
     entra = settings.auth_mode is AuthMode.ENTRA
     principal = None if entra else local_principal()
+    producer_origins = relationship_producer_origins(principal)
 
     class _NoRemoteHost:
         def __getattr__(self, name: str) -> Any:  # noqa: ANN401 - refusing protocol sentinel
@@ -620,6 +657,10 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
                 settings.relationship_intelligence_writes_enabled
             ),
             relationship_memory_enabled=settings.relationship_memory_enabled,
+            relationship_identity_correction_enabled=(
+                settings.relationship_identity_correction_enabled
+            ),
+            producer_origins=producer_origins,
             gsqs_b0_ports=WorkflowPorts(),
         ),
         principal=principal,

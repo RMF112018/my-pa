@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes ninety-eight capability names and none of them
+  ends: the transport routes one hundred and two capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -214,6 +214,33 @@ def document(
     }
 
 
+def _service(marked: Scene) -> ApplicationService:
+    """The service every wire in this file is built over.
+
+    Composed **without** the governed merge, and the reason is the same one
+    `tests/contract/test_transport_parity.py` records: `_Entities` implements none
+    of the sixteen identity-correction port methods, so a build that composed the
+    plane would answer `internal_error` for the merge pair and this file's
+    all-succeed sweeps would be measuring a crash. The two are still driven --
+    every negative sweep here sends them and reads the refusal -- and what they
+    are exempted from is the *positive* sweep, which asserts a successful answer.
+    The merge itself is proved against a real server in `tests/database` and
+    `tests/recovery`.
+    """
+    return build_service(
+        marked.world,
+        marked.providers,
+        relationship_identity_correction_enabled=False,
+    )
+
+
+#: The two this file drives for refusals and not for answers, because the harness
+#: composes no governed merge.
+UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
+    {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
+)
+
+
 @contextmanager
 def wire_for(service: ApplicationService, principal: Principal) -> Iterator[Wire]:
     with serve(create_http_app(service, principal=principal)) as client:
@@ -233,7 +260,7 @@ def capture_uvicorn(caplog: pytest.LogCaptureFixture) -> Iterator[None]:
 
 @pytest.fixture
 def wire(marked: Scene) -> Iterator[Wire]:
-    with wire_for(build_service(marked.world, marked.providers), marked.principal) as client:
+    with wire_for(_service(marked), marked.principal) as client:
         yield client
 
 
@@ -792,6 +819,43 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "statement": MARKER_CONTENT,
             "idempotency_key": "wire-memory-create-0001",
         },
+        # Phase B's four. The producer statement carries the marker for the
+        # reason every other statement here does: a candidate memory is text a
+        # rule wrote about a person, and this file's whole job is to prove it
+        # does not come back out through a refusal.
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: {
+            "entity_id": person.entity_id,
+            "expected_entity_version": person.version,
+            "statement": MARKER_CONTENT,
+            "evidence": [{"role": "direct", "entity_observation_id": staged_mention(marked)}],
+        },
+        Capability.ENTITIES_PROPOSALS_CREATE: {
+            "kind": "record_alias",
+            "payload": {
+                "entity_id": person.entity_id,
+                "alias_type": "initials",
+                "display_value": "PP",
+            },
+            "evidence": [
+                {
+                    "role": "supporting",
+                    "entity_observation_id": staged_mention(marked),
+                }
+            ],
+        },
+        Capability.ENTITIES_MERGE_PREVIEW: {
+            "survivor_entity_id": person.entity_id,
+            "expected_survivor_version": person.version,
+            "merged_away": [
+                {"entity_id": organization.entity_id, "expected_version": organization.version}
+            ],
+            "reason": MARKER_CONTENT,
+        },
+        Capability.ENTITIES_MERGE: {
+            "preview_id": "eipv_wirewire01wirewire01",
+            "preview_digest": "0" * 64,
+            "reason": MARKER_CONTENT,
+        },
         Capability.RELATIONSHIP_MEMORY_GET: {"memory_id": read_memory},
         Capability.RELATIONSHIP_MEMORY_LIST: {"entity_id": person.entity_id},
         Capability.RELATIONSHIP_MEMORY_SEARCH: {"query": MARKER_QUERY},
@@ -1162,6 +1226,17 @@ SCOPED_CAPABILITIES = [
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
+        # Phase B's four (`WP-RI-B-05`, `WP-RI-B-06`) join them for the same
+        # reason: a proposal names a mutation, a candidate memory names its
+        # subject and a merge names two identities and a preview, and none of
+        # those is a `src_…` or an `enr_…`. All four are in
+        # `domain.policy.decision._SCOPELESS`, and leaving them in would make this
+        # rule assert that a stranger is denied a scope neither the request nor
+        # the plane has.
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 ]
 
@@ -1358,6 +1433,23 @@ ENTITY_DIRECTED_EXEMPTION = frozenset(
 )
 
 
+#: The Phase B exemption (`WP-RI-B-05`), and it is one name.
+#: `entities.proposals.create` is the only one of Phase B's four the substring
+#: proxy refuses, and it is refused for the reason `capture.create`,
+#: `documents.create`, `relationship_memory.create`, `entities.create` and the two
+#: directed `create` names are: what it writes is a *product-owned* record under
+#: `ADR-003` -- a request, filed in this Principal's own partition, for a change a
+#: reviewer may or may not make -- and writing one mutates no source. Its rows
+#: carry no `source_id`, and the plane reaches no `SourceProvider` at all.
+#:
+#: The other three pass the name check unaided, which is the check working rather
+#: than an omission: `relationship_memory.propose`, `entities.merge.preview` and
+#: `entities.merge` name what they do without claiming a mutation of anything
+#: outside this product, and a future `entities.proposals.delete` is still caught
+#: here.
+PHASE_B_PROPOSAL_EXEMPTION = frozenset({Capability.ENTITIES_PROPOSALS_CREATE})
+
+
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
 
@@ -1396,6 +1488,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | RELATIONSHIP_MEMORY_EXEMPTION
         | ENTITY_AUTHORING_EXEMPTION
         | ENTITY_DIRECTED_EXEMPTION
+        | PHASE_B_PROPOSAL_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)
@@ -1442,7 +1535,11 @@ def test_no_capability_over_the_wire_calls_anything_but_a_read(
     """
     record = staged_record(marked)
     marked.world.searches[marked.enrollment.enrollment_id] = staged_search(marked)
-    payloads = payloads_for(marked, record)
+    payloads = {
+        capability: payload
+        for capability, payload in payloads_for(marked, record).items()
+        if capability not in UNCOMPOSED_HERE
+    }
     replies = [
         wire.send(
             capability.value,
@@ -1452,6 +1549,16 @@ def test_no_capability_over_the_wire_calls_anything_but_a_read(
     ]
     expected = [200 for _capability in payloads]
     assert [reply.status for reply in replies] == expected
+    # And the two this harness does not compose still answer, and still answer
+    # cleanly: a refusal is a rendered envelope and this file's claim is about
+    # what a rendering discloses, not about whether the request succeeded.
+    for capability in sorted(UNCOMPOSED_HERE, key=lambda item: item.value):
+        refused = wire.send(
+            capability.value,
+            document(capability, marked.principal, payloads_for(marked, record)[capability]),
+        )
+        assert refused.status == 501, refused.body
+        assert_clean(refused.rendered(), marked_root, "an uncomposed capability")
     assert set(marked.provider.calls) <= {"list_children", "metadata", "fetch"}
     assert marked.provider.calls, "no capability touched the provider at all"
     for reply in replies:
@@ -1614,6 +1721,11 @@ def test_no_header_of_any_answer_names_anything(
     record = staged_record(marked)
     marked.world.searches[marked.enrollment.enrollment_id] = staged_search(marked)
     for capability, payload in payloads_for(marked, record).items():
+        if capability in UNCOMPOSED_HERE:
+            # A refusal's headers are scanned by the sweep above, where the
+            # `501` is asserted rather than assumed. Scanning them here would
+            # break the non-vacuity control this test's docstring rests on.
+            continue
         reply = wire.send(capability.value, document(capability, marked.principal, payload))
         assert reply.status == 200, f"{capability.value} answered {reply.status}"
         rendered = " ".join(f"{name}: {value}" for name, value in reply.headers.items())
@@ -1638,14 +1750,21 @@ def test_a_running_gateway_writes_nothing_sensitive_to_a_log(
     with (
         caplog.at_level(logging.DEBUG),
         capture_uvicorn(caplog),
-        wire_for(build_service(marked.world, marked.providers), marked.principal) as client,
+        wire_for(_service(marked), marked.principal) as client,
     ):
         for capability, payload in payloads_for(marked, record).items():
             answer = client.send(capability.value, document(capability, marked.principal, payload))
             # The control for the scan below. "Nothing sensitive is in the log"
             # is satisfied for free by requests that never ran, and by a log
             # capture that captured nothing. Both are asserted against.
-            assert answer.status == 200, f"{capability.value} answered {answer.status}"
+            #
+            # The two this harness does not compose answer `501` rather than
+            # `200`, and they are still sent: a refusal is logged too, and the
+            # reason it is *worth* sending is that its request carried the marker
+            # in a `reason` field. What the control has to exclude is a request
+            # that never ran, and a `501` from the composition floor ran.
+            expected = 501 if capability in UNCOMPOSED_HERE else 200
+            assert answer.status == expected, f"{capability.value} answered {answer.status}"
         client.send(
             Capability.KNOWLEDGE_SEARCH.value,
             document(

@@ -57,6 +57,7 @@ PRIOR_VERSION: Final = "memver_bbbb0002bbbb0002"
 SUBJECT: Final = "ent_aaaa0001aaaa0001"
 CORRELATION: Final = "corr_aaaa0001aaaa0001"
 PROPOSAL: Final = "mprop_aaaa0001aaaa0001"
+SUCCESSOR_PROPOSAL: Final = "mprop_bbbb0002bbbb0002"
 
 WHEN: Final = datetime(2026, 8, 22, 12, tzinfo=UTC)
 
@@ -99,9 +100,11 @@ def a_proposal(**overrides: object) -> RelationshipMemoryProposal:
         "memory_proposal_id": PROPOSAL,
         "principal_id": PRINCIPAL,
         "subject_entity_id": SUBJECT,
+        "expected_subject_version": 3,
         "proposed_kind": MemoryKind.GENERAL_NOTE,
         "proposed_statement": statement,
         "proposed_statement_sha256": statement_digest(statement),
+        "dedupe_sha256": "d" * 64,
         "state": MemoryProposalState.PROPOSED,
         "method": MemoryProposalMethod.DETERMINISTIC,
         "method_version": "v1",
@@ -452,6 +455,23 @@ def test_the_repr_of_a_proposal_does_not_contain_the_statement() -> None:
     assert STATEMENT not in rendered
     assert "qzvbnr-marker" not in rendered
     assert PROPOSAL in rendered
+
+
+def test_a_proposal_persists_a_positive_subject_version() -> None:
+    assert a_proposal(expected_subject_version=7).expected_subject_version == 7
+    with pytest.raises(RelationshipMemoryError, match="positive subject version"):
+        a_proposal(expected_subject_version=0)
+
+
+def test_proposal_supersession_records_time_and_successor_lineage() -> None:
+    proposal = a_proposal(
+        state=MemoryProposalState.SUPERSEDED,
+        superseded_at=WHEN,
+        superseded_by_memory_proposal_id=SUCCESSOR_PROPOSAL,
+    )
+    assert proposal.superseded_by_memory_proposal_id == SUCCESSOR_PROPOSAL
+    with pytest.raises(RelationshipMemoryError, match="records when"):
+        a_proposal(state=MemoryProposalState.SUPERSEDED)
 
 
 # --- the aggregate holds no narrative ----------------------------------------

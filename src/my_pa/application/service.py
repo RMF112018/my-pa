@@ -104,12 +104,13 @@ publishes and what every clamp below reads. There is no second copy to drift
 from __future__ import annotations
 
 import base64
+import binascii
 import hashlib
 import json
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import asdict, dataclass, replace
 from datetime import UTC, date, datetime, timedelta
 from itertools import islice
 from types import MappingProxyType
@@ -135,6 +136,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateManagedDocumentCommand,
@@ -179,8 +181,11 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewEntityMerge,
+    ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -241,12 +246,17 @@ from my_pa.application.entity_context import EntityContextService
 from my_pa.application.entity_directed import EntityDirectedService
 from my_pa.application.entity_governance import (
     EntityGovernanceService,
+    EntityProposalReviewService,
     ObserveCommand,
     QuarantinedObservationError,
     ResolutionNotPermittedError,
     ResolveMentionCommand,
+    ReviewAuthorityError,
     UnknownEntityError,
     UnknownObservationError,
+)
+from my_pa.application.entity_governance import (
+    ProposedEvidence as EntityProposedEvidence,
 )
 from my_pa.application.entity_resolution import (
     ACTIVE_ASSIGNMENT_STATUS,
@@ -285,6 +295,12 @@ from my_pa.application.goodnotes_semantics import (
     submit_proposal,
     work_payload,
 )
+from my_pa.application.identity_correction import (
+    ConflictChoice,
+    IdentityCorrectionService,
+    MergeCommand,
+    MergePreviewCommand,
+)
 from my_pa.application.intelligence import (
     begin_cycle,
     commit_artifact,
@@ -297,9 +313,14 @@ from my_pa.application.intelligence import (
 )
 from my_pa.application.managed_documents import ManagedDocumentService
 from my_pa.application.model_gate import BoundedModelGate
+from my_pa.application.producer_origin import ProducerOriginError, ProducerOriginRegistry
 from my_pa.application.relationship_memory import (
     ArchiveMemoryCommand,
     CreateMemoryCommand,
+    MemoryProposalOrigin,
+    ProposedEvidence,
+    ProposeMemoryCommand,
+    RelationshipMemoryProposalService,
     RelationshipMemoryService,
     ReviseMemoryCommand,
 )
@@ -329,6 +350,9 @@ from my_pa.contracts.ports import (
     UnitOfWork,
     UnknownScopeError,
     WorkCursorError,
+    WriteRequestConflictError,
+    WriteRequestEvidence,
+    WriteRequestResult,
 )
 from my_pa.contracts.v1.capabilities import EffectiveLimits, ReadinessReport, ReadinessState
 from my_pa.contracts.v1.capture import CaptureListEntry, CaptureReceiptView, CaptureVersionView
@@ -355,18 +379,23 @@ from my_pa.domain.capture.errors import (
     CaptureError,
     EmptyCaptureError,
 )
+from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.reveal import EvidenceState
 from my_pa.domain.capture.review import (
+    EntityProposalReviewCase,
     ReviewCase,
     ReviewConflictError,
+    ReviewCorrectionError,
+    ReviewDecision,
     ReviewNotFoundError,
+    ReviewSubjectKind,
     ReviewUnsupportedError,
 )
 from my_pa.domain.capture.submission import CaptureKind, CaptureTransport
 from my_pa.domain.capture.version import CaptureContent, CaptureVersion, ProcessingPolicy
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.coverage import CoverageState
-from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
 from my_pa.domain.common.provenance import TrustLevel
 from my_pa.domain.common.time import format_rfc3339, utc_now
 from my_pa.domain.documents.managed import (
@@ -413,17 +442,22 @@ from my_pa.domain.relationship.governance import (
     ActorClass,
     EntityMutationConflictError,
     EntityObservation,
+    EntityProposalMethod,
+    EvidenceRole,
     ObservationAuthorityError,
     ObservationTimeError,
     StaleResolutionVersionError,
     origin_of,
 )
+from my_pa.domain.relationship.identity_correction import IdentityConflict
 from my_pa.domain.relationship.memory import (
+    EvidenceLinkRole,
     MemoryAdmission,
     MemoryBoundsError,
     MemoryConflictError,
     MemoryKind,
     MemoryKindNotPermittedError,
+    MemoryProposalMethod,
     MemoryStructuredValueError,
     MergedSubjectError,
     RelationshipMemory,
@@ -433,6 +467,7 @@ from my_pa.domain.relationship.memory import (
     StaleMemoryVersionError,
 )
 from my_pa.domain.relationship.normalization import NormalizationError
+from my_pa.domain.relationship.proposal_payload import ProposalPayloadError
 from my_pa.domain.relationship.resolution import EntityResolution
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -662,8 +697,92 @@ def _memory_view(detail: MemoryDetail, *, include_statement: bool) -> dict[str, 
     return view
 
 
+_REVIEW_CURSOR_ORDER: Final = "opened_at_asc_review_case_id_asc_v1"
+_MAX_REVIEW_CURSOR_CHARACTERS: Final = 512
+
+
+def _review_cursor_binding(
+    *,
+    principal_id: str,
+    page_size: int,
+    subject_kind: ReviewSubjectKind | None,
+    state: ProposalState | None,
+    entity_id: str | None,
+) -> str:
+    """Bind a continuation to every input that gives its position meaning."""
+    canonical = json.dumps(
+        {
+            "entity_id": entity_id,
+            "order": _REVIEW_CURSOR_ORDER,
+            "page_size": page_size,
+            "principal_id": principal_id,
+            "state": None if state is None else state.value,
+            "subject_kind": None if subject_kind is None else subject_kind.value,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _encode_review_cursor(*, binding: str, opened_at: datetime, review_case_id: str) -> str:
+    """Encode one text-free keyset position using the repository cursor shape."""
+    payload = json.dumps(
+        {
+            "b": binding,
+            "o": format_rfc3339(opened_at),
+            "r": review_case_id,
+            "v": 1,
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+        ensure_ascii=True,
+    )
+    return base64.urlsafe_b64encode(payload.encode("ascii")).decode("ascii").rstrip("=")
+
+
+def _decode_review_cursor(token: str, *, expected_binding: str) -> tuple[datetime, str] | None:
+    """Decode one bound position; every malformed or mismatched token is identical."""
+    if not token or len(token) > _MAX_REVIEW_CURSOR_CHARACTERS:
+        return None
+    padded = token + "=" * (-len(token) % 4)
+    try:
+        decoded = json.loads(
+            base64.b64decode(padded.encode("ascii"), altchars=b"-_", validate=True)
+        )
+    except (binascii.Error, UnicodeEncodeError, UnicodeDecodeError, ValueError):
+        return None
+    if not isinstance(decoded, dict) or set(decoded) != {"b", "o", "r", "v"}:
+        return None
+    binding, opened_value, review_case_id, version = (
+        decoded["b"],
+        decoded["o"],
+        decoded["r"],
+        decoded["v"],
+    )
+    if (
+        binding != expected_binding
+        or not isinstance(opened_value, str)
+        or not isinstance(review_case_id, str)
+        or version != 1
+    ):
+        return None
+    try:
+        opened_at = datetime.fromisoformat(opened_value)
+        if opened_at.tzinfo is None:
+            return None
+        validate_identifier(review_case_id, IdKind.REVIEW_CASE)
+    except (InvalidIdentifierError, ValueError, OverflowError):
+        return None
+    return opened_at.astimezone(UTC), review_case_id
+
+
 def _review_case_payload(
-    case: ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase,
+    case: ReviewCase
+    | GoodNotesReviewCase
+    | RelationshipMemoryReviewCase
+    | EntityProposalReviewCase,
 ) -> dict[str, Any]:
     """One review case as the contract may disclose it, whatever its subject kind.
 
@@ -687,6 +806,18 @@ def _review_case_payload(
     own decision to its result through the memory plane, where classification is
     enforced. Disclosing `proposed_kind` is deliberate: a reviewer asked to
     accept a sensitivity has to know that is what they are accepting.
+
+    **The Entity branch follows the same rule and adds one field to it.** An
+    Entity proposal's payload is a producer's assertion about a person — the
+    display name a rule inferred, the external address a source claimed — and
+    `EntityProposalReviewCase` carries none of it, structurally rather than by
+    omission here. What it adds is `method`: `deterministic`, `rule` or
+    `local_model`. A reviewer being asked to accept a local model's conclusion
+    has to know that is what they are accepting, which is the same argument
+    `proposed_kind` makes one branch up and is the whole of section 21.4's
+    anti-laundering rule read from the reviewer's side. `escalated` is disclosed
+    for the same reason: a case that has been raised to the operator ceiling
+    looks identical to one that has not unless the listing says so.
     """
     common = {
         "review_case_id": case.review_case_id,
@@ -702,7 +833,7 @@ def _review_case_payload(
     if isinstance(case, GoodNotesReviewCase):
         return {
             **common,
-            "subject_kind": "goodnotes_region",
+            "subject_kind": ReviewSubjectKind.GOODNOTES_REGION.value,
             "region_id": case.region_id,
             "page_version_id": case.page_version_id,
             "confidence": case.confidence,
@@ -710,15 +841,25 @@ def _review_case_payload(
     if isinstance(case, RelationshipMemoryReviewCase):
         return {
             **common,
-            "subject_kind": "relationship_memory",
+            "subject_kind": ReviewSubjectKind.RELATIONSHIP_MEMORY.value,
             "subject_entity_id": case.subject_entity_id,
             "proposed_kind": case.proposed_kind.value,
             "accepted_memory_id": case.accepted_memory_id,
             "accepted_memory_version_id": case.accepted_memory_version_id,
         }
+    if isinstance(case, EntityProposalReviewCase):
+        return {
+            **common,
+            "subject_kind": ReviewSubjectKind.ENTITY_PROPOSAL.value,
+            "subject_entity_id": case.target_entity_id,
+            "proposed_kind": case.proposed_kind.value,
+            "method": case.method.value,
+            "escalated": case.escalated,
+            "accepted_record_id": case.accepted_record_id,
+        }
     return {
         **common,
-        "subject_kind": "capture_proposal",
+        "subject_kind": ReviewSubjectKind.CAPTURE_PROPOSAL.value,
         "capture_id": case.capture_id,
         "version_id": case.version_id,
         "proposal_type": case.proposal_type.value,
@@ -1595,6 +1736,16 @@ def _entity_governance_translated() -> Iterator[None]:
         failure = InvalidRequestError(SafeDetail.OBSERVED_AT)
     except ObservationAuthorityError:
         failure = InvalidRequestError(SafeDetail.OBSERVATION_AUTHORITY)
+    except ProposalPayloadError:
+        # `WP-RI-B-05`. A payload that names a field its kind's command does not
+        # take, omits one the kind requires, carries a server-owned name, or
+        # proposes a status a caller may not ask for. Every one of those is the
+        # caller's own move to correct, so `invalid_request` and not `conflict`
+        # -- and the token is `payload` rather than the offending field, because
+        # a token per admitted name would restate seventeen schemas in
+        # `SafeDetail` and would tell a caller which of its fields the *schema*
+        # objected to, which is the one thing a closed vocabulary must not do.
+        failure = InvalidRequestError(SafeDetail.PAYLOAD)
     if failure is not None:
         raise failure
 
@@ -2025,6 +2176,90 @@ _ENTITY_TRUST_BASIS: Final = ("principal_partition",)
 _ENTITY_AUTHORING_TRUST_BASIS: Final = ("principal_partition", "user_confirmed_assertion")
 
 
+#: The identity-correction views, and the two module-level helpers the two
+#: handlers share.
+
+
+def _identity_conflict_view(conflict: IdentityConflict) -> dict[str, object]:
+    """One conflict as a caller reads it: what kind, which family, which record.
+
+    No value and no name, for the reason `IdentityEffect`'s own states carry
+    none: a merge conflict is a statement about somebody's identity, and the
+    record identifier is what an operator needs to decide it.
+    """
+    return {
+        "kind": conflict.kind.value,
+        "family": conflict.family.value,
+        "record_id": conflict.record_id,
+    }
+
+
+def _merge_idempotency_key(principal_id: str, preview_id: str) -> str:
+    """The server's replay identity for one governed merge.
+
+    Over the Principal and the preview, and nothing the caller can vary
+    independently of them. A preview is consumable once, so one preview is one
+    operation: an identical retry produces this same key and replays, while a
+    materially different request naming the same preview produces this same key
+    and a different request digest, which is the conflict operator §23 asks for.
+
+    `idk_` and thirty-two hexadecimal characters, the shape
+    `adapters.remote_request` derives for the capabilities whose commands carry
+    the field. This one's command does not carry it, which is what §26 requires
+    of a server-owned field -- so the shape is shared and the *source* is not.
+    """
+    digest = hashlib.sha256(
+        f"{Capability.ENTITIES_MERGE.value}|{principal_id}|{preview_id}".encode()
+    ).hexdigest()
+    return f"idk_{digest[:32]}"
+
+
+def _relationship_write_digest(command: Command) -> str:
+    """Digest only material command fields without persisting their values."""
+    return hashlib.sha256(
+        json.dumps(
+            {"command": type(command).__name__, "material": asdict(command)},
+            sort_keys=True,
+            separators=(",", ":"),
+            default=str,
+        ).encode()
+    ).hexdigest()
+
+
+def _reserve_relationship_write(
+    unit_of_work: UnitOfWork,
+    authorization: Authorization,
+    command: Command,
+) -> tuple[str, WriteRequestResult | None]:
+    digest = _relationship_write_digest(command)
+    try:
+        replayed = unit_of_work.write_requests.reserve(
+            authorization.principal.principal_id,
+            command.capability.value,
+            authorization.request_id,
+            digest,
+        )
+    except WriteRequestConflictError:
+        raise ConflictError(SafeDetail.IDEMPOTENCY_CONFLICT) from None
+    return digest, replayed
+
+
+def _complete_relationship_write(
+    unit_of_work: UnitOfWork,
+    authorization: Authorization,
+    command: Command,
+    digest: str,
+    result: WriteRequestResult,
+) -> None:
+    unit_of_work.write_requests.complete(
+        authorization.principal.principal_id,
+        command.capability.value,
+        authorization.request_id,
+        digest,
+        result,
+    )
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -2041,6 +2276,8 @@ class ApplicationService:
         relationship_intelligence_enabled: bool = False,
         relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
+        relationship_identity_correction_enabled: bool = False,
+        producer_origins: ProducerOriginRegistry | None = None,
         gsqs_b0_ports: WorkflowPorts | None = None,
     ) -> None:
         self._unit_of_work = unit_of_work
@@ -2072,11 +2309,19 @@ class ApplicationService:
         #: never widens an absent one.
         self._relationship_intelligence_writes_enabled = relationship_intelligence_writes_enabled
         self._relationship_memory_enabled = relationship_memory_enabled
+        # The third gate, and it is the narrowest. `_identity_correction_plane`
+        # is the floor every one of its handlers asks; `available_capabilities`
+        # is what `capabilities.get` and the MCP tool list read. Default `False`
+        # for the reason the two above it default `False`: a composition root
+        # that has not said the operation is composed gets a process that does
+        # not serve it.
+        self._relationship_identity_correction_enabled = relationship_identity_correction_enabled
         self._gsqs_b0_ports = gsqs_b0_ports
         #: Explicit production composition of the optional proposal plane. The
         #: default gate is disabled; an enabled gate cannot be constructed
         #: without its local provider and canonical Review router.
         self._model_gate = model_gate or BoundedModelGate()
+        self._producer_origins = producer_origins or ProducerOriginRegistry()
         #: WP-27's application service, held rather than built per request: it is
         #: stateless, takes its ports as arguments, and constructing one per call
         #: would say it held something.
@@ -2116,7 +2361,7 @@ class ApplicationService:
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
         something the composition root did not supply — the six `documents.`
-        names in a process with no managed root, and the twenty-eight `entities.` names
+        names in a process with no managed root, and the thirty-one `entities.` names
         in one that has not enabled the relationship plane. It is one answer with
         two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
@@ -2139,6 +2384,22 @@ class ApplicationService:
         # repository proves ownership of it by reading `knowledge.entities`.
         if not (self._relationship_intelligence_enabled and self._relationship_memory_enabled):
             served -= _RELATIONSHIP_MEMORY_CAPABILITIES
+        # A proposal surface without a trusted server registration would
+        # advertise a write every authenticated caller can only be denied.
+        # Withhold both producer capabilities when composition has no exact
+        # producer identity; per-Principal resolution still fails closed.
+        if not self._producer_origins.has_registrations:
+            served -= _PRODUCER_CAPABILITIES
+        # The governed merge, narrowed separately again. Its own switch requires
+        # the write switch, which requires the plane switch, and `Settings._check`
+        # refuses a process configured otherwise -- so the three subtractions
+        # above have already removed these names whenever a lower gate is off,
+        # and this line is what a build with every lower gate on still has to
+        # pass. Written as its own condition rather than folded into the write
+        # subtraction because the two answer different questions and a build can
+        # be in either state.
+        if not self._relationship_identity_correction_enabled:
+            served -= _IDENTITY_CORRECTION_CAPABILITIES
         return served
 
     def invoke(
@@ -3226,70 +3487,179 @@ class ApplicationService:
     def _review_list(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListReviewCases
     ) -> _Result:
-        """List review cases without capture or normalized-value content."""
+        """List review cases without capture, statement or payload content.
+
+        One page across every composed subject kind, narrowed by whichever of the
+        three filters the caller stated. The filters go to the port rather than
+        being applied to the page after it comes back: a filter applied here
+        would return a short page and call it complete, and `entity_id` would
+        have made two planes that cannot answer it read everything first.
+        """
         page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
+        binding = _review_cursor_binding(
+            principal_id=principal_id,
+            page_size=page_size,
+            subject_kind=command.subject_kind,
+            state=command.state,
+            entity_id=command.entity_id,
+        )
+        position: tuple[datetime, str] | None = None
+        if command.after is not None:
+            position = _decode_review_cursor(command.after, expected_binding=binding)
+            if position is None:
+                raise ConflictError(SafeDetail.CURSOR)
         with _translated():
             found = unit_of_work.reviews.cases(
-                limit=page_size + 1, principal_id=authorization.principal.principal_id
+                limit=page_size + 1,
+                principal_id=principal_id,
+                subject_kind=command.subject_kind,
+                state=command.state,
+                entity_id=command.entity_id,
+                after_opened_at=None if position is None else position[0],
+                after_review_case_id=None if position is None else position[1],
             )
         truncated = len(found) > page_size
+        page = found[:page_size]
+        next_cursor = (
+            _encode_review_cursor(
+                binding=binding,
+                opened_at=page[-1].opened_at,
+                review_case_id=page[-1].review_case_id,
+            )
+            if truncated and page
+            else None
+        )
         return _Result(
-            payload={"review_cases": [_review_case_payload(case) for case in found[:page_size]]},
+            payload={"review_cases": [_review_case_payload(case) for case in page]},
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=("review_policy",),
                 truncation=Truncation(
                     is_truncated=truncated,
                     reason="page_size_reached" if truncated else None,
+                    next_cursor=next_cursor,
                 ),
-                extra_limitations=((Limitation.LISTING_HAS_NO_CONTINUATION,) if truncated else ()),
             ),
         )
 
     def _review_decide(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: DecideReviewCase
     ) -> _Result:
-        """Append one disposition and, for acceptance, its assertion and receipt."""
+        """Append one disposition and, for acceptance, carry out what it accepted.
+
+        **Which plane decides is decided here, and it is one branch rather than a
+        capability of its own.** Three of the four subject kinds are decided inside
+        the port, because everything their decision does is SQL. An Entity
+        proposal is executed through the canonical Phase A mutation services,
+        which live in this layer, so its ordering is
+        `EntityProposalReviewService`'s and this routes to it. A caller sees one
+        capability, one request shape and one answer either way.
+
+        `decided_by`, the operator declaration and the fresh resolver are all
+        server-supplied. There is no field on the command for any of them: a
+        caller that could name its own authority would name the one it needed.
+        """
+        request_digest, replayed = _reserve_relationship_write(unit_of_work, authorization, command)
+        if replayed is not None:
+            if replayed.result_family == "review_invalidated":
+                return _Result(
+                    payload={"review_case_id": replayed.result_id, "result": "invalidated"},
+                    disclosure=unenrolled_disclosure(
+                        authorization.at,
+                        trust_basis=("review_policy", "source_span_validation"),
+                    ),
+                )
+            if replayed.result_family != "review_decision":
+                raise InternalError()
+            return _Result(
+                payload={
+                    "review_case_id": replayed.result_secondary_id,
+                    "decision_id": replayed.result_id,
+                    "review_version": replayed.result_version,
+                    "disposition": replayed.result_disposition,
+                    "proposal_state": replayed.result_state,
+                    "assertion_id": replayed.result_assertion_id,
+                    "receipt_id": replayed.receipt_id,
+                },
+                disclosure=unenrolled_disclosure(
+                    authorization.at,
+                    trust_basis=("review_policy", "reviewed_promotion"),
+                ),
+            )
+        request = ReviewDecisionRequest(
+            review_case_id=command.review_case_id,
+            expected_review_version=command.expected_review_version,
+            disposition=command.disposition,
+            principal_id=authorization.principal.principal_id,
+            correlation_id=authorization.correlation_id,
+            audit_id=authorization.audit_id,
+            policy_version=authorization.decision.policy_version,
+            decided_at=self._clock(),
+            corrected_value=command.corrected_value,
+            correction_patch=command.correction_patch,
+            reason=command.reason,
+        )
         decision = None
         conflict = False
         missing = False
         unsupported = False
-        with _translated():
+        denied = False
+        invalid = False
+        with _translated(), _entity_governance_translated():
             try:
-                decision = unit_of_work.reviews.decide(
-                    ReviewDecisionRequest(
-                        review_case_id=command.review_case_id,
-                        expected_review_version=command.expected_review_version,
-                        disposition=command.disposition,
-                        principal_id=authorization.principal.principal_id,
-                        correlation_id=authorization.correlation_id,
-                        audit_id=authorization.audit_id,
-                        policy_version=authorization.decision.policy_version,
-                        decided_at=self._clock(),
-                        corrected_value=command.corrected_value,
-                    )
+                entity_case = unit_of_work.reviews.entity_proposal_case(
+                    request.principal_id, request.review_case_id
                 )
+                if entity_case is None:
+                    decision = unit_of_work.reviews.decide(
+                        request,
+                        has_operator_authority=self._operator_authority(authorization),
+                    )
+                else:
+                    decision = self._entity_review(unit_of_work, authorization, request)
             except ReviewConflictError:
                 conflict = True
             except ReviewNotFoundError:
                 missing = True
             except ReviewUnsupportedError:
                 unsupported = True
+            except ReviewAuthorityError:
+                denied = True
+            except ReviewCorrectionError:
+                invalid = True
         if conflict:
             raise ConflictError(SafeDetail.EXPECTED_REVIEW_VERSION)
         if unsupported:
             raise UnsupportedError(SafeDetail.DISPOSITION)
+        if denied:
+            raise DeniedError(SafeDetail.DISPOSITION)
+        if invalid:
+            raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
         if missing:
             raise NotFoundError(SafeDetail.REVIEW_CASE_ID)
         if decision is None:
-            return _Result(
+            result = _Result(
                 payload={"review_case_id": command.review_case_id, "result": "invalidated"},
                 disclosure=unenrolled_disclosure(
                     authorization.at,
                     trust_basis=("review_policy", "source_span_validation"),
                 ),
             )
-        return _Result(
+            _complete_relationship_write(
+                unit_of_work,
+                authorization,
+                command,
+                request_digest,
+                WriteRequestResult(
+                    result_family="review_invalidated",
+                    result_id=command.review_case_id,
+                    result_state="invalidated",
+                    audit_id=authorization.audit_id,
+                ),
+            )
+            return result
+        result = _Result(
             payload={
                 "review_case_id": decision.review_case_id,
                 "decision_id": decision.decision_id,
@@ -3303,6 +3673,80 @@ class ApplicationService:
                 authorization.at,
                 trust_basis=("review_policy", "reviewed_promotion"),
             ),
+        )
+        _complete_relationship_write(
+            unit_of_work,
+            authorization,
+            command,
+            request_digest,
+            WriteRequestResult(
+                result_family="review_decision",
+                result_id=decision.decision_id,
+                result_secondary_id=decision.review_case_id,
+                result_version=decision.sequence,
+                result_state=decision.proposal_state.value,
+                result_disposition=decision.disposition.value,
+                result_assertion_id=decision.assertion_id,
+                receipt_id=decision.receipt_id,
+                audit_id=authorization.audit_id,
+            ),
+        )
+        return result
+
+    def _entity_review(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        request: ReviewDecisionRequest,
+    ) -> ReviewDecision:
+        """One Entity proposal decided, with the fresh resolver its kind may need.
+
+        The resolver is built here and run inside this transaction, against the
+        state that exists now rather than the state the proposal was filed
+        against — the same callable `entities.unresolved_mentions.resolve` builds
+        and for the same reason. It is a veto and not a licence: it can refuse a
+        binding the world no longer supports and it cannot license one, and a
+        `resolve_mention` acceptance arriving without it is refused rather than
+        performed unchecked.
+
+        **`has_operator_authority` is the acting context's own declaration, and
+        it used to be hard-coded `False`.** The old sentence read "a reviewer
+        holding `review.decide` is not thereby an operator", and that is still
+        exactly right and is still what happens: `review.decide` is not
+        operator-only, so a reviewer who is not the authenticated operator gets
+        `False` here and cannot accept an escalated case or a `merge_entities`
+        proposal. What the constant also did was make `escalate` a disposition
+        with no exit -- it raises a case to the operator ceiling, and nothing
+        published could then reach it -- which is a hole in a surface Phase B
+        itself publishes rather than a boundary Phase B is keeping.
+
+        Section 15 is preserved and is preserved somewhere else, which is the
+        point: acceptance of a `merge_entities` or `split_identity` proposal
+        records reviewed intent and lineage and mutates no identity, whatever
+        this flag says. Identity mutation is `entities.merge`'s, which is
+        operator-only *and* behind its own feature gate. So an operator who
+        accepts a merge proposal here has still not merged anything.
+        """
+        principal_id = authorization.principal.principal_id
+        resolver = EntityResolutionService(unit_of_work.entities)
+
+        def resolve_now(
+            observation: EntityObservation, refused: frozenset[str], at: datetime
+        ) -> EntityResolution:
+            return resolver.resolve(
+                principal_id,
+                ResolutionRequest(
+                    raw_reference=observation.observed_value,
+                    at=at,
+                    refused_entity_ids=refused,
+                ),
+            )
+
+        return EntityProposalReviewService(unit_of_work.entities, unit_of_work.reviews).decide(
+            request,
+            decided_by=principal_id,
+            has_operator_authority=self._operator_authority(authorization),
+            resolve=resolve_now,
         )
 
     def _continuity_pulse(
@@ -3923,7 +4367,7 @@ class ApplicationService:
         the request.
 
         **This is the floor, and it was missing.** `available_capabilities`
-        withholds the twenty-eight `entities.` names, and two readers consult it —
+        withholds the thirty-one `entities.` names, and two readers consult it —
         `capabilities.get` and the MCP tool list. The HTTP transport is not one
         of them: `/v1/{capability}` routes by path segment and `_run` dispatches
         straight from `_HANDLERS`, so every one of the six executed and
@@ -7349,6 +7793,516 @@ class ApplicationService:
         )
         return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
 
+    # ---- WP-RI-B: the producers, and the governed merge ---------------------
+    #
+    # Four handlers, and every rule they enforce lives somewhere else. Which
+    # payload fields a proposal kind admits, what a dedupe digest is over, what a
+    # candidate memory's classification floor is, what a merge blocks on and what
+    # its effect ledger records are all `EntityGovernanceService`',
+    # `RelationshipMemoryProposalService`'s and `IdentityCorrectionService`'s, so
+    # a second copy here could not disagree with them.
+    #
+    # What this file supplies is the four things a caller may not: the Principal,
+    # the clock, the correlation and audit references the authorization already
+    # resolved, and -- for the two producer paths -- the proposal method. None of
+    # the four commands has a field for any of them.
+
+    #: Producer provenance is injected by composition and keyed by the exact
+    #: authenticated Principal. Commands carry no origin fields. An unregistered
+    #: producer is refused, and a local-model registration must name the exact
+    #: model and version.
+    def _proposal_origin(
+        self, authorization: Authorization
+    ) -> tuple[EntityProposalMethod, str, str | None, str | None]:
+        """What the server will record as having produced an entity proposal.
+
+        The only input is the server-created authorization. The immutable
+        registry resolves its authenticated Principal; no command field can
+        select or alter provenance.
+        """
+        try:
+            origin = self._producer_origins.resolve(authorization.principal)
+        except ProducerOriginError:
+            raise DeniedError() from None
+        return (
+            EntityProposalMethod(origin.method),
+            origin.method_version,
+            origin.model_id,
+            origin.model_version,
+        )
+
+    def _memory_proposal_origin(self, authorization: Authorization) -> MemoryProposalOrigin:
+        """What the server will record as having produced a candidate memory.
+
+        Uses the same immutable Principal registration as entity proposals.
+        """
+        try:
+            origin = self._producer_origins.resolve(authorization.principal)
+        except ProducerOriginError:
+            raise DeniedError() from None
+        return MemoryProposalOrigin(
+            method=MemoryProposalMethod(origin.method),
+            method_version=origin.method_version,
+            model_id=origin.model_id,
+            model_version=origin.model_version,
+        )
+
+    def _operator_authority(self, authorization: Authorization) -> bool:
+        """Whether the acting context is the authenticated operator.
+
+        **The one place a handler reads `is_operator`, and it decides nothing.**
+        Whether an operator-only capability may run at all was decided by
+        `domain.policy.decision.evaluate`, which denies every non-operator caller
+        of a member of `_OPERATOR_ONLY` before a handler exists. What this reports
+        is the authenticated fact, to services whose own rules are the decision:
+        `IdentityCorrectionService` refuses without it and
+        `EntityProposalReviewService` refuses an escalated case without it.
+
+        Derived rather than passed as `True` at the merge call sites, and the
+        difference is load-bearing rather than stylistic. A hard-coded `True`
+        would be correct today and would silently stop being correct the moment
+        `entities.merge` left `_OPERATOR_ONLY` -- which is exactly the mutation
+        operator §30 requires a test to catch. Derived, the code fails closed
+        under that mutation and the service's own refusal becomes reachable
+        instead of dead.
+        """
+        return authorization.principal.is_operator
+
+    def _identity_correction_plane(self) -> None:
+        """Refuse when this build has not enabled the governed merge.
+
+        The same floor `_entity_writes` is, one switch narrower, and it exists for
+        the same reason: `available_capabilities` withholds the governed merge and
+        two readers consult it -- `capabilities.get` and the MCP tool list -- while
+        the HTTP transport consults neither, routing by path segment straight into
+        `_HANDLERS`.
+
+        `_entity_writes()` first, so a build that turned this on without the
+        gates below it refuses on the lowest one that is off rather than on this
+        one. `Settings._check` refuses that configuration at startup, so the
+        ordering here is what holds for a process composed some other way -- a
+        test double, an embedded build -- rather than a second copy of a rule the
+        settings already enforce.
+
+        `unsupported` and not `denied`: a process without the switch has no
+        governed merge, which is a fact about the build. Who may call it is the
+        separate question `_OPERATOR_ONLY` answers, and a caller without operator
+        authority is denied by policy before reaching here.
+        """
+        self._entity_writes()
+        if not self._relationship_identity_correction_enabled:
+            raise UnsupportedError()
+
+    def _entities_proposals_create(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: CreateEntityProposal,
+    ) -> _Result:
+        """`entities.proposals.create`: ask for a change, and perform none.
+
+        The producer's whole write surface on this plane. What comes back says
+        what was recorded, what it will need before it can be accepted, and
+        whether this request created it or found the same thing already open,
+        plus the server-minted canonical review case and its initial version.
+
+        **The receipt is the audit event, not a mutation ledger row.**
+        `entities.proposals.create` writes no `entity_mutation_events` row and
+        should not: `MutationRecordFamily` enumerates the canonical record classes
+        this plane can mutate, and its own docstring is what a proposal is not --
+        a proposal changes nothing, so a family for it would make the ledger a log
+        of requests as well as of facts. Every capability already writes an
+        `audit_events` row before its handler runs, and `authorization.audit_id`
+        is that row. So the contract's audit/receipt field is `audit_id`, which is
+        the same field every non-mutating capability answers with, and no enum
+        gains a member that contradicts its own definition.
+        """
+        self._entity_writes()
+        request_digest, replayed = _reserve_relationship_write(unit_of_work, authorization, command)
+        if replayed is not None:
+            if replayed.result_family != "entity_proposal":
+                raise InternalError()
+            return _Result(
+                payload={
+                    "proposal_id": replayed.result_id,
+                    "proposal_version": replayed.result_version,
+                    "kind": replayed.result_subtype,
+                    "state": replayed.result_state,
+                    "review_requirement": replayed.result_requirement,
+                    "review_case_id": replayed.result_secondary_id,
+                    "review_version": 0,
+                    "dedupe_sha256": replayed.result_digest,
+                    "evidence_refs": [
+                        {
+                            "role": link.role,
+                            **(
+                                {"entity_observation_id": link.entity_observation_id}
+                                if link.entity_observation_id is not None
+                                else {"capture_span_id": link.capture_span_id}
+                                if link.capture_span_id is not None
+                                else {"knowledge_id": link.knowledge_id}
+                            ),
+                        }
+                        for link in replayed.evidence
+                    ],
+                    "proposed_at": format_rfc3339(cast("datetime", replayed.result_at)),
+                    "created": replayed.result_created,
+                    "audit_id": replayed.audit_id,
+                },
+                disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+            )
+        method, method_version, model_id, model_version = self._proposal_origin(authorization)
+        with _translated(), _entity_governance_translated():
+            admission = EntityGovernanceService(unit_of_work.entities).propose(
+                authorization.principal.principal_id,
+                kind=command.kind,
+                payload=cast("Mapping[str, str | bool]", command.payload),
+                observation_ids=(),
+                proposed_by=authorization.principal.principal_id,
+                method=method,
+                method_version=method_version,
+                at=authorization.at,
+                evidence=tuple(
+                    EntityProposedEvidence(
+                        role=EvidenceRole(entry["role"]),
+                        entity_observation_id=entry.get("entity_observation_id"),
+                        capture_span_id=entry.get("capture_span_id"),
+                        knowledge_id=entry.get("knowledge_id"),
+                    )
+                    for entry in command.evidence
+                ),
+                expected_target_version=command.expected_target_version,
+                model_id=model_id,
+                model_version=model_version,
+            )
+            stored_evidence = unit_of_work.entities.proposal_evidence_links(
+                authorization.principal.principal_id, admission.proposal_id
+            )
+        evidence_refs = [
+            {
+                "role": link.role.value,
+                **(
+                    {"entity_observation_id": link.entity_observation_id}
+                    if link.entity_observation_id is not None
+                    else {"capture_span_id": link.capture_span_id}
+                    if link.capture_span_id is not None
+                    else {"knowledge_id": cast(str, link.knowledge_id)}
+                ),
+            }
+            for link in stored_evidence
+        ]
+        result = _Result(
+            payload={
+                "proposal_id": admission.proposal_id,
+                "proposal_version": 1,
+                "kind": admission.kind.value,
+                "state": admission.state.value,
+                "review_requirement": admission.requirement.value,
+                "review_case_id": admission.review_case_id,
+                "review_version": admission.review_version,
+                "dedupe_sha256": admission.dedupe_sha256,
+                "evidence_refs": evidence_refs,
+                "proposed_at": format_rfc3339(admission.proposed_at),
+                "created": admission.created,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+        _complete_relationship_write(
+            unit_of_work,
+            authorization,
+            command,
+            request_digest,
+            WriteRequestResult(
+                result_family="entity_proposal",
+                result_id=admission.proposal_id,
+                result_secondary_id=admission.review_case_id,
+                result_version=1,
+                result_state=admission.state.value,
+                result_subtype=admission.kind.value,
+                result_requirement=admission.requirement.value,
+                result_at=admission.proposed_at,
+                result_digest=admission.dedupe_sha256,
+                result_created=admission.created,
+                audit_id=authorization.audit_id,
+                evidence=tuple(
+                    WriteRequestEvidence(
+                        sequence=link.sequence,
+                        role=link.role.value,
+                        entity_observation_id=link.entity_observation_id,
+                        capture_span_id=link.capture_span_id,
+                        knowledge_id=link.knowledge_id,
+                    )
+                    for link in stored_evidence
+                ),
+            ),
+        )
+        return result
+
+    def _relationship_memory_propose(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ProposeRelationshipMemory,
+    ) -> _Result:
+        """`relationship_memory.propose`: raise a candidate, and never a memory.
+
+        The subject is read through the entity plane's own Principal-scoped port
+        before anything else, which is what keeps a foreign subject
+        indistinguishable from an absent one: a caller that cannot read the entity
+        gets `None` and the same `not_found`, and never learns which of the two it
+        was. `RelationshipMemoryProposalService` re-checks the subject's Principal
+        as defence in depth; the scoped read is the first line.
+
+        **The receipt carries no statement**, because `MemoryProposalReceipt` has
+        no statement field. A `sensitivity` candidate floors at
+        `restricted_local` and the read plane withholds restricted statements from
+        search; handing the proposed words back through a producer's receipt would
+        be a second channel for exactly the text the accepted form is withheld on.
+        """
+        self._relationship_memory_plane()
+        request_digest, replayed = _reserve_relationship_write(unit_of_work, authorization, command)
+        if replayed is not None:
+            if replayed.result_family != "memory_proposal":
+                raise InternalError()
+            return _Result(
+                payload={
+                    "memory_proposal_id": replayed.result_id,
+                    "review_case_id": replayed.result_secondary_id,
+                    "subject_entity_id": command.entity_id,
+                    "kind": replayed.result_subtype,
+                    "state": replayed.result_state,
+                    "classification": replayed.result_classification,
+                    "method": replayed.result_method,
+                    "proposed_at": format_rfc3339(cast("datetime", replayed.result_at)),
+                    "evidence_count": replayed.result_count,
+                    "dedupe_sha256": replayed.result_digest,
+                    "created": replayed.result_created,
+                    "audit_id": replayed.audit_id,
+                },
+                disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEMORY_TRUST_BASIS),
+            )
+        principal_id = authorization.principal.principal_id
+        with _translated(), _memory_translated(), _entity_translated():
+            subject = unit_of_work.entities.get(principal_id, command.entity_id)
+            if subject is None:
+                raise NotFoundError(SafeDetail.SUBJECT_ENTITY_ID)
+            receipt = RelationshipMemoryProposalService().propose(
+                unit_of_work.relationship_memory_proposals,
+                ProposeMemoryCommand(
+                    principal_id=principal_id,
+                    subject_entity_id=command.entity_id,
+                    expected_subject_version=command.expected_entity_version,
+                    memory_kind=command.kind,
+                    statement=command.statement,
+                    structured_value=command.structured_value,
+                    context_links=_memory_links(command.context_links),
+                    evidence=tuple(
+                        ProposedEvidence(
+                            role=EvidenceLinkRole(entry["role"]),
+                            entity_observation_id=entry.get("entity_observation_id"),
+                            capture_span_id=entry.get("capture_span_id"),
+                            knowledge_id=entry.get("knowledge_id"),
+                        )
+                        for entry in command.evidence
+                    ),
+                ),
+                subject=subject,
+                origin=self._memory_proposal_origin(authorization),
+                at=authorization.at,
+            )
+        result = _Result(
+            payload={
+                "memory_proposal_id": receipt.memory_proposal_id,
+                "review_case_id": receipt.review_case_id,
+                "subject_entity_id": receipt.subject_entity_id,
+                "kind": receipt.proposed_kind.value,
+                "state": receipt.state.value,
+                "classification": receipt.classification.value,
+                "method": receipt.method.value,
+                "proposed_at": format_rfc3339(receipt.proposed_at),
+                "evidence_count": receipt.evidence_count,
+                "dedupe_sha256": receipt.dedupe_sha256,
+                "created": receipt.created,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_MEMORY_TRUST_BASIS),
+        )
+        _complete_relationship_write(
+            unit_of_work,
+            authorization,
+            command,
+            request_digest,
+            WriteRequestResult(
+                result_family="memory_proposal",
+                result_id=receipt.memory_proposal_id,
+                result_secondary_id=receipt.review_case_id,
+                result_state=receipt.state.value,
+                result_subtype=receipt.proposed_kind.value,
+                result_classification=receipt.classification.value,
+                result_method=receipt.method.value,
+                result_at=receipt.proposed_at,
+                result_count=receipt.evidence_count,
+                result_digest=receipt.dedupe_sha256,
+                result_created=receipt.created,
+                audit_id=authorization.audit_id,
+            ),
+        )
+        return result
+
+    def _entities_merge_preview(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PreviewEntityMerge,
+    ) -> _Result:
+        """`entities.merge.preview`: what a merge would do, bound and stored.
+
+        **No error translation.** `IdentityCorrectionService` raises
+        `application.errors` types directly, with the `SafeDetail` decided where
+        the failure is understood, which is `errors.py`'s own stated rule.
+        Wrapping this call in a `_..._translated()` context manager would
+        re-classify decisions that layer already made -- turning, for instance, a
+        deliberate `PREVIEW_STALE` into whatever the wrapper maps a conflict to.
+        The two producer handlers above wrap, because the services they call raise
+        domain errors; this one does not, because the service it calls does not.
+        """
+        self._identity_correction_plane()
+        report = IdentityCorrectionService(
+            unit_of_work.entities, unit_of_work.relationship_memory
+        ).preview(
+            MergePreviewCommand(
+                principal_id=authorization.principal.principal_id,
+                survivor_entity_id=command.survivor_entity_id,
+                expected_survivor_version=command.expected_survivor_version,
+                merged_away=tuple(
+                    (str(entry["entity_id"]), cast("int", entry["expected_version"]))
+                    for entry in command.merged_away
+                ),
+                reason=command.reason,
+                evidence_refs=command.evidence_refs,
+            ),
+            at=authorization.at,
+            requested_by=authorization.principal.principal_id,
+            actor_class=ActorClass.USER,
+            has_operator_authority=self._operator_authority(authorization),
+        )
+        preview = report.preview
+        return _Result(
+            payload={
+                "preview_id": preview.preview_id,
+                "preview_token": preview.preview_digest,
+                "conflict_digest": preview.conflict_digest,
+                "plan_digest": preview.plan_digest,
+                "expires_at": format_rfc3339(preview.expires_at),
+                "affected_groups": [
+                    {
+                        "family": group.family.value,
+                        "disposition": group.disposition.value,
+                        "record_count": group.record_count,
+                    }
+                    for group in report.groups
+                ],
+                "blockers": [_identity_conflict_view(item) for item in report.blockers],
+                "conflicts": [_identity_conflict_view(item) for item in report.conflicts],
+                "required_choices": list(report.required_choices),
+                "projected_effects": [
+                    {
+                        "family": draft.family.value,
+                        "record_id": draft.record_id,
+                        "kind": draft.kind.value,
+                    }
+                    for draft in report.projected_effects
+                ],
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
+    def _entities_merge(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: MergeEntities,
+    ) -> _Result:
+        """`entities.merge`: perform the merge the preview described, or refuse.
+
+        **The idempotency key is derived here and never sent.** Operator §23 keeps
+        it out of a remote caller's hands and §26 makes it server-owned, and
+        `REMOTE_OWNED_PAYLOAD_FIELDS` refuses one that arrives anyway -- but
+        something still has to choose it. It is derived from the capability, the
+        Principal and the preview, which is the operation's identity: a preview is
+        consumable once, so one preview is one operation. An identical retry
+        therefore produces the same key and replays; a materially different
+        request against the same preview produces the same key and a different
+        request digest, which is the conflict §23 asks for. Deriving it here
+        rather than at the remote boundary is what makes that true on local MCP,
+        remote MCP and HTTP alike instead of on one transport.
+
+        **The preview token is not this key**, which §23 states as a rule: the
+        digest says "the world is still what I was shown" and the key says "this
+        is the request I already made". The key is over the preview *identifier*,
+        which the caller cannot forge into another operation's -- a preview it
+        does not own is refused as absent before the key is consulted.
+
+        No error translation, for the reason `_entities_merge_preview` gives.
+        """
+        self._identity_correction_plane()
+        principal_id = authorization.principal.principal_id
+        receipt = IdentityCorrectionService(
+            unit_of_work.entities, unit_of_work.relationship_memory
+        ).apply(
+            MergeCommand(
+                principal_id=principal_id,
+                preview_id=command.preview_id,
+                preview_digest=command.preview_digest,
+                idempotency_key=_merge_idempotency_key(principal_id, command.preview_id),
+                reason=command.reason,
+                evidence_refs=command.evidence_refs,
+                choices=tuple(
+                    sorted(
+                        (str(entry["record_id"]), ConflictChoice(entry["choice"]))
+                        for entry in command.choices
+                    )
+                ),
+            ),
+            at=authorization.at,
+            correlation_id=authorization.correlation_id,
+            audit_id=authorization.audit_id,
+            performed_by=principal_id,
+            actor_class=ActorClass.USER,
+            has_operator_authority=self._operator_authority(authorization),
+        )
+        operation = receipt.operation
+        return _Result(
+            payload={
+                "identity_operation_id": operation.identity_operation_id,
+                "state": operation.state.value,
+                "survivor_entity_id": operation.survivor_entity_id,
+                "merged_entity_ids": list(operation.merged_entity_ids),
+                "preview_id": operation.preview_id,
+                "completed_at": (
+                    None
+                    if operation.completed_at is None
+                    else format_rfc3339(operation.completed_at)
+                ),
+                "replayed": receipt.replayed,
+                "effects": [
+                    {
+                        "effect_id": effect.effect_id,
+                        "sequence": effect.sequence,
+                        "family": effect.family.value,
+                        "record_id": effect.record_id,
+                        "kind": effect.kind.value,
+                    }
+                    for effect in receipt.effects
+                ],
+                "receipt_id": operation.receipt_id,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
 
 #: The wiring. `capabilities.get` reports availability from these keys, so a
 #: capability is available exactly when something here can execute it, and there
@@ -7453,6 +8407,9 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: (
             ApplicationService._entities_unresolved_mentions_resolve
         ),
+        Capability.ENTITIES_PROPOSALS_CREATE: ApplicationService._entities_proposals_create,
+        Capability.ENTITIES_MERGE_PREVIEW: ApplicationService._entities_merge_preview,
+        Capability.ENTITIES_MERGE: ApplicationService._entities_merge,
         Capability.RELATIONSHIP_MEMORY_CREATE: ApplicationService._relationship_memory_create,
         Capability.RELATIONSHIP_MEMORY_GET: ApplicationService._relationship_memory_get,
         Capability.RELATIONSHIP_MEMORY_LIST: ApplicationService._relationship_memory_list,
@@ -7461,6 +8418,7 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.RELATIONSHIP_MEMORY_REVISE: ApplicationService._relationship_memory_revise,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE: ApplicationService._relationship_memory_archive,
         Capability.RELATIONSHIP_MEMORY_RESTORE: ApplicationService._relationship_memory_restore,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: ApplicationService._relationship_memory_propose,
     }
 )
 
@@ -7501,6 +8459,9 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_OBSERVATIONS_LIST,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
     }
 )
 
@@ -7536,6 +8497,38 @@ _ENTITY_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # Phase B's three `entities.` writes. The producer path is here because
+        # it inserts a proposal row, and the two identity-correction capabilities
+        # because the preview inserts a control row and the merge rewrites
+        # canonical ones -- so a build with the plane on and writes off serves
+        # none of the three, which is what `test_entity_write_gate` derives from
+        # the purpose map and compares against this set.
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+    }
+)
+
+#: The governed merge, withheld from a process that has not set
+#: `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`. A subset of
+#: `_ENTITY_WRITE_CAPABILITIES` and therefore of `_ENTITY_CAPABILITIES`: this is
+#: a third narrowing of an already-narrowed plane, not a family of its own.
+#:
+#: Two rather than one. The preview is here beside the apply because the operator
+#: boundary is about reading the exact identities of two people as much as about
+#: collapsing them, and a build that served the inspection while withholding the
+#: act would gate the less sensitive half.
+_IDENTITY_CORRECTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+    }
+)
+
+_PRODUCER_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 )
 
@@ -7554,6 +8547,14 @@ _RELATIONSHIP_MEMORY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RELATIONSHIP_MEMORY_REVISE,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
+        # The producer path is composed on exactly the same conjunction as the
+        # eight, and on no further switch. It writes, so the question was whether
+        # to gate it behind `relationship_intelligence_writes_enabled` as well;
+        # the answer is no, because `relationship_memory.create` -- which writes
+        # an *accepted* memory -- is not gated on it either, and gating the
+        # weaker act more tightly than the stronger one would be a rule nobody
+        # could explain to an operator.
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 )
 

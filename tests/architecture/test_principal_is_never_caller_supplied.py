@@ -237,7 +237,9 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # same shape `MemoryWriteRequest.principal_id` has and the reason
     # `persistence.relationship_memory` is registered below.
     "application/entity_authoring.py": (("request", "principal_id"),) * 2,
-    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 13,
+    # The persistence serializer now reads the same server-composed field once
+    # more to acquire the Entity mutation scope before any identifier read.
+    "infrastructure/persistence/entity_authoring.py": (("request", "principal_id"),) * 23,
     "application/intelligence.py": (
         ("artifact", "principal_id"),
         ("artifact", "principal_id"),
@@ -286,10 +288,32 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # `record_mutation_event` and `record_fact_evidence_link`, and each read is
     # the same `if X.principal_id != principal_id: raise` those writes already
     # perform for an observation and a proposal -- and three more row mappers.
+    # WP-RI-06 adds `effect`, `operation` and `preview` to the same family, and
+    # three more `row` reads for the mappers that build those records back. Each
+    # is the identity-correction plane's version of the rule above: the write
+    # methods refuse a record whose `principal_id` is not the acting Principal's
+    # before any statement runs, and the mappers read a column out of a statement
+    # `_mine` already scoped.
+    # The six additional `request` reads serialize directed assignment and
+    # relationship creation/revision against Entity merge. They are the same
+    # application-composed write requests described above: the new reads pass
+    # the resolved partition to the shared lock and then re-read only rows
+    # constrained by that partition; no transport can supply this field.
+    #
+    # WP-RI-B-05 adds one of each and nothing new in kind. The second `link`
+    # read is `record_proposal_evidence_link` refusing an
+    # `EntityProposalEvidenceLink` whose `principal_id` is not the acting
+    # Principal's -- the same `if X.principal_id != principal_id: raise` the
+    # canonical evidence link, the observation and the proposal already perform,
+    # made before the statement that would otherwise report it as a foreign-key
+    # violation naming a constraint. The ninth `row` read is
+    # `_row_to_proposal_evidence_link` stamping the column back onto the record
+    # it builds from a row a `_mine`-scoped statement returned.
     "infrastructure/persistence/entity.py": (
         ("alias", "principal_id"),
         ("assignment", "principal_id"),
         ("decision", "principal_id"),
+        ("effect", "principal_id"),
         ("entity", "principal_id"),
         ("entity", "principal_id"),
         ("entity", "principal_id"),
@@ -297,7 +321,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("event", "principal_id"),
         ("identifier", "principal_id"),
         ("link", "principal_id"),
+        ("link", "principal_id"),
         ("observation", "principal_id"),
+        ("operation", "principal_id"),
+        ("operation", "principal_id"),
+        ("preview", "principal_id"),
         ("proposal", "principal_id"),
         ("proposal", "principal_id"),
         ("record", "principal_id"),
@@ -321,6 +349,12 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),
@@ -332,6 +366,27 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("row", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+    ),
+    # WP-RI-06's merge service. `MergePreviewCommand` and `MergeCommand` are
+    # internal dataclasses whose docstrings say the actor, the clock and the
+    # authority are the server's, and neither has a transport-facing counterpart
+    # carrying a `principal_id` field — so there is nothing a caller could have
+    # supplied for these three reads to be confused with, exactly as for
+    # `ObserveCommand` above. The fourth is the stored preview's own field, read
+    # to recompute that preview's binding digest and refuse a row whose stored
+    # binding disagrees with the digest beside it -- so it is read in order to
+    # *check* it, which is the registry's own rule. `identity_preview` is
+    # partition-scoped, so a preview held by anyone else was answered as absent
+    # before this read happens at all.
+    "application/identity_correction.py": (
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("preview", "principal_id"),
     ),
     # WP-RI-06's governance service carries the `principal_id` of the proposal
     # it just loaded onto the decided copy of that proposal. The value is not
@@ -349,6 +404,21 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # is nothing a caller could have supplied for these reads to be confused
     # with. The handler builds them from `authorization.principal.principal_id`,
     # and every repository call below stamps or refuses on the same value.
+    #
+    # `WP-RI-B-05`'s eleven `request.principal_id` reads are
+    # `EntityProposalReviewService` carrying one already-resolved Principal
+    # through one review decision, and they are safe for a reason of their own
+    # rather than by extension. `ReviewDecisionRequest` does have a
+    # `principal_id` field -- unlike the internal command dataclasses above --
+    # but no caller ever fills it: `ApplicationService._review_decide` is the
+    # only construction site in `src/`, and it writes
+    # `authorization.principal.principal_id` into it, while the transport
+    # command `DecideReviewCase` carries no `principal_id` field at all, so a
+    # payload naming one is refused by the dataclass constructor before any of
+    # this runs. What the reads do is carry that resolved partition into the
+    # repository calls, each of which stamps or refuses on the same value --
+    # `entity_proposal_case` and the ledger reads are `_mine`-scoped, and every
+    # write goes through `_bound`.
     "application/entity_governance.py": (
         ("command", "principal_id"),
         ("command", "principal_id"),
@@ -358,21 +428,57 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("command", "principal_id"),
         ("command", "principal_id"),
         ("held", "principal_id"),
+    )
+    + (("request", "principal_id"),) * 12,
+    # The one read in the application service is the same value on the way back
+    # out: `_review_decide` builds the request from
+    # `authorization.principal.principal_id` on the line above and then hands
+    # the field to the router that decides which plane owns the case. Reading
+    # the request rather than the authorization a second time is what keeps the
+    # routing read and the decision that follows it provably the same Principal.
+    "application/service.py": (("request", "principal_id"),),
+    # `WP-RI-B-05`'s Review SQL for the entity plane. Neither read is a caller's
+    # statement: `decision.principal_id` is checked *against* the acting
+    # Principal and the write is refused on a mismatch -- the same shape
+    # `record_proposal` uses one module over -- and `row.principal_id` is a
+    # column selected out of a `_mine`-scoped statement, so it is the partition
+    # the query already confined itself to, being copied onto the record it
+    # produced.
+    "infrastructure/persistence/entity_proposal_review.py": (
+        ("decision", "principal_id"),
+        ("row", "principal_id"),
     ),
-    # WP-29's Relationship Memory service. Its three commands are internal
-    # dataclasses whose docstrings each say "with the Principal already
-    # resolved", and the transport-facing commands the normalizer builds carry
-    # no `principal_id` field at all — so there is nothing a caller could have
-    # supplied for these three reads to be confused with. The service copies the
-    # resolved value onto the `MemoryWriteRequest` it hands the repository, and
-    # the fourth read is that request's own field, used to scope the replay
-    # lookup so a foreign idempotency key answers as absent rather than
-    # returning another Principal's receipt.
+    # WP-29's Relationship Memory service, and WP-RI-05's producer beside it.
+    # Every command in the module is an internal dataclass whose docstring says
+    # "with the Principal already resolved", and the transport-facing commands
+    # the normalizer builds carry no `principal_id` field at all — so there is
+    # nothing a caller could have supplied for any of these reads to be confused
+    # with. The direct path accounts for three: the service copies the resolved
+    # value onto the `MemoryWriteRequest` it hands the repository, and the
+    # `request` read is that request's own field, used to scope the replay lookup
+    # so a foreign idempotency key answers as absent rather than returning
+    # another Principal's receipt.
+    #
+    # `propose` accounts for the other three, and the first of them is the one
+    # this registry exists to distinguish: `subject.principal_id !=
+    # command.principal_id` reads the value **in order to refuse a mismatch**,
+    # against the entity a Principal-scoped read returned. That is the same
+    # posture `application/entity_governance.py` takes above — checked, never
+    # trusted — and it is why the `subject` read is registered beside it rather
+    # than treated as a second statement of ownership. The remaining two stamp
+    # the resolved Principal onto the proposal record and onto each of its
+    # evidence links, so a candidate cannot be recorded into a partition the
+    # acting Principal does not own.
     "application/relationship_memory.py": (
         ("command", "principal_id"),
         ("command", "principal_id"),
         ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
+        ("command", "principal_id"),
         ("request", "principal_id"),
+        ("subject", "principal_id"),
     ),
     # The context card's own invariant, and it reads both values *in order to
     # refuse a mismatch*: a card memory pairs a stored memory with a stored
@@ -391,6 +497,35 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # row with it, never to trust it. The `row` and `link` reads are stored
     # column values being mapped back onto domain records, from statements that
     # were already scoped by those same calls.
+    # The producer's insert (`WP-RI-B-05`). Existing reads either compare each
+    # evidence link with the proposal or pass the domain record's identity to
+    # `_mine`/`_bound`; the service constructed both records under the resolved
+    # authorization. The three new reads acquire the proposal subject/context
+    # Entity mutation locks, query the subject in that same partition, and
+    # validate every context target there before checking redirect and version
+    # state. They serialize a server-bound scope; they do not select a Principal
+    # from transport input.
+    "infrastructure/persistence/relationship_memory_proposals.py": (
+        ("link", "principal_id"),
+        ("link", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+        ("proposal", "principal_id"),
+    ),
+    # The eight new `request` reads acquire Entity mutation scopes and revalidate
+    # current subject/context rows for create, revise, archive, and restore. A
+    # `MemoryWriteRequest` is built by the application from the resolved
+    # authorization and public memory commands carry no Principal field, so the
+    # lock cannot turn caller input into a partition choice.
     "infrastructure/persistence/relationship_memory.py": (
         ("link", "principal_id"),
         ("request", "principal_id"),
@@ -405,16 +540,27 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),
     ),
-    # The same plane's review and promotion path. All nine reads are of the
+    # The same plane's review and promotion path. All reads are of the
     # `ReviewDecisionRequest.principal_id` the authenticated Review capability
-    # resolved, and eight of them are arguments to `_mine`, `_bound` or the
-    # subject re-validation those two scope — read to constrain a statement to
-    # the partition or to stamp a row with it. The ninth echoes it back onto the
-    # returned `ReviewDecision`, which is the same value the caller was already
-    # authenticated as and carries no partition decision of its own.
+    # resolved. Sixteen are internal scoping, stamping, or helper-composition
+    # reads that constrain statements to the partition or stamp rows with it.
+    # The seventeenth echoes it back onto the returned `ReviewDecision`, which
+    # is the same value the caller was already
+    # authenticated as and carries no partition decision of its own. The three
+    # new reads scope the optimistic subject discovery, the shared Entity
+    # mutation lock, and the locked proposal re-read; they preserve that same
+    # authenticated partition while closing the merge/review race.
     "infrastructure/persistence/relationship_memory_review.py": (
         ("request", "principal_id"),
         ("request", "principal_id"),
@@ -425,7 +571,22 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
+        ("request", "principal_id"),
     ),
+    # Producer-origin construction compares each mapping key with the immutable
+    # origin record it indexes. Both values are server-composed; a mismatch is
+    # refused before the registry can resolve any authenticated Principal.
+    "application/producer_origin.py": (("origin", "principal_id"),),
     "application/goodnotes.py": (
         ("page", "principal_id"),
         ("page", "principal_id"),

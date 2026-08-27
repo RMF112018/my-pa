@@ -1,0 +1,608 @@
+"""The preview binding, the operation's two mechanisms, and the effect ledger's order.
+
+Nothing here opens a connection. What is proved is the half of `WP-RI-06` that
+has to hold before any SQL exists: that a preview cannot be written with an
+expiry a caller chose, that the preview digest and the idempotency key stay
+separate concepts, that an effect cannot be stored with half its evidence or with
+a digest that disagrees with the state beside it, and that the ledger's order is
+a property of the effects rather than of the walk that found them.
+
+The database-tier sibling drives the same records against the append-only
+triggers and the composite foreign keys.
+
+Every identity here is synthetic and every state is identifiers and closed
+vocabulary members, which is the rule the effect ledger's own declaration states
+about what may go in `before_state` and `after_state`.
+"""
+
+from __future__ import annotations
+
+from dataclasses import fields
+from datetime import UTC, datetime, timedelta
+from itertools import permutations
+from typing import Final
+
+import pytest
+
+from my_pa.domain.common.identifiers import InvalidIdentifierError
+from my_pa.domain.relationship.governance import ActorClass
+from my_pa.domain.relationship.identity_correction import (
+    IDENTITY_PREVIEW_LIFETIME,
+    MAX_MERGED_AWAY_ENTITIES,
+    IdentityConflict,
+    IdentityConflictKind,
+    IdentityEffect,
+    IdentityEffectDraft,
+    IdentityEffectFamily,
+    IdentityEffectKind,
+    IdentityOperation,
+    IdentityOperationState,
+    IdentityOperationType,
+    IdentityPreview,
+    blocks_merge,
+    conflict_digest_for,
+    plan_digest_for,
+    preview_digest_for,
+    sequence_effects,
+    state_digest,
+)
+
+PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
+SURVIVOR: Final = "ent_aaaa0001aaaa0001"
+MERGED: Final = "ent_bbbb0002bbbb0002"
+OTHER_MERGED: Final = "ent_cccc0003cccc0003"
+
+PREVIEW: Final = "eipv_aaaa0001aaaa01"
+OPERATION: Final = "eiop_aaaa0001aaaa01"
+EFFECT: Final = "eief_aaaa0001aaaa01"
+
+CORRELATION: Final = "corr_aaaa0001aaaa0001"
+AUDIT: Final = "audit_aaaa0001aaaa01"
+
+WHEN: Final = datetime(2026, 8, 24, 12, tzinfo=UTC)
+DIGEST: Final = "0" * 64
+OTHER_DIGEST: Final = "1" * 64
+
+
+def a_preview(**overrides: object) -> IdentityPreview:
+    values: dict[str, object] = {
+        "preview_id": PREVIEW,
+        "principal_id": PRINCIPAL,
+        "operation_type": IdentityOperationType.MERGE,
+        "survivor_entity_id": SURVIVOR,
+        "expected_survivor_version": 3,
+        "merged_away": ((MERGED, 1),),
+        "preview_digest": DIGEST,
+        "conflict_digest": OTHER_DIGEST,
+        "plan_digest": OTHER_DIGEST,
+        "created_by": "operator",
+        "actor_class": ActorClass.USER,
+        "created_at": WHEN,
+        "expires_at": WHEN + IDENTITY_PREVIEW_LIFETIME,
+    }
+    values.update(overrides)
+    return IdentityPreview(**values)
+
+
+def an_operation(**overrides: object) -> IdentityOperation:
+    values: dict[str, object] = {
+        "identity_operation_id": OPERATION,
+        "principal_id": PRINCIPAL,
+        "operation_type": IdentityOperationType.MERGE,
+        "survivor_entity_id": SURVIVOR,
+        "merged_entity_ids": (MERGED,),
+        "preview_id": PREVIEW,
+        "preview_digest": DIGEST,
+        "idempotency_key": "merge-0001",
+        "request_digest": OTHER_DIGEST,
+        "performed_by": "operator",
+        "actor_class": ActorClass.USER,
+        "correlation_id": CORRELATION,
+        "audit_id": AUDIT,
+        "receipt_id": "rcpt_aaaa0001aaaa01",
+        "state": IdentityOperationState.COMPLETED,
+        "started_at": WHEN,
+        "completed_at": WHEN + timedelta(seconds=2),
+    }
+    values.update(overrides)
+    return IdentityOperation(**values)
+
+
+def a_draft(
+    record_id: str,
+    *,
+    family: IdentityEffectFamily = IdentityEffectFamily.ALIAS,
+    kind: IdentityEffectKind = IdentityEffectKind.OWNER_REPARENTED,
+) -> IdentityEffectDraft:
+    return IdentityEffectDraft(
+        family=family,
+        record_id=record_id,
+        kind=kind,
+        before_state={"entity_id": MERGED},
+        after_state={"entity_id": SURVIVOR},
+    )
+
+
+# --- the preview binding -----------------------------------------------------
+
+
+def test_a_preview_expires_exactly_fifteen_minutes_after_it_was_created() -> None:
+    assert timedelta(minutes=15) == IDENTITY_PREVIEW_LIFETIME
+    assert a_preview().expires_at == WHEN + timedelta(minutes=15)
+
+
+@pytest.mark.parametrize("minutes", [14, 16, 60])
+def test_a_writer_cannot_choose_a_preview_lifetime(minutes: int) -> None:
+    """The whole force of a fixed expiry is that no caller decides it."""
+    with pytest.raises(ValueError, match="fifteen minutes"):
+        a_preview(expires_at=WHEN + timedelta(minutes=minutes))
+
+
+def test_a_preview_is_expired_at_its_expiry_and_not_before() -> None:
+    preview = a_preview()
+    assert not preview.is_expired(preview.expires_at - timedelta(seconds=1))
+    assert preview.is_expired(preview.expires_at)
+
+
+def test_a_preview_that_nothing_has_used_is_not_consumed() -> None:
+    assert not a_preview().is_consumed
+    assert a_preview(consumed_at=WHEN + timedelta(minutes=1)).is_consumed
+
+
+def test_a_preview_cannot_be_consumed_before_it_was_created() -> None:
+    with pytest.raises(ValueError, match="consumed before"):
+        a_preview(consumed_at=WHEN - timedelta(seconds=1))
+
+
+def test_a_preview_binds_its_preview_digest_and_not_its_conflict_digest() -> None:
+    """The two columns are adjacent strings of the same shape; only one admits."""
+    preview = a_preview()
+    assert preview.binds(DIGEST)
+    assert not preview.binds(OTHER_DIGEST)
+
+
+def test_a_preview_merges_away_between_one_and_ten_entities() -> None:
+    with pytest.raises(ValueError, match="between 1 and"):
+        a_preview(merged_away=())
+    too_many = tuple((f"ent_merged{index:08d}", 1) for index in range(MAX_MERGED_AWAY_ENTITIES + 1))
+    with pytest.raises(ValueError, match="between 1 and"):
+        a_preview(merged_away=too_many)
+
+
+def test_a_preview_names_each_merged_away_entity_once() -> None:
+    with pytest.raises(ValueError, match="each merged-away entity once"):
+        a_preview(merged_away=((MERGED, 1), (MERGED, 2)))
+
+
+def test_a_preview_does_not_merge_the_survivor_into_itself() -> None:
+    with pytest.raises(ValueError, match="survivor into itself"):
+        a_preview(merged_away=((SURVIVOR, 1),))
+
+
+@pytest.mark.parametrize("version", [0, -1])
+def test_a_preview_expects_versions_that_could_exist(version: int) -> None:
+    with pytest.raises(ValueError, match="version that could exist"):
+        a_preview(expected_survivor_version=version)
+    with pytest.raises(ValueError, match="version that could exist"):
+        a_preview(merged_away=((MERGED, version),))
+
+
+@pytest.mark.parametrize("digest", ["", "not-a-digest", "0" * 63, "G" * 64])
+def test_a_preview_digest_is_a_sha256_digest(digest: str) -> None:
+    with pytest.raises(ValueError, match="sha256 digest"):
+        a_preview(preview_digest=digest)
+    with pytest.raises(ValueError, match="sha256 digest"):
+        a_preview(conflict_digest=digest)
+    with pytest.raises(ValueError, match="sha256 digest"):
+        a_preview(plan_digest=digest)
+
+
+def test_a_preview_names_a_preview_identifier_and_an_entity_identifier() -> None:
+    with pytest.raises(InvalidIdentifierError):
+        a_preview(preview_id=OPERATION)
+    with pytest.raises(InvalidIdentifierError):
+        a_preview(survivor_entity_id=PREVIEW)
+
+
+# --- the digests -------------------------------------------------------------
+
+
+def test_the_preview_digest_is_over_the_binding_and_is_order_insensitive() -> None:
+    """Two requests naming the same entities in different orders are one preview."""
+    forwards = preview_digest_for(
+        operation_type=IdentityOperationType.MERGE,
+        principal_id=PRINCIPAL,
+        survivor_entity_id=SURVIVOR,
+        expected_survivor_version=3,
+        merged_away=((MERGED, 1), (OTHER_MERGED, 2)),
+        plan_digest=OTHER_DIGEST,
+    )
+    backwards = preview_digest_for(
+        operation_type=IdentityOperationType.MERGE,
+        principal_id=PRINCIPAL,
+        survivor_entity_id=SURVIVOR,
+        expected_survivor_version=3,
+        merged_away=((OTHER_MERGED, 2), (MERGED, 1)),
+        plan_digest=OTHER_DIGEST,
+    )
+    assert forwards == backwards
+
+
+@pytest.mark.parametrize(
+    "tampered",
+    [
+        {"principal_id": "prn_bbbb0002bbbb0002bbbb0002"},
+        {"survivor_entity_id": OTHER_MERGED},
+        {"expected_survivor_version": 4},
+        {"merged_away": ((MERGED, 2),)},
+        {"merged_away": ((OTHER_MERGED, 1),)},
+    ],
+)
+def test_the_preview_digest_moves_when_any_part_of_the_binding_moves(
+    tampered: dict[str, object],
+) -> None:
+    """A request that changed an identity or a version cannot present as the original."""
+    binding: dict[str, object] = {
+        "operation_type": IdentityOperationType.MERGE,
+        "principal_id": PRINCIPAL,
+        "survivor_entity_id": SURVIVOR,
+        "expected_survivor_version": 3,
+        "merged_away": ((MERGED, 1),),
+        "plan_digest": OTHER_DIGEST,
+    }
+    original = preview_digest_for(**binding)
+    assert preview_digest_for(**{**binding, **tampered}) != original
+
+
+def test_the_preview_token_moves_when_the_operator_visible_plan_moves() -> None:
+    binding = {
+        "operation_type": IdentityOperationType.MERGE,
+        "principal_id": PRINCIPAL,
+        "survivor_entity_id": SURVIVOR,
+        "expected_survivor_version": 3,
+        "merged_away": ((MERGED, 1),),
+        "plan_digest": DIGEST,
+    }
+    assert preview_digest_for(**binding) != preview_digest_for(
+        **{**binding, "plan_digest": OTHER_DIGEST}
+    )
+
+
+def test_the_plan_digest_is_order_insensitive_and_binds_counts_and_effect_states() -> None:
+    conflict = IdentityConflict(
+        IdentityConflictKind.AMBIGUOUS_DISPOSITION,
+        IdentityEffectFamily.ALIAS,
+        "alias_aaaa0001aaaa01",
+    )
+    effect = a_draft("alias_bbbb0002bbbb02")
+    first = plan_digest_for(
+        groups=(("alias", "transformed", 1), ("observation", "unchanged", 0)),
+        conflicts=(conflict,),
+        projected_effects=(effect,),
+    )
+    assert first == plan_digest_for(
+        groups=(("observation", "unchanged", 0), ("alias", "transformed", 1)),
+        conflicts=(conflict,),
+        projected_effects=(effect,),
+    )
+    assert first != plan_digest_for(
+        groups=(("alias", "transformed", 2), ("observation", "unchanged", 0)),
+        conflicts=(conflict,),
+        projected_effects=(effect,),
+    )
+    assert first != plan_digest_for(
+        groups=(("alias", "transformed", 1), ("observation", "unchanged", 0)),
+        conflicts=(conflict,),
+        projected_effects=(
+            IdentityEffectDraft(
+                family=effect.family,
+                record_id=effect.record_id,
+                kind=effect.kind,
+                before_state=effect.before_state,
+                after_state={"entity_id": OTHER_MERGED},
+            ),
+        ),
+    )
+
+
+def test_the_conflict_digest_is_over_a_set_and_not_over_a_walk_order() -> None:
+    conflicts = [
+        IdentityConflict(
+            kind=IdentityConflictKind.ACTIVE_IDENTIFIER_CONFLICT,
+            family=IdentityEffectFamily.IDENTIFIER,
+            record_id="xid_aaaa0001aaaa0001",
+        ),
+        IdentityConflict(
+            kind=IdentityConflictKind.UNSUPPORTED_FAMILY,
+            family=IdentityEffectFamily.PROPOSAL,
+            record_id="eprp_aaaa0001aaaa01",
+        ),
+    ]
+    assert conflict_digest_for(conflicts) == conflict_digest_for(list(reversed(conflicts)))
+    assert conflict_digest_for(conflicts) == conflict_digest_for([*conflicts, conflicts[0]])
+
+
+def test_a_conflict_appearing_between_preview_and_apply_moves_the_conflict_digest() -> None:
+    """The case section 27 names: a concurrent identifier claim, versions unchanged."""
+    empty = conflict_digest_for(())
+    claimed = conflict_digest_for(
+        [
+            IdentityConflict(
+                kind=IdentityConflictKind.ACTIVE_IDENTIFIER_CONFLICT,
+                family=IdentityEffectFamily.IDENTIFIER,
+                record_id="xid_aaaa0001aaaa0001",
+            )
+        ]
+    )
+    assert empty != claimed
+
+
+def test_the_two_blocking_conflict_kinds_are_the_two_the_contract_names() -> None:
+    blocking = {kind for kind in IdentityConflictKind if blocks_merge(kind)}
+    assert blocking == {
+        IdentityConflictKind.ACTIVE_IDENTIFIER_CONFLICT,
+        IdentityConflictKind.UNSUPPORTED_FAMILY,
+    }
+    assert not blocks_merge(IdentityConflictKind.AMBIGUOUS_DISPOSITION)
+
+
+def test_a_conflict_reports_whether_it_blocks_rather_than_storing_it() -> None:
+    conflict = IdentityConflict(
+        kind=IdentityConflictKind.AMBIGUOUS_DISPOSITION,
+        family=IdentityEffectFamily.ASSIGNMENT,
+        record_id="asn_aaaa0001aaaa0001",
+    )
+    assert not conflict.blocks
+    assert "blocks" not in {declared.name for declared in fields(IdentityConflict)}
+
+
+# --- the operation -----------------------------------------------------------
+
+
+def test_an_operation_carries_a_preview_digest_and_an_idempotency_key_separately() -> None:
+    """Section 23: the preview token is not the mutation idempotency key."""
+    operation = an_operation()
+    assert operation.preview_digest != operation.idempotency_key
+    assert operation.request_digest != operation.preview_digest
+
+
+def test_an_operation_never_reprs_its_key_or_its_reason() -> None:
+    rendered = repr(an_operation(reason="duplicate synthetic contact rows"))
+    assert "merge-0001" not in rendered
+    assert "duplicate synthetic contact rows" not in rendered
+
+
+def test_an_operation_in_progress_names_no_end() -> None:
+    running = an_operation(state=IdentityOperationState.IN_PROGRESS, completed_at=None)
+    assert running.completed_at is None
+    with pytest.raises(ValueError, match="finished exactly when"):
+        an_operation(state=IdentityOperationState.IN_PROGRESS)
+
+
+@pytest.mark.parametrize("state", [IdentityOperationState.COMPLETED, IdentityOperationState.FAILED])
+def test_a_finished_operation_names_an_end(state: IdentityOperationState) -> None:
+    assert an_operation(state=state).completed_at is not None
+    with pytest.raises(ValueError, match="finished exactly when"):
+        an_operation(state=state, completed_at=None)
+
+
+def test_an_operation_does_not_end_before_it_started() -> None:
+    with pytest.raises(ValueError, match="end before it started"):
+        an_operation(completed_at=WHEN - timedelta(seconds=1))
+
+
+def test_an_operation_reason_is_bounded() -> None:
+    with pytest.raises(ValueError, match="reason is bounded"):
+        an_operation(reason="x" * 501)
+    with pytest.raises(ValueError, match="reason is not blank"):
+        an_operation(reason="   ")
+
+
+def test_an_operation_names_each_merged_away_entity_once_and_not_the_survivor() -> None:
+    with pytest.raises(ValueError, match="each merged-away entity once"):
+        an_operation(merged_entity_ids=(MERGED, MERGED))
+    with pytest.raises(ValueError, match="survivor into itself"):
+        an_operation(merged_entity_ids=(SURVIVOR,))
+
+
+def test_an_operation_carries_an_idempotency_key() -> None:
+    with pytest.raises(ValueError, match="idempotency key"):
+        an_operation(idempotency_key="")
+
+
+def test_an_operation_requires_a_server_receipt_identifier() -> None:
+    with pytest.raises(InvalidIdentifierError):
+        an_operation(receipt_id="audit_aaaa0001aaaa01")
+
+
+# --- the effect ledger -------------------------------------------------------
+
+
+def test_an_effect_records_both_states_and_both_digests() -> None:
+    effect = sequence_effects(
+        [a_draft("eals_aaaa0001aaaa01")],
+        identity_operation_id=OPERATION,
+        principal_id=PRINCIPAL,
+        recorded_at=WHEN,
+    )[0]
+    assert effect.before_state == {"entity_id": MERGED}
+    assert effect.after_state == {"entity_id": SURVIVOR}
+    assert effect.before_sha256 == state_digest(effect.before_state)
+    assert effect.after_sha256 == state_digest(effect.after_state)
+
+
+def test_an_effect_refuses_a_state_that_disagrees_with_its_recorded_digest() -> None:
+    """The tamper detection the append-only trigger cannot supply on its own."""
+    with pytest.raises(ValueError, match="does not match its recorded digest"):
+        IdentityEffect(
+            effect_id=EFFECT,
+            identity_operation_id=OPERATION,
+            principal_id=PRINCIPAL,
+            sequence=1,
+            family=IdentityEffectFamily.ALIAS,
+            record_id="eals_aaaa0001aaaa01",
+            kind=IdentityEffectKind.OWNER_REPARENTED,
+            before_state={"entity_id": MERGED},
+            after_state={"entity_id": SURVIVOR},
+            before_sha256=state_digest({"entity_id": OTHER_MERGED}),
+            after_sha256=state_digest({"entity_id": SURVIVOR}),
+            recorded_at=WHEN,
+        )
+
+
+def test_an_effect_records_a_change_rather_than_a_repetition() -> None:
+    with pytest.raises(ValueError, match="records a change"):
+        IdentityEffectDraft(
+            family=IdentityEffectFamily.ALIAS,
+            record_id="eals_aaaa0001aaaa01",
+            kind=IdentityEffectKind.OWNER_REPARENTED,
+            before_state={"entity_id": MERGED},
+            after_state={"entity_id": MERGED},
+        )
+
+
+def test_an_effect_refuses_a_state_that_says_nothing() -> None:
+    """A recorded state of `{}` is a redirect-only ledger written one row at a time."""
+    with pytest.raises(ValueError, match="says something"):
+        IdentityEffectDraft(
+            family=IdentityEffectFamily.ENTITY,
+            record_id=MERGED,
+            kind=IdentityEffectKind.ENTITY_REDIRECTED,
+            before_state={},
+            after_state={"status": "merged_redirect"},
+        )
+
+
+def test_an_effect_names_an_opaque_record_id_of_any_family() -> None:
+    with pytest.raises(InvalidIdentifierError):
+        a_draft("/etc/passwd")
+
+
+# --- deterministic ordering --------------------------------------------------
+
+
+def _drafts() -> list[IdentityEffectDraft]:
+    return [
+        a_draft(
+            MERGED,
+            family=IdentityEffectFamily.ENTITY,
+            kind=IdentityEffectKind.ENTITY_REDIRECTED,
+        ),
+        a_draft("eals_aaaa0001aaaa01"),
+        a_draft("eals_bbbb0002bbbb02"),
+        a_draft("xid_aaaa0001aaaa0001", family=IdentityEffectFamily.IDENTIFIER),
+        a_draft(
+            "erel_aaaa0001aaaa01",
+            family=IdentityEffectFamily.RELATIONSHIP,
+            kind=IdentityEffectKind.SELF_EDGE_SUPERSEDED,
+        ),
+        a_draft(
+            "eprp_aaaa0001aaaa01",
+            family=IdentityEffectFamily.PROPOSAL,
+            kind=IdentityEffectKind.DEPENDENT_INVALIDATED,
+        ),
+    ]
+
+
+def _numbering(drafts: list[IdentityEffectDraft]) -> list[tuple[int, str, str]]:
+    return [
+        (effect.sequence, effect.family.value, effect.record_id)
+        for effect in sequence_effects(
+            drafts,
+            identity_operation_id=OPERATION,
+            principal_id=PRINCIPAL,
+            recorded_at=WHEN,
+        )
+    ]
+
+
+def test_the_same_effects_are_numbered_the_same_way_however_they_were_found() -> None:
+    """Determinism as a measured property: the walk order must not reach the ledger.
+
+    Every permutation rather than a sample of shuffles. A sampled proof of a
+    property this small says only that the sampler did not find the counterexample,
+    and an emitter walking six affected families can produce any of these orders.
+    """
+    expected = _numbering(_drafts())
+    for order in permutations(range(len(_drafts()))):
+        reordered = [_drafts()[position] for position in order]
+        assert _numbering(reordered) == expected
+
+
+def test_the_ledger_numbers_from_one_without_gaps() -> None:
+    numbering = _numbering(_drafts())
+    assert [sequence for sequence, _, _ in numbering] == list(range(1, len(numbering) + 1))
+
+
+def test_the_identity_change_is_recorded_before_what_it_caused() -> None:
+    """`WP-07` walks the ledger backwards, so the redirect must be first here."""
+    first_sequence, first_family, first_record = _numbering(_drafts())[0]
+    assert (first_sequence, first_family, first_record) == (
+        1,
+        IdentityEffectFamily.ENTITY.value,
+        MERGED,
+    )
+
+
+def test_an_operation_records_one_effect_per_record() -> None:
+    duplicated = [
+        a_draft("eals_aaaa0001aaaa01"),
+        a_draft("eals_aaaa0001aaaa01", kind=IdentityEffectKind.ROW_COALESCED),
+    ]
+    with pytest.raises(ValueError, match="one effect per record"):
+        sequence_effects(
+            duplicated,
+            identity_operation_id=OPERATION,
+            principal_id=PRINCIPAL,
+            recorded_at=WHEN,
+        )
+
+
+def test_the_same_record_in_two_families_is_two_effects() -> None:
+    """`record_id` is unique per family, not globally; the pair is what identifies a row."""
+    numbering = _numbering(
+        [
+            a_draft("eals_aaaa0001aaaa01"),
+            a_draft("eals_aaaa0001aaaa01", family=IdentityEffectFamily.OBSERVATION),
+        ]
+    )
+    assert len(numbering) == 2
+
+
+def test_effect_identifiers_are_issued_rather_than_derived_from_their_subject() -> None:
+    """A deterministic identifier would be one derived from the row it names."""
+    drafts = [a_draft("eals_aaaa0001aaaa01")]
+    first = sequence_effects(
+        drafts, identity_operation_id=OPERATION, principal_id=PRINCIPAL, recorded_at=WHEN
+    )[0]
+    second = sequence_effects(
+        drafts, identity_operation_id=OPERATION, principal_id=PRINCIPAL, recorded_at=WHEN
+    )[0]
+    assert first.effect_id != second.effect_id
+    assert first.sequence == second.sequence
+
+
+# --- the closed vocabularies -------------------------------------------------
+
+
+def test_the_operation_type_admits_only_what_this_phase_performs() -> None:
+    """`WP-07` widens this with the code that writes the value."""
+    assert [member.value for member in IdentityOperationType] == ["merge"]
+
+
+def test_every_effect_kind_names_a_transformation_of_an_existing_row() -> None:
+    """Both states are required precisely because no kind creates or destroys one."""
+    assert {member.value for member in IdentityEffectKind} == {
+        "entity_redirected",
+        "owner_reparented",
+        "row_coalesced",
+        "self_edge_superseded",
+        "dependent_invalidated",
+        "derived_state_invalidated",
+    }
+
+
+def test_the_effect_families_include_the_ones_a_mutation_ledger_excludes() -> None:
+    """A merge does something to a proposal, and an inversion has to put it back."""
+    families = {member.value for member in IdentityEffectFamily}
+    assert {"proposal", "review_case", "derived_context"} <= families

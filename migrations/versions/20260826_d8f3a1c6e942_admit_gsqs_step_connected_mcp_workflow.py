@@ -1,11 +1,11 @@
 """Admit the connected-MCP GSQS B0 `gsqs.step` capability.
 
 Revision ID: d8f3a1c6e942
-Revises: c4b0a1d9e827
+Revises: 3d07af4dc513
 Create Date: 2026-08-26
 
-One capability name (`gsqs.step`). Purposes are unchanged
-(`gsqs_b0_execution`, `gsqs_b0_observation`). ChatLLM drives inference
+One capability name (`gsqs.step`). Purposes are unchanged from Phase B's
+vocabulary at `b64e29a0f7c1` / `3d07af4dc513`. ChatLLM drives inference
 through production `my-pa` MCP; this name is the case lease/submit step
 beside `gsqs.start` / `gsqs.status`.
 
@@ -14,8 +14,8 @@ CHECK constraint on `knowledge.audit_events` and restates the unchanged
 purpose set (`D-69`).
 
 The literals below are written out and frozen at this revision rather than
-derived from the domain enums. `downgrade` restores `c4b0a1d9e827`'s
-vocabulary exactly.
+derived from the domain enums. `downgrade` restores Phase B's vocabulary at
+`3d07af4dc513` exactly.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from typing import Final
 from alembic import op
 
 revision: str = "d8f3a1c6e942"
-down_revision: str | None = "c4b0a1d9e827"
+down_revision: str | None = "3d07af4dc513"
 branch_labels: str | None = None
 depends_on: str | None = None
 
@@ -48,31 +48,32 @@ _CAPABILITIES_AT_THIS_REVISION: Final = (
     "'entities.assignments.revise', 'entities.context', 'entities.create', "
     "'entities.get', 'entities.identifiers.bind', 'entities.identifiers.list', "
     "'entities.identifiers.retire', 'entities.identifiers.supersede', "
-    "'entities.observations.list', 'entities.observe', "
-    "'entities.relationships', 'entities.relationships.create', "
-    "'entities.relationships.end', 'entities.relationships.revise', "
-    "'entities.resolve', 'entities.restore', 'entities.search', "
-    "'entities.unresolved_mentions', 'entities.unresolved_mentions.resolve', "
-    "'entities.update', 'goodnotes.content', 'goodnotes.propose', "
-    "'goodnotes.work', 'gsqs.start', 'gsqs.status', 'gsqs.step', "
-    "'knowledge.coverage', "
-    "'knowledge.read', 'knowledge.reveal', 'knowledge.search', "
-    "'native_sources.backfill', 'native_sources.configure', "
+    "'entities.merge', 'entities.merge.preview', 'entities.observations.list', "
+    "'entities.observe', 'entities.proposals.create', 'entities.relationships', "
+    "'entities.relationships.create', 'entities.relationships.end', "
+    "'entities.relationships.revise', 'entities.resolve', 'entities.restore', "
+    "'entities.search', 'entities.unresolved_mentions', "
+    "'entities.unresolved_mentions.resolve', 'entities.update', "
+    "'goodnotes.content', 'goodnotes.propose', 'goodnotes.work', "
+    "'gsqs.start', 'gsqs.status', 'gsqs.step', "
+    "'knowledge.coverage', 'knowledge.read', 'knowledge.reveal', "
+    "'knowledge.search', 'native_sources.backfill', 'native_sources.configure', "
     "'native_sources.disable', 'native_sources.discover', "
     "'native_sources.pause', 'native_sources.preflight', "
     "'native_sources.reconcile', 'native_sources.resume', "
     "'native_sources.retry', 'native_sources.status', 'native_sources.sync', "
     "'relationship_memory.archive', 'relationship_memory.create', "
     "'relationship_memory.get', 'relationship_memory.history', "
-    "'relationship_memory.list', 'relationship_memory.restore', "
-    "'relationship_memory.revise', 'relationship_memory.search', "
-    "'reports.begin_cycle', 'reports.commit', 'reports.latest', "
-    "'reports.list', 'reports.read', 'reports.record_run_state', "
-    "'reports.resolve_set', 'reports.search', 'review.decide', 'review.list', "
-    "'sources.enroll', 'sources.fetch', 'sources.list', 'sources.metadata', "
-    "'sources.status', 'tasks.bulk_confirm', 'tasks.bulk_preview', "
-    "'tasks.create', 'tasks.history', 'tasks.list', 'tasks.read', "
-    "'tasks.search', 'tasks.transition', 'tasks.update')"
+    "'relationship_memory.list', 'relationship_memory.propose', "
+    "'relationship_memory.restore', 'relationship_memory.revise', "
+    "'relationship_memory.search', 'reports.begin_cycle', 'reports.commit', "
+    "'reports.latest', 'reports.list', 'reports.read', "
+    "'reports.record_run_state', 'reports.resolve_set', 'reports.search', "
+    "'review.decide', 'review.list', 'sources.enroll', 'sources.fetch', "
+    "'sources.list', 'sources.metadata', 'sources.status', "
+    "'tasks.bulk_confirm', 'tasks.bulk_preview', 'tasks.create', "
+    "'tasks.history', 'tasks.list', 'tasks.read', 'tasks.search', "
+    "'tasks.transition', 'tasks.update')"
 )
 
 _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
@@ -92,30 +93,32 @@ _CAPABILITIES_BEFORE_THIS_REVISION: Final = (
     "'entities.assignments.revise', 'entities.context', 'entities.create', "
     "'entities.get', 'entities.identifiers.bind', 'entities.identifiers.list', "
     "'entities.identifiers.retire', 'entities.identifiers.supersede', "
-    "'entities.observations.list', 'entities.observe', "
-    "'entities.relationships', 'entities.relationships.create', "
-    "'entities.relationships.end', 'entities.relationships.revise', "
-    "'entities.resolve', 'entities.restore', 'entities.search', "
-    "'entities.unresolved_mentions', 'entities.unresolved_mentions.resolve', "
-    "'entities.update', 'goodnotes.content', 'goodnotes.propose', "
-    "'goodnotes.work', 'gsqs.start', 'gsqs.status', 'knowledge.coverage', "
-    "'knowledge.read', 'knowledge.reveal', 'knowledge.search', "
-    "'native_sources.backfill', 'native_sources.configure', "
+    "'entities.merge', 'entities.merge.preview', 'entities.observations.list', "
+    "'entities.observe', 'entities.proposals.create', 'entities.relationships', "
+    "'entities.relationships.create', 'entities.relationships.end', "
+    "'entities.relationships.revise', 'entities.resolve', 'entities.restore', "
+    "'entities.search', 'entities.unresolved_mentions', "
+    "'entities.unresolved_mentions.resolve', 'entities.update', "
+    "'goodnotes.content', 'goodnotes.propose', 'goodnotes.work', "
+    "'gsqs.start', 'gsqs.status', "
+    "'knowledge.coverage', 'knowledge.read', 'knowledge.reveal', "
+    "'knowledge.search', 'native_sources.backfill', 'native_sources.configure', "
     "'native_sources.disable', 'native_sources.discover', "
     "'native_sources.pause', 'native_sources.preflight', "
     "'native_sources.reconcile', 'native_sources.resume', "
     "'native_sources.retry', 'native_sources.status', 'native_sources.sync', "
     "'relationship_memory.archive', 'relationship_memory.create', "
     "'relationship_memory.get', 'relationship_memory.history', "
-    "'relationship_memory.list', 'relationship_memory.restore', "
-    "'relationship_memory.revise', 'relationship_memory.search', "
-    "'reports.begin_cycle', 'reports.commit', 'reports.latest', "
-    "'reports.list', 'reports.read', 'reports.record_run_state', "
-    "'reports.resolve_set', 'reports.search', 'review.decide', 'review.list', "
-    "'sources.enroll', 'sources.fetch', 'sources.list', 'sources.metadata', "
-    "'sources.status', 'tasks.bulk_confirm', 'tasks.bulk_preview', "
-    "'tasks.create', 'tasks.history', 'tasks.list', 'tasks.read', "
-    "'tasks.search', 'tasks.transition', 'tasks.update')"
+    "'relationship_memory.list', 'relationship_memory.propose', "
+    "'relationship_memory.restore', 'relationship_memory.revise', "
+    "'relationship_memory.search', 'reports.begin_cycle', 'reports.commit', "
+    "'reports.latest', 'reports.list', 'reports.read', "
+    "'reports.record_run_state', 'reports.resolve_set', 'reports.search', "
+    "'review.decide', 'review.list', 'sources.enroll', 'sources.fetch', "
+    "'sources.list', 'sources.metadata', 'sources.status', "
+    "'tasks.bulk_confirm', 'tasks.bulk_preview', 'tasks.create', "
+    "'tasks.history', 'tasks.list', 'tasks.read', 'tasks.search', "
+    "'tasks.transition', 'tasks.update')"
 )
 
 _PURPOSES_AT_THIS_REVISION: Final = (
@@ -123,10 +126,12 @@ _PURPOSES_AT_THIS_REVISION: Final = (
     "'commitment_authoring', 'commitment_read', 'content_extraction', "
     "'context_preference', 'context_preparation', 'continuity_authoring', "
     "'document_authoring', 'document_read', 'entity_authoring', "
-    "'entity_observation_ingest', 'entity_read', 'goodnotes_content', "
+    "'entity_identity_correction', 'entity_observation_ingest', "
+    "'entity_proposal', 'entity_read', 'goodnotes_content', "
     "'goodnotes_proposal', 'goodnotes_work', 'gsqs_b0_execution', "
-    "'gsqs_b0_observation', 'knowledge_read', 'knowledge_search', "
-    "'relationship_memory_authoring', 'relationship_memory_read', "
+    "'gsqs_b0_observation', 'knowledge_read', "
+    "'knowledge_search', 'relationship_memory_authoring', "
+    "'relationship_memory_proposal', 'relationship_memory_read', "
     "'report_authoring', 'report_read', 'review_disposition', "
     "'security_validation', 'source_inspection', 'status_observation', "
     "'task_authoring', 'task_read')"
@@ -137,10 +142,12 @@ _PURPOSES_BEFORE_THIS_REVISION: Final = (
     "'commitment_authoring', 'commitment_read', 'content_extraction', "
     "'context_preference', 'context_preparation', 'continuity_authoring', "
     "'document_authoring', 'document_read', 'entity_authoring', "
-    "'entity_observation_ingest', 'entity_read', 'goodnotes_content', "
+    "'entity_identity_correction', 'entity_observation_ingest', "
+    "'entity_proposal', 'entity_read', 'goodnotes_content', "
     "'goodnotes_proposal', 'goodnotes_work', 'gsqs_b0_execution', "
-    "'gsqs_b0_observation', 'knowledge_read', 'knowledge_search', "
-    "'relationship_memory_authoring', 'relationship_memory_read', "
+    "'gsqs_b0_observation', 'knowledge_read', "
+    "'knowledge_search', 'relationship_memory_authoring', "
+    "'relationship_memory_proposal', 'relationship_memory_read', "
     "'report_authoring', 'report_read', 'review_disposition', "
     "'security_validation', 'source_inspection', 'status_observation', "
     "'task_authoring', 'task_read')"

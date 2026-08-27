@@ -357,29 +357,34 @@ email, or calendar data.
 
 **That describes WP-9, and is no longer true of the plane.** Corrected
 2026-08-19 when it acquired public reads, and again after Phase A, which gave it
-writes: the Relationship Intelligence entity plane is twenty-eight `entities.`
-names now — ten reads and eighteen writes over identity, identifiers, aliases,
-assignments, directed edges, observations and mention resolution. This document,
+writes: the Relationship Intelligence entity plane is thirty-one `entities.`
+names now — ten reads and twenty-one writes over identity, identifiers, aliases,
+assignments, directed edges, observations, mention resolution, proposal staging,
+and governed merge preview/apply. This document,
 whose job is stating what the build does not do, said nothing about them. What
 remains true, and is the limitation:
 
 * **They are off by default, and the writes are off twice.** A process that has
   not set `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the
-  twenty-eight and refuses each with `unsupported` on every transport. A process
+  thirty-one and refuses each with `unsupported` on every transport. A process
   that has set it but not
   `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` serves the reads and refuses
-  all eighteen writes the same way.
-* **Merge and proposal review still have no caller.**
-  `src/my_pa/application/entity_reenrichment.py` and the merge half of
-  `src/my_pa/application/entity_governance.py` are composed by no bootstrap,
-  capability, script or worker, so the review queue can be *read* and cannot be
-  *worked*. An operator with a proposal to decide has no supported action. What
-  changed in Phase A is the authoring, assignment, directed-edge and observation
-  halves, which do have callers; merge did not.
+  all twenty-one writes the same way.
+* **Proposal review and governed merge are available, but remain fail-closed and
+  off by default.** Entity and Relationship Memory cases use canonical
+  `review.list`/`review.decide`; accepting a merge proposal does not execute a
+  merge. Apply requires a separate persisted `entities.merge.preview` followed
+  by operator-only `entities.merge`. Remotely, both additionally require global
+  remote writes, an exact server-resolved `remote.operator` durable capability
+  set, the allowed-capability and purpose intersections, every feature gate, and
+  application policy. No raw allowlist or non-operator profile can publish them,
+  and this repository change activates no live profile, grant, or flag.
 * **No live personal data has reached it.** Every figure and every test is
   synthetic, and no connector writes an observation.
-* **Split does not exist**, so the "reversible merge/split" above overstates what
-  the plane supports: a merge is recorded and redirects, and cannot be undone.
+* **Split does not exist.** Phase B records invertible effects for `WP-07`, but
+  no current capability performs the inverse. `WP-08` still owns final
+  Relationship Memory redistribution and `WP-10` complete cross-plane
+  re-enrichment.
 
 Profiles disclose coverage, unavailable domains, freshness, calculation basis,
 and time windows. They do not claim completeness. There is no automatic identity
@@ -521,8 +526,12 @@ no capability name written anywhere in the package, and no read of a field out o
 a caller's request. The last two exist because a plant that wrote expected-version
 and idempotency logic inline in the transport passed every other claim.
 
-**stdio only.** No socket is opened and the SDK's SSE, streamable-HTTP and
-WebSocket servers are named and forbidden by import.
+**Local stdio and a separately gated persistent remote surface.** The default
+`apps/gateway.py mcp` process opens no socket and imports only the stdio MCP
+adapter. `apps/gateway.py mcp-remote` is a distinct authenticated Streamable
+HTTP surface: it is disabled by default, requires the origin OAuth configuration
+and durable remote-security control, and enforces exact host/origin and DNS
+rebinding protections. This repository does not activate or deploy it.
 
 **The kill switch.** `MY_PA_MCP_SURFACE_DISABLED` is **off by default and the
 surface serves** — it is a pipe an operator starts deliberately, not a network
@@ -535,13 +544,15 @@ process refuses to serve when that row is absent, foreign or **revoked** — so
 `revoke_client` withdraws the surface at the next start. stdio carries no
 credential, so nothing is verified and nothing is presented.
 
-**Not built, and named rather than implied.** There is **no OAuth 2.1
-authorization server, no PKCE, no resource indicators and no per-external-client
-profile conformance testing**. Not because they were skipped: none of them has
-anything to run over. They are properties of an *ingress*, and this build has
-none — `EXT-07` (external ingress) and `EXT-08` (client activation) are
-operator-gated and untouched. Any statement that this surface is "OAuth-ready" or
-"conformance-tested against a client profile" would be false.
+**Remote authentication is implemented, not activated.** The persistent remote
+surface has an origin OAuth authorization server, protected-resource metadata,
+resource-bound access and optional refresh tokens, and durable client grants.
+It still fails closed unless the global remote switch, database security control,
+exact host/origin checks, token resource/scope, and capability/purpose
+intersections all admit the request. Remote writes need their independent global
+write switch; operator-only merge additionally needs the exact server-resolved
+`remote.operator` durable capability set. No live client, grant, flag, public
+ingress, or deployment is established by this implementation.
 
 **No live NAS source provider.** Source reads over MCP go through the existing
 `sources.*` capabilities and the fixture provider, which are read-only; a live

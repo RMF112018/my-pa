@@ -255,6 +255,52 @@ class Purpose(StrEnum):
     # readable in a profile and absent from a broad search under the same grant.
     RELATIONSHIP_MEMORY_READ = "relationship_memory_read"
     RELATIONSHIP_MEMORY_AUTHORING = "relationship_memory_authoring"
+    # Phase B's additions. Each is a purpose of its own rather than a reuse, and
+    # `D-91`'s test — would the reuse widen the grant? — answers loudly in every
+    # case.
+    #
+    # **`ENTITY_PROPOSAL` is not `ENTITY_AUTHORING`.** Authoring *decides* who a
+    # person is; a proposal *asks* a reviewer to. Admitting the producer path
+    # under the authoring purpose would mean a grant issued so a rule can raise
+    # candidates could also rename an entity, retire the address their mail
+    # arrives at, and assert who they report to — which is the self-promotion
+    # operator §16 forbids, arrived at by the grant rather than by a code path.
+    # Nor is it `ENTITY_OBSERVATION_INGEST`: that records what a source *said*
+    # and binds nothing, while a proposal names a mutation and a target version.
+    # One purpose for the one producer capability, because a second would map
+    # one-to-one and cost another frozen-constraint literal.
+    ENTITY_PROPOSAL = "entity_proposal"
+    # **`ENTITY_IDENTITY_CORRECTION` is not `ENTITY_AUTHORING` and not
+    # `REVIEW_DISPOSITION`.** Operator §24 puts `entities.merge.preview` and
+    # `entities.merge` behind an operator authorization context, and §15 says a
+    # reviewer grant is not an identity-correction grant. Admitting either under
+    # `ENTITY_AUTHORING` would hand every holder of the eighteen Phase A writes
+    # the authority to collapse two people into one; admitting them under
+    # `REVIEW_DISPOSITION` would make `review.decide` a hidden merge endpoint by
+    # grant, which is the exact sentence §15 writes.
+    #
+    # **One purpose covering both the preview and the apply, deliberately, and
+    # the coupling is accepted rather than worked around.** The remote boundary
+    # derives write-gating from `permitted_purposes(capability) & _WRITE_PURPOSES`
+    # (`adapters/mcp/remote.py`), so a shared purpose makes the preview
+    # remote-write-gated too. Splitting it to un-gate the preview would create a
+    # purpose that reads the whole affected world of a merge — every alias,
+    # identifier, assignment, edge, observation, proposal and review case of two
+    # people — under a grant narrower than the one the merge needs, which is a
+    # weaker §24 boundary bought with a schema literal. The preview also
+    # persists a durable control row, so it is a write in this module's own
+    # terms; see `_WRITE_CAPABILITIES`.
+    ENTITY_IDENTITY_CORRECTION = "entity_identity_correction"
+    # **`RELATIONSHIP_MEMORY_PROPOSAL` is not `RELATIONSHIP_MEMORY_AUTHORING`,**
+    # for the reason `ENTITY_PROPOSAL` is not `ENTITY_AUTHORING`, and here the
+    # separation is the whole of operator §12: the authoring purpose creates an
+    # *active* memory, and this path is forbidden to. A grant issued to a rule
+    # so it can raise candidates about a person must not also let it write
+    # accepted private statements about them — and reuse would make the
+    # prohibition a property of the handler rather than of the grant. Reading is
+    # separate again: a producer proposes and does not read back, so neither of
+    # the plane's existing pair is widened.
+    RELATIONSHIP_MEMORY_PROPOSAL = "relationship_memory_proposal"
     # Connected-MCP B0 workflow purposes. Two rather than one, on the same rule
     # as the capture and managed-document planes: a purpose wide enough to cover
     # starting a repetition and observing it is a purpose that grants both.

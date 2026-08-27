@@ -34,6 +34,7 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     EndEntityAssignment,
     EndEntityRelationship,
@@ -45,7 +46,9 @@ from my_pa.application.commands import (
     ListEntityIdentifiers,
     ListEntityObservations,
     ListUnresolvedMentions,
+    MergeEntities,
     ObserveEntityMention,
+    PreviewEntityMerge,
     ResolveEntity,
     ResolveUnresolvedMention,
     RestoreEntity,
@@ -89,12 +92,17 @@ from my_pa.domain.relationship.governance import (
     EntityObservation,
     EntityProposal,
     EntityProposalKind,
+    EntityProposalMethod,
     EntityProposalState,
     ObservationAuthority,
     ObservationKind,
     ResolutionDisposition,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
+from my_pa.domain.relationship.proposal_payload import (
+    EntityProposalPayload,
+    dedupe_digest,
+)
 from my_pa.domain.relationship.resolution import ResolutionOutcome
 
 WHEN: Final = datetime(2026, 8, 18, 12, tzinfo=UTC)
@@ -119,6 +127,16 @@ OWN_ENTITY: Final = "ent_mine0002mine00002"
 #: A second entity of my own, so a write of mine that has to name two of them
 #: does not have to borrow one of theirs.
 OWN_SECOND: Final = "ent_mine0003mine00003"
+
+#: The merge payload every staged proposal below carries. One value rather than
+#: one per site: these tests are about which Principal may read a proposal, and
+#: a payload that differed between them would vary something the assertions do
+#: not measure. It names entities of mine, because a payload naming a foreign
+#: entity would be testing the payload rather than the partition.
+_MERGE_PAYLOAD: Final = EntityProposalPayload.of(
+    EntityProposalKind.MERGE_ENTITIES,
+    {"retained_entity_id": OWN_ENTITY, "merged_entity_id": OWN_SECOND},
+)
 
 #: A display name that is also an instruction. If any of it reaches a tool
 #: description, a schema, or an unrelated payload, the entity plane is an
@@ -492,6 +510,46 @@ _EVERY_CAPABILITY: Final = (
             idempotency_key="privacy-entities-resolve-0001",
         ),
     ),
+    # Phase B's three (`WP-RI-B-05`, `WP-RI-B-06`), every one of them aimed at
+    # the *other* Principal's entity. The producer path is the sharper of the
+    # three for this claim: a proposal is the cheapest way to probe for a
+    # stranger's identity, because it asks a question about an entity without
+    # trying to change one, and a plane that answered a foreign target with
+    # anything but the answer an absent one gets would confirm the entity exists.
+    (
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        CreateEntityProposal(
+            kind=EntityProposalKind.RECORD_ALIAS,
+            payload={
+                "entity_id": FOREIGN_ENTITY,
+                "alias_type": "nickname",
+                "display_value": "Conf",
+            },
+            evidence=(
+                {
+                    "role": "direct",
+                    "entity_observation_id": "eobs_privacy0001privacy01",
+                },
+            ),
+        ),
+    ),
+    (
+        Capability.ENTITIES_MERGE_PREVIEW,
+        PreviewEntityMerge(
+            survivor_entity_id=FOREIGN_ENTITY,
+            expected_survivor_version=1,
+            merged_away=({"entity_id": FOREIGN_SCOPE, "expected_version": 1},),
+            reason="a stranger may not merge these",
+        ),
+    ),
+    (
+        Capability.ENTITIES_MERGE,
+        MergeEntities(
+            preview_id="eipv_privacy0001privacy01",
+            preview_digest="0" * 64,
+            reason="a stranger may not merge these",
+        ),
+    ),
 )
 
 
@@ -509,7 +567,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    assert len(served) == 28
+    # Thirty-one since `WP-RI-B-05` and `WP-RI-B-06`. The count is asserted as
+    # well as the set, because a prefix scan that stopped matching would satisfy
+    # the equality against an equally empty tuple.
+    assert len(served) == 31
 
 
 # --- the partition, under every capability ---------------------------------
@@ -838,9 +899,12 @@ def test_a_collision_read_judges_only_this_principals_rows(staged: Scene, kind: 
             "proposal_id": identifier,
             "kind": EntityProposalKind.MERGE_ENTITIES,
             "state": EntityProposalState.PROPOSED,
-            "payload": (),
+            "payload": _MERGE_PAYLOAD,
             "observation_ids": (),
             "proposed_at": WHEN,
+            "method": EntityProposalMethod.DETERMINISTIC,
+            "method_version": "1",
+            "dedupe_sha256": dedupe_digest(_MERGE_PAYLOAD),
         }
         staged.world.entity_proposals.append(
             EntityProposal(**common, principal_id=theirs, proposed_by="their operator")  # type: ignore[arg-type]
@@ -912,10 +976,13 @@ def test_an_entity_merged_away_once_is_merged_away_for_everyone(staged: Scene) -
             principal_id=mine,
             kind=EntityProposalKind.MERGE_ENTITIES,
             state=EntityProposalState.ACCEPTED,
-            payload=(),
+            payload=_MERGE_PAYLOAD,
             observation_ids=(),
             proposed_at=WHEN,
             proposed_by="my operator",
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="1",
+            dedupe_sha256=dedupe_digest(_MERGE_PAYLOAD),
             decided_by="my operator",
             decided_at=WHEN,
             decision_reason="same person",
@@ -1069,10 +1136,13 @@ def test_an_identifier_another_principal_holds_is_unavailable(staged: Scene, kin
                     principal_id=mine,
                     kind=EntityProposalKind.MERGE_ENTITIES,
                     state=EntityProposalState.ACCEPTED,
-                    payload=(),
+                    payload=_MERGE_PAYLOAD,
                     observation_ids=(),
                     proposed_at=WHEN,
                     proposed_by="my operator",
+                    method=EntityProposalMethod.DETERMINISTIC,
+                    method_version="1",
+                    dedupe_sha256=dedupe_digest(_MERGE_PAYLOAD),
                     decided_by="my operator",
                     decided_at=WHEN,
                     decision_reason="same person",

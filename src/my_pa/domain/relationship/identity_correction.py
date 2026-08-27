@@ -1,0 +1,818 @@
+"""What a governed identity correction binds, does, and leaves behind.
+
+Three records, and the separation between them is the whole of `WP-RI-06`'s
+safety argument.
+
+**A preview is a binding, not a report.** Operator prompt section 19 requires
+`entities.merge.preview` to persist what it looked at: the exact entities, the
+exact versions it read them at, and a digest of both. That is why the preview is
+a durable record rather than a computed response — an apply that arrived with
+"the same" identities but a different set of versions would otherwise be
+indistinguishable from a replay of the preview an operator actually read. The
+preview is what makes "you approved *this*" checkable.
+
+**An operation is one act, and it is idempotent by its key and not by its
+preview.** Section 23 states the rule this record is shaped by: the preview
+token is *not* the mutation idempotency key. They answer different questions. The
+preview digest answers "is the world still what the operator was shown"; the
+idempotency key answers "have I already performed this request". A design that
+collapsed them would make a retry after a concurrent change either a silent
+second merge or an un-retryable failure, depending on which meaning won.
+
+**An effect is the evidence a later split has to work from.** Section 22 requires
+the ledger to be "sufficiently complete and deterministic for `WP-07` to invert a
+governed merge later", and says in the same breath: do not fake invertibility by
+recording only redirects. So every effect carries the row's state on both sides
+of the change, both states are required rather than optional, and the vocabulary
+below is organised by *what undoing each effect would take* rather than by which
+table the row lives in. `WP-07` is not implemented here and nothing in this
+module performs a merge; what is implemented is the record that makes performing
+one recoverable.
+
+**No raw personal narrative text enters the preview or the operation.** Sections
+19 and 28 draw that line, and it is drawn here in the shape of the records: the
+preview and the operation carry identifiers, versions, digests and one bounded
+reason, and there is no column on either that a statement, a name or a source
+span could go in. The *effect* ledger is the exception the same sections admit —
+before/after state is canonical recovery evidence — and it is bounded and
+classified rather than open: both states are `repr=False` on the argument
+`EntityMutationEvent` records for its own pair, and the writers on this plane
+put identifiers, closed vocabulary members and versions in them and nothing else.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import re
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from enum import StrEnum
+from typing import Final
+
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.relationship.governance import ENTITY_CHANGE_REASON_LIMIT, ActorClass
+from my_pa.domain.source.registry import issue_identifier
+
+__all__ = [
+    "IDENTITY_PREVIEW_LIFETIME",
+    "MAX_MERGED_AWAY_ENTITIES",
+    "IdentityConflict",
+    "IdentityConflictKind",
+    "IdentityEffect",
+    "IdentityEffectDraft",
+    "IdentityEffectFamily",
+    "IdentityEffectKind",
+    "IdentityOperation",
+    "IdentityOperationState",
+    "IdentityOperationType",
+    "IdentityPreview",
+    "blocks_merge",
+    "conflict_digest_for",
+    "plan_digest_for",
+    "preview_digest_for",
+    "sequence_effects",
+    "state_digest",
+]
+
+#: How long a persisted merge preview stays usable, fixed by operator prompt
+#: section 19 and by `MYPA-RI-COMP-04`'s own line for `entity_identity_previews`.
+#:
+#: **Fixed rather than configured, and named rather than spelled at each site.**
+#: A preview is a statement that a set of entities held a set of versions at a
+#: moment, and the operator is being asked to authorise a mutation against that
+#: statement. Every minute it stays valid is a minute in which the statement can
+#: become false without anything noticing -- the version check at apply is what
+#: catches that, and the expiry is what bounds how much the operator is being
+#: asked to trust it for. Fifteen minutes is long enough to read a preview that
+#: enumerates ten identities and every record family they touch, and short
+#: enough that an approval left open over lunch is refused rather than honoured.
+#:
+#: A configurable lifetime would make the bound a deployment property, and the
+#: first thing a caller under time pressure would do is raise it. `IdentityPreview`
+#: therefore derives `expires_at` from `created_at` and refuses any other value,
+#: so a writer cannot extend one preview by writing a later timestamp.
+IDENTITY_PREVIEW_LIFETIME: Final = timedelta(minutes=15)
+
+#: How many entities one merge may merge away, from operator prompt section 19's
+#: "1..10 merged-away Entity IDs". Bounded because every affected record family is
+#: enumerated per merged-away entity, and an unbounded set makes the preview's own
+#: cost unbounded -- which is how a preview stops being something an operator can
+#: read before deciding.
+MAX_MERGED_AWAY_ENTITIES: Final = 10
+
+#: The shape a SHA-256 digest takes, restated here because the CHECKs on the three
+#: `entity_identity_*` tables say the same thing in SQL and the two have to refuse
+#: the same values. The same restatement `governance` makes for `request_digest`.
+_SHA256: Final = re.compile(r"\A[0-9a-f]{64}\Z")
+
+
+class IdentityOperationType(StrEnum):
+    """Which governed identity correction one preview and one operation name.
+
+    **One member, and the absence of the second is deliberate.** The composed
+    target names `merge` and `split`; operator prompt section 22 says in the same
+    document that `WP-06` does not implement split. Declaring `split` here would
+    put a value in a closed set that nothing issues and that no code path can
+    produce -- which is exactly what `D-RI-04` refused when it declined to
+    declare identifier prefixes for records no work package had yet created: a
+    closed vocabulary is a promise about what can be stored, and promising one
+    for a record nothing writes is a promise about nothing.
+
+    What it costs to add later is one restatement of the CHECK on
+    `entity_identity_previews.operation_type` and
+    `entity_identity_operations.operation_type` -- the same cost `823e23b6cc63`
+    paid to widen the stored audit vocabulary, and the ordinary price of widening
+    a closed set. `WP-07` pays it with the code that writes the value.
+    """
+
+    MERGE = "merge"
+
+
+class IdentityOperationState(StrEnum):
+    """Where one identity operation stands.
+
+    Three states, and the first one exists because a crash has to be legible.
+    Apply is atomic (section 21), so a rolled-back merge leaves no effects and no
+    canonical change -- but the operation row is written *before* the work and is
+    the row an idempotent retry finds, so without `IN_PROGRESS` a process that
+    died mid-apply would leave a row indistinguishable from a completed merge and
+    a retry would answer "already done" about a merge that never happened.
+
+    `FAILED` is a decided outcome rather than a stuck one: the request was
+    admitted, the work was attempted, and it did not complete. A refusal *before*
+    admission -- an expired preview, a mismatched digest, a stale version -- writes
+    no operation row at all, because nothing was attempted and a ledger of
+    requests that were never performed is a different record from this one.
+    """
+
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
+class IdentityConflictKind(StrEnum):
+    """Why one record stops a merge, or requires the operator to decide it.
+
+    Three kinds, each traceable to one sentence of the frozen contract:
+
+    * ACTIVE_IDENTIFIER_CONFLICT -- section 21's "conflicting active identifier
+      blocks merge". Two entities hold the same identity in the same namespace
+      and both bindings are current, so reparenting either would make one address
+      the current identity of one entity twice;
+    * UNSUPPORTED_FAMILY -- section 20's requirement that a materially affected
+      family which "cannot yet be safely transformed with reversible lineage"
+      surface an explicit blocker and be refused at apply. This is the honest name
+      for the `WP-08` and `WP-10` boundary: Relationship Memory origin-subject
+      redistribution and bounded re-enrichment are not this phase's to perform,
+      and a merge that quietly proceeded past them would produce exactly the
+      unreversible state section 20 forbids;
+    * AMBIGUOUS_DISPOSITION -- a record the merge could transform in more than one
+      defensible way, which section 21 requires the operator to choose between
+      before apply.
+
+    Whether a kind blocks is derived rather than stored, on the same argument
+    `requirement_for` makes about a proposal's review requirement: a writer that
+    could declare its own conflict non-blocking would declare every conflict
+    non-blocking.
+    """
+
+    ACTIVE_IDENTIFIER_CONFLICT = "active_identifier_conflict"
+    UNSUPPORTED_FAMILY = "unsupported_family"
+    AMBIGUOUS_DISPOSITION = "ambiguous_disposition"
+
+
+#: Which conflict kinds refuse a merge outright, as against those the operator
+#: resolves by choosing. A mapping rather than a field, for the reason
+#: `_REQUIREMENT_BY_KIND` is a mapping.
+_BLOCKS_BY_KIND: dict[IdentityConflictKind, bool] = {
+    IdentityConflictKind.ACTIVE_IDENTIFIER_CONFLICT: True,
+    IdentityConflictKind.UNSUPPORTED_FAMILY: True,
+    IdentityConflictKind.AMBIGUOUS_DISPOSITION: False,
+}
+
+
+def blocks_merge(kind: IdentityConflictKind) -> bool:
+    """Whether a conflict of `kind` refuses the merge rather than awaiting a choice."""
+    return _BLOCKS_BY_KIND[kind]
+
+
+class IdentityEffectFamily(StrEnum):
+    """Which record family one effect is about.
+
+    Deliberately **not** `MutationRecordFamily`, and the difference is the point
+    rather than an oversight. That vocabulary is closed at the six families the
+    entity plane holds as canonical fact and excludes proposals on the argument
+    that "a mutation ledger that also recorded proposals would record the asking
+    as if it were the doing". A merge genuinely does something to a proposal: an
+    identity change invalidates the pending requests that named the identity, and
+    an inversion has to put them back. Recording that in the mutation ledger's
+    vocabulary would break its rule; leaving it unrecorded would leave the effect
+    ledger unable to invert what the merge did.
+
+    `DERIVED_CONTEXT` is the one member that names something the merge did not
+    author. A prepared context package is stale after an identity change, and
+    section 21 requires derived state to become stale "where current
+    infrastructure supports invalidation". It is recorded here because a split
+    has to re-mark exactly the packages a merge marked, and no other record says
+    which those were.
+    """
+
+    ENTITY = "entity"
+    IDENTIFIER = "identifier"
+    ALIAS = "alias"
+    ASSIGNMENT = "assignment"
+    RELATIONSHIP = "relationship"
+    OBSERVATION = "observation"
+    PROPOSAL = "proposal"
+    REVIEW_CASE = "review_case"
+    DERIVED_CONTEXT = "derived_context"
+
+
+class IdentityEffectKind(StrEnum):
+    """What one effect did, named by what undoing it would take.
+
+    **Organised by inverse rather than by table**, because the reader this
+    vocabulary exists for is `WP-07`. A set of members like
+    `alias_reparented`/`identifier_reparented`/`assignment_reparented` would name
+    three rows and one operation; `record_family` already says which row, so what
+    is left for this column to say is the thing a split needs to know and cannot
+    otherwise recover -- which way to run the change.
+
+    What a split needs from each, stated so the ledger's sufficiency is a claim a
+    reader can check rather than an assertion:
+
+    * ENTITY_REDIRECTED -- `before_state` holds the merged-away entity's status
+      before the merge, and the inverse restores it and clears
+      `superseded_by_entity_id`. This is the only effect the survivor's own row
+      is *not* the subject of: `SqlEntityRepository.redirect_entity` writes
+      `status` and `superseded_by_entity_id` on the merged-away row and touches
+      the survivor not at all, so a merge that revised the survivor would be a
+      change this vocabulary does not describe -- and adding that behaviour means
+      adding a member here rather than reusing one;
+    * OWNER_REPARENTED -- a child row moved from a merged-away entity to the
+      survivor. `before_state` names the entity it belonged to, and the inverse
+      is to give it back. This is the effect kind a redirect-only ledger has
+      instead of, which is the shortcut section 22 names;
+    * ROW_COALESCED -- a child row left service because the survivor already held
+      an equivalent one. `after_state` names the counterpart it was folded into,
+      so the inverse can revive this row *and* know which row to stop treating as
+      its replacement. Without the counterpart a split would revive a duplicate
+      of a row that is still current;
+    * SELF_EDGE_SUPERSEDED -- a directed edge whose two ends became the same
+      entity. Section 21 requires it to be superseded rather than to survive
+      silently, and it is a separate kind from ROW_COALESCED because it was
+      folded into nothing: there is no counterpart, and a split restores it by
+      un-superseding rather than by un-folding;
+    * DEPENDENT_INVALIDATED -- a pending proposal or review case that named an
+      identity the merge changed. `before_state` holds the state it was in, and
+      the inverse restores that state rather than re-deciding it;
+    * DERIVED_STATE_INVALIDATED -- derived context or index state marked stale.
+      It is the one kind whose inverse is not a restoration: a split re-marks
+      rather than un-marks, because the derived state was stale in both
+      directions. It is recorded so that a split knows the set.
+
+    None of these creates or destroys a row, and that is what makes both states
+    required on every effect. An effect kind that created a row would carry no
+    `before_state`, and admitting a nullable pair for its sake would let every
+    other effect be written with half the evidence -- which is the ledger section
+    22 forbids, arrived at by permission rather than by intent.
+    """
+
+    ENTITY_REDIRECTED = "entity_redirected"
+    OWNER_REPARENTED = "owner_reparented"
+    ROW_COALESCED = "row_coalesced"
+    SELF_EDGE_SUPERSEDED = "self_edge_superseded"
+    DEPENDENT_INVALIDATED = "dependent_invalidated"
+    DERIVED_STATE_INVALIDATED = "derived_state_invalidated"
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityConflict:
+    """One record that blocks a merge, or that the operator must decide.
+
+    Carries no free-text explanation. A conflict is rendered to an operator by
+    the application layer, which knows the capability, the locale of the error
+    contract and what may be disclosed; a message stored here would be a bounded
+    text column on a record whose subject is somebody's identity, and section 28
+    is explicit about what accumulates in those.
+    """
+
+    kind: IdentityConflictKind
+    family: IdentityEffectFamily
+    record_id: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, IdentityConflictKind):
+            raise ValueError("an identity conflict has a closed kind")
+        if not isinstance(self.family, IdentityEffectFamily):
+            raise ValueError("an identity conflict names a closed record family")
+        validate_identifier(self.record_id)
+
+    @property
+    def blocks(self) -> bool:
+        """Whether this conflict refuses the merge rather than awaiting a choice."""
+        return blocks_merge(self.kind)
+
+
+def _canonical(value: object) -> str:
+    """One JSON encoding of `value` that two processes agree on byte for byte.
+
+    Sorted keys and no separators padding, the same encoding
+    `application.service._authoring_digest` already uses for the same purpose.
+    `default` is deliberately absent: a value this cannot encode is a value a
+    digest would silently stringify differently on a different Python, and a
+    digest that depends on `repr` is not a digest anything can be checked against.
+    """
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _digest(value: object) -> str:
+    return hashlib.sha256(_canonical(value).encode("utf-8")).hexdigest()
+
+
+def state_digest(state: Mapping[str, object]) -> str:
+    """The digest one effect stores beside a recorded state.
+
+    Recomputed by `IdentityEffect` on construction and refused when it disagrees,
+    so a row whose state was edited without its digest -- or whose digest was
+    edited without its state -- cannot be read back into the domain at all. That
+    is the tamper detection the ledger has beyond the append-only trigger: the
+    trigger refuses an `UPDATE` through the ordinary path, and this refuses a row
+    that arrived some other way.
+    """
+    return _digest(state)
+
+
+def preview_digest_for(
+    *,
+    operation_type: IdentityOperationType,
+    principal_id: str,
+    survivor_entity_id: str,
+    expected_survivor_version: int,
+    merged_away: Iterable[tuple[str, int]],
+    plan_digest: str,
+) -> str:
+    """The digest a preview is bound by, over exactly the identity it binds.
+
+    **Over the binding and the safe plan fingerprint.** Principal, operation type, survivor
+    with the version it was read at, and every merged-away entity with the
+    version it was read at -- sorted, so that two requests naming the same
+    entities in different orders are the same preview rather than two.
+
+    Deliberately *not* over the reason or evidence references. The affected
+    counts and consequences are bound through `plan_digest`; this
+    digest exists so that an apply naming a different set of entities, or the
+    same entities at different versions, cannot present itself as the preview the
+    operator read. Folding the prose in would make an operator who corrected a
+    typo in their own reason re-run the whole preview, and would say nothing
+    additional about identity.
+
+    The conflicts the preview found are also digested separately by `conflict_digest_for`,
+    because they change for a different reason than the binding does: the
+    binding changes when the request changes, and the conflicts change when the
+    world does.
+    """
+    if not _SHA256.fullmatch(plan_digest):
+        raise ValueError("a preview plan digest is a sha256 digest")
+    return _digest(
+        {
+            "operation_type": operation_type.value,
+            "principal_id": principal_id,
+            "survivor": [survivor_entity_id, expected_survivor_version],
+            "merged_away": sorted([entity_id, version] for entity_id, version in merged_away),
+            "plan_digest": plan_digest,
+        }
+    )
+
+
+def conflict_digest_for(conflicts: Iterable[IdentityConflict]) -> str:
+    """The digest over everything a preview found that an apply must still answer for.
+
+    Sorted and deduplicated, so it is a digest of a *set*: the analysis that
+    produces conflicts walks several record families and nothing orders those
+    walks, and a digest that depended on the walk order would differ between two
+    previews of an unchanged world.
+
+    What it is for is the second half of section 21's admission rule. The preview
+    digest proves the operator authorised these identities at these versions; this
+    proves they authorised them knowing *this* set of conflicts. A merge whose
+    blocking conflicts appeared between preview and apply -- a concurrent
+    identifier claim is the case section 27 names -- produces a different digest
+    here while the binding digest still matches, and the apply is refused with
+    the versions still agreeing. Without it, the only thing standing between a
+    newly-conflicted merge and an apply would be re-running the analysis and
+    hoping the second answer is compared to the first.
+    """
+    return _digest(
+        sorted(
+            {
+                (conflict.kind.value, conflict.family.value, conflict.record_id)
+                for conflict in conflicts
+            }
+        )
+    )
+
+
+def plan_digest_for(
+    *,
+    groups: Iterable[tuple[str, str, int]],
+    conflicts: Iterable[IdentityConflict],
+    projected_effects: Iterable[IdentityEffectDraft],
+) -> str:
+    """Digest the complete safe plan an operator sees, without narrative text.
+
+    Groups bind every named family, disposition and exact count. Conflicts bind
+    blockers and required choices. Projected effects bind every deterministic
+    canonical consequence and its recovery states. All three collections are
+    sorted so repository walk order cannot move the token.
+    """
+    return _digest(
+        {
+            "groups": sorted((family, disposition, count) for family, disposition, count in groups),
+            "conflicts": sorted(
+                {
+                    (conflict.kind.value, conflict.family.value, conflict.record_id)
+                    for conflict in conflicts
+                }
+            ),
+            "projected_effects": sorted(
+                (
+                    effect.family.value,
+                    effect.record_id,
+                    effect.kind.value,
+                    _canonical(dict(effect.before_state)),
+                    _canonical(dict(effect.after_state)),
+                )
+                for effect in projected_effects
+            ),
+        }
+    )
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityPreview:
+    """One persisted, expiring binding between an operator's approval and a world state.
+
+    `expires_at` is **derived and checked, not supplied**: it is `created_at` plus
+    `IDENTITY_PREVIEW_LIFETIME` and any other value is refused. A writer that
+    could choose the expiry could choose a longer one, and the whole force of a
+    fixed fifteen minutes is that no caller decides it.
+
+    `consumed_at` is what stops one approval producing two merges. Section 27
+    requires that "a consumed preview cannot produce a materially different
+    second operation"; the record's part of that is to have somewhere to say it
+    has been used, and the repository's part is to claim it under the same
+    transaction that writes the operation.
+
+    **The versions are carried beside the identities rather than derived from
+    them**, because that pairing is the thing the apply re-checks. `merged_away`
+    is a tuple of `(entity_id, expected_version)` pairs -- the same untyped-pairs
+    shape `EntityProposal.payload` uses -- rather than two parallel tuples, which
+    is a shape where a caller can drop one element and produce a preview that
+    binds the wrong version to the wrong entity while every length check passes.
+    """
+
+    preview_id: str
+    principal_id: str
+    operation_type: IdentityOperationType
+    survivor_entity_id: str
+    expected_survivor_version: int
+    merged_away: tuple[tuple[str, int], ...]
+    preview_digest: str
+    conflict_digest: str
+    plan_digest: str
+    created_by: str
+    actor_class: ActorClass
+    created_at: datetime
+    expires_at: datetime
+    consumed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.preview_id, IdKind.ENTITY_IDENTITY_PREVIEW)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.survivor_entity_id, IdKind.ENTITY)
+        if not isinstance(self.operation_type, IdentityOperationType):
+            raise ValueError("a preview has a closed operation type")
+        if not isinstance(self.actor_class, ActorClass):
+            raise ValueError("a preview has a closed actor class")
+        if not self.created_by.strip():
+            raise ValueError("a preview names who asked for it")
+        if self.expected_survivor_version < 1:
+            raise ValueError("a preview expects a survivor version that could exist")
+        if not 1 <= len(self.merged_away) <= MAX_MERGED_AWAY_ENTITIES:
+            raise ValueError(
+                f"a preview merges away between 1 and {MAX_MERGED_AWAY_ENTITIES} entities"
+            )
+        merged_ids = tuple(entity_id for entity_id, _ in self.merged_away)
+        for entity_id, expected_version in self.merged_away:
+            validate_identifier(entity_id, IdKind.ENTITY)
+            if expected_version < 1:
+                raise ValueError("a preview expects a merged-away version that could exist")
+        if len(set(merged_ids)) != len(merged_ids):
+            raise ValueError("a preview names each merged-away entity once")
+        if self.survivor_entity_id in merged_ids:
+            raise ValueError("a preview does not merge the survivor into itself")
+        for digest in (self.preview_digest, self.conflict_digest, self.plan_digest):
+            if not _SHA256.fullmatch(digest):
+                raise ValueError("a preview digest is a sha256 digest")
+        ensure_utc(self.created_at)
+        ensure_utc(self.expires_at)
+        if self.expires_at != self.created_at + IDENTITY_PREVIEW_LIFETIME:
+            raise ValueError("a preview expires exactly fifteen minutes after it was created")
+        if self.consumed_at is not None:
+            ensure_utc(self.consumed_at)
+            if self.consumed_at < self.created_at:
+                raise ValueError("a preview cannot be consumed before it was created")
+
+    @property
+    def is_consumed(self) -> bool:
+        """Whether an operation has already been admitted against this preview."""
+        return self.consumed_at is not None
+
+    def is_expired(self, now: datetime) -> bool:
+        """Whether `now` is past this preview's fixed expiry.
+
+        Takes the moment as an argument rather than reading a clock, so the
+        expiry a caller enforces is the one the caller can also audit -- and so
+        that the transaction which consumes a preview compares against the same
+        instant it stamps.
+        """
+        return ensure_utc(now) >= self.expires_at
+
+    def binds(self, digest: str) -> bool:
+        """Whether `digest` is the binding this preview was issued for.
+
+        A method rather than an equality the caller writes, because the value
+        being compared is the one an operator's client sends back and the
+        comparison is the whole admission gate: a caller that compared
+        `conflict_digest` here by mistake would accept a merge whose identities
+        had changed, and the two columns are adjacent strings of the same shape.
+        """
+        return digest == self.preview_digest
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityOperation:
+    """One admitted identity correction: what was asked, under what authority, and how it ended.
+
+    **`preview_digest` and `idempotency_key` are both here and they are not the
+    same mechanism**, which section 23 states as a rule and this record enforces
+    as a shape. The digest is a claim about the *world*: these entities held these
+    versions. The key is a claim about the *request*: this is the same call I
+    made before. `request_digest` is what makes the second claim decidable --
+    same key and same digest is the caller retrying and gets the first answer
+    back; same key and a different digest is a caller reusing a key for a
+    different merge, which is the one case that must be refused rather than
+    absorbed. It is the mechanism `entity_mutation_events` already uses, reused
+    rather than reinvented.
+
+    `reason` is bounded and `repr=False`. It explains one decision to a later
+    reader; a column that could hold a document is a column an ingester
+    eventually puts one in, and on this plane the document would be about a
+    person.
+    """
+
+    identity_operation_id: str
+    principal_id: str
+    operation_type: IdentityOperationType
+    survivor_entity_id: str
+    merged_entity_ids: tuple[str, ...]
+    preview_id: str
+    preview_digest: str
+    idempotency_key: str = field(repr=False)
+    request_digest: str
+    performed_by: str
+    actor_class: ActorClass
+    correlation_id: str
+    audit_id: str
+    receipt_id: str
+    state: IdentityOperationState
+    started_at: datetime
+    reason: str | None = field(default=None, repr=False)
+    completed_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.survivor_entity_id, IdKind.ENTITY)
+        validate_identifier(self.preview_id, IdKind.ENTITY_IDENTITY_PREVIEW)
+        validate_identifier(self.correlation_id, IdKind.CORRELATION)
+        validate_identifier(self.audit_id, IdKind.AUDIT)
+        validate_identifier(self.receipt_id, IdKind.RECEIPT)
+        if not isinstance(self.operation_type, IdentityOperationType):
+            raise ValueError("an identity operation has a closed operation type")
+        if not isinstance(self.state, IdentityOperationState):
+            raise ValueError("an identity operation has a closed state")
+        if not isinstance(self.actor_class, ActorClass):
+            raise ValueError("an identity operation has a closed actor class")
+        if not self.performed_by.strip():
+            raise ValueError("an identity operation names who performed it")
+        if not self.idempotency_key:
+            raise ValueError("an identity operation carries an idempotency key")
+        for digest in (self.preview_digest, self.request_digest):
+            if not _SHA256.fullmatch(digest):
+                raise ValueError("an identity operation digest is a sha256 digest")
+        if not 1 <= len(self.merged_entity_ids) <= MAX_MERGED_AWAY_ENTITIES:
+            raise ValueError(
+                f"an identity operation merges away between 1 and "
+                f"{MAX_MERGED_AWAY_ENTITIES} entities"
+            )
+        for entity_id in self.merged_entity_ids:
+            validate_identifier(entity_id, IdKind.ENTITY)
+        if len(set(self.merged_entity_ids)) != len(self.merged_entity_ids):
+            raise ValueError("an identity operation names each merged-away entity once")
+        if self.survivor_entity_id in self.merged_entity_ids:
+            raise ValueError("an identity operation does not merge the survivor into itself")
+        if self.reason is not None:
+            if not self.reason.strip():
+                raise ValueError("an identity operation reason is not blank")
+            if len(self.reason) > ENTITY_CHANGE_REASON_LIMIT:
+                raise ValueError("an identity operation reason is bounded")
+        ensure_utc(self.started_at)
+        # An operation is finished exactly when it has stopped being in progress.
+        # Stated as an equivalence rather than as two rules, so that "still
+        # running" is a shape a reader can query for rather than the absence of
+        # one -- and so a crashed apply cannot be mistaken for a completed merge
+        # by a retry that only looked at the state.
+        finished = self.state is not IdentityOperationState.IN_PROGRESS
+        if finished != (self.completed_at is not None):
+            raise ValueError("an identity operation is finished exactly when it names an end")
+        if self.completed_at is not None:
+            ensure_utc(self.completed_at)
+            if self.completed_at < self.started_at:
+                raise ValueError("an identity operation cannot end before it started")
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityEffectDraft:
+    """One effect an operation intends, before the ledger has ordered it.
+
+    A separate type from `IdentityEffect` because `sequence` is not the writer's
+    to choose. An emitter that assigned its own sequence numbers would be
+    assigning them in whatever order it walked the affected families, and two
+    replays of the same merge would number the same effects differently -- which
+    is the determinism section 29 requires as a tested property. `sequence_effects`
+    is the only thing that turns a draft into a ledger row, and it is the only
+    place the order is decided.
+    """
+
+    family: IdentityEffectFamily
+    record_id: str
+    kind: IdentityEffectKind
+    before_state: Mapping[str, object] = field(repr=False)
+    after_state: Mapping[str, object] = field(repr=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.family, IdentityEffectFamily):
+            raise ValueError("an identity effect names a closed record family")
+        if not isinstance(self.kind, IdentityEffectKind):
+            raise ValueError("an identity effect has a closed kind")
+        # No expected kind: `record_id` names a row in whichever family
+        # `family` says, and no single kind can express that. What is still
+        # checked is that the value is an opaque identifier at all, which is the
+        # rule `entity_mutation_events.record_id` applies for the same reason.
+        validate_identifier(self.record_id)
+        for state in (self.before_state, self.after_state):
+            if not isinstance(state, Mapping):
+                raise ValueError("an identity effect records each state as an object")
+            if not state:
+                raise ValueError("an identity effect records a state that says something")
+        if self.before_state == self.after_state:
+            raise ValueError("an identity effect records a change")
+
+
+@dataclass(frozen=True, slots=True)
+class IdentityEffect:
+    """One append-only row of the ledger a split has to invert a merge from.
+
+    **Both states are required and both digests are checked here.** A ledger row
+    holding only the state after the change records that something happened and
+    not what it was; section 22 calls recording only redirects "faking
+    invertibility", and a half-recorded effect is the same failure one row at a
+    time. The digests are recomputed on construction and a disagreement is
+    refused, so a state edited without its digest -- or a digest edited without
+    its state -- cannot be read back into the domain at all.
+
+    `sequence` is assigned by `sequence_effects` and is unique per operation at
+    the server. It orders the ledger for a reader and for the inversion `WP-07`
+    will run over it; what makes it meaningful is that the same merge replayed
+    produces the same numbers against the same effects.
+    """
+
+    effect_id: str
+    identity_operation_id: str
+    principal_id: str
+    sequence: int
+    family: IdentityEffectFamily
+    record_id: str
+    kind: IdentityEffectKind
+    before_state: Mapping[str, object] = field(repr=False)
+    after_state: Mapping[str, object] = field(repr=False)
+    before_sha256: str
+    after_sha256: str
+    recorded_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.effect_id, IdKind.ENTITY_IDENTITY_EFFECT)
+        validate_identifier(self.identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.record_id)
+        if not isinstance(self.family, IdentityEffectFamily):
+            raise ValueError("an identity effect names a closed record family")
+        if not isinstance(self.kind, IdentityEffectKind):
+            raise ValueError("an identity effect has a closed kind")
+        if self.sequence < 1:
+            raise ValueError("an identity effect sequence is positive")
+        for state, digest in (
+            (self.before_state, self.before_sha256),
+            (self.after_state, self.after_sha256),
+        ):
+            if not isinstance(state, Mapping):
+                raise ValueError("an identity effect records each state as an object")
+            if not state:
+                raise ValueError("an identity effect records a state that says something")
+            if not _SHA256.fullmatch(digest):
+                raise ValueError("an identity effect state digest is a sha256 digest")
+            if state_digest(state) != digest:
+                raise ValueError("an identity effect state does not match its recorded digest")
+        if self.before_state == self.after_state:
+            raise ValueError("an identity effect records a change")
+        ensure_utc(self.recorded_at)
+
+
+#: Where each family falls in the ledger's order, taken from the declaration
+#: order of `IdentityEffectFamily` rather than from the member values, so that
+#: `ENTITY` sorts first however the values are spelled.
+_FAMILY_ORDER: Final = {family: position for position, family in enumerate(IdentityEffectFamily)}
+
+
+def _order_key(draft: IdentityEffectDraft) -> tuple[int, str, str]:
+    """Where one draft falls in the ledger, decided by nothing that varies per run.
+
+    Family first, so `ENTITY` comes first: the redirect is the change every other
+    effect on the operation is a consequence of, and a reader walking the ledger
+    forwards sees the identity change before what it caused. `WP-07` walks it
+    backwards and therefore undoes the consequences before restoring the
+    identity, which is the order the entity plane's own guards require --
+    `SqlEntityRepository.redirect_entity` refuses to merge into an entity that is
+    itself a redirect, so an inversion that restored the identity last is one
+    whose intermediate states are all legal.
+
+    Then `record_id`, then `kind`, both of which are total orders over values the
+    server issued rather than over anything a caller chose.
+    """
+    return (_FAMILY_ORDER[draft.family], draft.record_id, draft.kind.value)
+
+
+def sequence_effects(
+    drafts: Iterable[IdentityEffectDraft],
+    *,
+    identity_operation_id: str,
+    principal_id: str,
+    recorded_at: datetime,
+) -> tuple[IdentityEffect, ...]:
+    """Order `drafts` deterministically and number them from one.
+
+    **The determinism is the whole function.** An emitter walks aliases, then
+    identifiers, then assignments, and within each walks whatever the database
+    returned; nothing in that ordering is stable across two runs, and a ledger
+    whose sequence numbers were assigned in walk order would give the same merge
+    two different orderings and give `WP-07` no way to tell a re-run from a
+    different operation. So the emitter produces a set and this produces the
+    order, and `tests/unit/test_identity_correction.py` proves that shuffling the
+    input does not move a single number.
+
+    One effect per record: two drafts naming the same family and record are
+    refused rather than ordered, because they are a merge that transformed one
+    row twice and the ledger cannot say which state to restore. Refusing here
+    also makes `_order_key` a total order, so the numbering has no tie to break.
+
+    Effect identifiers are freshly issued and are not part of the ordering. A
+    deterministic *identifier* would be an identifier derived from its subject,
+    which `issue_identifier` exists to make impossible; what has to be
+    reproducible is the sequence, and it is.
+    """
+    ordered = sorted(drafts, key=_order_key)
+    subjects = [(draft.family, draft.record_id) for draft in ordered]
+    if len(set(subjects)) != len(subjects):
+        raise ValueError("an identity operation records one effect per record")
+    return tuple(
+        IdentityEffect(
+            effect_id=issue_identifier(IdKind.ENTITY_IDENTITY_EFFECT),
+            identity_operation_id=identity_operation_id,
+            principal_id=principal_id,
+            sequence=sequence,
+            family=draft.family,
+            record_id=draft.record_id,
+            kind=draft.kind,
+            before_state=draft.before_state,
+            after_state=draft.after_state,
+            before_sha256=state_digest(draft.before_state),
+            after_sha256=state_digest(draft.after_state),
+            recorded_at=recorded_at,
+        )
+        for sequence, draft in enumerate(ordered, start=1)
+    )

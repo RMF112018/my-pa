@@ -24,6 +24,7 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     EndEntityAssignment,
     EndEntityRelationship,
@@ -35,7 +36,9 @@ from my_pa.application.commands import (
     ListEntityIdentifiers,
     ListEntityObservations,
     ListUnresolvedMentions,
+    MergeEntities,
     ObserveEntityMention,
+    PreviewEntityMerge,
     ResolveEntity,
     ResolveUnresolvedMention,
     RestoreEntity,
@@ -84,6 +87,7 @@ from my_pa.domain.relationship.memory import (
     statement_digest,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
+from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 from my_pa.domain.relationship.resolution import ResolutionOutcome
 from my_pa.domain.source.registry import issue_identifier
 
@@ -744,6 +748,25 @@ _OFF_SWITCH_COMMANDS: dict[Capability, object] = {
         idempotency_key="off-switch-resolve",
         reason="the plane is off, so nothing decides this",
     ),
+    # `WP-RI-B-05` and `WP-RI-B-06`. Three more names on the same prefix and so
+    # three more rows in this sweep, which is exactly what the completeness
+    # guard below is for: the plane grew and the sweep had to grow with it.
+    Capability.ENTITIES_PROPOSALS_CREATE: CreateEntityProposal(
+        kind=EntityProposalKind.RECORD_ALIAS,
+        payload={"entity_id": ALICE, "display_value": "A. Chen", "alias_type": "nickname"},
+        evidence=({"role": "direct", "entity_observation_id": "eobs_offswitch0001"},),
+    ),
+    Capability.ENTITIES_MERGE_PREVIEW: PreviewEntityMerge(
+        survivor_entity_id=ALICE,
+        expected_survivor_version=1,
+        merged_away=({"entity_id": ALICE_TWO, "expected_version": 1},),
+        reason="the plane is off, so nothing previews this",
+    ),
+    Capability.ENTITIES_MERGE: MergeEntities(
+        preview_id="eipv_offswitch0001",
+        preview_digest="0" * 64,
+        reason="the plane is off, so nothing merges this",
+    ),
 }
 
 
@@ -756,7 +779,11 @@ def test_the_off_switch_sweep_covers_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert set(_OFF_SWITCH_COMMANDS) == served
-    assert len(served) == 28
+    # Thirty-one since `WP-RI-B-05` and `WP-RI-B-06`: the producer path and the
+    # governed merge's two halves. The count is asserted rather than derived for
+    # the reason it always was -- it is what tells a reader the prefix scan found
+    # the plane and not a substring of it.
+    assert len(served) == 31
 
 
 @pytest.mark.parametrize(

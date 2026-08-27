@@ -304,6 +304,67 @@ class SafeDetail(StrEnum):
     #: refused, and a twelfth code would make every reader that switches on the
     #: eleven wrong.
     REVIEW_REQUIRED = "review_required"
+    #: Governed identity correction (WP-RI-06). Four tokens over the existing
+    #: eleven `ErrorCode` members, declared on the same argument the completion
+    #: contract's outcome codes above are: the code says what class of failure
+    #: this is and the detail says which rule refused.
+    #:
+    #: `PREVIEW_EXPIRED` and `PREVIEW_STALE` are both `conflict` and are
+    #: deliberately different tokens, because the next action differs: an expired
+    #: preview needs a fresh one, and a stale one needs the operator to re-read
+    #: what changed before asking for a fresh one.
+    #:
+    #: **`PREVIEW_STALE` covers a mismatched digest as well as version drift,
+    #: and the collapse is deliberate.** A caller that could tell "your preview
+    #: is for different entities" from "your preview is for these entities at
+    #: different versions" learns which half of a forged token was wrong, which
+    #: is a probe. Both answers require the same thing -- ask for a new preview
+    #: and read it -- so one token is the whole of what a caller can act on.
+    #:
+    #: `OPERATOR_REQUIRED` is `denied` and says the acting context declared no
+    #: operator authority. It is distinct from `REVIEW_REQUIRED`: a reviewer who
+    #: may decide an identity-correction proposal still may not execute one, and
+    #: a caller told the wrong token would go and find a reviewer.
+    #:
+    #: `IDENTITY_CORRECTION_CONFLICT` is the blocking-conflict answer -- a
+    #: preview already consumed, or a record family this phase cannot transform
+    #: with reversible lineage. It names no record, because a merge blocker is a
+    #: statement about somebody's identity and the enumeration belongs in the
+    #: preview the operator asked for, not in an error a client logs.
+    PREVIEW_EXPIRED = "preview_expired"
+    PREVIEW_STALE = "preview_stale"
+    OPERATOR_REQUIRED = "operator_required"
+    IDENTITY_CORRECTION_CONFLICT = "identity_correction_conflict"
+    #: The transport fields `WP-RI-B-05` and `WP-RI-B-06` accept, which nothing
+    #: else names.
+    #: Each is the transport field's own name, which is this enum's rule -- a
+    #: token names a *field* and never a value -- and each is added rather than
+    #: reused because no existing member names the same field. `PAYLOAD` is the
+    #: one worth arguing about: a proposal's `payload` is a nested object whose
+    #: admitted names come from the kind, so a refusal of a name inside it is
+    #: still a refusal of `payload`, and a token per admitted name would restate
+    #: seventeen schemas here.
+    #:
+    #: **Four tokens B4 offered and this package declined**, recorded here so
+    #: the decision is legible rather than a silence: `CORRECTION_PATCH`,
+    #: `SUBJECT_KIND`, `PROPOSAL_STATE` and a repointing of a Review reason from
+    #: `ACTION` to `REASON`. Every one of the four sites already names a field
+    #: and discloses nothing, which is the whole of this enum's rule, so they are
+    #: imprecise rather than unsafe. The sharpest of them, `CORRECTED_VALUE` on a
+    #: refused `correction_patch`, cannot be made exact by a token alone:
+    #: `_review_decide` catches one `ReviewCorrectionError` raised by both the
+    #: bounded-string path and the typed-patch path, so reporting
+    #: `correction_patch` there would replace an imprecise token with a wrong one
+    #: for half the refusals. Making it exact needs the domain error to carry
+    #: which field failed, which is a change to `domain/capture/review.py` that no
+    #: Phase B contract asks for.
+    PROPOSAL_KIND = "kind"
+    PAYLOAD = "payload"
+    PROPOSED_BY = "proposed_by"
+    MERGED_AWAY = "merged_away"
+    PREVIEW_ID = "preview_id"
+    PREVIEW_DIGEST = "preview_digest"
+    CHOICES = "choices"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

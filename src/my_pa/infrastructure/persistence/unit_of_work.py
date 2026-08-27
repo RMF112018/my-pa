@@ -79,6 +79,7 @@ from my_pa.contracts.ports import (
     OperationQueue,
     ProjectRepository,
     PulseRepository,
+    RelationshipMemoryProposalRepository,
     RelationshipMemoryRepository,
     RepositoryFailureError,
     ReviewDecisionRequest,
@@ -92,10 +93,19 @@ from my_pa.contracts.ports import (
     UnknownScopeError,
     WorkerHealthRepository,
     WorkerPlaneStatus,
+    WriteRequestRepository,
 )
 from my_pa.contracts.v1.status import SourceStatusState
+from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.reveal import Reveal
-from my_pa.domain.capture.review import ReviewCase, ReviewDecision
+from my_pa.domain.capture.review import (
+    Disposition,
+    EntityProposalReviewCase,
+    EntityProposalReviewDecision,
+    ReviewCase,
+    ReviewDecision,
+    ReviewSubjectKind,
+)
 from my_pa.domain.capture.version import CaptureVersion
 from my_pa.domain.extraction.corpus import CorpusCoverage
 from my_pa.domain.extraction.coverage import AggregateLimitation, CoverageCounts
@@ -127,6 +137,15 @@ from my_pa.infrastructure.persistence.enrollment import (
     record_scope,
 )
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
+from my_pa.infrastructure.persistence.entity_proposal_review import (
+    decide_ledger_dispositions,
+    entity_proposal_review_case,
+    entity_proposal_review_cases,
+    invalidate_entity_proposal,
+    name_entity_proposal_successor,
+    record_entity_proposal_review_decision,
+    supersede_entity_proposal,
+)
 from my_pa.infrastructure.persistence.extraction import coverage_for
 from my_pa.infrastructure.persistence.goodnotes import (
     decide_goodnotes_review,
@@ -153,6 +172,9 @@ from my_pa.infrastructure.persistence.registry import (
 from my_pa.infrastructure.persistence.relationship_memory import (
     SqlRelationshipMemoryRepository,
 )
+from my_pa.infrastructure.persistence.relationship_memory_proposals import (
+    SqlRelationshipMemoryProposalRepository,
+)
 from my_pa.infrastructure.persistence.relationship_memory_review import (
     decide_relationship_memory_review,
     is_relationship_memory_review_case,
@@ -178,6 +200,7 @@ from my_pa.infrastructure.persistence.tables import (
 )
 from my_pa.infrastructure.persistence.task_management import SqlTaskManagementRepository
 from my_pa.infrastructure.persistence.worker_health import worker_plane_health
+from my_pa.infrastructure.persistence.write_requests import SqlWriteRequestRepository
 from my_pa.infrastructure.providers.registered import RegisteredSourceProviders
 
 __all__ = ["SqlAlchemyUnitOfWork"]
@@ -463,15 +486,23 @@ class _Captures(CaptureRepository):
 
 #: One case on the canonical Review surface, whichever plane opened it.
 #:
-#: An alias rather than the union spelled out three times: `_Reviews.cases`, its
-#: inner statement and the list it sorts all describe the same set, and three
-#: copies of a union is three places a fourth subject kind would have to be
-#: remembered.
-type _ReviewCaseVariant = ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase
+#: An alias rather than the union spelled out four times: `_Reviews.cases`, its
+#: inner statement and the list it sorts all describe the same set, and four
+#: copies of a union is four places a fifth subject kind would have to be
+#: remembered. `WP-RI-B-05` adding `EntityProposalReviewCase` changed this one
+#: line and nothing else about the shape, which is what the alias was for.
+type _ReviewCaseVariant = (
+    ReviewCase | GoodNotesReviewCase | RelationshipMemoryReviewCase | EntityProposalReviewCase
+)
 
 
 class _Reviews(ReviewRepository):
     """The governed review and promotion plane.
+
+    **Two of the four branches are composed, not unconditional, and for the same
+    reason.** Relationship Memory was the first; `WP-RI-B-05`'s Entity proposal
+    branch is the second, and it is closed until a composition root says
+    otherwise -- see `relationship_intelligence_enabled` below.
 
     **The Relationship Memory branch is composed, not unconditional.** The other
     two planes on this surface are always part of a build; Relationship Memory is
@@ -486,17 +517,51 @@ class _Reviews(ReviewRepository):
     obeys it rather than deriving it from a query.
     """
 
-    def __init__(self, connection: Connection, *, relationship_memory_enabled: bool) -> None:
+    def __init__(
+        self,
+        connection: Connection,
+        *,
+        relationship_memory_enabled: bool,
+        relationship_intelligence_enabled: bool = False,
+    ) -> None:
         self._connection = connection
         self._relationship_memory_enabled = relationship_memory_enabled
+        self._relationship_intelligence_enabled = relationship_intelligence_enabled
 
-    def cases(self, *, limit: int, principal_id: str) -> tuple[_ReviewCaseVariant, ...]:
+    def _asked(self, subject_kind: ReviewSubjectKind | None) -> frozenset[ReviewSubjectKind]:
+        """Which planes this page will query at all.
+
+        Composition first and the filter second, in that order, because they are
+        two different sentences: an uncomposed plane is absent from the build and
+        an unselected one is absent from this page. Collapsing them would make a
+        caller able to learn, by filtering, whether a plane exists.
+        """
+        composed = {ReviewSubjectKind.CAPTURE_PROPOSAL, ReviewSubjectKind.GOODNOTES_REGION}
+        if self._relationship_memory_enabled:
+            composed.add(ReviewSubjectKind.RELATIONSHIP_MEMORY)
+        if self._relationship_intelligence_enabled:
+            composed.add(ReviewSubjectKind.ENTITY_PROPOSAL)
+        if subject_kind is not None:
+            composed &= {subject_kind}
+        return frozenset(composed)
+
+    def cases(
+        self,
+        *,
+        limit: int,
+        principal_id: str,
+        subject_kind: ReviewSubjectKind | None = None,
+        state: ProposalState | None = None,
+        entity_id: str | None = None,
+        after_opened_at: datetime | None = None,
+        after_review_case_id: str | None = None,
+    ) -> tuple[_ReviewCaseVariant, ...]:
         """One page merged from the planes that open cases on this surface.
 
         Each composed plane is asked for `limit` of its own and the merge takes
         the oldest `limit` overall, so a plane holding nothing costs one query
-        and changes nothing — which is what lets Relationship Memory join the
-        surface without the other two knowing it exists.
+        and changes nothing — which is what lets Relationship Memory and the
+        Entity plane join the surface without the other two knowing they exist.
 
         An *uncomposed* plane costs no query at all and contributes no case. That
         is a stronger statement than "it would have returned nothing anyway":
@@ -504,29 +569,83 @@ class _Reviews(ReviewRepository):
         because nothing wrote a row" is a fact about the data and "absent because
         the build does not have the plane" is a fact about the build, and only
         the second survives the day a producer is admitted.
+
+        **`entity_id` asks only the planes that could answer it.** A capture case
+        is about a span of text and a GoodNotes case is about a region of a page;
+        neither has an entity to be about, so neither is queried when the filter
+        is set. That is the filter meaning what it says rather than two planes
+        returning everything and a merge hiding it.
+
+        Every plane applies `state` and the decoded keyset before its own LIMIT.
+        The merge can therefore take the oldest `limit` globally without losing
+        a later match behind an earlier non-match or repeating the tie at a page
+        boundary.
         """
 
+        if (after_opened_at is None) != (after_review_case_id is None):
+            raise ValueError("a review cursor position is complete or absent")
+
         def statement() -> tuple[_ReviewCaseVariant, ...]:
-            capture = review_cases(
-                self._connection, limit=limit, context=capture_context(principal_id)
-            )
-            goodnotes = goodnotes_review_cases(
-                self._connection, principal_id=principal_id, limit=limit
-            )
-            memories: tuple[RelationshipMemoryReviewCase, ...] = ()
-            if self._relationship_memory_enabled:
-                memories = relationship_memory_review_cases(
-                    self._connection, principal_id=principal_id, limit=limit
+            asked = self._asked(subject_kind)
+            found: list[_ReviewCaseVariant] = []
+            if entity_id is None and ReviewSubjectKind.CAPTURE_PROPOSAL in asked:
+                found.extend(
+                    review_cases(
+                        self._connection,
+                        limit=limit,
+                        context=capture_context(principal_id),
+                        state=state,
+                        after_opened_at=after_opened_at,
+                        after_review_case_id=after_review_case_id,
+                    )
+                )
+            if entity_id is None and ReviewSubjectKind.GOODNOTES_REGION in asked:
+                found.extend(
+                    goodnotes_review_cases(
+                        self._connection,
+                        principal_id=principal_id,
+                        limit=limit,
+                        state=state,
+                        after_opened_at=after_opened_at,
+                        after_review_case_id=after_review_case_id,
+                    )
+                )
+            if ReviewSubjectKind.RELATIONSHIP_MEMORY in asked:
+                found.extend(
+                    case
+                    for case in relationship_memory_review_cases(
+                        self._connection,
+                        principal_id=principal_id,
+                        limit=limit,
+                        state=state,
+                        entity_id=entity_id,
+                        after_opened_at=after_opened_at,
+                        after_review_case_id=after_review_case_id,
+                    )
+                )
+            if ReviewSubjectKind.ENTITY_PROPOSAL in asked:
+                found.extend(
+                    entity_proposal_review_cases(
+                        self._connection,
+                        principal_id=principal_id,
+                        limit=limit,
+                        state=state,
+                        entity_id=entity_id,
+                        after_opened_at=after_opened_at,
+                        after_review_case_id=after_review_case_id,
+                    )
                 )
             combined: list[_ReviewCaseVariant] = sorted(
-                [*capture, *goodnotes, *memories],
+                found,
                 key=lambda case: (case.opened_at, case.review_case_id),
             )
             return tuple(combined[:limit])
 
         return _read(statement)
 
-    def decide(self, request: ReviewDecisionRequest) -> ReviewDecision | None:
+    def decide(
+        self, request: ReviewDecisionRequest, *, has_operator_authority: bool = False
+    ) -> ReviewDecision | None:
         """Route one decision to the plane that opened the case.
 
         With the memory plane uncomposed the memory branch is skipped and the
@@ -549,10 +668,89 @@ class _Reviews(ReviewRepository):
                 review_case_id=request.review_case_id,
                 principal_id=request.principal_id,
             ):
-                return decide_relationship_memory_review(self._connection, request)
+                return decide_relationship_memory_review(
+                    self._connection,
+                    request,
+                    has_operator_authority=has_operator_authority,
+                )
             return decide_review(self._connection, request)
 
         return _read(statement)
+
+    # --- the Entity proposal plane's case read and decision ledger -----------
+    #
+    # Storage only. The ordering of an Entity decision — claim it, promote it,
+    # append it — belongs to `EntityProposalReviewService`, because promotion
+    # runs through the canonical Phase A mutation services and those are
+    # application code this layer may not import. Each method answers `None`,
+    # an empty ledger or `False` for an uncomposed plane, which is the same
+    # answer an identifier naming nothing gets.
+
+    def entity_proposal_case(
+        self, principal_id: str, review_case_id: str
+    ) -> EntityProposalReviewCase | None:
+        if not self._relationship_intelligence_enabled:
+            return None
+        return _read(
+            lambda: entity_proposal_review_case(
+                self._connection, review_case_id=review_case_id, principal_id=principal_id
+            )
+        )
+
+    def entity_proposal_decisions(
+        self, principal_id: str, review_case_id: str
+    ) -> tuple[Disposition, ...]:
+        return _read(
+            lambda: decide_ledger_dispositions(
+                self._connection, review_case_id=review_case_id, principal_id=principal_id
+            )
+        )
+
+    def record_entity_proposal_decision(
+        self, principal_id: str, decision: EntityProposalReviewDecision
+    ) -> None:
+        _read(
+            lambda: record_entity_proposal_review_decision(self._connection, principal_id, decision)
+        )
+
+    def invalidate_entity_proposal(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        reason: str,
+        decided_by: str,
+        decided_at: datetime,
+    ) -> bool:
+        return _read(
+            lambda: invalidate_entity_proposal(
+                self._connection,
+                principal_id,
+                proposal_id,
+                reason=reason,
+                decided_by=decided_by,
+                decided_at=decided_at,
+            )
+        )
+
+    def supersede_entity_proposal(
+        self, principal_id: str, proposal_id: str, *, at: datetime
+    ) -> bool:
+        return _read(
+            lambda: supersede_entity_proposal(self._connection, principal_id, proposal_id, at=at)
+        )
+
+    def name_entity_proposal_successor(
+        self, principal_id: str, proposal_id: str, *, successor_proposal_id: str
+    ) -> None:
+        _read(
+            lambda: name_entity_proposal_successor(
+                self._connection,
+                principal_id,
+                proposal_id,
+                successor_proposal_id=successor_proposal_id,
+            )
+        )
 
 
 class _Knowledge(KnowledgeRepository):
@@ -686,7 +884,12 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     """
 
     def __init__(
-        self, engine: Engine, *, audit: AuditSink, relationship_memory_enabled: bool = False
+        self,
+        engine: Engine,
+        *,
+        audit: AuditSink,
+        relationship_memory_enabled: bool = False,
+        relationship_intelligence_enabled: bool = False,
     ) -> None:
         """Take the engine, the audit sink, and which optional planes are composed.
 
@@ -703,10 +906,27 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         failing-closed direction: a caller that has not said the plane is
         composed gets a unit of work that does not reach it, which is the answer
         that discloses nothing if the caller was simply not updated.
+
+        `relationship_intelligence_enabled` is the same bool for the same
+        reasons, for the Entity proposal plane `WP-RI-B-05` puts on the Review
+        surface. It is separate from the memory switch because the two planes
+        are separately composed: the memory plane binds its subjects from the
+        entity plane and so implies it, but the entity plane does not imply the
+        memory plane, and one flag would make enabling either enable both.
+
+        **This paragraph used to say the half was not wired yet, and that is no
+        longer true.** `WP-RI-B-07` threads
+        `settings.relationship_intelligence_enabled` through
+        `bootstrap.gateway.build_gateway_runtime`, so a real build with the plane
+        on now reaches the Entity branch. The sentence is corrected rather than
+        deleted because the state it described was real for one wave and the
+        default here is still `False` for the reason above: a caller that has not
+        said the plane is composed gets a unit of work that does not reach it.
         """
         self._engine = engine
         self._audit = audit
         self._relationship_memory_enabled = relationship_memory_enabled
+        self._relationship_intelligence_enabled = relationship_intelligence_enabled
         self._context: AbstractContextManager[Connection] | None = None
         self._connection: Connection | None = None
 
@@ -801,7 +1021,15 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
 
     @property
     def reviews(self) -> ReviewRepository:
-        return _Reviews(self._open, relationship_memory_enabled=self._relationship_memory_enabled)
+        return _Reviews(
+            self._open,
+            relationship_memory_enabled=self._relationship_memory_enabled,
+            relationship_intelligence_enabled=self._relationship_intelligence_enabled,
+        )
+
+    @property
+    def write_requests(self) -> WriteRequestRepository:
+        return SqlWriteRequestRepository(self._open)
 
     @property
     def situations(self) -> SituationRepository:
@@ -870,6 +1098,19 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def relationship_memory(self) -> RelationshipMemoryRepository:
         """The Relationship Memory rows, on this transaction's connection."""
         return SqlRelationshipMemoryRepository(self._open)
+
+    @property
+    def relationship_memory_proposals(self) -> RelationshipMemoryProposalRepository:
+        """The producer's one insert, on this transaction's connection.
+
+        Ungated here, exactly as `relationship_memory` above is: whether the
+        plane is composed is `ApplicationService.available_capabilities`' answer
+        and `_relationship_memory_plane()`'s, and a second copy of that decision
+        in the unit of work would be a second thing able to disagree with it.
+        What this property decides is which object the handler gets, and the
+        answer is one that can only insert a candidate.
+        """
+        return SqlRelationshipMemoryProposalRepository(self._open)
 
     @property
     def audit(self) -> AuditSink:

@@ -27,6 +27,7 @@ number that measures the machine rather than the code.
 from __future__ import annotations
 
 from collections.abc import Iterator
+from dataclasses import replace
 from pathlib import Path
 from typing import Final
 
@@ -38,7 +39,7 @@ from sqlalchemy.engine import make_url
 
 from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.domain.relationship.entity import EntityType
+from my_pa.domain.relationship.entity import EntityStatus, EntityType
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from tests.evaluation.fixtures.program_scale_cases import PROGRAM_SCALE_CASES
@@ -96,8 +97,28 @@ def loaded_database() -> Iterator[Engine]:
         engine = create_database_engine(url)
         with engine.begin() as connection:
             repository = SqlEntityRepository(connection)
+            redirects = {
+                redirect.merged_entity_id: redirect
+                for redirect in PROGRAM_SCALE_CORPUS.merged_redirects
+            }
             for entity in PROGRAM_SCALE_CORPUS.entities:
-                repository.create(entity.principal_id, entity)
+                # The corpus describes final state, but its children are
+                # historical facts written before a merge. Reproduce that
+                # history: admit each future redirect as current, load every
+                # child through the guarded public repository, then apply the
+                # intended redirect below.
+                repository.create(
+                    entity.principal_id,
+                    (
+                        replace(
+                            entity,
+                            status=EntityStatus.ACTIVE,
+                            superseded_by_entity_id=None,
+                        )
+                        if entity.entity_id in redirects
+                        else entity
+                    ),
+                )
             for alias in PROGRAM_SCALE_CORPUS.aliases:
                 repository.record_alias(alias.principal_id, alias)
             for identifier in PROGRAM_SCALE_CORPUS.identifiers:
@@ -110,6 +131,15 @@ def loaded_database() -> Iterator[Engine]:
                 repository.record_relationship(relationship.principal_id, relationship)
             for observation in PROGRAM_SCALE_CORPUS.observations:
                 repository.record_observation(observation.principal_id, observation)
+            entities_by_id = {entity.entity_id: entity for entity in PROGRAM_SCALE_CORPUS.entities}
+            for redirect in PROGRAM_SCALE_CORPUS.merged_redirects:
+                merged = entities_by_id[redirect.merged_entity_id]
+                repository.redirect_entity(
+                    merged.principal_id,
+                    redirect.merged_entity_id,
+                    redirect.survivor_entity_id,
+                    expected_version=merged.version,
+                )
         yield engine
     finally:
         if engine is not None:
@@ -170,12 +200,25 @@ def test_the_corpus_round_trips_through_postgresql(loaded_database: Engine) -> N
                 "entity_observations",
             )
         }
+        redirects = {
+            (str(row.entity_id), str(row.superseded_by_entity_id))
+            for row in connection.execute(
+                text(
+                    "SELECT entity_id, superseded_by_entity_id "
+                    "FROM knowledge.entities WHERE status = 'merged_redirect'"
+                )
+            ).all()
+        }
     assert counted["entities"] == len(PROGRAM_SCALE_CORPUS.entities)
     assert counted["entity_aliases"] == len(PROGRAM_SCALE_CORPUS.aliases)
     assert counted["entity_external_identifiers"] == len(PROGRAM_SCALE_CORPUS.identifiers)
     assert counted["entity_assignments"] == len(PROGRAM_SCALE_CORPUS.assignments)
     assert counted["entity_relationships"] == len(PROGRAM_SCALE_CORPUS.relationships)
     assert counted["entity_observations"] == len(PROGRAM_SCALE_CORPUS.observations)
+    assert redirects == {
+        (redirect.merged_entity_id, redirect.survivor_entity_id)
+        for redirect in PROGRAM_SCALE_CORPUS.merged_redirects
+    }
 
 
 def test_every_labelled_case_answers_as_labelled(loaded_database: Engine) -> None:

@@ -288,6 +288,26 @@ class IdKind(StrEnum):
     ENTITY_MUTATION_EVENT = "emut"
     ENTITY_FACT_EVIDENCE_LINK = "efev"
     ENTITY_RESOLUTION_DECISION = "erdc"
+    #: WP-RI-06: the three records a governed identity correction is bound by,
+    #: performed under, and recorded in. Three prefixes rather than a reuse of
+    #: `ENTITY_MERGE` (`emrg`), on the argument `CAPTURE_VERSION` makes against
+    #: reusing `VERSION`: `emrg` names the redirect-lineage row an accepted merge
+    #: proposal leaves behind, which is exactly the redirect-only lineage these
+    #: three exist because it is insufficient for inverse recovery. A reference
+    #: carrying one prefix for both could not say which of them it meant.
+    #:
+    #: `ENTITY_IDENTITY_PREVIEW` names the expiring binding between an operator's
+    #: approval and the versions the preview read. `ENTITY_IDENTITY_OPERATION`
+    #: names one admitted correction. `ENTITY_IDENTITY_EFFECT` names one
+    #: append-only before/after row of what that correction did, and is
+    #: deliberately not `ENTITY_MUTATION_EVENT` (`emut`): that ledger records one
+    #: capability's change to one canonical record under an idempotency key, and
+    #: this one records one step of an operation a later split has to reverse --
+    #: and `entity_identity_effects.record_id` carries no foreign key, so its
+    #: prefix is the only thing in the value that says what it points at.
+    ENTITY_IDENTITY_PREVIEW = "eipv"
+    ENTITY_IDENTITY_OPERATION = "eiop"
+    ENTITY_IDENTITY_EFFECT = "eief"
 
 
 class InvalidIdentifierError(ValueError):

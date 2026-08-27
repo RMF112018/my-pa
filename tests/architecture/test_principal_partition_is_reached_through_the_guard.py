@@ -116,6 +116,7 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # goes through `partition_criterion` or `principal_bound_values`, so it
         # is registered statement-level below rather than per-module.
         "infrastructure/persistence/entity.py",
+        "infrastructure/persistence/write_requests.py",
         # The same plane's governed write path (`WP-RI-A-02`), separated from the
         # module above because a guarded write is a transaction rather than a
         # statement. Every statement it builds over an entity table goes through
@@ -126,6 +127,17 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # proves ownership by joining to `captures.owner_principal_id`. That
         # comparison is registered in `HAND_WRITTEN_COMPARISONS`.
         "infrastructure/persistence/entity_authoring.py",
+        # `WP-RI-B-05`'s Review half of the same plane, separated from the two
+        # above for the reason they are separated from each other: this module's
+        # subject is a review case rather than a proposal or a canonical write.
+        # Every statement it builds over `entity_proposals` and
+        # `entity_proposal_review_decisions` goes through `partition_criterion`
+        # or `principal_bound_values`, through the one-line `_mine`/`_bound`
+        # wrappers `relationship_memory_review.py` established, and it has no
+        # statement that proves ownership any other way -- it cites no capture
+        # span and no knowledge record, so it adds nothing to
+        # `HAND_WRITTEN_COMPARISONS`.
+        "infrastructure/persistence/entity_proposal_review.py",
         "infrastructure/persistence/goodnotes.py",
         "infrastructure/persistence/goodnotes_semantics.py",
         "infrastructure/persistence/goodnotes_delivery.py",
@@ -155,6 +167,17 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
         # — composes `_mine` or `_bound`, and those two are one-line wrappers
         # over `partition_criterion` and `principal_bound_values` respectively.
         "infrastructure/persistence/relationship_memory.py",
+        # Shared validation for Relationship Memory context targets. Its sole
+        # statement reads `knowledge.entities` through `partition_criterion`
+        # before accepting an Entity target as present and writable for the
+        # already-resolved Principal.
+        "infrastructure/persistence/relationship_memory_context.py",
+        # The producer's one insert (`WP-RI-B-05`). Both of its statements are
+        # stamped through `principal_bound_values`, which is the stronger half of
+        # this guard rather than the weaker one: it *refuses* values that already
+        # carry a partition column, so the row is written under the context's
+        # Principal and cannot take one from a record a caller influenced.
+        "infrastructure/persistence/relationship_memory_proposals.py",
         # The Relationship Memory review and promotion plane. Every statement it
         # builds — the case listing, the dispatch probe, the decision append, the
         # proposal stamp, the promoted aggregate and version, the evidence copy,
@@ -300,6 +323,12 @@ STATEMENT_LEVEL: Final = frozenset(
         "infrastructure/persistence/knowledge.py",
         "infrastructure/persistence/managed_documents.py",
         "infrastructure/persistence/relationships.py",
+        # The producer's one insert (`WP-RI-B-05`). Statement-level rather than
+        # per-module, and it is the easiest such claim in this file to check:
+        # the module builds exactly two statements and both are `insert(...)`
+        # values stamped through `principal_bound_values`. There is no read to
+        # scope and no third statement to be uncertain about.
+        "infrastructure/persistence/relationship_memory_proposals.py",
         "infrastructure/persistence/reveal.py",
     }
 )
@@ -314,6 +343,11 @@ STATEMENT_LEVEL: Final = frozenset(
 #: modules is reached only through an application path that has already resolved
 #: the Principal, which is the same argument the `QUARANTINED` entries make.
 PER_MODULE_ONLY: Final = {
+    "infrastructure/persistence/write_requests.py": (
+        "every reservation/result read and completion update uses `_mine`, and both "
+        "the reservation and typed evidence inserts use `_bound`; the module has "
+        "not yet joined a dedicated statement-level scanner."
+    ),
     "infrastructure/persistence/goodnotes.py": (
         "all reads use the shared partition criterion and all writes use "
         "principal_bound_values; helper-built joins consume those predicates."
@@ -385,6 +419,32 @@ PER_MODULE_ONLY: Final = {
         "per-module rather than statement-level only because this plane has no "
         "bespoke statement-level scan of its own yet; writing one is the work "
         "this entry represents, not a hole it is covering."
+    ),
+    "infrastructure/persistence/relationship_memory_context.py": (
+        "its sole statement reads `knowledge.entities` through "
+        "partition_criterion before treating a context target as present and "
+        "writable for the already-resolved Principal. It is per-module rather "
+        "than statement-level because this shared helper has no bespoke "
+        "statement scanner of its own."
+    ),
+    "infrastructure/persistence/entity_proposal_review.py": (
+        "seven statements of ten — every write and every keyed read — compose "
+        "`_mine` or `_bound`, the same one-line wrappers over "
+        "partition_criterion and principal_bound_values that "
+        "`relationship_memory_review.py` established and that the plane it "
+        "reviews already uses. **Three do not**, and they are the same three "
+        "shapes the sibling entry below names: the `review_version`, "
+        "`escalated` and `latest_disposition` correlated subqueries built by "
+        "`_case_columns`, each keyed on `review_case_id` alone. All three "
+        "`.correlate(entity_proposals)` to the `_mine`-scoped select they hang "
+        "off, so they are evaluated per candidate row of a page that predicate "
+        "has already admitted and can only see decisions belonging to a case "
+        "this Principal holds. **What isolates them is that scoped statement "
+        "and nothing else** — not the key, which spans every Principal. Both "
+        "reads that use them are `_mine`-scoped; there is no third caller, and "
+        "a fourth would have to add one. Statement-level would say more, and "
+        "saying it requires a statement-level test of its own, which is the "
+        "work this entry represents rather than a hole it is covering."
     ),
     "infrastructure/persistence/relationship_memory_review.py": (
         "eleven statements of fourteen — every write, and every read of a "
@@ -902,6 +962,53 @@ def test_every_relationship_statement_reaches_the_partition() -> None:
     )
 
 
+def test_every_memory_proposal_statement_reaches_the_partition() -> None:
+    """The producer's insert, statement by statement, which is two statements.
+
+    Claim 1 says the module uses `principal_scope` somewhere; this says every
+    statement in it does. It is the cheapest such claim in this file to check and
+    the strictest: the module builds exactly two statements, both `insert`s, and
+    both are stamped through `_bound` -- there is no read to scope and no third
+    statement whose classification could be argued about.
+
+    `_bound` and never `_mine`, and the asymmetry is the port rather than an
+    omission. `RelationshipMemoryProposalRepository` declares one method and it
+    inserts; a `_mine`-scoped read here would be a read the port has no method
+    for, which is the whole of what makes a producer unable to read back what a
+    reviewer did with its candidate.
+    """
+    path = PACKAGE / "infrastructure" / "persistence" / "relationship_memory_proposals.py"
+    partitioned = set(_partitioned_tables())
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+
+    checked = 0
+    offending: list[str] = []
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        for statement in ast.walk(function):
+            if not isinstance(statement, ast.Expr | ast.Assign | ast.AnnAssign | ast.Return):
+                continue
+            rendered = ast.unparse(statement)
+            if not any(f"insert({table})" in rendered for table in partitioned):
+                continue
+            checked += 1
+            if "_bound(" not in rendered:
+                offending.append(f"{function.name}:{statement.lineno}")
+
+    assert checked == 2, (
+        f"{checked} statements over a partitioned table were examined, not two. "
+        "The producer's whole persistence surface is one insert of a candidate "
+        "and one insert per evidence row; a third is a reach this port does not "
+        "declare a method for"
+    )
+    assert offending == [], (
+        f"{offending} insert into a principal-partitioned memory table without "
+        "stamping the partition through `principal_scope`. Every insert here goes "
+        "through `_bound`, which refuses a value that already carries one"
+    )
+
+
 #: A floor under the anti-vacuity floor. The widened walk reaches **thirty-four**
 #: statements touching a partitioned table at this head; thirty leaves room for
 #: one or two to be removed without reddening the suite, while a walk that
@@ -983,7 +1090,38 @@ _ENTITY_PLANE_MODULES: Final = (
 #: compared against the Principal already stamped on the write request; that
 #: comparison is registered in `HAND_WRITTEN_COMPARISONS` above, so removing it
 #: reddens there rather than passing quietly here.
+#:
+#: **It stayed one entry through `WP-RI-B-05`, which added a second span walk.**
+#: `EntitiesRepository.record_proposal_evidence_link` proves the same thing
+#: about the same table for a *proposal's* evidence, and reaches the partition
+#: through `_mine` on both joined tables instead — so it is guarded rather than
+#: registered. Two spellings of one precondition were enough; three would have
+#: been a pattern.
 _UNGUARDED_ENTITY_PLANE_STATEMENTS: Final = frozenset({"entity_authoring.py:_record_evidence"})
+
+#: The six closed table choices `proposal_target_version` binds before one
+#: `_mine(table, principal_id)` query. The assignment is not itself a query, so
+#: statement-local scans cannot see the downstream guard. The exact mapping and
+#: guarded consumer are asserted together below; this is not a general dynamic
+#: table exemption.
+_DYNAMIC_PROPOSAL_TARGET_TABLES: Final = frozenset(
+    {
+        "entities",
+        "entity_external_identifiers",
+        "entity_aliases",
+        "entity_assignments",
+        "entity_relationships",
+        "entity_observations",
+    }
+)
+
+
+def _is_dynamic_proposal_target_binding(function: str, statement: ast.stmt) -> bool:
+    if function != "proposal_target_version" or not isinstance(statement, ast.Assign):
+        return False
+    return any(
+        isinstance(target, ast.Name) and target.id == "target" for target in statement.targets
+    )
 
 
 def _entity_plane_statements() -> Iterator[tuple[Path, str, ast.stmt]]:
@@ -1028,6 +1166,8 @@ def test_every_entity_statement_reaches_the_partition() -> None:
             continue
         checked += 1
         if "_mine(" in rendered or "_bound(" in rendered:
+            continue
+        if _is_dynamic_proposal_target_binding(function, statement):
             continue
         if f"{path.name}:{function}" in _UNGUARDED_ENTITY_PLANE_STATEMENTS:
             continue
@@ -1500,6 +1640,9 @@ def test_every_entity_statement_reaches_the_partition_of_each_table_it_names() -
             if not named:
                 continue
             checked += 1
+            if _is_dynamic_proposal_target_binding(function.name, statement):
+                assert named == _DYNAMIC_PROPOSAL_TARGET_TABLES
+                continue
             for table in sorted(named):
                 reachable = [table, *[a for a, t in aliases.items() if t == table]]
                 guarded = any(
@@ -1520,6 +1663,36 @@ def test_every_entity_statement_reaches_the_partition_of_each_table_it_names() -
         "and whose child side is not answers from another Principal's row under "
         "this Principal's name"
     )
+
+
+def test_the_dynamic_proposal_target_map_is_closed_and_its_consumer_is_scoped() -> None:
+    path = PACKAGE / "infrastructure" / "persistence" / "entity.py"
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    function = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "proposal_target_version"
+    )
+    binding = next(
+        statement
+        for statement in function.body
+        if isinstance(statement, ast.Assign)
+        and any(
+            isinstance(target, ast.Name) and target.id == "target" for target in statement.targets
+        )
+    )
+    rendered_binding = ast.unparse(binding)
+    named = {
+        table
+        for table in _DYNAMIC_PROPOSAL_TARGET_TABLES
+        if _names_table(table).search(rendered_binding)
+    }
+    assert named == _DYNAMIC_PROPOSAL_TARGET_TABLES
+
+    rendered_function = ast.unparse(function)
+    assert "_mine(table, principal_id)" in rendered_function
+    assert "identity == record_id" in rendered_function
+    assert ".with_for_update(of=table)" in rendered_function
 
 
 def test_every_corpus_coverage_statement_reaches_the_partition() -> None:
@@ -1956,6 +2129,9 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
                 # proves ownership by joining to `captures.owner_principal_id`. That
                 # comparison is registered in `HAND_WRITTEN_COMPARISONS`.
                 "infrastructure/persistence/entity_authoring.py",
+                # `WP-RI-B-05`'s producer insert, held by
+                # `test_every_memory_proposal_statement_reaches_the_partition`.
+                "infrastructure/persistence/relationship_memory_proposals.py",
             }
         )
         == STATEMENT_LEVEL
@@ -1966,7 +2142,8 @@ def test_every_guarded_module_is_checked_per_statement_or_registered_as_not() ->
         "`test_every_reveal_statement_reaches_the_partition`, "
         "`test_every_corpus_coverage_statement_reaches_the_partition`, "
         "`test_every_managed_document_statement_reaches_the_partition_or_is_registered` "
-        "and `test_every_entity_statement_reaches_the_partition` are the six "
+        "`test_every_entity_statement_reaches_the_partition` and "
+        "`test_every_memory_proposal_statement_reaches_the_partition` are the seven "
         "that exist"
     )
 

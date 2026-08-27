@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import func, select, update
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.engine import Connection
 
@@ -124,7 +124,13 @@ def open_review_case(connection: Connection, proposal_id: str) -> str | None:
 
 
 def review_cases(
-    connection: Connection, *, limit: int, context: PrincipalContext
+    connection: Connection,
+    *,
+    limit: int,
+    context: PrincipalContext,
+    state: ProposalState | None = None,
+    after_opened_at: datetime | None = None,
+    after_review_case_id: str | None = None,
 ) -> tuple[ReviewCase, ...]:
     """Read one bounded page, oldest first, with current version derived from rows.
 
@@ -136,6 +142,8 @@ def review_cases(
     """
     if limit < 1:
         raise ValueError("a review page contains at least one case")
+    if (after_opened_at is None) != (after_review_case_id is None):
+        raise ValueError("a review cursor position is complete or absent")
     latest_sequence = (
         select(func.max(capture_review_decisions.c.sequence))
         .where(capture_review_decisions.c.review_case_id == capture_review_cases.c.review_case_id)
@@ -150,6 +158,19 @@ def review_cases(
         .correlate(capture_review_cases)
         .scalar_subquery()
     )
+    criteria = []
+    if state is not None:
+        criteria.append(capture_proposals.c.state == state.value)
+    if after_opened_at is not None and after_review_case_id is not None:
+        criteria.append(
+            or_(
+                capture_review_cases.c.opened_at > after_opened_at,
+                and_(
+                    capture_review_cases.c.opened_at == after_opened_at,
+                    capture_review_cases.c.review_case_id > after_review_case_id,
+                ),
+            )
+        )
     rows = connection.execute(
         principal_scoped(
             select(
@@ -169,6 +190,7 @@ def review_cases(
                 capture_proposals,
                 capture_proposals.c.proposal_id == capture_review_cases.c.proposal_id,
             )
+            .where(*criteria)
             .order_by(capture_review_cases.c.opened_at, capture_review_cases.c.review_case_id)
             .limit(limit),
             capture_review_cases,
@@ -254,7 +276,22 @@ def decide_review(connection: Connection, request: ReviewDecisionRequest) -> Rev
     )
     if current != request.expected_review_version:
         raise ReviewConflictError("the expected review version is stale")
-    if request.disposition in {Disposition.REPROCESS, Disposition.ESCALATE}:
+    # `INVALIDATE` joins the two `WP-RI-B-05` made reachable elsewhere, and is
+    # refused here for a reason of its own rather than for theirs. The
+    # disposition *requires* a reason -- that is what separates "the ground moved"
+    # from "a reviewer refused this" -- and this plane has nowhere to put one.
+    # `capture_proposals` reaches `invalidated` only through
+    # `proposals.invalidate_proposal`, whose reason is a closed
+    # `ProposalQuarantineReason` describing an evidence fault the server found,
+    # not prose a person wrote. Writing the state with a reason nobody can read
+    # back, or with a quarantine reason nobody chose, is exactly the false record
+    # `invalidate` exists to prevent, so the honest answer is that this plane has
+    # no eligible route yet.
+    if request.disposition in {
+        Disposition.REPROCESS,
+        Disposition.ESCALATE,
+        Disposition.INVALIDATE,
+    }:
         raise ReviewUnsupportedError("the requested disposition has no eligible route")
     if request.disposition in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}:
         faults = span_faults(connection, str(case.proposal_id))

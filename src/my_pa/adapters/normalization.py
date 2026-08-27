@@ -51,6 +51,7 @@ from __future__ import annotations
 from base64 import b64decode
 from binascii import Error as BinasciiError
 from collections.abc import Callable, Mapping
+from contextlib import suppress
 from datetime import date, datetime
 from enum import StrEnum
 from types import MappingProxyType
@@ -72,6 +73,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
@@ -114,8 +116,11 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewEntityMerge,
+    ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -160,7 +165,13 @@ from my_pa.application.commands import (
 )
 from my_pa.application.errors import InvalidRequestError, SafeDetail, UnsupportedError
 from my_pa.contracts.v1.envelope import RequestMetadata
-from my_pa.domain.capture.review import Disposition
+from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import (
+    CorrectionPatch,
+    Disposition,
+    ReviewError,
+    ReviewSubjectKind,
+)
 from my_pa.domain.capture.submission import CaptureKind
 from my_pa.domain.context import ContextPlane
 from my_pa.domain.context.preference import ContextPreferenceAction
@@ -191,6 +202,7 @@ from my_pa.domain.relationship.governance import (
     ResolutionDisposition,
 )
 from my_pa.domain.relationship.memory import MemoryKind, MemoryLifecycle
+from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 from my_pa.domain.situation.continuity import (
     CommitmentDirection,
     CommitmentState,
@@ -410,7 +422,29 @@ def _reveal_subject(payload: Mapping[str, Any]) -> Command:
 
 
 def _list_review_cases(payload: Mapping[str, Any]) -> Command:
-    return ListReviewCases(**payload)
+    """`review.list`, with its two closed-vocabulary filters named rather than raw.
+
+    A caller sends `"entity_proposal"` and `"needs_review"` as strings; the
+    command takes the enum members, so the strings are converted here and a
+    string outside either vocabulary is refused with the field it named. Doing
+    it here rather than in the command keeps `ReviewSubjectKind` and
+    `ProposalState` out of a transport payload's type, which is the same
+    division `_decide_review_case` already makes for `disposition`.
+    """
+    converted = dict(payload)
+    named = converted.get("subject_kind")
+    if isinstance(named, str):
+        try:
+            converted["subject_kind"] = ReviewSubjectKind(named)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.SUBJECT) from None
+    state = converted.get("state")
+    if isinstance(state, str):
+        try:
+            converted["state"] = ProposalState(state)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.LIFECYCLE_STATE) from None
+    return ListReviewCases(**converted)
 
 
 def _get_pulse(payload: Mapping[str, Any]) -> Command:
@@ -1408,6 +1442,16 @@ def _restore_managed_document(payload: Mapping[str, Any]) -> Command:
 
 
 def _decide_review_case(payload: Mapping[str, Any]) -> Command:
+    """`review.decide`, with the disposition named and the correction typed.
+
+    A correction patch arrives as a JSON object of named fields. It becomes a
+    `CorrectionPatch` here, which checks that it is a bounded set of named
+    string-or-flag values and nothing else — *not* that those are fields the
+    target command takes, which is the target command schema's answer and is
+    checked by the plane that owns the subject before it commits. A non-object,
+    or a value that is neither a string nor a flag, is refused here with the
+    field it named and never with what it held.
+    """
     converted = dict(payload)
     named = converted.get("disposition")
     if isinstance(named, str):
@@ -1415,7 +1459,86 @@ def _decide_review_case(payload: Mapping[str, Any]) -> Command:
             converted["disposition"] = Disposition(named)
         except ValueError:
             raise InvalidRequestError(SafeDetail.DISPOSITION) from None
+    patch = converted.get("correction_patch")
+    if patch is not None:
+        converted["correction_patch"] = _correction_patch(patch)
     return DecideReviewCase(**converted)
+
+
+def _correction_patch(patch: Any) -> CorrectionPatch:  # noqa: ANN401 - a decoded JSON value
+    """One decoded JSON object as a typed correction patch, or a refusal."""
+    if not isinstance(patch, Mapping):
+        raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+    values: dict[str, Any] = {}
+    for name, value in patch.items():
+        if not isinstance(name, str):
+            raise InvalidRequestError(SafeDetail.CORRECTED_VALUE)
+        values[name] = value
+    try:
+        return CorrectionPatch.of(values)
+    except ReviewError:
+        raise InvalidRequestError(SafeDetail.CORRECTED_VALUE) from None
+
+
+# --- WP-RI-B: the two producer paths and the governed merge -------------------
+#
+# Shape conversion and nothing else, exactly as every builder above is. JSON has
+# no enum and no tuple; a value outside a closed vocabulary is left as it arrived
+# so the command reports it under its own field name, and no rule about which
+# fields a payload may carry is decided here — that is the proposal schema's, the
+# preview's and the domain's, and a copy here would be a copy able to disagree.
+
+
+def _create_entity_proposal(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    if "proposed_by" in converted:
+        raise InvalidRequestError(SafeDetail.PROPOSED_BY)
+    kind = converted.get("kind")
+    if isinstance(kind, str):
+        try:
+            converted["kind"] = EntityProposalKind(kind)
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.PROPOSAL_KIND) from None
+    evidence = converted.get("evidence")
+    if isinstance(evidence, list):
+        converted["evidence"] = tuple(evidence)
+    return CreateEntityProposal(**converted)
+
+
+def _propose_relationship_memory(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    kind = converted.get("kind")
+    if isinstance(kind, str):
+        # Left as it arrived on a bad value, the way `_memory_vocabulary` leaves
+        # one, so the command reports `kind` rather than this reporting a field
+        # a payload may have got wrong twice.
+        with suppress(ValueError):
+            converted["kind"] = MemoryKind(kind)
+    evidence = converted.get("evidence")
+    if isinstance(evidence, list):
+        converted["evidence"] = tuple(evidence)
+    context_links = converted.get("context_links")
+    if isinstance(context_links, list):
+        converted["context_links"] = tuple(context_links)
+    return ProposeRelationshipMemory(**converted)
+
+
+def _preview_entity_merge(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    for name in ("merged_away", "evidence_refs"):
+        value = converted.get(name)
+        if isinstance(value, list):
+            converted[name] = tuple(value)
+    return PreviewEntityMerge(**converted)
+
+
+def _merge_entities(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    for name in ("choices", "evidence_refs"):
+        value = converted.get(name)
+        if isinstance(value, list):
+            converted[name] = tuple(value)
+    return MergeEntities(**converted)
 
 
 #: One builder per command owned by these legacy transports. WP-12C adds a
@@ -1515,6 +1638,9 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_OBSERVATIONS_LIST: _list_entity_observations,
         Capability.ENTITIES_OBSERVE: _observe_entity_mention,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: _resolve_unresolved_mention,
+        Capability.ENTITIES_PROPOSALS_CREATE: _create_entity_proposal,
+        Capability.ENTITIES_MERGE_PREVIEW: _preview_entity_merge,
+        Capability.ENTITIES_MERGE: _merge_entities,
         Capability.RELATIONSHIP_MEMORY_CREATE: _create_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_GET: _get_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_LIST: _list_relationship_memories,
@@ -1523,6 +1649,7 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.RELATIONSHIP_MEMORY_REVISE: _revise_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_ARCHIVE: _archive_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_RESTORE: _restore_relationship_memory,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: _propose_relationship_memory,
     }
 )
 
@@ -1531,8 +1658,8 @@ def _named(capability: str) -> Capability:
     """The capability this request names, or a refusal.
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
-    says this build does not serve a capability that exists, and a name that is
-            not one of the ninety-eight names nothing.
+    says this build does not serve a capability that exists, and a value outside
+    the 102 canonical names refers to nothing.
     """
     try:
         return Capability(capability)

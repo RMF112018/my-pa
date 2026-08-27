@@ -325,6 +325,31 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "entity_resolution_decisions",
         }
     ),
+    # `WP-RI-B-05`'s proposal evidence table. The same revision widens
+    # `entity_proposals` from six kinds to seventeen and adds thirteen columns to
+    # it, which this map does not read -- it names tables a revision *creates*.
+    "c7a1f04b9e63": frozenset({"entity_proposal_evidence_links"}),
+    # `WP-RI-B-06`'s identity-correction ledger: the expiring preview binding, the
+    # operation row that goes `in_progress` to `completed`, and the append-only
+    # effect ledger `WP-07` will have to read to invert a governed merge.
+    "d38e6b2fa715": frozenset(
+        {
+            "entity_identity_previews",
+            "entity_identity_operations",
+            "entity_identity_effects",
+        }
+    ),
+    # `WP-RI-B-05`'s Entity review decision ledger, the sibling of
+    # `capture_review_decisions` and `relationship_memory_review_decisions` on the
+    # one canonical Review plane.
+    "e5b0c94d7182": frozenset({"entity_proposal_review_decisions"}),
+    "3d07af4dc513": frozenset(
+        {"relationship_write_requests", "relationship_write_request_evidence"}
+    ),
+    # `a1f7d3c85e40` and `b64e29a0f7c1` create no table: the first widens two
+    # frozen disposition CHECKs and the second widens the two `audit_events`
+    # vocabularies. They are absent from this map rather than mapped to an empty
+    # set, because this map's keys are the revisions that create something.
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

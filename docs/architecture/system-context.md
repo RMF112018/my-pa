@@ -71,13 +71,13 @@ hash.
 
 
 The repository is an executable local candidate, not a documentation scaffold.
-The `my_pa` application defines and wires ninety-eight capabilities through HTTP,
+The `my_pa` application defines and wires one hundred and two capabilities through HTTP,
 MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
 planes. **A default composition exposes fifty-six of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT`, the
-twenty-eight `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
-(and its eighteen writes a second switch beside it), and the
-eight `relationship_memory.` names require that variable *and*
+thirty-one `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
+(and its twenty-one writes a second switch beside it), and the
+nine `relationship_memory.` names require that variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`, because a memory binds an Entity as its
 subject and ownership is proven by reading `knowledge.entities`; none has
 a default, so an unconfigured process withholds all three families from
@@ -86,10 +86,18 @@ HTTP, and reports readiness `degraded`. The default figure moved from fifty to
 fifty-three when WP-FE-03 admitted `commitments.history`, `commitments.search`
 and `commitments.update`, which arrive on the served side of that split; it did
 not move when WP-29 admitted the `relationship_memory.` family, because every
-name in it arrived on the withheld side. Corrected 2026-08-19: this sentence named the fully-composed capability count under a heading claiming authenticated
+name in it arrived on the withheld side. It then moved from fifty-three to
+fifty-six when the default-served `gsqs.start`, `gsqs.status`, and `gsqs.step`
+capabilities were admitted; `gsqs.start` and `gsqs.step` deliberately remain
+remote-visible when remote writes are disabled, while governed merge still
+requires global remote writes and the server-resolved exact `remote.operator`
+durable capability set.
+Corrected 2026-08-19: this sentence read
+"exposes one hundred and two capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns seventy-one revisions at head `d8f3a1c6e942`, including the merge of
+Alembic owns seventy-seven revisions at head `d8f3a1c6e942`; its linear history places the GSQS start/status admission
+`c4b0a1d9e827` immediately before Phase B's `c7a1f04b9e63`, then `gsqs.step` at `d8f3a1c6e942` after `3d07af4dc513`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
 semantic-retrieval gate remains `SEMANTIC_GATE_FAIL` and production semantic
@@ -445,6 +453,18 @@ read/write provider that allows accidental source mutation.
 - **Model-centric authority:** rejected because models are nondeterministic and cannot replace source/provenance/policy authority.
 - **Full NAS indexing:** rejected because it expands privacy, cost, and truthfulness risk without a current acceptance criterion.
 
+
+### Relationship Intelligence write identity
+
+The Phase B proposal and Review write boundary binds replay to the authenticated
+Principal, capability, server-owned request identity, and material digest. It
+persists typed receipt fields rather than request or response documents. Proposal
+origin is likewise composition-owned: exact producer registrations are immutable,
+and a composition with no trusted registration withholds producer capabilities.
+The default local operator is registered as the gateway rule producer; Entra
+producer identities remain withheld until trusted server configuration exists.
+Open-equivalent Relationship Memory candidates retain the first producer's
+origin while merging newly cited exact evidence.
 
 ## 15. Invalidation and next gate
 

@@ -35,12 +35,12 @@ See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unres
 ## Implementation boundary
 
 This index records architecture direction and current composition. The `my_pa`
-package defines ninety-eight capabilities and exposes them through the HTTP,
+package defines one hundred and two capabilities and exposes them through the HTTP,
 MCP, and operator-CLI adapters; a default composition serves fifty-six of
 them, because the `documents.`, `entities.` and `relationship_memory.` families
 each require an environment variable that has no default. The gateway and worker
 composition roots use the same PostgreSQL-backed policy and application seams.
-Alembic owns seventy-one revisions at head `d8f3a1c6e942`. The current candidate
+Alembic owns seventy-seven revisions at head `d8f3a1c6e942`; the chain admits `gsqs.start`/`gsqs.status` at `c4b0a1d9e827` immediately before Phase B continues at `c7a1f04b9e63`, then `gsqs.step` at `d8f3a1c6e942` after Phase B's `3d07af4dc513`. The current candidate
 also includes the MossAIc web BFF/PWA, managed documents, GoodNotes, the bounded
 model gate, Frontier MCP, and the Apple source host. These documents describe the
 resulting implementation and the accepted, inactive NAS target. They do not
@@ -50,7 +50,7 @@ risk acceptance.
 Corrected 2026-08-23: the paragraph above claimed 30 capabilities and 34
 revisions at head `b4e8d2c7a613`. That pair was self-consistent when it was
 written — `b4e8d2c7a613` is still in this chain and is still its 34th revision —
-and 35 more have landed on top of it since, the last being `d8f3a1c6e942`. The
+and further revisions have landed on top of it since, with current head `d8f3a1c6e942`. The
 current figures were already stated in [`system-context.md`](system-context.md)
 beside it, which has been kept current through those work packages while this
 index was not, and that is how a figure like this survives: the sibling is the

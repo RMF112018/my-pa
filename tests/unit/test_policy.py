@@ -314,6 +314,15 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.RELATIONSHIP_MEMORY_REVISE, Purpose.RELATIONSHIP_MEMORY_AUTHORING),
         (Capability.RELATIONSHIP_MEMORY_ARCHIVE, Purpose.RELATIONSHIP_MEMORY_AUTHORING),
         (Capability.RELATIONSHIP_MEMORY_RESTORE, Purpose.RELATIONSHIP_MEMORY_AUTHORING),
+        # Phase B's four, one purpose each. The two producer paths carry purposes
+        # neither plane's existing pair holds, which is what keeps a client that
+        # may raise candidates from thereby authoring what it proposed; the two
+        # identity-correction halves share one purpose, which is the coupling
+        # `purpose.py` argues for rather than works around.
+        (Capability.ENTITIES_PROPOSALS_CREATE, Purpose.ENTITY_PROPOSAL),
+        (Capability.RELATIONSHIP_MEMORY_PROPOSE, Purpose.RELATIONSHIP_MEMORY_PROPOSAL),
+        (Capability.ENTITIES_MERGE_PREVIEW, Purpose.ENTITY_IDENTITY_CORRECTION),
+        (Capability.ENTITIES_MERGE, Purpose.ENTITY_IDENTITY_CORRECTION),
         (Capability.RELATIONSHIP_MEMORY_GET, Purpose.RELATIONSHIP_MEMORY_READ),
         (Capability.RELATIONSHIP_MEMORY_LIST, Purpose.RELATIONSHIP_MEMORY_READ),
         (Capability.RELATIONSHIP_MEMORY_SEARCH, Purpose.RELATIONSHIP_MEMORY_READ),
@@ -361,9 +370,13 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # `entity_observation_ingest` and nothing else, and the other seventeen
     # writes under `entity_authoring` -- so it contributes twenty-two pairs
     # rather than the sixty-six a cross product would give.
-    # Unioned: 98 capabilities, 31 purposes, 100 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 100
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 100 == 2938
+    # Phase B added both producer paths and the governed merge pair, with one
+    # purpose per producer and one shared by preview/apply -- so it contributes
+    # four pairs rather than the twelve a cross product would give.
+    # GSQS B0 adds start/status/step capability-purpose pairs. Unioned: 102 capabilities,
+    # 34 purposes, 104 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 104
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 104 == 3364
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

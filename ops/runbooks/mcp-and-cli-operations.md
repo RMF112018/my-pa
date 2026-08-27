@@ -59,11 +59,11 @@ Principal, or has been **revoked** — so `apps/cli/clients.py revoke` withdraws
 this surface at the next start, with no second registry and nothing else to
 remember.
 
-**This is identification, not authentication.** stdio carries no credential, so
-the process presents no secret and verifies none. Authenticating an external MCP
-client needs an ingress that does not exist in this build (`EXT-07`/`EXT-08`,
-operator-gated). There is no OAuth authorization server, no PKCE, no resource
-indicators and no per-client profile conformance testing; see
+**For local stdio this is identification, not authentication.** stdio carries no
+credential, so that process presents no secret and verifies none. The separate
+persistent remote MCP surface authenticates through the origin OAuth server and
+resource-bound tokens, then resolves durable capability and purpose grants; it
+does not reuse `MY_PA_MCP_CLIENT_ID` as authentication. See
 `docs/operations/mcv-limitations.md` §13a.
 
 **Restart is required for either switch to take effect.** Both are composed once
@@ -76,7 +76,7 @@ All three transports call one function — `adapters/normalization.normalize` �
 and none of them can build a request value of its own. A request that HTTP
 refuses, MCP and the CLI refuse, with the same code, the same message, the same
 `safe_details`, and the same audit event. That is `SPEC-AC-001`, and
-`tests/contract/test_transport_parity.py` holds it over all ninety-eight capabilities.
+`tests/contract/test_transport_parity.py` holds it over all one hundred and two capabilities.
 
 Practically: **there is no capability reachable from a shell that is not
 reachable over HTTP, and no authority that comes with being local.** The CLI is
@@ -105,9 +105,27 @@ configures TLS (`D-30`; `P00-OD-010` is open and reserved to the operator).
 .venv/bin/python apps/gateway.py mcp
 ```
 
-**Stdio only** (`D-26`, `D-30`). The server speaks JSON-RPC on standard input
-and standard output and binds nothing. There is no `--host`, no `--port`, and no
-transport flag; the SDK's HTTP and SSE transports are never imported.
+**This command is local stdio** (`D-26`). It speaks JSON-RPC on standard input
+and standard output and binds nothing. There is no `--host`, `--port`, or
+transport flag on this subcommand.
+
+Persistent remote MCP is a separate `apps/gateway.py mcp-remote` subcommand
+using authenticated Streamable HTTP. It is disabled by default and refuses to
+start without the exact HTTPS origin OAuth settings; serving also requires the
+durable database remote-security control. Requests are constrained by exact
+host/origin and DNS-rebinding protections, resource- and scope-bound OAuth,
+durable capability and purpose grants, feature/policy gates, and the independent
+remote-write switch. Operator-only merge additionally requires the
+server-resolved exact `remote.operator` durable capability set. This repository
+state configures no live client or grant and does not activate, publish, or
+deploy that ingress.
+
+`gsqs.start` is the deliberate exception to the remote write classification:
+it remains visible when remote writes are disabled so an authenticated ChatLLM
+caller can start the bounded synthetic B0 workflow. The server still supplies
+its idempotency value and enforces the durable capability/purpose grant. This
+does not widen any Entity write; `entities.merge.preview` and `entities.merge`
+still require global remote writes and the exact `remote.operator` profile.
 
 It is not usually run by hand. An MCP client launches it as a child process and
 owns both pipes. The equivalent client configuration is a command and its
@@ -163,25 +181,25 @@ one declared capability, `tools`, and nothing else.
 ## The tool list
 
 `tools/list` returns the tools **this process can serve**, and that is not the
-same as the tools this build implements. The build implements ninety-eight, one
+same as the tools this build implements. The build implements one hundred and two, one
 per capability name. A default process publishes **fifty-six**. That is the
-ninety-eight, less the six `documents.` names, the twenty-eight `entities.` names
-and the eight `relationship_memory.` names a default composition withholds.
+one hundred and two, less the six `documents.` names, the thirty-one `entities.` names
+and the nine `relationship_memory.` names a default composition withholds.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
 configured**, and nothing else gates them. There is no default location and no
 inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
-same child publishes those six, reaching sixty-two of the ninety-eight. The
-remaining thirty-six are the twenty-eight `entities.` names, which `D-RI-20`
+same child publishes those six, reaching sixty-two of the one hundred and two. The
+remaining forty are the thirty-one `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
-— and whose eighteen writes need
+— and whose twenty-one writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it, so a process with
-the plane switch alone publishes seventy-two — and the eight
+the plane switch alone publishes seventy-two — and the nine
 `relationship_memory.` names, which need the plane variable *and*
-`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all ninety-eight has
-all four variables set. An operator who expects `documents.create`
+`MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred and two has
+all required feature gates and composition dependencies satisfied. An operator who expects `documents.create`
 on the list and does not find it should look at that variable first — it is the
 only thing that decides it. (Pointing the plane at real storage is `EXT-10` and
 remains operator-gated; `docs/operations/mcv-limitations.md` section 13 states
@@ -252,8 +270,10 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-23):** the tool list is derived from all
-**ninety-eight** current capabilities, and the schema has **seventy-one**
-revisions at head `d8f3a1c6e942`. `capabilities.get` also reports content-free
+**one hundred and two** current capabilities, and the schema has **seventy-seven**
+revisions at head `d8f3a1c6e942`; the
+merged chain admits GSQS start/status at `c4b0a1d9e827` immediately before Phase B continues
+at `c7a1f04b9e63`, then `gsqs.step` after `3d07af4dc513`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its
 stated head.
 

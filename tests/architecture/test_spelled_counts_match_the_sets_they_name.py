@@ -370,6 +370,9 @@ _ORDINAL_UNITS = (
     "ninety-eighth",
     "ninety-ninth",
     "hundredth",
+    "hundred-first",
+    "hundred-second",
+    "hundred-third",
 )
 
 
@@ -654,21 +657,6 @@ def stated(number: str) -> int:
 #: distinctive fragment of the block, so an entry excuses one occurrence rather
 #: than every occurrence of the same words in the same file.
 EXCUSED: tuple[tuple[str, str, str, str], ...] = (
-    (
-        "tests/schema/test_capture_schema_migration.py",
-        "ninety-five capabilities",
-        "emits what it emitted on the day it merged",
-        "historical freeze of a merged revision's vocabulary, not the live "
-        "`Capability` size -- the next sentence names twenty-nine purposes the "
-        "same way",
-    ),
-    (
-        "tests/schema/test_capture_schema_migration.py",
-        "twenty-nine purposes",
-        "now declared in the domain",
-        "the same historical freeze: that merged revision's purpose CHECK, not "
-        "the live `Purpose` enum",
-    ),
     # --- what WP-RI-05 added, on the day it merged ---------------------------
     #
     # Four claims that used to be checked against the entity plane's size and

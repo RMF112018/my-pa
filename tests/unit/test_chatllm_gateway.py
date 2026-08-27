@@ -16,6 +16,12 @@ from my_pa.adapters.mcp.chatllm_gateway import (
     prepare_compact_call,
     render_describe,
 )
+from my_pa.adapters.mcp.tools import TOOLS
+from my_pa.adapters.remote_request import (
+    REMOTE_OWNED_PAYLOAD_FIELDS,
+    SERVER_OWNED_REMOTE_FIELDS,
+    remote_tool_schema,
+)
 from my_pa.application.errors import InvalidRequestError, UnsupportedError
 from my_pa.domain.identity.operation import Capability
 
@@ -100,6 +106,26 @@ def test_describe_paginates_deterministically() -> None:
         )
     )
     assert first["items"][0]["capability"] not in {item["capability"] for item in second["items"]}
+
+
+def test_exact_describe_uses_remote_tool_schema() -> None:
+    tools = {tool.name: tool for tool in TOOLS}
+    read_name = Capability.CAPABILITIES_GET.value
+    write_name = Capability.TASKS_CREATE.value
+    read_described = json.loads(
+        render_describe({"capability": read_name}, allowed_canonical=frozenset({read_name}))
+    )
+    write_described = json.loads(
+        render_describe({"capability": write_name}, allowed_canonical=frozenset({write_name}))
+    )
+    assert read_described["input_schema"] == remote_tool_schema(tools[read_name].input_schema)
+    assert write_described["input_schema"] == remote_tool_schema(tools[write_name].input_schema)
+    assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(read_described["input_schema"]["properties"])
+    assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(write_described["input_schema"]["properties"])
+    payload = write_described["input_schema"]["properties"]["payload"]
+    assert REMOTE_OWNED_PAYLOAD_FIELDS.isdisjoint(payload["properties"])
+    canonical_payload = tools[write_name].input_schema["properties"]["payload"]["properties"]
+    assert "idempotency_key" in canonical_payload
 
 
 def test_taxonomy_is_not_a_grant() -> None:

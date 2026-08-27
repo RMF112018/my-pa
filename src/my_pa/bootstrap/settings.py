@@ -77,6 +77,7 @@ __all__ = [
     "LogLevel",
     "Settings",
     "SettingsError",
+    "compact_chatllm_publication",
     "load_settings",
 ]
 
@@ -248,6 +249,25 @@ def _is_https_mcp_resource(value: str) -> bool:
 def _split_allowlist(raw: str) -> tuple[str, ...]:
     """Split a comma- or space-separated allowlist. Empty input is an empty tuple."""
     return tuple(token for token in raw.replace(",", " ").split() if token)
+
+
+def compact_chatllm_publication(
+    *,
+    enabled: bool,
+    allowlisted_client_ids: frozenset[str],
+    authenticated_client_id: str,
+) -> bool:
+    """Fail-closed compact `/mcp` publication selector.
+
+    True only when the process flag is on, the allowlist is non-empty, and the
+    token-derived client identifier is an exact member. Prefix, suffix, and
+    substring similarity do not admit a client.
+    """
+    return (
+        enabled
+        and bool(allowlisted_client_ids)
+        and authenticated_client_id in allowlisted_client_ids
+    )
 
 
 class Settings(StrictModel):
@@ -749,6 +769,14 @@ class Settings(StrictModel):
         against the token-derived client identifier; there is no glob or prefix.
         """
         return frozenset(_split_allowlist(self.mcp_chatllm_gateway_oauth_client_ids))
+
+    def compact_publication_for_client(self, authenticated_client_id: str) -> bool:
+        """Whether this process publishes the compact façade to `authenticated_client_id`."""
+        return compact_chatllm_publication(
+            enabled=self.mcp_chatllm_gateway_enabled,
+            allowlisted_client_ids=self.chatllm_gateway_oauth_client_id_set(),
+            authenticated_client_id=authenticated_client_id,
+        )
 
     def gsqs_remote_eval_origin_allowlist(self) -> tuple[str, ...]:
         """Exact allowed Origin values. Empty means no browser Origin is admitted."""

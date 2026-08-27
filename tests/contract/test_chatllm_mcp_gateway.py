@@ -19,7 +19,12 @@ from my_pa.adapters.mcp.chatllm_gateway import (
 )
 from my_pa.adapters.mcp.remote import RemoteAccessContext, create_remote_mcp_app
 from my_pa.adapters.mcp.server import published_tools
-from my_pa.adapters.remote_request import SERVER_OWNED_REMOTE_FIELDS
+from my_pa.adapters.mcp.tools import TOOLS
+from my_pa.adapters.remote_request import (
+    REMOTE_OWNED_PAYLOAD_FIELDS,
+    SERVER_OWNED_REMOTE_FIELDS,
+    remote_tool_schema,
+)
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
 
@@ -182,6 +187,75 @@ async def test_describe_and_read_round_trip(scene: Scene) -> None:
     assert read.is_error is False
     envelope = json.loads(read.content[0].text)
     assert envelope["error"] is None
+
+
+@pytest.mark.anyio
+async def test_describe_lookup_matches_remote_schema_and_round_trips(scene: Scene) -> None:
+    scene.world.work_evidence_refs.add((scene.principal.principal_id, "cap_origin0001origin0001"))
+    read_name = Capability.CAPABILITIES_GET.value
+    write_name = Capability.TASKS_CREATE.value
+    tools = {tool.name: tool for tool in TOOLS}
+
+    async def exercise(session: ClientSession) -> tuple[object, ...]:
+        described_read = await session.call_tool(DESCRIBE_TOOL, {"capability": read_name})
+        described_write = await session.call_tool(DESCRIBE_TOOL, {"capability": write_name})
+        read_schema = json.loads(described_read.content[0].text)["input_schema"]
+        write_schema = json.loads(described_write.content[0].text)["input_schema"]
+        read_args = {name: {} for name in read_schema.get("properties", {}) if name != "payload"}
+        if "payload" in read_schema.get("properties", {}):
+            required = read_schema["properties"]["payload"].get("required", [])
+            read_args["payload"] = dict.fromkeys(required, "synthetic") if required else {}
+        read = await session.call_tool(READ_TOOL, {"capability": read_name, "arguments": read_args})
+        write_payload = {
+            "title": "Describe schema write",
+            "origin_evidence_ref": "cap_origin0001origin0001",
+        }
+        write = await session.call_tool(
+            WRITE_TOOL,
+            {"capability": write_name, "arguments": {"payload": write_payload}},
+        )
+        invalid = await session.call_tool(
+            WRITE_TOOL,
+            {"capability": write_name, "arguments": {"payload": {}}},
+        )
+        return described_read, described_write, read, write, invalid, read_schema, write_schema
+
+    app = _app(
+        scene,
+        compact=True,
+        allowed=frozenset({read_name, write_name}),
+        purposes=frozenset(
+            {
+                (Capability.CAPABILITIES_GET, None),
+                (Capability.TASKS_CREATE, Purpose.TASK_AUTHORING),
+            }
+        ),
+        writes_enabled=True,
+    )
+    (
+        described_read,
+        described_write,
+        read,
+        write,
+        invalid,
+        read_schema,
+        write_schema,
+    ) = await _session(app, exercise)
+    assert json.loads(described_read.content[0].text)["input_schema"] == remote_tool_schema(
+        tools[read_name].input_schema
+    )
+    assert json.loads(described_write.content[0].text)["input_schema"] == remote_tool_schema(
+        tools[write_name].input_schema
+    )
+    assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(read_schema["properties"])
+    assert SERVER_OWNED_REMOTE_FIELDS.isdisjoint(write_schema["properties"])
+    assert "idempotency_key" not in write_schema["properties"]["payload"]["properties"]
+    write_payload_schema = write_schema["properties"]["payload"]["properties"]
+    assert REMOTE_OWNED_PAYLOAD_FIELDS.isdisjoint(write_payload_schema)
+    assert read.is_error is False
+    assert write.is_error is False
+    assert invalid.is_error is True
+    assert json.loads(invalid.content[0].text)["code"] == "invalid_request"
 
 
 @pytest.mark.anyio

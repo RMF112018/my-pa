@@ -13,6 +13,7 @@ from typing import Any, Final, Literal
 from mcp.types import Tool, ToolAnnotations
 
 from my_pa.adapters.mcp.tools import TOOLS
+from my_pa.adapters.remote_request import remote_tool_schema
 from my_pa.application.errors import InvalidRequestError, SafeDetail, UnsupportedError
 from my_pa.domain.identity.operation import Capability, is_destructive_capability, is_operator_only
 
@@ -159,12 +160,12 @@ def _as_object(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
     return value
 
 
-def _parse_wrapper(wrapper: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
-    extra = set(wrapper) - {"capability", "arguments"}
+def _parse_wrapper(document: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
+    extra = set(document) - {"capability", "arguments"}
     if extra:
         raise InvalidRequestError(SafeDetail.NAME)
-    raw_name = wrapper.get("capability")
-    nested = wrapper.get("arguments")
+    raw_name = document.get("capability")
+    nested = document.get("arguments")
     if not isinstance(raw_name, str) or not raw_name.strip():
         raise InvalidRequestError(SafeDetail.NAME)
     if not isinstance(nested, Mapping):
@@ -174,7 +175,7 @@ def _parse_wrapper(wrapper: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
 
 def prepare_compact_call(
     tool_name: str,
-    wrapper: Mapping[str, Any] | None,
+    document: Mapping[str, Any] | None,
     *,
     allowed_canonical: frozenset[str],
 ) -> tuple[str, Mapping[str, Any] | None]:
@@ -184,7 +185,7 @@ def prepare_compact_call(
     names are canonical capability values. Raises application errors for
     wrapper/kind/eligibility failures before `invoke`.
     """
-    document = _as_object(wrapper)
+    document = _as_object(document)
     if tool_name == DESCRIBE_TOOL:
         extra = set(document) - set(_DESCRIBE_SCHEMA["properties"])
         if extra:
@@ -224,9 +225,11 @@ def _catalog_item(name: str) -> dict[str, Any]:
     }
 
 
-def render_describe(wrapper: Mapping[str, Any] | None, *, allowed_canonical: frozenset[str]) -> str:
+def render_describe(
+    document: Mapping[str, Any] | None, *, allowed_canonical: frozenset[str]
+) -> str:
     """JSON catalog or contract lookup, already filtered by `allowed_canonical`."""
-    document = _as_object(wrapper)
+    document = _as_object(document)
     extra = set(document) - set(_DESCRIBE_SCHEMA["properties"])
     if extra:
         raise InvalidRequestError()
@@ -254,10 +257,11 @@ def render_describe(wrapper: Mapping[str, Any] | None, *, allowed_canonical: fro
             raise UnsupportedError()
         item = _catalog_item(exact)
         tool = _CANONICAL_TOOLS.get(exact)
+        schema = None if tool is None else remote_tool_schema(tool.input_schema)
         result = {
             "profile": PROFILE_VERSION,
             "item": item,
-            "input_schema": None if tool is None else tool.input_schema,
+            "input_schema": schema,
             "annotations": None
             if tool is None or tool.annotations is None
             else tool.annotations.model_dump(exclude_none=True),

@@ -1201,6 +1201,73 @@ def request_field_reads(tree: ast.AST) -> list[tuple[int, str]]:
     return found
 
 
+def _constant_key(node: ast.AST) -> str | None:
+    """The string key a subscript or accessor names, if it is a constant."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Subscript):
+        return _constant_key(node.slice)
+    return None
+
+
+def request_field_key_reads(tree: ast.AST) -> list[tuple[int, str]]:
+    """Named keys read out of a tainted request document."""
+    tainted = request_taint(tree)
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            if not (_receivers(node.value) & tainted):
+                continue
+            key = _constant_key(node.slice)
+            found.append((node.lineno, "*" if key is None else key))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr not in ACCESSORS:
+                continue
+            instance = _receivers(node.func.value)
+            if node.args:
+                instance |= _receivers(node.args[0])
+            if not (instance & tainted):
+                continue
+            key = None
+            if node.func.attr in {"get", "pop", "setdefault", "__getitem__", "getitem"}:
+                receiver_tainted = bool(_receivers(node.func.value) & tainted)
+                first_tainted = bool(node.args and (_receivers(node.args[0]) & tainted))
+                if receiver_tainted and node.args:
+                    key = _constant_key(node.args[0])
+                elif (not receiver_tainted) and first_tainted and len(node.args) >= 2:
+                    key = _constant_key(node.args[1])
+            found.append((node.lineno, "*" if key is None else key))
+    return found
+
+
+#: Nested canonical target fields the compact façade must not inspect.
+#: Wrapper/describe keys (`capability`, `arguments`, `feature`, `kind`, `query`,
+#: `cursor`, `limit`) are presentation and are not in this set.
+GATEWAY_FORBIDDEN_NESTED_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "payload",
+        "expected_version",
+        "expected_version_number",
+        "idempotency_key",
+        "principal_id",
+        "purpose",
+        "request_id",
+        "requested_at",
+        "contract_version",
+        "scope",
+    }
+)
+
+
+def forbidden_gateway_field_reads(tree: ast.AST) -> list[tuple[int, str]]:
+    """Façade-module field reads of nested canonical target content."""
+    return [
+        (line, key)
+        for line, key in request_field_key_reads(tree)
+        if key in GATEWAY_FORBIDDEN_NESTED_KEYS
+    ]
+
+
 @pytest.mark.parametrize("path", _modules(), ids=_relative)
 def test_the_adapter_never_reads_a_field_out_of_a_request(path: Path) -> None:
     """The document goes to `normalize` whole, or it is not going through one path.
@@ -1209,13 +1276,19 @@ def test_the_adapter_never_reads_a_field_out_of_a_request(path: Path) -> None:
     field. `_document` measures the encoded size of the whole document and hands
     it on; nothing in this package looks inside it.
 
-    `chatllm_gateway.py` is the compact façade parser: it may read only wrapper
-    and describe keys, then hands the nested canonical document to `_answer`
-    whole. Canonical per-capability payload logic remains forbidden here.
+    `chatllm_gateway.py` may inspect only wrapper/describe keys, then hands the
+    nested canonical document to `_answer` whole.
     """
+    tree = _tree(path)
     if path.name == "chatllm_gateway.py":
+        forbidden = forbidden_gateway_field_reads(tree)
+        assert not forbidden, (
+            f"{_relative(path)} inspects nested canonical fields {forbidden}. "
+            "Only wrapper/describe keys are presentation; target payload fields "
+            "remain behind `normalize`"
+        )
         return
-    reads = request_field_reads(_tree(path))
+    reads = request_field_reads(tree)
     assert not reads, (
         f"{_relative(path)} reads {reads} out of a caller's request. The request "
         "document reaches `adapters.normalization` whole; a transport that opens "
@@ -1229,6 +1302,23 @@ def test_the_adapter_never_reads_a_field_out_of_a_request(path: Path) -> None:
 #: written, and the request rebound to a local the old receiver list did not
 #: name. Kept verbatim, and wrapped in the signature `_answer` really has, because
 #: the value of a control is what it caught rather than what it describes.
+def test_gateway_wrapper_reads_are_allowed_and_nested_payload_reads_are_not() -> None:
+    """Narrow façade allowance, with a plant the old whole-module skip would miss."""
+    gateway = PACKAGE / "chatllm_gateway.py"
+    allowed = {key for _, key in request_field_key_reads(_tree(gateway))}
+    assert {"capability", "arguments", "feature", "kind", "query", "cursor", "limit"} <= allowed
+    assert not forbidden_gateway_field_reads(_tree(gateway))
+
+    planted = ast.parse(
+        gateway.read_text(encoding="utf-8")
+        + "\n\ndef _planted_nested_read(document):\n"
+        + '    nested = document.get("arguments")\n'
+        + '    return nested.get("payload")\n'
+    )
+    forbidden = forbidden_gateway_field_reads(planted)
+    assert any(key == "payload" for _, key in forbidden), forbidden
+
+
 EVADING_PLANT: Final = """
 def _answer(service, principal, name, arguments):
     seen: dict[str, int] = {}
@@ -1268,10 +1358,14 @@ def test_both_detectors_report_the_plant_that_got_through() -> None:
     assert any(entry.startswith("carried.") for _, entry in reads)
 
     # The other end of `D-55`: the real module passes both detectors, so they
-    # distinguish rather than merely refuse.
+    # distinguish rather than merely refuse. The compact façade may inspect
+    # wrapper/describe keys only.
     for path in _modules():
         tree = _tree(path)
-        assert not request_field_reads(tree)
+        if path.name == "chatllm_gateway.py":
+            assert not forbidden_gateway_field_reads(tree)
+        else:
+            assert not request_field_reads(tree)
 
 
 @pytest.mark.parametrize(

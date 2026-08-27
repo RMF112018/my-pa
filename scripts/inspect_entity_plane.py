@@ -43,6 +43,7 @@ from sqlalchemy import Engine, text
 
 from my_pa.bootstrap.settings import load_settings
 from my_pa.domain.common.identifiers import IdKind, InvalidIdentifierError, validate_identifier
+from my_pa.domain.relationship.governance import UNDECIDED_PROPOSAL_STATES
 from my_pa.infrastructure.database.engine import create_database_engine
 
 SCHEMA: Final = "knowledge"
@@ -116,16 +117,37 @@ def _open_proposals(engine: Engine, principal_id: str) -> list[dict[str, Any]]:
     all it takes for that to stop being true. An operator who needs to know who
     proposed something reads the proposal, by identifier, through the reviewed
     surface -- exactly as they do for the payload.
+
+    **"Awaiting a decision" is derived from the domain, not spelled here.** This
+    read matched `state = 'proposed'` as a literal until `WP-RI-B-05` made
+    `initial_state_for` write `needs_review` for every kind a person has to look
+    at -- so an operator asking what was waiting on them was answered with the
+    subset that was *not*, and a plane holding nothing but review-requiring
+    proposals reported an empty queue. It under-reported in silence, which is
+    the failure mode worse than the report refusing to run: an operator reads
+    "no open proposals" and stops looking.
+
+    `UNDECIDED_PROPOSAL_STATES` is the tuple `EntityGovernanceService.open_proposals`
+    reads, so the report and the service answer one question, and a state added
+    to it reaches this report on the day it is added rather than when somebody
+    notices. The values are bound rather than interpolated: they are a closed
+    set from this repository's own domain and could be pasted in safely, but a
+    query that builds a predicate out of values is a shape this file should not
+    contain even once.
     """
+    states = {
+        f"state_{index}": state.value for index, state in enumerate(UNDECIDED_PROPOSAL_STATES)
+    }
+    placeholders = ", ".join(f":{name}" for name in states)
     with engine.connect() as connection:
         rows = connection.execute(
             text(
                 f"SELECT proposal_id, kind, proposed_at "  # noqa: S608
                 f"FROM {SCHEMA}.entity_proposals "
-                "WHERE principal_id = :principal_id AND state = 'proposed' "
+                f"WHERE principal_id = :principal_id AND state IN ({placeholders}) "
                 "ORDER BY proposed_at, proposal_id"
             ),
-            {"principal_id": principal_id},
+            {"principal_id": principal_id, **states},
         ).all()
     return [
         {

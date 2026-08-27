@@ -45,7 +45,7 @@ request does too, because `1a4c9e77b2d5` creates the capture tables and widens
 
 ## What the gateway is, and what it does not yet do
 
-`apps/gateway.py` routes the ninety-seven public capabilities over HTTP on
+`apps/gateway.py` routes the one hundred one public capabilities over HTTP on
 loopback and, in a default process, serves fifty-five of them.
 One request is one call to `ApplicationService.invoke`, and the response body is
 the envelope that call produced — the transport maps and does not decide.
@@ -53,9 +53,9 @@ the envelope that call produced — the transport maps and does not decide.
 **Corrected 2026-08-19: this line read "serves the fifty-four public
 capabilities", and a default gateway does not.** Three families are composed
 only when their variable is set — the six `documents.` names behind
-`MY_PA_MANAGED_DOCUMENT_ROOT`, the twenty-eight `entities.` names behind
-`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` (whose eighteen writes need
-`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` as well), and the eight
+`MY_PA_MANAGED_DOCUMENT_ROOT`, the thirty-one `entities.` names behind
+`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` (whose twenty-one writes need
+`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` as well), and the nine
 `relationship_memory.` names behind `MY_PA_RELATIONSHIP_MEMORY_ENABLED` and the
 entity plane together. None of the four has a default.
 `/v1/{capability}` is a path parameter, so all of them *route*: dispatch
@@ -63,7 +63,7 @@ reaches the handler, which refuses with `unsupported` and the transport maps tha
 to **`501`**. This section already discloses the source-root gate below in the
 same detail; it said nothing about these two, which is the omission being
 corrected. `capabilities.get` on such a process reports readiness `degraded` and
-`12 of 65 capabilities are unwired.` rather than `ready`.
+`46 of 101 capabilities are unwired.` rather than `ready`.
 
 **It is bound to `127.0.0.1` and there is no option to bind elsewhere.** That is
 `D-30` and `AGENTS.md` §5: `P00-OD-010` — which authentication mechanism this
@@ -147,8 +147,8 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
        "payload":{}}'
 ```
 
-**Current-state correction (2026-08-23):** the candidate has **ninety-seven**
-capabilities and **seventy** Alembic revisions at head `c4b0a1d9e827`.
+**Current-state correction (2026-08-23):** the candidate has **one hundred one**
+capabilities and **seventy-six** Alembic revisions at head `3d07af4dc513`; the merged chain admits GSQS at `c4b0a1d9e827` before continuing Phase B at `c7a1f04b9e63`.
 `capabilities.get` now also returns `worker_planes`; backlog without a live
 heartbeat is `worker_absent`/`worker_stale`, never silently healthy. The dated
 transcript below remains historical evidence for its stated head.

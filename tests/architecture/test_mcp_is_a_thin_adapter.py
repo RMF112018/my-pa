@@ -298,6 +298,15 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         ("entities.relationships", "direction"),
         ("context.feedback", "target_id"),
         ("goodnotes.propose", "uncertainty"),
+        # The version of the record a proposal asks to change, not where a file
+        # lives. Exempt on the `direction` precedent above: it trips the scan on
+        # the substring "target", and it is an `integer` -- a positive record
+        # version -- so no string a caller sends through it can be a path at all.
+        # The name is the frozen contract's (operator section 11 says "expected
+        # target version where applicable") and is the column's, so renaming it
+        # to dodge the scan would put the wire, the domain and the schema out of
+        # step to satisfy a substring.
+        ("entities.proposals.create", "expected_target_version"),
     }
 )
 
@@ -591,9 +600,11 @@ def test_the_location_scan_would_catch_one() -> None:
     # The exemption names tools that exist, and the properties they name are
     # really published — so it cannot rot into a permission for a property that
     # has since changed meaning or disappeared.
-    # Seven exact non-location uses: the three Commitment direction filters,
-    # the entity-edge direction, and three inherited opaque/non-location fields.
-    assert len(EXEMPT_PROPERTIES) == 7
+    # Eight exact non-location uses: the three Commitment direction filters,
+    # the entity-edge direction, three inherited opaque/non-location fields, and
+    # `WP-RI-B-05`'s expected target version -- an integer record version whose
+    # name trips the scan on "target".
+    assert len(EXEMPT_PROPERTIES) == 8
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

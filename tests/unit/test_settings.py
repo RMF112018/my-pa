@@ -586,3 +586,69 @@ def test_both_switches_together_are_admitted() -> None:
     )
     assert settings.relationship_intelligence_enabled is True
     assert settings.relationship_intelligence_writes_enabled is True
+
+
+def test_identity_correction_defaults_off_like_every_gate_below_it() -> None:
+    """`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, unset (operator section 18).
+
+    Default `False`, on the same argument the two switches above it default
+    `False`: the remote MCP profile and the manifest are both derived from the
+    capability set with no per-capability exclusion list, so "available" and
+    "reachable" are one decision, and this is where it is made. A governed merge
+    is the most consequential act this product can perform on identity; a build
+    that served it because nobody said not to would be serving it by accident.
+    """
+    settings = load_settings({DATABASE_URL: _A_URL})
+    assert settings.relationship_identity_correction_enabled is False
+
+
+def test_identity_correction_without_the_write_switch_refuses_to_start() -> None:
+    """The second half of section 18's ordering, and it is checked against *writes*.
+
+    Checking the plane switch alone would admit a process serving governed merges
+    while refusing every ordinary entity write -- a build where an operator may
+    collapse two identities and may not correct a misspelled name. The write
+    switch already requires the plane switch, so this one rule makes the whole
+    chain transitive: identity correction is unavailable unless every lower gate
+    is enabled.
+    """
+    with pytest.raises(SettingsError) as refused:
+        load_settings(
+            {
+                DATABASE_URL: _A_URL,
+                f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED": "true",
+                f"{ENV_PREFIX}RELATIONSHIP_IDENTITY_CORRECTION_ENABLED": "true",
+            }
+        )
+    message = str(refused.value)
+    assert f"{ENV_PREFIX}RELATIONSHIP_IDENTITY_CORRECTION_ENABLED" in message
+    assert f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED" in message
+
+
+def test_identity_correction_without_the_plane_at_all_refuses_to_start() -> None:
+    """The transitive case, asserted rather than inferred from the two rules.
+
+    An operator who sets only this switch has set the highest gate and none of
+    the ones below it. Which of the two refusals fires is not the claim -- that
+    the process does not start is.
+    """
+    with pytest.raises(SettingsError):
+        load_settings(
+            {
+                DATABASE_URL: _A_URL,
+                f"{ENV_PREFIX}RELATIONSHIP_IDENTITY_CORRECTION_ENABLED": "true",
+            }
+        )
+
+
+def test_all_three_switches_together_are_admitted() -> None:
+    """Non-vacuity: the refusals above are about combinations, not about the flag."""
+    settings = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED": "true",
+            f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED": "true",
+            f"{ENV_PREFIX}RELATIONSHIP_IDENTITY_CORRECTION_ENABLED": "true",
+        }
+    )
+    assert settings.relationship_identity_correction_enabled is True

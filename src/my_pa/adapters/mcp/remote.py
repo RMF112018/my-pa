@@ -6,7 +6,7 @@ import asyncio
 from collections.abc import AsyncIterator, Callable, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
-from typing import Final
+from typing import Final, Literal
 
 from mcp.server.context import ServerRequestContext
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
@@ -57,6 +57,30 @@ _WRITE_PURPOSES: Final = frozenset(
         Purpose.RELATIONSHIP_MEMORY_AUTHORING,
         Purpose.ENTITY_OBSERVATION_INGEST,
         Purpose.ENTITY_AUTHORING,
+        # Phase B's three, each admitted because the capability it permits
+        # persists a row. A proposal is a request rather than a canonical fact
+        # and it is still written down, so a remote producer needs
+        # remote-writes-enabled to raise one.
+        Purpose.ENTITY_PROPOSAL,
+        Purpose.RELATIONSHIP_MEMORY_PROPOSAL,
+        # `entity_identity_correction` covers `entities.merge.preview` as well as
+        # `entities.merge`, and the coupling is accepted rather than worked
+        # around (Manager R-7). This set is intersected with a capability's
+        # permitted purposes, so a shared purpose makes both write-gated — and
+        # that is the safe direction: the preview persists a durable control row
+        # and reads the exact identities of two people, so requiring
+        # remote-writes-enabled *plus* an operator grant for it is the boundary
+        # operator §24 asks for rather than an accident of the derivation.
+        # Splitting the purpose to un-gate the preview was considered and
+        # refused; `domain/identity/purpose.py` records why.
+        #
+        # Both capabilities are operator-only, so `remote_tool_names` withholds
+        # them unless the composition root attaches the exact server-resolved
+        # ``remote.operator`` marker. The membership remains load-bearing: even
+        # that profile cannot publish either name unless remote writes are also
+        # enabled, and it is the axis
+        # `tests/contract/test_entity_remote_exposure.py` asserts against.
+        Purpose.ENTITY_IDENTITY_CORRECTION,
     }
 )
 
@@ -68,6 +92,7 @@ class RemoteAccessContext:
     principal: Principal
     allowed_capabilities: frozenset[str] | None = None
     capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None
+    relationship_grant_profile: Literal["remote.operator"] | None = None
 
 
 RemoteAccessResolver = Callable[[str | None], RemoteAccessContext | None]
@@ -159,13 +184,31 @@ class _McpEndpoint:
             await response(scope, receive, send)
 
 
-def remote_tool_names(service: ApplicationService, *, writes_enabled: bool) -> frozenset[str]:
+_REMOTE_OPERATOR_IDENTITY_CAPABILITIES: Final = frozenset(
+    {
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+    }
+)
+
+
+def remote_tool_names(
+    service: ApplicationService,
+    *,
+    writes_enabled: bool,
+    relationship_grant_profile: Literal["remote.operator"] | None = None,
+) -> frozenset[str]:
     """Deterministically classify the canonical, composed capability set."""
 
     names: set[str] = set()
     composed = {tool.name for tool in published_tools(service)}
     for capability in Capability:
-        if capability.value not in composed or is_operator_only(capability):
+        if capability.value not in composed:
+            continue
+        if is_operator_only(capability) and not (
+            relationship_grant_profile == "remote.operator"
+            and capability in _REMOTE_OPERATOR_IDENTITY_CAPABILITIES
+        ):
             continue
         is_write = bool(permitted_purposes(capability) & _WRITE_PURPOSES)
         if writes_enabled or not is_write:
@@ -200,6 +243,11 @@ def create_remote_mcp_app(
         raise ValueError("at least one exact allowed host is required")
 
     profile = remote_tool_names(service, writes_enabled=writes_enabled)
+    operator_profile = remote_tool_names(
+        service,
+        writes_enabled=writes_enabled,
+        relationship_grant_profile="remote.operator",
+    )
     serving = global_enabled and remote_enabled
 
     def access_for_request(context: ServerRequestContext[object]) -> McpAccess | None:
@@ -210,7 +258,12 @@ def create_remote_mcp_app(
         if resolved is None:
             return None
         principal, granted = resolved.principal, resolved.allowed_capabilities
-        allowed = profile if granted is None else profile & granted
+        request_profile = (
+            operator_profile
+            if resolved.relationship_grant_profile == "remote.operator"
+            else profile
+        )
+        allowed = request_profile if granted is None else request_profile & granted
         return McpAccess(
             principal=principal,
             allowed_tools=allowed,

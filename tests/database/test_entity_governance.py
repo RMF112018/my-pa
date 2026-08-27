@@ -38,10 +38,12 @@ from my_pa.domain.relationship.governance import (
     EntityMergeRecord,
     EntityObservation,
     EntityProposalKind,
+    EntityProposalMethod,
     EntityProposalState,
     ObservationKind,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.relationship.proposal_payload import EntityProposalPayload
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence import tables
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
@@ -144,6 +146,10 @@ def two_principals(migrated_engine: Engine) -> Engine:
         repository.create(PRINCIPAL_A, _entity(ALICE))
         repository.create(PRINCIPAL_A, _entity(ALICE_TWO, name="Alice Chen"))
         repository.create(PRINCIPAL_B, _entity("ent_cccc0003cccc0003", PRINCIPAL_B, "Bob Chen"))
+        repository.create(
+            PRINCIPAL_B,
+            _entity("ent_dddd0004dddd0004", PRINCIPAL_B, "Robert Chen"),
+        )
     return migrated_engine
 
 
@@ -452,27 +458,65 @@ def test_the_server_refuses_an_observation_recorded_before_it_was_observed(
 # --- proposals --------------------------------------------------------------
 
 
-def _propose(engine: Engine, kind: EntityProposalKind = EntityProposalKind.MERGE_ENTITIES) -> None:
+def _propose(engine: Engine, kind: EntityProposalKind = EntityProposalKind.MERGE_ENTITIES) -> str:
+    """One open proposal in A's partition. Returns the identifier the server minted."""
     with engine.begin() as connection:
-        EntityGovernanceService(SqlEntityRepository(connection)).propose(
+        return (
+            EntityGovernanceService(SqlEntityRepository(connection))
+            .propose(
+                PRINCIPAL_A,
+                kind=kind,
+                payload={"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
+                observation_ids=(),
+                proposed_by="resolver",
+                method=EntityProposalMethod.DETERMINISTIC,
+                method_version="1",
+                at=WHEN,
+            )
+            .proposal_id
+        )
+
+
+def _merge(engine: Engine, proposal_id: str, *, merge_id: str = "emrg_aaaa0001aaaa0001") -> None:
+    """Perform the identity merge an accepted proposal asks for.
+
+    Two repository calls rather than a service call, and that is the point of
+    the helper: since `WP-RI-B-05` no review disposition performs a merge, so a
+    test that needs merged state stages it the way `entities.merge` will --
+    redirect, then lineage. Everything below that reads merged state uses this,
+    which is also why none of those tests silently became assertions about
+    nothing when acceptance stopped merging.
+    """
+    with engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.redirect_entity(PRINCIPAL_A, ALICE_TWO, ALICE)
+        repository.record_merge(
             PRINCIPAL_A,
-            proposal_id="eprp_aaaa0001aaaa0001",
-            kind=kind,
-            payload={"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
-            observation_ids=(),
-            proposed_by="resolver",
-            proposed_at=WHEN,
+            EntityMergeRecord(
+                merge_id=merge_id,
+                principal_id=PRINCIPAL_A,
+                retained_entity_id=ALICE,
+                merged_entity_id=ALICE_TWO,
+                proposal_id=proposal_id,
+                decided_by="the operator",
+                reason="confirmed by employee number",
+                decided_at=LATER,
+            ),
         )
 
 
 def test_a_proposal_round_trips_with_its_payload(two_principals: Engine) -> None:
-    _propose(two_principals)
+    proposal_id = _propose(two_principals)
     with two_principals.connect() as connection:
-        held = SqlEntityRepository(connection).proposal(PRINCIPAL_A, "eprp_aaaa0001aaaa0001")
+        held = SqlEntityRepository(connection).proposal(PRINCIPAL_A, proposal_id)
     assert held is not None
     assert held.kind is EntityProposalKind.MERGE_ENTITIES
-    assert held.state is EntityProposalState.PROPOSED
-    assert dict(held.payload) == {
+    # `needs_review` and not `proposed`, since `WP-RI-B-05` made the initial
+    # state derive from the kind's review requirement: a merge is
+    # `REQUIRES_OPERATOR`, so a person has to look at it and the state says so
+    # rather than leaving a reader to recompute it from the kind.
+    assert held.state is EntityProposalState.NEEDS_REVIEW
+    assert held.payload.as_mapping() == {
         "retained_entity_id": ALICE,
         "merged_entity_id": ALICE_TWO,
     }
@@ -486,7 +530,7 @@ def test_the_server_refuses_a_decided_proposal_with_no_actor(two_principals: Eng
     one module: a writer that skipped the service entirely still cannot mark a
     proposal accepted without saying who accepted it.
     """
-    _propose(two_principals)
+    proposal_id = _propose(two_principals)
     with (
         pytest.raises(
             IntegrityError, match="a_proposal_is_decided_exactly_when_something_decided_it"
@@ -496,14 +540,15 @@ def test_the_server_refuses_a_decided_proposal_with_no_actor(two_principals: Eng
         connection.execute(
             text(
                 f"UPDATE {SCHEMA}.entity_proposals SET state = 'accepted' "  # noqa: S608
-                "WHERE proposal_id = 'eprp_aaaa0001aaaa0001'"
-            )
+                "WHERE proposal_id = :pid"
+            ),
+            {"pid": proposal_id},
         )
 
 
 def test_the_server_refuses_an_actor_on_an_open_proposal(two_principals: Engine) -> None:
     """The other direction: an open proposal that names a decider is also refused."""
-    _propose(two_principals)
+    proposal_id = _propose(two_principals)
     with (
         pytest.raises(
             IntegrityError, match="a_proposal_is_decided_exactly_when_something_decided_it"
@@ -514,13 +559,14 @@ def test_the_server_refuses_an_actor_on_an_open_proposal(two_principals: Engine)
             text(
                 f"UPDATE {SCHEMA}.entity_proposals "  # noqa: S608
                 "SET decided_by = 'someone', decided_at = now() "
-                "WHERE proposal_id = 'eprp_aaaa0001aaaa0001'"
-            )
+                "WHERE proposal_id = :pid"
+            ),
+            {"pid": proposal_id},
         )
 
 
 def test_the_server_refuses_a_decision_without_a_moment(two_principals: Engine) -> None:
-    _propose(two_principals)
+    proposal_id = _propose(two_principals)
     with (
         pytest.raises(IntegrityError, match="a_proposal_decision_has_both_an_actor_and_a_moment"),
         two_principals.begin() as connection,
@@ -529,13 +575,14 @@ def test_the_server_refuses_a_decision_without_a_moment(two_principals: Engine) 
             text(
                 f"UPDATE {SCHEMA}.entity_proposals "  # noqa: S608
                 "SET state = 'accepted', decided_by = 'someone' "
-                "WHERE proposal_id = 'eprp_aaaa0001aaaa0001'"
-            )
+                "WHERE proposal_id = :pid"
+            ),
+            {"pid": proposal_id},
         )
 
 
 def test_the_server_refuses_a_decision_before_the_proposal(two_principals: Engine) -> None:
-    _propose(two_principals)
+    proposal_id = _propose(two_principals)
     with (
         pytest.raises(IntegrityError, match="a_proposal_is_not_decided_before_it_was_proposed"),
         two_principals.begin() as connection,
@@ -545,55 +592,84 @@ def test_the_server_refuses_a_decision_before_the_proposal(two_principals: Engin
                 f"UPDATE {SCHEMA}.entity_proposals "  # noqa: S608
                 "SET state = 'accepted', decided_by = 'someone', "
                 "decided_at = '2020-01-01T00:00:00Z' "
-                "WHERE proposal_id = 'eprp_aaaa0001aaaa0001'"
-            )
+                "WHERE proposal_id = :pid"
+            ),
+            {"pid": proposal_id},
         )
 
 
-# --- merge, end to end ------------------------------------------------------
+# --- accepting a merge proposal, end to end ---------------------------------
 
 
-def test_an_operator_accepted_merge_redirects_and_leaves_lineage(
+def test_an_operator_accepted_merge_leaves_both_identities_untouched(
     two_principals: Engine,
 ) -> None:
-    _propose(two_principals)
+    """`WP-RI-B-05`, proved against the real schema rather than against a double.
+
+    This test replaces one that asserted the opposite. Until `WP-RI-B-05`,
+    accepting a `merge_entities` proposal redirected the merged-away entity and
+    wrote the lineage row, and the test here checked that it had. Section 15 of
+    the Phase B contract forbids exactly that: acceptance establishes reviewed
+    identity-correction intent and performs no identity mutation, because a
+    reviewer's grant is not an identity-correction grant.
+
+    Both rows are read before and after, and the three columns a merge writes --
+    `status`, `superseded_by_entity_id` and `version` -- are compared on each.
+    Restoring the redirect turns two of the six comparisons red, and restoring
+    the lineage write turns the fourth assertion red, so the correction cannot be
+    half-undone without this test noticing.
+    """
+    proposal_id = _propose(two_principals)
+    with two_principals.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        before = {
+            entity_id: repository.get(PRINCIPAL_A, entity_id) for entity_id in (ALICE, ALICE_TWO)
+        }
+    for held in before.values():
+        assert held is not None
+        # Active and unredirected beforehand, so "unchanged" below is an
+        # assertion about a value rather than about an absence.
+        assert held.status is EntityStatus.ACTIVE
+        assert held.superseded_by_entity_id is None
+
     with two_principals.begin() as connection:
         EntityGovernanceService(SqlEntityRepository(connection)).accept(
             PRINCIPAL_A,
-            "eprp_aaaa0001aaaa0001",
+            proposal_id,
             decided_by="the operator",
             decided_at=LATER,
             reason="confirmed by employee number",
             has_operator_authority=True,
-            merge_id="emrg_aaaa0001aaaa0001",
         )
+
     with two_principals.connect() as connection:
         repository = SqlEntityRepository(connection)
-        merged = repository.get(PRINCIPAL_A, ALICE_TWO)
-        lineage = repository.merges(PRINCIPAL_A, ALICE_TWO)
-        decided = repository.proposal(PRINCIPAL_A, "eprp_aaaa0001aaaa0001")
-    assert merged is not None
-    assert merged.status is EntityStatus.MERGED_REDIRECT
-    assert merged.superseded_by_entity_id == ALICE
-    assert [record.retained_entity_id for record in lineage] == [ALICE]
+        after = {
+            entity_id: repository.get(PRINCIPAL_A, entity_id) for entity_id in (ALICE, ALICE_TWO)
+        }
+        lineage = repository.merges(PRINCIPAL_A)
+        decided = repository.proposal(PRINCIPAL_A, proposal_id)
+    for entity_id, was in before.items():
+        now = after[entity_id]
+        assert was is not None
+        assert now is not None
+        assert now.status is was.status
+        assert now.superseded_by_entity_id is was.superseded_by_entity_id
+        assert now.version == was.version
+    assert lineage == [], "a review disposition wrote merge lineage"
+
+    # And the acceptance itself is recorded, so the test is not passing because
+    # nothing happened at all.
     assert decided is not None
     assert decided.state is EntityProposalState.ACCEPTED
     assert decided.decided_by == "the operator"
+    assert decided.accepted_record_id is None
 
 
 def test_an_entity_can_be_merged_away_only_once(two_principals: Engine) -> None:
     """A redirect with two targets resolves to neither, so the schema refuses it."""
-    _propose(two_principals)
-    with two_principals.begin() as connection:
-        EntityGovernanceService(SqlEntityRepository(connection)).accept(
-            PRINCIPAL_A,
-            "eprp_aaaa0001aaaa0001",
-            decided_by="the operator",
-            decided_at=LATER,
-            reason="confirmed",
-            has_operator_authority=True,
-            merge_id="emrg_aaaa0001aaaa0001",
-        )
+    proposal_id = _propose(two_principals)
+    _merge(two_principals, proposal_id)
     with (
         pytest.raises(IntegrityError),
         two_principals.begin() as connection,
@@ -610,13 +686,13 @@ def test_an_entity_can_be_merged_away_only_once(two_principals: Engine) -> None:
                 "pid": PRINCIPAL_A,
                 "retained": "ent_cccc0003cccc0003",
                 "merged": ALICE_TWO,
-                "prop": "eprp_aaaa0001aaaa0001",
+                "prop": proposal_id,
             },
         )
 
 
 def test_the_server_refuses_a_merge_of_an_entity_into_itself(two_principals: Engine) -> None:
-    _propose(two_principals)
+    proposal_id = _propose(two_principals)
     with (
         pytest.raises(IntegrityError, match="a_merge_joins_two_distinct_entities"),
         two_principals.begin() as connection,
@@ -632,7 +708,7 @@ def test_the_server_refuses_a_merge_of_an_entity_into_itself(two_principals: Eng
                 "mid": "emrg_cccc0003cccc0003",
                 "pid": PRINCIPAL_A,
                 "same": ALICE,
-                "prop": "eprp_aaaa0001aaaa0001",
+                "prop": proposal_id,
             },
         )
 
@@ -683,17 +759,7 @@ def test_a_merged_entity_still_resolves_historically(two_principals: Engine) -> 
                 principal_id=PRINCIPAL_A,
             ),
         )
-    _propose(two_principals)
-    with two_principals.begin() as connection:
-        EntityGovernanceService(SqlEntityRepository(connection)).accept(
-            PRINCIPAL_A,
-            "eprp_aaaa0001aaaa0001",
-            decided_by="the operator",
-            decided_at=LATER,
-            reason="confirmed",
-            has_operator_authority=True,
-            merge_id="emrg_aaaa0001aaaa0001",
-        )
+    _merge(two_principals, _propose(two_principals))
     with two_principals.connect() as connection:
         answer = EntityResolutionService(SqlEntityRepository(connection)).resolve(
             PRINCIPAL_A, ResolutionRequest(raw_reference="Ali Two")
@@ -713,27 +779,30 @@ def test_the_repository_refuses_to_decide_a_proposal_a_second_time(
 
     `EntityGovernanceService` already refuses with `ProposalNotOpenError`, and
     that check reads the proposal and then writes — two statements, so two
-    callers can both read "open" and both write. The repository's `UPDATE` now
-    carries `state = 'proposed'` in its own predicate, which is where that race
-    is actually settled. Driven through `SqlEntityRepository` directly, because
-    going through the service would prove only the service's check.
+    callers can both read "open" and both write. The repository's `UPDATE`
+    carries the undecided states in its own predicate, which is where that race
+    is actually settled. (It carried the `proposed` literal until `WP-RI-B-05`
+    began writing `needs_review`; both are undecided and the predicate names the
+    set the record's own `is_open` reads, so the two cannot disagree.) Driven
+    through `SqlEntityRepository` directly, because going through the service
+    would prove only the service's check.
 
     What the second write would otherwise do is replace `decided_by`,
     `decided_at` and the reason: the record of who decided and why becomes
     whoever called last, and a rejected merge can be re-accepted with nothing
     left to show it was ever refused.
     """
-    _propose(two_principals)
+    proposal_id = _propose(two_principals)
     with two_principals.begin() as connection:
         EntityGovernanceService(SqlEntityRepository(connection)).reject(
             PRINCIPAL_A,
-            "eprp_aaaa0001aaaa0001",
+            proposal_id,
             decided_by="the operator",
             decided_at=WHEN,
             reason="different people",
         )
     with two_principals.connect() as connection:
-        decided = SqlEntityRepository(connection).proposal(PRINCIPAL_A, "eprp_aaaa0001aaaa0001")
+        decided = SqlEntityRepository(connection).proposal(PRINCIPAL_A, proposal_id)
     assert decided is not None
 
     with (
@@ -751,7 +820,7 @@ def test_the_repository_refuses_to_decide_a_proposal_a_second_time(
         )
 
     with two_principals.connect() as connection:
-        held = SqlEntityRepository(connection).proposal(PRINCIPAL_A, "eprp_aaaa0001aaaa0001")
+        held = SqlEntityRepository(connection).proposal(PRINCIPAL_A, proposal_id)
     assert held is not None
     assert held.state is EntityProposalState.REJECTED
     assert held.decided_by == "the operator"
@@ -769,14 +838,18 @@ def test_a_merge_record_cannot_cite_another_principals_proposal(
     the entities are A's, the record is A's, and only the citation crosses.
     """
     with two_principals.begin() as connection:
-        EntityGovernanceService(SqlEntityRepository(connection)).propose(
+        theirs = EntityGovernanceService(SqlEntityRepository(connection)).propose(
             PRINCIPAL_B,
-            proposal_id="eprp_bbbb0002bbbb0002",
             kind=EntityProposalKind.MERGE_ENTITIES,
-            payload={"retained_entity_id": "ent_cccc0003cccc0003"},
+            payload={
+                "retained_entity_id": "ent_cccc0003cccc0003",
+                "merged_entity_id": "ent_dddd0004dddd0004",
+            },
             observation_ids=(),
             proposed_by="resolver",
-            proposed_at=WHEN,
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="1",
+            at=WHEN,
         )
     with (
         pytest.raises(UnknownScopeError, match="cites a proposal"),
@@ -789,7 +862,7 @@ def test_a_merge_record_cannot_cite_another_principals_proposal(
                 principal_id=PRINCIPAL_A,
                 retained_entity_id=ALICE,
                 merged_entity_id=ALICE_TWO,
-                proposal_id="eprp_bbbb0002bbbb0002",
+                proposal_id=theirs.proposal_id,
                 decided_by="the operator",
                 reason="borrowed authority",
                 decided_at=WHEN,
@@ -870,53 +943,73 @@ def test_an_observation_limit_reaches_the_server_as_a_limit_clause(
 
 # --- the governance plane's partition, where nothing had reached it ----------
 
-#: The entity Principal B already holds, from the `two_principals` fixture.
+#: The two entities Principal B already holds, from the `two_principals` fixture.
 BEE_ONE: Final = "ent_cccc0003cccc0003"
 BEE_TWO: Final = "ent_dddd0004dddd0004"
-B_PROPOSAL: Final = "eprp_bbbb0002bbbb0002"
 B_MERGE: Final = "emrg_bbbb0002bbbb0002"
-A_PROPOSAL: Final = "eprp_aaaa0001aaaa0001"
 A_MERGE: Final = "emrg_aaaa0001aaaa0001"
 
 
-def _propose_for_b(engine: Engine) -> None:
-    """One open proposal in Principal B's partition, so every read below has a decoy."""
-    with engine.begin() as connection:
-        EntityGovernanceService(SqlEntityRepository(connection)).propose(
-            PRINCIPAL_B,
-            proposal_id=B_PROPOSAL,
-            kind=EntityProposalKind.MERGE_ENTITIES,
-            payload={"retained_entity_id": BEE_ONE},
-            observation_ids=(),
-            proposed_by="resolver",
-            proposed_at=WHEN,
-        )
+def _propose_for_b(engine: Engine) -> str:
+    """One open proposal in Principal B's partition, so every read below has a decoy.
 
-
-def _a_decided_merge_for_b(engine: Engine) -> None:
-    """A whole accepted merge in B's partition: second entity, proposal, decision, lineage."""
+    Returns the minted identifier. Proposal identifiers are the server's to
+    choose since `WP-RI-B-05`, so the decoy's identity is read back rather than
+    named -- which also means these partition assertions compare two identifiers
+    the server actually issued instead of two literals that could both be wrong.
+    """
     with engine.begin() as connection:
         repository = SqlEntityRepository(connection)
-        repository.create(PRINCIPAL_B, _entity(BEE_TWO, PRINCIPAL_B, "Bob Chen"))
-        EntityGovernanceService(repository).propose(
-            PRINCIPAL_B,
-            proposal_id=B_PROPOSAL,
-            kind=EntityProposalKind.MERGE_ENTITIES,
-            payload={"retained_entity_id": BEE_ONE, "merged_entity_id": BEE_TWO},
-            observation_ids=(),
-            proposed_by="resolver",
-            proposed_at=WHEN,
+        return (
+            EntityGovernanceService(repository)
+            .propose(
+                PRINCIPAL_B,
+                kind=EntityProposalKind.MERGE_ENTITIES,
+                payload={"retained_entity_id": BEE_ONE, "merged_entity_id": BEE_TWO},
+                observation_ids=(),
+                proposed_by="resolver",
+                method=EntityProposalMethod.DETERMINISTIC,
+                method_version="1",
+                at=WHEN,
+            )
+            .proposal_id
         )
+
+
+def _a_decided_merge_for_b(engine: Engine) -> str:
+    """A whole merge in B's partition: second entity, proposal, decision, redirect, lineage.
+
+    The decision and the merge are two acts now. Both are staged here because
+    what the tests below need is B's *lineage* to exist, and since `WP-RI-B-05`
+    accepting the proposal does not produce any.
+    """
+    proposal_id = _propose_for_b(engine)
     with engine.begin() as connection:
         EntityGovernanceService(SqlEntityRepository(connection)).accept(
             PRINCIPAL_B,
-            B_PROPOSAL,
+            proposal_id,
             decided_by="B's operator",
             decided_at=LATER,
             reason="same person",
             has_operator_authority=True,
-            merge_id=B_MERGE,
         )
+    with engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.redirect_entity(PRINCIPAL_B, BEE_TWO, BEE_ONE)
+        repository.record_merge(
+            PRINCIPAL_B,
+            EntityMergeRecord(
+                merge_id=B_MERGE,
+                principal_id=PRINCIPAL_B,
+                retained_entity_id=BEE_ONE,
+                merged_entity_id=BEE_TWO,
+                proposal_id=proposal_id,
+                decided_by="B's operator",
+                reason="same person",
+                decided_at=LATER,
+            ),
+        )
+    return proposal_id
 
 
 def test_an_observation_write_decides_a_collision_on_its_own_partitions_rows(
@@ -994,18 +1087,18 @@ def test_a_proposal_read_answers_a_foreign_proposal_as_an_absent_one(
     it discloses both the identifiers and the fact that a merge is pending on
     them.
     """
-    _propose(two_principals)
-    _propose_for_b(two_principals)
+    a_proposal = _propose(two_principals)
+    b_proposal = _propose_for_b(two_principals)
     with two_principals.connect() as connection:
         repository = SqlEntityRepository(connection)
-        foreign = repository.proposal(PRINCIPAL_A, B_PROPOSAL)
+        foreign = repository.proposal(PRINCIPAL_A, b_proposal)
         absent = repository.proposal(PRINCIPAL_A, "eprp_ffff0006ffff0006")
-        mine = repository.proposal(PRINCIPAL_A, A_PROPOSAL)
-        theirs = repository.proposal(PRINCIPAL_B, B_PROPOSAL)
+        mine = repository.proposal(PRINCIPAL_A, a_proposal)
+        theirs = repository.proposal(PRINCIPAL_B, b_proposal)
     assert foreign is None
     assert foreign == absent
     assert mine is not None
-    assert mine.proposal_id == A_PROPOSAL
+    assert mine.proposal_id == a_proposal
     assert theirs is not None, "the staged foreign row went missing"
     assert theirs.principal_id == PRINCIPAL_B
 
@@ -1019,18 +1112,18 @@ def test_the_proposal_queue_does_not_list_another_principals_proposals(
     vacuous: it fails if the partition is dropped *and* it fails if the fixture
     ever stops staging either row.
     """
-    _propose(two_principals)
-    _propose_for_b(two_principals)
+    a_proposal = _propose(two_principals)
+    b_proposal = _propose_for_b(two_principals)
     with two_principals.connect() as connection:
         repository = SqlEntityRepository(connection)
         mine = repository.proposals(PRINCIPAL_A)
         theirs = repository.proposals(PRINCIPAL_B)
-        mine_open = repository.proposals(PRINCIPAL_A, EntityProposalState.PROPOSED)
-    assert [item.proposal_id for item in mine] == [A_PROPOSAL]
-    assert [item.proposal_id for item in theirs] == [B_PROPOSAL], (
+        mine_open = repository.proposals(PRINCIPAL_A, EntityProposalState.NEEDS_REVIEW)
+    assert [item.proposal_id for item in mine] == [a_proposal]
+    assert [item.proposal_id for item in theirs] == [b_proposal], (
         "the staged foreign row went missing"
     )
-    assert [item.proposal_id for item in mine_open] == [A_PROPOSAL]
+    assert [item.proposal_id for item in mine_open] == [a_proposal]
 
 
 def test_a_decision_cannot_reach_another_principals_proposal(
@@ -1038,15 +1131,20 @@ def test_a_decision_cannot_reach_another_principals_proposal(
 ) -> None:
     """`decide_proposal` settles at the database, and its partition is part of that.
 
-    The UPDATE already carries `state = 'proposed'` so a decision happens once.
+    The UPDATE already carries the undecided states so a decision happens once.
     The partition is the other half: `proposal_id` is a global primary key, so
     without it A's decision matches B's open proposal exactly and accepts it --
     B's merge authorised by A's operator, recorded as B's own decision, with
     `decided_by` naming someone in a partition B cannot read.
+
+    The direct-repository attack supplies A-owned participant references while
+    retaining B's proposal identifier. That deliberately satisfies the earlier
+    participant-scope guard so this test reaches the proposal partition
+    predicate it exists to prove; B's stored proposal remains unchanged.
     """
-    _propose_for_b(two_principals)
+    b_proposal = _propose_for_b(two_principals)
     with two_principals.connect() as connection:
-        staged = SqlEntityRepository(connection).proposal(PRINCIPAL_B, B_PROPOSAL)
+        staged = SqlEntityRepository(connection).proposal(PRINCIPAL_B, b_proposal)
     assert staged is not None, "the staged foreign row went missing"
 
     with (
@@ -1058,6 +1156,10 @@ def test_a_decision_cannot_reach_another_principals_proposal(
             replace(
                 staged,
                 principal_id=PRINCIPAL_A,
+                payload=EntityProposalPayload.of(
+                    EntityProposalKind.MERGE_ENTITIES,
+                    {"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
+                ),
                 state=EntityProposalState.ACCEPTED,
                 decided_by="A's operator",
                 decided_at=LATER,
@@ -1066,9 +1168,9 @@ def test_a_decision_cannot_reach_another_principals_proposal(
         )
 
     with two_principals.connect() as connection:
-        held = SqlEntityRepository(connection).proposal(PRINCIPAL_B, B_PROPOSAL)
+        held = SqlEntityRepository(connection).proposal(PRINCIPAL_B, b_proposal)
     assert held is not None
-    assert held.state is EntityProposalState.PROPOSED
+    assert held.state is EntityProposalState.NEEDS_REVIEW
     assert held.decided_by is None
     assert held.decision_reason is None
 
@@ -1083,20 +1185,11 @@ def test_merge_lineage_does_not_list_another_principals_merges(
     of B's reasoning -- and `merges(entity_id=...)` would answer A with lineage
     for an entity A cannot otherwise see at all.
 
-    Both Principals hold a real accepted merge here, so neither assertion can
-    pass by finding nothing.
+    Both Principals hold a real merge here -- staged as the operator act that
+    performs one, since accepting the proposal no longer does -- so neither
+    assertion can pass by finding nothing.
     """
-    _propose(two_principals)
-    with two_principals.begin() as connection:
-        EntityGovernanceService(SqlEntityRepository(connection)).accept(
-            PRINCIPAL_A,
-            A_PROPOSAL,
-            decided_by="the operator",
-            decided_at=LATER,
-            reason="confirmed by employee number",
-            has_operator_authority=True,
-            merge_id=A_MERGE,
-        )
+    _merge(two_principals, _propose(two_principals), merge_id=A_MERGE)
     _a_decided_merge_for_b(two_principals)
 
     with two_principals.connect() as connection:

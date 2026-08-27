@@ -64,6 +64,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
     CreateProject,
@@ -106,8 +107,11 @@ from my_pa.application.commands import (
     ListSources,
     ListTasks,
     ListUnresolvedMentions,
+    MergeEntities,
     ObserveEntityMention,
     PrepareContext,
+    PreviewEntityMerge,
+    ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
     ReadIntelligenceArtifact,
@@ -167,10 +171,21 @@ __all__ = ["Authorization", "authorize"]
 class Authorization:
     """The outcome of the one authorization, and what the use case may act on.
 
-    A handler receives this instead of a principal, which is deliberate: there
-    is no `principal.is_operator` for a use case to consult and no scope for it
-    to widen. What it gets is the decision that was already made and the
-    enrollments that were already loaded.
+    A handler receives this instead of a bare principal, which is deliberate: it
+    gets the decision that was already made and the enrollments that were already
+    loaded, and there is no scope for it to widen.
+
+    **This docstring used to say there is no `principal.is_operator` for a use
+    case to consult, and that is corrected rather than left standing.** The
+    principal has always been reachable through this record; what the sentence
+    was really asserting is that no handler *decides* on operator authority, and
+    that is still true and is what `ApplicationService._operator_authority`
+    preserves. `WP-RI-B-07` reads the flag at exactly one place, to pass an
+    authenticated fact through to a service whose own rule is the decision —
+    `IdentityCorrectionService` refuses without it, and `EntityProposalReviewService`
+    refuses an escalated case without it. Whether the request may run at all is
+    still `domain.policy.decision`'s, which has already denied every
+    non-operator caller of an operator-only capability before a handler exists.
     """
 
     principal: Principal
@@ -395,6 +410,16 @@ def _requested_scope(
             | ReviseRelationshipMemory()
             | ArchiveRelationshipMemory()
             | RestoreRelationshipMemory()
+            # Phase B's four. A proposal, a candidate memory, a merge preview and
+            # a merge each name entities, previews and observations of the acting
+            # Principal's own partition and no configured source, so the empty
+            # set is a measurement here exactly as it is for the twenty-nine
+            # above it -- and `domain.policy.decision._SCOPELESS` is where that
+            # measurement is read as one rather than as a failed lookup.
+            | CreateEntityProposal()
+            | ProposeRelationshipMemory()
+            | PreviewEntityMerge()
+            | MergeEntities()
         ):
             return frozenset()
         case CreateCapture():

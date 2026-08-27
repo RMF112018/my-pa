@@ -12,6 +12,12 @@ from my_pa.contracts.oauth import AuthorizationRequest
 SYNTHETIC_APPROVAL_VALUE = "s" * 43
 
 
+@pytest.fixture
+def anyio_backend() -> str:
+    """These ASGI contract tests exercise the installed asyncio backend only."""
+    return "asyncio"
+
+
 class FakeAuthorizationServer:
     resource = "https://mcp.example.invalid/mcp"
     issuer = "https://mcp.example.invalid"

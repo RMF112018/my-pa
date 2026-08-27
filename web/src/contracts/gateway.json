@@ -68,7 +68,7 @@
     },
     "review.list": {
       "purpose": "capture_review",
-      "payloadFields": ["page_size"],
+      "payloadFields": ["page_size", "subject_kind", "state", "entity_id", "after"],
       "probe": { "page_size": 25 }
     },
     "review.decide": {
@@ -77,7 +77,9 @@
         "review_case_id",
         "expected_review_version",
         "disposition",
-        "corrected_value"
+        "corrected_value",
+        "correction_patch",
+        "reason"
       ],
       "probe": {
         "review_case_id": "rvw_aaaaaaaa11111111",

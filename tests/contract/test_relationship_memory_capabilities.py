@@ -73,6 +73,7 @@ from my_pa.application.commands import (
     SearchRelationshipMemories,
 )
 from my_pa.application.errors import InvalidRequestError
+from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import _HANDLERS, ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.contracts.ports import ReviewDecisionRequest, UnitOfWork
@@ -102,6 +103,7 @@ from my_pa.domain.relationship.memory import (
     MemoryProposalMethod,
     MemoryProposalState,
     classification_floor_for,
+    memory_proposal_dedupe_digest,
     statement_digest,
 )
 from my_pa.domain.relationship.normalization import normalize_identifier, normalize_name
@@ -169,6 +171,9 @@ MEMORY_CAPABILITIES: Final[tuple[Capability, ...]] = (
     Capability.RELATIONSHIP_MEMORY_REVISE,
     Capability.RELATIONSHIP_MEMORY_ARCHIVE,
     Capability.RELATIONSHIP_MEMORY_RESTORE,
+    # The ninth (`WP-RI-B-05`), and the guard below is exactly what made adding
+    # it a decision here rather than a silent widening of the prefix.
+    Capability.RELATIONSHIP_MEMORY_PROPOSE,
 )
 
 MEMORY_WRITES: Final[tuple[Capability, ...]] = (
@@ -184,6 +189,18 @@ MEMORY_READS: Final[tuple[Capability, ...]] = (
     Capability.RELATIONSHIP_MEMORY_SEARCH,
     Capability.RELATIONSHIP_MEMORY_HISTORY,
 )
+
+#: The ninth, which is a write and is in neither tuple above. `WP-RI-B-05`.
+#:
+#: **A third tuple rather than a fifth row in `MEMORY_WRITES`, and the reason is
+#: the claim that tuple carries.** Every sweep over `MEMORY_WRITES` asserts the
+#: capability permits `relationship_memory_authoring` and nothing else, which is
+#: exactly what this one must not permit: a producer raising a candidate must not
+#: hold the grant that writes an accepted memory. Folding it in would either
+#: falsify those four assertions or force the purpose map to widen, and widening
+#: it is the escalation operator section 12 forbids. The pair below is what this
+#: one is asserted against instead.
+MEMORY_PROPOSALS: Final[tuple[Capability, ...]] = (Capability.RELATIONSHIP_MEMORY_PROPOSE,)
 
 #: The command each capability builds.
 MEMORY_COMMANDS: Final[Mapping[Capability, type]] = {
@@ -217,24 +234,37 @@ def _uncomposed_unit_of_work() -> UnitOfWork:
 
 def _service(*, entities: bool, memory: bool) -> ApplicationService:
     """A composed service with the two switches set, and nothing else wired."""
+    producer_id = "prn_remote_memory_profile"
     return ApplicationService(
         unit_of_work=_uncomposed_unit_of_work,
         limits=LIMITS,
         clock=lambda: WHEN,
         relationship_intelligence_enabled=entities,
         relationship_memory_enabled=memory,
+        producer_origins=ProducerOriginRegistry(
+            {
+                producer_id: ProducerOrigin(
+                    principal_id=producer_id,
+                    principal_kind=PrincipalKind.OPERATOR,
+                    method="rule",
+                    method_version="synthetic-remote-profile.1",
+                )
+            }
+        ),
     )
 
 
 # --- the plane is implemented, and named the same way everywhere -------------
 
 
-def test_the_eight_names_are_every_name_on_the_plane() -> None:
-    """Guards every list below: a ninth name would otherwise go untested.
+def test_the_nine_names_are_every_name_on_the_plane() -> None:
+    """Guards every list below: a tenth name would otherwise go untested.
 
     The tuple is written out rather than derived from the prefix — that is the
     rule `_RELATIONSHIP_MEMORY_CAPABILITIES` follows so admitting a name is a
-    decision — and this is the check that pays for it.
+    decision — and this is the check that pays for it. It paid at `WP-RI-B-05`:
+    `relationship_memory.propose` joined the plane and this test is what said the
+    lists below had to grow with it.
     """
     by_prefix = {
         capability
@@ -242,8 +272,34 @@ def test_the_eight_names_are_every_name_on_the_plane() -> None:
         if capability.value.startswith("relationship_memory.")
     }
     assert set(MEMORY_CAPABILITIES) == by_prefix
-    assert len(MEMORY_CAPABILITIES) == 8
-    assert set(MEMORY_WRITES) | set(MEMORY_READS) == set(MEMORY_CAPABILITIES)
+    assert len(MEMORY_CAPABILITIES) == 9
+    assert (set(MEMORY_WRITES) | set(MEMORY_READS) | set(MEMORY_PROPOSALS)) == set(
+        MEMORY_CAPABILITIES
+    )
+    # Three disjoint groups and not two overlapping ones: the producer is not a
+    # direct write and is not a read, which is the whole of why it needs a
+    # purpose neither of them holds.
+    assert not set(MEMORY_WRITES) & set(MEMORY_READS)
+    assert not set(MEMORY_PROPOSALS) & (set(MEMORY_WRITES) | set(MEMORY_READS))
+
+
+@pytest.mark.parametrize("capability", MEMORY_PROPOSALS, ids=lambda c: c.value)
+def test_the_producer_holds_a_purpose_neither_half_of_the_plane_holds(
+    capability: Capability,
+) -> None:
+    """`relationship_memory.propose` is the plane's third grant, not a fourth write.
+
+    Operator section 12 keeps a produced candidate out of `relationship_memory.create`
+    and section 16 keeps a producer from deciding its own proposal. This is where
+    the first of those becomes a property of the *grant*: a client that may raise
+    candidates holds `relationship_memory_proposal` and nothing else, so it
+    reaches neither the four direct writes nor the four reads.
+    """
+    assert permitted_purposes(capability) == frozenset({Purpose.RELATIONSHIP_MEMORY_PROPOSAL})
+    assert Purpose.RELATIONSHIP_MEMORY_AUTHORING not in permitted_purposes(capability)
+    assert Purpose.RELATIONSHIP_MEMORY_READ not in permitted_purposes(capability)
+    for other in (*MEMORY_WRITES, *MEMORY_READS):
+        assert Purpose.RELATIONSHIP_MEMORY_PROPOSAL not in permitted_purposes(other)
 
 
 @pytest.mark.parametrize("capability", MEMORY_CAPABILITIES, ids=lambda c: c.value)
@@ -1116,9 +1172,17 @@ def _a_promoted_assertion(engine: Engine, subject: str, statement: str) -> str:
                 memory_proposal_id=memory_proposal_id,
                 principal_id=PRINCIPAL,
                 subject_entity_id=subject,
+                expected_subject_version=1,
                 proposed_kind=MemoryKind.COMMUNICATION_PREFERENCE.value,
                 proposed_statement=statement,
                 proposed_statement_sha256=statement_digest(statement),
+                dedupe_sha256=memory_proposal_dedupe_digest(
+                    principal_id=PRINCIPAL,
+                    subject_entity_id=subject,
+                    proposed_kind=MemoryKind.COMMUNICATION_PREFERENCE,
+                    proposed_statement_sha256=statement_digest(statement),
+                    structured_value=None,
+                ),
                 structured_value=None,
                 state=MemoryProposalState.NEEDS_REVIEW.value,
                 method=MemoryProposalMethod.RULE.value,

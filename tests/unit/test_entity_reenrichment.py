@@ -32,12 +32,18 @@ from my_pa.domain.relationship.governance import (
     EntityObservation,
     EntityProposal,
     EntityProposalKind,
+    EntityProposalMethod,
     EntityProposalState,
     ObservationKind,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.relationship.proposal_payload import (
+    EntityProposalPayload,
+    dedupe_digest,
+)
 from my_pa.domain.relationship.resolution import EntityResolution
-from tests.conftest import FakeUnitOfWork, World
+from tests.conftest import World
+from tests.conftest import _Entities as FakeEntities
 
 PRINCIPAL = "prn_aaaa0001aaaa0001aaaa0001"
 ALICE = "ent_aaaa0001aaaa0001"
@@ -50,8 +56,15 @@ VERSION = "ver_aaaa0001aaaa0001"
 WHEN = datetime(2026, 8, 18, 12, tzinfo=UTC)
 
 
-def _entities(world: World):  # noqa: ANN202
-    return FakeUnitOfWork(world).entities
+def _entities(world: World) -> FakeEntities:
+    """The entity plane over this `World`.
+
+    One fake since `WP-RI-B-05` moved the proposal-plane methods into
+    `tests/conftest.py`. They lived in a subclass beside it while that file was
+    frozen for the worker that needed them, which meant a second fake of one
+    repository and a `World` field stapled on from outside.
+    """
+    return FakeEntities(world)
 
 
 @pytest.fixture
@@ -114,6 +127,10 @@ def _record_merge(entities, merged: str = ALICE_TWO, retained: str = ALICE) -> N
     # `proposal_id` against `entity_proposals` in SQL, and the in-memory double
     # now does the same — so a merge record citing a proposal nobody wrote is a
     # state the product cannot reach, and this helper must not build one.
+    payload = EntityProposalPayload.of(
+        EntityProposalKind.MERGE_ENTITIES,
+        {"retained_entity_id": retained, "merged_entity_id": merged},
+    )
     entities.record_proposal(
         PRINCIPAL,
         EntityProposal(
@@ -121,10 +138,13 @@ def _record_merge(entities, merged: str = ALICE_TWO, retained: str = ALICE) -> N
             principal_id=PRINCIPAL,
             kind=EntityProposalKind.MERGE_ENTITIES,
             state=EntityProposalState.PROPOSED,
-            payload={"retained_entity_id": retained, "merged_entity_id": merged},
+            payload=payload,
             observation_ids=(),
             proposed_by="resolver",
             proposed_at=WHEN,
+            method=EntityProposalMethod.DETERMINISTIC,
+            method_version="1",
+            dedupe_sha256=dedupe_digest(payload),
         ),
     )
     entities.record_merge(
@@ -353,34 +373,55 @@ def test_an_outcome_names_a_closed_trigger() -> None:
 def test_an_accepted_merge_followed_by_re_enrichment_moves_the_evidence(
     world: World, enriching: EntityReenrichmentService
 ) -> None:
-    """The two halves of section 15.3, in the order a caller performs them.
+    """The three acts of section 15.3, in the order a caller performs them.
 
-    The merge decides; re-enrichment carries the consequence. Kept separate
-    because the first needs an operator and the second needs nobody — folding
-    them together would put a bounded background walk inside a decision.
+    A reviewer accepts the identity-correction proposal; an operator performs
+    the merge; re-enrichment carries the consequence. They are three because
+    each needs a different authority — a reviewer, then the operator, then
+    nobody — and folding any two together is how one of those authorities stops
+    being asked for. `WP-RI-B-05` separated the first two, which had been one
+    call: accepting the proposal *was* the merge, so the operator gate was a
+    parameter rather than a capability.
     """
     entities = _entities(world)
     governing = EntityGovernanceService(entities)
     entities.create(PRINCIPAL, _entity(ALICE))
     entities.create(PRINCIPAL, _entity(ALICE_TWO))
     entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", ALICE_TWO))
-    governing.propose(
+    proposed = governing.propose(
         PRINCIPAL,
-        proposal_id="eprp_aaaa0001aaaa0001",
         kind=EntityProposalKind.MERGE_ENTITIES,
         payload={"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
         observation_ids=(),
         proposed_by="resolver",
-        proposed_at=WHEN,
+        method=EntityProposalMethod.DETERMINISTIC,
+        method_version="1",
+        at=WHEN,
     )
     governing.accept(
         PRINCIPAL,
-        "eprp_aaaa0001aaaa0001",
+        proposed.proposal_id,
         decided_by="the operator",
         decided_at=WHEN,
         reason="confirmed",
         has_operator_authority=True,
-        merge_id="emrg_aaaa0001aaaa0001",
+    )
+    # Acceptance established reviewed intent and changed no identity, so the
+    # merge is performed here: the redirect and the lineage row that
+    # `entities.merge` writes under `entity_identity_correction`.
+    entities.redirect_entity(PRINCIPAL, ALICE_TWO, ALICE)
+    entities.record_merge(
+        PRINCIPAL,
+        EntityMergeRecord(
+            merge_id="emrg_aaaa0001aaaa0001",
+            principal_id=PRINCIPAL,
+            retained_entity_id=ALICE,
+            merged_entity_id=ALICE_TWO,
+            proposal_id=proposed.proposal_id,
+            decided_by="the operator",
+            reason="confirmed",
+            decided_at=WHEN,
+        ),
     )
     outcome = enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
 

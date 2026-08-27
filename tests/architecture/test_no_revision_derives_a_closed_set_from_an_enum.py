@@ -737,8 +737,8 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 70
-    assert len({revision for revision, _ in revisions}) == 70
+    assert len(revisions) == 76
+    assert len({revision for revision, _ in revisions}) == 76
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",
@@ -820,7 +820,13 @@ def test_the_allowlist_names_only_revisions_this_package_does_not_edit() -> None
     """
     assert {revision for revision, *_ in ALLOWED} == {"8b3f5c17d904"}
     assert len(ALLOWED) == 4
-    assert not {revision for revision, *_ in ALLOWED} & set(FROZEN)
+    allowed_sites = {(revision, constraint) for revision, _, constraint, *_ in ALLOWED}
+    frozen_sites = {
+        (revision, constraint)
+        for revision, constraints in FROZEN.items()
+        for constraint in constraints
+    }
+    assert not allowed_sites & frozen_sites
 
 
 @pytest.mark.parametrize("revision", sorted(FROZEN))

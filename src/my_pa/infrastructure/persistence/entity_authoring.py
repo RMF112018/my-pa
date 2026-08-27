@@ -76,10 +76,13 @@ from my_pa.domain.relationship.entity import (
     IdentifierState,
 )
 from my_pa.domain.relationship.governance import (
-    ActorClass,
     EvidenceRole,
-    MutationAuthority,
     MutationRecordFamily,
+)
+from my_pa.infrastructure.persistence.identifier_claim_lock import (
+    lock_entity_mutation_scopes,
+    lock_identifier_claim_keys,
+    lock_identifier_entity_scopes,
 )
 from my_pa.infrastructure.persistence.principal_scope import (
     capture_context,
@@ -171,26 +174,41 @@ def _bound(table: Table, principal_id: str, **values: object) -> dict[str, objec
     return principal_bound_values(dict(values), table, capture_context(principal_id))
 
 
-#: What every write on this path carries, and the one value each may hold.
-#:
-#: `USER_CONFIRMED_ASSERTION` because these capabilities are reached only by a
-#: request an authenticated Principal made, naming the version it read: the user
-#: was asked and answered. `SYSTEM_DETERMINISTIC` is what an inference-driven
-#: writer would carry and is deliberately unreachable from here, because
-#: `MutationAuthority` records that it "may never, by itself, create or merge an
-#: identity" -- and a create is one of the capabilities this path serves.
-#:
-#: Hard-coded rather than taken from the request, which has no field for it, for
-#: the reason `RelationshipMemoryService` hard-codes `MemoryActorClass.USER`: an
-#: authority a caller could state is an authority a caller could raise.
 #: SQLSTATE for a unique violation, which is the one `IntegrityError` this
 #: module's ledger insert is entitled to interpret. Restated here rather than
 #: imported from the driver, so the persistence layer's error classification
 #: does not become a reason for every reader of this file to import psycopg.
 _UNIQUE_VIOLATION = "23505"
 
-_AUTHORITY = MutationAuthority.USER_CONFIRMED_ASSERTION
-_ACTOR_CLASS = ActorClass.USER
+#: What a write on this path carries when nothing says otherwise, and what it
+#: meant when it was the only value one could carry.
+#:
+#: `USER_CONFIRMED_ASSERTION` because these capabilities are ordinarily reached
+#: by a request an authenticated Principal made, naming the version it read: the
+#: user was asked and answered. `SYSTEM_DETERMINISTIC` is what an
+#: inference-driven writer would carry and is unreachable here, because
+#: `MutationAuthority` records that it "may never, by itself, create or merge an
+#: identity" -- and a create is one of the capabilities this path serves; the
+#: request refuses it outright rather than leaving the refusal to this module.
+#:
+#: **These are now the defaults rather than the only values, and `WP-RI-B-05` is
+#: the change.** They were two module constants here, and the reason given was
+#: that an authority a caller could state is an authority a caller could raise.
+#: That reason still holds and is still enforced -- no transport command carries
+#: either field, and a proposal payload naming one is refused by
+#: `FORBIDDEN_PAYLOAD_FIELDS` -- but the premise it rested on, that the request
+#: "has no field for it", stopped being true when review promotion had to
+#: execute: a fact a reviewer accepted from a source or a local model recorded
+#: as `user_confirmed_assertion` is a record claiming the user asserted what
+#: somebody else did.
+#:
+#: So the writers below read `request.authority` and `request.actor_class`, and
+#: the two constants moved to `domain.relationship.governance` as
+#: `DEFAULT_MUTATION_AUTHORITY` and `DEFAULT_MUTATION_ACTOR_CLASS`, which is
+#: where `EntityWriteRequest` declares them as its field defaults. They were not
+#: left here as aliases beside the readers: a constant nothing reads is a claim
+#: nothing checks, and two spellings of one default are two things that can
+#: drift apart.
 
 #: Which fact column of `entity_fact_evidence_links` each record family fills.
 _EVIDENCE_TARGET_COLUMN: Mapping[MutationRecordFamily, str] = {
@@ -277,6 +295,7 @@ def mutation_replay_for(
 
 def admit_mutation(connection: Connection, request: EntityWriteRequest) -> EntityMutationAdmission:
     """Admit one governed entity write. See `EntitiesRepository.admit_mutation`."""
+    _serialize_identifier_request(connection, request)
     if request.operation is EntityWriteOperation.CREATE:
         outcome = _create(connection, request)
     else:
@@ -303,6 +322,51 @@ def admit_mutation(connection: Connection, request: EntityWriteRequest) -> Entit
         ),
         created=True,
     )
+
+
+def _serialize_identifier_request(connection: Connection, request: EntityWriteRequest) -> None:
+    """Acquire Entity and identifier locks before this request's first read/write."""
+    claims: set[tuple[str, str]] = set()
+    entity_id: str | None = None
+    if request.operation is EntityWriteOperation.CREATE:
+        entity_id = str(request.minted_entity_id)
+    elif request.entity_id is not None:
+        entity_id = str(request.entity_id)
+    if entity_id is None:
+        return
+
+    lock_entity_mutation_scopes(connection, request.principal_id, (entity_id,))
+
+    if request.operation not in {
+        EntityWriteOperation.CREATE,
+        EntityWriteOperation.BIND_IDENTIFIER,
+        EntityWriteOperation.RETIRE_IDENTIFIER,
+        EntityWriteOperation.SUPERSEDE_IDENTIFIER,
+    }:
+        return
+
+    # The Entity lock precedes reading a held claim: otherwise a retire or
+    # supersede could read one key, wait, and mutate a row whose key changed
+    # before the lock was acquired.
+    lock_identifier_entity_scopes(connection, request.principal_id, (entity_id,))
+    if request.operation is EntityWriteOperation.CREATE:
+        claims.update(
+            (item.namespace.value, item.normalized_value) for item in request.initial_identifiers
+        )
+    else:
+        if request.operation in {
+            EntityWriteOperation.BIND_IDENTIFIER,
+            EntityWriteOperation.SUPERSEDE_IDENTIFIER,
+        }:
+            claims.add((str(request.namespace), str(request.normalized_value)))
+        if request.operation in {
+            EntityWriteOperation.RETIRE_IDENTIFIER,
+            EntityWriteOperation.SUPERSEDE_IDENTIFIER,
+        }:
+            held = _identifier_claim_for_target(connection, request, str(request.target_child_id))
+            if held is not None:
+                claims.add(held)
+    lock_identifier_claim_keys(connection, request.principal_id, claims)
 
 
 # --- the operations -----------------------------------------------------------
@@ -581,6 +645,15 @@ def _supersede_identifier(
 ) -> _Outcome:
     entity_id = str(request.entity_id)
     replacement = str(request.minted_child_id)
+    target = str(request.target_child_id)
+    lock_identifier_entity_scopes(connection, request.principal_id, (entity_id,))
+    claims = {
+        (str(request.namespace), str(request.normalized_value)),
+    }
+    held_claim = _identifier_claim_for_target(connection, request, target)
+    if held_claim is not None:
+        claims.add(held_claim)
+    lock_identifier_claim_keys(connection, request.principal_id, claims)
     # The replacement is written first, because the row being superseded points
     # at it and a foreign key needs its target. The old row is still `active` at
     # this moment, so a replacement carrying the *same* value is refused by the
@@ -595,6 +668,7 @@ def _supersede_identifier(
         display_value=str(request.display_value),
         effective_from=request.effective_from,
         effective_to=request.effective_to,
+        serialize=False,
     )
     prior = _transition_identifier(
         connection,
@@ -602,6 +676,7 @@ def _supersede_identifier(
         state=IdentifierState.SUPERSEDED,
         retired_at=request.server_received_at,
         superseded_by_identifier_id=replacement,
+        serialize=False,
     )
     return _Outcome(
         entity_id=entity_id,
@@ -781,6 +856,7 @@ def _insert_binding(
     display_value: str,
     effective_from: datetime | None,
     effective_to: datetime | None,
+    serialize: bool = True,
 ) -> None:
     """Write one `active` binding, or refuse with the reason the store holds.
 
@@ -789,6 +865,11 @@ def _insert_binding(
     one absorbs a re-bind of an address the entity already holds, and a governed
     write must not hand back a receipt for a binding it did not make.
     """
+    if serialize:
+        lock_identifier_entity_scopes(connection, request.principal_id, (entity_id,))
+        lock_identifier_claim_keys(
+            connection, request.principal_id, ((namespace, normalized_value),)
+        )
     for _ in range(BIND_ATTEMPTS):
         # The stamp is built inside the statement rather than hoisted above the
         # loop, and that is not incidental:
@@ -913,10 +994,16 @@ def _transition_identifier(
     state: IdentifierState,
     retired_at: datetime,
     superseded_by_identifier_id: str | None,
+    serialize: bool = True,
 ) -> dict[str, Any]:
     """Move one active binding out of service, guarded on its own version."""
     target = str(request.target_child_id)
     expected = int(request.target_child_version or 0)
+    if serialize:
+        lock_identifier_entity_scopes(connection, request.principal_id, (str(request.entity_id),))
+        held_claim = _identifier_claim_for_target(connection, request, target)
+        if held_claim is not None:
+            lock_identifier_claim_keys(connection, request.principal_id, (held_claim,))
     updated = connection.execute(
         update(entity_external_identifiers)
         .where(
@@ -954,6 +1041,24 @@ def _transition_identifier(
     if int(row.version) != expected:
         raise StaleEntityVersionError("the expected identifier version is stale")
     raise DuplicateEntityFactError("that binding has already left service")
+
+
+def _identifier_claim_for_target(
+    connection: Connection, request: EntityWriteRequest, target: str
+) -> tuple[str, str] | None:
+    row = connection.execute(
+        select(
+            entity_external_identifiers.c.namespace,
+            entity_external_identifiers.c.normalized_value,
+        ).where(
+            _mine(entity_external_identifiers, request.principal_id),
+            entity_external_identifiers.c.identifier_id == target,
+            entity_external_identifiers.c.entity_id == request.entity_id,
+        )
+    ).one_or_none()
+    if row is None:
+        return None
+    return str(row.namespace), str(row.normalized_value)
 
 
 def _transition_alias(
@@ -1013,6 +1118,19 @@ def _record_evidence(
     proved by walking the span to the capture that owns it, and a span behind
     another Principal's capture answers exactly what a span that does not exist
     answers.
+
+    **The shape is checked before the walk, and `WP-RI-B-05` added that line.**
+    PR #154's fifth non-blocking observation is exactly this omission, and
+    Phase B touches the invariant: `EntitiesRepository.record_proposal_evidence_link`
+    is a second writer of capture-span evidence, so the plane now has three of
+    them and two spellings of the same precondition. `persistence.entity`'s
+    `_link_evidence` has always validated its reference before the read; this
+    one did not, and relied on the transport command's `_entity_evidence` --
+    which is real but is a boundary that an in-process caller of
+    `EntityAuthoringService` does not have to cross. A malformed reference
+    reaching the query is answered "outside this scope", which is a statement
+    about a Principal's partition made about a value that could never have been
+    in anybody's.
     """
     if not request.evidence:
         return ()
@@ -1020,6 +1138,7 @@ def _record_evidence(
     target_id = outcome.record_id
     link_ids: list[str] = []
     for reference, link_id in zip(request.evidence, request.minted_evidence_link_ids, strict=True):
+        validate_identifier(reference, IdKind.SPAN)
         owned = connection.execute(
             select(capture_spans.c.span_id)
             .select_from(
@@ -1049,7 +1168,7 @@ def _record_evidence(
                     # attaches, and a role a writer could choose would let one
                     # file its own objection alongside its own assertion.
                     role=EvidenceRole.DIRECT.value,
-                    authority=_AUTHORITY.value,
+                    authority=request.authority.value,
                     created_at=request.server_received_at,
                 )
             )
@@ -1089,7 +1208,7 @@ def _record_mutation(
                     record_id=outcome.record_id,
                     prior_version=outcome.prior_version,
                     new_version=outcome.new_version,
-                    authority=_AUTHORITY.value,
+                    authority=request.authority.value,
                     # `null()` rather than `None`: a `None` handed to a JSONB
                     # column is the JSON value `null`, not SQL NULL, and
                     # `a_mutation_before_state_is_an_object` refuses it --
@@ -1103,7 +1222,7 @@ def _record_mutation(
                     correlation_id=request.correlation_id,
                     audit_id=request.audit_id,
                     receipt_id=None,
-                    actor_class=_ACTOR_CLASS.value,
+                    actor_class=request.actor_class.value,
                     recorded_at=request.server_received_at,
                 )
             )

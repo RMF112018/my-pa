@@ -61,8 +61,15 @@ LIFECYCLE_REVISION: Final = "2fe4e13fb449"
 #: naming both keeps the chain assertion below a statement about the order
 #: rather than about whichever revision happens to be last.
 PHASE_A_REVISION: Final = "823e23b6cc63"
+#: Phase B's vocabulary revision, which is where `upgrade head` now lands.
+#: `PHASE_A_REVISION` above was head until the Phase B chain stacked on it;
+#: naming both keeps the chain assertion below a statement about the order
+#: rather than about whichever revision happens to be last.
+PHASE_B_REVISION: Final = "b64e29a0f7c1"
+PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
-HEAD_REVISION: Final = GSQS_REVISION
+PHASE_B_START: Final = "c7a1f04b9e63"
+HEAD_REVISION: Final = PHASE_B_HEAD
 PRIOR: Final = "d4a8c1e7b930"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_f8c3a1e6b247_add_goodnotes_notebook_lineage_logical_.py"
@@ -192,8 +199,12 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(WORK_REVISION).down_revision == INTELLIGENCE_REVISION
     assert script.get_revision(MEMORY_REVISION).down_revision == WORK_REVISION
     assert script.get_revision(PHASE_A_REVISION).down_revision == LIFECYCLE_REVISION
-    assert script.get_revision(HEAD_REVISION).down_revision == PHASE_A_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 70
+    assert script.get_revision(GSQS_REVISION).down_revision == PHASE_A_REVISION
+    assert script.get_revision(PHASE_B_START).down_revision == GSQS_REVISION
+    assert script.get_revision(PHASE_B_REVISION).down_revision == "a1f7d3c85e40"
+    assert script.get_revision(PHASE_B_HEAD).down_revision == PHASE_B_REVISION
+    assert script.get_heads() == [HEAD_REVISION]
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 76
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:
@@ -281,7 +292,7 @@ def test_prior_head_to_new_head_preserves_ordinal_pages(disposable_database: str
                     " '2026-08-12T10:00:00+00')"
                 )
             )
-        command.upgrade(_config(), "head")
+        command.upgrade(_config(), REVISION)
         with engine.connect() as connection:
             row = connection.execute(
                 text(
@@ -297,7 +308,7 @@ def test_prior_head_to_new_head_preserves_ordinal_pages(disposable_database: str
             revision = connection.execute(
                 text("SELECT version_num FROM alembic_version")
             ).scalar_one()
-            assert revision == HEAD_REVISION
+            assert revision == REVISION
         assert _tables(engine) >= NEW_TABLES
     finally:
         engine.dispose()

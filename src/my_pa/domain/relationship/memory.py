@@ -49,6 +49,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import StrEnum
@@ -103,8 +104,10 @@ __all__ = [
     "RelationshipMemoryVersion",
     "StaleMemoryVersionError",
     "classification_floor_for",
+    "memory_proposal_dedupe_digest",
     "satisfies_floor",
     "statement_digest",
+    "validate_context_links",
     "validate_statement",
     "validate_structured_value",
 ]
@@ -534,6 +537,38 @@ def statement_digest(statement: str) -> str:
     return hashlib.sha256(statement.encode("utf-8")).hexdigest()
 
 
+def memory_proposal_dedupe_digest(
+    *,
+    principal_id: str,
+    subject_entity_id: str,
+    proposed_kind: MemoryKind | str,
+    proposed_statement_sha256: str,
+    structured_value: dict[str, Any] | None,
+    context_links: tuple[Mapping[str, str], ...] = (),
+) -> str:
+    """Identify one semantic open proposal independently of optimistic state.
+
+    ``expected_subject_version`` is intentionally absent.  It protects a later
+    promotion from a stale subject, but a version-only move does not make the
+    same Principal, subject, kind, statement and structured value a new claim.
+    Keeping this material in one helper also prevents producer and reprocess
+    paths from silently acquiring different open-equivalence rules.
+    """
+    kind = proposed_kind.value if isinstance(proposed_kind, MemoryKind) else proposed_kind
+    material: dict[str, Any] = {
+        "kind": kind,
+        "principal_id": principal_id,
+        "statement_sha256": proposed_statement_sha256,
+        "structured_value": structured_value,
+        "subject_entity_id": subject_entity_id,
+    }
+    if context_links:
+        material["context_links"] = [dict(sorted(link.items())) for link in context_links]
+    return hashlib.sha256(
+        json.dumps(material, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+
+
 def _require(condition: bool, message: str) -> None:
     if not condition:
         raise MemoryStructuredValueError(message)
@@ -695,6 +730,38 @@ def validate_structured_value(
     if len(encoded) > MAX_STRUCTURED_VALUE_BYTES:
         raise MemoryBoundsError(f"a structured value is at most {MAX_STRUCTURED_VALUE_BYTES} bytes")
     return envelope
+
+
+def validate_context_links(value: object) -> tuple[dict[str, str], ...]:
+    """Return the canonical bounded link set shared by direct and reviewed writes."""
+    if not isinstance(value, tuple | list) or len(value) > MAX_CONTEXT_LINKS_PER_VERSION:
+        raise RelationshipMemoryError("memory context links are a bounded list")
+    links: list[dict[str, str]] = []
+    identities: set[tuple[str, str, str]] = set()
+    for entry in value:
+        if not isinstance(entry, Mapping) or set(entry) != {"target_type", "target_id", "role"}:
+            raise RelationshipMemoryError("a context link carries its canonical fields")
+        raw_type, target_id, raw_role = (
+            entry["target_type"],
+            entry["target_id"],
+            entry["role"],
+        )
+        if not all(isinstance(item, str) for item in (raw_type, target_id, raw_role)):
+            raise RelationshipMemoryError("a context link carries text vocabulary values")
+        try:
+            target_type = ContextLinkTargetType(raw_type)
+            role = ContextLinkRole(raw_role)
+            validate_identifier(target_id, CONTEXT_TARGET_ID_KINDS[target_type])
+        except (ValueError, KeyError):
+            raise RelationshipMemoryError("a context link names a valid target and role") from None
+        identity = (target_type.value, target_id, role.value)
+        if identity in identities:
+            raise RelationshipMemoryError("a memory version names each context link once")
+        identities.add(identity)
+        links.append({"target_type": target_type.value, "target_id": target_id, "role": role.value})
+    return tuple(
+        sorted(links, key=lambda link: (link["target_type"], link["target_id"], link["role"]))
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -966,31 +1033,42 @@ class RelationshipMemoryProposal:
     memory_proposal_id: str
     principal_id: str
     subject_entity_id: str
+    expected_subject_version: int
     proposed_kind: MemoryKind
     proposed_statement: str = field(repr=False)
     proposed_statement_sha256: str
+    dedupe_sha256: str
     state: MemoryProposalState
     method: MemoryProposalMethod
     method_version: str
     classification: Classification
     proposed_at: datetime
     structured_value: dict[str, Any] | None = field(default=None, repr=False)
+    context_links: tuple[dict[str, str], ...] = field(default=(), repr=False)
     model_id: str | None = None
     model_version: str | None = None
     review_case_id: str | None = None
     accepted_memory_id: str | None = None
     accepted_memory_version_id: str | None = None
     invalidated_reason: str | None = None
+    superseded_at: datetime | None = None
+    superseded_by_memory_proposal_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.memory_proposal_id, IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.subject_entity_id, IdKind.ENTITY)
+        if self.expected_subject_version < 1:
+            raise RelationshipMemoryError("a proposal expects a positive subject version")
         if not isinstance(self.proposed_kind, MemoryKind):
             raise RelationshipMemoryError("a memory proposal carries a known kind")
         validate_statement(self.proposed_statement)
         if self.proposed_statement_sha256 != statement_digest(self.proposed_statement):
             raise RelationshipMemoryError("a proposal's digest is the digest of its own statement")
+        if len(self.dedupe_sha256) != 64 or any(
+            character not in "0123456789abcdef" for character in self.dedupe_sha256
+        ):
+            raise RelationshipMemoryError("a proposal carries its canonical dedupe digest")
         if not isinstance(self.state, MemoryProposalState):
             raise RelationshipMemoryError("a memory proposal carries a known state")
         if not isinstance(self.method, MemoryProposalMethod):
@@ -1028,6 +1106,23 @@ class RelationshipMemoryProposal:
             validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
         if self.structured_value is not None and set(self.structured_value) != {"schema", "value"}:
             raise MemoryStructuredValueError("a proposal's structured value is a schema envelope")
+        if self.context_links != validate_context_links(self.context_links):
+            raise RelationshipMemoryError("proposal context links use canonical order")
+        if (self.state is MemoryProposalState.SUPERSEDED) is not (self.superseded_at is not None):
+            raise RelationshipMemoryError("a superseded proposal records when it was superseded")
+        if self.superseded_at is not None:
+            ensure_utc(self.superseded_at)
+            if self.superseded_at < self.proposed_at:
+                raise RelationshipMemoryError("a proposal is not superseded before it was proposed")
+        if self.superseded_by_memory_proposal_id is not None:
+            validate_identifier(
+                self.superseded_by_memory_proposal_id,
+                IdKind.RELATIONSHIP_MEMORY_PROPOSAL,
+            )
+            if self.superseded_by_memory_proposal_id == self.memory_proposal_id:
+                raise RelationshipMemoryError("a proposal is not its own successor")
+            if self.state is not MemoryProposalState.SUPERSEDED:
+                raise RelationshipMemoryError("only a superseded proposal names a successor")
 
 
 @dataclass(frozen=True, slots=True)
@@ -1126,6 +1221,8 @@ class RelationshipMemoryReviewCase:
     proposal_state: ProposalState = ProposalState.NEEDS_REVIEW
     review_version: int = 0
     latest_disposition: Disposition | None = None
+    escalated: bool = False
+    superseded_by_proposal_id: str | None = None
     accepted_memory_id: str | None = None
     accepted_memory_version_id: str | None = None
 
@@ -1143,6 +1240,13 @@ class RelationshipMemoryReviewCase:
             raise RelationshipMemoryError("a review version is not negative")
         if (self.review_version == 0) is not (self.latest_disposition is None):
             raise RelationshipMemoryError("an undecided case has version zero and no disposition")
+        if not isinstance(self.escalated, bool):
+            raise RelationshipMemoryError("a memory review escalation marker is a flag")
+        if self.superseded_by_proposal_id is not None:
+            validate_identifier(
+                self.superseded_by_proposal_id,
+                IdKind.RELATIONSHIP_MEMORY_PROPOSAL,
+            )
         accepted = self.proposal_state in (
             ProposalState.ACCEPTED,
             ProposalState.CORRECTED_ACCEPTED,
@@ -1162,6 +1266,11 @@ class RelationshipMemoryReviewCase:
     def risk_class(self) -> RiskClass:
         """The one class every candidate memory is reviewed at. See the constant."""
         return MEMORY_REVIEW_RISK_CLASS
+
+    @property
+    def requires_operator_authority(self) -> bool:
+        """Whether escalation raised this still-open case to its operator ceiling."""
+        return self.escalated
 
 
 @dataclass(frozen=True, slots=True)

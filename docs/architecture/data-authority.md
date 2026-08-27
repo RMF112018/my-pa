@@ -197,7 +197,7 @@ stateDiagram-v2
 ```
 
 
-The read-only slice stops at source observations, derived text, source-bound knowledge and search, coverage, operations, and audit. The scope promoted on 2026-08-01 adds user-authored records, span-bound proposals, reviewed assertions, and governed entity resolution, and admits read-only relationship profiles over fixture observations. Managed documents, projections, relationship synthesis, and model-generated proposals remain later.
+The original read-only slice stops at source observations, derived text, source-bound knowledge and search, coverage, operations, and audit. The scope promoted on 2026-08-01 added user-authored records, span-bound proposals, reviewed assertions, governed entity resolution, and relationship profiles over fixture observations. Relationship Intelligence Phase A and Phase B now add separately gated canonical entity writes, governed proposal staging, canonical review decisions, and persisted operator-only merge preview/apply; these remain product-owned transitions and do not grant authority to a fixture or source provider. Managed-document ingestion, final Relationship Memory redistribution, complete cross-plane re-enrichment, broad relationship synthesis, and model-generated proposals remain later.
 
 
 Promotion requires verified identity/version; allowed classification/purpose/policy; complete provenance; represented conflicts/unavailable evidence; explicit promoter authority; and auditable/reversible transition where applicable.

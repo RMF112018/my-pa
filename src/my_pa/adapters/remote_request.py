@@ -33,9 +33,29 @@ __all__ = [
     "REMOTE_OWNED_PAYLOAD_FIELDS",
     "SERVER_OWNED_REMOTE_FIELDS",
     "compose_remote_arguments",
+    "is_server_replay_capability",
     "remote_tool_schema",
     "resolve_remote_purpose",
 ]
+
+#: Writes whose canonical application handler persists a Principal-scoped
+#: request receipt.  Unlike `_IDEMPOTENT_REMOTE_CAPABILITIES`, these commands
+#: intentionally have no caller-shaped idempotency field: the remote boundary
+#: derives the correlation identity itself and the same registry drives MCP's
+#: `idempotentHint`.
+_SERVER_REPLAY_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
+    {
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        Capability.REVIEW_DECIDE,
+    }
+)
+
+
+def is_server_replay_capability(capability: Capability) -> bool:
+    """Whether remote retries are backed by the canonical request ledger."""
+    return capability in _SERVER_REPLAY_REMOTE_CAPABILITIES
+
 
 #: Envelope fields a remote MCP caller may not state. `capability` is already
 #: removed from published schemas because the tool name carries it; it is listed
@@ -107,6 +127,35 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # **None of Phase B's four writes is here, and the reason is this set's
+        # mechanism rather than a judgement about how replayable they are.**
+        # Membership makes `compose_remote_arguments` derive a key and *insert it
+        # into the payload*, so a capability here must have an
+        # `idempotency_key` field on its command. None of the four does, and
+        # that absence is itself the contract:
+        #
+        # * `entities.proposals.create` and `relationship_memory.propose` carry
+        #   no key because a proposal is not arbitrated by one. The entity
+        #   producer's replay identity is the server-derived `dedupe_sha256`
+        #   under `UNIQUE (principal_id, dedupe_sha256)` on the open states, so a
+        #   repeat is answered by the open proposal with `created=False` and
+        #   writes nothing — a stronger guarantee than a caller-shaped key, and
+        #   one that holds on every transport rather than only this one. The
+        #   memory producer has neither, which B3 recorded as a real gap; adding
+        #   it here would advertise a replay guarantee nothing implements.
+        # * `entities.merge` is arbitrated by
+        #   `UNIQUE (principal_id, idempotency_key)` on
+        #   `entity_identity_operations`, and its key is derived by the handler
+        #   from the preview it consumes — so an identical retry replays and a
+        #   materially different request against the same preview conflicts, on
+        #   local MCP, remote MCP and HTTP alike. Deriving it here would give the
+        #   guarantee to one transport out of three.
+        # * `entities.merge.preview` mints a fresh preview on every call and has
+        #   no replay identity to key on at all.
+        #
+        # `REMOTE_OWNED_PAYLOAD_FIELDS` still refuses a caller-supplied
+        # `idempotency_key` on every one of these paths, which is what operator §23's "do not
+        # accept caller-selected remote idempotency keys" actually needs.
     }
 )
 
@@ -119,6 +168,13 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
 #:
 #: `sources.fetch` — a ChatLLM fetch is inspection of one object. Extraction is
 #: a different act and stays available when it is the only granted purpose.
+#:
+#: **Phase B adds nothing here, and the emptiness is derived rather than
+#: overlooked.** `resolve_remote_purpose` consults this mapping only when the
+#: grant intersection leaves more than one purpose. Each of `entities.proposals.create`,
+#: `relationship_memory.propose`, `entities.merge.preview` and `entities.merge`
+#: permits exactly one purpose, so an entry for any of them could never be read
+#: — it would be a statement that looks like policy and decides nothing.
 CANONICAL_REMOTE_PURPOSES: Final[Mapping[Capability, Purpose]] = MappingProxyType(
     {
         Capability.CAPABILITIES_GET: Purpose.STATUS_OBSERVATION,
@@ -202,10 +258,26 @@ def compose_remote_arguments(
             ).encode()
         ).hexdigest()
         composed["payload"] = {**domain, "idempotency_key": f"idk_{digest[:32]}"}
+    if is_server_replay_capability(capability):
+        request_digest = hashlib.sha256(
+            json.dumps(
+                {
+                    "capability": capability.value,
+                    "principal_id": principal.principal_id,
+                    "arguments": composed,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            ).encode()
+        ).hexdigest()
+        request_id = f"corr_{request_digest[:32]}"
+    else:
+        request_id = issue_id(IdKind.CORRELATION)
     composed.update(
         {
             "contract_version": CONTRACT_VERSION,
-            "request_id": issue_id(IdKind.CORRELATION),
+            "request_id": request_id,
             "requested_at": format_rfc3339(clock()),
             "principal_id": principal.principal_id,
             "purpose": purpose.value,

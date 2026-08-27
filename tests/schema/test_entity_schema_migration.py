@@ -81,8 +81,27 @@ PHASE_A_TABLES: Final = frozenset(
     }
 )
 
+#: Phase B's seven, kept separate from the three sets above for the reason
+#: `PHASE_A_TABLES` is kept separate from `GOVERNANCE_TABLES`: they arrive on
+#: three further revisions, and a downgrade to `PREVIOUS_REVISION` passes through
+#: all of them. `c7a1f04b9e63` creates the proposal evidence table,
+#: `d38e6b2fa715` the three identity-correction tables and `e5b0c94d7182` the
+#: Entity review-decision ledger. `3d07af4dc513` adds the two shared replay
+#: receipt tables.
+PHASE_B_TABLES: Final = frozenset(
+    {
+        "entity_proposal_evidence_links",
+        "entity_proposal_review_decisions",
+        "entity_identity_previews",
+        "entity_identity_operations",
+        "entity_identity_effects",
+        "relationship_write_requests",
+        "relationship_write_request_evidence",
+    }
+)
+
 #: Everything the entity plane adds between `PREVIOUS_REVISION` and head.
-PLANE_TABLES: Final = NEW_TABLES | GOVERNANCE_TABLES | PHASE_A_TABLES
+PLANE_TABLES: Final = NEW_TABLES | GOVERNANCE_TABLES | PHASE_A_TABLES | PHASE_B_TABLES
 
 #: A name distinct from every other database-tier fixture's disposable
 #: database, so this suite can run alongside them without one dropping the
@@ -782,6 +801,16 @@ def _seed_observation(engine: Engine, **overrides: object) -> None:
 
 
 def _seed_proposal(engine: Engine, **overrides: object) -> None:
+    """One proposal row, seeded with every column the schema requires.
+
+    `method`, `method_version` and `dedupe_sha256` are `NOT NULL` since
+    `c7a1f04b9e63` and are supplied here rather than defaulted in the revision:
+    a default would be a migration asserting on a writer's behalf what produced
+    a proposal, which is exactly what that revision refuses to do. The digest is
+    a fixed synthetic value because nothing here reads it -- the tests below are
+    about the CHECKs on the *other* columns, and a real digest would make each
+    of them depend on an encoding they are not about.
+    """
     values: dict[str, object] = {
         "proposal_id": PROPOSAL,
         "principal_id": PRINCIPAL_A,
@@ -791,6 +820,9 @@ def _seed_proposal(engine: Engine, **overrides: object) -> None:
         "observation_ids": "[]",
         "proposed_at": "2026-08-18T12:00:00+00:00",
         "proposed_by": "resolver",
+        "method": "rule",
+        "method_version": "seed.1",
+        "dedupe_sha256": "0" * 64,
     }
     values.update(overrides)
     columns = ", ".join(values)

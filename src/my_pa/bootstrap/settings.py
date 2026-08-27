@@ -369,7 +369,7 @@ class Settings(StrictModel):
     goodnotes_tbr_bridge_enabled: bool = False
     #: Process-local gate for the relationship-intelligence entity plane
     #: (WP-RI-05, widened through Phase A). Default off. True composes all
-    #: twenty-eight `entities.` names over the acting Principal's own entities
+    #: thirty-one `entities.` names over the acting Principal's own entities
     #: and publishes the ten that read; the eighteen that write need the switch
     #: below as well, so this flag on its own serves a read-only plane. It
     #: enables no source traversal, because none exists. Off by default because
@@ -391,12 +391,13 @@ class Settings(StrictModel):
     #: A switch of its own rather than a reuse of the plane flag, on the argument
     #: `relationship_memory_enabled` makes beside it: the two admit different
     #: things. The plane flag publishes ten reads over the acting Principal's own
-    #: entities. This one publishes eighteen writes that decide who a person is,
-    #: which external addresses resolve to them, who they report to, and what a
-    #: source said about them — and the remote MCP profile is derived from the
-    #: capability set with no per-capability exclusion list, so "available" and
-    #: "remotely reachable" are one decision. An operator who wants entity reads
-    #: should not have to accept identity authoring to get them.
+    #: entities. This one is a prerequisite for all twenty-one writes that decide
+    #: who a person is, which external addresses resolve to them, who they report
+    #: to, what a source said about them, or stage and apply Phase B governance.
+    #: The merge preview/apply pair additionally requires the identity-correction
+    #: switch; remotely it also requires the exact server-resolved
+    #: `remote.operator` durable capability set. An operator who wants entity
+    #: reads should not have to accept identity authoring to get them.
     #:
     #: **Off is fail-closed on every transport, not only where a tool list is
     #: published.** `ApplicationService.available_capabilities` subtracts
@@ -420,6 +421,31 @@ class Settings(StrictModel):
     #: are one decision, and an operator who wants entity reads should not have
     #: to accept memory authoring to get them.
     relationship_memory_enabled: bool = False
+    #: Process-local gate for the governed identity merge (WP-RI-06). Default
+    #: off, and it requires **both** switches above it: identity correction is
+    #: unavailable unless every lower gate is enabled (operator §18). `_check`
+    #: ends the process rather than resolving a contradiction, exactly as the
+    #: write switch does.
+    #:
+    #: A third switch rather than a reuse of the write switch, because the two
+    #: admit different things. The write switch gates all twenty-one Entity
+    #: writes; the eighteen Phase A writes each change one record of one entity
+    #: and are reversible by their own inverse. This additionally publishes a
+    #: preview and an apply that between them collapse up to eleven identities
+    #: into one, reparent every child they own, and are undone only by a split
+    #: this phase does not implement. Remotely the pair still requires the exact
+    #: server-resolved `remote.operator` durable capability set. An operator who
+    #: wants entity authoring should not have to accept identity correction.
+    #:
+    #: **Off is fail-closed on every transport.**
+    #: `ApplicationService.available_capabilities` subtracts
+    #: `_IDENTITY_CORRECTION_CAPABILITIES`, which is what `capabilities.get` and
+    #: the MCP tool list read, and both handlers ask again through
+    #: `_identity_correction_plane()` because the HTTP transport routes by path
+    #: segment straight into `_HANDLERS` and consults neither. Both capabilities
+    #: are operator-only as well, so the flag is the *second* of two independent
+    #: gates rather than the only one.
+    relationship_identity_correction_enabled: bool = False
     goodnotes_self_improving_optimizer_enabled: bool = False
     goodnotes_rollout_stage: GoodNotesRolloutStage = GoodNotesRolloutStage.OBSERVE_ONLY
     remote_mcp_public_host: str = ""
@@ -584,6 +610,26 @@ class Settings(StrictModel):
                 f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED. There is no inference: "
                 "the entity plane's writes are not served by a process that does not "
                 "serve the plane"
+            )
+        if self.relationship_identity_correction_enabled and (
+            not self.relationship_intelligence_writes_enabled
+        ):
+            # The second half of operator §18's ordering, and it is checked
+            # against the *write* switch rather than the plane switch on
+            # purpose. Checking the plane switch alone would admit a process
+            # serving governed merges while refusing every ordinary entity
+            # write — a build where an operator may collapse two identities and
+            # may not correct a misspelled name. The write switch already
+            # requires the plane switch above, so this one line makes the whole
+            # chain transitive: identity correction is unavailable unless every
+            # lower gate is enabled.
+            raise SettingsError(
+                f"{ENV_PREFIX}RELATIONSHIP_IDENTITY_CORRECTION_ENABLED requires "
+                f"{ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED (which itself "
+                f"requires {ENV_PREFIX}RELATIONSHIP_INTELLIGENCE_ENABLED). There is no "
+                "inference: a governed merge rewrites the records the entity plane's "
+                "writes maintain, and a process that does not serve those writes does "
+                "not serve the operation that rewrites them"
             )
         if not self.redaction_enabled:
             raise SettingsError(

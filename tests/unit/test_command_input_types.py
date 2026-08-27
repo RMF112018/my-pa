@@ -30,6 +30,7 @@ import pytest
 from my_pa.application.commands import (
     DecideReviewCase,
     ListCommitments,
+    ListReviewCases,
     ListTasks,
     PrepareContext,
     SearchCommitments,
@@ -84,6 +85,11 @@ def test_decide_review_case_refuses_a_non_string_corrected_value() -> None:
             disposition=Disposition.CORRECT_AND_ACCEPT,
             corrected_value=NOT_A_STRING,
         )
+
+
+def test_list_review_cases_refuses_a_non_string_cursor() -> None:
+    with pytest.raises(InvalidRequestError):
+        ListReviewCases(after=NOT_A_STRING)
 
 
 def test_a_non_string_idempotency_key_is_refused_rather_than_accepted() -> None:

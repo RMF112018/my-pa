@@ -329,9 +329,12 @@ jobs:
     # Measured on run 31949638484 at head fc39292: the job-level 20-minute
     # timeout cancelled pytest at 20m17s while it was still executing, at 61%
     # of the suite. The expanded 991-test tier then passed locally at head
-    # 895c4ec in 44m24s. Allow fifty-five so checkout, install, and teardown sit
-    # outside an in-budget suite rather than pre-empting complete coverage.
-    timeout-minutes: 55
+    # 895c4ec in 44m24s. Fifty-five was sized for that. Combined Phase B plus
+    # GSQS at f7f31812 locally ran 1,528 tests in 71m02s; GitHub run
+    # 33003804651 then cancelled this job at 55m0s while pytest was still
+    # executing. Allow ninety so checkout, install, the 71-minute suite, and
+    # teardown sit inside the budget rather than pre-empting complete coverage.
+    timeout-minutes: 90
 
     services:
       postgres:

@@ -28,8 +28,8 @@ this one exists.
 
 **Stopping at `9c6b4a18ed72` emits the frozen eight and seven.** This is the
 whole argument for editing a merged migration: after the edit that revision
-emits what it emitted on the day it merged, with ninety-five capabilities and
-twenty-nine purposes now declared in the domain. If this reddens, the freeze has been undone
+emits what it emitted on the day it merged, with one hundred one capabilities and
+thirty-four purposes now declared in the domain. If this reddens, the freeze has been undone
 and every database at that revision has stopped agreeing with what the chain
 says it should hold.
 
@@ -259,7 +259,7 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # it, and this line is why a further one cannot arrive without it.
         "entities.unresolved_mentions",
         # The Relationship Memory plane. `f1c6b904a2d7` is the forward `ALTER`
-        # that admits the eight `relationship_memory.` names, and it travels in
+        # that admits the nine `relationship_memory.` names, and it travels in
         # the same revision as the tables rather than after them: a build that
         # could serve `relationship_memory.create` against a database whose
         # `capability_is_known` refuses the string would fail on the *audit*
@@ -300,6 +300,13 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "entities.restore",
         "entities.unresolved_mentions.resolve",
         "entities.update",
+        # Phase B's four. `b64e29a0f7c1` is the forward `ALTER` that admits all
+        # of them, and it is one revision for two work packages for the reason
+        # `823e23b6cc63` was one for three.
+        "entities.merge",
+        "entities.merge.preview",
+        "entities.proposals.create",
+        "relationship_memory.propose",
         # Connected-MCP B0 workflow. `c4b0a1d9e827` is the forward `ALTER`
         # that admits the pair on `capability_is_known`.
         "gsqs.start",
@@ -1046,6 +1053,16 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # trigger cannot silently disarm the other's.
             "entity_mutation_events_are_append_only",
             "entity_resolution_decisions_are_append_only",
+            # And `WP-RI-B-06`'s effect ledger, on a trigger function of its own
+            # for the same reason: dropping one plane's trigger must not silently
+            # disarm another's. The operations table beside it is deliberately
+            # *not* append-only -- it goes `in_progress` to `completed`, which is
+            # what makes a crashed apply legible rather than indistinguishable
+            # from a finished one.
+            "entity_identity_effects_are_append_only",
+            "relationship_write_requests_complete_once",
+            "relationship_write_requests_finish_in_transaction",
+            "relationship_write_request_evidence_is_append_only",
             "goodnotes_page_versions_are_immutable",
             "goodnotes_region_proposals_are_immutable",
             "goodnotes_source_snapshots_are_immutable",

@@ -402,9 +402,46 @@ EXPECTED_MODEL_FIELDS = {
             "observation_ids",
             "proposed_at",
             "proposed_by",
+            "method",
+            "method_version",
+            "dedupe_sha256",
+            "model_id",
+            "model_version",
+            "expected_target_version",
+            "review_case_id",
+            "accepted_record_type",
+            "accepted_record_id",
+            "accepted_record_version",
+            "invalidated_reason",
+            "superseded_at",
+            "superseded_by_proposal_id",
             "decided_by",
             "decided_at",
             "decision_reason",
+        }
+    ),
+    "my_pa.domain.relationship.governance.EntityProposalEvidenceLink": frozenset(
+        {
+            "proposal_id",
+            "principal_id",
+            "sequence",
+            "role",
+            "created_at",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+        }
+    ),
+    "my_pa.domain.relationship.proposal_payload.EntityProposalPayload": frozenset(
+        {
+            "kind",
+            "values",
+        }
+    ),
+    "my_pa.domain.relationship.proposal_payload.PayloadSchema": frozenset(
+        {
+            "required",
+            "optional",
         }
     ),
     "my_pa.domain.relationship.governance.EntityMergeRecord": frozenset(
@@ -584,21 +621,26 @@ EXPECTED_MODEL_FIELDS = {
             "memory_proposal_id",
             "principal_id",
             "subject_entity_id",
+            "expected_subject_version",
             "proposed_kind",
             "proposed_statement",
             "proposed_statement_sha256",
+            "dedupe_sha256",
             "state",
             "method",
             "method_version",
             "classification",
             "proposed_at",
             "structured_value",
+            "context_links",
             "model_id",
             "model_version",
             "review_case_id",
             "accepted_memory_id",
             "accepted_memory_version_id",
             "invalidated_reason",
+            "superseded_at",
+            "superseded_by_memory_proposal_id",
         }
     ),
     # No `statement` and no `risk_class`, and both absences are load-bearing.
@@ -617,6 +659,8 @@ EXPECTED_MODEL_FIELDS = {
             "proposal_state",
             "review_version",
             "latest_disposition",
+            "escalated",
+            "superseded_by_proposal_id",
             "accepted_memory_id",
             "accepted_memory_version_id",
         }
@@ -645,6 +689,78 @@ EXPECTED_MODEL_FIELDS = {
             "correction_reason",
             "proposal_id",
             "review_case_id",
+        }
+    ),
+    "my_pa.domain.relationship.identity_correction.IdentityConflict": frozenset(
+        {
+            "kind",
+            "family",
+            "record_id",
+        }
+    ),
+    "my_pa.domain.relationship.identity_correction.IdentityPreview": frozenset(
+        {
+            "preview_id",
+            "principal_id",
+            "operation_type",
+            "survivor_entity_id",
+            "expected_survivor_version",
+            "merged_away",
+            "preview_digest",
+            "conflict_digest",
+            "plan_digest",
+            "created_by",
+            "actor_class",
+            "created_at",
+            "expires_at",
+            "consumed_at",
+        }
+    ),
+    "my_pa.domain.relationship.identity_correction.IdentityOperation": frozenset(
+        {
+            "identity_operation_id",
+            "principal_id",
+            "operation_type",
+            "survivor_entity_id",
+            "merged_entity_ids",
+            "preview_id",
+            "preview_digest",
+            "idempotency_key",
+            "request_digest",
+            "performed_by",
+            "actor_class",
+            "correlation_id",
+            "audit_id",
+            "state",
+            "started_at",
+            "reason",
+            "receipt_id",
+            "completed_at",
+        }
+    ),
+    "my_pa.domain.relationship.identity_correction.IdentityEffectDraft": frozenset(
+        {
+            "family",
+            "record_id",
+            "kind",
+            "before_state",
+            "after_state",
+        }
+    ),
+    "my_pa.domain.relationship.identity_correction.IdentityEffect": frozenset(
+        {
+            "effect_id",
+            "identity_operation_id",
+            "principal_id",
+            "sequence",
+            "family",
+            "record_id",
+            "kind",
+            "before_state",
+            "after_state",
+            "before_sha256",
+            "after_sha256",
+            "recorded_at",
         }
     ),
 }
@@ -827,9 +943,49 @@ EXPECTED_TABLE_COLUMNS = {
             "observation_ids",
             "proposed_at",
             "proposed_by",
+            "method",
+            "method_version",
+            "dedupe_sha256",
+            "model_id",
+            "model_version",
+            "expected_target_version",
+            "review_case_id",
+            "accepted_record_type",
+            "accepted_record_id",
+            "accepted_record_version",
+            "invalidated_reason",
+            "superseded_at",
+            "superseded_by_proposal_id",
             "decided_by",
             "decided_at",
             "decision_reason",
+        }
+    ),
+    "entity_proposal_evidence_links": frozenset(
+        {
+            "proposal_id",
+            "sequence",
+            "principal_id",
+            "role",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+            "created_at",
+        }
+    ),
+    "entity_proposal_review_decisions": frozenset(
+        {
+            "decision_id",
+            "proposal_id",
+            "review_case_id",
+            "principal_id",
+            "sequence",
+            "disposition",
+            "reason",
+            "corrected_payload",
+            "correlation_id",
+            "audit_id",
+            "decided_at",
         }
     ),
     "entity_merge_records": frozenset(
@@ -1013,10 +1169,13 @@ EXPECTED_TABLE_COLUMNS = {
             "memory_proposal_id",
             "principal_id",
             "subject_entity_id",
+            "expected_subject_version",
             "proposed_kind",
             "proposed_statement",
             "proposed_statement_sha256",
+            "dedupe_sha256",
             "structured_value",
+            "context_links",
             "state",
             "method",
             "method_version",
@@ -1028,6 +1187,8 @@ EXPECTED_TABLE_COLUMNS = {
             "accepted_memory_id",
             "accepted_memory_version_id",
             "invalidated_reason",
+            "superseded_at",
+            "superseded_by_memory_proposal_id",
         }
     ),
     "relationship_memory_review_decisions": frozenset(
@@ -1039,6 +1200,8 @@ EXPECTED_TABLE_COLUMNS = {
             "sequence",
             "disposition",
             "corrected_statement",
+            "corrected_payload",
+            "reason",
             "correlation_id",
             "audit_id",
             "decided_at",
@@ -1057,6 +1220,45 @@ EXPECTED_TABLE_COLUMNS = {
             "memory_version_id",
             "aggregate_version",
             "lifecycle_state",
+        }
+    ),
+    "relationship_write_request_evidence": frozenset(
+        {
+            "principal_id",
+            "capability",
+            "request_id",
+            "sequence",
+            "role",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+        }
+    ),
+    "relationship_write_requests": frozenset(
+        {
+            "principal_id",
+            "capability",
+            "request_id",
+            "request_digest",
+            "result_family",
+            "result_id",
+            "result_secondary_id",
+            "result_version",
+            "result_state",
+            "result_subtype",
+            "result_requirement",
+            "result_disposition",
+            "result_assertion_id",
+            "result_classification",
+            "result_method",
+            "result_at",
+            "result_digest",
+            "result_count",
+            "result_created",
+            "receipt_id",
+            "audit_id",
+            "created_at",
+            "completed_at",
         }
     ),
     "relationship_memory_versions": frozenset(
@@ -1083,6 +1285,62 @@ EXPECTED_TABLE_COLUMNS = {
             "review_case_id",
             "idempotency_key",
             "correlation_id",
+        }
+    ),
+    "entity_identity_previews": frozenset(
+        {
+            "preview_id",
+            "principal_id",
+            "operation_type",
+            "survivor_entity_id",
+            "expected_survivor_version",
+            "merged_away",
+            "preview_digest",
+            "conflict_digest",
+            "plan_digest",
+            "created_by",
+            "actor_class",
+            "created_at",
+            "expires_at",
+            "consumed_at",
+        }
+    ),
+    "entity_identity_operations": frozenset(
+        {
+            "identity_operation_id",
+            "principal_id",
+            "operation_type",
+            "survivor_entity_id",
+            "merged_entity_ids",
+            "preview_id",
+            "preview_digest",
+            "idempotency_key",
+            "request_digest",
+            "reason",
+            "performed_by",
+            "actor_class",
+            "correlation_id",
+            "audit_id",
+            "receipt_id",
+            "state",
+            "started_at",
+            "completed_at",
+        }
+    ),
+    "entity_identity_effects": frozenset(
+        {
+            "effect_id",
+            "identity_operation_id",
+            "principal_id",
+            "sequence",
+            "record_family",
+            "record_id",
+            "effect_kind",
+            "before_state",
+            "after_state",
+            "before_sha256",
+            "after_sha256",
+            "recorded_at",
         }
     ),
 }
@@ -1118,8 +1376,11 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 43
-    assert len(actual_table_columns) == 37
+    assert len(actual_model_fields) == 51
+    # Forty-four after Phase B added the request-replay and replay-evidence
+    # ledgers. The figure makes the allow-list closed in both directions, so it
+    # moves with the declaration and never ahead of it.
+    assert len(actual_table_columns) == 44
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

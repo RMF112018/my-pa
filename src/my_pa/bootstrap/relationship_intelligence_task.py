@@ -6,12 +6,14 @@ not call any provider API, and sends no network traffic anywhere. It states
 which capabilities such a Task *would* be allowed, so the answer exists in the
 repository before anyone is in a position to grant it.
 
-**The profile is read-only, and that is the whole of it.** A Task may search,
+**This named Task profile is the standard read-only ceiling.** A Task may search,
 read, resolve, assemble a context card, and walk one entity's edges. It may not
 read the unresolved-mention queue, which the plane serves and this profile
 deliberately withholds — see `ALLOWED_CAPABILITIES`. It may not
-observe, propose, decide, or merge — those capabilities do not exist on any
-transport (`D-RI-21`), and if they did they would still be absent here.
+observe, propose, decide, or merge. Those capabilities now exist behind their
+own feature gates and immutable producer/reviewer/operator profiles, but remain
+absent from this standard profile. The named local and remote ceilings live in
+`relationship_intelligence_profiles`; declaring them activates no grant.
 Specification section 21.4 forbids a model creating a canonical person or
 merging identities autonomously, and `RI-AC-039` says the same; a profile that
 allowed a write would be the sentence in this repository that contradicted them.

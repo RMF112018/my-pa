@@ -450,7 +450,7 @@ def _execute_run(
         evidence_dir = output_dir / "stdio-eval"
         session = StdioEvalSession(
             command=serve_eval_mcp_command(
-                python=python or os.environ.get("PYTHON", "python3"),
+                python=python or os.environ.get("PYTHON") or "python3",
                 authorization=auth_path.resolve(),
                 evidence_dir=evidence_dir,
                 campaign_fixture=(campaign_dir / "campaign.json").resolve(),

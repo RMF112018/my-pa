@@ -299,9 +299,16 @@ CAPABILITY_PREFIX: Final = "relationship_memory."
 MEMORY_SQL_MODULES: Final = frozenset(
     {
         "infrastructure/persistence/relationship_memory.py",
+        "infrastructure/persistence/relationship_memory_proposals.py",
         "infrastructure/persistence/relationship_memory_review.py",
     }
 )
+
+#: The third arrived with `WP-RI-B-07` and is one insert wide. It could not have
+#: arrived earlier: this module asserts exact set equality over the modules above
+#: and could not admit a third until `Capability.RELATIONSHIP_MEMORY_PROPOSE`
+#: existed, which is why `RelationshipMemoryProposalService` shipped against a
+#: port with no implementor for two waves. The interlock worked.
 
 #: Every capability whose handler can read or write one of the eight memory
 #: tables. Compared for exact equality against the walk, so this is the sentence
@@ -319,10 +326,18 @@ DECLARED: Final = frozenset(
         Capability.ENTITIES_CONTEXT,
         Capability.REVIEW_LIST,
         Capability.REVIEW_DECIDE,
+        # `WP-RI-B-05`: the producer path, which is the only name on the plane's
+        # own prefix that cannot reach `relationship_memories`.
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        # `WP-RI-B-06`: the governed merge reads the memory plane to decide
+        # whether it may proceed, and writes nothing on it. Both are beyond the
+        # plane's own prefix and both carry a reason below.
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
     }
 )
 
-#: The three that are *not* `relationship_memory.*`, and what each one discloses
+#: The five that are *not* `relationship_memory.*`, and what each one discloses
 #: under a purpose issued for something else. This is the part of
 #: `RM-API-AC-002` that is a disclosure rather than a design, so each entry says
 #: the purpose, the rows and the fields rather than only the name.
@@ -360,11 +375,12 @@ BEYOND_THE_EIGHT: Final = {
         "purpose `review_disposition`, and it reads as well as writes. "
         "`review.decide` reads three of the eight "
         "(`relationship_memory_proposals`, `relationship_memory_review_decisions`, "
-        "`relationship_memory_proposal_evidence`) and writes five of the eight "
+        "`relationship_memory_proposal_evidence`) and writes seven of the eight "
         "(`relationship_memories`, `relationship_memory_versions`, "
-        "`relationship_memory_evidence_links`, "
-        "`relationship_memory_review_decisions`, `relationship_memory_proposals`). "
-        "**That five is a union over branches and no request writes it.** This "
+        "`relationship_memory_context_links`, `relationship_memory_evidence_links`, "
+        "`relationship_memory_review_decisions`, `relationship_memory_proposals`, "
+        "`relationship_memory_proposal_evidence`). "
+        "**That seven is a union over branches and no request writes it.** This "
         "string previously said the two non-promotion writes happen on every "
         "disposition; they do not, and claim 10 is what now says so. "
         "`review.decide` on `reject` writes two of the eight "
@@ -374,6 +390,38 @@ BEYOND_THE_EIGHT: Final = {
         "disposition to `None` and the proposal UPDATE is guarded on it. Bounded "
         "by what `_promotion_authority` can author and by the plane composition; "
         "`RM-API-AC-011` carries the promotion path."
+    ),
+    Capability.ENTITIES_MERGE_PREVIEW: (
+        "purpose `entity_identity_correction`, and it is operator-only. "
+        "`entities.merge.preview` reads three of the eight "
+        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`) and writes "
+        "none of the eight: `IdentityCorrectionService` asks the memory port "
+        "which affected input Entities are a canonical memory subject, a proposal "
+        "subject, or the Entity target of a current canonical version's context "
+        "link, because `WP-08` owns the Relationship Memory side of an identity "
+        "change and this phase refuses rather than guesses. The privacy-safe "
+        "answer is only the subset and count of affected input Entity identifiers: "
+        "`subject_entity_ids` returns the subset, and merge analysis derives its "
+        "aggregate count. Neither returns a memory identifier, per-Entity memory "
+        "count, or statement. "
+        "Bounded by the operator gate, by "
+        "`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, and by the plane "
+        "composition."
+    ),
+    Capability.ENTITIES_MERGE: (
+        "purpose `entity_identity_correction`, and it is operator-only. "
+        "`entities.merge` reads three of the eight "
+        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`) and writes "
+        "none of the eight, for the reason the preview beside it reads them: apply "
+        "recomputes the same privacy-safe affected-input subset and refuses when "
+        "any participant is a canonical memory subject, a proposal subject, or "
+        "the Entity target of a current canonical version's context link. It "
+        "returns no memory identifier or per-Entity memory count. **A governed "
+        "merge writes no memory row at all**, which is this phase's boundary "
+        "rather than a gap in it -- `WP-08` owns Relationship Memory origin-subject "
+        "and context redistribution."
     ),
 }
 
@@ -393,6 +441,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(
             {
                 "relationship_memories",
+                "relationship_memory_context_links",
                 "relationship_memory_submissions",
                 "relationship_memory_versions",
             }
@@ -429,6 +478,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(
             {
                 "relationship_memories",
+                "relationship_memory_context_links",
                 "relationship_memory_submissions",
                 "relationship_memory_versions",
             }
@@ -446,6 +496,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(
             {
                 "relationship_memories",
+                "relationship_memory_context_links",
                 "relationship_memory_submissions",
                 "relationship_memory_versions",
             }
@@ -458,6 +509,48 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
                 "relationship_memory_versions",
             }
         ),
+    ),
+    # `WP-RI-B-05`. Two writes and two reads. The reads arbitrate an
+    # open-equivalent retry and merge its exact evidence; neither exposes a
+    # review decision or canonical memory to the producer.
+    Capability.RELATIONSHIP_MEMORY_PROPOSE: (
+        frozenset(
+            {
+                "relationship_memory_proposal_evidence",
+                "relationship_memory_proposals",
+            }
+        ),
+        frozenset(
+            {
+                "relationship_memory_proposal_evidence",
+                "relationship_memory_proposals",
+            }
+        ),
+    ),
+    # `WP-RI-B-06`. Both halves of the governed merge read the same three tables to
+    # decide whether they may proceed and write neither. The empty write set is
+    # the Phase B boundary: a merge naming a memory subject, proposal subject or
+    # current canonical Entity context target is refused, because `WP-08` owns
+    # the redistribution and this phase will not guess it.
+    Capability.ENTITIES_MERGE_PREVIEW: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
+        frozenset(),
+    ),
+    Capability.ENTITIES_MERGE: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
+        frozenset(),
     ),
     Capability.RELATIONSHIP_MEMORY_GET: (
         frozenset(
@@ -507,7 +600,9 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         frozenset(
             {
                 "relationship_memories",
+                "relationship_memory_context_links",
                 "relationship_memory_evidence_links",
+                "relationship_memory_proposal_evidence",
                 "relationship_memory_proposals",
                 "relationship_memory_review_decisions",
                 "relationship_memory_versions",
@@ -550,6 +645,14 @@ UNCLASSIFIED_TABLE_MENTIONS: Final[dict[tuple[str, str, str], str]] = {
         "summaries_for_context",
         "current = relationship_memory_versions.alias('current')",
     ): "the same alias, for the context card",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "subject_entity_ids",
+        "proposal_context = func.jsonb_array_elements(relationship_memory_proposals.c."
+        "context_links).table_valued(column('value', relationship_memory_proposals.c."
+        "context_links.type)).lateral()",
+    ): "the lateral JSONB row source is held in a local and joined into the `select` "
+    "below it; this assignment only derives rows from the proposal table and cannot write it",
 }
 
 #: The enums whose members the walk splits a capability's writes by.
@@ -560,7 +663,14 @@ UNCLASSIFIED_TABLE_MENTIONS: Final[dict[tuple[str, str, str], str]] = {
 #: underneath it is the enum's own — the members come off the `class Disposition`
 #: body, not off a list here, so a ninth disposition joins the split by existing
 #: and a disposition that no literal happens to mention is still one of them.
-DECLARED_BRANCH_AXES: Final = frozenset({"Disposition"})
+#: Two axes since `WP-RI-B-05`. `EntityStatus` joined when
+#: `relationship_memory.propose` landed: `RelationshipMemoryProposalService.propose`
+#: refuses a subject that has been merged away, so that one member of the status
+#: vocabulary writes nothing while the other four write the producer's two
+#: tables. It is a real split rather than an artefact of the scan -- the whole
+#: point of that refusal is that a candidate raised about a historical identity
+#: is not silently rebound onto the current person.
+DECLARED_BRANCH_AXES: Final = frozenset({"Disposition", "EntityStatus"})
 
 #: Per axis, per capability, per member: the memory tables that member's branch
 #: can write. Only the capabilities whose write set actually *varies* by member
@@ -570,7 +680,7 @@ DECLARED_BRANCH_AXES: Final = frozenset({"Disposition"})
 #:
 #: This is the itinerary `DECLARED_TABLE_REACH` deliberately is not. The union of
 #: the rows below is that declaration's write set, and the difference between
-#: them is exactly the false sentence this claim exists to have caught: five
+#: them is exactly the false sentence this claim exists to have caught: six
 #: tables is what `review.decide` can write, one table is what `mark_unresolved`
 #: does write, and the row is now required to say both.
 DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str]]]]] = {
@@ -579,6 +689,7 @@ DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str
             "accept": frozenset(
                 {
                     "relationship_memories",
+                    "relationship_memory_context_links",
                     "relationship_memory_evidence_links",
                     "relationship_memory_proposals",
                     "relationship_memory_review_decisions",
@@ -588,6 +699,7 @@ DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str
             "correct_and_accept": frozenset(
                 {
                     "relationship_memories",
+                    "relationship_memory_context_links",
                     "relationship_memory_evidence_links",
                     "relationship_memory_proposals",
                     "relationship_memory_review_decisions",
@@ -601,10 +713,48 @@ DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str
                 {"relationship_memory_proposals", "relationship_memory_review_decisions"}
             ),
             "mark_unresolved": frozenset({"relationship_memory_review_decisions"}),
-            "reprocess": frozenset(),
-            "escalate": frozenset(),
+            # `WP-RI-B-05`, Manager ruling R-8. The two tables `reject` writes,
+            # and the same two acts — append the decision, stamp the proposal —
+            # reaching no promotion table, which is "creates no canonical record"
+            # measured rather than asserted. What the two branches do *not* share
+            # is the state stamped and the reason recorded, and no table set can
+            # express that: `REV::test_an_invalidation_is_not_a_rejection_and_
+            # leaves_no_negative_finding` is what holds it.
+            "invalidate": frozenset(
+                {"relationship_memory_proposals", "relationship_memory_review_decisions"}
+            ),
+            "reprocess": frozenset(
+                {
+                    "relationship_memory_proposal_evidence",
+                    "relationship_memory_proposals",
+                    "relationship_memory_review_decisions",
+                }
+            ),
+            "escalate": frozenset({"relationship_memory_review_decisions"}),
         }
-    }
+    },
+    "EntityStatus": {
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: {
+            # Four statuses write the producer's two tables and one writes
+            # nothing. `merged_redirect` is refused rather than followed: a
+            # candidate raised about a historical identity, rebound onto the
+            # entity that identity now redirects to, would put a different
+            # statement in front of the reviewer than the evidence supports.
+            "active": frozenset(
+                {"relationship_memory_proposal_evidence", "relationship_memory_proposals"}
+            ),
+            "inactive": frozenset(
+                {"relationship_memory_proposal_evidence", "relationship_memory_proposals"}
+            ),
+            "historical": frozenset(
+                {"relationship_memory_proposal_evidence", "relationship_memory_proposals"}
+            ),
+            "archived": frozenset(
+                {"relationship_memory_proposal_evidence", "relationship_memory_proposals"}
+            ),
+            "merged_redirect": frozenset(),
+        }
+    },
 }
 
 #: Guards that name the branch axis and that claim 10's evaluation cannot read.
@@ -616,16 +766,54 @@ DECLARED_BRANCH_WRITES: Final[dict[str, dict[Capability, dict[str, frozenset[str
 #: guards inside a function that reaches a memory row are collected; the capture
 #: and GoodNotes review planes branch on the same enum and reach none of the
 #: eight, so their guards are not this row's business.
-UNREADABLE_BRANCH_GUARDS: Final[dict[tuple[str, str, str], str]] = {
-    (
-        "my_pa.infrastructure.persistence.relationship_memory_review",
-        "decide_relationship_memory_review",
-        "any((Disposition(row.disposition) in _ACCEPTING for row in decisions))",
-    ): "the terminal-acceptance test, and the one place `_ACCEPTING` is asked about a "
-    "disposition that is *not* the request's — it reads the dispositions already on "
-    "the decision chain. Reading it against the requested member would be wrong, not "
-    "merely imprecise; it raises on the true branch, so leaving it unread costs the "
-    "split nothing",
+#:
+#: **Keyed by axis since `WP-RI-B-07`, and the nesting is not bookkeeping.** A
+#: guard is unreadable *for one axis*: `any(Disposition(...) in _ACCEPTING ...)`
+#: is unreadable when the split is asking about a `Disposition` member and is not
+#: a guard on `EntityStatus` at all. One flat dict compared against every axis
+#: would have declared it on both and so declared, for the second axis, an escape
+#: that does not exist there — which is the same class of false claim this module
+#: exists to prevent, made about itself.
+#:
+#: `EntityStatus` has one deliberately unreadable guard: the persistence-layer
+#: merged-subject safety check compares the stored string value with the enum
+#: member's value. The split conservatively unions both arms; the application
+#: service's readable status guard and its unit coverage hold the actual refusal.
+UNREADABLE_BRANCH_GUARDS: Final[dict[str, dict[tuple[str, str, str], str]]] = {
+    "Disposition": {
+        (
+            "my_pa.infrastructure.persistence.relationship_memory_review",
+            "decide_relationship_memory_review",
+            "any((Disposition(row.disposition) in _ACCEPTING for row in decisions))",
+        ): "the terminal-acceptance test, and the one place `_ACCEPTING` is asked about a "
+        "disposition that is *not* the request's — it reads the dispositions already on "
+        "the decision chain. Reading it against the requested member would be wrong, not "
+        "merely imprecise; it raises on the true branch, so leaving it unread costs the "
+        "split nothing",
+        (
+            "my_pa.infrastructure.persistence.relationship_memory_review",
+            "decide_relationship_memory_review",
+            "request.disposition in _ACCEPTING and escalated and (not has_operator_authority)",
+        ): "the accepting-after-escalation authority guard combines the requested "
+        "Disposition with stored escalation state; the split conservatively unions it",
+        (
+            "my_pa.infrastructure.persistence.relationship_memory_review",
+            "decide_relationship_memory_review",
+            "request.disposition is Disposition.ESCALATE and escalated",
+        ): "the repeated-escalation guard combines the requested Disposition with "
+        "stored escalation state; the split conservatively unions it",
+    },
+    "EntityStatus": {
+        (
+            "my_pa.infrastructure.persistence.relationship_memory_proposals",
+            "record_proposal",
+            "subject.status == EntityStatus.MERGED_REDIRECT.value",
+        ): "the persistence backstop compares a stored string with the enum member's "
+        "value, a guard shape the branch evaluator cannot reduce. Conservatively "
+        "unioning both arms does not weaken the runtime refusal; the application-layer "
+        "EntityStatus guard supplies the readable branch split and the repository guard "
+        "remains a fail-closed defense against bypass",
+    },
 }
 
 
@@ -1337,12 +1525,16 @@ def test_the_walk_finds_a_registry_a_population_and_a_path() -> None:
         "table directly. The callers did not resolve, so claim 3 is measuring the "
         "persistence layer and calling it the capability surface"
     )
-    eight = frozenset(
+    nine = frozenset(
         capability for capability in Capability if capability.value.startswith(CAPABILITY_PREFIX)
     )
-    assert len(eight) == 8, f"the plane now publishes {len(eight)} capabilities of its own, not 8"
-    assert eight <= reaching_capabilities(), (
-        f"{sorted(capability.value for capability in eight - reaching_capabilities())} are "
+    # Nine since `WP-RI-B-05`. The count is asserted rather than derived on
+    # purpose -- it is what tells a reader the prefix scan found the plane and
+    # not a substring -- and it moved when `relationship_memory.propose` was
+    # published, which is a change to the plane and not to this scan.
+    assert len(nine) == 9, f"the plane now publishes {len(nine)} capabilities of its own, not 9"
+    assert nine <= reaching_capabilities(), (
+        f"{sorted(capability.value for capability in nine - reaching_capabilities())} are "
         "`relationship_memory.*` capabilities the walk did not find reaching a memory row. "
         "That is not a finding about the code; it is this walk failing"
     )
@@ -2171,16 +2363,31 @@ def test_the_branch_split_reads_every_guard_it_meets() -> None:
         unreadable = frozenset[Guard]().union(
             *(_branch_scan(axis, name)[1] for name, _value in _enum_members(axis) or ())
         )
-        assert unreadable == frozenset(UNREADABLE_BRANCH_GUARDS), (
-            f"{sorted(unreadable ^ frozenset(UNREADABLE_BRANCH_GUARDS))} guards a "
+        declared_unreadable = frozenset(UNREADABLE_BRANCH_GUARDS.get(axis, {}))
+        assert unreadable == declared_unreadable, (
+            f"{sorted(unreadable ^ declared_unreadable)} guards a "
             f"memory-reaching path on {axis} in a shape this split cannot read, so its "
             "branches are unioned and the per-branch claim over it is a bound wearing an "
             "itinerary's words"
         )
+    # **Scoped to the functions the walk actually reaches**, which is the scope
+    # this module states for every other rule about branches: "only guards inside
+    # a function that reaches a memory row are collected". It was unscoped while
+    # `Disposition` was the only axis, and that cost nothing because the memory
+    # review plane is the only place a `Disposition` member is written down.
+    # `EntityStatus` is not like that: `EntityStatus.ACTIVE` and
+    # `EntityStatus.ARCHIVED` are handed to frozen *record constructors* all over
+    # the entity plane -- `Entity(...)`, `_Outcome(...)` -- in functions that
+    # reach no memory table at all. Reporting those would be this rule finding a
+    # true fact about a call site and drawing a false conclusion about a branch
+    # split that never runs there.
+    reaching = {(module, enclosing) for module, enclosing, _name in reaching_nodes()}
     handed_on = {
-        (_module_name(path), ast.unparse(call))
-        for path, tree in _sources()
-        for call in ast.walk(tree)
+        (module, ast.unparse(call))
+        for node, (path, _enclosing, function) in _nodes().items()
+        for module in [_module_name(path)]
+        if (module, node[1]) in reaching or node in reaching_nodes()
+        for call in ast.walk(function)
         if isinstance(call, ast.Call)
         for argument in [*call.args, *(keyword.value for keyword in call.keywords)]
         if isinstance(argument, ast.Attribute)
@@ -2188,9 +2395,10 @@ def test_the_branch_split_reads_every_guard_it_meets() -> None:
         and argument.value.id in DECLARED_BRANCH_AXES
     }
     assert not handed_on, (
-        f"{sorted(handed_on)} passes a branch-axis member as an argument. The split "
-        "assumes the member a callee's guards ask about is the one the capability was "
-        "asked about, and a member handed in at a call site breaks that"
+        f"{sorted(handed_on)} passes a branch-axis member as an argument from a "
+        "function that reaches a memory row. The split assumes the member a callee's "
+        "guards ask about is the one the capability was asked about, and a member "
+        "handed in at a call site breaks that"
     )
 
 
@@ -2720,9 +2928,18 @@ def test_the_port_crossings_that_reach_a_memory_row_are_the_two_planes() -> None
     rows through a port that has nothing to do with memory in its name.
     """
     crossings = _memory_reaching_port_methods()
-    assert set(crossings) == {"RelationshipMemoryRepository", "ReviewRepository"}, (
-        f"the ports reaching a memory row are now {sorted(crossings)}. A third one is a "
+    assert set(crossings) == {
+        "RelationshipMemoryProposalRepository",
+        "RelationshipMemoryRepository",
+        "ReviewRepository",
+    }, (
+        f"the ports reaching a memory row are now {sorted(crossings)}. A fourth one is a "
         "new way for a capability to reach memory without naming it"
+    )
+    assert crossings["RelationshipMemoryProposalRepository"] == frozenset({"record_proposal"}), (
+        "the producer's crossing is now "
+        f"{sorted(crossings['RelationshipMemoryProposalRepository'])}; the whole claim about "
+        "that port is that it has exactly one method and a producer can call nothing else"
     )
     assert crossings["ReviewRepository"] == frozenset({"cases", "decide"}), (
         f"the review-plane crossings are now {sorted(crossings['ReviewRepository'])}; "

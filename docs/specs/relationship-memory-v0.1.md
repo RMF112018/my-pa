@@ -163,7 +163,7 @@ Entity and the repository proves ownership of it by reading the entity tables,
 so serving memories without the plane that owns their subjects would be serving
 writes it cannot validate.
 
-A build without the plane withholds all eight `relationship_memory.` names from `capabilities.get` and
+A build without the plane withholds all nine `relationship_memory.` names from `capabilities.get` and
 from the MCP tool list, and every handler refuses `unsupported` as a floor under
 that — the HTTP transport routes by path segment and consults neither list.
 

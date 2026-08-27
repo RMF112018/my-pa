@@ -1195,6 +1195,30 @@ def test_a_redirect_points_at_the_survivor(migrated_engine: Engine) -> None:
     assert merged.superseded_by_entity_id == ALICE
 
 
+def test_a_redirect_with_a_stale_expected_version_changes_nothing(
+    migrated_engine: Engine,
+) -> None:
+    """The redirect UPDATE itself is a compare-and-set, not an earlier read."""
+    with migrated_engine.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        repository.create(PRINCIPAL_A, an_entity(ALICE, PRINCIPAL_A))
+        repository.create(PRINCIPAL_A, an_entity(BOB, PRINCIPAL_A, "Bob Synthetic"))
+        with pytest.raises(UnknownScopeError):
+            repository.redirect_entity(
+                PRINCIPAL_A,
+                BOB,
+                ALICE,
+                expected_version=0,
+            )
+
+    with migrated_engine.connect() as connection:
+        source = SqlEntityRepository(connection).get(PRINCIPAL_A, BOB)
+    assert source is not None
+    assert source.status is EntityStatus.ACTIVE
+    assert source.superseded_by_entity_id is None
+    assert source.version == 1
+
+
 def test_a_redirect_cycle_is_refused(migrated_engine: Engine) -> None:
     """Merging back the other way would make each pointer arrive at the other.
 

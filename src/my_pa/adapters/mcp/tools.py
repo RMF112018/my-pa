@@ -54,6 +54,7 @@ from typing import Any, Final, Union, get_args, get_origin, get_type_hints
 from mcp.types import Tool, ToolAnnotations
 
 from my_pa.adapters.normalization import PAYLOAD_KEY
+from my_pa.adapters.remote_request import is_server_replay_capability
 from my_pa.application.commands import Command
 from my_pa.contracts.v1.envelope import RequestMetadata
 from my_pa.domain.identity.operation import (
@@ -270,6 +271,7 @@ def _tools() -> tuple[Tool, ...]:
             annotations=ToolAnnotations(
                 read_only_hint=not is_write_capability(capability),
                 destructive_hint=is_destructive_capability(capability),
+                idempotent_hint=is_server_replay_capability(capability),
                 open_world_hint=False,
             ),
         )

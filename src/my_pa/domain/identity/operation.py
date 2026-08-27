@@ -397,7 +397,7 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
-    # The relationship-intelligence entity plane. Twenty-eight `entities.` names
+    # The relationship-intelligence entity plane. Thirty-one `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
     # WP-RI-A-02's twelve, WP-RI-A-03's seven and WP-RI-A-04's three.
@@ -569,6 +569,41 @@ class Capability(StrEnum):
     ENTITIES_OBSERVE = "entities.observe"
     ENTITIES_UNRESOLVED_MENTIONS_RESOLVE = "entities.unresolved_mentions.resolve"
 
+    #: Phase B's three additions to this plane, and they divide into two very
+    #: different authorities that happen to share a name prefix.
+    #:
+    #: `entities.proposals.create` is the *producer's* whole write surface. It
+    #: asks for a mutation and performs none, which is why it is not operator-only
+    #: and why it carries a purpose of its own rather than `entity_authoring`: a
+    #: rule, a source worker or a local model may hold it, and holding it must
+    #: not amount to holding the eighteen writes above. Operator §16 lists it
+    #: among the capabilities a producer client may have, beside
+    #: `entities.observe` and `review.list`, and beside no disposition at all.
+    #:
+    #: `entities.merge.preview` and `entities.merge` are **operator-only**, and
+    #: they are the first knowledge-plane members of `_OPERATOR_ONLY` — every
+    #: other member is source enrollment or a native-host command. The argument
+    #: that kept the capture, review and memory planes out of that set is the
+    #: one that puts these two in: `_OPERATOR_ONLY` asks whether a capability
+    #: *widens the scope a later request is evaluated against*. Deciding a review
+    #: promotes the Principal's own proposal about the Principal's own capture
+    #: and widens nothing. A merge collapses two identities into one, and every
+    #: alias, identifier, assignment, edge, observation and memory that named the
+    #: merged-away entity is thereafter reached through the survivor — so a grant
+    #: issued before the merge reaches records it did not reach before. That is
+    #: the widening `sources.enroll` is here for, arriving on the knowledge
+    #: plane for the first time.
+    #:
+    #: There is deliberately no `entities.identity_history`. The frozen MCP
+    #: contract assigns it to WP-02 and Phase B does not implement later-WP
+    #: surface, so a governed merge can be performed and its lineage cannot be
+    #: read back over MCP. That is a carried gap and it is recorded here rather
+    #: than closed quietly: `EntityGovernanceService.merge_lineage` exists in the
+    #: application layer with no capability publishing it.
+    ENTITIES_PROPOSALS_CREATE = "entities.proposals.create"
+    ENTITIES_MERGE_PREVIEW = "entities.merge.preview"
+    ENTITIES_MERGE = "entities.merge"
+
     # The Relationship Memory plane: durable, entity-bound knowledge the user
     # meant to keep. **A family of its own rather than an `entities.update`**,
     # and the naming is a policy decision rather than a style one. These
@@ -599,6 +634,18 @@ class Capability(StrEnum):
     RELATIONSHIP_MEMORY_REVISE = "relationship_memory.revise"
     RELATIONSHIP_MEMORY_ARCHIVE = "relationship_memory.archive"
     RELATIONSHIP_MEMORY_RESTORE = "relationship_memory.restore"
+
+    #: The ninth, and it is the producer's and not the user's. Operator §12
+    #: keeps `relationship_memory.create` for a person saying "remember this"
+    #: and routes everything a rule, a source or a local model derived through
+    #: here, where it lands as a candidate awaiting Review and never as an
+    #: active memory. Not operator-only, on the argument the eight above are
+    #: not: it writes a request about the acting Principal's own subject and
+    #: grants nothing. The separation that matters for it is the *purpose*, not
+    #: the operator flag — a producer holding this must not thereby hold
+    #: `relationship_memory.create`, and `_PERMITTED_PURPOSES` is where that is
+    #: decided.
+    RELATIONSHIP_MEMORY_PROPOSE = "relationship_memory.propose"
 
 
 class NativeSourceCapability(StrEnum):
@@ -650,9 +697,33 @@ type AuthorizedCapability = Capability | NativeSourceCapability
 #: does not already return. Restricting the *explanation* of a record while
 #: leaving the record itself readable would tell a caller that understanding
 #: what it is looking at is more privileged than looking at it.
+#:
+#: **`entities.merge.preview` and `entities.merge` are the first knowledge-plane
+#: members, and the paragraphs above are the reason rather than an exception to
+#: it.** Every argument that kept capture, review, continuity, documents, tasks,
+#: commitments, entities and Relationship Memory out of this set turns on one
+#: question: does the capability *widen the scope a later request is evaluated
+#: against*? A capture creates content the Principal already owns. A review
+#: disposition promotes the Principal's own proposal. A merge does something
+#: neither does — after it, every alias, identifier, assignment, edge,
+#: observation, proposal, review case and memory that named a merged-away entity
+#: is reached through the survivor, so a grant issued before the merge returns
+#: records it did not return before. That is the same property `sources.enroll`
+#: has, and operator §24 states the conclusion independently: neither
+#: `relationship_standard`, nor `relationship_reviewer` merely because a reviewer
+#: can decide proposals, nor `relationship_producer`, nor an ordinary ChatLLM may
+#: hold them.
+#:
+#: The preview is here beside the apply and not left out as "only a read". It
+#: reads the exact identities of two people and the whole affected world of a
+#: proposed merge, which is the disclosure the apply's authority exists to
+#: protect; an operator boundary that admitted the inspection and refused only
+#: the act would be a boundary on the least sensitive half.
 _OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
     {
         Capability.SOURCES_ENROLL,
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
         NativeSourceCapability.CONFIGURE,
         NativeSourceCapability.PREFLIGHT,
         NativeSourceCapability.SYNC,
@@ -905,6 +976,18 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # reachable by whichever grant a caller happened to hold.
         Capability.ENTITIES_OBSERVE: frozenset({Purpose.ENTITY_OBSERVATION_INGEST}),
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: frozenset({Purpose.ENTITY_AUTHORING}),
+        # One purpose each, and none of the three reuses `entity_authoring`.
+        # `entity_proposal` is the producer's, and the pairing is what makes
+        # operator §16's "a producer may not self-promote" a property of the
+        # grant: a client granted this purpose can invoke exactly one capability
+        # with it, and that capability writes a request.
+        Capability.ENTITIES_PROPOSALS_CREATE: frozenset({Purpose.ENTITY_PROPOSAL}),
+        # Both identity-correction capabilities take the same purpose and only
+        # that purpose. The coupling is deliberate; `purpose.py` argues it, and
+        # `_WRITE_CAPABILITIES` below records the persistence behaviour that
+        # makes the preview a write.
+        Capability.ENTITIES_MERGE_PREVIEW: frozenset({Purpose.ENTITY_IDENTITY_CORRECTION}),
+        Capability.ENTITIES_MERGE: frozenset({Purpose.ENTITY_IDENTITY_CORRECTION}),
         # The Relationship Memory pair, and neither is a reuse. `D-91`'s test
         # asks whether reuse would widen the grant, and here it plainly would in
         # both directions: `entity_read` is the identity plane — aliases,
@@ -936,6 +1019,10 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.RELATIONSHIP_MEMORY_LIST: frozenset({Purpose.RELATIONSHIP_MEMORY_READ}),
         Capability.RELATIONSHIP_MEMORY_SEARCH: frozenset({Purpose.RELATIONSHIP_MEMORY_READ}),
         Capability.RELATIONSHIP_MEMORY_HISTORY: frozenset({Purpose.RELATIONSHIP_MEMORY_READ}),
+        # The producer path, mapped to the producer purpose and to nothing else.
+        # A grant issued so a rule can raise candidates reaches this capability
+        # and neither `relationship_memory.create` nor any of the four reads.
+        Capability.RELATIONSHIP_MEMORY_PROPOSE: frozenset({Purpose.RELATIONSHIP_MEMORY_PROPOSAL}),
         NativeSourceCapability.DISCOVER: frozenset({Purpose.SOURCE_INSPECTION}),
         NativeSourceCapability.CONFIGURE: frozenset({Purpose.BOUNDED_ENROLLMENT}),
         NativeSourceCapability.PREFLIGHT: frozenset({Purpose.SECURITY_VALIDATION}),
@@ -1001,6 +1088,29 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # Phase B's four, each classified from what it actually persists rather
+        # than from what it is called (operator §25).
+        #
+        # `entities.proposals.create` inserts a row into
+        # `knowledge.entity_proposals` (and its evidence links) through
+        # `EntityGovernanceService.propose`. It is a write of a *request* and not
+        # of canonical fact, and it is still a write.
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        # `relationship_memory.propose` inserts a candidate and its evidence
+        # rows. Same shape, other plane.
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        # **`entities.merge.preview` is a write, and this is the one people will
+        # want to argue with.** It mutates no canonical record — that is what
+        # makes it additive below — but it INSERTs a durable row into
+        # `knowledge.entity_identity_previews` carrying a preview digest, a
+        # conflict digest, an expiry and a consumption state, and
+        # `entities.merge` later UPDATEs that row's `consumed_at`. A control row
+        # a second request reads and consumes is product-owned state, so calling
+        # this a read would be an annotation that contradicts the transaction.
+        # `tasks.bulk_preview` is the established precedent and is here for the
+        # same reason.
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
     }
 )
 
@@ -1028,6 +1138,20 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_ASSIGNMENTS_CREATE,
         Capability.ENTITIES_RELATIONSHIPS_CREATE,
         Capability.ENTITIES_OBSERVE,
+        # Three of Phase B's four add and never change. The two producer paths
+        # only insert: an open-equivalent repeat of `entities.proposals.create`
+        # returns the proposal that is already open and writes nothing, and
+        # `relationship_memory.propose` cannot reach an existing record at all.
+        Capability.ENTITIES_PROPOSALS_CREATE,
+        Capability.RELATIONSHIP_MEMORY_PROPOSE,
+        # `entities.merge.preview` creates a control row and mutates no
+        # canonical record — proved rather than asserted by the preview refusal
+        # tests, which assert `entities`, `entity_aliases` and their neighbours
+        # are untouched after one.
+        Capability.ENTITIES_MERGE_PREVIEW,
+        # `entities.merge` is deliberately absent: it redirects entities,
+        # reparents and coalesces children, supersedes self-edges and invalidates
+        # dependent proposals. It is the destructive half of this plane.
     }
 )
 

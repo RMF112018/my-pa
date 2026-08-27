@@ -14,6 +14,11 @@ begins as proposals." Section 21.4 forbids a model creating a canonical person
 or merging identities. So nothing here applies itself: a proposal carries the
 mutation it wants, the evidence for it, and what would have to happen before it
 could be accepted -- and a decision is a separate act with an actor attached.
+The mutation it wants is checked against its kind's schema in
+`domain.relationship.proposal_payload`, which is also where the fields a
+proposal may never carry are named; what would have to happen is derived from
+the kind by `requirement_for` and is never a column, so nothing can propose
+itself into a lower requirement.
 
 **A merge record is what an accepted merge left behind.** Section 15.3 requires
 a merge to name the retained identifier, preserve prior ones as lineage, and
@@ -44,14 +49,26 @@ from my_pa.domain.common.identifiers import (
     validate_identifier,
 )
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.relationship.proposal_payload import (
+    EntityProposalKind,
+    EntityProposalPayload,
+)
+from my_pa.domain.relationship.proposal_validation import ResolutionDisposition
 
 __all__ = [
+    "ACCEPTED_PROPOSAL_STATES",
+    "DEFAULT_MUTATION_ACTOR_CLASS",
+    "DEFAULT_MUTATION_AUTHORITY",
     "EDGE_WHITESPACE",
     "ENTITY_CHANGE_REASON_LIMIT",
+    "IDENTITY_CORRECTION_PROPOSAL_KINDS",
     "MENTION_DISPLAY_NAME_LIMIT",
     "NEGATIVE_IDENTITY_EVIDENCE_ROLE",
     "OBSERVED_VALUE_LIMIT",
+    "OPEN_EQUIVALENT_PROPOSAL_STATES",
     "PRODUCT_OWNED_CAPTURE_SOURCE_ID",
+    "PROPOSAL_METHOD_VERSION_LIMIT",
+    "UNDECIDED_PROPOSAL_STATES",
     "ActorClass",
     "EntityFactEvidenceLink",
     "EntityGovernanceError",
@@ -60,7 +77,10 @@ __all__ = [
     "EntityMutationEvent",
     "EntityObservation",
     "EntityProposal",
+    "EntityProposalEvidenceLink",
     "EntityProposalKind",
+    "EntityProposalMethod",
+    "EntityProposalPayload",
     "EntityProposalState",
     "EntityResolutionDecision",
     "EvidenceRole",
@@ -76,7 +96,9 @@ __all__ = [
     "ReviewRequirement",
     "StaleResolutionVersionError",
     "capture_origin_triple",
+    "initial_state_for",
     "origin_of",
+    "requirement_for",
 ]
 
 #: How long a disclosed mention name may be. Stated here and repeated as a CHECK
@@ -406,27 +428,6 @@ class EvidenceRole(StrEnum):
 NEGATIVE_IDENTITY_EVIDENCE_ROLE: EvidenceRole = EvidenceRole.COUNTEREVIDENCE
 
 
-class ResolutionDisposition(StrEnum):
-    """What was decided about one observation.
-
-    Five outcomes, and three of them are refusals. That ratio is the design:
-    section 15.2 requires an ambiguous mention to remain unresolved rather than
-    be forced into the nearest person, so the vocabulary has to make *not*
-    resolving an ordinary recorded decision rather than an absence of one.
-
-    DEFER and REJECT differ in what they say about the future: a deferred
-    observation is expected to be decidable later, and a rejected one has been
-    decided -- it refers to nothing this plane holds. QUARANTINE is the third
-    refusal and is about the observation rather than the match.
-    """
-
-    LINK_EXISTING = "link_existing"
-    CREATE_NEW = "create_new"
-    REJECT = "reject"
-    DEFER = "defer"
-    QUARANTINE = "quarantine"
-
-
 class ActorClass(StrEnum):
     """What class of actor performed one recorded act.
 
@@ -443,20 +444,22 @@ class ActorClass(StrEnum):
     SYSTEM_DETERMINISTIC = "system_deterministic"
 
 
-class EntityProposalKind(StrEnum):
-    """The mutations a proposal may ask for.
-
-    Every one of them is a mutation this plane can already perform through
-    `EntitiesRepository`. A proposal kind with no corresponding write would be a
-    request nothing could ever accept.
-    """
-
-    CREATE_ENTITY = "create_entity"
-    BIND_IDENTIFIER = "bind_identifier"
-    RECORD_ALIAS = "record_alias"
-    RECORD_ASSIGNMENT = "record_assignment"
-    RECORD_RELATIONSHIP = "record_relationship"
-    MERGE_ENTITIES = "merge_entities"
+#: What a governed entity write carries when nothing on the path says otherwise.
+#:
+#: Declared here, in the module that owns both vocabularies, because three
+#: records in `contracts.ports` and two writers in `infrastructure.persistence`
+#: all have to agree on it and a default spelled at each of them is five things
+#: that can drift. `infrastructure.persistence.entity_authoring` held these as
+#: two private constants until `WP-RI-B-05`; its comment block records why they
+#: moved and which half of its reasoning stopped being true.
+#:
+#: A *default* rather than the only value: review promotion executes an accepted
+#: proposal through the same services a user's own write goes through, and a
+#: promoted source or local-model conclusion recorded as
+#: `user_confirmed_assertion` would claim the user asserted what somebody else
+#: did. The pair moves together -- see `contracts.ports._check_write_authority`.
+DEFAULT_MUTATION_AUTHORITY: Final = MutationAuthority.USER_CONFIRMED_ASSERTION
+DEFAULT_MUTATION_ACTOR_CLASS: Final = ActorClass.USER
 
 
 class EntityProposalState(StrEnum):
@@ -465,12 +468,155 @@ class EntityProposalState(StrEnum):
     `SUPERSEDED` rather than deletion, because section 10.11 says no record is
     silently deleted and a proposal that was overtaken is evidence about how the
     understanding developed.
+
+    Eight, and deliberately the same eight `MemoryProposalState` names: Entity
+    and Relationship Memory candidates are decided on one Review surface by one
+    `Disposition` vocabulary, and two state sets of different sizes would make
+    "what can a reviewer do to this case" depend on which subject it carried.
+    Declared separately rather than shared for the reason `ActorClass` states
+    about `MemoryActorClass`: the two planes are widened independently, and one
+    enum would make widening either a silent widening of both.
+
+    `NEEDS_REVIEW` is where `requirement_for` puts a proposal a person has to
+    look at, and it is the difference this plane could not previously express --
+    with four states, a merge awaiting an operator and an alias awaiting a
+    threshold were both just `proposed`.
     """
 
     PROPOSED = "proposed"
+    NEEDS_REVIEW = "needs_review"
     ACCEPTED = "accepted"
+    CORRECTED_ACCEPTED = "corrected_accepted"
     REJECTED = "rejected"
+    DEFERRED = "deferred"
     SUPERSEDED = "superseded"
+    INVALIDATED = "invalidated"
+
+
+#: The states a second identical proposal would be a duplicate of.
+#:
+#: Three rather than one, and `DEFERRED` is the member that decides what this
+#: set is for. A deferred case is one a reviewer looked at and pushed out; a
+#: second identical row while it stands would put the same decision in front of
+#: that reviewer twice and let a producer clear a deferral by re-filing. So the
+#: rule is "nothing has finally disposed of this", not "nothing has touched it".
+#:
+#: `REJECTED` and `INVALIDATED` are absent because they are final, and a
+#: re-proposal after a refusal is a question about *evidence* -- section 15.2's
+#: negative identity evidence, read by a producer before it proposes -- rather
+#: than a uniqueness rule. A unique index cannot tell a producer that genuinely
+#: new evidence has invalidated the prior basis; only the evidence can.
+#:
+#: `entity_proposals` carries the matching partial unique index over
+#: `(principal_id, dedupe_sha256)`.
+OPEN_EQUIVALENT_PROPOSAL_STATES: Final[frozenset[EntityProposalState]] = frozenset(
+    {
+        EntityProposalState.PROPOSED,
+        EntityProposalState.NEEDS_REVIEW,
+        EntityProposalState.DEFERRED,
+    }
+)
+
+#: The states in which nothing has decided a proposal yet, and it is therefore
+#: still available to be decided for the first time.
+#:
+#: Two, and `DEFERRED` is deliberately not one of them although
+#: `OPEN_EQUIVALENT_PROPOSAL_STATES` holds it: a deferred proposal *was* decided
+#: -- somebody looked at it and pushed it out -- and the two sets answer
+#: different questions. This one answers "may a decision be recorded against
+#: this row", which is the predicate `SqlEntityRepository.decide_proposal` puts
+#: inside its guarded `UPDATE`; that one answers "would a second identical
+#: proposal be a duplicate". Routing a deferral back to a reviewer is the Review
+#: plane's disposition and will widen this set when it lands, together with the
+#: predicate, exactly as `WP-RI-B-05` widened both from `PROPOSED` alone.
+#:
+#: A tuple rather than a module-level `frozenset` for `_DECIDED_PROPOSAL_STATES`'
+#: measured reason: the enum-derivation guard reports any revision whose CHECK
+#: vocabulary equals a live closed set exactly, and these two values are what a
+#: `state IN (...)` predicate on this table would spell.
+UNDECIDED_PROPOSAL_STATES: Final = (
+    EntityProposalState.PROPOSED,
+    EntityProposalState.NEEDS_REVIEW,
+)
+
+#: The states in which a reviewer has made the call, and the record therefore
+#: names who made it and when. `SUPERSEDED` is not one of them: a proposal
+#: overtaken by a successor was not decided, which is why it carries
+#: `superseded_at` instead of a decision.
+#:
+#: A tuple rather than a module-level `frozenset`, and the shape is deliberate.
+#: `tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum`
+#: discovers live closed sets by walking `my_pa` for every `StrEnum` and every
+#: module-level `frozenset[str]`, and reports any revision whose emitted CHECK
+#: vocabulary equals one exactly -- because a literal that agrees today is
+#: indistinguishable from a derived one. A frozenset naming these five would
+#: have been reported against the `entity_proposals` CHECK that says the same
+#: thing, and the two are meant to be independent: this one is what the record
+#: refuses now, and the migration's is what a database migrated to that revision
+#: refuses forever.
+_DECIDED_PROPOSAL_STATES: Final = (
+    EntityProposalState.ACCEPTED,
+    EntityProposalState.CORRECTED_ACCEPTED,
+    EntityProposalState.REJECTED,
+    EntityProposalState.DEFERRED,
+    EntityProposalState.INVALIDATED,
+)
+
+#: The states in which a proposal produced a canonical record, and the states in
+#: which one may be promoted -- `application.entity_promotion` reads this rather
+#: than spelling the pair, so "accepted" means one thing on both sides of the
+#: promotion. A tuple for the reason above, and measured rather than assumed:
+#: written as a frozenset, these two values matched `f1c6b904a2d7`'s
+#: `a_memory_proposal_names_its_result_exactly_when_accepted` -- the same
+#: sentence about the memory plane -- and that guard went red.
+ACCEPTED_PROPOSAL_STATES: Final = (
+    EntityProposalState.ACCEPTED,
+    EntityProposalState.CORRECTED_ACCEPTED,
+)
+
+#: The two kinds whose acceptance changes no identity.
+#:
+#: Named once here rather than spelled at each reader, because this pair is the
+#: whole of section 15's division and every place that has to honour it -- the
+#: reviewer's promotion path, the merge application, the preview's affected
+#: proposals -- has to agree on which kinds it names. Accepting one of these
+#: records reviewed intent and lineage; the mutation itself is a separate
+#: operator act, and a reviewer grant is not an identity-correction grant.
+IDENTITY_CORRECTION_PROPOSAL_KINDS: Final[frozenset[EntityProposalKind]] = frozenset(
+    {EntityProposalKind.MERGE_ENTITIES, EntityProposalKind.SPLIT_IDENTITY}
+)
+
+
+class EntityProposalMethod(StrEnum):
+    """How a proposal was produced.
+
+    Three members, and the absences are the same ones `MemoryProposalMethod`
+    records: there is no `cloud_model` and no `hybrid`, because no path in this
+    build routes relationship evidence to a cloud model and a vocabulary that
+    named one would advertise a method a caller could ask for and a reviewer
+    could believe had run.
+
+    This is a *server-owned* value -- `FORBIDDEN_PAYLOAD_FIELDS` refuses
+    `method` in a payload -- for the reason section 21.4 gives: a model
+    conclusion filed as a deterministic match is a model conclusion a threshold
+    would accept without a person, which is exactly the promotion this whole
+    plane exists to prevent.
+    """
+
+    DETERMINISTIC = "deterministic"
+    RULE = "rule"
+    LOCAL_MODEL = "local_model"
+
+
+#: How long a method or model version token may be, and the shape it takes.
+#:
+#: The bounded lowercase token `domain.capture.proposal` uses for the same two
+#: fields, restated rather than imported for the reason that module's own
+#: constant is not this plane's: these are two vocabularies about two planes,
+#: and a shared constant would make widening one widen the other.
+PROPOSAL_METHOD_VERSION_LIMIT = 32
+
+_METHOD_VERSION_PATTERN: Final = re.compile(r"\A[a-z0-9][a-z0-9._-]{0,31}\Z")
 
 
 class ReviewRequirement(StrEnum):
@@ -498,13 +644,49 @@ class ReviewRequirement(StrEnum):
 #: What each proposal kind requires before acceptance. A mapping rather than a
 #: field the proposer supplies, because a proposer that could name its own
 #: review requirement could name the lowest one.
+#:
+#: **Three rules decide all seventeen, and they are stated because a table of
+#: seventeen hand-assigned values is a table nobody can check.**
+#:
+#: *An identity claim needs a person.* Bringing an entity into existence,
+#: changing the name resolution matches on, claiming an external address, or
+#: saying which person a mention meant are all assertions about who somebody is,
+#: and section 21.4 reserves those from autonomous action.
+#:
+#: *A subtractive change needs a person.* `record_alias` may clear a threshold
+#: because an alias is additive and non-exclusive -- adding one takes nothing
+#: away and collides with nothing. Retiring or superseding one *removes a path
+#: something already resolves through*, so a four-year-old message stops finding
+#: its sender; ending an assignment or a relationship drops the subject out of
+#: the context the plane assembles about them. Wrong-and-additive costs a row a
+#: reviewer deletes. Wrong-and-subtractive costs a link nobody knows is gone.
+#:
+#: *Identity correction needs the operator specifically.* Section 8.4 keeps
+#: merges out of default bulk acceptance, and a split is the same act read
+#: backwards.
+#:
+#: What is left -- recording and revising assignments and relationships -- is
+#: the "low-risk topic and project" class section 19.4 admits to a configured
+#: threshold, and revising is the same class as recording because it corrects
+#: the record it corrects rather than removing it.
 _REQUIREMENT_BY_KIND: dict[EntityProposalKind, ReviewRequirement] = {
     EntityProposalKind.CREATE_ENTITY: ReviewRequirement.REQUIRES_REVIEW,
+    EntityProposalKind.UPDATE_ENTITY: ReviewRequirement.REQUIRES_REVIEW,
     EntityProposalKind.BIND_IDENTIFIER: ReviewRequirement.REQUIRES_REVIEW,
+    EntityProposalKind.RETIRE_IDENTIFIER: ReviewRequirement.REQUIRES_REVIEW,
+    EntityProposalKind.SUPERSEDE_IDENTIFIER: ReviewRequirement.REQUIRES_REVIEW,
     EntityProposalKind.RECORD_ALIAS: ReviewRequirement.MAY_BE_ACCEPTED_AUTOMATICALLY,
+    EntityProposalKind.RETIRE_ALIAS: ReviewRequirement.REQUIRES_REVIEW,
+    EntityProposalKind.SUPERSEDE_ALIAS: ReviewRequirement.REQUIRES_REVIEW,
     EntityProposalKind.RECORD_ASSIGNMENT: ReviewRequirement.MAY_BE_ACCEPTED_AUTOMATICALLY,
+    EntityProposalKind.REVISE_ASSIGNMENT: ReviewRequirement.MAY_BE_ACCEPTED_AUTOMATICALLY,
+    EntityProposalKind.END_ASSIGNMENT: ReviewRequirement.REQUIRES_REVIEW,
     EntityProposalKind.RECORD_RELATIONSHIP: ReviewRequirement.MAY_BE_ACCEPTED_AUTOMATICALLY,
+    EntityProposalKind.REVISE_RELATIONSHIP: ReviewRequirement.MAY_BE_ACCEPTED_AUTOMATICALLY,
+    EntityProposalKind.END_RELATIONSHIP: ReviewRequirement.REQUIRES_REVIEW,
+    EntityProposalKind.RESOLVE_MENTION: ReviewRequirement.REQUIRES_REVIEW,
     EntityProposalKind.MERGE_ENTITIES: ReviewRequirement.REQUIRES_OPERATOR,
+    EntityProposalKind.SPLIT_IDENTITY: ReviewRequirement.REQUIRES_OPERATOR,
 }
 
 
@@ -516,6 +698,38 @@ def requirement_for(kind: EntityProposalKind) -> ReviewRequirement:
     in if it were a column.
     """
     return _REQUIREMENT_BY_KIND[kind]
+
+
+def initial_state_for(kind: EntityProposalKind) -> EntityProposalState:
+    """The state a newly recorded proposal of `kind` is written in.
+
+    **Derived from the requirement, and that is the whole of it.** `WP-RI-B-05`
+    added `NEEDS_REVIEW` to this plane precisely so that "a person has to look
+    at this" could be a state rather than a fact a reader had to recompute, and
+    then wrote `PROPOSED` for all seventeen kinds anyway, because widening
+    `EntityProposal.is_open` without widening the repository's `UPDATE`
+    predicate would have made the record claim a decision was available that the
+    server refused. Both are widened now, and this is where the claim is made.
+
+    So a queue filtered to `NEEDS_REVIEW` is the reviewer's queue and a queue
+    filtered to `PROPOSED` is what a configured threshold may act on -- and
+    neither reader has to hold a copy of `_REQUIREMENT_BY_KIND` to tell them
+    apart. A kind added to that mapping gets its initial state from the same
+    rule on the same day; there is no second table to forget.
+
+    `REQUIRES_OPERATOR` lands in `NEEDS_REVIEW` beside `REQUIRES_REVIEW` rather
+    than in a state of its own, because the *state* says a person must look and
+    the *requirement* says which person may act -- and `_decide` reads the
+    requirement, not the state, when it refuses a merge to a caller declaring no
+    operator authority. A third open state would put that rule in two places.
+
+    Both answers are in `UNDECIDED_PROPOSAL_STATES`, and a test holds that over
+    every kind: a proposal that arrived already decided is the failure this
+    whole plane exists to prevent.
+    """
+    if requirement_for(kind) is ReviewRequirement.MAY_BE_ACCEPTED_AUTOMATICALLY:
+        return EntityProposalState.PROPOSED
+    return EntityProposalState.NEEDS_REVIEW
 
 
 @dataclass(frozen=True, slots=True)
@@ -675,21 +889,78 @@ class EntityProposal:
     neither -- so "nothing has decided this" is a shape rather than a
     convention.
 
-    `payload` is the mutation's own fields as a mapping, deliberately untyped
-    here: a proposal is a request to call one of six repository writes, and
-    typing six shapes into this record would duplicate the six signatures that
-    already exist. The service that applies a proposal is where the shape is
-    checked, because that is where getting it wrong is caught.
+    **On the payload, and on the reasoning this record used to carry.** WP-RI-06
+    stored `payload` as untyped string pairs and argued: "a proposal is a request
+    to call one of six repository writes, and typing six shapes into this record
+    would duplicate the six signatures that already exist. The service that
+    applies a proposal is where the shape is checked, because that is where
+    getting it wrong is caught." That was true of the record it described --
+    nothing could reach `propose` except this repository's own service, so the
+    only writer was the one that also read it back.
+
+    It is not true of this one. WP-05 publishes `entities.proposals.create`,
+    which makes the payload a remote caller's mapping, and the field set of a
+    caller-supplied mapping is precisely what "checked where it is applied"
+    cannot defend: by the time an applier reads `principal_id` out of a payload,
+    the caller has already named the Principal, and an applier that ignored the
+    key would leave it stored as evidence of an assertion the server never
+    accepted. So the shape is checked where the value is *admitted*, and
+    `EntityProposalPayload` is where. The old argument's other half survives
+    intact and is stated in that module: the schema owns which fields exist and
+    the canonical command still owns what they mean.
+
+    **Method, and why the server owns it.** `method`/`method_version` say what
+    produced the request, and `model_id`/`model_version` are permitted only for
+    `LOCAL_MODEL` -- a deterministic proposal naming a model would be claiming a
+    model ran, and a model proposal naming none would be a model conclusion
+    filed under no authority at all. Both are refused. This is the same pair
+    `RelationshipMemoryProposal` carries and the same rule it enforces, because
+    it is the same question about a different subject.
+
+    **`expected_target_version` is nullable, and which kinds leave it null is a
+    property of the kind.** It names the version of the one record this proposal
+    changes: the alias for `retire_alias`, the relationship for
+    `revise_relationship`. Creating kinds have no such record yet, so they leave
+    it null and the parent versions are read *fresh at promotion* rather than
+    carried from proposal time -- a version read when a proposal was filed and
+    replayed when a reviewer accepted it days later would be a stale-write check
+    that had stopped checking anything.
+
+    **`dedupe_sha256` is the whole of open-equivalent dedupe** and is required
+    even on a decided proposal: the partial unique index is scoped by state, so
+    a row that left the open set still has to carry the digest that would
+    collide if it came back.
     """
 
     proposal_id: str
     principal_id: str
     kind: EntityProposalKind
     state: EntityProposalState
-    payload: tuple[tuple[str, str], ...]
+    payload: EntityProposalPayload
     observation_ids: tuple[str, ...]
     proposed_at: datetime
     proposed_by: str
+    method: EntityProposalMethod
+    method_version: str
+    dedupe_sha256: str
+    model_id: str | None = None
+    model_version: str | None = None
+    expected_target_version: int | None = None
+    review_case_id: str | None = None
+    accepted_record_type: MutationRecordFamily | None = None
+    accepted_record_id: str | None = None
+    accepted_record_version: int | None = None
+    invalidated_reason: str | None = None
+    superseded_at: datetime | None = None
+    #: The proposal that replaced this one, when a reprocess produced a
+    #: successor against current evidence. Nullable in both directions: a
+    #: proposal can be superseded with nothing to point at -- a merge preview
+    #: invalidating what it made unanswerable, say -- and a successor pointer
+    #: without supersession would be a live proposal claiming to have been
+    #: replaced. `WP-RI-B-05` adds the column and the writer
+    #: (`EntitiesRepository.supersede_proposal`); the `reprocess` disposition
+    #: that mints the successor is the Review plane's.
+    superseded_by_proposal_id: str | None = None
     decided_by: str | None = None
     decided_at: datetime | None = None
     decision_reason: str | None = None
@@ -701,14 +972,91 @@ class EntityProposal:
             raise ValueError("a proposal has a closed kind")
         if not isinstance(self.state, EntityProposalState):
             raise ValueError("a proposal has a closed state")
+        if not isinstance(self.payload, EntityProposalPayload):
+            raise ValueError("a proposal carries a schema-checked payload")
+        if self.payload.kind is not self.kind:
+            raise ValueError("a proposal's payload is the payload of its own kind")
         if not self.proposed_by.strip():
             raise ValueError("a proposal names what proposed it")
         for observation_id in self.observation_ids:
             validate_identifier(observation_id, IdKind.ENTITY_OBSERVATION)
         if len(set(self.observation_ids)) != len(self.observation_ids):
             raise ValueError("a proposal cites each observation once")
+        self._check_method()
+        # The same `_SHA256` a mutation-ledger request digest is checked
+        # against: a dedupe column that admitted anything would admit a
+        # producer's own opaque token, and the uniqueness rule would then be
+        # over whatever that producer chose to put there.
+        if not _SHA256.fullmatch(self.dedupe_sha256):
+            raise ValueError("a proposal's dedupe digest is a sha256 digest")
+        if self.expected_target_version is not None:
+            if self.expected_target_version < 0:
+                raise ValueError("an expected target version is not negative")
+            if (
+                self.expected_target_version == 0
+                and self.kind is not EntityProposalKind.RESOLVE_MENTION
+            ):
+                raise ValueError("only mention resolution may expect target version zero")
+        if self.review_case_id is not None:
+            validate_identifier(self.review_case_id, IdKind.REVIEW_CASE)
+        self._check_result()
         ensure_utc(self.proposed_at)
-        decided = self.state in (EntityProposalState.ACCEPTED, EntityProposalState.REJECTED)
+        self._check_decision()
+
+    def _check_method(self) -> None:
+        if not isinstance(self.method, EntityProposalMethod):
+            raise ValueError("a proposal names a known method")
+        if not _METHOD_VERSION_PATTERN.fullmatch(self.method_version):
+            raise ValueError("a proposal names its method version as a bounded lowercase token")
+        if (self.method is EntityProposalMethod.LOCAL_MODEL) is not (self.model_id is not None):
+            raise ValueError("a model proposal names its model, and only a model proposal does")
+        if (self.model_id is None) is not (self.model_version is None):
+            raise ValueError("a named model states its version")
+        for token in (self.model_id, self.model_version):
+            if token is not None and not _METHOD_VERSION_PATTERN.fullmatch(token):
+                raise ValueError("a model identity is a bounded lowercase token")
+
+    def _check_result(self) -> None:
+        # One direction only, and the asymmetry is section 15's. An accepted
+        # `merge_entities` or `split_identity` proposal establishes reviewed
+        # intent and produces no canonical record at all -- identity mutation is
+        # a separate operator act through `entities.merge` -- so "accepted"
+        # cannot imply "named a record". What does hold is the other way round:
+        # a record named by a proposal nobody accepted would be a promotion with
+        # no acceptance behind it.
+        if self.accepted_record_id is not None and self.state not in ACCEPTED_PROPOSAL_STATES:
+            raise ValueError("a proposal names the record it became only when it was accepted")
+        if self.accepted_record_id is not None and self.kind in IDENTITY_CORRECTION_PROPOSAL_KINDS:
+            raise ValueError("an accepted identity correction records intent, not a record")
+        named = (
+            self.accepted_record_type is not None,
+            self.accepted_record_id is not None,
+            self.accepted_record_version is not None,
+        )
+        if len(set(named)) != 1:
+            raise ValueError("an accepted record is named by its family, identifier and version")
+        if self.accepted_record_type is not None and not isinstance(
+            self.accepted_record_type, MutationRecordFamily
+        ):
+            raise ValueError("an accepted record names a known family")
+        if self.accepted_record_version is not None and self.accepted_record_version < 1:
+            raise ValueError("an accepted record version is a positive integer")
+        # A reason explains a *departure*, which is the rule `state_reason`
+        # follows on an observation: an invalidated proposal with no reason
+        # records that its basis failed without recording how, and any other
+        # state carrying one attributes a refusal to a proposal nobody refused.
+        if (self.state is EntityProposalState.INVALIDATED) is not (
+            self.invalidated_reason is not None
+        ):
+            raise ValueError("an invalidated proposal records why, and only an invalidated one")
+        if self.invalidated_reason is not None:
+            if not self.invalidated_reason.strip():
+                raise ValueError("an invalidation reason is not blank")
+            if len(self.invalidated_reason) > ENTITY_CHANGE_REASON_LIMIT:
+                raise ValueError("an invalidation reason is bounded")
+
+    def _check_decision(self) -> None:
+        decided = self.state in _DECIDED_PROPOSAL_STATES
         if decided != (self.decided_by is not None):
             raise ValueError("a decided proposal names who decided it, and only a decided one")
         if (self.decided_at is not None) != (self.decided_by is not None):
@@ -717,6 +1065,26 @@ class EntityProposal:
             ensure_utc(self.decided_at)
             if self.decided_at < self.proposed_at:
                 raise ValueError("a proposal cannot be decided before it was proposed")
+        # Supersession is not a decision and carries its own moment. A proposal
+        # a successor overtook was never disposed of by anyone, so recording it
+        # under `decided_at` would put an actor on an event that had none.
+        if (self.state is EntityProposalState.SUPERSEDED) is not (self.superseded_at is not None):
+            raise ValueError("a superseded proposal records when, and only a superseded one")
+        if self.superseded_at is not None:
+            ensure_utc(self.superseded_at)
+            if self.superseded_at < self.proposed_at:
+                raise ValueError("a proposal cannot be superseded before it was proposed")
+        # One direction, like the accepted-record rule above and for the same
+        # reason: a successor pointer on a live proposal would say it had been
+        # replaced while it was still awaiting a decision, but a proposal may be
+        # superseded by something that is not another proposal and then has
+        # nothing to name.
+        if self.superseded_by_proposal_id is not None:
+            validate_identifier(self.superseded_by_proposal_id, IdKind.ENTITY_PROPOSAL)
+            if self.state is not EntityProposalState.SUPERSEDED:
+                raise ValueError("only a superseded proposal names its successor")
+            if self.superseded_by_proposal_id == self.proposal_id:
+                raise ValueError("a proposal is not its own successor")
 
     @property
     def requirement(self) -> ReviewRequirement:
@@ -725,7 +1093,109 @@ class EntityProposal:
 
     @property
     def is_open(self) -> bool:
-        return self.state is EntityProposalState.PROPOSED
+        """Whether this proposal is still awaiting its first decision.
+
+        `UNDECIDED_PROPOSAL_STATES`, which is `PROPOSED` and `NEEDS_REVIEW`.
+        This was `PROPOSED` alone at `WP-RI-B-05`'s first commit, and the reason
+        recorded for the narrowness was that `EntitiesRepository.decide_proposal`
+        settles a decision at the server with `state = 'proposed'` inside the
+        `UPDATE` predicate -- so widening the property alone would make the
+        record claim a decision was available that the database would refuse,
+        and the caller would see a scope error rather than the refusal it hit.
+        That reason was right, and it was applied to too small a population.
+        `initial_state_for` now writes `NEEDS_REVIEW` for every kind a person
+        has to look at, and `decide_proposal`'s predicate was widened with it --
+        but `invalidate_proposal`, which is the merge path's way of closing a
+        proposal an identity correction made unanswerable, kept the `proposed`
+        literal. It was not the predicate anybody was looking at, and a governed
+        merge naming an entity with a review-requiring proposal failed outright
+        as a result.
+
+        So the rule this property carries is about a *population*, not about one
+        statement: every statement that guards "has this been decided yet" reads
+        this tuple, and the two that do are `decide_proposal` and
+        `invalidate_proposal`. A third would have to read it too. `is_open` is
+        also what `IdentityCorrectionService` selects on when it plans which
+        proposals a merge must close, which is why a statement that disagrees
+        with this property does not merely refuse -- it refuses something the
+        planner already committed to.
+
+        `DEFERRED` is still absent, and that is not an oversight: a deferred
+        proposal was decided once. Routing a deferral back is the Review plane's
+        disposition and widens the same tuple when it lands.
+
+        Distinct from `OPEN_EQUIVALENT_PROPOSAL_STATES`, which answers a
+        different question -- whether a *second identical proposal* would be a
+        duplicate -- and answers it for a deferred proposal too.
+        """
+        return self.state in UNDECIDED_PROPOSAL_STATES
+
+
+@dataclass(frozen=True, slots=True)
+class EntityProposalEvidenceLink:
+    """One exact record a proposal rests on.
+
+    Three evidence kinds where `EntityProposal.observation_ids` holds one, and a
+    role where it holds none. That array can say "this proposal cites these
+    observations"; it cannot cite the capture span a user's own note came from,
+    it cannot cite a knowledge record, and it cannot distinguish an observation
+    that *argues against* the proposal from one that supports it. A proposal
+    plane that could only accumulate supporting references is a plane that can
+    only ever make a candidate look better founded than it is, which is the
+    argument `EvidenceRole.COUNTEREVIDENCE` already records one record over.
+
+    So this table is the complete evidence target and the array is the Phase A
+    shape that preceded it. The array is *not* removed here: dropping a column
+    is not an additive migration, and every writer of it belongs to work
+    packages this one does not own. Whoever moves those writers drops it.
+
+    **No opaque identifier of its own, and that is a decision.** This plane
+    gives a record its own identifier prefix when something has to point *at*
+    it -- `entity_fact_evidence_links` carries `link_id` because
+    `entity_resolution_decisions.evidence_link_ids` cites links by identifier.
+    Nothing cites one of these: a proposal is the addressable record and its
+    evidence is read through it. `(proposal_id, sequence)` is the ordering key
+    `entity_resolution_decisions` already uses for the same shape, and it makes
+    "the third piece of evidence for this proposal" nameable without promising a
+    prefix nothing issues.
+
+    **No `authority` column either**, unlike its sibling on canonical facts. A
+    proposal has no mutation authority -- that is what makes it a proposal.
+    Authority is established when a reviewer accepts it, and
+    `entity_fact_evidence_links.authority` is where that gets recorded, on the
+    fact rather than on the request.
+    """
+
+    proposal_id: str
+    principal_id: str
+    sequence: int
+    role: EvidenceRole
+    created_at: datetime
+    entity_observation_id: str | None = None
+    capture_span_id: str | None = None
+    knowledge_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.proposal_id, IdKind.ENTITY_PROPOSAL)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if self.sequence < 1:
+            raise ValueError("proposal evidence is numbered from one")
+        if not isinstance(self.role, EvidenceRole):
+            raise ValueError("proposal evidence carries a known role")
+        named = [
+            target
+            for target in (self.entity_observation_id, self.capture_span_id, self.knowledge_id)
+            if target is not None
+        ]
+        if len(named) != 1:
+            raise ValueError("proposal evidence names exactly one evidence record")
+        if self.entity_observation_id is not None:
+            validate_identifier(self.entity_observation_id, IdKind.ENTITY_OBSERVATION)
+        if self.capture_span_id is not None:
+            validate_identifier(self.capture_span_id, IdKind.SPAN)
+        if self.knowledge_id is not None:
+            validate_identifier(self.knowledge_id, IdKind.KNOWLEDGE)
+        ensure_utc(self.created_at)
 
 
 @dataclass(frozen=True, slots=True)

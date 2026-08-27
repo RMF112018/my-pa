@@ -19,29 +19,138 @@ authority, and the declaration is a parameter rather than a flag on the
 proposal — a proposal that could name its own authority level could name the
 lowest one.
 
-**What accepting a merge does, and does not do.** It redirects the merged-away
-entity at the survivor and writes a lineage record. It does *not* delete the
-merged entity, rewrite its identifiers, or move its observations: section 15.3
-asks a merge to preserve prior identifiers as lineage, and an entity that still
-resolves as a `HISTORICAL_MATCH` is how a merge stays reversible. Re-pointing
-the records that referred to it is re-enrichment, and re-enrichment is
-`WP-RI-08`.
+**What accepting a merge does, and does not do — and what it used to do.**
+`WP-RI-06` applied the merge here: accepting a `merge_entities` proposal
+redirected the merged-away entity at the survivor and wrote the lineage record,
+and its argument was that an entity which still resolves as a `HISTORICAL_MATCH`
+is how a merge stays reversible, section 15.3 asking a merge to preserve prior
+identifiers as lineage. That half is still true and is now `WP-RI-B-06`'s to
+honour. The other half was the defect: it made *accepting a proposal* be the
+merge, so anything holding a reviewer's disposition held an identity-correction
+authority, and the whole distance between a review decision and a permanent
+identity join was one boolean this module asked its caller for.
+
+So acceptance now records reviewed intent, and only that. Accepting a
+`merge_entities` or a `split_identity` proposal writes the decision on the
+proposal — who accepted it, when, and why — and touches neither entity's status,
+redirect nor version. The identity change it asks for is a separate operator act
+under `entity_identity_correction`: `entities.merge.preview` binds an operator to
+exact entity versions and `entities.merge` applies what that preview bound. A
+reviewer grant is not an identity-correction grant, and `review.decide` is not a
+merge endpoint wearing another name.
+
+**Stated plainly, because it bounds what this correction is:** no published
+capability ever reached the applying code. The proposal methods here were called
+by tests and by nothing else, so this closes an unpublished path before it is
+published rather than withdrawing behaviour a caller could invoke.
+
+**Promotion of the ordinary kinds is routed elsewhere and executed here, and
+the division is deliberate.** `application.entity_promotion` answers *which*
+canonical command an accepted proposal becomes, which record it changes, and
+what evidence links have to follow it onto the fact it produces; that module
+imports nothing that can reach a repository, so the routing cannot quietly
+become the write. `accept` is where the write happens, through
+`EntityAuthoringService`, `EntityDirectedService` and this module's own
+`resolve_mention` -- the same three services a user's own request reaches, so
+every protection they hold is inherited rather than reimplemented: Principal
+isolation, the guarded `UPDATE` that enforces expected version, the active
+partial uniques, evidence validation, the idempotency store, the mutation
+ledger and the plane's stable errors.
+
+**This module used to hold no authoring service, and that sentence was the
+guard.** `WP-RI-B-05`'s first commit recorded it in as many words: "accepting a
+proposal cannot itself write a canonical record" was a property of what this
+module could reach. Making promotion execute changed that, and the honest
+statement of what replaced it is narrower and stronger:
+
+* *producing* still cannot reach a canonical write. `propose` and the five
+  helpers it delegates to touch `record_proposal`,
+  `record_proposal_evidence_link` and three reads, and nothing else;
+  `tests/architecture/test_derivation_proposes_and_never_promotes` reads that
+  off the source, and additionally requires the allowlist it measures against
+  to be disjoint from every repository method that writes canonical fact.
+* *accepting* can, and only through a service that requires a decided proposal
+  in this Principal's partition and a `PromotionContext` the transport supplies.
+* *identity correction* still cannot, from either. `merge_entities` and
+  `split_identity` are refused by `promotion_for` and absent from its table, and
+  `redirect_entity`/`record_merge` appear nowhere in this module -- which is the
+  structural form of section 15 and is separately asserted.
+
+**Promoted authority is `review_accepted` under `review_promotion`.** A promoted
+alias recorded as `user_confirmed_assertion` would say the user asserted what a
+source or a local model asserted; section 14 forbids exactly that, and the pair
+travels on the write request so no writer has to be trusted to choose it.
+`resolve_mention` derived the same pair from its `actor_class` before any of
+this existed and is unchanged -- it is the precedent, not an exception.
 """
 
 from __future__ import annotations
 
 import json
-from collections.abc import Callable, Mapping
-from dataclasses import dataclass, field
+from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass, field, fields, replace
 from datetime import datetime
 from hashlib import sha256
+from typing import Any, Final
 
-from my_pa.contracts.ports import EntitiesRepository, SourceRepository
+from my_pa.application.commands import (
+    AddEntityAlias,
+    BindEntityIdentifier,
+    CreateEntity,
+    CreateEntityAssignment,
+    CreateEntityRelationship,
+    EndEntityAssignment,
+    EndEntityRelationship,
+    ResolveUnresolvedMention,
+    RetireEntityAlias,
+    RetireEntityIdentifier,
+    ReviseEntityAssignment,
+    ReviseEntityRelationship,
+    SupersedeEntityAlias,
+    SupersedeEntityIdentifier,
+    UpdateEntity,
+)
+from my_pa.application.entity_authoring import EntityAuthoringService
+from my_pa.application.entity_directed import EntityDirectedService
+from my_pa.application.entity_promotion import (
+    PromotionCall,
+    PromotionCommand,
+    StaleTargetVersionError,
+    UnpromotableProposalError,
+    evidence_links_for,
+    promotion_for,
+    target_of,
+)
+from my_pa.contracts.ports import (
+    DirectedReceipt,
+    EntitiesRepository,
+    EntityMutationAdmission,
+    ProposalAdmissionConflictError,
+    ProposalEvidenceConflictError,
+    ProposalReviewScopeConflictError,
+    ReviewDecisionRequest,
+    ReviewRepository,
+    SourceRepository,
+)
+from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import (
+    CorrectionPatch,
+    Disposition,
+    EntityProposalReviewDecision,
+    ReviewConflictError,
+    ReviewCorrectionError,
+    ReviewDecision,
+    ReviewNotFoundError,
+)
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import (
+    ACCEPTED_PROPOSAL_STATES,
+    IDENTITY_CORRECTION_PROPOSAL_KINDS,
+    OPEN_EQUIVALENT_PROPOSAL_STATES,
+    UNDECIDED_PROPOSAL_STATES,
     ActorClass,
     EntityFactEvidenceLink,
     EntityGovernanceError,
@@ -50,7 +159,10 @@ from my_pa.domain.relationship.governance import (
     EntityMutationEvent,
     EntityObservation,
     EntityProposal,
+    EntityProposalEvidenceLink,
     EntityProposalKind,
+    EntityProposalMethod,
+    EntityProposalPayload,
     EntityProposalState,
     EntityResolutionDecision,
     EvidenceRole,
@@ -67,17 +179,24 @@ from my_pa.domain.relationship.governance import (
     StaleResolutionVersionError,
     capture_origin_triple,
     origin_of,
+    requirement_for,
 )
 from my_pa.domain.relationship.normalization import NormalizationError, normalize_name
+from my_pa.domain.relationship.proposal_payload import ProposalPayloadError, dedupe_digest
 from my_pa.domain.relationship.resolution import EntityResolution, ResolutionOutcome
 from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
     "EntityGovernanceService",
+    "InvalidPromotionError",
     "MentionResolution",
     "ObservationAdmission",
     "ObserveCommand",
+    "PromotionContext",
+    "ProposalAdmission",
     "ProposalNotOpenError",
+    "ProposalSuppressedError",
+    "ProposedEvidence",
     "QuarantinedObservationError",
     "ResolutionNotPermittedError",
     "ResolveMentionCommand",
@@ -138,6 +257,19 @@ class ReviewAuthorityError(Exception):
     """A decision was attempted without the authority the proposal requires."""
 
 
+class ProposalSuppressedError(EntityGovernanceError):
+    """A proposal repeats a claim whose whole basis has already been refused.
+
+    Its own error rather than a silent no-op or a dedupe answer, because the
+    three are different facts and a producer told the wrong one behaves wrongly:
+    "already open" means wait, "recorded" means a reviewer will see it, and this
+    means the grounds were refused and re-offering the same ones will be refused
+    again. Names the rule and never the pairing — the entity a citation was
+    refused against is exactly the kind of detail a refusal must not disclose to
+    a caller that could not otherwise read it.
+    """
+
+
 class ProposalNotOpenError(Exception):
     """A decision was attempted on a proposal that has already been decided.
 
@@ -147,11 +279,95 @@ class ProposalNotOpenError(Exception):
     """
 
 
+class InvalidPromotionError(EntityGovernanceError):
+    """An acceptance asked to be promoted and this module cannot carry it out.
+
+    Distinct from `entity_promotion.PromotionError` and its two subclasses,
+    which say something about the *proposal*: that it names no canonical
+    mutation, or that the record it changes has moved. This one says something
+    about the *request to promote* -- a context missing the one thing a kind
+    needs, most concretely a `resolve_mention` promotion with no fresh
+    resolution to veto the binding with. Telling the two apart matters because
+    only one of them is fixed by looking at the world again.
+    """
+
+
+@dataclass(frozen=True, slots=True)
+class ProposedEvidence:
+    """One exact record a producer offers in support of, or against, a proposal.
+
+    A carrier rather than `EntityProposalEvidenceLink` itself, and the two
+    fields it does *not* have are the reason: the proposal identifier is minted
+    by `propose` after this is handed over, and `sequence` is the server's
+    ordering. A producer that could choose either could file evidence against a
+    proposal it did not make, or renumber somebody else's citation.
+
+    `role` is the producer's to state, because a producer that read an
+    observation contradicting its own candidate has said something worth
+    recording and `EvidenceRole.COUNTEREVIDENCE` is where it goes. The record
+    still refuses more or fewer than one named target.
+    """
+
+    role: EvidenceRole
+    entity_observation_id: str | None = None
+    capture_span_id: str | None = None
+    knowledge_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class PromotionContext:
+    """What only the promoting transaction can supply, handed to `accept`.
+
+    Absent from `PromotionCall` on purpose -- `entity_promotion`'s own docstring
+    argues it, and the argument is that these belong to the moment of promotion
+    rather than to the proposal. An idempotency key derived from the proposal
+    would make a reviewer's second, corrected decision replay the first one's
+    receipt; a correlation and an audit identifier belong to the request that is
+    happening now.
+
+    `resolve` is the fresh resolution `resolve_mention` runs *inside* this
+    transaction, and it is required only for that one kind. It is a veto rather
+    than a licence: it can refuse a binding against the state that exists now --
+    a conflicted identifier, a historical match -- and it cannot license one. A
+    `resolve_mention` promotion arriving without it is refused rather than
+    performed unchecked, which is why the field is optional and its absence is
+    an error rather than a default.
+
+    Passing this to `accept` is what makes promotion happen; omitting it records
+    the acceptance and writes no canonical record, which is the behaviour every
+    caller had before promotion could execute.
+    """
+
+    correlation_id: str
+    audit_id: str
+    idempotency_key: str
+    at: datetime
+    resolve: _FreshResolution | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class _PromotedRecord:
+    """The canonical record one promotion produced, as the proposal will name it."""
+
+    record_family: MutationRecordFamily
+    record_id: str
+    record_version: int
+
+
 class EntityGovernanceService:
     """Records observations, proposes changes, and applies decided ones."""
 
     def __init__(self, entities: EntitiesRepository) -> None:
         self._entities = entities
+        # Constructed rather than injected, because both are stateless routers
+        # that take their repository per call -- there is no wiring for a
+        # composition root to get wrong, and a constructor argument would make
+        # every existing `EntityGovernanceService(unit_of_work.entities)` call
+        # site have to know about promotion. They are held privately: nothing
+        # outside `_execute` reaches either, and `propose` cannot reach them at
+        # all, which the architecture guard reads off the source.
+        self._authoring = EntityAuthoringService()
+        self._directed = EntityDirectedService()
 
     # --- observation ------------------------------------------------------
 
@@ -197,37 +413,257 @@ class EntityGovernanceService:
         self,
         principal_id: str,
         *,
-        proposal_id: str,
         kind: EntityProposalKind,
-        payload: Mapping[str, str],
+        payload: Mapping[str, str | bool],
         observation_ids: tuple[str, ...],
         proposed_by: str,
-        proposed_at: datetime,
-    ) -> EntityProposal:
-        """Record a proposed mutation. Applies nothing.
+        method: EntityProposalMethod,
+        method_version: str,
+        at: datetime,
+        evidence: Sequence[ProposedEvidence] = (),
+        model_id: str | None = None,
+        model_version: str | None = None,
+        expected_target_version: int | None = None,
+    ) -> ProposalAdmission:
+        """Record a proposed mutation, or hand back the open one that already says it.
 
-        Returns the proposal so a caller can read `requirement` and know what
-        would have to happen next, rather than discovering it when `decide`
-        refuses.
+        The application behaviour behind `entities.proposals.create`, and the
+        only way a proposal is written. There is no second entry point that
+        skips the checks below, because a producer path with a weaker sibling is
+        a producer path whose rules are optional.
+
+        **What the caller supplies is what a producer could legitimately have
+        decided**: which mutation it is asking for, the fields of that mutation,
+        which observations it read, and — from authenticated context rather than
+        from a payload — what produced it. Everything else is decided here. The
+        identifier is minted, the state is the initial one, the moment is the
+        server's clock, and the dedupe digest is derived: a caller that could
+        name the digest could name one nothing would collide with, and
+        open-equivalent dedupe would then be over a value the proposer chose.
+        `EntityProposalPayload` refuses the rest by field name, so a payload
+        carrying `principal_id`, `method`, `authority` or an idempotency key is
+        refused before this method has a proposal to record.
+
+        **Evidence is checked against this Principal's partition before it is
+        cited.** An observation that is absent and one that is somebody else's
+        are the same refusal here for the reason they are everywhere on this
+        plane. A quarantined observation is refused outright: `resolve_mention`
+        already refuses to let one bind an entity, and a proposal *is* a request
+        to bind one.
+
+        **An open-equivalent proposal is returned rather than multiplied.** Two
+        producers reaching the same conclusion have proposed the change once, and
+        a reviewer shown it twice has to decide the same thing twice. The
+        returned admission says `created=False`, so a caller can tell "recorded"
+        from "already open" without the two being one answer.
+
+        **A review case is opened here for every kind.** No automatic promoter is
+        configured in this build, so a threshold-eligible proposal without a case
+        would be stranded outside every executable path. The producer cannot
+        supply the case identifier; the server mints and returns it as part of
+        the canonical receipt so the proposal can be correlated with Review.
+
+        No mutation-ledger row is written, and that is the ledger's own rule
+        rather than an omission — `MutationRecordFamily` holds the six canonical
+        families and deliberately excludes proposals, because a ledger that
+        recorded requests would record the asking as if it were the doing.
         """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
+        checked = EntityProposalPayload.of(kind, payload)
+        typed_observation_ids = tuple(
+            offered.entity_observation_id
+            for offered in evidence
+            if offered.entity_observation_id is not None
+        )
+        suppression_observation_ids = tuple(
+            dict.fromkeys([*observation_ids, *typed_observation_ids])
+        )
+        self._admit_evidence(principal_id, suppression_observation_ids)
+        # Suppression is decided before dedupe, and the order is deliberate: a
+        # producer re-filing evidence a reviewer has already refused is told so,
+        # rather than being told what is currently open in a queue it does not
+        # decide.
+        self._refuse_a_known_bad_proposal(principal_id, checked, suppression_observation_ids)
+        digest = dedupe_digest(checked)
+        open_equivalent = self._open_equivalent(principal_id, digest)
+        if open_equivalent is not None:
+            self._record_evidence(principal_id, open_equivalent, evidence, at=ensure_utc(at))
+            return _admission(open_equivalent, created=False)
         proposal = EntityProposal(
-            proposal_id=proposal_id,
+            proposal_id=issue_identifier(IdKind.ENTITY_PROPOSAL),
             principal_id=principal_id,
             kind=kind,
-            state=EntityProposalState.PROPOSED,
-            payload=tuple(sorted((str(k), str(v)) for k, v in payload.items())),
+            # Every producer proposal waits on the canonical Review plane. The
+            # configured automatic promoter Phase B would need does not exist,
+            # so leaving threshold-eligible kinds in `proposed` would strand
+            # them outside every executable path.
+            state=EntityProposalState.NEEDS_REVIEW,
+            payload=checked,
             observation_ids=observation_ids,
-            proposed_at=ensure_utc(proposed_at),
+            proposed_at=ensure_utc(at),
             proposed_by=proposed_by,
+            method=method,
+            method_version=method_version,
+            dedupe_sha256=digest,
+            model_id=model_id,
+            model_version=model_version,
+            expected_target_version=expected_target_version,
+            review_case_id=_review_case_for(kind),
         )
-        self._entities.record_proposal(principal_id, proposal)
-        return proposal
+        try:
+            self._entities.record_proposal(principal_id, proposal)
+        except ProposalAdmissionConflictError:
+            concurrent = self._open_equivalent(principal_id, digest)
+            if concurrent is None:
+                raise
+            self._record_evidence(principal_id, concurrent, evidence, at=proposal.proposed_at)
+            return _admission(concurrent, created=False)
+        self._record_evidence(principal_id, proposal, evidence, at=proposal.proposed_at)
+        return _admission(proposal, created=True)
+
+    def _record_evidence(
+        self,
+        principal_id: str,
+        proposal: EntityProposal,
+        evidence: Sequence[ProposedEvidence],
+        *,
+        at: datetime,
+    ) -> None:
+        """Write the exact records this proposal rests on, in the order it cited them.
+
+        **Two sources, one table, and the numbering says which came first.**
+        Every observation on `observation_ids` becomes a `DIRECT` link, because
+        a producer citing an observation for its own candidate is saying "this
+        is why" — the same role, for the same reason, that the canonical write
+        path gives the evidence a caller attaches to its own write. Anything the
+        producer states explicitly follows, keeping the role it stated, which is
+        how a capture span, a knowledge record or a piece of counterevidence
+        gets cited at all: `observation_ids` is a JSONB array of one identifier
+        kind and can carry none of the three.
+
+        The array is still written and is not replaced here. Dropping it is not
+        an additive migration and every other writer of it belongs to Phase A;
+        the table's own docstring records that the two surfaces coexist until
+        those writers move.
+
+        Each link is admitted by the repository against this Principal's
+        partition before it is written — a foreign observation and an absent one
+        answer alike — so a producer cannot cite its way into another
+        partition's evidence.
+        """
+        cited = [
+            ProposedEvidence(role=EvidenceRole.DIRECT, entity_observation_id=observation_id)
+            for observation_id in proposal.observation_ids
+        ]
+        try:
+            self._entities.merge_proposal_evidence_links(
+                principal_id,
+                proposal.proposal_id,
+                (
+                    EntityProposalEvidenceLink(
+                        proposal_id=proposal.proposal_id,
+                        principal_id=principal_id,
+                        sequence=sequence,
+                        role=offered.role,
+                        created_at=at,
+                        entity_observation_id=offered.entity_observation_id,
+                        capture_span_id=offered.capture_span_id,
+                        knowledge_id=offered.knowledge_id,
+                    )
+                    for sequence, offered in enumerate([*cited, *evidence], start=1)
+                ),
+            )
+        except ProposalEvidenceConflictError as exc:
+            raise ProposalNotOpenError(
+                "this proposal stopped being open while evidence was appended"
+            ) from exc
+
+    def _admit_evidence(self, principal_id: str, observation_ids: tuple[str, ...]) -> None:
+        """Refuse a citation this Principal cannot make. See `propose`."""
+        for observation_id in observation_ids:
+            held = self._entities.observation(principal_id, observation_id)
+            if held is None:
+                raise UnknownObservationError("no such observation in this scope")
+            if held.state is ObservationState.QUARANTINED:
+                raise QuarantinedObservationError(
+                    "a quarantined observation does not evidence a proposal"
+                )
+
+    def _refuse_a_known_bad_proposal(
+        self,
+        principal_id: str,
+        payload: EntityProposalPayload,
+        observation_ids: tuple[str, ...],
+    ) -> None:
+        """Refuse a proposal every one of whose citations has already been refused.
+
+        This is what makes a rejection do more than sit in a table.
+        `OPEN_EQUIVALENT_PROPOSAL_STATES` deliberately excludes `REJECTED` and
+        `INVALIDATED` so that a refused claim *can* be raised again — but only on
+        new grounds, because a unique index cannot tell a producer that its basis
+        has changed and only the evidence can.
+
+        So the rule is over the evidence rather than over the digest: if this
+        proposal names a target entity and every observation it cites is already
+        recorded as counterevidence against that entity, it is the same claim on
+        the same grounds and is refused. One citation that has not been refused
+        is genuinely new grounds and the proposal is admitted — which is the
+        whole of "unless genuinely new evidence invalidates the prior basis", and
+        is why a proposal citing nothing is never suppressed: it has no basis to
+        have been refused.
+        """
+        target = payload.as_mapping().get("entity_id")
+        if not isinstance(target, str) or not observation_ids:
+            return
+        if all(
+            target in self._refused_pairings(principal_id, observation_id)
+            for observation_id in observation_ids
+        ):
+            raise ProposalSuppressedError(
+                "this pairing has already been refused on every citation offered"
+            )
+
+    def _open_equivalent(self, principal_id: str, digest: str) -> EntityProposal | None:
+        """The open proposal this digest already has, if any.
+
+        One read, keyed on `(principal_id, dedupe_sha256)` — the columns
+        `an_open_equivalent_proposal_is_raised_once` is already over. This was a
+        loop over `proposals(principal_id, state)` for each of the three
+        open-equivalent states with the digests compared in Python, which was
+        correct and was a scan of every open proposal on every create; the
+        repository read that replaced it changes the shape and not the answer.
+
+        The states are passed rather than known by the port, so widening
+        `OPEN_EQUIVALENT_PROPOSAL_STATES` is a change here and not a change to
+        the port. The index remains the authority either way: this read is what
+        turns a would-be integrity error into the open proposal the producer was
+        going to be told about.
+        """
+        return self._entities.proposal_by_dedupe(
+            principal_id, digest, sorted(OPEN_EQUIVALENT_PROPOSAL_STATES)
+        )
 
     def open_proposals(self, principal_id: str) -> list[EntityProposal]:
-        """Everything awaiting a decision."""
+        """Everything awaiting a decision, in both of the states that means.
+
+        Two reads rather than one, because `EntitiesRepository.proposals`
+        filters by a single state and `UNDECIDED_PROPOSAL_STATES` names two
+        since `initial_state_for` began writing `NEEDS_REVIEW`. Reading only
+        `proposed` would have made this method answer "everything awaiting a
+        decision" with the subset of it that no person has to look at — the
+        opposite of the queue a reviewer wants — and the states are what tells
+        those two queues apart.
+
+        Sorted by identifier so the concatenation of two partitioned reads is
+        one stable order rather than one order per state.
+        """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
-        return self._entities.proposals(principal_id, state=EntityProposalState.PROPOSED)
+        held = [
+            proposal
+            for state in UNDECIDED_PROPOSAL_STATES
+            for proposal in self._entities.proposals(principal_id, state=state)
+        ]
+        return sorted(held, key=lambda proposal: proposal.proposal_id)
 
     def reject(
         self,
@@ -254,6 +690,34 @@ class EntityGovernanceService:
             has_operator_authority=False,
         )
 
+    def defer(
+        self,
+        principal_id: str,
+        proposal_id: str,
+        *,
+        decided_by: str,
+        decided_at: datetime,
+        reason: str,
+    ) -> EntityProposal:
+        """Push a proposal out without refusing it. Needs no authority, like `reject`.
+
+        `DEFERRED` is in `OPEN_EQUIVALENT_PROPOSAL_STATES` and not in
+        `UNDECIDED_PROPOSAL_STATES`, and both memberships are the point: a
+        producer cannot clear a deferral by re-filing the same candidate, and a
+        reviewer cannot decide the same case twice. Reopening a deferred case is
+        a widening of `UNDECIDED_PROPOSAL_STATES` that nothing in this package
+        needs, so it is not made.
+        """
+        return self._decide(
+            principal_id,
+            proposal_id,
+            state=EntityProposalState.DEFERRED,
+            decided_by=decided_by,
+            decided_at=decided_at,
+            reason=reason,
+            has_operator_authority=False,
+        )
+
     def accept(
         self,
         principal_id: str,
@@ -263,23 +727,109 @@ class EntityGovernanceService:
         decided_at: datetime,
         reason: str,
         has_operator_authority: bool = False,
-        merge_id: str | None = None,
+        promotion: PromotionContext | None = None,
+        corrected_payload: EntityProposalPayload | None = None,
     ) -> EntityProposal:
-        """Accept a proposal and apply what it asked for.
+        """Record that a proposal was accepted, and carry it out if asked to.
 
         `has_operator_authority` is a parameter the caller must pass rather than
-        anything this module can infer. A `REQUIRES_OPERATOR` proposal — today,
-        every merge — is refused without it.
+        anything this module can infer. A `REQUIRES_OPERATOR` proposal — today, a
+        merge or a split — is refused without it, and that refusal is about who
+        may *record the acceptance*: what the acceptance establishes is reviewed
+        identity-correction intent, and the identity change it asks for is a
+        separate act under a separate capability. See the module docstring for
+        the division and for what this method used to do instead.
+
+        **The decision is claimed before anything is written, and the order is
+        the whole safety argument.** `_decide`'s guarded `UPDATE` is what makes
+        deciding a one-time act; running it first means two reviewers racing on
+        one proposal produce one decision and one promotion, and the loser
+        writes nothing at all. Promoting first and deciding afterwards would let
+        both write a canonical record and only then discover that one of them
+        had no acceptance behind it.
+
+        **`promotion` is what makes the acceptance execute.** Omitting it
+        records the decision and writes no canonical record, which is what every
+        caller got before promotion could execute and is still the right answer
+        for a caller that only wants the decision. Supplying it routes the
+        proposal through `entity_promotion` to the canonical Phase A service
+        that performs its kind, under `review_accepted`/`review_promotion`, and
+        then names the record it produced on the proposal.
+
+        **An identity correction is not promoted, and supplying a context does
+        not change that.** `merge_entities` and `split_identity` are refused by
+        the routing and are skipped here before it is consulted, so a reviewer
+        holding a promotion context still cannot reach a merge: section 15's
+        division is a property of the kind rather than of what the caller asked
+        for. The acceptance is recorded exactly as it was.
+
+        **Everything a promotion writes is in this transaction.** The canonical
+        write, the evidence links that follow the proposal onto the fact, and
+        the `accepted_record_*` naming are three statements after the decision,
+        and any of them failing takes the decision with it — so an acceptance
+        that names no record is one nobody made, rather than one that half
+        happened.
+
+        **`corrected_payload` is what `correct_and_accept` promotes, and it never
+        overwrites what was proposed.** The stored proposal keeps the producer's
+        own payload: it is the assertion the decision was taken against, and
+        `dedupe_sha256` is a digest over that kind and that payload, so writing
+        the reviewer's version over it would leave the digest describing
+        something nobody proposed and would rewrite the record the reviewer
+        disagreed with. The decision ledger holds the correction; this promotes
+        it; the state becomes `corrected_accepted`, which is how a later reader
+        knows to look for one.
         """
-        return self._decide(
+        corrected = corrected_payload is not None
+        if promotion is None:
+            held_for_promotion = self._entities.proposal(principal_id, proposal_id)
+            if (
+                held_for_promotion is not None
+                and held_for_promotion.kind not in IDENTITY_CORRECTION_PROPOSAL_KINDS
+            ):
+                raise InvalidPromotionError(
+                    "an ordinary accepted proposal requires canonical promotion"
+                )
+        decided = self._decide(
             principal_id,
             proposal_id,
-            state=EntityProposalState.ACCEPTED,
+            state=(
+                EntityProposalState.CORRECTED_ACCEPTED
+                if corrected
+                else EntityProposalState.ACCEPTED
+            ),
             decided_by=decided_by,
             decided_at=decided_at,
             reason=reason,
             has_operator_authority=has_operator_authority,
-            merge_id=merge_id,
+        )
+        if corrected_payload is not None and corrected_payload.kind is not decided.kind:
+            # Checked after the decision rather than before it, because only the
+            # stored proposal says what kind it is and a caller-stated kind would
+            # be the caller choosing which schema its correction was checked
+            # against. `EntityProposal` refuses the same mismatch on its own
+            # payload; this is that rule applied to the reviewer's.
+            raise InvalidPromotionError("a correction is a correction of its proposal's own kind")
+        if promotion is None or decided.kind in IDENTITY_CORRECTION_PROPOSAL_KINDS:
+            return decided
+        promoted = self._promote(
+            decided if corrected_payload is None else replace(decided, payload=corrected_payload),
+            principal_id=principal_id,
+            decided_by=decided_by,
+            promotion=promotion,
+        )
+        self._entities.record_proposal_promotion(
+            principal_id,
+            decided.proposal_id,
+            record_family=promoted.record_family,
+            record_id=promoted.record_id,
+            record_version=promoted.record_version,
+        )
+        return replace(
+            decided,
+            accepted_record_type=promoted.record_family,
+            accepted_record_id=promoted.record_id,
+            accepted_record_version=promoted.record_version,
         )
 
     def _decide(
@@ -292,7 +842,6 @@ class EntityGovernanceService:
         decided_at: datetime,
         reason: str,
         has_operator_authority: bool,
-        merge_id: str | None = None,
     ) -> EntityProposal:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         held = self._entities.proposal(principal_id, proposal_id)
@@ -303,7 +852,12 @@ class EntityGovernanceService:
         if not decided_by.strip():
             raise ValueError("a decision names who made it")
 
-        accepting = state is EntityProposalState.ACCEPTED
+        # Both accepting states, and the widening is load-bearing rather than
+        # tidy: `correct_and_accept` writes `corrected_accepted`, and a check
+        # that named only `accepted` would have let a corrected acceptance of a
+        # merge proposal past the operator gate that an ordinary acceptance of
+        # the same proposal is refused by.
+        accepting = state in ACCEPTED_PROPOSAL_STATES
         if (
             accepting
             and held.requirement is ReviewRequirement.REQUIRES_OPERATOR
@@ -322,52 +876,450 @@ class EntityGovernanceService:
             observation_ids=held.observation_ids,
             proposed_at=held.proposed_at,
             proposed_by=held.proposed_by,
+            method=held.method,
+            method_version=held.method_version,
+            dedupe_sha256=held.dedupe_sha256,
+            model_id=held.model_id,
+            model_version=held.model_version,
+            expected_target_version=held.expected_target_version,
+            review_case_id=held.review_case_id,
             decided_by=decided_by,
             decided_at=ensure_utc(decided_at),
             decision_reason=reason,
         )
-        if accepting:
-            self._apply(principal_id, decided, merge_id=merge_id)
+        # The decision, and no second write. There is no `_apply` step between
+        # these two lines any more; the module docstring records what used to be
+        # here and why it moved.
         self._entities.decide_proposal(principal_id, decided)
         return decided
 
-    # --- applying an accepted proposal -------------------------------------
+    # --- promotion: carrying out what a reviewer accepted --------------------
 
-    def _apply(self, principal_id: str, proposal: EntityProposal, *, merge_id: str | None) -> None:
-        """Perform what an accepted proposal asked for.
+    def _promote(
+        self,
+        proposal: EntityProposal,
+        *,
+        principal_id: str,
+        decided_by: str,
+        promotion: PromotionContext,
+    ) -> _PromotedRecord:
+        """Execute one accepted proposal through the service that owns its mutation.
 
-        Only merges are applied here. The other five kinds name mutations whose
-        arguments are whole domain records rather than the string pairs a
-        proposal payload carries, and reconstructing an `ExternalIdentifier` from
-        flattened strings would be a second, weaker constructor for a type that
-        already has one. Those kinds are recorded and decided here and applied by
-        the caller that holds the record — which is the honest division until
-        something produces them, and is stated here rather than discovered.
+        Four steps and no fifth. `promotion_for` says which canonical command
+        this is and refuses anything that is not an accepted ordinary kind;
+        `_promotion_arguments` supplies the versions and the key that only this
+        moment can; the command's own constructor re-checks every value it was
+        handed; `_execute` hands it to the canonical service. Nothing here
+        decides what a duplicate is, what a stale version is, or whether an
+        entity may be written — those live where they already lived.
+
+        **The evidence follows the fact.** `evidence_links_for` builds the links
+        that carry the proposal's cited observations onto the record it became,
+        which is section 14's "evidence links must survive promotion", and they
+        are written after the canonical write because the record they point at
+        has to exist first. The `OBSERVATION` family is skipped rather than
+        linked: a `resolve_mention` promotion's subject *is* an observation, and
+        that decision's evidence is written by `resolve_mention` itself onto
+        `entity_resolution_decisions.evidence_link_ids`.
         """
-        if proposal.kind is not EntityProposalKind.MERGE_ENTITIES:
-            return
-        payload = dict(proposal.payload)
-        merged = payload.get("merged_entity_id")
-        retained = payload.get("retained_entity_id")
-        if not merged or not retained:
-            raise ValueError("a merge proposal names the entity kept and the entity merged away")
-        if merge_id is None:
-            raise ValueError("accepting a merge records its lineage, which needs an identifier")
-
-        self._entities.redirect_entity(principal_id, merged, retained)
-        self._entities.record_merge(
-            principal_id,
-            EntityMergeRecord(
-                merge_id=merge_id,
-                principal_id=principal_id,
-                retained_entity_id=retained,
-                merged_entity_id=merged,
-                proposal_id=proposal.proposal_id,
-                decided_by=proposal.decided_by or "",
-                reason=proposal.decision_reason or "",
-                decided_at=proposal.decided_at or proposal.proposed_at,
-            ),
+        call = promotion_for(proposal)
+        arguments = self._promotion_arguments(principal_id, proposal, call, promotion=promotion)
+        promoted = self._execute(
+            call.command(**arguments),
+            principal_id=principal_id,
+            decided_by=decided_by,
+            promotion=promotion,
         )
+        if promoted.record_family is not MutationRecordFamily.OBSERVATION:
+            for link in evidence_links_for(
+                self._entities.proposal_evidence_for(principal_id, proposal.proposal_id),
+                principal_id=principal_id,
+                record_family=promoted.record_family,
+                record_id=promoted.record_id,
+                at=promotion.at,
+            ):
+                self._entities.record_fact_evidence_link(principal_id, link)
+        return promoted
+
+    def _promotion_arguments(
+        self,
+        principal_id: str,
+        proposal: EntityProposal,
+        call: PromotionCall,
+        *,
+        promotion: PromotionContext,
+    ) -> dict[str, Any]:
+        """The proposal's own fields, plus the versions and the key it may not carry.
+
+        **Every expected version is read now, and none is replayed from proposal
+        time.** A version a producer read when it filed a candidate and a
+        reviewer accepted a week later is a stale-write check that has stopped
+        checking: it would either refuse every promotion of an entity anybody
+        else touched in between, or — if the record had moved back — pass while
+        checking nothing. So the current version of each record the command
+        expects is read inside this transaction, and the guarded `UPDATE` in the
+        repository is still what settles a writer racing this one.
+
+        **`expected_target_version` is the reviewer's stale check, and it is
+        checked here rather than passed through.** Section 27: a stale target
+        version prevents promotion. When the proposal states one it must equal
+        the current version of the record its kind changes, and promotion is
+        refused otherwise — which is a different answer from the canonical
+        service's, and a better one, because it names the proposal's own
+        expectation rather than a version the caller never chose. When the
+        proposal states none the check has nothing to compare: `entity_proposals`
+        makes the column nullable, `entities.proposals.create` publishes it as
+        optional, and a creating kind has no record to have read a version of.
+
+        **Which expectation is about which record is derived, not tabulated.**
+        The names are read off the command's own fields, so a command that grows
+        or loses one is answered here without a second table having to be
+        edited in step. `expected_version` is the only ambiguous one and its two
+        readings are exactly the two write planes: on the authoring plane the
+        entity is the aggregate and its version is what every operation expects,
+        including the child ones; on the directed plane it is the assignment's
+        or the edge's own. `AssignmentWriteRequest` and `EntityWriteRequest` say
+        so in those words, and `call.record_family` is what tells them apart.
+        """
+        arguments: dict[str, Any] = dict(call.fields)
+        arguments["idempotency_key"] = promotion.idempotency_key
+        target = target_of(proposal)
+        target_version: int | None = None
+        if target is not None:
+            record, record_id = target
+            target_version = self._current_version(
+                principal_id, record.family, record_id, arguments
+            )
+            if (
+                proposal.expected_target_version is not None
+                and proposal.expected_target_version != target_version
+            ):
+                raise StaleTargetVersionError(
+                    "the record this proposal changes has moved since it was proposed"
+                )
+        child_planes = (MutationRecordFamily.ASSIGNMENT, MutationRecordFamily.RELATIONSHIP)
+        for expectation in (
+            declared.name
+            for declared in fields(call.command)
+            if declared.name.startswith("expected_")
+        ):
+            if expectation == "expected_version":
+                arguments[expectation] = (
+                    target_version
+                    if call.record_family in child_planes
+                    else self._entity_version(principal_id, arguments["entity_id"])
+                )
+            elif expectation == "expected_entity_version":
+                arguments[expectation] = self._optional_entity_version(
+                    principal_id, arguments.get("entity_id")
+                )
+            elif expectation == "expected_scope_version":
+                arguments[expectation] = self._optional_entity_version(
+                    principal_id, arguments.get("scope_entity_id")
+                )
+            elif expectation == "expected_from_version":
+                arguments[expectation] = self._entity_version(
+                    principal_id, arguments["from_entity_id"]
+                )
+            elif expectation == "expected_to_version":
+                arguments[expectation] = self._entity_version(
+                    principal_id, arguments["to_entity_id"]
+                )
+            else:
+                # `expected_identifier_version`, `expected_alias_version` and
+                # `expected_resolution_version`: each is the version of the one
+                # record its kind changes, which is what `target_of` names.
+                arguments[expectation] = target_version
+        return arguments
+
+    def _current_version(
+        self,
+        principal_id: str,
+        family: MutationRecordFamily,
+        record_id: str,
+        arguments: Mapping[str, Any],
+    ) -> int:
+        """The version the record this proposal changes carries right now.
+
+        The parent entity is read from the payload for a child record rather
+        than from the child, because the schemas for those kinds name both and
+        a read that took the parent from the row would follow a redirect this
+        method has no disposition for.
+        """
+        if family is MutationRecordFamily.ENTITY:
+            return self._entity_version(principal_id, record_id)
+        if family is MutationRecordFamily.IDENTIFIER:
+            for identifier in self._entities.external_identifiers(
+                principal_id, arguments["entity_id"]
+            ):
+                if identifier.identifier_id == record_id:
+                    return identifier.version
+            raise UnpromotableProposalError("no such external identifier in this scope")
+        if family is MutationRecordFamily.ALIAS:
+            for alias in self._entities.aliases(principal_id, arguments["entity_id"]):
+                if alias.alias_id == record_id:
+                    return alias.version
+            raise UnpromotableProposalError("no such alias in this scope")
+        if family is MutationRecordFamily.ASSIGNMENT:
+            assignment = self._entities.assignment(principal_id, record_id)
+            if assignment is None:
+                raise UnpromotableProposalError("no such assignment in this scope")
+            return assignment.version
+        if family is MutationRecordFamily.RELATIONSHIP:
+            relationship = self._entities.relationship(principal_id, record_id)
+            if relationship is None:
+                raise UnpromotableProposalError("no such relationship in this scope")
+            return relationship.version
+        held = self._entities.observation(principal_id, record_id)
+        if held is None:
+            raise UnknownObservationError("no such observation in this scope")
+        return held.resolution_version
+
+    def _entity_version(self, principal_id: str, entity_id: object) -> int:
+        """The version of one entity this Principal holds, or a refusal naming the scope.
+
+        A foreign entity and an absent one answer alike, which is the rule the
+        rest of this plane follows and is why the read is Principal-scoped
+        rather than filtered afterwards.
+        """
+        if not isinstance(entity_id, str):
+            raise UnpromotableProposalError("a proposal names the entity it is about")
+        entity = self._entities.get(principal_id, entity_id)
+        if entity is None:
+            raise UnknownEntityError("no such entity in this scope")
+        return entity.version
+
+    def _optional_entity_version(self, principal_id: str, entity_id: object) -> int | None:
+        """`_entity_version`, or `None` where the command's field is optional."""
+        return None if entity_id is None else self._entity_version(principal_id, entity_id)
+
+    def _execute(
+        self,
+        command: PromotionCommand,
+        *,
+        principal_id: str,
+        decided_by: str,
+        promotion: PromotionContext,
+    ) -> _PromotedRecord:
+        """Hand one constructed command to the canonical service that performs it.
+
+        **Fifteen branches and no mutation logic in any of them.** Each one
+        forwards the command's fields to the service method whose capability
+        performs that kind, adds the Principal and the request identities, and
+        returns what the receipt says was written. That is deliberately the same
+        shape `application.service`'s handlers have — the alternative was a
+        promotion path that reached the repository directly, which is the second
+        copy of the mutation section 14 forbids.
+
+        **The authority pair is stamped once, here, and is the same for every
+        branch.** `review_accepted` under `review_promotion`: a reviewer
+        accepted somebody else's assertion, which is neither the user having
+        asserted it nor a conclusion that could be recomputed.
+
+        `resolve_mention` is this module's own method rather than one of the two
+        services, and it derived the same pair from `actor_class` before any of
+        this existed. It needs the fresh resolution the transport supplies,
+        because that veto runs against the state that exists now rather than the
+        state the queue was rendered from.
+        """
+        authoring: dict[str, Any] = {
+            "principal_id": principal_id,
+            "correlation_id": promotion.correlation_id,
+            "audit_id": promotion.audit_id,
+            "at": promotion.at,
+            "authority": MutationAuthority.REVIEW_ACCEPTED,
+            "actor_class": ActorClass.REVIEW_PROMOTION,
+        }
+        directed: dict[str, Any] = {
+            "principal_id": principal_id,
+            "audit_id": promotion.audit_id,
+            "at": promotion.at,
+            "authority": MutationAuthority.REVIEW_ACCEPTED,
+            "actor_class": ActorClass.REVIEW_PROMOTION,
+        }
+        match command:
+            case CreateEntity():
+                return _from_receipt(
+                    self._authoring.create(
+                        self._entities,
+                        entity_type=command.entity_type,
+                        display_name=command.display_name,
+                        # Always empty, and stated rather than forwarded.
+                        # `create_entity`'s payload schema admits neither field,
+                        # because a create carrying three aliases would put four
+                        # separate assertions, each resting on its own evidence,
+                        # under one reviewer's single accept.
+                        aliases=(),
+                        identifiers=(),
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case UpdateEntity():
+                return _from_receipt(
+                    self._authoring.update(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        display_name=command.display_name,
+                        canonical_name=command.canonical_name,
+                        status=command.status,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case BindEntityIdentifier():
+                return _from_receipt(
+                    self._authoring.bind_identifier(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        namespace=command.namespace,
+                        display_value=command.display_value,
+                        effective_from=command.effective_from,
+                        effective_to=command.effective_to,
+                        evidence=command.evidence,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case RetireEntityIdentifier():
+                return _from_receipt(
+                    self._authoring.retire_identifier(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        identifier_id=command.identifier_id,
+                        expected_identifier_version=command.expected_identifier_version,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case SupersedeEntityIdentifier():
+                return _from_receipt(
+                    self._authoring.supersede_identifier(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        identifier_id=command.identifier_id,
+                        expected_identifier_version=command.expected_identifier_version,
+                        namespace=command.namespace,
+                        display_value=command.display_value,
+                        effective_from=command.effective_from,
+                        effective_to=command.effective_to,
+                        evidence=command.evidence,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case AddEntityAlias():
+                return _from_receipt(
+                    self._authoring.add_alias(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        alias_type=command.alias_type,
+                        display_value=command.display_value,
+                        effective_from=command.effective_from,
+                        effective_to=command.effective_to,
+                        evidence=command.evidence,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case RetireEntityAlias():
+                return _from_receipt(
+                    self._authoring.retire_alias(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        alias_id=command.alias_id,
+                        expected_alias_version=command.expected_alias_version,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case SupersedeEntityAlias():
+                return _from_receipt(
+                    self._authoring.supersede_alias(
+                        self._entities,
+                        entity_id=command.entity_id,
+                        expected_version=command.expected_version,
+                        alias_id=command.alias_id,
+                        expected_alias_version=command.expected_alias_version,
+                        alias_type=command.alias_type,
+                        display_value=command.display_value,
+                        effective_from=command.effective_from,
+                        effective_to=command.effective_to,
+                        evidence=command.evidence,
+                        reason=command.reason,
+                        idempotency_key=command.idempotency_key,
+                        **authoring,
+                    )
+                )
+            case CreateEntityAssignment():
+                return _from_directed(
+                    self._directed.create_assignment(self._entities, command, **directed)
+                )
+            case ReviseEntityAssignment():
+                return _from_directed(
+                    self._directed.revise_assignment(self._entities, command, **directed)
+                )
+            case EndEntityAssignment():
+                return _from_directed(
+                    self._directed.end_assignment(self._entities, command, **directed)
+                )
+            case CreateEntityRelationship():
+                return _from_directed(
+                    self._directed.create_relationship(self._entities, command, **directed)
+                )
+            case ReviseEntityRelationship():
+                return _from_directed(
+                    self._directed.revise_relationship(self._entities, command, **directed)
+                )
+            case EndEntityRelationship():
+                return _from_directed(
+                    self._directed.end_relationship(self._entities, command, **directed)
+                )
+            case ResolveUnresolvedMention():
+                if promotion.resolve is None:
+                    raise InvalidPromotionError(
+                        "promoting a mention resolution needs a fresh resolution to check it"
+                    )
+                outcome = self.resolve_mention(
+                    ResolveMentionCommand(
+                        principal_id=principal_id,
+                        observation_id=command.observation_id,
+                        expected_resolution_version=command.expected_resolution_version,
+                        disposition=command.disposition,
+                        idempotency_key=command.idempotency_key,
+                        entity_id=command.entity_id,
+                        expected_entity_version=command.expected_entity_version,
+                        entity_type=command.entity_type,
+                        canonical_name=command.canonical_name,
+                        display_name=command.display_name,
+                        rejected_entity_id=command.rejected_entity_id,
+                        reason=command.reason,
+                    ),
+                    resolve=promotion.resolve,
+                    at=promotion.at,
+                    correlation_id=promotion.correlation_id,
+                    audit_id=promotion.audit_id,
+                    decided_by=decided_by,
+                    actor_class=ActorClass.REVIEW_PROMOTION,
+                )
+                return _PromotedRecord(
+                    record_family=MutationRecordFamily.OBSERVATION,
+                    record_id=outcome.observation_id,
+                    record_version=outcome.resolution_version,
+                )
 
     def merge_lineage(
         self, principal_id: str, entity_id: str | None = None
@@ -1008,6 +1960,415 @@ class EntityGovernanceService:
 _UNBOUNDED_NEGATIVE_EVIDENCE: int | None = None
 
 
+#: The two dispositions that make a case terminal wherever it lives.
+_ACCEPTING: Final[frozenset[Disposition]] = frozenset(
+    {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}
+)
+
+
+class EntityProposalReviewService:
+    """One Entity proposal decided on the one canonical Review surface.
+
+    **This is not a second review plane, and the shape is what says so.** It
+    opens no case, keeps no state of its own and publishes no listing: the case
+    was opened by `propose`, the listing is `review.list`, and the vocabulary is
+    the shared `Disposition`. What lives here is the *ordering* of one decision,
+    which had to be application code for a reason section 14 fixes: an accepted
+    ordinary proposal is executed through the canonical Phase A mutation
+    services, and the other three subject kinds on this surface promote inside
+    their own SQL because everything their promotion does is SQL. Ordering it in
+    `infrastructure` would have meant either a second copy of those mutations or
+    an import direction the architecture forbids.
+
+    **The order is claim, execute, append, and each step is why the next one is
+    safe.** `EntityGovernanceService`'s guarded `UPDATE` is what makes deciding a
+    one-time act, so it runs first and two racing reviewers produce one decision.
+    The promotion runs second, inside the same transaction, so a refusal takes
+    the decision back with it. The ledger row is appended last, and
+    `UNIQUE (review_case_id, sequence)` is what makes two reviewers who both read
+    version 0 produce one row rather than two.
+
+    **A reviewer grant is not an identity-correction grant.** Accepting a
+    `merge_entities` or `split_identity` proposal records reviewed intent and
+    lineage and mutates no identity — `EntityGovernanceService.accept` skips the
+    routing for those kinds before it is consulted, and `promotion_for` refuses
+    them anyway. Nothing here re-opens that door, and there is a test that holds
+    both entities' status and version unchanged across an acceptance taken
+    through this service with an operator's authority and a promotion context in
+    hand.
+    """
+
+    def __init__(self, entities: EntitiesRepository, reviews: ReviewRepository) -> None:
+        self._entities = entities
+        self._reviews = reviews
+        self._governance = EntityGovernanceService(entities)
+
+    def decide(
+        self,
+        request: ReviewDecisionRequest,
+        *,
+        decided_by: str,
+        has_operator_authority: bool = False,
+        resolve: _FreshResolution | None = None,
+    ) -> ReviewDecision:
+        """Append one disposition to an Entity proposal's case and perform it.
+
+        `decided_by`, `has_operator_authority` and `resolve` come from the
+        authenticated request rather than from the review request, for the reason
+        section 26 gives about every server-owned field: a caller that could name
+        its own authority would name the one it needed.
+
+        **The promotion's idempotency key is this decision's identifier**, which
+        is what `relationship_memory_review` uses for the same reason: the
+        admitting act of a promoted write is the reviewer's decision, a
+        synthesized key would name nothing, and a key derived from the *proposal*
+        would make a second, corrected decision replay the first one's receipt.
+        """
+        decision_id = issue_identifier(IdKind.REVIEW_DECISION)
+        promotion = PromotionContext(
+            correlation_id=request.correlation_id,
+            audit_id=request.audit_id,
+            idempotency_key=decision_id,
+            at=request.decided_at,
+            resolve=resolve,
+        )
+        correction_patch = (
+            None if request.correction_patch is None else request.correction_patch.as_mapping()
+        )
+        try:
+            held = self._entities.serialize_entity_proposal_review_scope(
+                request.principal_id,
+                request.review_case_id,
+                correction_patch=correction_patch,
+            )
+        except ProposalReviewScopeConflictError as exc:
+            raise ReviewConflictError(
+                "this proposal changed while the review request was in flight"
+            ) from exc
+        except ProposalPayloadError as exc:
+            raise ReviewCorrectionError(str(exc)) from exc
+        if held is None:
+            raise ReviewNotFoundError("the request names no stored review case")
+        case = self._reviews.entity_proposal_case(request.principal_id, request.review_case_id)
+        if case is None or case.proposal_id != held.proposal_id:
+            raise ReviewNotFoundError("the request names no stored review case")
+        ledger = self._reviews.entity_proposal_decisions(
+            request.principal_id, request.review_case_id
+        )
+        if any(disposition in _ACCEPTING for disposition in ledger):
+            raise ReviewConflictError("an accepted review case is terminal")
+        if len(ledger) != request.expected_review_version:
+            raise ReviewConflictError("the expected review version is stale")
+        if not held.is_open:
+            raise ReviewConflictError("this proposal has already been decided")
+
+        escalated = Disposition.ESCALATE in ledger
+        corrected = self._corrected_payload(held, request)
+        state = self._perform(
+            request,
+            held,
+            escalated=escalated,
+            corrected=corrected,
+            decided_by=decided_by,
+            has_operator_authority=has_operator_authority,
+            promotion=promotion,
+        )
+        self._reviews.record_entity_proposal_decision(
+            request.principal_id,
+            EntityProposalReviewDecision(
+                decision_id=decision_id,
+                proposal_id=held.proposal_id,
+                review_case_id=request.review_case_id,
+                principal_id=request.principal_id,
+                sequence=len(ledger) + 1,
+                disposition=request.disposition,
+                correlation_id=request.correlation_id,
+                audit_id=request.audit_id,
+                decided_at=request.decided_at,
+                reason=request.reason,
+                corrected_payload=(
+                    None if corrected is None else CorrectionPatch.of(corrected.as_mapping())
+                ),
+            ),
+        )
+        return ReviewDecision(
+            decision_id=decision_id,
+            review_case_id=request.review_case_id,
+            sequence=len(ledger) + 1,
+            disposition=request.disposition,
+            principal_id=request.principal_id,
+            correlation_id=request.correlation_id,
+            audit_id=request.audit_id,
+            decided_at=request.decided_at,
+            proposal_state=state,
+        )
+
+    def _corrected_payload(
+        self, held: EntityProposal, request: ReviewDecisionRequest
+    ) -> EntityProposalPayload | None:
+        """The reviewer's correction, checked against the target command's schema.
+
+        **The check is `EntityProposalPayload`'s and there is no second copy of
+        it.** `schema_for(kind)` is derived from the one canonical command that
+        would carry the mutation out, so constructing the payload against the
+        proposal's own kind *is* validating the patch against the target command
+        schema — the same validator the producer's payload went through, applied
+        to the reviewer's. That is what section 13's "validate patch against
+        target command schema before commit" asks for, and writing a second,
+        weaker check here would be the failure that module's own docstring names.
+
+        A patch is refused for a subject that has no such schema, which today
+        means it is refused for every case that is not an Entity proposal: this
+        method is only reached for one, and `ReviewDecisionRequest` refuses a
+        patch and a `corrected_value` together, so a capture reviewer's single
+        bounded string is untouched by any of this.
+        """
+        if request.disposition is not Disposition.CORRECT_AND_ACCEPT:
+            return None
+        if request.correction_patch is None:
+            raise ReviewCorrectionError("an entity correction is a typed patch, not one value")
+        try:
+            return EntityProposalPayload.of(held.kind, request.correction_patch.as_mapping())
+        except ProposalPayloadError as exc:
+            raise ReviewCorrectionError(str(exc)) from exc
+
+    def _perform(
+        self,
+        request: ReviewDecisionRequest,
+        held: EntityProposal,
+        *,
+        escalated: bool,
+        corrected: EntityProposalPayload | None,
+        decided_by: str,
+        has_operator_authority: bool,
+        promotion: PromotionContext | None,
+    ) -> ProposalState:
+        """Do what the disposition says, and return the state the case now presents.
+
+        Eight branches and no default, so a disposition added to the vocabulary
+        is a type error here rather than a decision that quietly records itself
+        and does nothing.
+        """
+        principal_id = request.principal_id
+        match request.disposition:
+            case Disposition.ACCEPT | Disposition.CORRECT_AND_ACCEPT:
+                self._require_the_ceiling(held, escalated=escalated, granted=has_operator_authority)
+                decided = self._governance.accept(
+                    principal_id,
+                    held.proposal_id,
+                    decided_by=decided_by,
+                    decided_at=request.decided_at,
+                    reason=request.reason or _ACCEPTANCE_REASON,
+                    has_operator_authority=has_operator_authority,
+                    promotion=promotion,
+                    corrected_payload=corrected,
+                )
+                return ProposalState(decided.state.value)
+            case Disposition.REJECT:
+                self._governance.reject(
+                    principal_id,
+                    held.proposal_id,
+                    decided_by=decided_by,
+                    decided_at=request.decided_at,
+                    reason=self._stated(request),
+                )
+                return ProposalState.REJECTED
+            case Disposition.DEFER:
+                self._governance.defer(
+                    principal_id,
+                    held.proposal_id,
+                    decided_by=decided_by,
+                    decided_at=request.decided_at,
+                    reason=self._stated(request),
+                )
+                return ProposalState.DEFERRED
+            case Disposition.INVALIDATE:
+                # Through the Review port rather than through
+                # `EntityGovernanceService`, because the whole of an invalidation
+                # is one guarded `UPDATE` that has to set the state and the
+                # reason together: `an_invalidated_proposal_records_why` fires on
+                # the row that writes `invalidated`, and `decide_proposal` --
+                # which is what every other disposition on this plane goes
+                # through -- carries no `invalidated_reason`.
+                #
+                # Distinct from `reject` in what it claims, and that is the point
+                # of having both. A rejection says a reviewer read the request
+                # and refused it. An invalidation says the ground moved: the
+                # entity a proposal named was merged away, the evidence it rested
+                # on was withdrawn. Recording the second as the first would
+                # attribute a judgement to somebody who never made one. Nothing
+                # canonical is written either way, and the proposal, its evidence
+                # links and its case all stay readable.
+                if not self._reviews.invalidate_entity_proposal(
+                    principal_id,
+                    held.proposal_id,
+                    reason=self._stated(request),
+                    decided_by=decided_by,
+                    decided_at=request.decided_at,
+                ):
+                    raise ReviewConflictError(
+                        "this proposal was decided while the request was in flight"
+                    )
+                return ProposalState.INVALIDATED
+            case Disposition.MARK_UNRESOLVED:
+                # Nothing is written to the proposal, and that is what the
+                # disposition means: section 13 says "preserve unresolved
+                # state/evidence". `EntityProposalState` declares no `unresolved`
+                # member -- it is what the schema's CHECK is generated from, so
+                # inventing one would be a schema change this package is not the
+                # owner of, and borrowing `invalidated` would report the evidence
+                # as withdrawn when a reviewer only declined to settle it. The
+                # ledger row is the record, exactly as it is on the memory plane.
+                self._stated(request)
+                return ProposalState.UNRESOLVED
+            case Disposition.ESCALATE:
+                # Also writes nothing to the proposal. Escalation raises the
+                # *ceiling*, and the ceiling is read from the ledger: the next
+                # acceptance on this case is refused without operator authority,
+                # whatever its kind's own requirement says. It performs no
+                # identity correction and touches no entity -- section 15's
+                # division is not something a disposition can move.
+                self._stated(request)
+                return ProposalState(held.state.value)
+            case Disposition.REPROCESS:
+                return self._reprocess(request, held, decided_by=decided_by)
+
+    def _require_the_ceiling(self, held: EntityProposal, *, escalated: bool, granted: bool) -> None:
+        """Refuse an acceptance below the ceiling this case now stands at.
+
+        Two ways to reach the operator ceiling and only one of them is the kind's
+        own: `requirement_for` puts identity correction there permanently, and an
+        `escalate` decision puts this one case there for good. `accept` re-checks
+        the first for itself; the second exists only in the ledger, so it is
+        checked here and the check is the whole of what escalation *does*.
+
+        **Only an acceptance is gated, and that is deliberate.** A reviewer may
+        still reject, defer or mark an escalated case unresolved, because none of
+        those writes a canonical record — the ceiling exists to stop a change
+        being made below it, not to strand the case. Gating every disposition
+        would mean an escalation nobody with operator authority ever looked at
+        could not even be withdrawn.
+        """
+        if granted:
+            return
+        if escalated:
+            raise ReviewAuthorityError(
+                "this case was escalated and the caller declared no operator authority"
+            )
+        if held.requirement is ReviewRequirement.REQUIRES_OPERATOR:
+            raise ReviewAuthorityError(
+                "this proposal requires operator authority and the caller declared none"
+            )
+
+    def _stated(self, request: ReviewDecisionRequest) -> str:
+        """The reason this disposition states, required for all five of them here.
+
+        `ReviewDecisionRequest` requires one for `escalate` and `invalidate` only,
+        because the other three have callers on planes that never asked for one
+        and refusing them would be a regression rather than a rule. This plane
+        has no such caller, so it requires what section 13 actually says.
+        """
+        if request.reason is None:
+            raise ReviewCorrectionError("this disposition states the reason for it")
+        return request.reason
+
+    def _reprocess(
+        self, request: ReviewDecisionRequest, held: EntityProposal, *, decided_by: str
+    ) -> ProposalState:
+        """Supersede this proposal and raise its successor against current evidence.
+
+        **Three statements in one transaction, and the order is forced.** The
+        successor cannot be inserted while the predecessor is open, because
+        `dedupe_sha256` is a digest over the kind and the payload and not over
+        the method -- so a successor restating the same request collides with the
+        predecessor on `an_open_equivalent_proposal_is_raised_once`. And the
+        successor pointer cannot be written before the successor exists, because
+        its foreign key is immediate. Supersede, insert, then point is the only
+        order that satisfies both, which is why
+        `EntitiesRepository.supersede_proposal` -- one statement doing the first
+        and the third together -- cannot be used here and is left for a
+        supersession whose successor already exists.
+
+        **A stale reprocess creates nothing.** The supersession is a guarded
+        `UPDATE`; when it matches no row the proposal was decided while this was
+        in flight, and the refusal is raised *before* the successor is built, so
+        there is nothing to roll back rather than something the transaction has
+        to take away.
+
+        **What the successor carries.** The
+        same kind and payload -- the request has not changed, only the moment it
+        is being asked at -- with `method` and `method_version` re-stamped from
+        the predecessor and its evidence copied. Existing-target kinds bind the
+        target's version read in this transaction now; replaying the
+        predecessor's old expectation would turn reprocess into a stale request.
+        The read precedes supersession, so a missing target creates nothing.
+        """
+        evidence = self._offered_again(request.principal_id, held)
+        expected_target_version: int | None = None
+        target = target_of(held)
+        if target is not None:
+            descriptor, record_id = target
+            expected_target_version = self._entities.proposal_target_version(
+                request.principal_id, descriptor.family, record_id
+            )
+            if expected_target_version is None:
+                raise ReviewConflictError("the proposal target no longer exists")
+        if not self._reviews.supersede_entity_proposal(
+            request.principal_id, held.proposal_id, at=request.decided_at
+        ):
+            raise ReviewConflictError("this proposal was decided while the reprocess was in flight")
+        successor = self._governance.propose(
+            request.principal_id,
+            kind=held.kind,
+            payload=held.payload.as_mapping(),
+            observation_ids=held.observation_ids,
+            proposed_by=held.proposed_by,
+            method=held.method,
+            method_version=held.method_version,
+            at=request.decided_at,
+            evidence=evidence,
+            model_id=held.model_id,
+            model_version=held.model_version,
+            expected_target_version=expected_target_version,
+        )
+        self._reviews.name_entity_proposal_successor(
+            request.principal_id,
+            held.proposal_id,
+            successor_proposal_id=successor.proposal_id,
+        )
+        return ProposalState.SUPERSEDED
+
+    def _offered_again(self, principal_id: str, held: EntityProposal) -> list[ProposedEvidence]:
+        """The predecessor's evidence, minus what `propose` will re-derive itself.
+
+        `propose` writes one `DIRECT` link per cited observation from
+        `observation_ids`, so copying those forward would give the successor each
+        of them twice. Everything else -- a capture span, a knowledge record, a
+        piece of counterevidence -- exists only in the link table and would be
+        lost by a reprocess that did not carry it, which would make the successor
+        rest on less than the proposal it replaced.
+        """
+        cited = set(held.observation_ids)
+        return [
+            ProposedEvidence(
+                role=link.role,
+                entity_observation_id=link.entity_observation_id,
+                capture_span_id=link.capture_span_id,
+                knowledge_id=link.knowledge_id,
+            )
+            for link in self._entities.proposal_evidence_links(principal_id, held.proposal_id)
+            if not (link.role is EvidenceRole.DIRECT and link.entity_observation_id in cited)
+        ]
+
+
+#: What `decision_reason` records for an acceptance, which states no reason of
+#: its own. Section 13 gives a reason to the five dispositions that depart from
+#: what was proposed and to none of the three that carry it out, but
+#: `entity_proposals` requires a decision to say something -- so this says the
+#: true thing rather than echoing a caller's words that were never asked for.
+_ACCEPTANCE_REASON: Final = "accepted on review"
+
+
 @dataclass(frozen=True, slots=True)
 class ObserveCommand:
     """One observation to record, with the Principal already resolved.
@@ -1100,6 +2461,62 @@ class ObservationAdmission:
 
 
 @dataclass(frozen=True, slots=True)
+class ProposalAdmission:
+    """What one admitted proposal is, without the mutation it asks for.
+
+    No payload, on `ObservationAdmission`'s terms: the fields a proposal carries
+    are a display name, an address or a reason read out of somebody's mail, and a
+    receipt that echoed them would put them on a second surface for no gain — and
+    a *deduped* admission would put the earlier producer's text on this one.
+
+    `requirement` is derived from the kind and is here because it is the answer a
+    producer needs next: whether what it proposed will wait for a person, wait
+    for the operator, or may clear a threshold. Reading it off the admission is
+    how a producer learns that without guessing from the kind.
+
+    The server-minted review case identifier and its initial version are included
+    so the proposal receipt can be correlated with the canonical Review plane.
+    """
+
+    proposal_id: str
+    kind: EntityProposalKind
+    state: EntityProposalState
+    requirement: ReviewRequirement
+    dedupe_sha256: str
+    observation_ids: tuple[str, ...]
+    proposed_at: datetime
+    review_case_id: str
+    review_version: int
+    #: False when an open-equivalent proposal already said this, in which case
+    #: every other field describes *that* proposal. The producer's request was
+    #: understood and nothing was written.
+    created: bool
+
+
+def _review_case_for(kind: EntityProposalKind) -> str:
+    """A freshly issued canonical Review case for every producer proposal."""
+    requirement_for(kind)  # totality guard for a future kind
+    return issue_identifier(IdKind.REVIEW_CASE)
+
+
+def _admission(proposal: EntityProposal, *, created: bool) -> ProposalAdmission:
+    if proposal.review_case_id is None:
+        raise ValueError("a producer proposal belongs to the canonical Review plane")
+    return ProposalAdmission(
+        proposal_id=proposal.proposal_id,
+        kind=proposal.kind,
+        state=proposal.state,
+        requirement=proposal.requirement,
+        dedupe_sha256=proposal.dedupe_sha256,
+        observation_ids=proposal.observation_ids,
+        proposed_at=proposal.proposed_at,
+        review_case_id=proposal.review_case_id,
+        review_version=0,
+        created=created,
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class MentionResolution:
     """What one resolution decision decided, and what it left behind."""
 
@@ -1162,6 +2579,48 @@ _ACTOR_CLASS: Mapping[ObservationAuthority, ActorClass] = {
 #: built out of the observation and the refusals -- and building it here would
 #: put the resolver's own vocabulary in a module whose subject is governance.
 type _FreshResolution = Callable[[EntityObservation, frozenset[str], datetime], EntityResolution]
+
+
+def _from_receipt(admission: EntityMutationAdmission) -> _PromotedRecord:
+    """What one authoring-plane promotion produced, read off its receipt.
+
+    **The version is the child's where there is a child and the entity's
+    otherwise, and that is not a choice between two numbers that mean the same
+    thing.** `accepted_record_id` names the record the proposal became, so the
+    version beside it has to be that record's own — an alias promoted at the
+    entity's version would answer "what version of this alias did the review
+    produce" with a number about a different row. `EntityMutationReceipt`
+    carries both because the entity is the aggregate and every child write
+    advances it too; this reads the one the family names.
+
+    A replayed admission is not a special case here. It carries the same record
+    and the same version as the write it replays, which is the whole point of
+    an idempotency store, and a promotion answered from one has still named the
+    record its acceptance produced.
+    """
+    receipt = admission.receipt
+    if receipt.record_family is MutationRecordFamily.ENTITY:
+        return _PromotedRecord(
+            record_family=receipt.record_family,
+            record_id=receipt.record_id,
+            record_version=receipt.entity_version,
+        )
+    if receipt.child_version is None:
+        raise UnpromotableProposalError("a promoted child record carries its own version")
+    return _PromotedRecord(
+        record_family=receipt.record_family,
+        record_id=receipt.record_id,
+        record_version=receipt.child_version,
+    )
+
+
+def _from_directed(receipt: DirectedReceipt) -> _PromotedRecord:
+    """What one directed-plane promotion produced. `version` is the record's own."""
+    return _PromotedRecord(
+        record_family=receipt.record_family,
+        record_id=receipt.record_id,
+        record_version=receipt.version,
+    )
 
 
 def _observation_state(admission: ObservationAdmission) -> dict[str, object]:

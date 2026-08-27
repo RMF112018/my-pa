@@ -61,7 +61,7 @@ from __future__ import annotations
 import ast
 from collections.abc import Iterable, Iterator, Mapping
 from pathlib import Path
-from typing import Final
+from typing import Final, Literal
 
 import pytest
 
@@ -73,7 +73,9 @@ PACKAGE: Final = ROOT / "src" / "my_pa" / "adapters" / "mcp"
 #: Every module in the package, by name. Written out so that a new module is a
 #: decision recorded here rather than a file that quietly joins the scan — or,
 #: worse, one the scan never notices it did not read.
-MODULES: Final[frozenset[str]] = frozenset({"__init__.py", "remote.py", "server.py", "tools.py"})
+MODULES: Final[frozenset[str]] = frozenset(
+    {"__init__.py", "chatllm_gateway.py", "remote.py", "server.py", "tools.py"}
+)
 
 #: Exactly what this package may import from this repository. An allowlist, in
 #: the `D-81` shape: an entry that no longer matches reddens, and a new import is
@@ -106,6 +108,7 @@ ADMISSIBLE_IMPORTS: Final[frozenset[str]] = frozenset(
         "my_pa",
         "my_pa.adapters.mcp.server",
         "my_pa.adapters.mcp.remote",
+        "my_pa.adapters.mcp.chatllm_gateway",
         "my_pa.adapters.mcp.tools",
         "my_pa.adapters.normalization",
         "my_pa.adapters.remote_request",
@@ -390,7 +393,7 @@ def test_the_scan_reads_every_module_in_the_package() -> None:
     """Guards every zero below. A walk that parsed nothing passes everything."""
     modules = _modules()
     assert {path.name for path in modules} == MODULES
-    assert len(modules) == 4, f"the package now holds {[p.name for p in modules]}"
+    assert len(modules) == 5, f"the package now holds {[p.name for p in modules]}"
     # A positive control on the parser: the package really does contain code, so
     # the AST claims below are about statements rather than about empty files.
     statements = sum(len(list(ast.walk(_tree(path)))) for path in modules)
@@ -1198,6 +1201,376 @@ def request_field_reads(tree: ast.AST) -> list[tuple[int, str]]:
     return found
 
 
+def _constant_key(node: ast.AST) -> str | None:
+    """The string key a subscript or accessor names, if it is a constant."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Subscript):
+        return _constant_key(node.slice)
+    return None
+
+
+#: Closed façade/describe keys the compact gateway may read from the *outer*
+#: request mapping. Nested canonical `arguments` are a different taint class:
+#: once obtained they admit no field reads at all, regardless of key name.
+OUTER_GATEWAY_KEYS: Final[frozenset[str]] = frozenset(
+    {
+        "arguments",
+        "capability",
+        "cursor",
+        "feature",
+        "kind",
+        "limit",
+        "query",
+    }
+)
+
+TaintClass = Literal["outer", "nested"]
+_Returned = tuple[TaintClass | None, tuple[TaintClass | None, ...] | None]
+_NAMED_ACCESSORS: Final[frozenset[str]] = frozenset(
+    {"get", "pop", "setdefault", "__getitem__", "getitem"}
+)
+
+
+def _walk_skip_nested_defs(node: ast.AST) -> Iterator[ast.AST]:
+    yield node
+    for child in ast.iter_child_nodes(node):
+        if isinstance(child, ast.FunctionDef | ast.AsyncFunctionDef | ast.ClassDef):
+            continue
+        yield from _walk_skip_nested_defs(child)
+
+
+def _direct_returns(function: ast.FunctionDef | ast.AsyncFunctionDef) -> list[ast.Return]:
+    found: list[ast.Return] = []
+    for stmt in function.body:
+        for node in _walk_skip_nested_defs(stmt):
+            if isinstance(node, ast.Return):
+                found.append(node)
+    return found
+
+
+def _stronger_taint(left: TaintClass | None, right: TaintClass | None) -> TaintClass | None:
+    if left == "nested" or right == "nested":
+        return "nested"
+    if left == "outer" or right == "outer":
+        return "outer"
+    return None
+
+
+def _bound_accessor_key(call: ast.Call) -> str | None:
+    return _constant_key(call.args[0]) if call.args else None
+
+
+def _unbound_accessor_key(call: ast.Call) -> str | None:
+    return _constant_key(call.args[1]) if len(call.args) >= 2 else None
+
+
+def _expr_mapping_class(
+    node: ast.AST,
+    outer: set[str],
+    nested: set[str],
+    returned: Mapping[str, _Returned],
+) -> TaintClass | None:
+    """Whether `node` holds the outer façade mapping or nested canonical arguments.
+
+    Scalars read from allowlisted outer keys are neither. Nested wins when an
+    expression could be either, because that is the class that must stay opaque.
+    """
+    if isinstance(node, ast.Name):
+        if node.id in nested:
+            return "nested"
+        if node.id in outer:
+            return "outer"
+        return None
+    if isinstance(node, ast.IfExp):
+        return _stronger_taint(
+            _expr_mapping_class(node.body, outer, nested, returned),
+            _expr_mapping_class(node.orelse, outer, nested, returned),
+        )
+    if isinstance(node, ast.BoolOp):
+        cls: TaintClass | None = None
+        for value in node.values:
+            cls = _stronger_taint(cls, _expr_mapping_class(value, outer, nested, returned))
+        return cls
+    if isinstance(node, ast.Starred):
+        return _expr_mapping_class(node.value, outer, nested, returned)
+    if isinstance(node, ast.Attribute):
+        # A bound method or other attribute taken from a nested mapping still
+        # carries that mapping. `getter = nested.get` must not drop the class.
+        return _expr_mapping_class(node.value, outer, nested, returned)
+    if isinstance(node, ast.Subscript):
+        receiver = _expr_mapping_class(node.value, outer, nested, returned)
+        if receiver == "outer" and _constant_key(node.slice) == "arguments":
+            return "nested"
+        return "nested" if receiver == "nested" else None
+    if not isinstance(node, ast.Call):
+        return None
+    if isinstance(node.func, ast.Name):
+        info = returned.get(node.func.id)
+        if info is not None:
+            return info[0]
+        if node.func.id == "dict" and node.args:
+            return _expr_mapping_class(node.args[0], outer, nested, returned)
+        return None
+    if not isinstance(node.func, ast.Attribute):
+        return None
+    if node.func.attr == "copy":
+        return _expr_mapping_class(node.func.value, outer, nested, returned)
+    if node.func.attr not in ACCESSORS:
+        return None
+    receiver = _expr_mapping_class(node.func.value, outer, nested, returned)
+    if receiver == "outer":
+        return "nested" if _bound_accessor_key(node) == "arguments" else None
+    if receiver == "nested":
+        return "nested"
+    if not node.args:
+        return None
+    first = _expr_mapping_class(node.args[0], outer, nested, returned)
+    if first == "outer":
+        return "nested" if _unbound_accessor_key(node) == "arguments" else None
+    return "nested" if first == "nested" else None
+
+
+def _merge_returned(
+    current: _Returned,
+    value: ast.expr,
+    returned: Mapping[str, _Returned],
+    outer: set[str],
+    nested: set[str],
+) -> _Returned:
+    value_cls, elements = current
+    if isinstance(value, ast.Tuple):
+        elts = tuple(_expr_mapping_class(elt, outer, nested, returned) for elt in value.elts)
+        if elements is None:
+            elements = elts
+        else:
+            paired = zip(elements, elts, strict=False)
+            elements = tuple(_stronger_taint(left, right) for left, right in paired)
+        return value_cls, elements
+    return _stronger_taint(value_cls, _expr_mapping_class(value, outer, nested, returned)), elements
+
+
+def _add_taint(name: str, cls: TaintClass | None, outer: set[str], nested: set[str]) -> bool:
+    if cls == "nested" and name not in nested:
+        nested.add(name)
+        return True
+    if cls == "outer" and name not in outer:
+        outer.add(name)
+        return True
+    return False
+
+
+def gateway_taint_classes(
+    tree: ast.AST,
+) -> tuple[frozenset[str], frozenset[str], dict[str, _Returned]]:
+    """Outer façade mappings vs nested canonical `arguments` mappings.
+
+    Outer seeds are request-shaped parameters (`document`, and the rest of
+    `REQUEST_RECEIVERS`). A value becomes nested only when it is read out of an
+    outer mapping under the key `arguments`, rebound from such a value, returned
+    in a tuple slot that carries it, or received as a parameter that a caller
+    passed it in — including overflow into that callee's `*args` / `**kwargs`.
+    Scalars from other outer keys do not join either set — that is what keeps
+    catalog-row `.get("summary")` from looking like a request read.
+    """
+    functions = {
+        node.name: node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+    outer: set[str] = set()
+    nested: set[str] = set()
+    bound = _module_bindings(tree)
+    loaded = {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
+    outer |= {name for name in REQUEST_RECEIVERS if name in loaded and name not in bound}
+    for function in functions.values():
+        outer |= {entry.arg for entry in _parameters(function) if entry.arg in REQUEST_RECEIVERS}
+
+    returned: dict[str, _Returned] = dict.fromkeys(functions, (None, None))
+    changed = True
+    while changed:
+        changed = False
+        next_returned: dict[str, _Returned] = dict.fromkeys(functions, (None, None))
+        for name, function in functions.items():
+            merged: _Returned = (None, None)
+            for stmt in _direct_returns(function):
+                if stmt.value is None:
+                    continue
+                merged = _merge_returned(merged, stmt.value, returned, outer, nested)
+            next_returned[name] = merged
+        if next_returned != returned:
+            returned = next_returned
+            changed = True
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Assign):
+                if len(node.targets) == 1 and isinstance(node.targets[0], ast.Tuple | ast.List):
+                    elts = node.targets[0].elts
+                    if isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name):
+                        elements = returned.get(node.value.func.id, (None, None))[1]
+                        if elements is not None:
+                            for target, cls in zip(elts, elements, strict=False):
+                                if isinstance(target, ast.Name):
+                                    changed |= _add_taint(target.id, cls, outer, nested)
+                            continue
+                    if isinstance(node.value, ast.Tuple):
+                        for target, elt in zip(elts, node.value.elts, strict=False):
+                            if isinstance(target, ast.Name):
+                                changed |= _add_taint(
+                                    target.id,
+                                    _expr_mapping_class(elt, outer, nested, returned),
+                                    outer,
+                                    nested,
+                                )
+                        continue
+                cls = _expr_mapping_class(node.value, outer, nested, returned)
+                for name in _bound_names(node.targets):
+                    changed |= _add_taint(name, cls, outer, nested)
+            elif isinstance(node, ast.AnnAssign | ast.NamedExpr) and node.value is not None:
+                cls = _expr_mapping_class(node.value, outer, nested, returned)
+                for name in _bound_names([node.target]):
+                    changed |= _add_taint(name, cls, outer, nested)
+            elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+                called = functions.get(node.func.id)
+                if called is None:
+                    continue
+                positional = [entry.arg for entry in (*called.args.posonlyargs, *called.args.args)]
+                named = set(positional) | {entry.arg for entry in called.args.kwonlyargs}
+                for index, argument in enumerate(node.args):
+                    cls = _expr_mapping_class(argument, outer, nested, returned)
+                    if index < len(positional):
+                        changed |= _add_taint(positional[index], cls, outer, nested)
+                    elif called.args.vararg is not None:
+                        changed |= _add_taint(called.args.vararg.arg, cls, outer, nested)
+                for keyword in node.keywords:
+                    cls = _expr_mapping_class(keyword.value, outer, nested, returned)
+                    if keyword.arg in named:
+                        changed |= _add_taint(keyword.arg, cls, outer, nested)
+                    elif called.args.kwarg is not None:
+                        changed |= _add_taint(called.args.kwarg.arg, cls, outer, nested)
+    return frozenset(outer), frozenset(nested), returned
+
+
+def _nested_accessor_key(call: ast.Call, receiver_is_nested: bool) -> str:
+    attr = call.func.attr if isinstance(call.func, ast.Attribute) else ""
+    if attr in {"keys", "items", "values"}:
+        return f"*{attr}*"
+    key = _bound_accessor_key(call) if receiver_is_nested else _unbound_accessor_key(call)
+    return key if key is not None else "*"
+
+
+def _match_pattern_keys(pattern: ast.pattern) -> list[str]:
+    """Keys a `match` pattern would bind out of a nested mapping, if any.
+
+    A bare name (`case carried:`) is whole-value carry and is not an inspection.
+    Mapping, sequence, and class patterns open structure.
+    """
+    if isinstance(pattern, ast.MatchMapping):
+        keys = [_constant_key(key) or "*" for key in pattern.keys]
+        if pattern.rest is not None:
+            keys.append("*rest*")
+        return keys or ["*mapping*"]
+    if isinstance(pattern, ast.MatchOr):
+        found: list[str] = []
+        for inner in pattern.patterns:
+            found.extend(_match_pattern_keys(inner))
+        return found
+    if isinstance(pattern, ast.MatchAs) and pattern.pattern is not None:
+        return _match_pattern_keys(pattern.pattern)
+    if isinstance(pattern, ast.MatchSequence):
+        return ["*sequence*"]
+    if isinstance(pattern, ast.MatchClass):
+        found = ["*class*"]
+        for inner in (*pattern.patterns, *pattern.kwd_patterns):
+            found.extend(_match_pattern_keys(inner))
+        return found
+    return []
+
+
+def nested_canonical_inspections(tree: ast.AST) -> list[tuple[int, str]]:
+    """Every field-level inspection of nested canonical `arguments`.
+
+    The key name is evidence, not the rule. `title`, `payload`, `future_field`,
+    and a name introduced tomorrow are the same violation: a field read from a
+    mapping classified as nested canonical arguments.
+    """
+    outer, nested, returned = gateway_taint_classes(tree)
+    outer_s, nested_s = set(outer), set(nested)
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            if _expr_mapping_class(node.value, outer_s, nested_s, returned) == "nested":
+                found.append((node.lineno, _constant_key(node.slice) or "*"))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr not in ACCESSORS:
+                continue
+            receiver = _expr_mapping_class(node.func.value, outer_s, nested_s, returned)
+            if receiver == "nested":
+                found.append((node.lineno, _nested_accessor_key(node, True)))
+                continue
+            first = (
+                _expr_mapping_class(node.args[0], outer_s, nested_s, returned)
+                if node.args
+                else None
+            )
+            if first == "nested":
+                found.append((node.lineno, _nested_accessor_key(node, False)))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            # Bound method held in a name: `getter = nested.get; getter("field")`.
+            if node.func.id in nested_s:
+                found.append((node.lineno, _bound_accessor_key(node) or "*"))
+        elif isinstance(node, ast.Match):
+            if _expr_mapping_class(node.subject, outer_s, nested_s, returned) == "nested":
+                for case in node.cases:
+                    for key in _match_pattern_keys(case.pattern):
+                        found.append((node.lineno, key))
+        elif isinstance(node, ast.For | ast.AsyncFor | ast.comprehension):
+            if _expr_mapping_class(node.iter, outer_s, nested_s, returned) == "nested":
+                found.append((node.lineno, "*iter*"))
+        elif isinstance(node, ast.Compare):
+            for op, comparator in zip(node.ops, node.comparators, strict=True):
+                if not isinstance(op, ast.In | ast.NotIn):
+                    continue
+                if _expr_mapping_class(comparator, outer_s, nested_s, returned) == "nested":
+                    found.append((node.lineno, "*contains*"))
+    return found
+
+
+def outer_gateway_field_reads(tree: ast.AST) -> list[tuple[int, str]]:
+    """Named keys read out of the outer façade/describe mapping."""
+    outer, nested, returned = gateway_taint_classes(tree)
+    outer_s, nested_s = set(outer), set(nested)
+    found: list[tuple[int, str]] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Subscript):
+            if _expr_mapping_class(node.value, outer_s, nested_s, returned) != "outer":
+                continue
+            found.append((node.lineno, _constant_key(node.slice) or "*"))
+        elif isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
+            if node.func.attr not in _NAMED_ACCESSORS:
+                continue
+            receiver = _expr_mapping_class(node.func.value, outer_s, nested_s, returned)
+            if receiver == "outer":
+                found.append((node.lineno, _bound_accessor_key(node) or "*"))
+                continue
+            first = (
+                _expr_mapping_class(node.args[0], outer_s, nested_s, returned)
+                if node.args
+                else None
+            )
+            if first == "outer":
+                found.append((node.lineno, _unbound_accessor_key(node) or "*"))
+    return found
+
+
+def disallowed_outer_gateway_reads(tree: ast.AST) -> list[tuple[int, str]]:
+    """Outer façade reads that are not closed wrapper/describe keys."""
+    return [
+        (line, key)
+        for line, key in outer_gateway_field_reads(tree)
+        if key not in OUTER_GATEWAY_KEYS
+    ]
+
+
 @pytest.mark.parametrize("path", _modules(), ids=_relative)
 def test_the_adapter_never_reads_a_field_out_of_a_request(path: Path) -> None:
     """The document goes to `normalize` whole, or it is not going through one path.
@@ -1205,8 +1578,27 @@ def test_the_adapter_never_reads_a_field_out_of_a_request(path: Path) -> None:
     Validation, idempotency and expected-version logic all begin by reading a
     field. `_document` measures the encoded size of the whole document and hands
     it on; nothing in this package looks inside it.
+
+    `chatllm_gateway.py` may inspect the outer façade/describe mapping's closed
+    key set, then must hand the nested canonical `arguments` mapping onward
+    whole. Nested opacity is structural: it does not depend on which target
+    field name is being read.
     """
-    reads = request_field_reads(_tree(path))
+    tree = _tree(path)
+    if path.name == "chatllm_gateway.py":
+        nested_reads = nested_canonical_inspections(tree)
+        assert not nested_reads, (
+            f"{_relative(path)} inspects nested canonical arguments {nested_reads}. "
+            "NO_FIELD_READS_FROM_NESTED_CANONICAL_ARGUMENTS: the nested document "
+            "is carried, returned, or passed onward, never opened"
+        )
+        extra = disallowed_outer_gateway_reads(tree)
+        assert not extra, (
+            f"{_relative(path)} reads non-façade keys {extra} from the outer "
+            "gateway document. Outer reads are the closed wrapper/describe set"
+        )
+        return
+    reads = request_field_reads(tree)
     assert not reads, (
         f"{_relative(path)} reads {reads} out of a caller's request. The request "
         "document reaches `adapters.normalization` whole; a transport that opens "
@@ -1215,11 +1607,231 @@ def test_the_adapter_never_reads_a_field_out_of_a_request(path: Path) -> None:
     )
 
 
-#: The reimplementation that got through, in the two spellings that got it
-#: through: the capability name composed out of an `ast.BinOp` rather than
-#: written, and the request rebound to a local the old receiver list did not
-#: name. Kept verbatim, and wrapped in the signature `_answer` really has, because
-#: the value of a control is what it caught rather than what it describes.
+def test_nested_opacity_is_not_a_finite_key_denylist() -> None:
+    """The control must not reappear as `GATEWAY_FORBIDDEN_NESTED_KEYS`."""
+    assigned: list[str] = []
+    for node in ast.walk(_tree(Path(__file__))):
+        if isinstance(node, ast.Assign):
+            assigned.extend(sorted(_bound_names(node.targets)))
+        elif isinstance(node, ast.AnnAssign):
+            assigned.extend(sorted(_bound_names([node.target])))
+    assert "GATEWAY_FORBIDDEN_NESTED_KEYS" not in assigned
+    assert "forbidden_gateway_field_reads" not in {
+        node.name
+        for node in ast.walk(_tree(Path(__file__)))
+        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
+    }
+
+
+def test_outer_facade_and_describe_reads_remain_allowed_and_nested_is_forwarded() -> None:
+    """Positive controls: closed outer keys, whole nested forwarding."""
+    allowed = ast.parse(
+        "def f(document):\n"
+        '    cap = document.get("capability")\n'
+        '    nested = document.get("arguments")\n'
+        '    feature = document.get("feature")\n'
+        '    kind = document.get("kind")\n'
+        '    query = document.get("query")\n'
+        '    cursor = document.get("cursor")\n'
+        '    limit = document.get("limit")\n'
+        "    return cap, nested, feature, kind, query, cursor, limit\n"
+    )
+    keys = {key for _, key in outer_gateway_field_reads(allowed)}
+    assert keys == {
+        "arguments",
+        "capability",
+        "cursor",
+        "feature",
+        "kind",
+        "limit",
+        "query",
+    }
+    assert not nested_canonical_inspections(allowed)
+    assert not disallowed_outer_gateway_reads(allowed)
+
+    gateway = _tree(PACKAGE / "chatllm_gateway.py")
+    present = {key for _, key in outer_gateway_field_reads(gateway)}
+    assert {
+        "arguments",
+        "capability",
+        "cursor",
+        "feature",
+        "kind",
+        "limit",
+        "query",
+    } <= present
+    assert present <= OUTER_GATEWAY_KEYS
+    assert not nested_canonical_inspections(gateway)
+    assert not disallowed_outer_gateway_reads(gateway)
+
+    whole_match = ast.parse(
+        "def f(document):\n"
+        '    nested = document.get("arguments")\n'
+        "    match nested:\n"
+        "        case carried:\n"
+        "            return carried\n"
+    )
+    assert not nested_canonical_inspections(whole_match)
+
+
+@pytest.mark.parametrize(
+    ("label", "source"),
+    [
+        (
+            "payload",
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            '    return nested.get("payload")\n',
+        ),
+        (
+            "title",
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            '    return nested.get("title")\n',
+        ),
+        (
+            "future_field",
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            '    return nested.get("future_field")\n',
+        ),
+        (
+            "alias-rebinding",
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            "    carried = nested\n"
+            '    return carried.get("future_field")\n',
+        ),
+        (
+            "unbound-accessor",
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            '    return dict.get(nested, "future_field")\n',
+        ),
+        (
+            "subscript",
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            '    return nested["future_field"]\n',
+        ),
+        (
+            "star-args",
+            "def _peek(*rest):\n"
+            '    return rest[0].get("future_field")\n'
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            "    return _peek(nested)\n",
+        ),
+        (
+            "named-into-kwargs",
+            "def _peek(**kw):\n"
+            '    return kw["value"].get("future_field")\n'
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            "    return _peek(value=nested)\n",
+        ),
+        (
+            "kwargs-unpack",
+            "def _peek(**kw):\n"
+            '    return kw["future_field"]\n'
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            "    return _peek(**nested)\n",
+        ),
+        (
+            "bound-method",
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            "    getter = nested.get\n"
+            '    return getter("future_field")\n',
+        ),
+        (
+            "match-mapping",
+            "def f(document):\n"
+            '    nested = document.get("arguments")\n'
+            "    match nested:\n"
+            '        case {"future_field": value}:\n'
+            "            return value\n"
+            "    return None\n",
+        ),
+    ],
+)
+def test_nested_canonical_field_reads_fail_regardless_of_key(label: str, source: str) -> None:
+    """Mutation of NO_FIELD_READS_FROM_NESTED_CANONICAL_ARGUMENTS reddens.
+
+    The label is the plant, not an enumerated denylist. `title` and
+    `future_field` have no special status: they fail because they are field
+    reads from the nested mapping.
+    """
+    found = nested_canonical_inspections(ast.parse(source))
+    assert found, f"{label} plant was not detected: {source!r}"
+    if label in {"payload", "title", "future_field"}:
+        assert any(key == label for _, key in found), found
+    else:
+        assert any(key == "future_field" for _, key in found), found
+
+
+def test_nested_plants_are_visible_inside_the_real_gateway_module() -> None:
+    """In-situ plants: the real module plus a nested read still reddens."""
+    original = (PACKAGE / "chatllm_gateway.py").read_text(encoding="utf-8")
+    assert not nested_canonical_inspections(ast.parse(original))
+    for key in ("payload", "title", "future_field"):
+        planted = ast.parse(
+            original
+            + "\n\ndef _planted_nested_read(document):\n"
+            + '    nested = document.get("arguments")\n'
+            + f'    return nested.get("{key}")\n'
+        )
+        found = nested_canonical_inspections(planted)
+        assert any(name == key for _, name in found), (key, found)
+    structural = (
+        (
+            "star-args",
+            "def _planted_peek_star(*rest):\n"
+            "    return rest[0].get('future_field')\n"
+            "def _planted_star(document):\n"
+            "    nested = document.get('arguments')\n"
+            "    return _planted_peek_star(nested)\n",
+        ),
+        (
+            "named-into-kwargs",
+            "def _planted_peek_kw(**kw):\n"
+            "    return kw['value'].get('future_field')\n"
+            "def _planted_kw(document):\n"
+            "    nested = document.get('arguments')\n"
+            "    return _planted_peek_kw(value=nested)\n",
+        ),
+        (
+            "kwargs-unpack",
+            "def _planted_peek_unpack(**kw):\n"
+            "    return kw['future_field']\n"
+            "def _planted_unpack(document):\n"
+            "    nested = document.get('arguments')\n"
+            "    return _planted_peek_unpack(**nested)\n",
+        ),
+        (
+            "bound-method",
+            "def _planted_bound(document):\n"
+            "    nested = document.get('arguments')\n"
+            "    getter = nested.get\n"
+            "    return getter('future_field')\n",
+        ),
+        (
+            "match-mapping",
+            "def _planted_match(document):\n"
+            "    nested = document.get('arguments')\n"
+            "    match nested:\n"
+            "        case {'future_field': value}:\n"
+            "            return value\n"
+            "    return None\n",
+        ),
+    )
+    for label, snippet in structural:
+        planted = ast.parse(original + "\n\n" + snippet)
+        found = nested_canonical_inspections(planted)
+        assert any(name == "future_field" for _, name in found), (label, found)
+
+
 EVADING_PLANT: Final = """
 def _answer(service, principal, name, arguments):
     seen: dict[str, int] = {}
@@ -1259,10 +1871,15 @@ def test_both_detectors_report_the_plant_that_got_through() -> None:
     assert any(entry.startswith("carried.") for _, entry in reads)
 
     # The other end of `D-55`: the real module passes both detectors, so they
-    # distinguish rather than merely refuse.
+    # distinguish rather than merely refuse. The compact façade may inspect
+    # closed outer wrapper/describe keys only and must not open nested arguments.
     for path in _modules():
         tree = _tree(path)
-        assert not request_field_reads(tree)
+        if path.name == "chatllm_gateway.py":
+            assert not nested_canonical_inspections(tree)
+            assert not disallowed_outer_gateway_reads(tree)
+        else:
+            assert not request_field_reads(tree)
 
 
 @pytest.mark.parametrize(

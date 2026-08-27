@@ -23,6 +23,28 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Record checkout identity
+        shell: bash
+        env:
+          INTENDED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD="$(git rev-parse HEAD)"
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          echo "repository=${GITHUB_REPOSITORY}"
+          echo "checked_out_commit=${HEAD}"
+          echo "checked_out_tree=${TREE}"
+          echo "intended_commit=${INTENDED_COMMIT}"
+          echo "github_sha=${GITHUB_SHA}"
+          echo "github_ref=${GITHUB_REF:-}"
+          echo "event_name=${GITHUB_EVENT_NAME}"
+          git log -1 --format='subject=%s'
+          if [[ "${HEAD}" != "${INTENDED_COMMIT}" ]]; then
+            echo "::error::Checked-out HEAD is not the intended commit (${HEAD} != ${INTENDED_COMMIT})"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -86,6 +108,25 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
+          python - <<'PY'
+          import inspect
+          import tomllib
+          from pathlib import Path
+
+          from my_pa.adapters.mcp.server import _answer
+          from my_pa.application.service import ApplicationService
+
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          print(f"package_name={project['project']['name']}")
+          print(f"package_version={project['project']['version']}")
+          print(
+              "invoke="
+              f"{ApplicationService.invoke.__module__}.{ApplicationService.invoke.__qualname__}"
+          )
+          print(f"invoke_file={inspect.getfile(ApplicationService)}")
+          print(f"answer={_answer.__module__}.{_answer.__qualname__}")
+          print(f"answer_file={inspect.getfile(_answer)}")
+          PY
           python -m ruff check .
           python -m ruff format --check .
           # `mypy` with no path argument, deliberately: an explicit target
@@ -134,6 +175,28 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Record checkout identity
+        shell: bash
+        env:
+          INTENDED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD="$(git rev-parse HEAD)"
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          echo "repository=${GITHUB_REPOSITORY}"
+          echo "checked_out_commit=${HEAD}"
+          echo "checked_out_tree=${TREE}"
+          echo "intended_commit=${INTENDED_COMMIT}"
+          echo "github_sha=${GITHUB_SHA}"
+          echo "github_ref=${GITHUB_REF:-}"
+          echo "event_name=${GITHUB_EVENT_NAME}"
+          git log -1 --format='subject=%s'
+          if [[ "${HEAD}" != "${INTENDED_COMMIT}" ]]; then
+            echo "::error::Checked-out HEAD is not the intended commit (${HEAD} != ${INTENDED_COMMIT})"
+            exit 1
+          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -178,6 +241,28 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Record checkout identity
+        shell: bash
+        env:
+          INTENDED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD="$(git rev-parse HEAD)"
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          echo "repository=${GITHUB_REPOSITORY}"
+          echo "checked_out_commit=${HEAD}"
+          echo "checked_out_tree=${TREE}"
+          echo "intended_commit=${INTENDED_COMMIT}"
+          echo "github_sha=${GITHUB_SHA}"
+          echo "github_ref=${GITHUB_REF:-}"
+          echo "event_name=${GITHUB_EVENT_NAME}"
+          git log -1 --format='subject=%s'
+          if [[ "${HEAD}" != "${INTENDED_COMMIT}" ]]; then
+            echo "::error::Checked-out HEAD is not the intended commit (${HEAD} != ${INTENDED_COMMIT})"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -196,6 +281,26 @@ jobs:
 
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
+
+          python - <<'PY'
+          import inspect
+          import tomllib
+          from pathlib import Path
+
+          from my_pa.adapters.mcp.server import _answer
+          from my_pa.application.service import ApplicationService
+
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          print(f"package_name={project['project']['name']}")
+          print(f"package_version={project['project']['version']}")
+          print(
+              "invoke="
+              f"{ApplicationService.invoke.__module__}.{ApplicationService.invoke.__qualname__}"
+          )
+          print(f"invoke_file={inspect.getfile(ApplicationService)}")
+          print(f"answer={_answer.__module__}.{_answer.__qualname__}")
+          print(f"answer_file={inspect.getfile(_answer)}")
+          PY
 
           # Derive the pins from the declaration rather than restating them, and
           # require a floor for every runtime dependency. Parsing with
@@ -363,6 +468,28 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+
+      - name: Record checkout identity
+        shell: bash
+        env:
+          INTENDED_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: |
+          set -euo pipefail
+          HEAD="$(git rev-parse HEAD)"
+          TREE="$(git rev-parse 'HEAD^{tree}')"
+          echo "repository=${GITHUB_REPOSITORY}"
+          echo "checked_out_commit=${HEAD}"
+          echo "checked_out_tree=${TREE}"
+          echo "intended_commit=${INTENDED_COMMIT}"
+          echo "github_sha=${GITHUB_SHA}"
+          echo "github_ref=${GITHUB_REF:-}"
+          echo "event_name=${GITHUB_EVENT_NAME}"
+          git log -1 --format='subject=%s'
+          if [[ "${HEAD}" != "${INTENDED_COMMIT}" ]]; then
+            echo "::error::Checked-out HEAD is not the intended commit (${HEAD} != ${INTENDED_COMMIT})"
+            exit 1
+          fi
 
       - name: Set up Python
         uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
@@ -374,6 +501,25 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           python -m pip install -e ".[dev]"
+          python - <<'PY'
+          import inspect
+          import tomllib
+          from pathlib import Path
+
+          from my_pa.adapters.mcp.server import _answer
+          from my_pa.application.service import ApplicationService
+
+          project = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))
+          print(f"package_name={project['project']['name']}")
+          print(f"package_version={project['project']['version']}")
+          print(
+              "invoke="
+              f"{ApplicationService.invoke.__module__}.{ApplicationService.invoke.__qualname__}"
+          )
+          print(f"invoke_file={inspect.getfile(ApplicationService)}")
+          print(f"answer={_answer.__module__}.{_answer.__qualname__}")
+          print(f"answer_file={inspect.getfile(_answer)}")
+          PY
 
       - name: Run the database tier against the disposable service
         shell: bash

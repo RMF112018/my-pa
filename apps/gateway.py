@@ -270,6 +270,7 @@ def _mcp_remote(args: argparse.Namespace) -> int:
             # The transport's canonical read-only profile performs the final
             # deterministic intersection, so no write name is recreated here.
             capabilities &= remote_tool_names(runtime.service, writes_enabled=False)
+        compact = settings.compact_publication_for_client(authenticated.client_id)
         return RemoteAccessContext(
             principal=authenticated.principal,
             allowed_capabilities=capabilities,
@@ -278,6 +279,7 @@ def _mcp_remote(args: argparse.Namespace) -> int:
                 authenticated.capabilities,
                 write_allowed=authenticated.write_allowed,
             ),
+            compact_publication=compact,
         )
 
     from my_pa.adapters.mcp.remote import remote_tool_names

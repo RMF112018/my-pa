@@ -81,6 +81,16 @@ deployment and private readiness checks:
    `capabilities.get`, and confirm mutation tools remain absent unless separately
    and intentionally granted and enabled.
 
+The compact ChatLLM façade is a **publication profile on this same `/mcp`
+resource**, default-off. It does not add a URL, OAuth audience, or
+protected-resource document. `MY_PA_MCP_CHATLLM_GATEWAY_ENABLED` plus an exact
+OAuth client-ID allowlist (`MY_PA_MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS`) selects
+which already-registered clients see `my_pa.describe` / `my_pa.read` (and
+conditional write/operator umbrellas) instead of the canonical catalog.
+Enabling either variable in production, writing live client IDs, or cutting
+ChatLLM over to the façade is a separate operator commissioning act. Rollback is
+unsetting the flag; grants and OAuth clients are unchanged.
+
 Example bounded approval, using only public identifiers and no secret values:
 
 ```bash

@@ -18,6 +18,7 @@ from my_pa.bootstrap.settings import (
     LogLevel,
     Settings,
     SettingsError,
+    compact_chatllm_publication,
     load_settings,
 )
 from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
@@ -38,6 +39,98 @@ def test_defaults_are_safe() -> None:
     assert settings.contract_strict_mode is True
     assert settings.gateway_bind_mode is GatewayBindMode.LOOPBACK
     assert settings.gateway_bind_host() == "127.0.0.1"
+    assert settings.mcp_chatllm_gateway_enabled is False
+    assert settings.mcp_chatllm_gateway_oauth_client_ids == ""
+    assert settings.chatllm_gateway_oauth_client_id_set() == frozenset()
+
+
+def test_chatllm_gateway_allowlist_is_exact_and_empty_by_default() -> None:
+    enabled = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_ENABLED": "true",
+            f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS": "client-a, client-b",
+        }
+    )
+    assert enabled.mcp_chatllm_gateway_enabled is True
+    assert enabled.chatllm_gateway_oauth_client_id_set() == frozenset({"client-a", "client-b"})
+    still_closed = load_settings(
+        {DATABASE_URL: _A_URL, f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_ENABLED": "true"}
+    )
+    assert still_closed.mcp_chatllm_gateway_enabled is True
+    assert still_closed.chatllm_gateway_oauth_client_id_set() == frozenset()
+
+
+def test_compact_selector_requires_every_conjunct() -> None:
+    member = "client-exact"
+    allowlist = frozenset({member})
+    assert (
+        compact_chatllm_publication(
+            enabled=False,
+            allowlisted_client_ids=allowlist,
+            authenticated_client_id=member,
+        )
+        is False
+    )
+    assert (
+        compact_chatllm_publication(
+            enabled=True,
+            allowlisted_client_ids=frozenset(),
+            authenticated_client_id=member,
+        )
+        is False
+    )
+    assert (
+        compact_chatllm_publication(
+            enabled=True,
+            allowlisted_client_ids=allowlist,
+            authenticated_client_id="other-client",
+        )
+        is False
+    )
+    assert (
+        compact_chatllm_publication(
+            enabled=True,
+            allowlisted_client_ids=allowlist,
+            authenticated_client_id=member,
+        )
+        is True
+    )
+    assert (
+        compact_chatllm_publication(
+            enabled=True,
+            allowlisted_client_ids=allowlist,
+            authenticated_client_id="client-exact-extra",
+        )
+        is False
+    )
+    assert (
+        compact_chatllm_publication(
+            enabled=True,
+            allowlisted_client_ids=allowlist,
+            authenticated_client_id="client",
+        )
+        is False
+    )
+    assert (
+        compact_chatllm_publication(
+            enabled=True,
+            allowlisted_client_ids=allowlist,
+            authenticated_client_id="xxclient-exactyy",
+        )
+        is False
+    )
+    parsed = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_ENABLED": "true",
+            f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS": " client-exact , other ",
+        }
+    )
+    assert parsed.compact_publication_for_client(member) is True
+    assert parsed.compact_publication_for_client("client-exact ") is False
+    source = (Path(__file__).resolve().parents[2] / "apps" / "gateway.py").read_text()
+    assert "compact_publication_for_client" in source
 
 
 def test_container_gateway_bind_is_explicit_and_closed() -> None:

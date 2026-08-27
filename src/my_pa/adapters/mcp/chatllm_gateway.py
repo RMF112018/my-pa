@@ -162,11 +162,11 @@ def _as_object(value: Mapping[str, Any] | None) -> Mapping[str, Any]:
 def _parse_wrapper(wrapper: Mapping[str, Any]) -> tuple[str, Mapping[str, Any]]:
     extra = set(wrapper) - {"capability", "arguments"}
     if extra:
-        raise InvalidRequestError(SafeDetail.CAPABILITY)
+        raise InvalidRequestError(SafeDetail.NAME)
     raw_name = wrapper.get("capability")
     nested = wrapper.get("arguments")
     if not isinstance(raw_name, str) or not raw_name.strip():
-        raise InvalidRequestError(SafeDetail.CAPABILITY)
+        raise InvalidRequestError(SafeDetail.NAME)
     if not isinstance(nested, Mapping):
         raise InvalidRequestError(SafeDetail.PAYLOAD)
     return raw_name, nested
@@ -201,7 +201,7 @@ def prepare_compact_call(
         raise UnsupportedError() from None
     expected = {READ_TOOL: "read", WRITE_TOOL: "write", OPERATOR_TOOL: "operator"}[tool_name]
     if facade_kind(capability) != expected:
-        raise InvalidRequestError(SafeDetail.CAPABILITY_TYPE_MISMATCH)
+        raise InvalidRequestError()
     return target_name, nested
 
 
@@ -237,13 +237,13 @@ def render_describe(wrapper: Mapping[str, Any] | None, *, allowed_canonical: fro
     cursor = document.get("cursor")
     limit = document.get("limit", _DEFAULT_LIMIT)
     if feature is not None and (not isinstance(feature, str) or not feature):
-        raise InvalidRequestError(SafeDetail.FEATURE)
+        raise InvalidRequestError()
     if kind is not None and kind not in _KINDS:
         raise InvalidRequestError()
     if query is not None and (not isinstance(query, str) or not (1 <= len(query) <= _MAX_QUERY)):
         raise InvalidRequestError(SafeDetail.QUERY)
     if exact is not None and (not isinstance(exact, str) or not exact):
-        raise InvalidRequestError(SafeDetail.CAPABILITY)
+        raise InvalidRequestError(SafeDetail.NAME)
     if cursor is not None and (not isinstance(cursor, str) or not cursor):
         raise InvalidRequestError(SafeDetail.CURSOR)
     if not isinstance(limit, int) or isinstance(limit, bool) or not (1 <= limit <= _MAX_LIMIT):

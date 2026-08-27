@@ -24,6 +24,7 @@ from my_pa.adapters.remote_request import (
 )
 from my_pa.application.errors import InvalidRequestError, UnsupportedError
 from my_pa.domain.identity.operation import Capability
+from tests.conftest import Scene
 
 
 def test_facade_names_follow_eligible_kinds() -> None:
@@ -138,3 +139,101 @@ def test_taxonomy_is_not_a_grant() -> None:
             {"capability": Capability.TASKS_SEARCH.value, "arguments": {}},
             allowed_canonical=allowed,
         )
+
+
+def test_prepare_returns_the_same_nested_arguments_object() -> None:
+    nested: dict[str, object] = {}
+    name, forwarded = prepare_compact_call(
+        READ_TOOL,
+        {"capability": Capability.CAPABILITIES_GET.value, "arguments": nested},
+        allowed_canonical=frozenset({Capability.CAPABILITIES_GET.value}),
+    )
+    assert name == Capability.CAPABILITIES_GET.value
+    assert forwarded is nested
+
+
+def test_compact_read_forwards_nested_arguments_through_normalize_to_invoke(
+    scene: Scene, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Compact MCP production path reaches the published single-entry boundary.
+
+    `_answer` and `normalize` stay real. `invoke` is recorded on a stand-in
+    because that method is the published execution contract; the gateway is not
+    replaced and no second registry is introduced.
+    """
+    from datetime import UTC, datetime
+
+    from my_pa.adapters.mcp import server as mcp_server
+    from my_pa.adapters.mcp.server import _answer
+    from my_pa.adapters.normalization import normalize as real_normalize
+    from my_pa.application.service import ApplicationService
+    from my_pa.contracts.v1.envelope import ResponseEnvelope
+    from my_pa.contracts.v1.errors import ErrorCode, ProblemDetail, RetryGuidance
+    from my_pa.domain.identity.operation import permitted_purposes
+
+    assert mcp_server.ApplicationService is ApplicationService
+    assert mcp_server.normalize is real_normalize
+
+    purpose = sorted(permitted_purposes(Capability.CAPABILITIES_GET))[0]
+    nested = {
+        "request_id": "req-compact-forward",
+        "purpose": purpose.value,
+        "principal_id": scene.principal.principal_id,
+        "requested_at": "2026-08-11T12:00:00Z",
+        "payload": {},
+    }
+    seen: dict[str, object] = {}
+
+    def tracking_normalize(capability: str, arguments: object) -> object:
+        seen["capability"] = capability
+        seen["arguments"] = arguments
+        result = real_normalize(capability, arguments)  # type: ignore[arg-type]
+        seen["metadata"], seen["command"] = result
+        return result
+
+    monkeypatch.setattr(mcp_server, "normalize", tracking_normalize)
+
+    class RecordingService:
+        def __init__(self) -> None:
+            self.invocations: list[tuple[object, ...]] = []
+
+        def invoke(
+            self,
+            metadata: object,
+            command: object,
+            *,
+            principal: object,
+            transport: object,
+            capability_grants: object = None,
+        ) -> ResponseEnvelope:
+            self.invocations.append((metadata, command, principal, transport, capability_grants))
+            return ResponseEnvelope(
+                request_id="req-compact-forward",
+                correlation_id="corr_abc123def456",
+                completed_at=datetime(2026, 8, 11, 12, 0, tzinfo=UTC),
+                error=ProblemDetail(
+                    code=ErrorCode.DENIED,
+                    message="denied",
+                    correlation_id="corr_abc123def456",
+                    retry=RetryGuidance.AFTER_AUTHORITY_CHANGE,
+                ),
+            )
+
+    service = RecordingService()
+    body, is_error, image = _answer(
+        service,  # type: ignore[arg-type]
+        scene.principal,
+        READ_TOOL,
+        {"capability": Capability.CAPABILITIES_GET.value, "arguments": nested},
+        canonical_targets=frozenset({Capability.CAPABILITIES_GET.value}),
+    )
+    assert is_error
+    assert image is None
+    assert body
+    assert seen["capability"] == Capability.CAPABILITIES_GET.value
+    assert seen["arguments"] is nested
+    assert len(service.invocations) == 1
+    metadata, command, principal, _transport, _grants = service.invocations[0]
+    assert metadata is seen["metadata"]
+    assert command is seen["command"]
+    assert principal is scene.principal

@@ -2,6 +2,9 @@
 
 Presentation only. Canonical capability names remain the dispatch and
 authorization key. This module does not own grants, OAuth, or `invoke`.
+Nested canonical `arguments` are carried whole to `normalize` then
+`ApplicationService.invoke`; this façade does not bind, dispatch, or execute
+tools.
 """
 
 from __future__ import annotations

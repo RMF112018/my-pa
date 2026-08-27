@@ -38,6 +38,26 @@ def test_defaults_are_safe() -> None:
     assert settings.contract_strict_mode is True
     assert settings.gateway_bind_mode is GatewayBindMode.LOOPBACK
     assert settings.gateway_bind_host() == "127.0.0.1"
+    assert settings.mcp_chatllm_gateway_enabled is False
+    assert settings.mcp_chatllm_gateway_oauth_client_ids == ""
+    assert settings.chatllm_gateway_oauth_client_id_set() == frozenset()
+
+
+def test_chatllm_gateway_allowlist_is_exact_and_empty_by_default() -> None:
+    enabled = load_settings(
+        {
+            DATABASE_URL: _A_URL,
+            f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_ENABLED": "true",
+            f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_OAUTH_CLIENT_IDS": "client-a, client-b",
+        }
+    )
+    assert enabled.mcp_chatllm_gateway_enabled is True
+    assert enabled.chatllm_gateway_oauth_client_id_set() == frozenset({"client-a", "client-b"})
+    still_closed = load_settings(
+        {DATABASE_URL: _A_URL, f"{ENV_PREFIX}MCP_CHATLLM_GATEWAY_ENABLED": "true"}
+    )
+    assert still_closed.mcp_chatllm_gateway_enabled is True
+    assert still_closed.chatllm_gateway_oauth_client_id_set() == frozenset()
 
 
 def test_container_gateway_bind_is_explicit_and_closed() -> None:

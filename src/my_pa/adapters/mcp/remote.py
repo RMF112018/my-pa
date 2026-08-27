@@ -31,6 +31,7 @@ __all__ = [
     "RemoteAccessContext",
     "RemoteAccessResolver",
     "create_remote_mcp_app",
+    "is_remote_write",
     "remote_tool_names",
 ]
 
@@ -93,6 +94,7 @@ class RemoteAccessContext:
     allowed_capabilities: frozenset[str] | None = None
     capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None
     relationship_grant_profile: Literal["remote.operator"] | None = None
+    compact_publication: bool = False
 
 
 RemoteAccessResolver = Callable[[str | None], RemoteAccessContext | None]
@@ -192,6 +194,15 @@ _REMOTE_OPERATOR_IDENTITY_CAPABILITIES: Final = frozenset(
 )
 
 
+def is_remote_write(capability: Capability) -> bool:
+    """Whether the current remote profile treats `capability` as a write.
+
+    This is the purpose intersection `remote_tool_names` already uses, which is
+    stricter than `is_write_capability` for names such as `gsqs.start`.
+    """
+    return bool(permitted_purposes(capability) & _WRITE_PURPOSES)
+
+
 def remote_tool_names(
     service: ApplicationService,
     *,
@@ -210,8 +221,7 @@ def remote_tool_names(
             and capability in _REMOTE_OPERATOR_IDENTITY_CAPABILITIES
         ):
             continue
-        is_write = bool(permitted_purposes(capability) & _WRITE_PURPOSES)
-        if writes_enabled or not is_write:
+        if writes_enabled or not is_remote_write(capability):
             names.add(capability.value)
     return frozenset(names)
 
@@ -264,11 +274,21 @@ def create_remote_mcp_app(
             else profile
         )
         allowed = request_profile if granted is None else request_profile & granted
+        compact = resolved.compact_publication
+        published = allowed
+        canonical = None
+        if compact:
+            from my_pa.adapters.mcp.chatllm_gateway import facade_tool_names
+
+            canonical = allowed
+            published = facade_tool_names(allowed)
         return McpAccess(
             principal=principal,
-            allowed_tools=allowed,
+            allowed_tools=published,
             allowed_capability_purposes=resolved.capability_purposes,
             transport=CaptureTransport.REMOTE_CLIENT,
+            compact_publication=compact,
+            allowed_canonical_targets=canonical,
         )
 
     server = create_mcp_server(

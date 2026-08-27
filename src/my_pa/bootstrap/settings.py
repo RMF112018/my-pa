@@ -352,6 +352,15 @@ class Settings(StrictModel):
     mcp_surface_disabled: bool = False
     remote_mcp_enabled: bool = False
     remote_writes_enabled: bool = False
+    #: Compact ChatLLM publication profile on the existing `/mcp` resource.
+    #: **Off by default.** True does not change OAuth audience, protected-resource
+    #: metadata, grants, or which Principal is acting. It only allows the
+    #: authenticated OAuth client IDs in
+    #: `mcp_chatllm_gateway_oauth_client_ids` to see the façade tools instead of
+    #: the canonical per-capability catalog. An empty allowlist never selects
+    #: compact mode, even when this flag is true.
+    mcp_chatllm_gateway_enabled: bool = False
+    mcp_chatllm_gateway_oauth_client_ids: str = ""
     #: Process-local gates for GoodNotes Durable Note Ingestion rollout (WP-15).
     #: All default off. True does not ingest, write canonical notes, deliver,
     #: call Abacus, mutate NAS, or change the existing TBR Task.
@@ -732,6 +741,14 @@ class Settings(StrictModel):
             raise SettingsError(
                 "GSQS remote-eval OAuth audience must be the public HTTPS origin with path /mcp"
             )
+
+    def chatllm_gateway_oauth_client_id_set(self) -> frozenset[str]:
+        """Exact OAuth client IDs eligible for compact `/mcp` publication.
+
+        Empty is fail-closed: no client is selected. Values are compared exactly
+        against the token-derived client identifier; there is no glob or prefix.
+        """
+        return frozenset(_split_allowlist(self.mcp_chatllm_gateway_oauth_client_ids))
 
     def gsqs_remote_eval_origin_allowlist(self) -> tuple[str, ...]:
         """Exact allowed Origin values. Empty means no browser Origin is admitted."""

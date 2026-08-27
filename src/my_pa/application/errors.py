@@ -364,6 +364,13 @@ class SafeDetail(StrEnum):
     PREVIEW_ID = "preview_id"
     PREVIEW_DIGEST = "preview_digest"
     CHOICES = "choices"
+    #: Compact ChatLLM façade wrapper fields. `CAPABILITY` names the wrapper's
+    #: canonical-target field and never the value. `CAPABILITY_TYPE_MISMATCH`
+    #: says the façade kind (read/write/operator) does not match the target;
+    #: it does not say which grant, profile, or Principal caused a hide.
+    CAPABILITY = "capability"
+    FEATURE = "feature"
+    CAPABILITY_TYPE_MISMATCH = "capability_type_mismatch"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

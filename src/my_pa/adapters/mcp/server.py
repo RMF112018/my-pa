@@ -103,6 +103,12 @@ from mcp.types import (
 from mcp.types import PaginatedRequestParams as ListToolsParams
 
 from my_pa import __version__
+from my_pa.adapters.mcp.chatllm_gateway import (
+    DESCRIBE_TOOL,
+    compact_tools,
+    prepare_compact_call,
+    render_describe,
+)
 from my_pa.adapters.mcp.tools import TOOLS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.adapters.remote_request import compose_remote_arguments, remote_tool_schema
@@ -138,6 +144,8 @@ class McpAccess:
     allowed_tools: frozenset[str] | None = None
     allowed_capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None
     transport: CaptureTransport = CaptureTransport.LOCAL
+    compact_publication: bool = False
+    allowed_canonical_targets: frozenset[str] | None = None
 
 
 def _document(arguments: Mapping[str, Any] | None) -> Mapping[str, Any]:
@@ -261,6 +269,18 @@ def _result_bytes(blocks: Sequence[ContentBlock]) -> int:
     return total
 
 
+def _remote_facade_tool(tool: Tool, *, oauth_scopes: frozenset[str]) -> Tool:
+    """OAuth metadata on a façade tool without rewriting its wrapper schema.
+
+    Canonical `remote_tool_schema` strips server-owned envelope fields, including
+    `capability`. The façade wrapper requires that field, so it must not pass
+    through the canonical remote rewriter.
+    """
+    meta = dict(tool.meta or {})
+    meta["securitySchemes"] = [{"type": "oauth2", "scopes": sorted(oauth_scopes)}]
+    return tool.model_copy(update={"meta": meta})
+
+
 def _answer(
     service: ApplicationService,
     principal: Principal,
@@ -269,6 +289,7 @@ def _answer(
     transport: CaptureTransport = CaptureTransport.LOCAL,
     allowed_capability_purposes: frozenset[tuple[Capability, Purpose | None]] | None = None,
     clock: Callable[[], datetime] = utc_now,
+    canonical_targets: frozenset[str] | None = None,
 ) -> tuple[str, bool, ImageContent | None]:
     """One tool call, executed synchronously: text, failure flag, optional image.
 
@@ -284,11 +305,26 @@ def _answer(
     assertion would ever see.
     """
     request_arguments = arguments
+    if canonical_targets is not None:
+        try:
+            name, request_arguments = prepare_compact_call(
+                name, arguments, allowed_canonical=canonical_targets
+            )
+            if name == DESCRIBE_TOOL:
+                return (
+                    render_describe(request_arguments, allowed_canonical=canonical_targets),
+                    False,
+                    None,
+                )
+        except ApplicationError as refusal:
+            return _problem(refusal).to_canonical_json(), True, None
+        except Exception:
+            return _problem(InternalError()).to_canonical_json(), True, None
     if transport is CaptureTransport.REMOTE_CLIENT:
         try:
             request_arguments = compose_remote_arguments(
                 capability_name=name,
-                arguments=arguments or {},
+                arguments=request_arguments or {},
                 principal=principal,
                 grants=allowed_capability_purposes,
                 clock=clock,
@@ -415,11 +451,19 @@ def create_mcp_server(
         access = _access(context)
         if not enabled or access is None:
             return ListToolsResult(tools=[])
-        tools = published_tools(service)
-        if access.allowed_tools is not None:
-            tools = tuple(tool for tool in tools if tool.name in access.allowed_tools)
+        if access.compact_publication:
+            tools = compact_tools(access.allowed_tools or frozenset())
+        else:
+            tools = published_tools(service)
+            if access.allowed_tools is not None:
+                tools = tuple(tool for tool in tools if tool.name in access.allowed_tools)
         if access.transport is CaptureTransport.REMOTE_CLIENT:
-            tools = tuple(_remote_tool(tool, oauth_scopes=oauth_scopes) for tool in tools)
+            if access.compact_publication:
+                tools = tuple(
+                    _remote_facade_tool(tool, oauth_scopes=oauth_scopes) for tool in tools
+                )
+            else:
+                tools = tuple(_remote_tool(tool, oauth_scopes=oauth_scopes) for tool in tools)
         return ListToolsResult(tools=list(tools))
 
     async def _call_tool(
@@ -428,14 +472,19 @@ def create_mcp_server(
         """`tools/call`. The one `await` in this package."""
         access = _access(context)
         published = {tool.name for tool in published_tools(service)}
-        remote_refusal = access_for_request is not None and (
-            params.name not in published
-            or (
-                access is not None
-                and access.allowed_tools is not None
-                and params.name not in access.allowed_tools
+        if access is not None and access.compact_publication:
+            remote_refusal = (
+                access.allowed_tools is not None and params.name not in access.allowed_tools
             )
-        )
+        else:
+            remote_refusal = access_for_request is not None and (
+                params.name not in published
+                or (
+                    access is not None
+                    and access.allowed_tools is not None
+                    and params.name not in access.allowed_tools
+                )
+            )
         if not enabled or access is None or remote_refusal:
             # No thread, no service, no envelope. There is no request identity to
             # build one from and nothing to correlate a disabled surface against
@@ -470,6 +519,7 @@ def create_mcp_server(
             access.transport,
             access.allowed_capability_purposes,
             clock,
+            access.allowed_canonical_targets if access.compact_publication else None,
         )
         release_here = True
         try:

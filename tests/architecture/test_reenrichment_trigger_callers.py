@@ -27,6 +27,8 @@ def test_new_authenticated_proposal_calls_the_exact_producer_observer() -> None:
     assert "self._proposal_origin(authorization)" in source
     assert "if self._relationship_reenrichment_enabled and admission.created:" in source
     assert "register_producer_version_observation(" in source
+    assert "proposal_version=admission.state.value" in source
+    assert 'proposal_version="1"' not in source
     assert source.index("self._proposal_origin(authorization)") < source.index(
         "register_producer_version_observation("
     )

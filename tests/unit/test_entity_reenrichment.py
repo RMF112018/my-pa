@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Callable
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
@@ -30,6 +31,7 @@ from my_pa.application.entity_reenrichment import (
     register_source_version_observation,
 )
 from my_pa.application.service import _register_reenrichment_result, _Result
+from my_pa.contracts.ports import ReenrichmentVersionObservation
 
 PRINCIPAL = "prn_aaaa0001aaaa0001aaaa0001"
 OTHER_PRINCIPAL = "prn_bbbb0002bbbb0002bbbb0002"
@@ -39,6 +41,11 @@ SOURCE_OBJECT = "obj_aaaa0001aaaa0001"
 SOURCE_VERSION = "ver_aaaa0001aaaa0001"
 PROPOSAL = "eprp_aaaa0001aaaa0001"
 WHEN = datetime(2026, 8, 28, 12, tzinfo=UTC)
+
+
+@dataclass(frozen=True)
+class _Observation:
+    changed: bool
 
 
 def _binding(**changes: object) -> ReenrichmentBinding:
@@ -83,6 +90,7 @@ class _Current:
 class _Repository:
     def __init__(self) -> None:
         self.registered: dict[str, ReenrichmentWork] = {}
+        self.by_id: dict[str, ReenrichmentWork] = {}
         self.stale: list[tuple[str, tuple[StaleBindingReason, ...]]] = []
         self.completed: list[str] = []
         self.live_claim = True
@@ -102,6 +110,7 @@ class _Repository:
             updated_at=at,
         )
         self.registered[binding.binding_sha256] = work
+        self.by_id[work.work_id] = work
         return work
 
     def apply_claimed(
@@ -115,7 +124,7 @@ class _Repository:
         at: datetime,
     ) -> BindingCurrency:
         assert principal_id == PRINCIPAL and owner == "worker_01" and at == WHEN
-        work = _claimed(_binding())
+        work = self.by_id.get(work_id, _claimed(_binding()))
         if not self.live_claim:
             raise ValueError("re-enrichment application requires this worker's live claim")
         currency = assess_currency(work.binding, current)
@@ -134,15 +143,62 @@ class _Repository:
         key: str,
         version: str,
         at: datetime,
-    ) -> object:
+    ) -> ReenrichmentVersionObservation:
         del principal_id, at
         previous = self.versions.get((namespace, key))
         self.versions[(namespace, key)] = version
 
-        class _Observation:
-            changed = previous is not None and previous != version
+        return _Observation(previous is not None and previous != version)
 
-        return _Observation()
+
+class _SqlEquivalentCurrent:
+    """The application-visible semantics of SqlCurrentReenrichmentBindings."""
+
+    def __init__(
+        self,
+        repository: _Repository,
+        *,
+        subjects: dict[tuple[ReenrichmentSubjectKind, str], str] | None = None,
+    ) -> None:
+        self.repository = repository
+        self.subjects = subjects or {}
+
+    def subject_version(
+        self, principal_id: str, kind: ReenrichmentSubjectKind, subject_id: str
+    ) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        if kind is ReenrichmentSubjectKind.PRINCIPAL:
+            return "1" if subject_id == principal_id else None
+        return self.subjects.get((kind, subject_id))
+
+    def input_version(self, principal_id: str, key: str) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        return self.repository.versions.get(("input", key))
+
+    def producer_version(self, principal_id: str, key: str) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        return self.repository.versions.get(("producer", key))
+
+    def policy_version(self, principal_id: str) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        return self.repository.versions.get(("policy", "current"))
+
+
+def _as_claimed(repository: _Repository, work: ReenrichmentWork) -> ReenrichmentWork:
+    claimed = replace(
+        work,
+        state=ReenrichmentState.RUNNING,
+        attempt_count=1,
+        updated_at=WHEN,
+        lease_owner="worker_01",
+        lease_expires_at=WHEN + timedelta(minutes=1),
+    )
+    repository.by_id[work.work_id] = claimed
+    return claimed
 
 
 def _claimed(binding: ReenrichmentBinding) -> ReenrichmentWork:
@@ -409,7 +465,8 @@ def test_source_observer_registers_only_an_exact_version_advance() -> None:
             ReenrichmentSubjectKind.SOURCE_VERSION, changed_version, changed_version
         ),
     )
-    assert work.binding.input_versions == (BindingVersion("source_version", changed_version),)
+    watermark_key = f"source_{hashlib.sha256(SOURCE_OBJECT.encode()).hexdigest()[:40]}"
+    assert work.binding.input_versions == (BindingVersion(watermark_key, changed_version),)
     assert work.binding.producer_versions == (
         BindingVersion("source_pipeline", "sources.fetch.v1"),
     )
@@ -420,7 +477,7 @@ def test_producer_observer_excludes_policy_and_registers_exact_advance() -> None
     arguments = {
         "principal_id": PRINCIPAL,
         "proposal_id": PROPOSAL,
-        "proposal_version": "1",
+        "proposal_version": "proposed",
         "method": "rules",
         "method_version": "pipeline-v1",
         "model_id": None,
@@ -443,11 +500,146 @@ def test_producer_observer_excludes_policy_and_registers_exact_advance() -> None
     assert work is not None
     assert work.binding.trigger is ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE
     assert work.binding.subjects == (
-        ReenrichmentSubject(ReenrichmentSubjectKind.PROPOSAL, PROPOSAL, "1"),
+        ReenrichmentSubject(ReenrichmentSubjectKind.PROPOSAL, PROPOSAL, "proposed"),
     )
-    assert work.binding.producer_versions == (
-        BindingVersion("proposal_method", "rules"),
-        BindingVersion("proposal_pipeline", "pipeline-v2"),
+    assert len(work.binding.producer_versions) == 1
+    assert work.binding.producer_versions[0].key == "entity_proposal"
+
+
+def test_generic_mutation_binding_is_current_and_reaches_the_apply_callback() -> None:
+    repository = _Repository()
+    (work,) = register_mutation_reenrichment(
+        repository,
+        principal_id=PRINCIPAL,
+        capability="entities.update",
+        cause_record_id="emut_aaaa0001aaaa0001",
+        policy_version="policy-v1",
+        at=WHEN,
+    )
+    current = _SqlEquivalentCurrent(repository)
+    assert assess_currency(work.binding, current).is_current
+    applied: list[str] = []
+    currency = EntityReenrichmentService(repository).apply_claimed(
+        _as_claimed(repository, work),
+        owner="worker_01",
+        current=current,
+        apply=lambda _binding, key: applied.append(key),
+        at=WHEN,
+    )
+    assert currency.is_current
+    assert applied == [work.binding.binding_sha256]
+
+
+def test_generic_mutation_binding_stales_when_policy_or_producer_advances() -> None:
+    repository = _Repository()
+    (work,) = register_mutation_reenrichment(
+        repository,
+        principal_id=PRINCIPAL,
+        capability="entities.update",
+        cause_record_id="emut_aaaa0001aaaa0001",
+        policy_version="policy-v1",
+        at=WHEN,
+    )
+    repository.versions[("producer", "relationship_intelligence")] = "v-next"
+    repository.versions[("policy", "current")] = "policy-v2"
+    reasons = assess_currency(work.binding, _SqlEquivalentCurrent(repository)).reasons
+    assert reasons == (
+        StaleBindingReason.POLICY_VERSION_CHANGED,
+        StaleBindingReason.PRODUCER_VERSION_CHANGED,
+    )
+
+
+def test_source_binding_is_current_then_a_new_source_version_makes_it_stale() -> None:
+    repository = _Repository()
+    register_source_version_observation(
+        repository,
+        principal_id=PRINCIPAL,
+        source_object_id=SOURCE_OBJECT,
+        source_version_id=SOURCE_VERSION,
+        policy_version="policy-v1",
+        at=WHEN,
+    )
+    second = "ver_bbbb0002bbbb0002"
+    work = register_source_version_observation(
+        repository,
+        principal_id=PRINCIPAL,
+        source_object_id=SOURCE_OBJECT,
+        source_version_id=second,
+        policy_version="policy-v1",
+        at=WHEN,
+    )
+    assert work is not None
+    subjects = {
+        (ReenrichmentSubjectKind.SOURCE_OBJECT, SOURCE_OBJECT): second,
+        (ReenrichmentSubjectKind.SOURCE_VERSION, second): second,
+    }
+    current = _SqlEquivalentCurrent(repository, subjects=subjects)
+    applied: list[str] = []
+    currency = EntityReenrichmentService(repository).apply_claimed(
+        _as_claimed(repository, work),
+        owner="worker_01",
+        current=current,
+        apply=lambda _binding, key: applied.append(key),
+        at=WHEN,
+    )
+    assert currency.is_current
+    assert applied == [work.binding.binding_sha256]
+    third = "ver_cccc0003cccc0003"
+    register_source_version_observation(
+        repository,
+        principal_id=PRINCIPAL,
+        source_object_id=SOURCE_OBJECT,
+        source_version_id=third,
+        policy_version="policy-v1",
+        at=WHEN,
+    )
+    subjects[(ReenrichmentSubjectKind.SOURCE_OBJECT, SOURCE_OBJECT)] = third
+    reasons = assess_currency(
+        work.binding, _SqlEquivalentCurrent(repository, subjects=subjects)
+    ).reasons
+    assert reasons == (
+        StaleBindingReason.INPUT_VERSION_CHANGED,
+        StaleBindingReason.SUBJECT_VERSION_CHANGED,
+    )
+
+
+def test_producer_binding_is_current_then_a_producer_advance_makes_it_stale() -> None:
+    repository = _Repository()
+    common = {
+        "principal_id": PRINCIPAL,
+        "proposal_id": PROPOSAL,
+        "proposal_version": "proposed",
+        "method": "rules",
+        "model_id": None,
+        "model_version": None,
+        "policy_version": "policy-v1",
+        "at": WHEN,
+    }
+    register_producer_version_observation(repository, method_version="v1", **common)
+    work = register_producer_version_observation(repository, method_version="v2", **common)
+    assert work is not None
+    current = _SqlEquivalentCurrent(
+        repository,
+        subjects={(ReenrichmentSubjectKind.PROPOSAL, PROPOSAL): "proposed"},
+    )
+    applied: list[str] = []
+    currency = EntityReenrichmentService(repository).apply_claimed(
+        _as_claimed(repository, work),
+        owner="worker_01",
+        current=current,
+        apply=lambda _binding, key: applied.append(key),
+        at=WHEN,
+    )
+    assert currency.is_current
+    assert applied == [work.binding.binding_sha256]
+    current.subjects[(ReenrichmentSubjectKind.PROPOSAL, PROPOSAL)] = "accepted"
+    assert assess_currency(work.binding, current).reasons == (
+        StaleBindingReason.SUBJECT_VERSION_CHANGED,
+    )
+    current.subjects[(ReenrichmentSubjectKind.PROPOSAL, PROPOSAL)] = "proposed"
+    register_producer_version_observation(repository, method_version="v3", **common)
+    assert assess_currency(work.binding, current).reasons == (
+        StaleBindingReason.PRODUCER_VERSION_CHANGED,
     )
 
 

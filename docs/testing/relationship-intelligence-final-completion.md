@@ -46,7 +46,7 @@ The IDs are identifiers and traceability anchors, not runtime configuration.
 |---|---|---|
 | `RI-FC-WP-01` Identity Correction | Governed split preview/apply is the exact inverse of one completed merge; stale state, digest, source-operation, Principal, and one-settlement guards fail closed. | IMPLEMENTED |
 | `RI-FC-WP-02` Identity History | One authoritative keyset-paginated history joins direct mutations, completed identity operations/effects, and legacy merge lineage without scraping proposal/review records. | IMPLEMENTED |
-| `RI-FC-WP-03` Re-enrichment | Seven exact triggers are registered from truthful authorized mutations; source-version and model/rule-version changes use exact version-observation hooks after a verified fetch or newly created authenticated proposal. All registration shares the same Principal-fenced unit of work. Immutable bounded bindings, Principal/work locks, database-time lease checks, post-apply currency validation, and atomic settlement prevent obsolete or duplicate derived mutation. | IMPLEMENTED |
+| `RI-FC-WP-03` Re-enrichment | Seven exact triggers are registered from truthful authorized mutations; source-version and model/rule-version changes use exact version-observation hooks after a verified fetch or newly created authenticated proposal. Every subject/input/producer/policy key and value now matches the exact `CurrentReenrichmentBindings` lookup used at apply. All registration shares the same Principal-fenced unit of work. Immutable bounded bindings, Principal/work locks, database-time lease checks, post-apply currency validation, and atomic settlement prevent obsolete or duplicate derived mutation. | IMPLEMENTED |
 | `RI-FC-WP-04` Proposal/Review | Generated discriminated payload schemas cover all proposal families; accepted merge/split proposals produce operator-preview handoffs and never execute identity correction. | IMPLEMENTED |
 | `RI-FC-WP-05` Security/Principal | `version_content` and `span_faults` require a resolved Principal context and predicate `capture_versions.owner_principal_id`; foreign and absent opaque identifiers have the same result. Two-Principal controls make deletion of either predicate fail. | IMPLEMENTED_CORRECTIVE |
 | `RI-FC-WP-06` MCP/Profiles/Documentation | The added public capability names, neutral commands, schemas, dispatch, purpose/profile bindings, runbooks, and current-state counts are synchronized. | IMPLEMENTED |
@@ -150,10 +150,10 @@ uses these evidence classes:
 
 | Evidence | Exact result |
 |---|---|
-| Integrated corrective FAST | `14,235 passed, 1,551 deselected in 570.80s` |
-| Integrated corrective architecture | `4,710 passed in 290.60s` |
+| Integrated corrective FAST | `14,239 passed, 1,551 deselected in 584.37s` |
+| Integrated corrective architecture | `4,710 passed in 297.65s` |
 | Exact-observer focused unit/contract/architecture set | `65 passed in 0.82s` |
-| Exact-observer affected application/contract set | `292 passed in 5.20s` |
+| Exact-observer and currency-alignment affected set | `296 passed in 1.03s` |
 | Integrated focused application/contract set | `201 passed, 7 deselected` |
 | Integrated focused architecture/schema/domain set | `960 passed, 81 deselected` |
 | Integrated focused concurrency/schema set | `114 passed, 457 deselected` |
@@ -223,6 +223,11 @@ independent review:
     successful settlement.
 12. Input and producer version collections are capped at 100 unique keys in the
     domain and by JSONB type/cardinality checks in the additive migration/schema.
+13. Source, proposal-producer, and generic mutation builders now bind only exact
+    SQL-readable subject versions and observed watermark keys. SQL-equivalent
+    currency tests prove each newly registered binding reaches the apply callback,
+    while source, proposal-state, producer-contract, and policy advances make the
+    prior binding stale without weakening `assess_currency`.
 
 ## Load-bearing and mutation controls
 

@@ -8304,7 +8304,7 @@ class ApplicationService:
                 unit_of_work.reenrichment,
                 principal_id=authorization.principal.principal_id,
                 proposal_id=admission.proposal_id,
-                proposal_version="1",
+                proposal_version=admission.state.value,
                 method=method.value,
                 method_version=method_version,
                 model_id=model_id,

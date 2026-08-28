@@ -54,6 +54,7 @@ __all__ = [
 ]
 
 REENRICHMENT_PRODUCER_VERSION = "relationship-intelligence-v0.2"
+SOURCE_PIPELINE_VERSION = "sources.fetch.v1"
 
 
 type ReenrichmentApplication = Callable[[ReenrichmentBinding, str], None]
@@ -99,6 +100,20 @@ def register_source_version_observation(
     )
     if not observation.changed:
         return None
+    repository.observe_version(
+        principal_id,
+        namespace="producer",
+        key="source_pipeline",
+        version=SOURCE_PIPELINE_VERSION,
+        at=moment,
+    )
+    repository.observe_version(
+        principal_id,
+        namespace="policy",
+        key="current",
+        version=policy_version,
+        at=moment,
+    )
     return repository.register(
         ReenrichmentBinding(
             principal_id=principal_id,
@@ -116,8 +131,8 @@ def register_source_version_observation(
                     source_version_id,
                 ),
             ),
-            input_versions=(BindingVersion("source_version", source_version_id),),
-            producer_versions=(BindingVersion("source_pipeline", "sources.fetch.v1"),),
+            input_versions=(BindingVersion(watermark_key, source_version_id),),
+            producer_versions=(BindingVersion("source_pipeline", SOURCE_PIPELINE_VERSION),),
             policy_version=policy_version,
         ),
         at=moment,
@@ -157,17 +172,13 @@ def register_producer_version_observation(
     )
     if not observation.changed:
         return None
-    producer_versions = [
-        BindingVersion("proposal_method", method),
-        BindingVersion("proposal_pipeline", method_version),
-    ]
-    if model_id is not None and model_version is not None:
-        producer_versions.extend(
-            (
-                BindingVersion("model_id", model_id),
-                BindingVersion("model_version", model_version),
-            )
-        )
+    repository.observe_version(
+        principal_id,
+        namespace="policy",
+        key="current",
+        version=policy_version,
+        at=moment,
+    )
     return repository.register(
         ReenrichmentBinding(
             principal_id=principal_id,
@@ -181,7 +192,7 @@ def register_producer_version_observation(
                 ),
             ),
             input_versions=(),
-            producer_versions=tuple(producer_versions),
+            producer_versions=(BindingVersion("entity_proposal", digest),),
             policy_version=policy_version,
         ),
         at=moment,
@@ -203,7 +214,24 @@ def register_mutation_reenrichment(
     affected records remain inputs to the downstream derivation; this hook does
     not reimplement or infer the authoritative mutation's result.
     """
+    moment = ensure_utc(at)
     triggers = TRIGGERS_BY_MUTATION_CAPABILITY.get(capability, ())
+    if not triggers:
+        return ()
+    repository.observe_version(
+        principal_id,
+        namespace="producer",
+        key="relationship_intelligence",
+        version=REENRICHMENT_PRODUCER_VERSION,
+        at=moment,
+    )
+    repository.observe_version(
+        principal_id,
+        namespace="policy",
+        key="current",
+        version=policy_version,
+        at=moment,
+    )
     return tuple(
         repository.register(
             ReenrichmentBinding(
@@ -214,14 +242,19 @@ def register_mutation_reenrichment(
                     ReenrichmentSubject(
                         ReenrichmentSubjectKind.PRINCIPAL,
                         principal_id,
-                        policy_version,
+                        "1",
                     ),
                 ),
-                input_versions=(BindingVersion("mutation_capability", capability),),
-                producer_versions=(BindingVersion("ri_contract", "v0.2"),),
+                input_versions=(),
+                producer_versions=(
+                    BindingVersion(
+                        "relationship_intelligence",
+                        REENRICHMENT_PRODUCER_VERSION,
+                    ),
+                ),
                 policy_version=policy_version,
             ),
-            at=at,
+            at=moment,
         )
         for trigger in triggers
     )

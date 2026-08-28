@@ -2474,14 +2474,14 @@ class ApplicationService:
         # producer identity; per-Principal resolution still fails closed.
         if not self._producer_origins.has_registrations:
             served -= _PRODUCER_CAPABILITIES
-        # The governed merge, narrowed separately again. Its own switch requires
-        # the write switch, which requires the plane switch, and `Settings._check`
-        # refuses a process configured otherwise -- so the three subtractions
-        # above have already removed these names whenever a lower gate is off,
-        # and this line is what a build with every lower gate on still has to
-        # pass. Written as its own condition rather than folded into the write
-        # subtraction because the two answer different questions and a build can
-        # be in either state.
+        # Governed identity correction, narrowed separately again. Its own switch
+        # requires the write switch, which requires the plane switch, and
+        # `Settings._check` refuses a process configured otherwise -- so the three
+        # subtractions above have already removed these names whenever a lower
+        # gate is off, and this line is what a build with every lower gate on still
+        # has to pass. Written as its own condition rather than folded into the
+        # write subtraction because the two answer different questions and a
+        # build can be in either state.
         if not self._relationship_identity_correction_enabled:
             served -= _IDENTITY_CORRECTION_CAPABILITIES
         return served
@@ -4582,13 +4582,15 @@ class ApplicationService:
 
     # ---- the Relationship Memory plane -------------------------------------
     #
-    # Eight handlers over one service, and the shape every plane here uses:
+    # Nine handlers over two services, and the shape every plane here uses:
     # resolve the gate, build the use-case command with the Principal the
-    # authorization already resolved, hand both to `RelationshipMemoryService`.
-    # No memory rule is restated in this file. Which authority a direct write
-    # carries, which classification floor a kind implies, whether a subject may
-    # be written to, and how a replay is decided all stay in the service, the
-    # repository and the domain, so a second copy here cannot disagree with them.
+    # authorization already resolved, and hand both to `RelationshipMemoryService`
+    # for canonical memory operations or `RelationshipMemoryProposalService` for
+    # the candidate producer. No memory rule is restated in this file. Which
+    # authority a direct write carries, which classification floor a kind implies,
+    # whether a subject may be written to, and how a replay is decided all stay in
+    # the services, the repository and the domain, so a second copy here cannot
+    # disagree with them.
     #
     # `principal_id=authorization.principal.principal_id` is the only thing these
     # handlers say about identity, and the transport-facing commands have no
@@ -5005,7 +5007,7 @@ class ApplicationService:
         **The memory repository is passed only when this build composed the
         plane, and the two switches are read directly rather than through
         `_relationship_memory_plane`.** That helper raises `UnsupportedError`,
-        which is the right answer for the eight `relationship_memory.` handlers
+        which is the right answer for the nine `relationship_memory.` handlers
         and the wrong one here: `entities.context` is an entity capability, it is
         served by builds that never turned the memory plane on, and refusing it
         for a collection it can honestly decline to speak about would withdraw a
@@ -8090,19 +8092,19 @@ class ApplicationService:
         )
         return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
 
-    # ---- WP-RI-B: the producers, and the governed merge ---------------------
+    # ---- WP-RI-B: producers and governed identity correction ----------------
     #
-    # Four handlers, and every rule they enforce lives somewhere else. Which
+    # Six handlers, and every rule they enforce lives somewhere else. Which
     # payload fields a proposal kind admits, what a dedupe digest is over, what a
-    # candidate memory's classification floor is, what a merge blocks on and what
-    # its effect ledger records are all `EntityGovernanceService`',
+    # candidate memory's classification floor is, what identity correction blocks
+    # on and what its effect ledger records are all `EntityGovernanceService`',
     # `RelationshipMemoryProposalService`'s and `IdentityCorrectionService`'s, so
     # a second copy here could not disagree with them.
     #
     # What this file supplies is the four things a caller may not: the Principal,
     # the clock, the correlation and audit references the authorization already
     # resolved, and -- for the two producer paths -- the proposal method. None of
-    # the four commands has a field for any of them.
+    # the six commands has a field for any of them.
 
     #: Producer provenance is injected by composition and keyed by the exact
     #: authenticated Principal. Commands carry no origin fields. An unregistered
@@ -8166,13 +8168,13 @@ class ApplicationService:
         return authorization.principal.is_operator
 
     def _identity_correction_plane(self) -> None:
-        """Refuse when this build has not enabled the governed merge.
+        """Refuse when this build has not enabled governed identity correction.
 
         The same floor `_entity_writes` is, one switch narrower, and it exists for
-        the same reason: `available_capabilities` withholds the governed merge and
-        two readers consult it -- `capabilities.get` and the MCP tool list -- while
-        the HTTP transport consults neither, routing by path segment straight into
-        `_HANDLERS`.
+        the same reason: `available_capabilities` withholds governed merge and
+        split, and two readers consult it -- `capabilities.get` and the MCP tool
+        list -- while the HTTP transport consults neither, routing by path segment
+        straight into `_HANDLERS`.
 
         `_entity_writes()` first, so a build that turned this on without the
         gates below it refuses on the lowest one that is off rather than on this
@@ -8182,9 +8184,9 @@ class ApplicationService:
         settings already enforce.
 
         `unsupported` and not `denied`: a process without the switch has no
-        governed merge, which is a fact about the build. Who may call it is the
-        separate question `_OPERATOR_ONLY` answers, and a caller without operator
-        authority is denied by policy before reaching here.
+        governed identity correction, which is a fact about the build. Who may
+        call it is the separate question `_OPERATOR_ONLY` answers, and a caller
+        without operator authority is denied by policy before reaching here.
         """
         self._entity_writes()
         if not self._relationship_identity_correction_enabled:
@@ -9025,15 +9027,15 @@ _ENTITY_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     }
 )
 
-#: The governed merge, withheld from a process that has not set
+#: Governed identity correction, withheld from a process that has not set
 #: `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`. A subset of
 #: `_ENTITY_WRITE_CAPABILITIES` and therefore of `_ENTITY_CAPABILITIES`: this is
 #: a third narrowing of an already-narrowed plane, not a family of its own.
 #:
-#: Two rather than one. The preview is here beside the apply because the operator
-#: boundary is about reading the exact identities of two people as much as about
-#: collapsing them, and a build that served the inspection while withholding the
-#: act would gate the less sensitive half.
+#: Four rather than two. Merge and split each publish their preview beside apply:
+#: the operator boundary covers inspecting the exact identities and inverse plan
+#: as well as performing either transition, so a build cannot expose an inspection
+#: while withholding only its corresponding act.
 _IDENTITY_CORRECTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.ENTITIES_MERGE_PREVIEW,
@@ -9066,7 +9068,8 @@ _RELATIONSHIP_MEMORY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
         # The producer path is composed on exactly the same conjunction as the
-        # eight, and on no further switch. It writes, so the question was whether
+        # other eight, and on no further switch. It writes, so the question was
+        # whether
         # to gate it behind `relationship_intelligence_writes_enabled` as well;
         # the answer is no, because `relationship_memory.create` -- which writes
         # an *accepted* memory -- is not gated on it either, and gating the

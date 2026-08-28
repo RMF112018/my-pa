@@ -17,6 +17,7 @@ about what may go in `before_state` and `after_state`.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from itertools import permutations
@@ -560,7 +561,7 @@ def test_relationship_memory_merge_and_split_advance_one_token_each() -> None:
         rows(),
     ]
     draft = SqlRelationshipMemoryRepository(planning).plan_identity_merge(
-        PRINCIPAL, frozenset({MERGED}), SURVIVOR
+        PRINCIPAL, frozenset({MERGED}), SURVIVOR, 5
     )[0]
     assert draft.before_state == {
         "subject_entity_id": MERGED,
@@ -603,7 +604,9 @@ def test_relationship_memory_merge_and_split_advance_one_token_each() -> None:
 
     restoring = MagicMock()
     restoring.execute.return_value = SimpleNamespace(rowcount=1)
-    SqlRelationshipMemoryRepository(restoring).restore_identity_effect(PRINCIPAL, source)
+    SqlRelationshipMemoryRepository(restoring).restore_identity_effect(
+        PRINCIPAL, source, restored_state=split.after_state
+    )
     statement = restoring.execute.call_args.args[0]
     assert statement._values["subject_entity_id"].value == MERGED
     assert statement._values["origin_subject_entity_id"].value == MERGED
@@ -734,8 +737,15 @@ class _SplitMemories:
     ) -> bool:
         return principal_id == PRINCIPAL
 
-    def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
+    def restore_identity_effect(
+        self,
+        principal_id: str,
+        effect: IdentityEffect,
+        *,
+        restored_state: Mapping[str, object],
+    ) -> None:
         assert principal_id == PRINCIPAL
+        assert restored_state
         self.restored.append(effect)
 
 

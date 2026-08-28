@@ -4675,6 +4675,7 @@ class RelationshipMemoryRepository(ABC):
         principal_id: str,
         merged_entity_ids: frozenset[str],
         survivor_entity_id: str,
+        survivor_entity_version: int,
     ) -> tuple[IdentityEffectDraft, ...]:
         """Plan content-blind RM binding moves while retaining immutable origins."""
         raise NotImplementedError
@@ -4683,7 +4684,13 @@ class RelationshipMemoryRepository(ABC):
         """Apply one planned RM binding move under its exact before-state guard."""
         raise NotImplementedError
 
-    def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
+    def restore_identity_effect(
+        self,
+        principal_id: str,
+        effect: IdentityEffect,
+        *,
+        restored_state: Mapping[str, object],
+    ) -> None:
         """Restore one opaque memory binding to its immutable origin subject."""
         raise NotImplementedError
 

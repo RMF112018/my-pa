@@ -7,6 +7,7 @@ preview consumption remain load-bearing without a database runtime.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Final, cast
@@ -246,8 +247,15 @@ class _Memories:
     ) -> bool:
         return principal_id == PRINCIPAL and self.states_match
 
-    def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
+    def restore_identity_effect(
+        self,
+        principal_id: str,
+        effect: IdentityEffect,
+        *,
+        restored_state: Mapping[str, object],
+    ) -> None:
         assert principal_id == PRINCIPAL
+        assert restored_state
         self.restored.append((effect.family, effect.record_id))
         self.restoration_order.append((effect.family, effect.record_id))
 

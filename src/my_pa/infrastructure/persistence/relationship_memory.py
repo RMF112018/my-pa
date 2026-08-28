@@ -1090,6 +1090,7 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         principal_id: str,
         merged_entity_ids: frozenset[str],
         survivor_entity_id: str,
+        survivor_entity_version: int,
     ) -> tuple[IdentityEffectDraft, ...]:
         """Plan opaque subject/context moves; never select statement or classification."""
         named = sorted(merged_entity_ids)
@@ -1167,6 +1168,11 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
                         "subject_entity_id": (
                             survivor_entity_id if subject in merged_entity_ids else subject
                         ),
+                        "expected_subject_version": (
+                            survivor_entity_version
+                            if subject in merged_entity_ids
+                            else int(row.expected_subject_version)
+                        ),
                         "context_links": after_links,
                     },
                 )
@@ -1212,7 +1218,13 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         if result.rowcount != 1:
             raise UnknownScopeError("a memory binding changed after merge preview")
 
-    def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
+    def restore_identity_effect(
+        self,
+        principal_id: str,
+        effect: IdentityEffect,
+        *,
+        restored_state: Mapping[str, object],
+    ) -> None:
         """Restore only opaque bindings; narrative and classification never enter the ledger."""
         table, id_column, admitted = _memory_identity_effect_write_subject(effect.family)
         if set(effect.before_state) != admitted or set(effect.after_state) != admitted:
@@ -1220,29 +1232,9 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         conditions = [_mine(table, principal_id), table.c[id_column] == effect.record_id]
         for name, value in effect.after_state.items():
             conditions.append(table.c[name].is_(None) if value is None else table.c[name] == value)
-        restored = dict(effect.before_state)
-        if effect.family is IdentityEffectFamily.RELATIONSHIP_MEMORY:
-            current_version = effect.after_state.get("version")
-            if not isinstance(current_version, int):
-                raise ValueError("a Relationship Memory identity effect records its version")
-            restored["version"] = current_version + 1
-        elif effect.family is IdentityEffectFamily.MEMORY_PROPOSAL:
-            before_links = effect.before_state.get("context_links")
-            after_links = effect.after_state.get("context_links")
-            if not isinstance(before_links, list) or not isinstance(after_links, list):
-                raise ValueError("a memory proposal identity effect records its context links")
-            if len(before_links) != len(after_links):
-                raise ValueError("a memory proposal identity effect preserves its link set")
-            restored_links: list[dict[str, object]] = []
-            for before_link, after_link in zip(before_links, after_links, strict=True):
-                if not isinstance(before_link, dict) or not isinstance(after_link, dict):
-                    raise ValueError("a memory proposal identity effect records link objects")
-                restored_link = dict(before_link)
-                origin = after_link.get("origin_subject_entity_id")
-                if origin is not None:
-                    restored_link["origin_subject_entity_id"] = origin
-                restored_links.append(restored_link)
-            restored["context_links"] = restored_links
+        restored = dict(restored_state)
+        if set(restored) != admitted:
+            raise ValueError("a restored memory identity effect contains only binding state")
         result = self._connection.execute(update(table).where(*conditions).values(**restored))
         if result.rowcount != 1:
             raise UnknownScopeError("a memory binding no longer matches its source merge")

@@ -517,7 +517,7 @@ class _Reviews(ReviewRepository):
     **The Relationship Memory branch is composed, not unconditional.** The other
     two planes on this surface are always part of a build; Relationship Memory is
     a default-off plane behind two settings, and `ApplicationService` withholds
-    all eight of its capability names unless both are on. This class used to
+    all nine of its capability names unless both are on. This class used to
     reach the memory tables regardless, so a build that had never enabled the
     plane still ran its query on every `review.list` and still routed
     `review.decide` through its case test — and a memory case that surfaced there
@@ -575,10 +575,10 @@ class _Reviews(ReviewRepository):
 
         An *uncomposed* plane costs no query at all and contributes no case. That
         is a stronger statement than "it would have returned nothing anyway":
-        with no producer of proposals the memory query is empty today, but "empty
-        because nothing wrote a row" is a fact about the data and "absent because
-        the build does not have the plane" is a fact about the build, and only
-        the second survives the day a producer is admitted.
+        a build may hold no memory proposals, but "empty because no candidate was
+        proposed" is a fact about the data and "absent because the build does not
+        have the plane" is a fact about the build. The distinction remains
+        load-bearing now that `relationship_memory.propose` can populate the plane.
 
         **`entity_id` asks only the planes that could answer it.** A capture case
         is about a span of text and a GoodNotes case is about a region of a page;

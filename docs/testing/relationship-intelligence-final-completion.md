@@ -144,14 +144,15 @@ uses these evidence classes:
 - migration: a single Alembic head and offline SQL generation, with historical
   digest settlement deliberately fail-closed offline because canonical digests
   are data-dependent;
-- isolated PostgreSQL: the immutable-origin corrective cycle used a separately
-  named, localhost-only PostgreSQL 17.10 container from an already-cached image.
-  Its auto-remove identity was verified before use; focused tests created and
-  dropped their own databases, and the container was then stopped and removed.
+- isolated PostgreSQL: the immutable-origin and proposal-token corrective cycles
+  each used a separately named, localhost-only PostgreSQL 17.10 container from
+  the already-cached image. Auto-remove identity was verified before use;
+  focused tests created and dropped their own databases, and each container was
+  then stopped and confirmed removed.
 
 | Evidence | Exact result |
 |---|---|
-| Integrated corrective FAST | `14,242 passed, 1,559 deselected` |
+| Integrated corrective FAST | `14,243 passed, 1,562 deselected` |
 | Integrated corrective architecture | `4,712 passed` |
 | Exact-observer focused unit/contract/architecture set | `65 passed in 0.82s` |
 | Startup lifecycle, re-enrichment, and affected child-process set | `74 passed in 4.91s` |
@@ -167,9 +168,10 @@ uses these evidence classes:
 | Whitespace | `git diff --check` passed |
 | Alembic graph | one head: `8e1c4a7b2d90` |
 | Alembic offline SQL | passed with a synthetic non-connecting PostgreSQL URL; the preceding no-URL attempt failed closed as required |
-| Isolated PostgreSQL affected persistence set | `118` tests collected from `test_entity_reenrichment.py`, `test_identity_correction_ledger.py`, and `test_identity_correction_merge.py`; source, producer, and generic mutation builders have real `SqlCurrentReenrichmentBindings` callback/stale contracts, and Relationship Memory merge/split has monotonic-token, stale-command, and immutable-origin regressions; only the three new immutable-origin cases were executed from this combined set, so no pass is claimed for the other 115 |
+| Isolated PostgreSQL affected persistence set | `121` tests collected from `test_entity_reenrichment.py`, `test_identity_correction_ledger.py`, and `test_identity_correction_merge.py`; source, producer, and generic mutation builders have real `SqlCurrentReenrichmentBindings` callback/stale contracts, and Relationship Memory merge/split has monotonic-token, stale-command, immutable-origin, and proposal-token rebound regressions; eight focused Relationship Memory cases were executed across the immutable-origin and proposal-token corrections, so no pass is claimed for the other 113 |
 | Entra production-composition persistence set | `33` tests collected from `test_entra_authentication.py`, including the durable initial/repeat/policy-advance observer contract; outside the immutable-origin focused database selection and not executed, so no database pass is claimed |
 | Immutable-origin PostgreSQL correction | `82 passed`: `3` focused proposal→merge→accept/correct-and-accept/reprocess regressions, all `68` Relationship Memory review persistence tests, and `11` database-marked Relationship Memory capability tests; each module migrated a fresh disposable database to head |
+| Proposal-token PostgreSQL correction | `5 passed, 81 deselected in 10.48s`: unequal-version proposal→merge→accept/correct-and-accept and proposal→merge→split→accept/correct-and-accept/reprocess; each case also proves stale external subject-version CAS, stale review-version refusal, Principal isolation, atomicity, and preserved immutable origins |
 
 The full database tier is not required by the campaign exception rule and was
 not run: `FULL_DB_TIER_NOT_RUN_TARGETED_EVIDENCE_SUFFICIENT`. No production,
@@ -270,6 +272,14 @@ independent review:
     head-schema origin, and the head migration backfills proposal-link lineage.
     Focused disposable-PostgreSQL execution also exposed and corrected the
     migration's malformed SQL comment and current-metadata duplicate-DDL path.
+20. Governed merge now rebinds each moved Relationship Memory proposal's
+    `expected_subject_version` to the locked survivor token; a context-only move
+    leaves the proposal's unchanged subject token alone. Split derives the
+    restored proposal token from the restored Entity's monotonic `N+2` effect
+    state and writes that already-digested inverse under the exact merge-after
+    CAS guard. Five unequal-version disposable-PostgreSQL cases prove current
+    accept, correction acceptance and reprocess after merge/split while stale
+    external tokens, foreign Principals and stale review versions change no row.
 
 ## Load-bearing and mutation controls
 

@@ -1607,11 +1607,16 @@ class IdentityCorrectionService:
             source_identity_operation_id=source.identity_operation_id,
         )
         self._entities.record_identity_operation(command.principal_id, opened)
+        restored_states = {(draft.family, draft.record_id): draft.after_state for draft in drafts}
         for effect in reversed(source_effects):
             if effect.family is IdentityEffectFamily.REVIEW_CASE:
                 continue
             if effect.family in _MEMORY_EFFECT_FAMILIES:
-                self._memories.restore_identity_effect(command.principal_id, effect)
+                self._memories.restore_identity_effect(
+                    command.principal_id,
+                    effect,
+                    restored_state=restored_states[(effect.family, effect.record_id)],
+                )
             else:
                 self._entities.restore_identity_effect(command.principal_id, effect)
         effects = _sequence_split_effects(
@@ -2123,7 +2128,10 @@ class IdentityCorrectionService:
         groups.append(_group(MergeFamily.REVIEW_CASE, affected_cases, bool(affected_cases)))
 
         memory_drafts = self._memories.plan_identity_merge(
-            principal_id, merged_entity_ids, survivor.entity_id
+            principal_id,
+            merged_entity_ids,
+            survivor.entity_id,
+            survivor.version,
         )
         changes.extend(
             _RowChange(
@@ -2524,6 +2532,12 @@ def _inverse_drafts(effects: Sequence[IdentityEffect]) -> tuple[IdentityEffectDr
         IdentityEffectFamily.RELATIONSHIP,
         IdentityEffectFamily.RELATIONSHIP_MEMORY,
     }
+    restored_entity_versions = {
+        effect.record_id: current_version + 1
+        for effect in effects
+        if effect.family is IdentityEffectFamily.ENTITY
+        and isinstance(current_version := effect.after_state.get("version"), int)
+    }
 
     def restored_state(effect: IdentityEffect) -> Mapping[str, object]:
         restored = dict(effect.before_state)
@@ -2549,6 +2563,9 @@ def _inverse_drafts(effects: Sequence[IdentityEffect]) -> tuple[IdentityEffectDr
                     restored_link["origin_subject_entity_id"] = origin
                 restored_links.append(restored_link)
             restored["context_links"] = restored_links
+            original_subject = effect.before_state.get("subject_entity_id")
+            if isinstance(original_subject, str) and original_subject in restored_entity_versions:
+                restored["expected_subject_version"] = restored_entity_versions[original_subject]
         return restored
 
     return tuple(

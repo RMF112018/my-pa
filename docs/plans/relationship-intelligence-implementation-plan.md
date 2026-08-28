@@ -273,8 +273,8 @@ named rather than a package number. Phase B subsequently moved `RI-AC-008` to
 | RI-AC-005 | Contact/source rows stay observations, not automatic canonical people | `MET` | `EntityGovernanceService.observe` records an observation and can do nothing else; `tests/unit/test_entity_governance.py` asserts no entity appears |
 | RI-AC-006 | Unresolved mentions are first-class and searchable | `MET` (backend) | An unlinked `entity_observations` row *is* the unresolved mention, listable via `unresolved_mentions`; resolution answers `AMBIGUOUS`/`NOT_FOUND` over the wire. Surfacing it to a user is `BLOCKED_BY_D09` |
 | RI-AC-007 | No identity merge without governed policy | `MET` | `ReviewRequirement.REQUIRES_OPERATOR` refuses an unauthorised accept; the server refuses a decided proposal with no actor (`tests/database/test_entity_governance.py`) |
-| RI-AC-008 | Merge preview shows all materially affected records | `MET` | Canonical Review case details expose the proposal and evidence needed for the pre-decision review; accepting an identity-correction proposal still does not merge. Separately, operator-only `entities.merge.preview` computes and persists an exact-version-bound, expiring merge plan and returns affected family/count groups, blockers, conflicts, required choices, and projected effects. `entities.merge` must consume that exact preview and revalidates it before atomic apply. This is bounded to the record families Phase B supports: unsupported split, final Relationship Memory redistribution, and complete cross-plane re-enrichment remain explicit blockers or later work rather than hidden side effects. Local and gated `remote.operator` MCP callers are composed; remote writes remain off by default |
-| RI-AC-009 | Merge and split history preserved and correctable | `PARTIAL` | `entity_merge_records` carries actor, reason, moment and both identifiers; the merged entity survives as a redirect. **Split is not implemented** — section 15.4's requirements are unmet and open |
+| RI-AC-008 | Merge preview shows all materially affected records | `MET` | Canonical Review case details expose the proposal and evidence needed for the pre-decision review; accepting an identity-correction proposal still does not merge. Separately, operator-only `entities.merge.preview` computes and persists an exact-version-bound, expiring merge plan and returns affected family/count groups, blockers, conflicts, required choices, and projected effects. `entities.merge` must consume that exact preview and revalidates it before atomic apply. Split is a separate exact-inverse preview/apply protocol, not a hidden merge side effect. Local and gated `remote.operator` MCP callers are composed; remote writes remain off by default |
+| RI-AC-009 | Merge and split history preserved and correctable | `PARTIAL` | Final completion adds `entities.identity_history` plus operator-only `entities.split.preview`/`entities.split`. Split preserves the completed merge and appends an exact inverse operation/effect ledger; it does not erase lineage. The criterion remains `PARTIAL` because broader user-facing/history outcomes remain outside this backend completion, not because split is absent |
 | RI-AC-010 | Negative identity evidence prevents repeated false matches | `UNMET` | WP-RI-06 brought the record it needed — a rejected proposal persists as `EntityProposalState.REJECTED` — but nothing reads it back. `EntityResolutionService` consults entities, aliases and identifiers and never proposals, so a rejected merge does not stop the same pairing being proposed again. The gap is a read, not a table |
 | RI-AC-011 | Every material profile statement links to evidence or is marked | `PARTIAL` | The context card carries its observations and per-source `coverage`, and marks what it left out (`ContextCardLimitation`, including `COVERAGE_COUNTED_A_BOUNDED_SAMPLE`). But an alias, an identifier and an assignment on that card carry no link to the observation that evidenced them — no column relates them — so those statements are neither linked nor marked |
 | RI-AC-012 | Source facts / notes / assertions / inferences structurally distinct | `PARTIAL` | `ObservationKind` distinguishes kinds of *source record* (contact row, message participant, calendar attendee, document mention, user statement). It does not distinguish a source fact from an assertion or an inference: nothing in this plane records an inference at all, so the distinction is unmade rather than made wrongly |
@@ -1105,16 +1105,17 @@ section 4a above.
   `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` publishes none of its writes.
 * **`record_assignment` and `record_relationship` have no natural key**, so a
   retry that mints a fresh identifier writes a second row (RI-AC-036).
-* **Proposal review and governed merge now have callers.** Entity and
+* **Proposal review and governed identity correction now have callers.** Entity and
   Relationship Memory cases use canonical `review.list`/`review.decide`;
   `entities.merge.preview`, `entities.merge`, `entities.split.preview`, and `entities.split` are the separate operator-only
   identity-correction entry points. Remote publication is not implied by a raw
   allowlist: it additionally requires global remote writes and an exact
   server-resolved `remote.operator` durable capability set, then preserves the
   allowed-capability, purpose, feature, Principal, policy, and audit gates. This
-  change activates no live profile or flag. `WP-07` split, `WP-08` final
-  Relationship Memory redistribution, and `WP-10` complete re-enrichment remain
-  explicit gaps.
+  change activates no live profile or flag. Split and the bounded nine-trigger
+  re-enrichment contract are implemented in repository code. WP-08 commissioning
+  and WP-09 synthetic canary execution remain explicit operator-only actions;
+  their repository procedures are documentation, not activation evidence.
 * **The context card counts coverage from at most
   `CONTEXT_CARD_COVERAGE_LIMIT` observations**, and says so
   (`COVERAGE_COUNTED_A_BOUNDED_SAMPLE`) when the ceiling bites. Beyond it the

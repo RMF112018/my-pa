@@ -50,7 +50,7 @@ The IDs are identifiers and traceability anchors, not runtime configuration.
 | `RI-FC-WP-04` Proposal/Review | Generated discriminated payload schemas cover all proposal families; accepted merge/split proposals produce operator-preview handoffs and never execute identity correction. | IMPLEMENTED |
 | `RI-FC-WP-05` Security/Principal | `version_content(version_id)` remains an internal method behind the already Principal-scoped capture workflow; no RI capability can invoke it directly. | `NOT_APPLICABLE_TO_RI_FINAL_COMPLETION` |
 | `RI-FC-WP-06` MCP/Profiles/Documentation | The added public capability names, neutral commands, schemas, dispatch, purpose/profile bindings, runbooks, and current-state counts are synchronized. | IMPLEMENTED |
-| `RI-FC-WP-07` Test/Mutation Audit | Unit, contract, security, architecture, concurrency, migration-shape, and isolated-database tests cover the new paths and known escape classes. | IMPLEMENTED |
+| `RI-FC-WP-07` Test/Mutation Audit | Executable non-database unit, contract, security, architecture, transport, and migration-shape tests exercise the new paths and known escape classes. Focused isolated-PostgreSQL tests define the database/concurrency evidence set but were collection-only in this environment. | IMPLEMENTED_PENDING_FRESH_HEAD_VALIDATION |
 | `RI-FC-WP-08` Commissioning | A fail-closed commissioning procedure is documented in `ops/runbooks/relationship-intelligence.md`. | PROCEDURE_ONLY_NOT_EXECUTED |
 | `RI-FC-WP-09` Synthetic live canary | A non-personal synthetic canary and rollback procedure is documented in the same runbook. | PROCEDURE_ONLY_NOT_EXECUTED |
 
@@ -126,13 +126,15 @@ row is updated only after that review completes.
 | `RI-AC-021`-`024`, `026`, `033`, `034`, `037`, `047` | OUTSIDE_FINAL_COMPLETION |
 | `RI-AC-004`, `017`, `019`, `029`, `031`, `032`, `061`-`064` | BLOCKED_BY_DEFERRED_FRONTEND_OR_RUNTIME |
 | `RI-AC-010`, `025`, `027`, `038`, `050`-`052`, `065` | UNMET |
-| `RI-AC-070` | PENDING_EXACT_HEAD_INDEPENDENT_REVIEW |
+| `RI-AC-070` | PENDING_FRESH_EXACT_HEAD_INDEPENDENT_REVIEW_AND_CI |
 
 ## Test and migration evidence
 
-These results were measured on the frozen pre-commit campaign tree. The final
-pull-request head must retain the same tree content and pass the exact-head
-independent review. The implementation uses these evidence classes:
+These results were measured on the frozen pre-corrective campaign tree. They are
+historical execution receipts, not validation of the current uncommitted
+corrective tree. The final pull-request head must rerun the applicable executable
+selection, retain the intended tree content, pass CI, and receive a fresh
+independent exact-head review. The implementation uses these evidence classes:
 
 - static: Ruff format/lint, configured mypy, `git diff --check`;
 - FAST: the repository's exact non-database marker expression;
@@ -142,8 +144,9 @@ independent review. The implementation uses these evidence classes:
 - migration: a single Alembic head and offline SQL generation, with historical
   digest settlement deliberately fail-closed offline because canonical digests
   are data-dependent;
-- isolated PostgreSQL: collection and migration/test mapping only in this
-  environment because `MY_PA_DATABASE_URL` is unset.
+- isolated PostgreSQL: test discovery and migration/test mapping only in this
+  environment because `MY_PA_DATABASE_URL` is unset. Collection proves that the
+  tests are selected; it does not prove their PostgreSQL behavior passes.
 
 | Evidence | Exact result |
 |---|---|
@@ -164,7 +167,7 @@ independent review. The implementation uses these evidence classes:
 | Whitespace | `git diff --check` passed |
 | Alembic graph | one head: `8e1c4a7b2d90` |
 | Alembic offline SQL | passed with a synthetic non-connecting PostgreSQL URL; the preceding no-URL attempt failed closed as required |
-| Isolated PostgreSQL affected set | `28` tests collected; not executed because `MY_PA_DATABASE_URL` is unset |
+| Isolated PostgreSQL affected set | `28` tests collected; not executed because `MY_PA_DATABASE_URL` is unset; no database pass is claimed |
 
 The full database tier is not required by the campaign exception rule and was
 not run: `FULL_DB_TIER_NOT_RUN_TARGETED_EVIDENCE_SUFFICIENT`. No production,
@@ -172,8 +175,10 @@ shared, or live-personal-data system was used.
 
 ## Findings closure
 
-All integration findings discovered before the frozen FAST gate were corrected
-in scope:
+The following findings were corrected before the frozen FAST gate. Independent
+review finding 4 additionally identified stale documentation claims; this
+corrective reconciles those claims but remains pending fresh-head tests, CI, and
+independent review:
 
 1. MCP catalog order now follows the closed `Capability` order filtered by the
    implemented command map; transport schemas, annotations, and fixture maps
@@ -226,7 +231,7 @@ guard is removed or weakened:
 | Proposal/review separation | Generated discriminated payload map covers every proposal family; identity-correction acceptance returns a preview handoff and cannot apply |
 | Remote write ceiling | Ordinary profiles cannot publish merge/split; exact `remote.operator`, server-resolved grants, purpose, feature, Principal, policy, audit, and global write gates all remain required |
 | Capability/audit closure | Architecture guards compare catalogs, commands, profiles, transports, fixtures, migration vocabularies, and spelled counts without deriving old migrations from current enums |
-| Database concurrency | Focused isolated-PostgreSQL tests cover settlement uniqueness, lease claims, replay, stale work, and cross-Principal persistence, but were collected rather than executed in this environment |
+| Database concurrency | Focused isolated-PostgreSQL tests target settlement uniqueness, lease claims, replay, stale work, and cross-Principal persistence. They were collected rather than executed here, so this is a mapped mutation target and pending database evidence, not a passing result |
 
 ## Operator-only remaining actions
 

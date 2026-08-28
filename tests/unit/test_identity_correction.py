@@ -20,7 +20,9 @@ from __future__ import annotations
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from itertools import permutations
+from types import SimpleNamespace
 from typing import Final
+from unittest.mock import MagicMock
 
 import pytest
 
@@ -60,6 +62,7 @@ from my_pa.domain.relationship.identity_correction import (
     state_digest,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.infrastructure.persistence.relationship_memory import SqlRelationshipMemoryRepository
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 SURVIVOR: Final = "ent_aaaa0001aaaa0001"
@@ -484,6 +487,7 @@ def test_an_effect_records_a_change_rather_than_a_repetition() -> None:
         (IdentityEffectFamily.IDENTIFIER, "xid_aaaa0001aaaa0001"),
         (IdentityEffectFamily.ASSIGNMENT, "asn_aaaa0001aaaa0001"),
         (IdentityEffectFamily.RELATIONSHIP, "erel_aaaa0001aaaa01"),
+        (IdentityEffectFamily.RELATIONSHIP_MEMORY, "mem_aaaa0001aaaa01"),
     ],
 )
 def test_a_split_restores_semantics_without_restoring_an_old_version(
@@ -536,6 +540,77 @@ def test_a_redirect_advances_the_merged_entity_version() -> None:
     assert change.before_state["version"] == 7
     assert change.after_state["version"] == 8
     assert change.expected_version == 7
+
+
+def test_relationship_memory_merge_and_split_advance_one_token_each() -> None:
+    def rows(*values: SimpleNamespace) -> SimpleNamespace:
+        return SimpleNamespace(all=lambda: list(values))
+
+    planning = MagicMock()
+    planning.execute.side_effect = [
+        rows(
+            SimpleNamespace(
+                memory_id="mem_aaaa0001aaaa01",
+                subject_entity_id=MERGED,
+                origin_subject_entity_id=MERGED,
+                version=7,
+            )
+        ),
+        rows(),
+        rows(),
+    ]
+    draft = SqlRelationshipMemoryRepository(planning).plan_identity_merge(
+        PRINCIPAL, frozenset({MERGED}), SURVIVOR
+    )[0]
+    assert draft.before_state == {
+        "subject_entity_id": MERGED,
+        "origin_subject_entity_id": MERGED,
+        "version": 7,
+    }
+    assert draft.after_state == {
+        "subject_entity_id": SURVIVOR,
+        "origin_subject_entity_id": MERGED,
+        "version": 8,
+    }
+
+    source = sequence_effects(
+        (draft,),
+        identity_operation_id=OPERATION,
+        principal_id=PRINCIPAL,
+        recorded_at=WHEN,
+    )[0]
+    assert source.before_sha256 == state_digest(source.before_state)
+    assert source.after_sha256 == state_digest(source.after_state)
+
+    merging = MagicMock()
+    merging.execute.return_value = SimpleNamespace(rowcount=1)
+    SqlRelationshipMemoryRepository(merging).apply_identity_effect(PRINCIPAL, draft)
+    merge_statement = merging.execute.call_args.args[0]
+    assert merge_statement._values["subject_entity_id"].value == SURVIVOR
+    assert merge_statement._values["origin_subject_entity_id"].value == MERGED
+    assert merge_statement._values["version"].value == 8
+    assert "relationship_memories.version = 7" in str(
+        merge_statement.compile(compile_kwargs={"literal_binds": True})
+    )
+
+    split = _inverse_drafts((source,))[0]
+    assert split.before_state == source.after_state
+    assert split.after_state == {
+        "subject_entity_id": MERGED,
+        "origin_subject_entity_id": MERGED,
+        "version": 9,
+    }
+
+    restoring = MagicMock()
+    restoring.execute.return_value = SimpleNamespace(rowcount=1)
+    SqlRelationshipMemoryRepository(restoring).restore_identity_effect(PRINCIPAL, source)
+    statement = restoring.execute.call_args.args[0]
+    assert statement._values["subject_entity_id"].value == MERGED
+    assert statement._values["origin_subject_entity_id"].value == MERGED
+    assert statement._values["version"].value == 9
+    assert "relationship_memories.version = 8" in str(
+        statement.compile(compile_kwargs={"literal_binds": True})
+    )
 
 
 class _SplitEntities:
@@ -681,8 +756,8 @@ def _split_fixture() -> tuple[_SplitEntities, _SplitMemories, IdentityCorrection
             family=IdentityEffectFamily.RELATIONSHIP_MEMORY,
             record_id="mem_aaaa0001aaaa01",
             kind=IdentityEffectKind.DERIVED_STATE_INVALIDATED,
-            before_state={"subject_entity_id": MERGED, "provenance": "source"},
-            after_state={"subject_entity_id": SURVIVOR, "provenance": "source"},
+            before_state={"subject_entity_id": MERGED, "provenance": "source", "version": 7},
+            after_state={"subject_entity_id": SURVIVOR, "provenance": "source", "version": 8},
         ),
     )
     effects = sequence_effects(
@@ -759,7 +834,10 @@ def test_split_service_restores_semantics_memory_provenance_and_replays_exactly(
     assert memory_inverse.after_state == {
         "subject_entity_id": MERGED,
         "provenance": "source",
+        "version": 9,
     }
+    assert memory_inverse.before_sha256 == state_digest(memory_inverse.before_state)
+    assert memory_inverse.after_sha256 == state_digest(memory_inverse.after_state)
     entity_inverse = next(
         effect for effect in first.effects if effect.family is IdentityEffectFamily.ENTITY
     )

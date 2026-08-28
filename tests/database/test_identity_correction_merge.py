@@ -45,6 +45,13 @@ from my_pa.application.identity_correction import (
     MergePreviewCommand,
     MergePreviewReport,
     MergeReceipt,
+    SplitCommand,
+    SplitPreviewCommand,
+)
+from my_pa.application.relationship_memory import (
+    CreateMemoryCommand,
+    RelationshipMemoryService,
+    ReviseMemoryCommand,
 )
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
@@ -113,6 +120,7 @@ from my_pa.domain.relationship.memory import (
     MemoryProposalState,
     MergedSubjectError,
     RelationshipMemoryProposal,
+    StaleMemoryVersionError,
     classification_floor_for,
     memory_proposal_dedupe_digest,
     statement_digest,
@@ -378,6 +386,48 @@ def _service(connection: Connection) -> IdentityCorrectionService:
     )
 
 
+def _memory_with_premerge_revision(
+    connection: Connection, *, suffix: str
+) -> tuple[str, int, ReviseMemoryCommand]:
+    memory_service = RelationshipMemoryService()
+    created = memory_service.create(
+        SqlRelationshipMemoryRepository(connection),
+        CreateMemoryCommand(
+            principal_id=PRINCIPAL_A,
+            subject_entity_id=MERGED_ONE,
+            memory_kind=MemoryKind.GENERAL_NOTE,
+            statement="Synthetic note captured before identity correction.",
+            structured_value=None,
+            context_links=(),
+            pinned=False,
+            observed_at=None,
+            effective_from=None,
+            effective_to=None,
+            idempotency_key=f"aba-create-{suffix}",
+        ),
+        at=WHEN,
+    ).receipt
+    return (
+        created.memory_id,
+        created.aggregate_version,
+        ReviseMemoryCommand(
+            principal_id=PRINCIPAL_A,
+            memory_id=created.memory_id,
+            expected_version=created.aggregate_version,
+            statement="Synthetic stale wording correction.",
+            memory_kind=None,
+            structured_value=None,
+            context_links=(),
+            pinned=None,
+            observed_at=None,
+            effective_from=None,
+            effective_to=None,
+            correction_reason="synthetic correction prepared before merge",
+            idempotency_key=f"aba-stale-revise-{suffix}",
+        ),
+    )
+
+
 class _PausingMergeRepository(SqlEntityRepository):
     """Expose the point after participant locks and before final revalidation."""
 
@@ -622,6 +672,122 @@ def test_a_merge_redirects_the_merged_entity_and_leaves_the_survivor_alone(
     assert receipt.replayed is False
     # Nothing was deleted: the merged-away entity is still a readable row.
     assert _row_count(staged, "entities", "principal_id = 'prn_aaaa0001aaaa0001aaaa0001'") == 4
+
+
+def test_premerge_memory_command_is_stale_after_governed_merge(staged: Engine) -> None:
+    """RI-FC-WP-07: merge advances the memory CAS token from N to N+1."""
+    with staged.begin() as connection:
+        memory_id, premerge_version, stale_command = _memory_with_premerge_revision(
+            connection, suffix="merge"
+        )
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    with staged.begin() as connection:
+        merge = _applied(connection, report, key="merge-memory-aba")
+
+    memory_effect = next(
+        effect
+        for effect in merge.effects
+        if effect.family is IdentityEffectFamily.RELATIONSHIP_MEMORY
+        and effect.record_id == memory_id
+    )
+    assert memory_effect.before_state["version"] == premerge_version
+    assert memory_effect.after_state["version"] == premerge_version + 1
+    assert memory_effect.after_state["subject_entity_id"] == SURVIVOR
+
+    with staged.connect() as connection:
+        detail = SqlRelationshipMemoryRepository(connection).detail(
+            memory_id, principal_id=PRINCIPAL_A
+        )
+    assert detail is not None
+    assert detail.memory.version == premerge_version + 1
+    assert detail.memory.subject_entity_id == SURVIVOR
+
+    with pytest.raises(StaleMemoryVersionError), staged.begin() as connection:
+        RelationshipMemoryService().revise(
+            SqlRelationshipMemoryRepository(connection),
+            stale_command,
+            at=WHEN + timedelta(seconds=1),
+            current_kind=MemoryKind.GENERAL_NOTE,
+        )
+    assert _row_count(staged, "relationship_memory_versions") == 1
+
+
+def test_premerge_memory_command_is_stale_after_governed_merge_and_split(
+    staged: Engine,
+) -> None:
+    """RI-FC-WP-07: split restores meaning while advancing N+1 to N+2."""
+    with staged.begin() as connection:
+        memory_id, premerge_version, stale_command = _memory_with_premerge_revision(
+            connection, suffix="split"
+        )
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    with staged.begin() as connection:
+        merge = _applied(connection, report, key="merge-memory-before-split")
+    with staged.begin() as connection:
+        split_preview = _service(connection).split_preview(
+            SplitPreviewCommand(
+                principal_id=PRINCIPAL_A,
+                source_identity_operation_id=merge.operation.identity_operation_id,
+                reason="reverse the synthetic identity correction",
+            ),
+            at=WHEN + timedelta(seconds=1),
+            requested_by=OPERATOR,
+            actor_class=ActorClass.USER,
+            has_operator_authority=True,
+        )
+    with staged.begin() as connection:
+        split = _service(connection).split_apply(
+            SplitCommand(
+                principal_id=PRINCIPAL_A,
+                preview_id=split_preview.preview.preview_id,
+                preview_digest=split_preview.preview.preview_digest,
+                idempotency_key="split-memory-aba",
+                reason="reverse the synthetic identity correction",
+            ),
+            at=WHEN + timedelta(seconds=2),
+            correlation_id="corr_bbbb0002bbbb0002",
+            audit_id="audit_bbbb0002bbbb0002",
+            performed_by=OPERATOR,
+            actor_class=ActorClass.USER,
+            has_operator_authority=True,
+        )
+
+    merge_effect = next(
+        effect
+        for effect in merge.effects
+        if effect.family is IdentityEffectFamily.RELATIONSHIP_MEMORY
+        and effect.record_id == memory_id
+    )
+    split_effect = next(
+        effect
+        for effect in split.effects
+        if effect.family is IdentityEffectFamily.RELATIONSHIP_MEMORY
+        and effect.record_id == memory_id
+    )
+    assert merge_effect.before_state["version"] == premerge_version
+    assert merge_effect.after_state["version"] == premerge_version + 1
+    assert split_effect.before_state["version"] == premerge_version + 1
+    assert split_effect.after_state["version"] == premerge_version + 2
+    assert split_effect.after_state["subject_entity_id"] == MERGED_ONE
+
+    with staged.connect() as connection:
+        detail = SqlRelationshipMemoryRepository(connection).detail(
+            memory_id, principal_id=PRINCIPAL_A
+        )
+    assert detail is not None
+    assert detail.memory.version == premerge_version + 2
+    assert detail.memory.subject_entity_id == MERGED_ONE
+
+    with pytest.raises(StaleMemoryVersionError), staged.begin() as connection:
+        RelationshipMemoryService().revise(
+            SqlRelationshipMemoryRepository(connection),
+            stale_command,
+            at=WHEN + timedelta(seconds=3),
+            current_kind=MemoryKind.GENERAL_NOTE,
+        )
+    assert _row_count(staged, "relationship_memory_versions") == 1
 
 
 def test_the_effect_ledger_records_every_change_in_a_stable_order(staged: Engine) -> None:

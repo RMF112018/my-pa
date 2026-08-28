@@ -90,7 +90,7 @@ def _source_effects() -> tuple[IdentityEffect, ...]:
                 after_state={
                     "subject_entity_id": SURVIVOR,
                     "origin_subject_entity_id": MERGED,
-                    "version": 1,
+                    "version": 2,
                 },
             ),
         ),
@@ -320,7 +320,10 @@ def test_split_preview_and_apply_restore_exact_states_in_inverse_order_and_repla
             key: value for key, value in effect.after_state.items() if key != "version"
         }
         assert restored_semantics == expected_semantics
-        if effect.family is IdentityEffectFamily.ENTITY:
+        if effect.family in {
+            IdentityEffectFamily.ENTITY,
+            IdentityEffectFamily.RELATIONSHIP_MEMORY,
+        }:
             assert effect.after_state["version"] > source.after_state["version"]
 
     replay = _apply(service, _command(report))

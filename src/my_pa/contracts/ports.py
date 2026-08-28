@@ -2367,7 +2367,7 @@ class EntitiesRepository(ABC):
         raise NotImplementedError
 
     def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
-        """Restore one source effect's exact before state under an after-state guard."""
+        """Restore semantics with a fresh concurrency token under an after-state guard."""
         raise NotImplementedError
 
 

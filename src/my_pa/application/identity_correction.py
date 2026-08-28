@@ -356,7 +356,7 @@ class SplitPreviewCommand:
 
 @dataclass(frozen=True, slots=True)
 class SplitCommand:
-    """Apply the exact inverse bound by a persisted split preview."""
+    """Apply the semantic inverse while advancing persisted concurrency tokens."""
 
     principal_id: str
     preview_id: str
@@ -1475,7 +1475,7 @@ class IdentityCorrectionService:
         actor_class: ActorClass,
         has_operator_authority: bool,
     ) -> SplitPreviewReport:
-        """Persist a content-blind preview of the exact inverse of one merge."""
+        """Persist a content-blind semantic inverse with monotonic concurrency tokens."""
         self._require_operator(has_operator_authority)
         validate_identifier(command.principal_id, IdKind.PRINCIPAL)
         validate_identifier(command.source_identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
@@ -1534,7 +1534,7 @@ class IdentityCorrectionService:
         actor_class: ActorClass,
         has_operator_authority: bool,
     ) -> SplitReceipt:
-        """Atomically restore every source effect's exact before state."""
+        """Atomically restore source semantics with monotonic concurrency tokens."""
         self._require_operator(has_operator_authority)
         self._require_reason(command.reason)
         self._require_evidence(command.principal_id, command.evidence_refs)
@@ -2514,7 +2514,7 @@ def _inverse_drafts(effects: Sequence[IdentityEffect]) -> tuple[IdentityEffectDr
     The source effect remains the immutable historical record of the exact
     pre-merge state. A split must not write its old concurrency token back onto
     the canonical row: doing so would create an ABA window in which a command
-    read before the merge could succeed after the split. The five version-owned
+    read before the merge could succeed after the split. The six version-owned
     families therefore restore every semantic field while advancing from the
     post-merge token.
     """
@@ -2524,6 +2524,7 @@ def _inverse_drafts(effects: Sequence[IdentityEffect]) -> tuple[IdentityEffectDr
         IdentityEffectFamily.IDENTIFIER,
         IdentityEffectFamily.ASSIGNMENT,
         IdentityEffectFamily.RELATIONSHIP,
+        IdentityEffectFamily.RELATIONSHIP_MEMORY,
     }
 
     def restored_state(effect: IdentityEffect) -> Mapping[str, object]:

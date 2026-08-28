@@ -44,7 +44,7 @@ The IDs are identifiers and traceability anchors, not runtime configuration.
 
 | Work package | Repository result | Disposition |
 |---|---|---|
-| `RI-FC-WP-01` Identity Correction | Governed split preview/apply is the exact inverse of one completed merge; stale state, digest, source-operation, Principal, and one-settlement guards fail closed. | IMPLEMENTED |
+| `RI-FC-WP-01` Identity Correction | Governed split preview/apply restores the semantics of one completed merge with fresh monotonic concurrency tokens; stale state, digest, source-operation, Principal, and one-settlement guards fail closed. | IMPLEMENTED |
 | `RI-FC-WP-02` Identity History | One authoritative keyset-paginated history joins direct mutations, completed identity operations/effects, and legacy merge lineage without scraping proposal/review records. | IMPLEMENTED |
 | `RI-FC-WP-03` Re-enrichment | Seven exact triggers are registered from truthful authorized mutations; source-version and model/rule-version changes use exact version-observation hooks after a verified fetch or newly created authenticated proposal. Fixed-Principal startup observes before serving. Entra HTTP observes the exact server-resolved Principal inside the identity transaction before authentication returns, while authenticated remote MCP observes its exact resolved Principal before publishing request context. First and unchanged observations are no-ops. Every subject/input/producer/policy key and value matches the exact `CurrentReenrichmentBindings` lookup used at apply. All registration shares the same Principal-fenced unit of work. Immutable bounded bindings, Principal/work locks, database-time lease checks, post-apply currency validation, and atomic settlement prevent obsolete or duplicate derived mutation. | IMPLEMENTED |
 | `RI-FC-WP-04` Proposal/Review | Generated discriminated payload schemas cover all proposal families; accepted merge/split proposals produce operator-preview handoffs and never execute identity correction. | IMPLEMENTED |
@@ -151,7 +151,7 @@ uses these evidence classes:
 
 | Evidence | Exact result |
 |---|---|
-| Integrated corrective FAST | `14,244 passed, 1,555 deselected` |
+| Integrated corrective FAST | `14,246 passed, 1,557 deselected` |
 | Integrated corrective architecture | `4,710 passed` |
 | Exact-observer focused unit/contract/architecture set | `65 passed in 0.82s` |
 | Startup lifecycle, re-enrichment, and affected child-process set | `74 passed in 4.91s` |
@@ -167,7 +167,7 @@ uses these evidence classes:
 | Whitespace | `git diff --check` passed |
 | Alembic graph | one head: `8e1c4a7b2d90` |
 | Alembic offline SQL | passed with a synthetic non-connecting PostgreSQL URL; the preceding no-URL attempt failed closed as required |
-| Isolated PostgreSQL affected persistence set | `114` tests collected from `test_entity_reenrichment.py`, `test_identity_correction_ledger.py`, and `test_identity_correction_merge.py`; source, producer, and generic mutation builders now have real `SqlCurrentReenrichmentBindings` callback/stale contracts in addition to the corrected concurrency cases; not executed because no verified disposable database URL was available, so no database pass is claimed |
+| Isolated PostgreSQL affected persistence set | `116` tests collected from `test_entity_reenrichment.py`, `test_identity_correction_ledger.py`, and `test_identity_correction_merge.py`; source, producer, and generic mutation builders now have real `SqlCurrentReenrichmentBindings` callback/stale contracts, and Relationship Memory merge/split has real monotonic-token/stale-command regressions; not executed because no verified disposable database URL was available, so no database pass is claimed |
 | Entra production-composition persistence set | `33` tests collected from `test_entra_authentication.py`, including the durable initial/repeat/policy-advance observer contract; not executed because no verified disposable database URL was available, so no database pass is claimed |
 
 The full database tier is not required by the campaign exception rule and was

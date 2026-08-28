@@ -1119,7 +1119,11 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
                     record_id=str(row.memory_id),
                     kind=IdentityEffectKind.OWNER_REPARENTED,
                     before_state=before,
-                    after_state={**before, "subject_entity_id": survivor_entity_id},
+                    after_state={
+                        **before,
+                        "subject_entity_id": survivor_entity_id,
+                        "version": int(row.version) + 1,
+                    },
                 )
             )
         proposal_rows = self._connection.execute(
@@ -1216,9 +1220,13 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         conditions = [_mine(table, principal_id), table.c[id_column] == effect.record_id]
         for name, value in effect.after_state.items():
             conditions.append(table.c[name].is_(None) if value is None else table.c[name] == value)
-        result = self._connection.execute(
-            update(table).where(*conditions).values(**dict(effect.before_state))
-        )
+        restored = dict(effect.before_state)
+        if effect.family is IdentityEffectFamily.RELATIONSHIP_MEMORY:
+            current_version = effect.after_state.get("version")
+            if not isinstance(current_version, int):
+                raise ValueError("a Relationship Memory identity effect records its version")
+            restored["version"] = current_version + 1
+        result = self._connection.execute(update(table).where(*conditions).values(**restored))
         if result.rowcount != 1:
             raise UnknownScopeError("a memory binding no longer matches its source merge")
 

@@ -42,6 +42,23 @@ SOURCE_VERSION = "ver_aaaa0001aaaa0001"
 PROPOSAL = "eprp_aaaa0001aaaa0001"
 WHEN = datetime(2026, 8, 28, 12, tzinfo=UTC)
 
+_DIRECT_SPECIALIZED_TRIGGERS = frozenset(
+    {
+        ReenrichmentTrigger.CORRECTED_IDENTITY,
+        ReenrichmentTrigger.NEW_ALIAS,
+        ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+        ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+        ReenrichmentTrigger.ACCEPTED_QUICK_CAPTURE_CORRECTION,
+        ReenrichmentTrigger.CONTRADICTION_RESOLUTION,
+    }
+)
+_VERSION_OBSERVER_TRIGGERS = frozenset(
+    {
+        ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
+        ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
+    }
+)
+
 
 @dataclass(frozen=True)
 class _Observation:
@@ -398,10 +415,10 @@ def test_every_governing_trigger_has_a_reachable_mutation_registration() -> None
     reached = {
         trigger for triggers in TRIGGERS_BY_MUTATION_CAPABILITY.values() for trigger in triggers
     }
-    assert reached == set(ReenrichmentTrigger) - {
-        ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
-        ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
-    }
+    assert (
+        reached | _DIRECT_SPECIALIZED_TRIGGERS
+        == set(ReenrichmentTrigger) - _VERSION_OBSERVER_TRIGGERS
+    )
     assert all(capability.count(".") >= 1 for capability in TRIGGERS_BY_MUTATION_CAPABILITY)
 
 
@@ -418,9 +435,8 @@ def test_every_mapped_mutation_can_register_its_trigger_work() -> None:
             at=WHEN,
         )
         produced.update(item.binding.trigger for item in work)
-    assert produced == set(ReenrichmentTrigger) - {
-        ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
-        ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
+    assert produced == {
+        trigger for triggers in TRIGGERS_BY_MUTATION_CAPABILITY.values() for trigger in triggers
     }
 
 
@@ -647,10 +663,9 @@ def test_all_nine_triggers_are_covered_by_truthful_mutations_and_exact_observers
     mutation_triggers = {
         trigger for triggers in TRIGGERS_BY_MUTATION_CAPABILITY.values() for trigger in triggers
     }
-    assert mutation_triggers | {
-        ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
-        ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
-    } == set(ReenrichmentTrigger)
+    assert mutation_triggers | _DIRECT_SPECIALIZED_TRIGGERS | _VERSION_OBSERVER_TRIGGERS == set(
+        ReenrichmentTrigger
+    )
 
 
 @pytest.mark.parametrize("capability", tuple(TRIGGERS_BY_MUTATION_CAPABILITY))

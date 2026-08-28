@@ -60,21 +60,15 @@ SOURCE_PIPELINE_VERSION = "sources.fetch.v1"
 type ReenrichmentApplication = Callable[[ReenrichmentBinding, str], None]
 
 
-# Every v0.2 section 27.4 trigger is attached to an already-authorized mutation
-# path.  One mutation may intentionally invalidate more than one derivation.
-# The mapping is closed and tested; adding a trigger without a caller fails.
+# Generic handler-attested mutation callers only. Capabilities whose handlers
+# register a more precise subject binding directly are deliberately absent, so
+# one mutation cannot also create Principal-wide generic work. Together with
+# those direct callers and the source/producer observers, all nine v0.2 section
+# 27.4 triggers remain closed and tested.
 TRIGGERS_BY_MUTATION_CAPABILITY: Mapping[str, tuple[ReenrichmentTrigger, ...]] = {
-    "entities.merge": (ReenrichmentTrigger.CORRECTED_IDENTITY,),
-    "entities.split": (ReenrichmentTrigger.CORRECTED_IDENTITY,),
-    "entities.aliases.add": (ReenrichmentTrigger.NEW_ALIAS,),
     "entities.aliases.supersede": (ReenrichmentTrigger.NEW_ALIAS,),
-    "entities.assignments.create": (ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,),
-    "entities.assignments.revise": (ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,),
-    "entities.assignments.end": (ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,),
     "entities.update": (ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,),
-    "capture.revise": (ReenrichmentTrigger.ACCEPTED_QUICK_CAPTURE_CORRECTION,),
     "entities.unresolved_mentions.resolve": (ReenrichmentTrigger.CONTRADICTION_RESOLUTION,),
-    "review.decide": (ReenrichmentTrigger.CONTRADICTION_RESOLUTION,),
     "context.feedback": (ReenrichmentTrigger.POLICY_CHANGE,),
 }
 

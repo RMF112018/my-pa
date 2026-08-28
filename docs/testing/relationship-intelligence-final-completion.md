@@ -151,8 +151,8 @@ uses these evidence classes:
 
 | Evidence | Exact result |
 |---|---|
-| Integrated corrective FAST | `14,246 passed, 1,557 deselected` |
-| Integrated corrective architecture | `4,710 passed` |
+| Integrated corrective FAST | `14,241 passed, 1,557 deselected` |
+| Integrated corrective architecture | `4,712 passed` |
 | Exact-observer focused unit/contract/architecture set | `65 passed in 0.82s` |
 | Startup lifecycle, re-enrichment, and affected child-process set | `74 passed in 4.91s` |
 | Authenticated-Principal observation and re-enrichment focused set | `81 passed in 0.71s` |
@@ -204,10 +204,10 @@ independent review:
    restricted-harness `PermissionError` results for synthetic local sockets;
    the permitted rerun passed all 4,706 tests before the exact-observer correction. No repository correction was
    indicated or made for those harness-only failures. The final integrated
-   architecture selection then passed all 4,710 tests.
+   architecture selection then passed all 4,712 tests.
 9. Re-enrichment is composed into the production unit of work and gateway. A
-   closed capability-to-trigger map reaches seven v0.2 triggers from truthful
-   authorized mutations. Source-version and model/rule-version changes are not
+   closed production caller inventory reaches seven v0.2 triggers from truthful
+   generic or specialized authorized mutations. Source-version and model/rule-version changes are not
    proxy mappings: exact observation hooks run after metadata/fetch agreement
    and authenticated proposal-origin resolution, respectively. First and
    unchanged observations are no-ops; advances register one deduplicated work
@@ -257,6 +257,11 @@ independent review:
     repeat observation create no work while an old policy watermark advances to
     one durable deduplicated `policy_change` item. These database-marked tests
     were collected but not executed without a verified disposable target.
+18. Generic mutation registration now owns only its four Principal-bound
+    capabilities. All eleven subject-specific handlers are excluded and absent
+    from the generic map; assignment create/revise/end therefore emit exactly one
+    `role_or_organization_change` item, and exact replay emits none. A structural
+    guard binds the direct caller set, trigger vocabulary, and disjointness.
 
 ## Load-bearing and mutation controls
 

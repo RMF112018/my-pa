@@ -4,8 +4,46 @@ from __future__ import annotations
 
 import inspect
 
-from my_pa.application.entity_reenrichment import TRIGGERS_BY_MUTATION_CAPABILITY
-from my_pa.application.service import ApplicationService
+from my_pa.application.entity_reenrichment import (
+    TRIGGERS_BY_MUTATION_CAPABILITY,
+    ReenrichmentTrigger,
+)
+from my_pa.application.service import _DIRECT_REENRICHMENT_CAPABILITIES, ApplicationService
+
+_DIRECT_CALLERS = {
+    "capture.revise": (
+        "_admit",
+        ReenrichmentTrigger.ACCEPTED_QUICK_CAPTURE_CORRECTION,
+    ),
+    "entities.aliases.add": ("_entities_aliases_add", ReenrichmentTrigger.NEW_ALIAS),
+    "entities.assignments.create": (
+        "_entities_assignments_create",
+        ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    ),
+    "entities.assignments.end": (
+        "_entities_assignments_end",
+        ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    ),
+    "entities.assignments.revise": (
+        "_entities_assignments_revise",
+        ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    ),
+    "entities.merge": ("_entities_merge", ReenrichmentTrigger.CORRECTED_IDENTITY),
+    "entities.relationships.create": (
+        "_entities_relationships_create",
+        ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+    ),
+    "entities.relationships.end": (
+        "_entities_relationships_end",
+        ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+    ),
+    "entities.relationships.revise": (
+        "_entities_relationships_revise",
+        ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+    ),
+    "entities.split": ("_entities_split", ReenrichmentTrigger.CORRECTED_IDENTITY),
+    "review.decide": ("_review_decide", ReenrichmentTrigger.CONTRADICTION_RESOLUTION),
+}
 
 
 def test_source_and_producer_proxy_mutations_are_not_mapped() -> None:
@@ -39,3 +77,26 @@ def test_old_proxy_callers_do_not_register_reenrichment() -> None:
     observation = inspect.getsource(ApplicationService._entities_observe)
     assert "reenrichment_cause_id" not in enrollment
     assert "SOURCE_VERSION_CHANGE" not in observation
+
+
+def test_every_direct_specialized_caller_is_excluded_from_generic_registration() -> None:
+    assert frozenset(_DIRECT_CALLERS) == _DIRECT_REENRICHMENT_CAPABILITIES
+    assert set(_DIRECT_REENRICHMENT_CAPABILITIES).isdisjoint(TRIGGERS_BY_MUTATION_CAPABILITY)
+    for handler_name, trigger in _DIRECT_CALLERS.values():
+        source = inspect.getsource(getattr(ApplicationService, handler_name))
+        assert "self._register_reenrichment(" in source
+        assert f"ReenrichmentTrigger.{trigger.name}" in source
+
+
+def test_direct_generic_and_version_observers_cover_all_nine_trigger_families() -> None:
+    reached = {
+        trigger for triggers in TRIGGERS_BY_MUTATION_CAPABILITY.values() for trigger in triggers
+    }
+    reached.update(trigger for _handler_name, trigger in _DIRECT_CALLERS.values())
+    reached.update(
+        {
+            ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
+            ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
+        }
+    )
+    assert reached == set(ReenrichmentTrigger)

@@ -2326,7 +2326,13 @@ _DIRECT_REENRICHMENT_CAPABILITIES = frozenset(
     {
         "capture.revise",
         "entities.aliases.add",
+        "entities.assignments.create",
+        "entities.assignments.end",
+        "entities.assignments.revise",
         "entities.merge",
+        "entities.relationships.create",
+        "entities.relationships.end",
+        "entities.relationships.revise",
         "entities.split",
         "review.decide",
     }

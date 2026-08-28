@@ -6,6 +6,7 @@ import argparse
 import asyncio
 import inspect
 from collections.abc import Mapping
+from datetime import datetime
 from types import SimpleNamespace
 from typing import Any
 from uuid import UUID
@@ -13,17 +14,110 @@ from uuid import UUID
 import apps.gateway as gateway
 import httpx2
 import pytest
-from tests.conftest import Scene, build_service
+from tests.conftest import (
+    DEFAULT_LIMITS,
+    WHEN,
+    FakeUnitOfWork,
+    Scene,
+    World,
+    build_service,
+    metadata_for,
+)
 
 import my_pa.bootstrap.gateway as bootstrap_gateway
 from my_pa.adapters.http import create_http_app
-from my_pa.application.commands import Command
+from my_pa.application.commands import (
+    Command,
+    CreateEntityAssignment,
+    EndEntityAssignment,
+    ReviseEntityAssignment,
+)
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import local_principal
+from my_pa.contracts.ports import ReenrichmentVersionObservation
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
-from my_pa.domain.relationship.reenrichment import ReenrichmentTrigger
+from my_pa.domain.relationship.entity import (
+    AssignmentType,
+    Entity,
+    EntityStatus,
+    EntityType,
+)
+from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.relationship.reenrichment import (
+    BindingVersion,
+    ReenrichmentBinding,
+    ReenrichmentState,
+    ReenrichmentSubject,
+    ReenrichmentSubjectKind,
+    ReenrichmentTrigger,
+    ReenrichmentWork,
+)
+
+ASSIGNEE = "ent_rienrich01rienrich"
+PROJECT = "ent_riproject2riproject"
+
+
+class _UnchangedObservation:
+    changed = False
+
+
+class _InvocationReenrichmentRepository:
+    def __init__(self) -> None:
+        self.bindings: list[ReenrichmentBinding] = []
+        self.registration_attempts = 0
+        self.observations: list[tuple[str, str, str, str]] = []
+
+    def register(self, binding: ReenrichmentBinding, *, at: datetime) -> ReenrichmentWork:
+        self.registration_attempts += 1
+        self.bindings.append(binding)
+        return ReenrichmentWork(
+            work_id=f"erwk_{self.registration_attempts:08d}",
+            binding=binding,
+            state=ReenrichmentState.QUEUED,
+            attempt_count=0,
+            max_attempts=3,
+            created_at=at,
+            updated_at=at,
+        )
+
+    def observe_version(
+        self,
+        principal_id: str,
+        *,
+        namespace: str,
+        key: str,
+        version: str,
+        at: datetime,
+    ) -> ReenrichmentVersionObservation:
+        del at
+        self.observations.append((principal_id, namespace, key, version))
+        return _UnchangedObservation()
+
+
+class _InvocationUnitOfWork(FakeUnitOfWork):
+    def __init__(self, world: World, reenrichment: _InvocationReenrichmentRepository) -> None:
+        super().__init__(world)
+        self._reenrichment = reenrichment
+
+    @property
+    def reenrichment(self) -> _InvocationReenrichmentRepository:
+        return self._reenrichment
+
+
+def _assignment_entity(entity_id: str, principal_id: str, *, entity_type: EntityType) -> Entity:
+    return Entity(
+        entity_id=entity_id,
+        principal_id=principal_id,
+        entity_type=entity_type,
+        canonical_name=normalize_name(f"Synthetic {entity_id}"),
+        display_name=f"Synthetic {entity_id}",
+        status=EntityStatus.ACTIVE,
+        created_at=WHEN,
+        updated_at=WHEN,
+        version=1,
+    )
 
 
 @pytest.mark.parametrize(
@@ -54,6 +148,127 @@ def test_each_production_mutation_path_registers_its_exact_trigger(
     source = inspect.getsource(getattr(ApplicationService, handler_name))
     assert "_register_reenrichment(" in source
     assert f"ReenrichmentTrigger.{trigger.name}" in source
+
+
+def test_assignment_invocations_register_role_change_once_and_replays_register_zero(
+    scene: Scene,
+) -> None:
+    principal_id = scene.principal.principal_id
+    with FakeUnitOfWork(scene.world) as unit_of_work:
+        unit_of_work.entities.create(
+            principal_id,
+            _assignment_entity(ASSIGNEE, principal_id, entity_type=EntityType.PERSON),
+        )
+        unit_of_work.entities.create(
+            principal_id,
+            _assignment_entity(PROJECT, principal_id, entity_type=EntityType.PROJECT),
+        )
+    reenrichment = _InvocationReenrichmentRepository()
+    service = ApplicationService(
+        unit_of_work=lambda: _InvocationUnitOfWork(scene.world, reenrichment),
+        limits=DEFAULT_LIMITS,
+        clock=lambda: WHEN,
+        relationship_intelligence_enabled=True,
+        relationship_intelligence_writes_enabled=True,
+        relationship_reenrichment_enabled=True,
+    )
+
+    def invoke(capability: Capability, command: Command) -> dict[str, Any]:
+        envelope = service.invoke(
+            metadata_for(
+                capability,
+                sorted(permitted_purposes(capability))[0],
+                scene.principal,
+            ),
+            command,
+            principal=scene.principal,
+        ).to_canonical_dict()
+        assert envelope.get("error") is None, envelope.get("error")
+        result = envelope["result"]
+        assert isinstance(result, dict)
+        return result
+
+    create = CreateEntityAssignment(
+        entity_id=ASSIGNEE,
+        expected_entity_version=1,
+        assignment_type=AssignmentType.PROJECT_ASSIGNMENT,
+        scope_entity_id=PROJECT,
+        expected_scope_version=1,
+        role="Project Manager",
+        idempotency_key="reenrichment-assignment-create",
+    )
+    created = invoke(Capability.ENTITIES_ASSIGNMENTS_CREATE, create)
+    assert created["replayed"] is False
+    assert reenrichment.registration_attempts == 1
+    replayed_create = invoke(Capability.ENTITIES_ASSIGNMENTS_CREATE, create)
+    assert replayed_create["replayed"] is True
+    assert reenrichment.registration_attempts == 1
+
+    revise = ReviseEntityAssignment(
+        assignment_id=created["record_id"],
+        expected_version=created["version"],
+        role="Programme Manager",
+        idempotency_key="reenrichment-assignment-revise",
+    )
+    revised = invoke(Capability.ENTITIES_ASSIGNMENTS_REVISE, revise)
+    assert revised["replayed"] is False
+    assert reenrichment.registration_attempts == 2
+    replayed_revise = invoke(Capability.ENTITIES_ASSIGNMENTS_REVISE, revise)
+    assert replayed_revise["replayed"] is True
+    assert reenrichment.registration_attempts == 2
+
+    end = EndEntityAssignment(
+        assignment_id=created["record_id"],
+        expected_version=revised["version"],
+        reason="the synthetic assignment ended",
+        end_now=True,
+        idempotency_key="reenrichment-assignment-end",
+    )
+    ended = invoke(Capability.ENTITIES_ASSIGNMENTS_END, end)
+    assert ended["replayed"] is False
+    assert reenrichment.registration_attempts == 3
+    replayed_end = invoke(Capability.ENTITIES_ASSIGNMENTS_END, end)
+    assert replayed_end["replayed"] is True
+    assert reenrichment.registration_attempts == 3
+
+    mutations = (created, revised, ended)
+    assert len(reenrichment.bindings) == len(mutations) == 3
+    assert {binding.trigger for binding in reenrichment.bindings} == {
+        ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE
+    }
+    assert all(
+        binding.trigger is not ReenrichmentTrigger.PROJECT_MAPPING_CHANGE
+        for binding in reenrichment.bindings
+    )
+    for binding, mutation in zip(reenrichment.bindings, mutations, strict=True):
+        assert binding.principal_id == principal_id
+        assert binding.cause_record_id == mutation["receipt_id"]
+        assert binding.subjects == (
+            ReenrichmentSubject(
+                ReenrichmentSubjectKind.ASSIGNMENT,
+                mutation["record_id"],
+                str(mutation["version"]),
+            ),
+        )
+        assert binding.input_versions == ()
+        assert binding.producer_versions == (
+            BindingVersion("relationship_intelligence", "relationship-intelligence-v0.2"),
+        )
+        assert binding.policy_version == "policy-v1"
+
+    assert (
+        reenrichment.observations
+        == [
+            (
+                principal_id,
+                "producer",
+                "relationship_intelligence",
+                "relationship-intelligence-v0.2",
+            ),
+            (principal_id, "policy", "current", "policy-v1"),
+        ]
+        * 3
+    )
 
 
 @pytest.mark.parametrize("transport", ["http", "stdio", "remote"])

@@ -19,14 +19,12 @@ that then looks complete. Two of them are answered with a blocker rather than a
 transformation, and the difference between blocking a family and passing over
 it is the difference between a merge an operator can trust and one they cannot.
 
-**What blocks, and why blocking is the honest answer.** Relationship Memory
-names entities as subjects and `WP-RI-08` owns what a merge does to that
-binding; this phase's effect ledger has no family that could record it, so a
-merge over an entity a memory names is refused rather than performed with no
-way back. An active external identifier the survivor already holds as a former
-one is the other, and section 21 settles that one outright. Neither refusal is a
-gap being hidden: it is section 20's requirement that an unsupported family
-surface an explicit blocker and that apply refuse the case.
+**What blocks, and why blocking is the honest answer.** An active external
+identifier the survivor already holds as a former one is refused outright, as
+section 21 requires. Relationship Memory is no longer an unsupported boundary:
+its subject and Entity-context bindings are planned, recorded, and restored as
+content-blind effects while immutable origins remain unchanged. Unsupported
+families still surface explicitly in the report rather than disappearing.
 
 **A Review case is not one of them, and it used to be.** The reasoning that
 blocked it was that closing a proposal and leaving its case standing is a silent
@@ -164,7 +162,7 @@ class MergeFamily(StrEnum):
     separate bindings, and answering them together would let one of them hide
     behind the other's answer.
 
-    Deliberately **not** `IdentityEffectFamily`, which has nine members and is a
+    Deliberately **not** `IdentityEffectFamily`, whose twelve members are a
     vocabulary about the *ledger*: it names the families a merge can record an
     effect on, so a family this phase cannot transform has no member there and
     could not be named. This enum is the vocabulary of the *report*, and its
@@ -2153,10 +2151,10 @@ class IdentityCorrectionService:
                 self._entities.fact_evidence_links_naming(principal_id, merged_entity_ids),
             )
         )
-        # Canonical, version-owned Relationship Memory Entity context links are
-        # included in the privacy-safe RELATIONSHIP_MEMORY blocker above.  This
-        # family names separate derived cache/index artifacts only; reporting
-        # the canonical links twice would leak structure and double-count them.
+        # Canonical, version-owned Relationship Memory subjects and Entity
+        # context links are included in the content-blind RELATIONSHIP_MEMORY
+        # effects above. This family names separate derived cache/index artifacts
+        # only; reporting canonical bindings twice would double-count them.
         groups.append(
             MergeAffectedGroup(MergeFamily.DERIVED_CONTEXT, FamilyDisposition.NOT_BOUND, 0)
         )
@@ -2534,6 +2532,23 @@ def _inverse_drafts(effects: Sequence[IdentityEffect]) -> tuple[IdentityEffectDr
             if not isinstance(current_version, int):
                 raise ValueError("a versioned identity effect records its resulting version")
             restored["version"] = current_version + 1
+        elif effect.family is IdentityEffectFamily.MEMORY_PROPOSAL:
+            before_links = effect.before_state.get("context_links")
+            after_links = effect.after_state.get("context_links")
+            if not isinstance(before_links, list) or not isinstance(after_links, list):
+                raise ValueError("a memory proposal identity effect records its context links")
+            if len(before_links) != len(after_links):
+                raise ValueError("a memory proposal identity effect preserves its link set")
+            restored_links: list[dict[str, object]] = []
+            for before_link, after_link in zip(before_links, after_links, strict=True):
+                if not isinstance(before_link, dict) or not isinstance(after_link, dict):
+                    raise ValueError("a memory proposal identity effect records link objects")
+                restored_link = dict(before_link)
+                origin = after_link.get("origin_subject_entity_id")
+                if origin is not None:
+                    restored_link["origin_subject_entity_id"] = origin
+                restored_links.append(restored_link)
+            restored["context_links"] = restored_links
         return restored
 
     return tuple(

@@ -52,6 +52,8 @@ from my_pa.domain.relationship.memory import (
     MemoryProposalMethod,
     MemoryProposalState,
     RelationshipMemoryProposal,
+    proposal_context_links_for_storage,
+    proposal_context_links_from_storage,
 )
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.identifier_claim_lock import lock_entity_mutation_scopes
@@ -205,14 +207,19 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
                             {
                                 "memory_proposal_id": proposal.memory_proposal_id,
                                 "subject_entity_id": proposal.subject_entity_id,
-                                "origin_subject_entity_id": proposal.subject_entity_id,
+                                "origin_subject_entity_id": proposal.origin_subject_entity_id,
                                 "expected_subject_version": proposal.expected_subject_version,
                                 "proposed_kind": proposal.proposed_kind.value,
                                 "proposed_statement": proposal.proposed_statement,
                                 "proposed_statement_sha256": proposal.proposed_statement_sha256,
                                 "dedupe_sha256": proposal.dedupe_sha256,
                                 "structured_value": proposal.structured_value,
-                                "context_links": list(proposal.context_links),
+                                "context_links": list(
+                                    proposal_context_links_for_storage(
+                                        proposal.context_links,
+                                        proposal.context_link_origins,
+                                    )
+                                ),
                                 "state": proposal.state.value,
                                 "method": proposal.method.value,
                                 "method_version": proposal.method_version,
@@ -256,17 +263,22 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
                 )
                 .with_for_update(of=relationship_memory_proposals)
             ).one()
+            stored_links, stored_link_origins = proposal_context_links_from_storage(
+                row.context_links
+            )
             stored = RelationshipMemoryProposal(
                 memory_proposal_id=str(row.memory_proposal_id),
                 principal_id=str(row.principal_id),
                 subject_entity_id=str(row.subject_entity_id),
+                origin_subject_entity_id=str(row.origin_subject_entity_id),
                 expected_subject_version=int(row.expected_subject_version),
                 proposed_kind=MemoryKind(row.proposed_kind),
                 proposed_statement=str(row.proposed_statement),
                 proposed_statement_sha256=str(row.proposed_statement_sha256),
                 dedupe_sha256=str(row.dedupe_sha256),
                 structured_value=row.structured_value,
-                context_links=tuple(row.context_links),
+                context_links=stored_links,
+                context_link_origins=stored_link_origins,
                 state=MemoryProposalState(row.state),
                 method=MemoryProposalMethod(row.method),
                 method_version=str(row.method_version),

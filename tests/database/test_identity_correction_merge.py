@@ -68,7 +68,8 @@ from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.proposal import ProposalState
-from my_pa.domain.capture.review import Disposition
+from my_pa.domain.capture.review import CorrectionPatch, Disposition
+from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal, PrincipalKind
@@ -143,6 +144,10 @@ from my_pa.infrastructure.persistence.relationship_memory import (
 )
 from my_pa.infrastructure.persistence.relationship_memory_proposals import (
     SqlRelationshipMemoryProposalRepository,
+)
+from my_pa.infrastructure.persistence.relationship_memory_review import (
+    decide_relationship_memory_review,
+    relationship_memory_review_cases,
 )
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork, _Reviews
 
@@ -327,6 +332,72 @@ def _proposal(
         EntityProposalKind.RECORD_ALIAS,
         {"entity_id": entity_id, "alias_type": "nickname", "display_value": "Ali"},
         review_case_id=review_case_id,
+    )
+
+
+def _memory_proposal(
+    proposal_id: str,
+    review_case_id: str,
+    *,
+    principal_id: str = PRINCIPAL_A,
+    subject_entity_id: str = MERGED_ONE,
+    context_entity_id: str = MERGED_ONE,
+) -> RelationshipMemoryProposal:
+    statement = "Synthetic proposed memory before identity correction."
+    context_links = (
+        {
+            "target_type": "entity",
+            "target_id": context_entity_id,
+            "role": "applies_in",
+        },
+    )
+    statement_sha256 = statement_digest(statement)
+    return RelationshipMemoryProposal(
+        memory_proposal_id=proposal_id,
+        principal_id=principal_id,
+        subject_entity_id=subject_entity_id,
+        expected_subject_version=1,
+        proposed_kind=MemoryKind.GENERAL_NOTE,
+        proposed_statement=statement,
+        proposed_statement_sha256=statement_sha256,
+        dedupe_sha256=memory_proposal_dedupe_digest(
+            principal_id=principal_id,
+            subject_entity_id=subject_entity_id,
+            proposed_kind=MemoryKind.GENERAL_NOTE,
+            proposed_statement_sha256=statement_sha256,
+            structured_value=None,
+            context_links=context_links,
+        ),
+        state=MemoryProposalState.NEEDS_REVIEW,
+        method=MemoryProposalMethod.RULE,
+        method_version="synthetic-origin-v1",
+        classification=Classification.PRIVATE_LOCAL,
+        proposed_at=WHEN,
+        context_links=context_links,
+        review_case_id=review_case_id,
+    )
+
+
+def _memory_review_request(
+    review_case_id: str,
+    disposition: Disposition,
+    *,
+    corrected_statement: str | None = None,
+) -> ReviewDecisionRequest:
+    return ReviewDecisionRequest(
+        review_case_id=review_case_id,
+        expected_review_version=0,
+        disposition=disposition,
+        principal_id=PRINCIPAL_A,
+        correlation_id="corr_origin01origin01",
+        audit_id="audit_origin01origin01",
+        policy_version="policy-v1",
+        decided_at=WHEN + timedelta(seconds=2),
+        correction_patch=(
+            CorrectionPatch.of({"statement": corrected_statement})
+            if corrected_statement is not None
+            else None
+        ),
     )
 
 
@@ -2334,46 +2405,172 @@ def test_a_proposal_with_no_review_case_leaves_the_review_family_unchanged(
     assert _row_count(staged, "entity_identity_effects", "record_family = 'review_case'") == 0
 
 
-def test_a_relationship_memory_subject_blocks_the_merge_without_naming_the_memory(
+@pytest.mark.parametrize(
+    ("disposition", "proposal_id", "review_case_id", "corrected_statement"),
+    [
+        (
+            Disposition.ACCEPT,
+            "mprop_origin01origin01",
+            "rvw_origin0001origin001",
+            None,
+        ),
+        (
+            Disposition.CORRECT_AND_ACCEPT,
+            "mprop_origin02origin02",
+            "rvw_origin0002origin002",
+            "Synthetic reviewer-corrected memory after identity correction.",
+        ),
+    ],
+)
+def test_proposal_merge_acceptance_preserves_subject_and_context_origins(
+    staged: Engine,
+    disposition: Disposition,
+    proposal_id: str,
+    review_case_id: str,
+    corrected_statement: str | None,
+) -> None:
+    proposal = _memory_proposal(proposal_id, review_case_id)
+    with staged.begin() as connection:
+        SqlRelationshipMemoryProposalRepository(connection).record_proposal(proposal, ())
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    assert _group(report, MergeFamily.RELATIONSHIP_MEMORY) == (
+        FamilyDisposition.TRANSFORMED,
+        1,
+    )
+    with staged.begin() as connection:
+        _applied(connection, report, key=f"merge-{disposition.value}-origin")
+
+    with staged.connect() as connection:
+        merged_proposal = connection.execute(
+            text(
+                f"SELECT subject_entity_id, origin_subject_entity_id, context_links "  # noqa: S608
+                f"FROM {SCHEMA}.relationship_memory_proposals "
+                "WHERE memory_proposal_id = :proposal_id AND principal_id = :principal_id"
+            ),
+            {"proposal_id": proposal_id, "principal_id": PRINCIPAL_A},
+        ).one()
+    assert merged_proposal.subject_entity_id == SURVIVOR
+    assert merged_proposal.origin_subject_entity_id == MERGED_ONE
+    assert merged_proposal.context_links == [
+        {
+            "target_type": "entity",
+            "target_id": SURVIVOR,
+            "origin_subject_entity_id": MERGED_ONE,
+            "role": "applies_in",
+        }
+    ]
+
+    with staged.begin() as connection:
+        decide_relationship_memory_review(
+            connection,
+            _memory_review_request(
+                review_case_id,
+                disposition,
+                corrected_statement=corrected_statement,
+            ),
+        )
+    with staged.connect() as connection:
+        accepted = connection.execute(
+            text(
+                f"SELECT accepted_memory_id, accepted_memory_version_id, "  # noqa: S608
+                f"origin_subject_entity_id FROM {SCHEMA}.relationship_memory_proposals "
+                "WHERE memory_proposal_id = :proposal_id AND principal_id = :principal_id"
+            ),
+            {"proposal_id": proposal_id, "principal_id": PRINCIPAL_A},
+        ).one()
+        memory = connection.execute(
+            text(
+                f"SELECT principal_id, subject_entity_id, origin_subject_entity_id "  # noqa: S608
+                f"FROM {SCHEMA}.relationship_memories WHERE memory_id = :memory_id"
+            ),
+            {"memory_id": accepted.accepted_memory_id},
+        ).one()
+        context = connection.execute(
+            text(
+                f"SELECT principal_id, target_id, origin_subject_entity_id "  # noqa: S608
+                f"FROM {SCHEMA}.relationship_memory_context_links "
+                "WHERE memory_version_id = :version_id"
+            ),
+            {"version_id": accepted.accepted_memory_version_id},
+        ).one()
+        foreign_detail = SqlRelationshipMemoryRepository(connection).detail(
+            accepted.accepted_memory_id, principal_id=PRINCIPAL_B
+        )
+        foreign_cases = relationship_memory_review_cases(
+            connection, principal_id=PRINCIPAL_B, limit=10
+        )
+
+    assert accepted.origin_subject_entity_id == MERGED_ONE
+    assert memory.principal_id == PRINCIPAL_A
+    assert memory.subject_entity_id == SURVIVOR
+    assert memory.origin_subject_entity_id == MERGED_ONE
+    assert context.principal_id == PRINCIPAL_A
+    assert context.target_id == SURVIVOR
+    assert context.origin_subject_entity_id == MERGED_ONE
+    assert foreign_detail is None
+    assert foreign_cases == ()
+
+
+def test_proposal_merge_reprocess_preserves_origin_on_the_successor(
     staged: Engine,
 ) -> None:
-    """WP-RI-08 owns origin-subject; this phase's ledger has no family for it."""
+    proposal_id = "mprop_origin03origin03"
+    review_case_id = "rvw_origin0003origin003"
     with staged.begin() as connection:
-        connection.execute(
-            text(
-                f"INSERT INTO {SCHEMA}.relationship_memory_proposals ("  # noqa: S608
-                "memory_proposal_id, principal_id, subject_entity_id, "
-                "expected_subject_version, proposed_kind, proposed_statement, "
-                "proposed_statement_sha256, dedupe_sha256, state, method, "
-                "method_version, classification, proposed_at) VALUES ("
-                "'mprop_aaaa0001aaaa01', :principal, :subject, 1, 'general_note', "
-                "'synthetic note', :digest, :dedupe, 'proposed', 'deterministic', 'v1', "
-                "'synthetic_test', :moment)"
-            ),
-            {
-                "principal": PRINCIPAL_A,
-                "subject": MERGED_ONE,
-                "digest": statement_digest("synthetic note"),
-                "dedupe": memory_proposal_dedupe_digest(
-                    principal_id=PRINCIPAL_A,
-                    subject_entity_id=MERGED_ONE,
-                    proposed_kind=MemoryKind.GENERAL_NOTE,
-                    proposed_statement_sha256=statement_digest("synthetic note"),
-                    structured_value=None,
-                ),
-                "moment": WHEN,
-            },
+        SqlRelationshipMemoryProposalRepository(connection).record_proposal(
+            _memory_proposal(proposal_id, review_case_id), ()
         )
     with staged.begin() as connection:
         report = _previewed(connection)
-    assert _group(report, MergeFamily.RELATIONSHIP_MEMORY) == (FamilyDisposition.BLOCKED, 1)
-    assert [conflict.record_id for conflict in report.blockers] == [MERGED_ONE]
-    assert [conflict.family for conflict in report.blockers] == [IdentityEffectFamily.ENTITY]
-    with pytest.raises(ConflictError) as refused, staged.begin() as connection:
-        _applied(connection, report)
-    assert [detail.value for detail in refused.value.safe_details] == [
-        "identity_correction_conflict"
+    with staged.begin() as connection:
+        _applied(connection, report, key="merge-reprocess-origin")
+    with staged.begin() as connection:
+        decide_relationship_memory_review(
+            connection,
+            _memory_review_request(review_case_id, Disposition.REPROCESS),
+        )
+
+    with staged.connect() as connection:
+        predecessor = connection.execute(
+            text(
+                f"SELECT origin_subject_entity_id, superseded_by_memory_proposal_id "  # noqa: S608
+                f"FROM {SCHEMA}.relationship_memory_proposals "
+                "WHERE memory_proposal_id = :proposal_id AND principal_id = :principal_id"
+            ),
+            {"proposal_id": proposal_id, "principal_id": PRINCIPAL_A},
+        ).one()
+        successor = connection.execute(
+            text(
+                f"SELECT principal_id, subject_entity_id, origin_subject_entity_id, "  # noqa: S608
+                f"context_links, expected_subject_version FROM "
+                f"{SCHEMA}.relationship_memory_proposals "
+                "WHERE memory_proposal_id = :proposal_id AND principal_id = :principal_id"
+            ),
+            {
+                "proposal_id": predecessor.superseded_by_memory_proposal_id,
+                "principal_id": PRINCIPAL_A,
+            },
+        ).one()
+        foreign_cases = relationship_memory_review_cases(
+            connection, principal_id=PRINCIPAL_B, limit=10
+        )
+
+    assert predecessor.origin_subject_entity_id == MERGED_ONE
+    assert successor.principal_id == PRINCIPAL_A
+    assert successor.subject_entity_id == SURVIVOR
+    assert successor.origin_subject_entity_id == MERGED_ONE
+    assert successor.context_links == [
+        {
+            "target_type": "entity",
+            "target_id": SURVIVOR,
+            "origin_subject_entity_id": MERGED_ONE,
+            "role": "applies_in",
+        }
     ]
+    assert successor.expected_subject_version == 1
+    assert _row_count(staged, "relationship_memories") == 0
+    assert foreign_cases == ()
 
 
 def test_resolution_decisions_and_source_links_are_reported_and_left_alone(

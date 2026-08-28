@@ -4645,11 +4645,9 @@ class RelationshipMemoryRepository(ABC):
         preview, and a count would be exactly that channel: an operator who could
         see "three memories" for one identity and "none" for another would learn
         what this plane holds without being permitted to read it. Existence per
-        *entity* is the only thing a merge needs, because the whole Relationship
-        Memory family is refused as unsupported when any row names a merged-away
-        entity -- `WP-RI-08` owns origin-subject redistribution and `WP-RI-06`'s
-        effect ledger has no family that could record what a merge did to a
-        memory.
+        *entity* is sufficient for legacy callers; governed merge planning uses
+        the separate content-blind identity-effect contract that records mutable
+        bindings while preserving immutable origin.
 
         **On this port and not on `EntitiesRepository`**, although the question is
         asked by the entity plane and the answer is entity identifiers. Every

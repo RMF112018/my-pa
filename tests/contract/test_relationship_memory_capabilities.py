@@ -1172,6 +1172,7 @@ def _a_promoted_assertion(engine: Engine, subject: str, statement: str) -> str:
                 memory_proposal_id=memory_proposal_id,
                 principal_id=PRINCIPAL,
                 subject_entity_id=subject,
+                origin_subject_entity_id=subject,
                 expected_subject_version=1,
                 proposed_kind=MemoryKind.COMMUNICATION_PREFERENCE.value,
                 proposed_statement=statement,

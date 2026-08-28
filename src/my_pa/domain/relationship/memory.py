@@ -105,6 +105,9 @@ __all__ = [
     "StaleMemoryVersionError",
     "classification_floor_for",
     "memory_proposal_dedupe_digest",
+    "preserve_proposal_context_link_origins",
+    "proposal_context_links_for_storage",
+    "proposal_context_links_from_storage",
     "satisfies_floor",
     "statement_digest",
     "validate_context_links",
@@ -764,6 +767,93 @@ def validate_context_links(value: object) -> tuple[dict[str, str], ...]:
     )
 
 
+def proposal_context_links_from_storage(
+    value: object,
+) -> tuple[tuple[dict[str, str], ...], tuple[str | None, ...]]:
+    """Decode proposal links while retaining each entity link's first subject.
+
+    Proposal JSON carries this server-owned lineage beside the public link
+    vocabulary because proposals can be reparented before review. Rows written
+    before lineage was recorded are interpreted at their current target. The
+    governed reparent writer stamps that pre-merge target before changing it.
+    """
+    if not isinstance(value, tuple | list):
+        raise RelationshipMemoryError("memory context links are a bounded list")
+    public: list[dict[str, str]] = []
+    origin_by_identity: dict[tuple[str, str, str], str | None] = {}
+    for entry in value:
+        if not isinstance(entry, Mapping):
+            raise RelationshipMemoryError("a context link carries its canonical fields")
+        public_entry = {
+            key: entry[key] for key in ("target_type", "target_id", "role") if key in entry
+        }
+        if set(entry) not in (
+            {"target_type", "target_id", "role"},
+            {"target_type", "target_id", "role", "origin_subject_entity_id"},
+        ):
+            raise RelationshipMemoryError("a stored proposal link carries only binding lineage")
+        public.append(public_entry)
+        identity = (
+            str(public_entry.get("target_type")),
+            str(public_entry.get("target_id")),
+            str(public_entry.get("role")),
+        )
+        origin = entry.get("origin_subject_entity_id")
+        origin_by_identity[identity] = None if origin is None else str(origin)
+    canonical = validate_context_links(tuple(public))
+    origins: list[str | None] = []
+    for link in canonical:
+        identity = (link["target_type"], link["target_id"], link["role"])
+        origin = origin_by_identity[identity]
+        if link["target_type"] == ContextLinkTargetType.ENTITY.value:
+            origin = origin or link["target_id"]
+            validate_identifier(origin, IdKind.ENTITY)
+        elif origin is not None:
+            raise RelationshipMemoryError("only an entity proposal link carries subject lineage")
+        origins.append(origin)
+    return canonical, tuple(origins)
+
+
+def proposal_context_links_for_storage(
+    links: tuple[Mapping[str, str], ...], origins: tuple[str | None, ...]
+) -> tuple[dict[str, str], ...]:
+    """Encode canonical proposal links with their server-owned entity origins."""
+    canonical = validate_context_links(links)
+    if len(origins) != len(canonical):
+        raise RelationshipMemoryError("proposal link lineage matches its canonical links")
+    stored: list[dict[str, str]] = []
+    for link, origin in zip(canonical, origins, strict=True):
+        encoded = dict(link)
+        if link["target_type"] == ContextLinkTargetType.ENTITY.value:
+            if origin is None:
+                raise RelationshipMemoryError("an entity proposal link carries its first subject")
+            validate_identifier(origin, IdKind.ENTITY)
+            encoded["origin_subject_entity_id"] = origin
+        elif origin is not None:
+            raise RelationshipMemoryError("only an entity proposal link carries subject lineage")
+        stored.append(encoded)
+    return tuple(stored)
+
+
+def preserve_proposal_context_link_origins(
+    links: object, prior_stored_links: object = ()
+) -> tuple[tuple[dict[str, str], ...], tuple[str | None, ...]]:
+    """Bind corrected public links to prior origins where their target survives."""
+    canonical = validate_context_links(links)
+    prior, prior_origins = proposal_context_links_from_storage(prior_stored_links)
+    origin_by_target = {
+        (link["target_type"], link["target_id"]): origin
+        for link, origin in zip(prior, prior_origins, strict=True)
+    }
+    origins = tuple(
+        (origin_by_target.get((link["target_type"], link["target_id"])) or link["target_id"])
+        if link["target_type"] == ContextLinkTargetType.ENTITY.value
+        else None
+        for link in canonical
+    )
+    return canonical, origins
+
+
 @dataclass(frozen=True, slots=True)
 class MemoryContextLink:
     """Where one memory version applies, or what it arose from.
@@ -1053,11 +1143,16 @@ class RelationshipMemoryProposal:
     invalidated_reason: str | None = None
     superseded_at: datetime | None = None
     superseded_by_memory_proposal_id: str | None = None
+    origin_subject_entity_id: str | None = None
+    context_link_origins: tuple[str | None, ...] = ()
 
     def __post_init__(self) -> None:
         validate_identifier(self.memory_proposal_id, IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
         validate_identifier(self.principal_id, IdKind.PRINCIPAL)
         validate_identifier(self.subject_entity_id, IdKind.ENTITY)
+        origin_subject_entity_id = self.origin_subject_entity_id or self.subject_entity_id
+        object.__setattr__(self, "origin_subject_entity_id", origin_subject_entity_id)
+        validate_identifier(origin_subject_entity_id, IdKind.ENTITY)
         if self.expected_subject_version < 1:
             raise RelationshipMemoryError("a proposal expects a positive subject version")
         if not isinstance(self.proposed_kind, MemoryKind):
@@ -1108,6 +1203,18 @@ class RelationshipMemoryProposal:
             raise MemoryStructuredValueError("a proposal's structured value is a schema envelope")
         if self.context_links != validate_context_links(self.context_links):
             raise RelationshipMemoryError("proposal context links use canonical order")
+        if not self.context_link_origins:
+            object.__setattr__(
+                self,
+                "context_link_origins",
+                tuple(
+                    link["target_id"]
+                    if link["target_type"] == ContextLinkTargetType.ENTITY.value
+                    else None
+                    for link in self.context_links
+                ),
+            )
+        proposal_context_links_for_storage(self.context_links, self.context_link_origins)
         if (self.state is MemoryProposalState.SUPERSEDED) is not (self.superseded_at is not None):
             raise RelationshipMemoryError("a superseded proposal records when it was superseded")
         if self.superseded_at is not None:

@@ -8,6 +8,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from my_pa.application.identity_correction import _inverse_drafts
 from my_pa.contracts.ports import UnknownScopeError
 from my_pa.domain.relationship.identity_correction import (
     IdentityEffectFamily,
@@ -68,7 +69,14 @@ def test_memory_merge_plan_records_only_reversible_opaque_bindings() -> None:
     assert drafts[0].after_state["subject_entity_id"] == SURVIVOR
     assert drafts[1].after_state["subject_entity_id"] == SURVIVOR
     assert drafts[1].after_state["context_links"] == [
-        {"target_type": "entity", "target_id": SURVIVOR}
+        {
+            "target_type": "entity",
+            "target_id": SURVIVOR,
+            "origin_subject_entity_id": MERGED,
+        }
+    ]
+    assert drafts[1].before_state["context_links"] == [
+        {"target_type": "entity", "target_id": MERGED}
     ]
     assert drafts[2].after_state["target_id"] == SURVIVOR
     field_names = {
@@ -118,3 +126,50 @@ def test_memory_restore_requires_the_exact_after_state_and_writes_the_before_sta
     connection.execute.return_value = SimpleNamespace(rowcount=0)
     with pytest.raises(UnknownScopeError):
         repository.restore_identity_effect(PRINCIPAL, effect)
+
+
+def test_proposal_split_restores_target_without_removing_legacy_origin() -> None:
+    draft_connection = MagicMock()
+    draft_connection.execute.side_effect = [
+        _rows(),
+        _rows(
+            SimpleNamespace(
+                memory_proposal_id="mprop_aaaa0001aaaa01",
+                subject_entity_id=MERGED,
+                origin_subject_entity_id=MERGED,
+                expected_subject_version=2,
+                context_links=[{"target_type": "entity", "target_id": MERGED}],
+            )
+        ),
+        _rows(),
+    ]
+    draft = SqlRelationshipMemoryRepository(draft_connection).plan_identity_merge(
+        PRINCIPAL, frozenset({MERGED}), SURVIVOR
+    )[0]
+    effect = sequence_effects(
+        (draft,),
+        identity_operation_id="eiop_aaaa0001aaaa01",
+        principal_id=PRINCIPAL,
+        recorded_at=datetime(2026, 8, 28, tzinfo=UTC),
+    )[0]
+    inverse = _inverse_drafts((effect,))[0]
+    assert inverse.after_state["context_links"] == [
+        {
+            "target_type": "entity",
+            "target_id": MERGED,
+            "origin_subject_entity_id": MERGED,
+        }
+    ]
+    connection = MagicMock()
+    connection.execute.return_value = SimpleNamespace(rowcount=1)
+
+    SqlRelationshipMemoryRepository(connection).restore_identity_effect(PRINCIPAL, effect)
+
+    statement = connection.execute.call_args.args[0]
+    assert statement._values["context_links"].value == [
+        {
+            "target_type": "entity",
+            "target_id": MERGED,
+            "origin_subject_entity_id": MERGED,
+        }
+    ]

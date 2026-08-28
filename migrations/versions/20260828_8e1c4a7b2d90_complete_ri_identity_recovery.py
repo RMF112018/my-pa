@@ -184,37 +184,59 @@ def _settle_completed_merges() -> None:
 
 def upgrade() -> None:
     _restate_capabilities(_CAPABILITIES_AT_THIS_REVISION)
-    op.execute(
-        f"""  # noqa: S608 -- fixed repository schema constant
+    origin_and_recovery_sql = f"""
         ALTER TABLE {SCHEMA}.relationship_memories
-          ADD COLUMN origin_subject_entity_id text;
+          ADD COLUMN IF NOT EXISTS origin_subject_entity_id text;
         UPDATE {SCHEMA}.relationship_memories
            SET origin_subject_entity_id = subject_entity_id;
         ALTER TABLE {SCHEMA}.relationship_memories
           ALTER COLUMN origin_subject_entity_id SET NOT NULL,
+          DROP CONSTRAINT IF EXISTS origin_subject_entity_id_is_an_opaque_identifier,
           ADD CONSTRAINT origin_subject_entity_id_is_an_opaque_identifier
             CHECK (origin_subject_entity_id ~ '^ent_[A-Za-z0-9]{{8,64}}$');
 
         ALTER TABLE {SCHEMA}.relationship_memory_proposals
-          ADD COLUMN origin_subject_entity_id text;
+          ADD COLUMN IF NOT EXISTS origin_subject_entity_id text;
         UPDATE {SCHEMA}.relationship_memory_proposals
            SET origin_subject_entity_id = subject_entity_id;
         ALTER TABLE {SCHEMA}.relationship_memory_proposals
           ALTER COLUMN origin_subject_entity_id SET NOT NULL,
+          DROP CONSTRAINT IF EXISTS proposal_origin_subject_is_an_opaque_identifier,
           ADD CONSTRAINT proposal_origin_subject_is_an_opaque_identifier
             CHECK (origin_subject_entity_id ~ '^ent_[A-Za-z0-9]{{8,64}}$');
+        UPDATE {SCHEMA}.relationship_memory_proposals AS proposal
+           SET context_links = COALESCE(
+             (
+               SELECT jsonb_agg(
+                 CASE
+                   WHEN link.value->>'target_type' = 'entity'
+                     AND NOT (link.value ? 'origin_subject_entity_id')
+                   THEN link.value || jsonb_build_object(
+                     'origin_subject_entity_id', link.value->>'target_id'
+                   )
+                   ELSE link.value
+                 END
+                 ORDER BY link.ordinality
+               )
+               FROM jsonb_array_elements(proposal.context_links)
+                    WITH ORDINALITY AS link(value, ordinality)
+             ),
+             '[]'::jsonb
+           );
 
         ALTER TABLE {SCHEMA}.relationship_memory_context_links
-          ADD COLUMN origin_subject_entity_id text;
+          ADD COLUMN IF NOT EXISTS origin_subject_entity_id text;
         UPDATE {SCHEMA}.relationship_memory_context_links
            SET origin_subject_entity_id = target_id WHERE target_type = 'entity';
         ALTER TABLE {SCHEMA}.relationship_memory_context_links
+          DROP CONSTRAINT IF EXISTS an_entity_memory_context_link_retains_its_origin_subject,
           ADD CONSTRAINT an_entity_memory_context_link_retains_its_origin_subject
             CHECK ((target_type = 'entity') = (origin_subject_entity_id IS NOT NULL));
 
         ALTER TABLE {SCHEMA}.entity_identity_previews
-          ADD COLUMN source_identity_operation_id text,
+          ADD COLUMN IF NOT EXISTS source_identity_operation_id text,
           DROP CONSTRAINT a_preview_operation_type_is_known,
+          DROP CONSTRAINT IF EXISTS a_split_preview_names_exactly_one_source_operation,
           ADD CONSTRAINT a_preview_operation_type_is_known
             CHECK (operation_type IN ('merge','split')),
           ADD CONSTRAINT a_split_preview_names_exactly_one_source_operation
@@ -222,10 +244,15 @@ def upgrade() -> None:
                    (source_identity_operation_id IS NOT NULL));
 
         ALTER TABLE {SCHEMA}.entity_identity_operations
-          ADD COLUMN source_identity_operation_id text,
-          ADD COLUMN effect_count integer,
-          ADD COLUMN effects_digest text,
+          ADD COLUMN IF NOT EXISTS source_identity_operation_id text,
+          ADD COLUMN IF NOT EXISTS effect_count integer,
+          ADD COLUMN IF NOT EXISTS effects_digest text,
           DROP CONSTRAINT an_identity_operation_type_is_known,
+          DROP CONSTRAINT IF EXISTS a_split_operation_names_exactly_one_source_merge,
+          DROP CONSTRAINT IF EXISTS an_identity_operation_settles_count_and_digest_together,
+          DROP CONSTRAINT IF EXISTS an_identity_operation_settles_at_least_one_effect,
+          DROP CONSTRAINT IF EXISTS an_identity_operation_effect_digest_is_sha256,
+          DROP CONSTRAINT IF EXISTS a_split_names_a_source_operation_of_its_principal,
           ADD CONSTRAINT an_identity_operation_type_is_known
             CHECK (operation_type IN ('merge','split')),
           ADD CONSTRAINT a_split_operation_names_exactly_one_source_merge
@@ -251,7 +278,7 @@ def upgrade() -> None:
               'memory_proposal','memory_context_link','derived_context')
           );
         """
-    )
+    op.execute(origin_and_recovery_sql)
     if context.is_offline_mode():
         # Historical settlement uses the application's canonical-JSON digest,
         # not PostgreSQL's JSONB text representation. An offline script cannot
@@ -267,11 +294,12 @@ def upgrade() -> None:
     op.execute(
         f"""
         ALTER TABLE {SCHEMA}.entity_identity_operations
+          DROP CONSTRAINT IF EXISTS a_completed_identity_operation_has_settled_effects,
           ADD CONSTRAINT a_completed_identity_operation_has_settled_effects CHECK (
             state <> 'completed' OR
             (effect_count IS NOT NULL AND effects_digest IS NOT NULL)
           );
-        CREATE UNIQUE INDEX one_completed_split_per_source_merge
+        CREATE UNIQUE INDEX IF NOT EXISTS one_completed_split_per_source_merge
           ON {SCHEMA}.entity_identity_operations
             (principal_id, source_identity_operation_id)
           WHERE operation_type = 'split' AND state = 'completed';

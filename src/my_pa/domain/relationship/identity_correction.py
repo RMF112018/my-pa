@@ -168,10 +168,9 @@ class IdentityConflictKind(StrEnum):
     * UNSUPPORTED_FAMILY -- section 20's requirement that a materially affected
       family which "cannot yet be safely transformed with reversible lineage"
       surface an explicit blocker and be refused at apply. This is the honest name
-      for the `WP-08` and `WP-10` boundary: Relationship Memory origin-subject
-      redistribution and bounded re-enrichment are not this phase's to perform,
-      and a merge that quietly proceeded past them would produce exactly the
-      unreversible state section 20 forbids;
+      for any future family that is materially affected but lacks reversible
+      lineage. Relationship Memory no longer occupies this boundary: governed
+      merge/split records its mutable bindings while preserving immutable origin;
     * AMBIGUOUS_DISPOSITION -- a record the merge could transform in more than one
       defensible way, which section 21 requires the operator to choose between
       before apply.

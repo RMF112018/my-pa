@@ -144,14 +144,14 @@ uses these evidence classes:
 - migration: a single Alembic head and offline SQL generation, with historical
   digest settlement deliberately fail-closed offline because canonical digests
   are data-dependent;
-- isolated PostgreSQL: test discovery and migration/test mapping only in this
-  environment because no separately verified disposable target was established.
-  Collection proves that the tests are selected; it does not prove their
-  PostgreSQL behavior passes.
+- isolated PostgreSQL: the immutable-origin corrective cycle used a separately
+  named, localhost-only PostgreSQL 17.10 container from an already-cached image.
+  Its auto-remove identity was verified before use; focused tests created and
+  dropped their own databases, and the container was then stopped and removed.
 
 | Evidence | Exact result |
 |---|---|
-| Integrated corrective FAST | `14,241 passed, 1,557 deselected` |
+| Integrated corrective FAST | `14,242 passed, 1,559 deselected` |
 | Integrated corrective architecture | `4,712 passed` |
 | Exact-observer focused unit/contract/architecture set | `65 passed in 0.82s` |
 | Startup lifecycle, re-enrichment, and affected child-process set | `74 passed in 4.91s` |
@@ -167,8 +167,9 @@ uses these evidence classes:
 | Whitespace | `git diff --check` passed |
 | Alembic graph | one head: `8e1c4a7b2d90` |
 | Alembic offline SQL | passed with a synthetic non-connecting PostgreSQL URL; the preceding no-URL attempt failed closed as required |
-| Isolated PostgreSQL affected persistence set | `116` tests collected from `test_entity_reenrichment.py`, `test_identity_correction_ledger.py`, and `test_identity_correction_merge.py`; source, producer, and generic mutation builders now have real `SqlCurrentReenrichmentBindings` callback/stale contracts, and Relationship Memory merge/split has real monotonic-token/stale-command regressions; not executed because no verified disposable database URL was available, so no database pass is claimed |
-| Entra production-composition persistence set | `33` tests collected from `test_entra_authentication.py`, including the durable initial/repeat/policy-advance observer contract; not executed because no verified disposable database URL was available, so no database pass is claimed |
+| Isolated PostgreSQL affected persistence set | `118` tests collected from `test_entity_reenrichment.py`, `test_identity_correction_ledger.py`, and `test_identity_correction_merge.py`; source, producer, and generic mutation builders have real `SqlCurrentReenrichmentBindings` callback/stale contracts, and Relationship Memory merge/split has monotonic-token, stale-command, and immutable-origin regressions; only the three new immutable-origin cases were executed from this combined set, so no pass is claimed for the other 115 |
+| Entra production-composition persistence set | `33` tests collected from `test_entra_authentication.py`, including the durable initial/repeat/policy-advance observer contract; outside the immutable-origin focused database selection and not executed, so no database pass is claimed |
+| Immutable-origin PostgreSQL correction | `82 passed`: `3` focused proposal→merge→accept/correct-and-accept/reprocess regressions, all `68` Relationship Memory review persistence tests, and `11` database-marked Relationship Memory capability tests; each module migrated a fresh disposable database to head |
 
 The full database tier is not required by the campaign exception rule and was
 not run: `FULL_DB_TIER_NOT_RUN_TARGETED_EVIDENCE_SUFFICIENT`. No production,
@@ -240,8 +241,9 @@ independent review:
 15. The lease-rollback, watermark-fence, and stale-callback PostgreSQL tests no
     longer pass rejected helper doubles. They construct the exact transactional
     SQL current-binding view, a versioned synthetic entity, and matching input,
-    producer, and policy watermarks. They were collected, not executed, because
-    this environment supplied no verified disposable database URL.
+    producer, and policy watermarks. They were collected, not executed in that
+    earlier corrective cycle; the later immutable-origin database authorization
+    did not broaden to this unrelated selection.
 16. Entra HTTP no longer skips policy observation when the process has no fixed
     Principal. Token verification and identity resolution establish the exact
     server-owned Principal, then the same authentication transaction observes
@@ -262,6 +264,12 @@ independent review:
     from the generic map; assignment create/revise/end therefore emit exactly one
     `role_or_organization_change` item, and exact replay emits none. A structural
     guard binds the direct caller set, trigger vocabulary, and disjointness.
+19. Relationship Memory proposal subject and per-Entity context origins now
+    survive proposal hydration, governed merge/split, acceptance, correction
+    acceptance, and reprocess. Review promotion/reprocess writes every required
+    head-schema origin, and the head migration backfills proposal-link lineage.
+    Focused disposable-PostgreSQL execution also exposed and corrected the
+    migration's malformed SQL comment and current-metadata duplicate-DDL path.
 
 ## Load-bearing and mutation controls
 

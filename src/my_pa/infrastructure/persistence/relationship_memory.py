@@ -1001,13 +1001,11 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
     ) -> frozenset[str]:
         """Which input entities this plane currently binds into canonical memory state.
 
-        Four binding classes are blockers: canonical memory subjects, proposal
+        Four binding classes are reported: canonical memory subjects, proposal
         subjects, Entity targets linked from a memory's current canonical version,
-        and Entity context targets on an open proposal. A candidate memory about
-        an identity, an open candidate scoped to it, or a current canonical context
-        link to it is as unrecoverable through a governed merge as an accepted
-        memory: `WP-RI-08` owns the subject and context redistribution rules, and
-        `WP-RI-06`'s effect ledger has no family that could record any rewrite.
+        and Entity context targets on an open proposal. Governed merge planning
+        now uses `plan_identity_merge` to record their mutable bindings as
+        content-blind effects while retaining immutable subject/context origins.
 
         **Classification is not read, and that is the point.** Every other read
         on this plane filters or counts restricted rows; this one asks a question
@@ -1140,6 +1138,8 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             after_links = [
                 {
                     **link,
+                    "origin_subject_entity_id": link.get("origin_subject_entity_id")
+                    or link["target_id"],
                     "target_id": survivor_entity_id,
                 }
                 if link.get("target_type") == ContextLinkTargetType.ENTITY.value
@@ -1226,6 +1226,23 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             if not isinstance(current_version, int):
                 raise ValueError("a Relationship Memory identity effect records its version")
             restored["version"] = current_version + 1
+        elif effect.family is IdentityEffectFamily.MEMORY_PROPOSAL:
+            before_links = effect.before_state.get("context_links")
+            after_links = effect.after_state.get("context_links")
+            if not isinstance(before_links, list) or not isinstance(after_links, list):
+                raise ValueError("a memory proposal identity effect records its context links")
+            if len(before_links) != len(after_links):
+                raise ValueError("a memory proposal identity effect preserves its link set")
+            restored_links: list[dict[str, object]] = []
+            for before_link, after_link in zip(before_links, after_links, strict=True):
+                if not isinstance(before_link, dict) or not isinstance(after_link, dict):
+                    raise ValueError("a memory proposal identity effect records link objects")
+                restored_link = dict(before_link)
+                origin = after_link.get("origin_subject_entity_id")
+                if origin is not None:
+                    restored_link["origin_subject_entity_id"] = origin
+                restored_links.append(restored_link)
+            restored["context_links"] = restored_links
         result = self._connection.execute(update(table).where(*conditions).values(**restored))
         if result.rowcount != 1:
             raise UnknownScopeError("a memory binding no longer matches its source merge")

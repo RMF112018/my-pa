@@ -80,9 +80,9 @@ from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
 from my_pa.adapters.http.oauth import build_origin_oauth_routes
 from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
 from my_pa.adapters.mcp.server import SERVER_NAME
-from my_pa.bootstrap.gateway import build_gateway_runtime
+from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
 from my_pa.bootstrap.relationship_intelligence_profiles import RELATIONSHIP_GRANT_PROFILES
-from my_pa.bootstrap.settings import load_settings
+from my_pa.bootstrap.settings import Settings, load_settings
 from my_pa.domain.identity.operation import Capability
 from my_pa.infrastructure.security import RemoteAuthenticationError, RemoteAuthenticator
 from my_pa.infrastructure.security.origin_authorization import OriginOAuthServer
@@ -146,10 +146,27 @@ _SOURCE_PROVIDER_NOTICE = (
 )
 
 
+def _build_serving_runtime(settings: Settings) -> GatewayRuntime:
+    """Compose and observe server-owned versions for this process Principal."""
+    runtime = build_gateway_runtime(settings)
+    principal = runtime.principal
+    if principal is None:
+        return runtime
+    try:
+        runtime.observe_reenrichment_versions(
+            principal_id=principal.principal_id,
+            cause="gateway_startup",
+        )
+    except Exception:
+        runtime.close()
+        raise
+    return runtime
+
+
 def _run(args: argparse.Namespace) -> int:
     settings = load_settings()
     host = settings.gateway_bind_host()
-    runtime = build_gateway_runtime(settings)
+    runtime = _build_serving_runtime(settings)
     application = (
         create_http_app(
             runtime.service,
@@ -217,7 +234,7 @@ def _mcp(args: argparse.Namespace) -> int:
     this one is the client's child.
     """
     settings = load_settings()
-    runtime = build_gateway_runtime(settings)
+    runtime = _build_serving_runtime(settings)
     if runtime.principal is None:
         # `entra` mode authenticates per request from a bearer token, and stdio
         # has nowhere to present one. Refused rather than served as the local
@@ -247,7 +264,7 @@ def _mcp_remote(args: argparse.Namespace) -> int:
     if not settings.remote_mcp_enabled:
         print("refusing    remote MCP is disabled", file=sys.stderr)
         return 2
-    runtime = build_gateway_runtime(settings)
+    runtime = _build_serving_runtime(settings)
     authorization_server = OriginOAuthServer(
         connections=runtime.work_engine.begin,
         issuer=settings.oauth_authorization_server,

@@ -58,6 +58,18 @@ from my_pa.domain.identity.operation import Capability
 
 MCP_SOURCE = Path(mcp_module.__file__).read_text(encoding="utf-8")
 
+
+def _gateway_child_command(*arguments: str) -> list[str]:
+    """Run the real composition root while isolating its database startup hook."""
+    bootstrap = (
+        "import apps.gateway as gateway; "
+        "from my_pa.bootstrap.gateway import GatewayRuntime; "
+        "GatewayRuntime.observe_reenrichment_versions = lambda self, **kwargs: (); "
+        "raise SystemExit(gateway.main())"
+    )
+    return [sys.executable, "-c", bootstrap, *arguments]
+
+
 #: What the `served` fixture hands a test: a session that has not been entered
 #: yet, so a test that wants two of them can have two.
 type Served = AbstractContextManager[McpTransport]
@@ -409,7 +421,8 @@ def _child_tool_list(**settings: str) -> tuple[list[str], bytes]:
     and the only honest way to test a switch that is read at startup is to start
     the process with it set. Everything about the child is the same in each
     case except the environment, so the differences below are the settings and
-    nothing else.
+    nothing else. The separately tested database startup observer is replaced
+    at its class boundary so this non-database process test can reach stdio.
     """
     environment = {
         **os.environ,
@@ -421,7 +434,7 @@ def _child_tool_list(**settings: str) -> tuple[list[str], bytes]:
         **settings,
     }
     process = subprocess.Popen(  # noqa: S603 - fixed argument list, no shell
-        [sys.executable, str(Path(gateway.__file__)), "mcp"],
+        _gateway_child_command("mcp"),
         cwd=Path(gateway.__file__).resolve().parents[1],
         env=environment,
         stdin=subprocess.PIPE,
@@ -587,7 +600,9 @@ def test_the_stdio_transport_serves_a_real_child_process() -> None:
     authorised transport would mean the authorised transport is never exercised
     in CI at all. The database URL is deliberately unreachable — composition is
     lazy and the handshake needs no connection, so nothing here depends on a
-    server, and a URL that resolved would make this test depend on one.
+    server, and a URL that resolved would make this test depend on one. The
+    separately tested startup observer is replaced at its class boundary in the
+    child; everything from composition through stdio remains real.
     """
     environment = {
         **os.environ,
@@ -598,7 +613,7 @@ def test_the_stdio_transport_serves_a_real_child_process() -> None:
         "MY_PA_DATABASE_URL": "postgresql+psycopg://someone@127.0.0.1:1/nothing",
     }
     process = subprocess.Popen(  # noqa: S603 - fixed argument list, no shell
-        [sys.executable, str(Path(gateway.__file__)), "mcp"],
+        _gateway_child_command("mcp"),
         cwd=Path(gateway.__file__).resolve().parents[1],
         env=environment,
         stdin=subprocess.PIPE,

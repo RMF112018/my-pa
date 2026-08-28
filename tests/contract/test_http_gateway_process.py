@@ -57,6 +57,17 @@ from my_pa.infrastructure.database.engine import create_database_engine
 GATEWAY_SOURCE = Path(gateway.__file__).read_text(encoding="utf-8")
 
 
+def _gateway_child_command(*arguments: str) -> list[str]:
+    """Run the real composition root while isolating its database startup hook."""
+    bootstrap = (
+        "import apps.gateway as gateway; "
+        "from my_pa.bootstrap.gateway import GatewayRuntime; "
+        "GatewayRuntime.observe_reenrichment_versions = lambda self, **kwargs: (); "
+        "raise SystemExit(gateway.main())"
+    )
+    return [sys.executable, "-c", bootstrap, *arguments]
+
+
 def document(capability: Capability, principal: Principal, purpose: Purpose) -> dict[str, Any]:
     return {
         "request_id": f"req-{capability.value}",
@@ -463,11 +474,11 @@ def test_the_gateway_process_starts_serves_and_exits_by_its_signal(tmp_path: Pat
     """`apps/gateway.py` as an operator runs it: a process, a socket, a signal.
 
     No database is reachable, which is deliberate rather than a compromise.
-    `create_engine` does not connect, so the process starts and serves, and the
-    request then fails because the store cannot be reached — a classified,
-    redacted answer from a real process, which is what proves the composition
-    root is wired. The claim here is about the process; `tests/concurrency` is
-    where the store is real.
+    The separately tested startup observer is replaced at its class boundary in
+    this child so the process can reach the transport; the request then fails
+    because the store cannot be reached — a classified, redacted answer from a
+    real process. The claim here is about process and HTTP behavior; the startup
+    lifecycle and database behavior have their own focused tests.
 
     **It fails `503 unavailable`, and the code is half the point of the test.**
     An unreachable server is `unavailable` in the contract's taxonomy:
@@ -496,7 +507,7 @@ def test_the_gateway_process_starts_serves_and_exits_by_its_signal(tmp_path: Pat
         "MY_PA_DATABASE_URL": "postgresql+psycopg://someone@127.0.0.1:1/nothing",
     }
     process = subprocess.Popen(  # noqa: S603 - fixed argument list, no shell
-        [sys.executable, str(Path(gateway.__file__)), "run", "--port", str(port)],
+        _gateway_child_command("run", "--port", str(port)),
         cwd=Path(gateway.__file__).resolve().parents[1],
         env=environment,
         stdout=subprocess.PIPE,

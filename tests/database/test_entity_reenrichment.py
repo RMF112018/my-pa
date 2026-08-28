@@ -35,6 +35,7 @@ from my_pa.infrastructure.persistence.entity_reenrichment import (
     SqlReenrichmentWorkRepository,
 )
 from my_pa.infrastructure.persistence.tables import (
+    entities,
     entity_reenrichment_subjects,
     entity_reenrichment_version_watermarks,
     entity_reenrichment_work,
@@ -106,82 +107,6 @@ def _binding(trigger: ReenrichmentTrigger = ReenrichmentTrigger.NEW_ALIAS) -> Re
     )
 
 
-class _Current:
-    def __init__(self, binding: ReenrichmentBinding) -> None:
-        self.binding = binding
-
-    def subject_version(
-        self, principal_id: str, kind: ReenrichmentSubjectKind, subject_id: str
-    ) -> str | None:
-        if principal_id != PRINCIPAL:
-            return None
-        return next(
-            (
-                item.version
-                for item in self.binding.subjects
-                if item.kind is kind and item.subject_id == subject_id
-            ),
-            None,
-        )
-
-    def input_version(self, principal_id: str, key: str) -> str | None:
-        if principal_id != PRINCIPAL:
-            return None
-        return next((item.version for item in self.binding.input_versions if item.key == key), None)
-
-    def producer_version(self, principal_id: str, key: str) -> str | None:
-        if principal_id != PRINCIPAL:
-            return None
-        return next(
-            (item.version for item in self.binding.producer_versions if item.key == key), None
-        )
-
-    def policy_version(self, principal_id: str) -> str | None:
-        return self.binding.policy_version if principal_id == PRINCIPAL else None
-
-
-class _DatabaseCurrent(_Current):
-    def __init__(self, binding: ReenrichmentBinding, connection: Connection) -> None:
-        super().__init__(binding)
-        self.connection = connection
-
-    def input_version(self, principal_id: str, key: str) -> str | None:
-        if principal_id != PRINCIPAL:
-            return None
-        value = self.connection.execute(
-            text(
-                "SELECT version FROM knowledge.entity_reenrichment_version_watermarks "
-                "WHERE principal_id = :principal_id AND namespace = 'input' "
-                "AND binding_key = :binding_key"
-            ),
-            {"principal_id": principal_id, "binding_key": key},
-        ).scalar_one_or_none()
-        return None if value is None else str(value)
-
-
-class _CoordinatedDatabaseCurrent(_DatabaseCurrent):
-    def __init__(
-        self,
-        binding: ReenrichmentBinding,
-        connection: Connection,
-        *,
-        post_apply_read: Event,
-        release_post_apply_read: Event,
-    ) -> None:
-        super().__init__(binding, connection)
-        self.post_apply_read = post_apply_read
-        self.release_post_apply_read = release_post_apply_read
-        self.input_reads = 0
-
-    def input_version(self, principal_id: str, key: str) -> str | None:
-        value = super().input_version(principal_id, key)
-        self.input_reads += 1
-        if self.input_reads == 2:
-            self.post_apply_read.set()
-            assert self.release_post_apply_read.wait(timeout=10)
-        return value
-
-
 def _current_binding() -> ReenrichmentBinding:
     return ReenrichmentBinding(
         principal_id=PRINCIPAL,
@@ -207,6 +132,41 @@ def _observe_current_versions(repository: SqlReenrichmentWorkRepository) -> None
             version=version,
             at=WHEN,
         )
+
+
+def _stage_entity_binding_currency(
+    connection: Connection,
+    repository: SqlReenrichmentWorkRepository,
+    binding: ReenrichmentBinding,
+) -> None:
+    connection.execute(
+        entities.insert().values(
+            entity_id=ENTITY,
+            principal_id=PRINCIPAL,
+            entity_type="person",
+            canonical_name="synthetic entity",
+            display_name="Synthetic Entity",
+            status="active",
+            created_at=WHEN,
+            updated_at=WHEN,
+            version=7,
+        )
+    )
+    for item in binding.input_versions:
+        repository.observe_version(
+            PRINCIPAL, namespace="input", key=item.key, version=item.version, at=WHEN
+        )
+    for item in binding.producer_versions:
+        repository.observe_version(
+            PRINCIPAL, namespace="producer", key=item.key, version=item.version, at=WHEN
+        )
+    repository.observe_version(
+        PRINCIPAL,
+        namespace="policy",
+        key="current",
+        version=binding.policy_version,
+        at=WHEN,
+    )
 
 
 def test_registration_is_deduplicated_by_the_complete_binding(engine: Engine) -> None:
@@ -311,6 +271,7 @@ def test_expiry_during_apply_rolls_back_effect_and_allows_one_reclaim(engine: En
     claimed_at = datetime.now(UTC)
     with engine.begin() as connection:
         repository = SqlReenrichmentWorkRepository(connection, _tables())
+        _stage_entity_binding_currency(connection, repository, binding)
         registered = repository.register(binding, at=claimed_at)
         claimed = repository.claim(owner="worker_a", at=claimed_at, lease_seconds=2)
         assert claimed is not None
@@ -338,7 +299,7 @@ def test_expiry_during_apply_rolls_back_effect_and_allows_one_reclaim(engine: En
                     PRINCIPAL,
                     registered.work_id,
                     owner="worker_a",
-                    current=_Current(binding),
+                    current=SqlCurrentReenrichmentBindings(connection, _tables()),
                     apply=apply,
                     at=claimed_at,
                 )
@@ -358,6 +319,7 @@ def test_expiry_during_apply_rolls_back_effect_and_allows_one_reclaim(engine: En
             )
         assert concurrent is None
         assert applying.result(timeout=5) == 0
+        assert callback_started.is_set()
 
     with engine.begin() as connection:
         reclaimed = SqlReenrichmentWorkRepository(connection, _tables()).claim(
@@ -377,19 +339,13 @@ def test_watermark_advance_waits_for_apply_fence_then_stales_future_work(
     claimed_at = datetime.now(UTC)
     with engine.begin() as connection:
         repository = SqlReenrichmentWorkRepository(connection, _tables())
-        repository.observe_version(
-            PRINCIPAL,
-            namespace="input",
-            key="source",
-            version="v2",
-            at=claimed_at,
-        )
+        _stage_entity_binding_currency(connection, repository, binding)
         registered = repository.register(binding, at=claimed_at)
         claimed = repository.claim(owner="worker_a", at=claimed_at, lease_seconds=30)
         assert claimed is not None
 
-    post_apply_read = Event()
-    release_post_apply_read = Event()
+    callback_started = Event()
+    release_callback = Event()
     writer_attempted = Event()
     writer_finished = Event()
     writer_backend_pid: list[int] = []
@@ -400,17 +356,14 @@ def test_watermark_advance_waits_for_apply_fence_then_stales_future_work(
 
             def apply(held: ReenrichmentBinding, effect_id: str) -> None:
                 assert effect_id == held.binding_sha256
+                callback_started.set()
+                assert release_callback.wait(timeout=10)
 
             currency = repository.apply_claimed(
                 PRINCIPAL,
                 registered.work_id,
                 owner="worker_a",
-                current=_CoordinatedDatabaseCurrent(
-                    binding,
-                    connection,
-                    post_apply_read=post_apply_read,
-                    release_post_apply_read=release_post_apply_read,
-                ),
+                current=SqlCurrentReenrichmentBindings(connection, _tables()),
                 apply=apply,
                 at=claimed_at,
             )
@@ -438,7 +391,7 @@ def test_watermark_advance_waits_for_apply_fence_then_stales_future_work(
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         applying = executor.submit(apply_current_binding)
-        assert post_apply_read.wait(timeout=5)
+        assert callback_started.wait(timeout=5)
         advancing = executor.submit(advance_watermark)
         assert writer_attempted.wait(timeout=5)
         assert not writer_finished.wait(timeout=0.2)
@@ -448,7 +401,7 @@ def test_watermark_advance_waits_for_apply_fence_then_stales_future_work(
                 {"pid": writer_backend_pid[0]},
             ).scalar_one()
         assert wait_type == "Lock"
-        release_post_apply_read.set()
+        release_callback.set()
         assert applying.result(timeout=10) == (True, ReenrichmentState.SUCCEEDED)
         assert advancing.result(timeout=10) == "v2"
 
@@ -467,7 +420,7 @@ def test_watermark_advance_waits_for_apply_fence_then_stales_future_work(
             PRINCIPAL,
             stale_registered.work_id,
             owner="worker_b",
-            current=_DatabaseCurrent(stale_binding, connection),
+            current=SqlCurrentReenrichmentBindings(connection, _tables()),
             apply=lambda _held, effect_id: applied.append(effect_id),
             at=stale_at,
         )

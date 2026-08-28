@@ -615,8 +615,9 @@ class Capability(StrEnum):
     # notes about the person. The noun is what makes the sensitive class legible
     # where grants are decided.
     #
-    # Eight, and the ninth is deliberately absent: there is no
-    # `relationship_memory.delete`. Archive is reversible and history is
+    # Eight original read/write capabilities, followed below by the ninth,
+    # producer-only capability. Separately, there is no
+    # `relationship_memory.delete`: archive is reversible and history is
     # retained, hard deletion is unresolved by ADR-003 and reserved to the
     # operator, and a capability name for it would be the first half of building
     # one.

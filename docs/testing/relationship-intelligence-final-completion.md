@@ -147,7 +147,7 @@ uses these evidence classes:
 | Evidence | Exact result |
 |---|---|
 | Claimed-count guard | `16 passed in 64.85s` |
-| FAST | `14164 passed, 1543 deselected in 581.01s` |
+| FAST | `14164 passed, 1543 deselected in 582.13s` |
 | Architecture, permission-matched synthetic local fixtures | `4706 passed in 303.78s` |
 | Architecture, restricted-sandbox attempt | `4703 passed, 3 failed in 296.28s`; all three failures were `PermissionError: [Errno 1]` at synthetic local TCP/Unix socket bind, and the permission-matched rerun above passed |
 | Focused transport | `447 passed, 1 deselected` |
@@ -157,7 +157,7 @@ uses these evidence classes:
 | Identity history/privacy/transport | `362 passed` |
 | Entity privacy regression | `96 passed` |
 | Remote-request replay | `55 passed` |
-| Ruff format | `895 files already formatted` |
+| Ruff format | `1135 files already formatted` |
 | Ruff lint | `All checks passed!` |
 | mypy | `Success: no issues found in 304 source files` |
 | Whitespace | `git diff --check` passed |

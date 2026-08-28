@@ -50,7 +50,7 @@ The IDs are identifiers and traceability anchors, not runtime configuration.
 | `RI-FC-WP-04` Proposal/Review | Generated discriminated payload schemas cover all proposal families; accepted merge/split proposals produce operator-preview handoffs and never execute identity correction. | IMPLEMENTED |
 | `RI-FC-WP-05` Security/Principal | `version_content` and `span_faults` require a resolved Principal context and predicate `capture_versions.owner_principal_id`; foreign and absent opaque identifiers have the same result. Two-Principal controls make deletion of either predicate fail. | IMPLEMENTED_CORRECTIVE |
 | `RI-FC-WP-06` MCP/Profiles/Documentation | The added public capability names, neutral commands, schemas, dispatch, purpose/profile bindings, runbooks, and current-state counts are synchronized. | IMPLEMENTED |
-| `RI-FC-WP-07` Test/Mutation Audit | Executable non-database unit, contract, security, architecture, transport, and migration-shape tests exercise the new paths and known escape classes. Focused isolated-PostgreSQL tests define the database/concurrency evidence set but were collection-only in this environment. | IMPLEMENTED_PENDING_FRESH_EXACT_HEAD_REVIEW |
+| `RI-FC-WP-07` Test/Mutation Audit | Executable non-database unit, contract, security, architecture, transport, and migration-shape tests exercise the new paths and known escape classes. The broader isolated-PostgreSQL concurrency selection was collection-only; later focused Relationship Memory corrections executed `82 passed` plus `5 passed` unequal-version cases, as recorded below. | IMPLEMENTED_PENDING_FRESH_EXACT_HEAD_REVIEW |
 | `RI-FC-WP-08` Commissioning | A fail-closed commissioning procedure is documented in `ops/runbooks/relationship-intelligence.md`. | PROCEDURE_ONLY_NOT_EXECUTED |
 | `RI-FC-WP-09` Synthetic live canary | A non-personal synthetic canary and rollback procedure is documented in the same runbook. | PROCEDURE_ONLY_NOT_EXECUTED |
 
@@ -295,7 +295,7 @@ guard is removed or weakened:
 | Proposal/review separation | Generated discriminated payload map covers every proposal family; identity-correction acceptance returns a preview handoff and cannot apply |
 | Remote write ceiling | Ordinary profiles cannot publish merge/split; exact `remote.operator`, server-resolved grants, purpose, feature, Principal, policy, audit, and global write gates all remain required |
 | Capability/audit closure | Architecture guards compare catalogs, commands, profiles, transports, fixtures, migration vocabularies, and spelled counts without deriving old migrations from current enums |
-| Database concurrency | Focused isolated-PostgreSQL tests target settlement uniqueness, lease claims, replay, stale work, and cross-Principal persistence. They were collected rather than executed here, so this is a mapped mutation target and pending database evidence, not a passing result |
+| Database concurrency | The broader isolated-PostgreSQL selection targeting settlement uniqueness, lease claims, replay, stale work, and cross-Principal persistence was collected rather than executed, so no pass is claimed for that unexecuted selection. Later focused Relationship Memory corrections executed `82 passed` plus `5 passed` unequal-version cases, exactly as recorded in the validation table above. |
 
 ## Operator-only remaining actions
 

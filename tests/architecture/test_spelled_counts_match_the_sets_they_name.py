@@ -372,6 +372,9 @@ _ORDINAL_UNITS = (
     "hundredth",
     "hundred-first",
     "hundred-second",
+    "hundred-third",
+    "hundred-fourth",
+    "hundred-fifth",
 )
 
 

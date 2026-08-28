@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred one capability names and none of them
+  ends: the transport routes one hundred and four capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -216,14 +216,14 @@ def document(
 def _service(marked: Scene) -> ApplicationService:
     """The service every wire in this file is built over.
 
-    Composed **without** the governed merge, and the reason is the same one
+    Composed **without** governed identity correction, and the reason is the same one
     `tests/contract/test_transport_parity.py` records: `_Entities` implements none
     of the sixteen identity-correction port methods, so a build that composed the
-    plane would answer `internal_error` for the merge pair and this file's
+    plane would answer `internal_error` for merge/split and this file's
     all-succeed sweeps would be measuring a crash. The two are still driven --
     every negative sweep here sends them and reads the refusal -- and what they
     are exempted from is the *positive* sweep, which asserts a successful answer.
-    The merge itself is proved against a real server in `tests/database` and
+    Identity correction itself is proved against a real server in `tests/database` and
     `tests/recovery`.
     """
     return build_service(
@@ -233,10 +233,15 @@ def _service(marked: Scene) -> ApplicationService:
     )
 
 
-#: The two this file drives for refusals and not for answers, because the harness
-#: composes no governed merge.
+#: These are driven for refusals and not for answers, because the harness
+#: composes no governed identity-correction ledger.
 UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
-    {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
+    {
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
+    }
 )
 
 
@@ -851,6 +856,19 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "preview_digest": "0" * 64,
             "reason": MARKER_CONTENT,
         },
+        Capability.ENTITIES_IDENTITY_HISTORY: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_SPLIT_PREVIEW: {
+            "source_identity_operation_id": issue_identifier(IdKind.ENTITY_IDENTITY_OPERATION),
+            "reason": MARKER_CONTENT,
+        },
+        Capability.ENTITIES_SPLIT: {
+            "preview_id": "eipv_wirewire02wirewire02",
+            "preview_digest": "1" * 64,
+            "reason": MARKER_CONTENT,
+        },
         Capability.RELATIONSHIP_MEMORY_GET: {"memory_id": read_memory},
         Capability.RELATIONSHIP_MEMORY_LIST: {"entity_id": person.entity_id},
         Capability.RELATIONSHIP_MEMORY_SEARCH: {"query": MARKER_QUERY},
@@ -1230,6 +1248,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_IDENTITY_HISTORY,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 ]

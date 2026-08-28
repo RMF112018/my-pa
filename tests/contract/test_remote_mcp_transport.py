@@ -340,6 +340,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
@@ -375,6 +377,7 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         # coalesces their children, supersedes self-edges and invalidates
         # dependent proposals.
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

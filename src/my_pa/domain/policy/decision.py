@@ -212,6 +212,9 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_IDENTITY_HISTORY,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
         # The task plane (WP-TM-03) names a Principal, not a source. A task is
         # opened by a Principal directly — through the assistant surface or an
         # accepted review decision — and never through a configured source's

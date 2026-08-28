@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred one capabilities. There are two ways to prove that and only one stays
+one hundred and four capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -28,10 +28,10 @@ command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
 default composition exposes fifty-five: the six managed-document names, the
-thirty-one `entities.` names and the nine Relationship Memory names are
+thirty-four `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
-second switch over the `entities.` family and withholds its eighteen writes on
+second switch over the `entities.` family and withholds its twenty-three writes on
 its own. Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
@@ -1186,6 +1186,21 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "preview_digest": "0" * 64,
             "reason": "A synthetic identity correction.",
         },
+        Capability.ENTITIES_IDENTITY_HISTORY: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_SPLIT_PREVIEW: {
+            "source_identity_operation_id": make_identifier(
+                IdKind.ENTITY_IDENTITY_OPERATION, "paritysplitsource"
+            ),
+            "reason": "A synthetic identity correction reversal.",
+        },
+        Capability.ENTITIES_SPLIT: {
+            "preview_id": "eipv_parity0002parity0002",
+            "preview_digest": "1" * 64,
+            "reason": "A synthetic identity correction reversal.",
+        },
         Capability.RELATIONSHIP_MEMORY_GET: {
             "memory_id": memory_id,
             "include_statement": True,
@@ -1361,8 +1376,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred one commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 102, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and four commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 105, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -1669,12 +1684,17 @@ def assert_same_answer(
     assert len(set(signals.values())) == 1, f"{where}: transports disagreed on success {signals}"
 
 
-#: The identity-correction pair, which this matrix compares a *refusal* for
+#: The governed identity-correction capabilities, which this matrix compares a *refusal* for
 #: rather than an answer, because
-#: the harness composes no governed merge. Named rather than skipped, so the
+#: the harness composes no governed merge/split ledger. Named rather than skipped, so the
 #: comparison below still covers them and the reason is legible.
 UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
-    {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
+    {
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
+    }
 )
 
 
@@ -1700,14 +1720,14 @@ def test_every_capability_answers_identically_over_all_three_transports(
 
 
 @pytest.mark.parametrize("capability", sorted(UNCOMPOSED_HERE), ids=lambda c: c.value)
-def test_the_governed_merge_refuses_identically_over_all_three_transports(
+def test_governed_identity_correction_refuses_identically_over_all_three_transports(
     capability: Capability, staged: tuple[Scene, KnowledgeRecord]
 ) -> None:
-    """`SPEC-AC-001` for the governed merge, which this harness does not compose.
+    """`SPEC-AC-001` for governed identity correction, which this harness does not compose.
 
     A refusal is an answer, and the claim `SPEC-AC-001` makes is about the
     application's semantics reaching every transport unchanged -- so the row that
-    matters for these two is that all three refuse, refuse for the same reason,
+    matters for these capabilities is that all three refuse, refuse for the same reason,
     and refuse in the same envelope. That is also the only end-to-end evidence
     there is that `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED` gates the HTTP
     path, which routes by path segment straight into `_HANDLERS` and never reads
@@ -2076,7 +2096,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: 101 capabilities answered from an empty world prove little."""
+    """Guard the matrix: 104 capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

@@ -40,6 +40,7 @@ from my_pa.application.commands import (
     EndEntityRelationship,
     GetEntity,
     GetEntityContext,
+    GetEntityIdentityHistory,
     GetEntityRelationships,
     ListEntityAliases,
     ListEntityAssignments,
@@ -49,6 +50,7 @@ from my_pa.application.commands import (
     MergeEntities,
     ObserveEntityMention,
     PreviewEntityMerge,
+    PreviewEntitySplit,
     ResolveEntity,
     ResolveUnresolvedMention,
     RestoreEntity,
@@ -57,6 +59,7 @@ from my_pa.application.commands import (
     ReviseEntityAssignment,
     ReviseEntityRelationship,
     SearchEntities,
+    SplitEntity,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     UpdateEntity,
@@ -550,6 +553,25 @@ _EVERY_CAPABILITY: Final = (
             reason="a stranger may not merge these",
         ),
     ),
+    (
+        Capability.ENTITIES_IDENTITY_HISTORY,
+        GetEntityIdentityHistory(entity_id=FOREIGN_ENTITY, page_size=10),
+    ),
+    (
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        PreviewEntitySplit(
+            source_identity_operation_id="eiop_foreign01foreign1",
+            reason="a stranger may not split this merge",
+        ),
+    ),
+    (
+        Capability.ENTITIES_SPLIT,
+        SplitEntity(
+            preview_id="eipv_privacy0002privacy02",
+            preview_digest="1" * 64,
+            reason="a stranger may not apply this split",
+        ),
+    ),
 )
 
 
@@ -567,10 +589,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    # Thirty-one since `WP-RI-B-05` and `WP-RI-B-06`. The count is asserted as
+    # Thirty-four after RI final completion. The count is asserted as
     # well as the set, because a prefix scan that stopped matching would satisfy
     # the equality against an equally empty tuple.
-    assert len(served) == 31
+    assert len(served) == 34
 
 
 # --- the partition, under every capability ---------------------------------

@@ -41,6 +41,7 @@ from my_pa.domain.relationship.proposal_payload import (
     EntityProposalPayload,
     ProposalPayloadError,
     dedupe_digest,
+    discriminated_payload_branches,
     schema_for,
 )
 
@@ -284,6 +285,38 @@ def test_no_payload_carries_evidence_references() -> None:
 @pytest.mark.parametrize("kind", list(EntityProposalKind))
 def test_every_kind_accepts_its_own_valid_payload(kind: EntityProposalKind) -> None:
     assert a_payload(kind).kind is kind
+
+
+def test_the_discovery_branches_are_generated_from_every_kind_schema() -> None:
+    branches = discriminated_payload_branches()
+    assert len(branches) == len(EntityProposalKind)
+    by_kind = {
+        branch["properties"]["kind"]["const"]: branch  # type: ignore[index]
+        for branch in branches
+    }
+    assert set(by_kind) == {kind.value for kind in EntityProposalKind}
+    for kind in EntityProposalKind:
+        payload = by_kind[kind.value]["properties"]["payload"]  # type: ignore[index]
+        assert payload["additionalProperties"] is False  # type: ignore[index]
+        assert set(payload["properties"]) == schema_for(kind).admitted  # type: ignore[index]
+        assert set(payload["required"]) == schema_for(kind).required  # type: ignore[index]
+
+
+def test_identity_correction_discovery_is_closed_and_self_describing() -> None:
+    by_kind = {
+        branch["properties"]["kind"]["const"]: branch["properties"]["payload"]  # type: ignore[index]
+        for branch in discriminated_payload_branches()
+    }
+    merge = by_kind[EntityProposalKind.MERGE_ENTITIES.value]
+    split = by_kind[EntityProposalKind.SPLIT_IDENTITY.value]
+    assert set(merge["properties"]) == {  # type: ignore[index]
+        "retained_entity_id",
+        "merged_entity_id",
+        "reason",
+    }
+    assert set(merge["required"]) == {"retained_entity_id", "merged_entity_id"}  # type: ignore[index]
+    assert set(split["properties"]) == {"entity_id", "reason"}  # type: ignore[index]
+    assert set(split["required"]) == {"entity_id"}  # type: ignore[index]
 
 
 @pytest.mark.parametrize("kind", list(EntityProposalKind))
@@ -540,10 +573,11 @@ def test_the_two_identity_correction_kinds_have_no_promotion_command() -> None:
     against, and a `_CAPABILITY_BY_KIND` entry for either kind would assert a
     promotion this plane deliberately does not perform.
 
-    `entities.split` is still absent outright; `WP-07` owns it.
+    Final completion publishes `entities.split` on the same separate-preview
+    boundary; its existence does not turn proposal acceptance into execution.
     """
     published = {capability.value for capability in Capability}
-    assert "entities.split" not in published
+    assert "entities.split" in published
     assert EntityProposalKind.MERGE_ENTITIES not in _CAPABILITY_BY_KIND
     assert EntityProposalKind.SPLIT_IDENTITY not in _CAPABILITY_BY_KIND
     # And the proposal names the two identities while the command names a
@@ -555,6 +589,10 @@ def test_the_two_identity_correction_kinds_have_no_promotion_command() -> None:
     commanded = _command_fields("entities.merge")
     assert proposed & commanded == {"reason"}
     assert {"retained_entity_id", "merged_entity_id"} <= proposed
+    split_proposed = schema_for(EntityProposalKind.SPLIT_IDENTITY).admitted
+    split_commanded = _command_fields("entities.split")
+    assert split_proposed & split_commanded == {"reason"}
+    assert "entity_id" in split_proposed
     assert not {"retained_entity_id", "merged_entity_id"} & commanded
     assert "preview_id" in commanded
     assert "preview_id" not in proposed

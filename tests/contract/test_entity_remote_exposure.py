@@ -71,7 +71,12 @@ ENTITY_WRITES: Final[frozenset[str]] = ENTITY_CAPABILITIES - ENTITY_READS
 #: only the exact ``remote.operator`` profile. Every ordinary remote profile still
 #: subtracts them: writes-enabled alone is deliberately insufficient.
 OPERATOR_ONLY_WRITES: Final[frozenset[str]] = frozenset(
-    {"entities.merge.preview", "entities.merge"}
+    {
+        "entities.merge.preview",
+        "entities.merge",
+        "entities.split.preview",
+        "entities.split",
+    }
 )
 
 #: The write half a remote client can ever reach, which is the write half less
@@ -110,6 +115,7 @@ def test_the_names_this_file_is_about_are_the_family() -> None:
         "entities.context",
         "entities.get",
         "entities.identifiers.list",
+        "entities.identity_history",
         "entities.observations.list",
         "entities.relationships",
         "entities.resolve",
@@ -141,6 +147,8 @@ def test_the_names_this_file_is_about_are_the_family() -> None:
         "entities.proposals.create",
         "entities.merge.preview",
         "entities.merge",
+        "entities.split.preview",
+        "entities.split",
     }
     assert ENTITY_READS | ENTITY_WRITES == ENTITY_CAPABILITIES
 

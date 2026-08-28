@@ -83,6 +83,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityIdentityHistory,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -113,6 +114,7 @@ from my_pa.application.commands import (
     ObserveEntityMention,
     PrepareContext,
     PreviewEntityMerge,
+    PreviewEntitySplit,
     ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
@@ -144,6 +146,7 @@ from my_pa.application.commands import (
     SearchKnowledge,
     SearchRelationshipMemories,
     SearchTasks,
+    SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
@@ -512,6 +515,19 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             preview_id=issue_identifier(IdKind.ENTITY_IDENTITY_PREVIEW),
             preview_digest="0" * 64,
             reason="A synthetic identity correction.",
+        ),
+        Capability.ENTITIES_IDENTITY_HISTORY: GetEntityIdentityHistory(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            page_size=10,
+        ),
+        Capability.ENTITIES_SPLIT_PREVIEW: PreviewEntitySplit(
+            source_identity_operation_id=issue_identifier(IdKind.ENTITY_IDENTITY_OPERATION),
+            reason="A synthetic identity correction reversal.",
+        ),
+        Capability.ENTITIES_SPLIT: SplitEntity(
+            preview_id=issue_identifier(IdKind.ENTITY_IDENTITY_PREVIEW),
+            preview_digest="1" * 64,
+            reason="A synthetic identity correction reversal.",
         ),
         Capability.RELATIONSHIP_MEMORY_GET: GetRelationshipMemory(
             memory_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY)
@@ -985,6 +1001,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_IDENTITY_HISTORY,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 ]
@@ -1154,6 +1173,9 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_IDENTITY_HISTORY,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
     excluded = set(Capability) - set(SCOPED_CAPABILITIES)

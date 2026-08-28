@@ -290,6 +290,11 @@ QUARANTINED: Final = {
         "quarantined for above. WP-TM-05 wires this into "
         "`application.commitments.CommitmentManagementService`."
     ),
+    "infrastructure/persistence/entity_identity_history.py": (
+        "the authoritative history is a UNION over three independently scoped "
+        "ledger branches. Each branch carries an explicit Principal predicate, "
+        "and focused SQL-structure tests require all three before execution."
+    ),
     "infrastructure/persistence/unit_of_work.py": (
         "the shared Work unit of work validates an origin reference by querying "
         "accepted capture assertions and their owning captures with explicit "
@@ -548,6 +553,17 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("enrollments", "principal_id"),
     ),
     "infrastructure/persistence/review.py": (("capture_review_cases", "principal_id"),),
+    "infrastructure/persistence/entity_identity_history.py": (
+        ("entity_identity_effects", "principal_id"),
+        ("entity_identity_operations", "principal_id"),
+        ("entity_merge_records", "principal_id"),
+        ("entity_mutation_events", "principal_id"),
+    ),
+    "infrastructure/persistence/entity_reenrichment.py": (
+        ("self._tables.subjects", "principal_id"),
+        ("self._tables.work", "principal_id"),
+    )
+    + (("table", "principal_id"),) * 7,
     # `WP-RI-A-02`'s evidence check, and the one predicate on this plane that
     # cannot be reached through the guard. A governed entity write may cite a
     # capture span, and `capture_spans` carries no principal partition --

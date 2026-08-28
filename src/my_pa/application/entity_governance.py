@@ -90,6 +90,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field, fields, replace
 from datetime import datetime
+from enum import StrEnum
 from hashlib import sha256
 from typing import Any, Final
 
@@ -188,6 +189,9 @@ from my_pa.domain.source.registry import issue_identifier
 
 __all__ = [
     "EntityGovernanceService",
+    "EntityIdentityCorrectionHandoff",
+    "EntityProposalReviewResult",
+    "IdentityCorrectionHandoffState",
     "InvalidPromotionError",
     "MentionResolution",
     "ObservationAdmission",
@@ -201,9 +205,64 @@ __all__ = [
     "ResolutionNotPermittedError",
     "ResolveMentionCommand",
     "ReviewAuthorityError",
+    "ReviewedPayloadSource",
     "UnknownEntityError",
     "UnknownObservationError",
 ]
+
+
+class IdentityCorrectionHandoffState(StrEnum):
+    """The sole honest state before a live, operator-bound preview exists."""
+
+    OPERATOR_PREVIEW_REQUIRED = "operator_preview_required"
+
+
+class ReviewedPayloadSource(StrEnum):
+    """Which immutable review record supplies the effective intent."""
+
+    PROPOSED = "proposed"
+    CORRECTED = "corrected"
+
+
+@dataclass(frozen=True, slots=True)
+class EntityIdentityCorrectionHandoff:
+    """Reviewed identity-correction intent awaiting a fresh operator preview.
+
+    This is deliberately not an executable command. Proposal payloads carry no
+    live versions, preview identifier, digest, idempotency key or authority, so
+    acceptance cannot honestly claim the current world is still the world the
+    producer observed. The separate operator-only preview owns those bindings
+    and every stale/conflict refusal.
+
+    ``effective_payload`` is the reviewer's validated correction for
+    ``correct_and_accept`` and the producer's original payload otherwise. The
+    stored proposal intentionally retains the original, so the effective value
+    has to be captured while the decision service has both.
+    """
+
+    proposal_id: str
+    proposal_kind: EntityProposalKind
+    effective_payload: EntityProposalPayload = field(repr=False)
+    effective_payload_source: ReviewedPayloadSource
+    state: IdentityCorrectionHandoffState = IdentityCorrectionHandoffState.OPERATOR_PREVIEW_REQUIRED
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.proposal_id, IdKind.ENTITY_PROPOSAL)
+        if self.proposal_kind not in IDENTITY_CORRECTION_PROPOSAL_KINDS:
+            raise ValueError("an identity-correction handoff names an identity-correction kind")
+        if self.effective_payload.kind is not self.proposal_kind:
+            raise ValueError("an identity-correction handoff carries its kind's payload")
+        if not isinstance(self.effective_payload_source, ReviewedPayloadSource):
+            raise ValueError("an identity-correction handoff names its reviewed payload source")
+        if self.state is not IdentityCorrectionHandoffState.OPERATOR_PREVIEW_REQUIRED:
+            raise ValueError("an identity-correction handoff always requires operator preview")
+
+
+@dataclass(frozen=True, slots=True)
+class EntityProposalReviewResult(ReviewDecision):
+    """An Entity review decision plus its optional operator-only handoff."""
+
+    identity_correction_handoff: EntityIdentityCorrectionHandoff | None = None
 
 
 class UnknownObservationError(EntityGovernanceError):
@@ -2091,7 +2150,20 @@ class EntityProposalReviewService:
                 ),
             ),
         )
-        return ReviewDecision(
+        handoff = None
+        if request.disposition in _ACCEPTING and held.kind in IDENTITY_CORRECTION_PROPOSAL_KINDS:
+            effective_payload = held.payload if corrected is None else corrected
+            handoff = EntityIdentityCorrectionHandoff(
+                proposal_id=held.proposal_id,
+                proposal_kind=held.kind,
+                effective_payload=effective_payload,
+                effective_payload_source=(
+                    ReviewedPayloadSource.PROPOSED
+                    if corrected is None
+                    else ReviewedPayloadSource.CORRECTED
+                ),
+            )
+        return EntityProposalReviewResult(
             decision_id=decision_id,
             review_case_id=request.review_case_id,
             sequence=len(ledger) + 1,
@@ -2101,6 +2173,7 @@ class EntityProposalReviewService:
             audit_id=request.audit_id,
             decided_at=request.decided_at,
             proposal_state=state,
+            identity_correction_handoff=handoff,
         )
 
     def _corrected_payload(

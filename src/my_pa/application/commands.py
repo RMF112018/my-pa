@@ -134,7 +134,10 @@ from my_pa.domain.relationship.memory import (
     RelationshipMemoryError,
     validate_context_links,
 )
-from my_pa.domain.relationship.proposal_payload import EntityProposalKind
+from my_pa.domain.relationship.proposal_payload import (
+    EntityProposalKind,
+    discriminated_payload_branches,
+)
 from my_pa.domain.search.query import MAX_QUERY_CHARACTERS, SearchQuery, SearchQueryError
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -5456,8 +5459,9 @@ class CreateEntityProposal:
 
     capability: ClassVar[Capability] = Capability.ENTITIES_PROPOSALS_CREATE
 
-    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+    mcp_payload_properties: ClassVar[Mapping[str, object]] = MappingProxyType(
         {
+            "oneOf": discriminated_payload_branches(),
             "payload": {
                 "description": (
                     "The requested mutation's own fields, as a flat object of "
@@ -5657,6 +5661,30 @@ class PreviewEntityMerge:
 
 
 @dataclass(frozen=True, slots=True)
+class GetEntityIdentityHistory:
+    """Read one entity's authoritative identity-change history.
+
+    The page is Principal-scoped and chronological. Its opaque continuation is
+    bound to the Principal, entity and page size, so it cannot be replayed into
+    another identity's history.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_IDENTITY_HISTORY
+
+    entity_id: str
+    page_size: int = 50
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.page_size > 100:
+            raise InvalidRequestError(SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _bounded_token(self.after, SafeDetail.CURSOR, maximum=512)
+
+
+@dataclass(frozen=True, slots=True)
 class MergeEntities:
     """Perform the merge a preview described, exactly as it described it.
 
@@ -5710,6 +5738,54 @@ class MergeEntities:
         _bounded_reason(self.reason, SafeDetail.REASON)
         _proposal_observation_ids(self.evidence_refs, detail=SafeDetail.EVIDENCE_REFS)
         _merge_choices(self.choices)
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewEntitySplit:
+    """Persist the exact inverse plan for one completed governed merge.
+
+    Operator-only. The source operation, its effects, and every current row must
+    still match before a preview is issued. The returned preview expires and is
+    consumed by ``entities.split`` exactly once.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_SPLIT_PREVIEW
+
+    source_identity_operation_id: str
+    reason: str = field(repr=False)
+    evidence_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.source_identity_operation_id,
+            IdKind.ENTITY_IDENTITY_OPERATION,
+            SafeDetail.SUBJECT,
+        )
+        _bounded_reason(self.reason, SafeDetail.REASON)
+        _proposal_observation_ids(self.evidence_refs, detail=SafeDetail.EVIDENCE_REFS)
+
+
+@dataclass(frozen=True, slots=True)
+class SplitEntity:
+    """Apply the exact inverse carried by a persisted split preview.
+
+    Operator-only, atomic, expected-state guarded and replay safe. It restores
+    the source merge's recorded before states and appends a new split operation;
+    it deletes neither the merge nor its provenance.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_SPLIT
+
+    preview_id: str
+    preview_digest: str
+    reason: str = field(repr=False)
+    evidence_refs: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _identifier(self.preview_id, IdKind.ENTITY_IDENTITY_PREVIEW, SafeDetail.PREVIEW_ID)
+        _sha256_digest(self.preview_digest, SafeDetail.PREVIEW_DIGEST)
+        _bounded_reason(self.reason, SafeDetail.REASON)
+        _proposal_observation_ids(self.evidence_refs, detail=SafeDetail.EVIDENCE_REFS)
 
 
 type Command = (
@@ -5804,7 +5880,10 @@ type Command = (
     | ResolveUnresolvedMention
     | CreateEntityProposal
     | PreviewEntityMerge
+    | GetEntityIdentityHistory
     | MergeEntities
+    | PreviewEntitySplit
+    | SplitEntity
     | CreateRelationshipMemory
     | GetRelationshipMemory
     | ListRelationshipMemories

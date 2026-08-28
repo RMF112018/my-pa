@@ -77,6 +77,7 @@ __all__ = [
     "PayloadSchema",
     "ProposalPayloadError",
     "dedupe_digest",
+    "discriminated_payload_branches",
     "schema_for",
 ]
 
@@ -370,6 +371,44 @@ def schema_for(kind: EntityProposalKind) -> PayloadSchema:
     this rule would fail in if it were a column.
     """
     return _SCHEMA_BY_KIND[kind]
+
+
+def discriminated_payload_branches() -> tuple[dict[str, object], ...]:
+    """JSON-Schema branches correlating each proposal kind with its payload.
+
+    The MCP command schema is assembled in the application/adapter boundary,
+    but the discriminated payload shape must be generated from the same table
+    that validates and digests a proposal. Returning branches rather than a
+    complete command schema keeps envelope fields and transport applicators out
+    of the domain while giving discovery a closed, self-describing contract.
+
+    Values are strings except for ``end_now``, the sole flag admitted by
+    :class:`EntityProposalPayload`. Semantic rules deliberately remain in
+    ``validate_proposal_target``; this describes shape and does not create a
+    second semantic validator.
+    """
+    branches: list[dict[str, object]] = []
+    for kind in EntityProposalKind:
+        schema = schema_for(kind)
+        properties = {
+            name: {"type": "boolean" if name == "end_now" else "string"}
+            for name in sorted(schema.admitted)
+        }
+        branches.append(
+            {
+                "properties": {
+                    "kind": {"const": kind.value},
+                    "payload": {
+                        "type": "object",
+                        "properties": properties,
+                        "required": sorted(schema.required),
+                        "additionalProperties": False,
+                    },
+                },
+                "required": ["kind", "payload"],
+            }
+        )
+    return tuple(branches)
 
 
 #: The one `status` value `update_entity` may not propose, and the reason it

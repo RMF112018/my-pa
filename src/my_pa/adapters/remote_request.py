@@ -102,7 +102,7 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # still requires `idempotency_key`; the server stamps it because the
         # caller must not.
         Capability.GSQS_START,
-        # The entity plane's eighteen writes (Phase A). Every one of them
+        # The entity plane's eighteen keyed writes (Phase A). Every one of them
         # carries an `idempotency_key` its command validates and its repository
         # arbitrates against
         # `entity_mutation_events (principal_id, capability, idempotency_key)`,
@@ -127,7 +127,7 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
-        # **None of Phase B's four writes is here, and the reason is this set's
+        # **No keyless governed producer/correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it
         # into the payload*, so a capability here must have an
@@ -152,6 +152,8 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         #   guarantee to one transport out of three.
         # * `entities.merge.preview` mints a fresh preview on every call and has
         #   no replay identity to key on at all.
+        # * split preview follows that same contract, while split apply is
+        #   replay-arbitrated by its consumed preview and persisted receipt.
         #
         # `REMOTE_OWNED_PAYLOAD_FIELDS` still refuses a caller-supplied
         # `idempotency_key` on every one of these paths, which is what operator §23's "do not

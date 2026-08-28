@@ -382,11 +382,20 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # *check* it, which is the registry's own rule. `identity_preview` is
     # partition-scoped, so a preview held by anyone else was answered as absent
     # before this read happens at all.
-    "application/identity_correction.py": (
-        ("command", "principal_id"),
-        ("command", "principal_id"),
-        ("command", "principal_id"),
-        ("preview", "principal_id"),
+    "application/identity_correction.py": (("command", "principal_id"),) * 27
+    + (("preview", "principal_id"),) * 2,
+    # Re-enrichment has no transport command. Bindings are created by the
+    # server-owned trigger path from the authenticated partition; these reads
+    # carry that partition through digesting, currency checks, and completion.
+    "application/entity_reenrichment.py": (("binding", "principal_id"),) * 2,
+    "domain/relationship/reenrichment.py": (("binding", "principal_id"),) * 4,
+    # The SQL adapter receives the same server-composed binding. Candidate and
+    # row values come from Principal-scoped work-table queries and are used to
+    # preserve, never choose, the partition.
+    "infrastructure/persistence/entity_reenrichment.py": (
+        (("binding", "principal_id"),) * 5
+        + (("candidate", "principal_id"),) * 2
+        + (("row", "principal_id"),)
     ),
     # WP-RI-06's governance service carries the `principal_id` of the proposal
     # it just loaded onto the decided copy of that proposal. The value is not

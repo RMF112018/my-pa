@@ -169,4 +169,5 @@ def test_legacy_transports_do_not_expose_the_native_host_boundary() -> None:
     tools = (ROOT / "src/my_pa/adapters/mcp/tools.py").read_text()
     assert "Capability.NATIVE_SOURCES_" not in normalization
     assert "Capability.NATIVE_SOURCES_" not in tools
-    assert "for capability in _COMMANDS" in tools
+    assert "for capability in Capability" in tools
+    assert "if capability in _COMMANDS" in tools

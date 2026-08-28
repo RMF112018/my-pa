@@ -34,6 +34,7 @@ _ENTITY_READS = frozenset(
         Capability.ENTITIES_RELATIONSHIPS,
         Capability.ENTITIES_OBSERVATIONS_LIST,
         Capability.ENTITIES_UNRESOLVED_MENTIONS,
+        Capability.ENTITIES_IDENTITY_HISTORY,
     }
 )
 _ROUTINE_ENTITY_AUTHORING = frozenset(
@@ -94,9 +95,18 @@ _OPERATOR = _REVIEWER | frozenset(
     {
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
-_IDENTITY_MUTATIONS = frozenset({Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE})
+_IDENTITY_MUTATIONS = frozenset(
+    {
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
+    }
+)
 _TRANSPORTS: Final[tuple[Literal["local", "remote"], ...]] = ("local", "remote")
 
 
@@ -122,4 +132,21 @@ RELATIONSHIP_GRANT_PROFILES: Final[Mapping[str, RelationshipGrantProfile]] = Map
     }
 )
 
-__all__ = ["RELATIONSHIP_GRANT_PROFILES", "RelationshipGrantProfile"]
+# Canonical role identities, independent of transport. The transport-qualified
+# mapping above remains the durable compatibility surface used by the gateway;
+# these names let policy and documentation refer to the four authorities without
+# pretending local versus remote changes what a role means.
+RELATIONSHIP_ROLE_PROFILES: Final[Mapping[str, frozenset[Capability]]] = MappingProxyType(
+    {
+        "relationship_standard": _STANDARD,
+        "relationship_producer": _PRODUCER,
+        "relationship_reviewer": _REVIEWER,
+        "relationship_operator": _OPERATOR,
+    }
+)
+
+__all__ = [
+    "RELATIONSHIP_GRANT_PROFILES",
+    "RELATIONSHIP_ROLE_PROFILES",
+    "RelationshipGrantProfile",
+]

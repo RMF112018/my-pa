@@ -62,7 +62,7 @@ PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
 PHASE_B_START: Final = "c7a1f04b9e63"
-HEAD_REVISION: Final = PHASE_B_HEAD
+HEAD_REVISION: Final = "8e1c4a7b2d90"
 GROUNDING_REVISION: Final = "b7f2c9e4a618"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_f4c1a8e6b205_add_goodnotes_delivery_attempt_ledger.py"
@@ -160,7 +160,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_heads() == [HEAD_REVISION]
     assert script.get_revision(REVISION).down_revision == PRIOR
     assert script.get_revision(PRIOR).down_revision == GROUNDING_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 76
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 77
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

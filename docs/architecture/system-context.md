@@ -71,12 +71,12 @@ hash.
 
 
 The repository is an executable local candidate, not a documentation scaffold.
-The `my_pa` application defines and wires one hundred one capabilities through HTTP,
+The `my_pa` application defines and wires one hundred and four capabilities through HTTP,
 MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
 planes. **A default composition exposes fifty-five of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT`, the
-thirty-one `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
-(and its twenty-one writes a second switch beside it), and the
+thirty-four `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
+(and its twenty-three writes a second switch beside it), and the
 nine `relationship_memory.` names require that variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`, because a memory binds an Entity as its
 subject and ownership is proven by reading `knowledge.entities`; none has
@@ -95,7 +95,7 @@ Corrected 2026-08-19: this sentence read
 "exposes one hundred one capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns seventy-six revisions at head `3d07af4dc513`; its linear history places the GSQS admission
+Alembic owns seventy-seven revisions at head `8e1c4a7b2d90`; its linear history places the GSQS admission
 `c4b0a1d9e827` immediately before Phase B's `c7a1f04b9e63`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the

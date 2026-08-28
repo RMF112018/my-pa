@@ -205,6 +205,7 @@ class SqlRelationshipMemoryProposalRepository(RelationshipMemoryProposalReposito
                             {
                                 "memory_proposal_id": proposal.memory_proposal_id,
                                 "subject_entity_id": proposal.subject_entity_id,
+                                "origin_subject_entity_id": proposal.subject_entity_id,
                                 "expected_subject_version": proposal.expected_subject_version,
                                 "proposed_kind": proposal.proposed_kind.value,
                                 "proposed_statement": proposal.proposed_statement,

@@ -357,8 +357,8 @@ email, or calendar data.
 
 **That describes WP-9, and is no longer true of the plane.** Corrected
 2026-08-19 when it acquired public reads, and again after Phase A, which gave it
-writes: the Relationship Intelligence entity plane is thirty-one `entities.`
-names now — ten reads and twenty-one writes over identity, identifiers, aliases,
+writes: the Relationship Intelligence entity plane is thirty-four `entities.`
+names now — eleven reads and twenty-three writes over identity, identifiers, aliases,
 assignments, directed edges, observations, mention resolution, proposal staging,
 and governed merge preview/apply. This document,
 whose job is stating what the build does not do, said nothing about them. What
@@ -366,10 +366,10 @@ remains true, and is the limitation:
 
 * **They are off by default, and the writes are off twice.** A process that has
   not set `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` publishes none of the
-  thirty-one and refuses each with `unsupported` on every transport. A process
+  thirty-four and refuses each with `unsupported` on every transport. A process
   that has set it but not
   `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` serves the reads and refuses
-  all twenty-one writes the same way.
+  all twenty-three writes the same way.
 * **Proposal review and governed merge are available, but remain fail-closed and
   off by default.** Entity and Relationship Memory cases use canonical
   `review.list`/`review.decide`; accepting a merge proposal does not execute a
@@ -381,10 +381,12 @@ remains true, and is the limitation:
   and this repository change activates no live profile, grant, or flag.
 * **No live personal data has reached it.** Every figure and every test is
   synthetic, and no connector writes an observation.
-* **Split does not exist.** Phase B records invertible effects for `WP-07`, but
-  no current capability performs the inverse. `WP-08` still owns final
-  Relationship Memory redistribution and `WP-10` complete cross-plane
-  re-enrichment.
+* **Identity history and split exist in repository code but have not been live
+  commissioned.** `entities.identity_history` is Principal-scoped and
+  keyset-paginated; `entities.split.preview`/`entities.split` use the same
+  operator-only identity-correction and remote-profile boundary as merge. No
+  flag, grant, OAuth setting, runtime, connector, or live personal-data path was
+  activated by final completion.
 
 Profiles disclose coverage, unavailable domains, freshness, calculation basis,
 and time windows. They do not claim completeness. There is no automatic identity

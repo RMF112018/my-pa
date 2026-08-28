@@ -41,9 +41,11 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityPreview,
     blocks_merge,
     conflict_digest_for,
+    effects_digest_for,
     plan_digest_for,
     preview_digest_for,
     sequence_effects,
+    sequence_inverse_effects,
     state_digest,
 )
 
@@ -587,7 +589,49 @@ def test_effect_identifiers_are_issued_rather_than_derived_from_their_subject() 
 
 def test_the_operation_type_admits_only_what_this_phase_performs() -> None:
     """`WP-07` widens this with the code that writes the value."""
-    assert [member.value for member in IdentityOperationType] == ["merge"]
+    assert [member.value for member in IdentityOperationType] == ["merge", "split"]
+
+
+def test_a_split_preview_and_operation_bind_exactly_one_source_merge() -> None:
+    source = "eiop_bbbb0002bbbb02"
+    preview = a_preview(
+        operation_type=IdentityOperationType.SPLIT,
+        source_identity_operation_id=source,
+    )
+    operation = an_operation(
+        operation_type=IdentityOperationType.SPLIT,
+        source_identity_operation_id=source,
+    )
+    assert preview.source_identity_operation_id == source
+    assert operation.source_identity_operation_id == source
+    with pytest.raises(ValueError, match="source merge"):
+        a_preview(operation_type=IdentityOperationType.SPLIT)
+    with pytest.raises(ValueError, match="source merge"):
+        an_operation(source_identity_operation_id=source)
+
+
+def test_an_inverse_is_numbered_in_exact_reverse_source_order() -> None:
+    source = sequence_effects(
+        _drafts(),
+        identity_operation_id=OPERATION,
+        principal_id=PRINCIPAL,
+        recorded_at=WHEN,
+    )
+    inverse = sequence_inverse_effects(
+        source,
+        identity_operation_id="eiop_bbbb0002bbbb02",
+        principal_id=PRINCIPAL,
+        recorded_at=WHEN + timedelta(seconds=1),
+    )
+    assert [(row.family, row.record_id) for row in inverse] == [
+        (row.family, row.record_id) for row in reversed(source)
+    ]
+    assert all(
+        inverse_row.before_state == source_row.after_state
+        and inverse_row.after_state == source_row.before_state
+        for inverse_row, source_row in zip(inverse, reversed(source), strict=True)
+    )
+    assert effects_digest_for(inverse) == effects_digest_for(tuple(inverse))
 
 
 def test_every_effect_kind_names_a_transformation_of_an_existing_row() -> None:

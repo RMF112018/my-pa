@@ -232,7 +232,12 @@ def _with_proposal_evidence(kind: str, reference: str) -> CreateEntityProposal:
 #: `OBSERVATION_CITERS` would put it through a directed-write constructor sweep
 #: that cannot build it and would prove nothing about its actual contract.
 IDENTITY_CITERS: Final[frozenset[Capability]] = frozenset(
-    {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
+    {
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
+    }
 )
 
 

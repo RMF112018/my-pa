@@ -9,20 +9,20 @@ Related: [`docs/plans/relationship-intelligence-implementation-plan.md`](../../d
 | --- | --- |
 | Plane status | Implemented, **off by default** |
 | Process gate | `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`, default `false` |
-| Read capabilities | Ten. `entities.search`, `entities.get`, `entities.resolve`, `entities.context`, `entities.relationships`, `entities.unresolved_mentions` (`WP-RI-05`); `entities.identifiers.list`, `entities.aliases.list` (`WP-RI-A-02`); `entities.assignments.list` (`WP-RI-A-03`); `entities.observations.list` (`WP-RI-A-04`) |
-| Write capabilities | Twenty-one. `entities.create`, `entities.update`, `entities.archive`, `entities.restore`, `entities.identifiers.bind`, `entities.identifiers.retire`, `entities.identifiers.supersede`, `entities.aliases.add`, `entities.aliases.retire`, `entities.aliases.supersede` (`WP-RI-A-02`); `entities.assignments.create`, `entities.assignments.revise`, `entities.assignments.end`, `entities.relationships.create`, `entities.relationships.revise`, `entities.relationships.end` (`WP-RI-A-03`); `entities.observe`, `entities.unresolved_mentions.resolve` (`WP-RI-A-04`); `entities.proposals.create` (`WP-RI-B-05`, the producer path); and `entities.merge.preview` and `entities.merge` (`WP-RI-B-06`, operator-only and behind a third gate of their own). **The row above said "proposal and merge remain in-process only" and Phase B published all three**; it is corrected rather than left standing. `entities.split` is still in-process only and is `WP-07`'s |
+| Read capabilities | Eleven. The prior ten plus `entities.identity_history`, a Principal-scoped, keyset-paginated view of the authoritative identity-operation/effect ledger |
+| Write capabilities | Twenty-three. The prior twenty-one plus `entities.split.preview` and `entities.split`. Merge and split preview/apply are operator-only, identity-correction-gated writes; a preview persists a bounded control record and is therefore not classified as a read |
 | Write gate | `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, default `false`, and it requires the plane gate above. A process that sets it `true` while `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` is `false` refuses to start rather than serving a half-configured plane |
-| Identity-correction gate | `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, default `false`, and it requires the **write** gate above rather than the plane gate — so the whole chain is transitive and a process may not serve a governed merge while refusing an ordinary entity write. A process that sets it without the write switch refuses to start. It withholds `entities.merge.preview` and `entities.merge` and nothing else. Both are **also** operator-only, so the flag is the second of two independent gates rather than the only one |
-| Purposes | Five. `entity_read` for the ten reads; `entity_observation_ingest` for `entities.observe` and nothing else; `entity_authoring` for the seventeen Phase A writes; `entity_proposal` for the producer path and nothing else, so a client that may raise candidates cannot author what it proposed; and `entity_identity_correction` for both halves of the governed merge, which share one purpose deliberately — splitting it to un-gate the preview would weaken the operator boundary to buy nothing. Separate rather than shared, so a grant issued to look up who someone reports to cannot assert that they do, and a grant issued to record what a mailbox said cannot decide who somebody is |
+| Identity-correction gate | `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, default `false`, and it requires the **write** gate above rather than the plane gate. It withholds merge and split preview/apply and nothing else. All four are also operator-only, so the flag is independent of the Principal/remote-profile gate |
+| Purposes | Five. `entity_read` covers all eleven reads; `entity_observation_ingest` covers `entities.observe`; `entity_authoring` covers the seventeen Phase A writes; `entity_proposal` covers the producer path; and `entity_identity_correction` covers merge and split preview/apply. Preview and apply intentionally share the correction purpose without collapsing their two-gate protocol |
 | Tables | `entities`, `entity_aliases`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, `entity_observations`, `entity_proposals`, `entity_merge_records`, `entity_mutation_events`, `entity_fact_evidence_links`, `entity_resolution_decisions`, and Phase B's seven: `entity_proposal_evidence_links`, `entity_proposal_review_decisions`, `entity_identity_previews`, `entity_identity_operations`, the append-only `entity_identity_effects`, `relationship_write_requests`, and its append-only child `relationship_write_request_evidence` |
-| Revisions | `9def3c2e63bb` (entity tables), `b7f4d1a92c36` (aliases), `c1a7e4b93d58` (capabilities and purpose), `d2b8f5c04e71` (governance tables), `e4d7b2f9a316` (`entities.unresolved_mentions`), `f3a8c1d7e592` (the disclosed mention name), `2fe4e13fb449` (record lifecycle, Principal-composite references and the three ledgers), `823e23b6cc63` (the one Phase A revision, admitting every `entities.` name this phase added and both new purposes) to `knowledge.audit_events`' `capability_is_known` and `purpose_is_known` CHECKs. Phase A takes exactly one such revision: three concurrent packages each restating one frozen constraint would produce three heads and three conflicting restatements. Phase B adds six, in one line: `c7a1f04b9e63` (the widened proposal record and its evidence table), `d38e6b2fa715` (the three identity-correction tables), `e5b0c94d7182` (the Entity review-decision ledger), `a1f7d3c85e40` (`invalidate` on the capture and memory disposition CHECKs), `b64e29a0f7c1` (this phase's capability names and purposes), and `3d07af4dc513` (the replay ledger, typed proposal/review payloads, and final Phase B invariants), for the same reason and under the same rule |
+| Final-completion revision | `8e1c4a7b2d90`, additive on `3d07af4dc513`; it adds the recovery/origin/re-enrichment state and widens frozen audit vocabulary for identity history and split without deriving a historical constraint from the current enum |
 | Calibration | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) |
 | Frontend | Not implemented. Held by the operator's `D-09` instruction |
 
 ## 2. Turning the plane on
 
-`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED=true` makes the entity plane's ten
-reads available to the process, and nothing else: the twenty-one writes need
+`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED=true` makes the entity plane's eleven
+reads available to the process, and nothing else: the twenty-three writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it. **The read switch is
 one decision with two consequences**, and both should be intended before it is
 set:
@@ -32,7 +32,7 @@ set:
    capability set. If `MY_PA_REMOTE_MCP_ENABLED` is also true, the reads are
    remotely reachable as reads and `MY_PA_REMOTE_WRITES_ENABLED` does not gate
    them; every write is classified as a write and requires that remote-write
-   switch. The two identity-correction writes require more: the server-resolved
+   switch. The four identity-correction writes require more: the server-resolved
    durable capability set must exactly equal the frozen `remote.operator`
    profile. A raw allowlist, subset, superset, reviewer profile, or writes-enabled
    setting alone cannot publish them.
@@ -47,7 +47,7 @@ writes alike. It deletes nothing, and it does not undo a write already made.
 
 **The write half is gated once more, locally as well as remotely.**
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` is a second switch and defaults
-to `false`, so a process that enables the plane serves the ten reads and refuses
+to `false`, so a process that enables the plane serves the eleven reads and refuses
 every write with `unsupported` until it is set. It is refused on every
 transport rather than only where a tool list is published: the writes are
 subtracted from `ApplicationService.available_capabilities`, which is what
@@ -57,19 +57,22 @@ segment straight into `_HANDLERS` and consults neither. Setting it `true` on a
 process that has not enabled the plane is a startup failure rather than a
 silently ignored variable.
 
-**The governed merge is gated once more again, and is operator-only besides.**
+**Governed merge and split are gated once more, and are operator-only besides.**
 `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED` is a third switch, defaults to
 `false`, and requires the *write* switch rather than the plane switch — so a
-process cannot serve a merge while refusing an ordinary entity write, and setting
+process cannot serve an identity correction while refusing an ordinary entity write, and setting
 it without the switch below it is a startup failure. With it off,
-`entities.merge.preview` and `entities.merge` are subtracted from
+`entities.merge.preview`, `entities.merge`, `entities.split.preview`, and
+`entities.split` are subtracted from
 `available_capabilities` and each handler asks the gate again, for the reason the
 write half does: the HTTP transport routes by path segment and reads no manifest.
 
 With it on they are still refused to anything but an authenticated operator.
 Both are in `_OPERATOR_ONLY`, which is the first time that set has held a
 knowledge-plane name: the test it applies is whether a capability *widens the
-scope a later request is evaluated against*, and after a merge every alias,
+scope a later request is evaluated against*. Merge rewrites the canonical reach
+of its affected records; split restores the exact inverse of one completed merge.
+After a merge every alias,
 identifier, assignment, edge, observation, proposal, review case and memory that
 named a merged-away entity is reached through the survivor. The ordinary remote
 profile still drops both names. They join the remote surface only when global
@@ -77,7 +80,10 @@ remote writes are enabled and the server-resolved durable capability set exactly
 matches `remote.operator`; the normal allowed-capability intersection, exact
 capability/purpose grant, feature gates, Principal check, and application policy
 then still apply. No configured profile or grant is created by this code, and all
-remote and identity-correction switches remain off by default.
+remote and identity-correction switches remain off by default. The exact
+`remote.operator` profile retains its historical name and expands additively;
+ordinary local/remote standard, producer, and reviewer profiles do not inherit
+identity-correction authority.
 
 **The preview is a write and is gated as one.** It mutates no canonical record
 and it does persist a bounded control row carrying a digest, an expiry and a
@@ -92,7 +98,7 @@ permitted purposes with `_WRITE_PURPOSES`, and both `entity_authoring` and
 `entity_observation_ingest` are in that set. The reads stay reachable with the
 write switch off, which is the correct classification and the property
 `tests/contract/test_entity_remote_exposure.py` holds in both directions. For
-merge preview/apply, the complete durable capability set must additionally be
+merge or split preview/apply, the complete durable capability set must additionally be
 the exact frozen `remote.operator` set; the purpose grant remains independently
 required at invocation.
 
@@ -271,9 +277,32 @@ durable capability set described in section 2.
 Apply is atomic, preserves merged-away rows as redirects, records lineage and an
 append-only effect ledger, reconciles supported children and affected proposal
 state, and hard-deletes nothing. A stale, expired, consumed with different
-material, conflicted, or tampered preview is refused. `WP-07` still owns split;
-`WP-08` still owns final Relationship Memory redistribution; `WP-10` still owns
-complete cross-plane context and re-enrichment.
+material, conflicted, or tampered preview is refused.
+
+### 4a. Reading history and applying a governed split
+
+`entities.identity_history` is an `entity_read` capability. It returns only the
+authenticated Principal's identity operations and effects, ordered by the
+repository's opaque keyset cursor. Callers pass the returned `next_cursor`
+unchanged; a malformed cursor is an `invalid_request`, not a request to restart
+from an inferred position.
+
+A split is the exact inverse of one completed merge, not a general-purpose
+identity editor. The operator supplies the source identity-operation identifier
+to `entities.split.preview`, inspects the recorded inverse plan, then supplies
+that preview's identifier and digest to `entities.split`. Apply checks the
+source operation, exact versions, unexpired/unused preview, digest, Principal,
+and effect-ledger integrity. It appends a new identity operation and effects; it
+does not erase or edit the merge history. Concurrent, stale, tampered, or replayed
+material fails closed. As with merge, accepting a review proposal never invokes
+split automatically.
+
+`capabilities.get` and MCP `tools/list` answer different questions and must not
+be conflated. The former is the process capability manifest, including names
+with an unavailable status and limitation. The latter is the effective tool
+view after process composition and, remotely, caller/profile/grant filtering.
+The generic HTTP and MCP paths still normalize into the same closed command
+schemas and dispatch the same application handlers.
 
 ## 5. Reading a resolution answer
 
@@ -308,13 +337,10 @@ candidate is the honest answer.
 
 - **No frontend.** Held by `D-09`. Every user-facing acceptance criterion is
   unmet for that reason and is ledgered as such.
-- **No split.** Section 15.4's split requirements are not implemented; only
-  merge is.
-- **Complete cross-plane re-enrichment is deferred to `WP-10`.** Phase B
-  invalidates or blocks the affected families it can safely account for; it does
-  not claim the final source/context traversal.
-- **Final Relationship Memory redistribution is deferred to `WP-08`.** Phase B
-  blocks unsafe merge plans rather than rewriting memory narrative or history.
+- **No live commissioning or canary has been performed.** Repository behavior is
+  validated with synthetic fixtures and isolated test databases only. Sections
+  8 and 9 are operator-gated procedures, not evidence that any flag, grant,
+  OAuth configuration, runtime, connector, or personal-data path was activated.
 - **`Entity.canonical_name` normalization is unenforced** at the schema level.
   The domain record now refuses an unnormalized `canonical_name`, alias value or
   identifier value at construction, so nothing routed through `Entity`,
@@ -350,3 +376,65 @@ candidate is the honest answer.
   table is cited as an audit trail. Corrected 2026-08-23: this bullet said all
   three were append-only by trigger, and a live server shows zero triggers on
   the third.
+
+## 8. WP-08 commissioning procedure — prepared, not executed
+
+This is a fail-closed checklist for a later operator-authorized commissioning.
+It grants no authority to perform the steps. Before execution, record the exact
+release commit/tree and migration head, operator authorization, target runtime
+identity, eligible synthetic or dedicated non-personal dataset, backup/restore
+point, and the exact `relationship_standard`, `relationship_producer`,
+`relationship_reviewer`, or `relationship_operator` role being commissioned.
+Map that role to the local/remote code-level profile; do not edit a grant to
+approximate a profile, and preserve the exact `remote.operator` compatibility
+name for the remote operator role.
+
+In an approved maintenance window, the operator's runtime owner must:
+
+1. attest clean artifact and migration identity, then validate the schema from
+   empty and from the supported preceding revision against an isolated database;
+2. inspect `capabilities.get` before changing configuration and preserve the
+   result as the process manifest baseline;
+3. stage plane, write, and identity-correction switches in dependency order,
+   refusing startup if any prerequisite is absent;
+4. resolve the intended server-side Principal/profile and compare the effective
+   MCP `tools/list` separately with the manifest — standard, producer, and
+   reviewer profiles must omit merge/split; only the exact operator profile may
+   include them, subject to capability and purpose grants;
+5. perform only the separately authorized synthetic checks from section 9, then
+   capture redacted audit identifiers, counts, and digests rather than payloads.
+
+Stop immediately on identity drift, multiple Alembic heads, an unexpected tool,
+cross-Principal visibility, schema/vocabulary mismatch, stale-preview success,
+non-operator correction reachability, or any need for live personal data. The
+rollback is configuration-only: restore all three RI switches and remote writes
+to their prior values and restart through the governed runtime procedure. Do not
+reverse the migration or delete ledger rows as an operational rollback. Preserve
+the failed evidence and hand the decision back to the operator.
+
+## 9. WP-09 canary procedure — prepared, not executed
+
+Run only after WP-08 is expressly authorized and its preconditions pass. Use a
+new synthetic Principal and synthetic entities with no live connector, NAS
+content, contact detail, credential, or production/shared database. Record exact
+request and result digests plus opaque identifiers for this bounded sequence:
+
+1. verify `relationship_standard` can read the plane and identity history but
+   cannot preview/apply merge or split;
+2. verify producer can submit a typed proposal and cannot review or mutate it;
+3. verify reviewer can decide an eligible proposal and still cannot execute an
+   identity correction;
+4. as the exact operator profile, preview then apply one merge, read its history,
+   preview the inverse from that source operation, and apply the exact split;
+5. prove a stale version, altered digest, second consumption, foreign Principal,
+   and non-operator request are each refused without an effect-ledger append;
+6. compare the generic HTTP and MCP envelopes after masking minted identifiers,
+   and compare `capabilities.get` with effective `tools/list` as distinct planes;
+7. turn the commissioned switches back to their recorded pre-canary state and
+   verify the tool view and direct-call refusal return to that state.
+
+The canary passes only if the final entity state equals the pre-merge semantic
+state, both immutable operations remain visible in history, all negative probes
+leave counts/digests unchanged, and no sensitive payload appears in logs or the
+evidence package. Any other result is a stop, rollback, and operator escalation;
+it is not permission to repair production data in place.

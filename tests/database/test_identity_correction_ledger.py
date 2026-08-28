@@ -147,6 +147,7 @@ def _insert_preview(engine: Engine, **overrides: object) -> None:
         "actor_class": "user",
         "created_at": WHEN,
         "expires_at": WHEN + IDENTITY_PREVIEW_LIFETIME,
+        "source_identity_operation_id": None,
     }
     values.update(overrides)
     with engine.begin() as connection:
@@ -155,11 +156,12 @@ def _insert_preview(engine: Engine, **overrides: object) -> None:
                 f"INSERT INTO {SCHEMA}.entity_identity_previews "  # noqa: S608
                 "(preview_id, principal_id, operation_type, survivor_entity_id, "
                 " expected_survivor_version, merged_away, preview_digest, conflict_digest, "
-                " plan_digest, "
+                " plan_digest, source_identity_operation_id, "
                 " created_by, actor_class, created_at, expires_at) "
                 "VALUES (:preview_id, :principal_id, :operation_type, :survivor_entity_id, "
                 " :expected_survivor_version, CAST(:merged_away AS jsonb), :preview_digest, "
-                " :conflict_digest, :plan_digest, :created_by, :actor_class, :created_at, "
+                " :conflict_digest, :plan_digest, :source_identity_operation_id, "
+                " :created_by, :actor_class, :created_at, "
                 " :expires_at)"
             ),
             values,
@@ -185,8 +187,15 @@ def _insert_operation(engine: Engine, **overrides: object) -> None:
         "state": "completed",
         "started_at": WHEN,
         "completed_at": WHEN + timedelta(seconds=2),
+        "effect_count": 1,
+        "effects_digest": DIGEST,
+        "source_identity_operation_id": None,
     }
     values.update(overrides)
+    if values["state"] == "in_progress":
+        values.setdefault("completed_at", None)
+        values["effect_count"] = None
+        values["effects_digest"] = None
     with engine.begin() as connection:
         connection.execute(
             text(
@@ -194,12 +203,14 @@ def _insert_operation(engine: Engine, **overrides: object) -> None:
                 "(identity_operation_id, principal_id, operation_type, survivor_entity_id, "
                 " merged_entity_ids, preview_id, preview_digest, idempotency_key, "
                 " request_digest, performed_by, actor_class, correlation_id, audit_id, receipt_id, "
-                " state, started_at, completed_at) "
+                " state, started_at, completed_at, effect_count, effects_digest, "
+                " source_identity_operation_id) "
                 "VALUES (:identity_operation_id, :principal_id, :operation_type, "
                 " :survivor_entity_id, CAST(:merged_entity_ids AS jsonb), :preview_id, "
                 " :preview_digest, :idempotency_key, :request_digest, :performed_by, "
                 " :actor_class, :correlation_id, :audit_id, :receipt_id, :state, "
-                " :started_at, :completed_at)"
+                " :started_at, :completed_at, :effect_count, :effects_digest, "
+                " :source_identity_operation_id)"
             ),
             values,
         )
@@ -366,11 +377,46 @@ def test_an_operation_is_updated_from_in_progress_to_completed(migrated_engine: 
 
 
 def test_the_server_refuses_an_unknown_operation_type(migrated_engine: Engine) -> None:
-    """`split` is not admitted at this revision; `WP-07` widens the CHECK."""
+    """The final-completion revision admits merge and split, and nothing else."""
     _insert_preview(migrated_engine)
     with pytest.raises(IntegrityError) as refused:
-        _insert_operation(migrated_engine, operation_type="split")
+        _insert_operation(migrated_engine, operation_type="rename")
     assert "an_identity_operation_type_is_known" in str(refused.value)
+
+
+def test_the_server_admits_one_split_bound_to_one_completed_merge(
+    migrated_engine: Engine,
+) -> None:
+    _insert_preview(migrated_engine)
+    _insert_operation(migrated_engine)
+    _insert_effect(migrated_engine)
+    split_preview = "eipv_bbbb0002bbbb02"
+    split_operation = "eiop_bbbb0002bbbb02"
+    _insert_preview(
+        migrated_engine,
+        preview_id=split_preview,
+        operation_type="split",
+        source_identity_operation_id=OPERATION,
+    )
+    _insert_operation(
+        migrated_engine,
+        identity_operation_id=split_operation,
+        operation_type="split",
+        preview_id=split_preview,
+        idempotency_key="split-0001",
+        receipt_id="rcpt_bbbb0002bbbb02",
+        source_identity_operation_id=OPERATION,
+    )
+    with migrated_engine.connect() as connection:
+        stored = connection.execute(
+            text(
+                f"SELECT source_identity_operation_id "  # noqa: S608
+                f"FROM {SCHEMA}.entity_identity_operations "
+                "WHERE identity_operation_id = :operation_id"
+            ),
+            {"operation_id": split_operation},
+        ).scalar_one()
+    assert stored == OPERATION
 
 
 # --- the append-only effect ledger -------------------------------------------

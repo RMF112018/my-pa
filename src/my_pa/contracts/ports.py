@@ -1,4 +1,4 @@
-"""The ports the 101 capability use cases call, and nothing else.
+"""The ports the 104 capability use cases call, and nothing else.
 
 `docs/architecture/module-boundaries.md` section 5.2 puts application ports here
 and section 5.3 gives the application the transaction boundary. `AGENTS.md`
@@ -144,6 +144,7 @@ from my_pa.domain.relationship.identity import (
 )
 from my_pa.domain.relationship.identity_correction import (
     IdentityEffect,
+    IdentityEffectDraft,
     IdentityEffectFamily,
     IdentityOperation,
     IdentityPreview,
@@ -2307,6 +2308,28 @@ class EntitiesRepository(ABC):
         """
         raise NotImplementedError
 
+    def identity_operation(
+        self, principal_id: str, identity_operation_id: str
+    ) -> IdentityOperation | None:
+        """One identity operation in this Principal's partition, or ``None``."""
+        raise NotImplementedError
+
+    def split_for_source_operation(
+        self, principal_id: str, source_identity_operation_id: str
+    ) -> IdentityOperation | None:
+        """The completed inverse already recorded for one merge, if any."""
+        raise NotImplementedError
+
+    def identity_effect_matches_after_state(
+        self, principal_id: str, effect: IdentityEffect
+    ) -> bool:
+        """Whether the canonical row still exactly equals a source effect's after state."""
+        raise NotImplementedError
+
+    def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
+        """Restore one source effect's exact before state under an after-state guard."""
+        raise NotImplementedError
+
 
 class PortError(Exception):
     """A failure an implementation of one of these ports may report.
@@ -3660,6 +3683,16 @@ class UnitOfWork(ABC):
         """
 
     @property
+    def identity_history(self) -> object:
+        """The optional Principal-scoped identity-history read projection.
+
+        Kept optional for narrow test doubles. The application handler narrows
+        this object to its one-method ``IdentityHistoryQuery`` protocol before
+        use; the canonical PostgreSQL composition supplies that implementation.
+        """
+        raise NotImplementedError
+
+    @property
     @abstractmethod
     def context_runs(self) -> ContextRunRepository:
         """Insert-only context-run metadata, inside this transaction.
@@ -4580,6 +4613,29 @@ class RelationshipMemoryRepository(ABC):
         the plane the memory capabilities need and this is reached by one
         operator-only path none of them serves.
         """
+        raise NotImplementedError
+
+    def identity_effect_matches_after_state(
+        self, principal_id: str, effect: IdentityEffect
+    ) -> bool:
+        """Content-blind equality check for a memory binding effect."""
+        raise NotImplementedError
+
+    def plan_identity_merge(
+        self,
+        principal_id: str,
+        merged_entity_ids: frozenset[str],
+        survivor_entity_id: str,
+    ) -> tuple[IdentityEffectDraft, ...]:
+        """Plan content-blind RM binding moves while retaining immutable origins."""
+        raise NotImplementedError
+
+    def apply_identity_effect(self, principal_id: str, effect: IdentityEffectDraft) -> None:
+        """Apply one planned RM binding move under its exact before-state guard."""
+        raise NotImplementedError
+
+    def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
+        """Restore one opaque memory binding to its immutable origin subject."""
         raise NotImplementedError
 
 

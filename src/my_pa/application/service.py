@@ -154,6 +154,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityIdentityHistory,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -185,6 +186,7 @@ from my_pa.application.commands import (
     ObserveEntityMention,
     PrepareContext,
     PreviewEntityMerge,
+    PreviewEntitySplit,
     ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
@@ -220,6 +222,7 @@ from my_pa.application.commands import (
     SearchKnowledge,
     SearchRelationshipMemories,
     SearchTasks,
+    SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
@@ -298,6 +301,13 @@ from my_pa.application.identity_correction import (
     IdentityCorrectionService,
     MergeCommand,
     MergePreviewCommand,
+    SplitCommand,
+    SplitPreviewCommand,
+)
+from my_pa.application.identity_history import (
+    IdentityHistoryCursorError,
+    IdentityHistoryQuery,
+    IdentityHistoryService,
 )
 from my_pa.application.intelligence import (
     begin_cycle,
@@ -2212,6 +2222,14 @@ def _merge_idempotency_key(principal_id: str, preview_id: str) -> str:
     return f"idk_{digest[:32]}"
 
 
+def _split_idempotency_key(principal_id: str, preview_id: str) -> str:
+    """The server-owned replay identity for one governed split preview."""
+    digest = hashlib.sha256(
+        f"{Capability.ENTITIES_SPLIT.value}|{principal_id}|{preview_id}".encode()
+    ).hexdigest()
+    return f"idk_{digest[:32]}"
+
+
 def _relationship_write_digest(command: Command) -> str:
     """Digest only material command fields without persisting their values."""
     return hashlib.sha256(
@@ -2359,7 +2377,7 @@ class ApplicationService:
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
         something the composition root did not supply — the six `documents.`
-        names in a process with no managed root, and the thirty-one `entities.` names
+        names in a process with no managed root, and the thirty-four `entities.` names
         in one that has not enabled the relationship plane. It is one answer with
         two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
@@ -3657,16 +3675,26 @@ class ApplicationService:
                 ),
             )
             return result
+        response_payload: dict[str, object] = {
+            "review_case_id": decision.review_case_id,
+            "decision_id": decision.decision_id,
+            "review_version": decision.sequence,
+            "disposition": decision.disposition.value,
+            "proposal_state": decision.proposal_state.value,
+            "assertion_id": decision.assertion_id,
+            "receipt_id": decision.receipt_id,
+        }
+        identity_handoff = getattr(decision, "identity_correction_handoff", None)
+        if identity_handoff is not None:
+            response_payload["identity_correction_handoff"] = {
+                "state": identity_handoff.state.value,
+                "proposal_id": identity_handoff.proposal_id,
+                "proposal_kind": identity_handoff.proposal_kind.value,
+                "effective_payload_source": identity_handoff.effective_payload_source.value,
+                "effective_payload": identity_handoff.effective_payload.as_mapping(),
+            }
         result = _Result(
-            payload={
-                "review_case_id": decision.review_case_id,
-                "decision_id": decision.decision_id,
-                "review_version": decision.sequence,
-                "disposition": decision.disposition.value,
-                "proposal_state": decision.proposal_state.value,
-                "assertion_id": decision.assertion_id,
-                "receipt_id": decision.receipt_id,
-            },
+            payload=response_payload,
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=("review_policy", "reviewed_promotion"),
@@ -4365,7 +4393,7 @@ class ApplicationService:
         the request.
 
         **This is the floor, and it was missing.** `available_capabilities`
-        withholds the thirty-one `entities.` names, and two readers consult it —
+        withholds the thirty-four `entities.` names, and two readers consult it —
         `capabilities.get` and the MCP tool list. The HTTP transport is not one
         of them: `/v1/{capability}` routes by path segment and `_run` dispatches
         straight from `_HANDLERS`, so every one of the six executed and
@@ -8281,6 +8309,167 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
         )
 
+    def _entities_identity_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetEntityIdentityHistory,
+    ) -> _Result:
+        """`entities.identity_history`: one bounded authoritative ledger page."""
+        self._entity_plane()
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            entity = unit_of_work.entities.get(principal_id, command.entity_id)
+        if entity is None:
+            raise NotFoundError(SafeDetail.TARGET_ID)
+        repository = cast("IdentityHistoryQuery", unit_of_work.identity_history)
+        try:
+            page = IdentityHistoryService().history(
+                repository,
+                principal_id=principal_id,
+                entity_id=command.entity_id,
+                page_size=command.page_size,
+                after=command.after,
+            )
+        except IdentityHistoryCursorError:
+            raise InvalidRequestError(SafeDetail.CURSOR) from None
+        return _Result(
+            payload={
+                "entity_id": page.entity_id,
+                "entries": [
+                    {
+                        "history_id": entry.history_id,
+                        "occurred_at": format_rfc3339(entry.occurred_at),
+                        "source": entry.source.value,
+                        "operation": entry.operation.value,
+                        "involved_entity_ids": list(entry.involved_entity_ids),
+                        "changes": [
+                            {
+                                "family": change.family,
+                                "record_id": change.record_id,
+                                "effect_kind": change.effect_kind,
+                                "before_state": change.before_state,
+                                "after_state": change.after_state,
+                            }
+                            for change in entry.changes
+                        ],
+                        "actor_class": entry.actor_class,
+                        "actor_id": entry.actor_id,
+                        "authority": entry.authority,
+                        "correlation_id": entry.correlation_id,
+                        "audit_id": entry.audit_id,
+                        "reason": entry.reason,
+                    }
+                    for entry in page.entries
+                ],
+                "is_truncated": page.is_truncated,
+                "next_cursor": page.next_cursor,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
+    def _entities_split_preview(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PreviewEntitySplit,
+    ) -> _Result:
+        """`entities.split.preview`: persist the exact inverse plan for one merge."""
+        self._identity_correction_plane()
+        report = IdentityCorrectionService(
+            unit_of_work.entities, unit_of_work.relationship_memory
+        ).split_preview(
+            SplitPreviewCommand(
+                principal_id=authorization.principal.principal_id,
+                source_identity_operation_id=command.source_identity_operation_id,
+                reason=command.reason,
+                evidence_refs=command.evidence_refs,
+            ),
+            at=authorization.at,
+            requested_by=authorization.principal.principal_id,
+            actor_class=ActorClass.USER,
+            has_operator_authority=self._operator_authority(authorization),
+        )
+        preview = report.preview
+        return _Result(
+            payload={
+                "preview_id": preview.preview_id,
+                "preview_token": preview.preview_digest,
+                "plan_digest": preview.plan_digest,
+                "source_identity_operation_id": report.source_operation.identity_operation_id,
+                "expires_at": format_rfc3339(preview.expires_at),
+                "projected_effects": [
+                    {
+                        "family": draft.family.value,
+                        "record_id": draft.record_id,
+                        "kind": draft.kind.value,
+                    }
+                    for draft in report.projected_effects
+                ],
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
+    def _entities_split(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SplitEntity,
+    ) -> _Result:
+        """`entities.split`: consume one exact preview and append its inverse."""
+        self._identity_correction_plane()
+        principal_id = authorization.principal.principal_id
+        receipt = IdentityCorrectionService(
+            unit_of_work.entities, unit_of_work.relationship_memory
+        ).split_apply(
+            SplitCommand(
+                principal_id=principal_id,
+                preview_id=command.preview_id,
+                preview_digest=command.preview_digest,
+                idempotency_key=_split_idempotency_key(principal_id, command.preview_id),
+                reason=command.reason,
+                evidence_refs=command.evidence_refs,
+            ),
+            at=authorization.at,
+            correlation_id=authorization.correlation_id,
+            audit_id=authorization.audit_id,
+            performed_by=principal_id,
+            actor_class=ActorClass.USER,
+            has_operator_authority=self._operator_authority(authorization),
+        )
+        operation = receipt.operation
+        return _Result(
+            payload={
+                "identity_operation_id": operation.identity_operation_id,
+                "state": operation.state.value,
+                "source_identity_operation_id": operation.source_identity_operation_id,
+                "survivor_entity_id": operation.survivor_entity_id,
+                "restored_entity_ids": list(operation.merged_entity_ids),
+                "preview_id": operation.preview_id,
+                "completed_at": (
+                    None
+                    if operation.completed_at is None
+                    else format_rfc3339(operation.completed_at)
+                ),
+                "replayed": receipt.replayed,
+                "effects": [
+                    {
+                        "effect_id": effect.effect_id,
+                        "sequence": effect.sequence,
+                        "family": effect.family.value,
+                        "record_id": effect.record_id,
+                        "kind": effect.kind.value,
+                    }
+                    for effect in receipt.effects
+                ],
+                "receipt_id": operation.receipt_id,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
 
 #: The wiring. `capabilities.get` reports availability from these keys, so a
 #: capability is available exactly when something here can execute it, and there
@@ -8387,6 +8576,9 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_PROPOSALS_CREATE: ApplicationService._entities_proposals_create,
         Capability.ENTITIES_MERGE_PREVIEW: ApplicationService._entities_merge_preview,
         Capability.ENTITIES_MERGE: ApplicationService._entities_merge,
+        Capability.ENTITIES_IDENTITY_HISTORY: ApplicationService._entities_identity_history,
+        Capability.ENTITIES_SPLIT_PREVIEW: ApplicationService._entities_split_preview,
+        Capability.ENTITIES_SPLIT: ApplicationService._entities_split,
         Capability.RELATIONSHIP_MEMORY_CREATE: ApplicationService._relationship_memory_create,
         Capability.RELATIONSHIP_MEMORY_GET: ApplicationService._relationship_memory_get,
         Capability.RELATIONSHIP_MEMORY_LIST: ApplicationService._relationship_memory_list,
@@ -8439,6 +8631,9 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_IDENTITY_HISTORY,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 
@@ -8483,6 +8678,8 @@ _ENTITY_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 
@@ -8499,6 +8696,8 @@ _IDENTITY_CORRECTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 

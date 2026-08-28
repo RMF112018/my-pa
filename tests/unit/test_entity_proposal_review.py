@@ -41,10 +41,13 @@ import pytest
 
 from my_pa.application.entity_governance import (
     EntityGovernanceService,
+    EntityIdentityCorrectionHandoff,
     EntityProposalReviewService,
+    IdentityCorrectionHandoffState,
     ProposalAdmission,
     ProposedEvidence,
     ReviewAuthorityError,
+    ReviewedPayloadSource,
     _review_case_for,
 )
 from my_pa.application.entity_promotion import (
@@ -970,6 +973,89 @@ def test_accepting_a_merge_proposal_through_review_mutates_no_identity(
         assert after.superseded_by_entity_id == expected.superseded_by_entity_id
     assert entities.merges(PRINCIPAL, ALICE) == []
     assert entities.merges(PRINCIPAL, BOB) == []
+    handoff = decision.identity_correction_handoff
+    assert isinstance(handoff, EntityIdentityCorrectionHandoff)
+    assert handoff.state is IdentityCorrectionHandoffState.OPERATOR_PREVIEW_REQUIRED
+    assert handoff.proposal_id == admitted.proposal_id
+    assert handoff.proposal_kind is EntityProposalKind.MERGE_ENTITIES
+    assert handoff.effective_payload.as_mapping() == MERGE_PAYLOAD
+    assert handoff.effective_payload_source is ReviewedPayloadSource.PROPOSED
+    for absent in ("preview_id", "preview_digest", "expected_version", "authority"):
+        assert not hasattr(handoff, absent)
+
+
+def test_accepting_a_split_proposal_hands_off_intent_and_executes_nothing(
+    entities: FakeEntities,
+    governing: EntityGovernanceService,
+    reviewing: EntityProposalReviewService,
+    reviews: FakeReviews,
+) -> None:
+    entities.create(PRINCIPAL, an_entity())
+    payload = {"entity_id": ALICE, "reason": "the source merge was mistaken"}
+    admitted = _propose(governing, kind=EntityProposalKind.SPLIT_IDENTITY, payload=payload)
+    case = _case_of(reviews, admitted.proposal_id)
+
+    decision = reviewing.decide(
+        _request(case, Disposition.ACCEPT),
+        decided_by="operator",
+        has_operator_authority=True,
+    )
+
+    handoff = decision.identity_correction_handoff
+    held = entities.proposal(PRINCIPAL, admitted.proposal_id)
+    entity = entities.get(PRINCIPAL, ALICE)
+    assert handoff is not None
+    assert handoff.proposal_kind is EntityProposalKind.SPLIT_IDENTITY
+    assert handoff.effective_payload.as_mapping() == payload
+    assert held is not None and held.accepted_record_id is None
+    assert entity is not None and entity.version == 1
+
+
+def test_corrected_merge_handoff_carries_reviewed_intent_not_the_original(
+    entities: FakeEntities,
+    governing: EntityGovernanceService,
+    reviewing: EntityProposalReviewService,
+    reviews: FakeReviews,
+) -> None:
+    entities.create(PRINCIPAL, an_entity())
+    entities.create(PRINCIPAL, an_entity(BOB, "Alice Chen"))
+    third = "ent_cccc0003cccc0003"
+    entities.create(PRINCIPAL, an_entity(third, "Alice C."))
+    admitted = _propose(governing, kind=EntityProposalKind.MERGE_ENTITIES, payload=MERGE_PAYLOAD)
+    case = _case_of(reviews, admitted.proposal_id)
+    corrected = {"retained_entity_id": ALICE, "merged_entity_id": third, "reason": "reviewed"}
+
+    decision = reviewing.decide(
+        _request(
+            case,
+            Disposition.CORRECT_AND_ACCEPT,
+            correction_patch=CorrectionPatch.of(corrected),
+        ),
+        decided_by="operator",
+        has_operator_authority=True,
+    )
+
+    handoff = decision.identity_correction_handoff
+    held = entities.proposal(PRINCIPAL, admitted.proposal_id)
+    assert handoff is not None
+    assert handoff.effective_payload.as_mapping() == corrected
+    assert handoff.effective_payload_source is ReviewedPayloadSource.CORRECTED
+    assert held is not None
+    assert held.payload.as_mapping() == MERGE_PAYLOAD
+
+
+def test_non_identity_review_decision_has_no_identity_correction_handoff(
+    entities: FakeEntities,
+    governing: EntityGovernanceService,
+    reviewing: EntityProposalReviewService,
+    reviews: FakeReviews,
+) -> None:
+    admitted = _staged(entities, governing)
+    case = _case_of(reviews, admitted.proposal_id)
+
+    decision = reviewing.decide(_request(case, Disposition.ACCEPT), decided_by="reviewer")
+
+    assert decision.identity_correction_handoff is None
 
 
 def test_a_reviewer_without_operator_authority_cannot_accept_a_merge_proposal(

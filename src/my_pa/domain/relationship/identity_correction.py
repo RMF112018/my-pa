@@ -71,9 +71,11 @@ __all__ = [
     "IdentityPreview",
     "blocks_merge",
     "conflict_digest_for",
+    "effects_digest_for",
     "plan_digest_for",
     "preview_digest_for",
     "sequence_effects",
+    "sequence_inverse_effects",
     "state_digest",
 ]
 
@@ -129,6 +131,7 @@ class IdentityOperationType(StrEnum):
     """
 
     MERGE = "merge"
+    SPLIT = "split"
 
 
 class IdentityOperationState(StrEnum):
@@ -228,6 +231,9 @@ class IdentityEffectFamily(StrEnum):
     OBSERVATION = "observation"
     PROPOSAL = "proposal"
     REVIEW_CASE = "review_case"
+    RELATIONSHIP_MEMORY = "relationship_memory"
+    MEMORY_PROPOSAL = "memory_proposal"
+    MEMORY_CONTEXT_LINK = "memory_context_link"
     DERIVED_CONTEXT = "derived_context"
 
 
@@ -346,6 +352,31 @@ def state_digest(state: Mapping[str, object]) -> str:
     return _digest(state)
 
 
+def effects_digest_for(effects: Iterable[IdentityEffect]) -> str:
+    """Bind a complete, ordered effect ledger without binding generated row IDs.
+
+    Split admission uses this together with the operation's settled effect count.
+    Omitting ``effect_id`` and ``recorded_at`` makes the digest a statement about
+    the canonical mutations, not about incidental identities or one clock read.
+    """
+    ordered = sorted(effects, key=lambda effect: effect.sequence)
+    return _digest(
+        [
+            {
+                "sequence": effect.sequence,
+                "family": effect.family.value,
+                "record_id": effect.record_id,
+                "kind": effect.kind.value,
+                "before_state": dict(effect.before_state),
+                "after_state": dict(effect.after_state),
+                "before_sha256": effect.before_sha256,
+                "after_sha256": effect.after_sha256,
+            }
+            for effect in ordered
+        ]
+    )
+
+
 def preview_digest_for(
     *,
     operation_type: IdentityOperationType,
@@ -354,6 +385,7 @@ def preview_digest_for(
     expected_survivor_version: int,
     merged_away: Iterable[tuple[str, int]],
     plan_digest: str,
+    source_identity_operation_id: str | None = None,
 ) -> str:
     """The digest a preview is bound by, over exactly the identity it binds.
 
@@ -377,6 +409,8 @@ def preview_digest_for(
     """
     if not _SHA256.fullmatch(plan_digest):
         raise ValueError("a preview plan digest is a sha256 digest")
+    if source_identity_operation_id is not None:
+        validate_identifier(source_identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
     return _digest(
         {
             "operation_type": operation_type.value,
@@ -384,6 +418,7 @@ def preview_digest_for(
             "survivor": [survivor_entity_id, expected_survivor_version],
             "merged_away": sorted([entity_id, version] for entity_id, version in merged_away),
             "plan_digest": plan_digest,
+            "source_identity_operation_id": source_identity_operation_id,
         }
     )
 
@@ -489,6 +524,7 @@ class IdentityPreview:
     created_at: datetime
     expires_at: datetime
     consumed_at: datetime | None = None
+    source_identity_operation_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.preview_id, IdKind.ENTITY_IDENTITY_PREVIEW)
@@ -496,6 +532,12 @@ class IdentityPreview:
         validate_identifier(self.survivor_entity_id, IdKind.ENTITY)
         if not isinstance(self.operation_type, IdentityOperationType):
             raise ValueError("a preview has a closed operation type")
+        if self.source_identity_operation_id is not None:
+            validate_identifier(self.source_identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
+        if (self.operation_type is IdentityOperationType.SPLIT) != (
+            self.source_identity_operation_id is not None
+        ):
+            raise ValueError("a split preview names exactly one source merge operation")
         if not isinstance(self.actor_class, ActorClass):
             raise ValueError("a preview has a closed actor class")
         if not self.created_by.strip():
@@ -593,6 +635,9 @@ class IdentityOperation:
     started_at: datetime
     reason: str | None = field(default=None, repr=False)
     completed_at: datetime | None = None
+    source_identity_operation_id: str | None = None
+    effect_count: int | None = None
+    effects_digest: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
@@ -604,6 +649,19 @@ class IdentityOperation:
         validate_identifier(self.receipt_id, IdKind.RECEIPT)
         if not isinstance(self.operation_type, IdentityOperationType):
             raise ValueError("an identity operation has a closed operation type")
+        if self.source_identity_operation_id is not None:
+            validate_identifier(self.source_identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
+        if (self.operation_type is IdentityOperationType.SPLIT) != (
+            self.source_identity_operation_id is not None
+        ):
+            raise ValueError("a split operation names exactly one source merge operation")
+        if (self.effect_count is None) != (self.effects_digest is None):
+            raise ValueError("an identity operation settles effect count and digest together")
+        if self.effect_count is not None:
+            if self.effect_count < 1:
+                raise ValueError("an identity operation settles at least one effect")
+            if self.effects_digest is None or not _SHA256.fullmatch(self.effects_digest):
+                raise ValueError("an identity operation effect digest is a sha256 digest")
         if not isinstance(self.state, IdentityOperationState):
             raise ValueError("an identity operation has a closed state")
         if not isinstance(self.actor_class, ActorClass):
@@ -815,4 +873,34 @@ def sequence_effects(
             recorded_at=recorded_at,
         )
         for sequence, draft in enumerate(ordered, start=1)
+    )
+
+
+def sequence_inverse_effects(
+    source_effects: Iterable[IdentityEffect],
+    *,
+    identity_operation_id: str,
+    principal_id: str,
+    recorded_at: datetime,
+) -> tuple[IdentityEffect, ...]:
+    """Record an inverse in the exact reverse of its source operation's order."""
+    source = sorted(source_effects, key=lambda effect: effect.sequence, reverse=True)
+    if [effect.sequence for effect in source] != list(range(len(source), 0, -1)):
+        raise ValueError("an inverse source ledger is contiguous")
+    return tuple(
+        IdentityEffect(
+            effect_id=issue_identifier(IdKind.ENTITY_IDENTITY_EFFECT),
+            identity_operation_id=identity_operation_id,
+            principal_id=principal_id,
+            sequence=sequence,
+            family=effect.family,
+            record_id=effect.record_id,
+            kind=effect.kind,
+            before_state=effect.after_state,
+            after_state=effect.before_state,
+            before_sha256=effect.after_sha256,
+            after_sha256=effect.before_sha256,
+            recorded_at=recorded_at,
+        )
+        for sequence, effect in enumerate(source, start=1)
     )

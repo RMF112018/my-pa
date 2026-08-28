@@ -30,6 +30,7 @@ from my_pa.application.commands import (
     EndEntityRelationship,
     GetEntity,
     GetEntityContext,
+    GetEntityIdentityHistory,
     GetEntityRelationships,
     ListEntityAliases,
     ListEntityAssignments,
@@ -39,6 +40,7 @@ from my_pa.application.commands import (
     MergeEntities,
     ObserveEntityMention,
     PreviewEntityMerge,
+    PreviewEntitySplit,
     ResolveEntity,
     ResolveUnresolvedMention,
     RestoreEntity,
@@ -47,6 +49,7 @@ from my_pa.application.commands import (
     ReviseEntityAssignment,
     ReviseEntityRelationship,
     SearchEntities,
+    SplitEntity,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
     UpdateEntity,
@@ -767,6 +770,16 @@ _OFF_SWITCH_COMMANDS: dict[Capability, object] = {
         preview_digest="0" * 64,
         reason="the plane is off, so nothing merges this",
     ),
+    Capability.ENTITIES_IDENTITY_HISTORY: GetEntityIdentityHistory(entity_id=ALICE),
+    Capability.ENTITIES_SPLIT_PREVIEW: PreviewEntitySplit(
+        source_identity_operation_id="eiop_offswitch0001",
+        reason="the plane is off, so nothing previews this split",
+    ),
+    Capability.ENTITIES_SPLIT: SplitEntity(
+        preview_id="eipv_offswitch0002",
+        preview_digest="1" * 64,
+        reason="the plane is off, so nothing applies this split",
+    ),
 }
 
 
@@ -779,11 +792,11 @@ def test_the_off_switch_sweep_covers_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert set(_OFF_SWITCH_COMMANDS) == served
-    # Thirty-one since `WP-RI-B-05` and `WP-RI-B-06`: the producer path and the
-    # governed merge's two halves. The count is asserted rather than derived for
+    # Thirty-four after RI final completion: identity history and the governed
+    # split's two halves join the existing plane. The count is asserted rather than derived for
     # the reason it always was -- it is what tells a reader the prefix scan found
     # the plane and not a substring of it.
-    assert len(served) == 31
+    assert len(served) == 34
 
 
 @pytest.mark.parametrize(

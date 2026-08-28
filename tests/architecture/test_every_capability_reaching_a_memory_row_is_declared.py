@@ -276,6 +276,9 @@ SERVICE: Final = PACKAGE / "application" / "service.py"
 #: rows each capability reaches. Claim 7 is the whole reason this path is here: a
 #: number in that row has been wrong three times and checked by nothing.
 ACCEPTANCE: Final = ROOT / "evidence" / "acceptance" / "RELATIONSHIP-MEMORY-RM-AC-20260822.md"
+IDENTITY_ACCESS_DELTA: Final = (
+    ROOT / "evidence" / "acceptance" / "RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md"
+)
 
 #: The row whose digits are bound.
 ROW: Final = "RM-API-AC-002"
@@ -334,10 +337,12 @@ DECLARED: Final = frozenset(
         # plane's own prefix and both carry a reason below.
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 
-#: The five that are *not* `relationship_memory.*`, and what each one discloses
+#: The seven that are *not* `relationship_memory.*`, and what each one discloses
 #: under a purpose issued for something else. This is the part of
 #: `RM-API-AC-002` that is a disclosure rather than a design, so each entry says
 #: the purpose, the rows and the fields rather than only the name.
@@ -350,6 +355,22 @@ DECLARED: Final = frozenset(
 #: in a reason is written in the `N of the eight (…)` form on purpose: that form
 #: is what `_claims_in()` reads, and anything written another way is prose again.
 BEYOND_THE_EIGHT: Final = {
+    Capability.ENTITIES_SPLIT_PREVIEW: (
+        "purpose `entity_identity_correction`. `entities.split.preview` reads three of the "
+        "eight (`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`) and writes none of the eight while proving every "
+        "opaque binding still matches the completed merge ledger. It reads no memory text, "
+        "classification, or evidence payload."
+    ),
+    Capability.ENTITIES_SPLIT: (
+        "purpose `entity_identity_correction`. `entities.split` reads three of the eight "
+        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`) and writes three of the eight "
+        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`) to restore only exact opaque before-state bindings "
+        "under after-state guards. It reads or writes no memory text, classification, or "
+        "evidence payload."
+    ),
     Capability.ENTITIES_CONTEXT: (
         "purpose `entity_read`. `entities.context` reads two of the eight "
         "(`relationship_memories`, `relationship_memory_versions`) through "
@@ -413,15 +434,11 @@ BEYOND_THE_EIGHT: Final = {
         "purpose `entity_identity_correction`, and it is operator-only. "
         "`entities.merge` reads three of the eight "
         "(`relationship_memories`, `relationship_memory_context_links`, "
-        "`relationship_memory_proposals`) and writes "
-        "none of the eight, for the reason the preview beside it reads them: apply "
-        "recomputes the same privacy-safe affected-input subset and refuses when "
-        "any participant is a canonical memory subject, a proposal subject, or "
-        "the Entity target of a current canonical version's context link. It "
-        "returns no memory identifier or per-Entity memory count. **A governed "
-        "merge writes no memory row at all**, which is this phase's boundary "
-        "rather than a gap in it -- `WP-08` owns Relationship Memory origin-subject "
-        "and context redistribution."
+        "`relationship_memory_proposals`) and writes three of the eight "
+        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`). Apply revalidates and changes only opaque "
+        "subject/context bindings while retaining immutable origin subjects; it reads or "
+        "writes no memory text, classification, or evidence payload."
     ),
 }
 
@@ -542,7 +559,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         ),
         frozenset(),
     ),
-    Capability.ENTITIES_MERGE: (
+    Capability.ENTITIES_SPLIT_PREVIEW: (
         frozenset(
             {
                 "relationship_memories",
@@ -551,6 +568,38 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
             }
         ),
         frozenset(),
+    ),
+    Capability.ENTITIES_SPLIT: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
+    ),
+    Capability.ENTITIES_MERGE: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
     ),
     Capability.RELATIONSHIP_MEMORY_GET: (
         frozenset(
@@ -653,7 +702,35 @@ UNCLASSIFIED_TABLE_MENTIONS: Final[dict[tuple[str, str, str], str]] = {
         "context_links.type)).lateral()",
     ): "the lateral JSONB row source is held in a local and joined into the `select` "
     "below it; this assignment only derives rows from the proposal table and cannot write it",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "_memory_identity_effect_read_subject",
+        "subjects = {IdentityEffectFamily.RELATIONSHIP_MEMORY: (relationship_memories, "
+        "'memory_id', {'subject_entity_id', 'origin_subject_entity_id', 'version'}), "
+        "IdentityEffectFamily.MEMORY_PROPOSAL: (relationship_memory_proposals, "
+        "'memory_proposal_id', {'subject_entity_id', 'origin_subject_entity_id', "
+        "'expected_subject_version', 'context_links'}), "
+        "IdentityEffectFamily.MEMORY_CONTEXT_LINK: (relationship_memory_context_links, "
+        "'context_link_id', {'target_id', 'origin_subject_entity_id'})}",
+    ): "the closed identity-effect family map selects one table for the guarded update or "
+    "after-state comparison issued by its caller; no content column is admitted",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "_memory_identity_effect_write_subject",
+        "subjects = {IdentityEffectFamily.RELATIONSHIP_MEMORY: (relationship_memories, "
+        "'memory_id', {'subject_entity_id', 'origin_subject_entity_id', 'version'}), "
+        "IdentityEffectFamily.MEMORY_PROPOSAL: (relationship_memory_proposals, "
+        "'memory_proposal_id', {'subject_entity_id', 'origin_subject_entity_id', "
+        "'expected_subject_version', 'context_links'}), "
+        "IdentityEffectFamily.MEMORY_CONTEXT_LINK: (relationship_memory_context_links, "
+        "'context_link_id', {'target_id', 'origin_subject_entity_id'})}",
+    ): "the separately named closed map feeds only guarded merge/split updates; no content "
+    "column is admitted",
 }
+
+UNCLASSIFIED_WRITE_TABLE_MENTIONS: Final = frozenset(
+    key for key in UNCLASSIFIED_TABLE_MENTIONS if key[1] == "_memory_identity_effect_write_subject"
+)
 
 #: The enums whose members the walk splits a capability's writes by.
 #:
@@ -912,6 +989,14 @@ DYNAMIC_ATTRIBUTE_LOOKUPS: Final[dict[tuple[str, str], str]] = {
         "alias's, and this reads one already-fetched `Row` back under those labels. The "
         "receiver is a row, the lookup issues no statement, and the entity plane reaches "
         "no memory table at all."
+    ),
+    ("my_pa.infrastructure.persistence.entity", "getattr(row, name)"): (
+        "the closed identity-effect subject declaration supplies column names from an exact "
+        "allowlist; this reads one already-fetched row to compare the stored after-state"
+    ),
+    ("my_pa.infrastructure.persistence.relationship_memory", "getattr(row, name)"): (
+        "the three-family memory identity-effect map supplies only opaque binding columns; "
+        "this reads one already-fetched row to compare the stored after-state"
     ),
 }
 
@@ -1711,13 +1796,14 @@ def _direct_table_reach() -> dict[Node, TableReach]:
             elif operation == "write":
                 writes |= tables
             else:
-                # Conservative: an unreadable shape is a read, never a silent
-                # absence. It is registered as well, because a *write* misread as
-                # a read is the failure this direction cannot catch on its own.
-                reads |= tables
-                unclassified.add(
-                    (_relative(path), function.name, _enclosing_statement(child, parents))
-                )
+                # Conservative unless the exact registered declaration is the
+                # closed write-only identity-effect table map.
+                key = (_relative(path), function.name, _enclosing_statement(child, parents))
+                if key in UNCLASSIFIED_WRITE_TABLE_MENTIONS:
+                    writes |= tables
+                else:
+                    reads |= tables
+                unclassified.add(key)
         found[node] = (frozenset(reads), frozenset(writes), frozenset(unclassified))
     return found
 
@@ -2530,8 +2616,17 @@ def _documents() -> list[tuple[str, str, str]]:
     row defaults to nothing, so an unattributed claim there fails by name.
     """
     row, line = _acceptance_row()
+    # The original row is immutable historical evidence. Its two Phase-B merge
+    # clauses are superseded by the additive final-completion delta.
+    row = re.sub(
+        r"`entities\.merge\.preview` reads three of the eight .*?"
+        r"`entities\.merge` reads three of the eight .*?writes none of the eight\.",
+        "",
+        row,
+    )
+    row = f"{row} {IDENTITY_ACCESS_DELTA.read_text(encoding='utf-8')}"
     return [
-        (f"{ACCEPTANCE.name}:{line}", row, ""),
+        (f"{ACCEPTANCE.name}:{line}+{IDENTITY_ACCESS_DELTA.name}", row, ""),
         *(
             (f"BEYOND_THE_EIGHT[{capability.value}]", reason, capability.value)
             for capability, reason in BEYOND_THE_EIGHT.items()

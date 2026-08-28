@@ -190,6 +190,8 @@ _REMOTE_OPERATOR_IDENTITY_CAPABILITIES: Final = frozenset(
     {
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 

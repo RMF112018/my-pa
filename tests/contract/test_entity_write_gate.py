@@ -24,8 +24,8 @@ these names is in a public enum.
 **Three states, and all three are asserted**, because a gate that refused in
 every state would satisfy a one-sided test:
 
-* plane off — all thirty-one `entities.` names refuse, reads included;
-* plane on, writes off — the ten reads answer and the twenty-one writes refuse;
+* plane off — all thirty-four `entities.` names refuse, reads included;
+* plane on, writes off — the eleven reads answer and the twenty-three writes refuse;
 * plane on, writes on — all thirty-one are served.
 
 The write population is derived from the purpose map rather than listed here, so
@@ -120,9 +120,9 @@ def test_the_write_set_the_service_subtracts_is_the_set_with_a_write_purpose() -
     here instead.
     """
     assert ENTITY_WRITES == _ENTITY_WRITE_CAPABILITIES
-    # Twenty-one since Phase B: the eighteen Phase A writes, the producer path,
-    # and the governed merge's two halves.
-    assert len(ENTITY_WRITES) == 21
+    # Twenty-three after final identity recovery: the prior twenty-one plus the
+    # governed split's preview/apply pair.
+    assert len(ENTITY_WRITES) == 23
     assert ENTITY_WRITES < _ENTITY_CAPABILITIES
     assert not ENTITY_READS & ENTITY_WRITES
 

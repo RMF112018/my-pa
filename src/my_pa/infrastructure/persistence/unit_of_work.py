@@ -137,6 +137,7 @@ from my_pa.infrastructure.persistence.enrollment import (
     record_scope,
 )
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
+from my_pa.infrastructure.persistence.entity_identity_history import SqlIdentityHistoryQuery
 from my_pa.infrastructure.persistence.entity_proposal_review import (
     decide_ledger_dispositions,
     entity_proposal_review_case,
@@ -1093,6 +1094,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def entities(self) -> EntitiesRepository:
         """The generalized entity rows, on this transaction's connection."""
         return SqlEntityRepository(self._open)
+
+    @property
+    def identity_history(self) -> SqlIdentityHistoryQuery:
+        """Authoritative identity history on this transaction's connection."""
+        return SqlIdentityHistoryQuery(self._open)
 
     @property
     def relationship_memory(self) -> RelationshipMemoryRepository:

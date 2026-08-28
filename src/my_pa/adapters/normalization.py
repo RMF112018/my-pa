@@ -90,6 +90,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityIdentityHistory,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -120,6 +121,7 @@ from my_pa.application.commands import (
     ObserveEntityMention,
     PrepareContext,
     PreviewEntityMerge,
+    PreviewEntitySplit,
     ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
@@ -152,6 +154,7 @@ from my_pa.application.commands import (
     SearchKnowledge,
     SearchRelationshipMemories,
     SearchTasks,
+    SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
@@ -1527,6 +1530,10 @@ def _preview_entity_merge(payload: Mapping[str, Any]) -> Command:
     return PreviewEntityMerge(**converted)
 
 
+def _get_entity_identity_history(payload: Mapping[str, Any]) -> Command:
+    return GetEntityIdentityHistory(**payload)
+
+
 def _merge_entities(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
     for name in ("choices", "evidence_refs"):
@@ -1534,6 +1541,22 @@ def _merge_entities(payload: Mapping[str, Any]) -> Command:
         if isinstance(value, list):
             converted[name] = tuple(value)
     return MergeEntities(**converted)
+
+
+def _preview_entity_split(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    evidence_refs = converted.get("evidence_refs")
+    if isinstance(evidence_refs, list):
+        converted["evidence_refs"] = tuple(evidence_refs)
+    return PreviewEntitySplit(**converted)
+
+
+def _split_entity(payload: Mapping[str, Any]) -> Command:
+    converted = dict(payload)
+    evidence_refs = converted.get("evidence_refs")
+    if isinstance(evidence_refs, list):
+        converted["evidence_refs"] = tuple(evidence_refs)
+    return SplitEntity(**converted)
 
 
 #: One builder per command owned by these legacy transports. WP-12C adds a
@@ -1634,7 +1657,10 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE: _resolve_unresolved_mention,
         Capability.ENTITIES_PROPOSALS_CREATE: _create_entity_proposal,
         Capability.ENTITIES_MERGE_PREVIEW: _preview_entity_merge,
+        Capability.ENTITIES_IDENTITY_HISTORY: _get_entity_identity_history,
         Capability.ENTITIES_MERGE: _merge_entities,
+        Capability.ENTITIES_SPLIT_PREVIEW: _preview_entity_split,
+        Capability.ENTITIES_SPLIT: _split_entity,
         Capability.RELATIONSHIP_MEMORY_CREATE: _create_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_GET: _get_relationship_memory,
         Capability.RELATIONSHIP_MEMORY_LIST: _list_relationship_memories,
@@ -1653,7 +1679,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a value outside
-    the 101 canonical names refers to nothing.
+    the 104 canonical names refers to nothing.
     """
     try:
         return Capability(capability)

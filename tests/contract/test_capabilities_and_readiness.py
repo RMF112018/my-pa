@@ -55,7 +55,7 @@ def manifest(implemented: frozenset[Capability] = EVERYTHING) -> CapabilityManif
 
 def test_manifest_lists_every_capability_exactly_once() -> None:
     names = [status.name for status in manifest().capabilities]
-    assert len(names) == len(Capability) == 101
+    assert len(names) == len(Capability) == 104
     assert set(names) == set(Capability)
     assert len(set(names)) == len(names)
 
@@ -151,6 +151,9 @@ def test_capability_names_match_the_published_contract() -> None:
         "entities.proposals.create",
         "entities.merge.preview",
         "entities.merge",
+        "entities.identity_history",
+        "entities.split.preview",
+        "entities.split",
         "entities.identifiers.list",
         "entities.aliases.list",
         "entities.create",
@@ -195,8 +198,8 @@ def test_operator_only_flag_cannot_contradict_the_domain() -> None:
         )
 
 
-def test_the_operator_only_set_is_enrollment_and_the_governed_merge() -> None:
-    """Three, and the third and fourth are the first knowledge-plane members.
+def test_the_operator_only_set_is_enrollment_and_governed_identity_correction() -> None:
+    """Enrollment plus both governed identity-correction preview/apply pairs.
 
     This test was named `test_only_sources_enroll_is_operator_only` and asserted
     a set of one for every package up to `WP-RI-B-06`. The name is corrected
@@ -218,10 +221,14 @@ def test_the_operator_only_set_is_enrollment_and_the_governed_merge() -> None:
         Capability.SOURCES_ENROLL,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
     assert is_operator_only(Capability.SOURCES_ENROLL)
     assert is_operator_only(Capability.ENTITIES_MERGE_PREVIEW)
     assert is_operator_only(Capability.ENTITIES_MERGE)
+    assert is_operator_only(Capability.ENTITIES_SPLIT_PREVIEW)
+    assert is_operator_only(Capability.ENTITIES_SPLIT)
     # And no capture, review, continuity, document, task, commitment, report,
     # entity-authoring or memory name joined them, which is the half of this
     # claim that keeps the boundary from spreading by precedent.

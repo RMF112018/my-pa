@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Final
 
@@ -16,6 +16,7 @@ from sqlalchemy.engine import make_url
 from my_pa.application.entity_reenrichment import (
     BindingVersion,
     ReenrichmentBinding,
+    ReenrichmentState,
     ReenrichmentSubject,
     ReenrichmentSubjectKind,
     ReenrichmentTrigger,
@@ -146,6 +147,39 @@ def test_claim_is_exclusive_and_stale_completion_preserves_why(engine: Engine) -
     assert stored is not None
     assert stored.state == "stale"
     assert stored.stale_reasons == (StaleBindingReason.SUBJECT_VERSION_CHANGED.value,)
+
+
+def test_expired_claims_recover_until_the_final_attempt_then_fail(engine: Engine) -> None:
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        registered = repository.register(_binding(), at=WHEN)
+        first = repository.claim(owner="worker_a", at=WHEN, lease_seconds=1)
+        assert first is not None and first.attempt_count == 1
+
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        second = repository.claim(owner="worker_b", at=WHEN + timedelta(seconds=1), lease_seconds=1)
+        assert second is not None and second.work_id == registered.work_id
+        assert second.attempt_count == 2
+
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        final = repository.claim(owner="worker_c", at=WHEN + timedelta(seconds=2), lease_seconds=1)
+        assert final is not None and final.attempt_count == final.max_attempts
+
+    failed_at = WHEN + timedelta(seconds=3)
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        assert repository.claim(owner="worker_d", at=failed_at) is None
+        stored = repository.get(PRINCIPAL, registered.work_id)
+
+    assert stored is not None
+    assert stored.state is ReenrichmentState.FAILED
+    assert stored.attempt_count == stored.max_attempts
+    assert stored.lease_owner is None
+    assert stored.lease_expires_at is None
+    assert stored.completed_at == failed_at
+    assert stored.last_error_code == "lease_expired"
 
 
 def test_all_nine_trigger_values_are_admitted_at_head(engine: Engine) -> None:

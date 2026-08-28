@@ -167,6 +167,22 @@ class SqlReenrichmentWorkRepository:
         if not 1 <= lease_seconds <= 900:
             raise ValueError("a re-enrichment lease is bounded")
         table = self._tables.work
+        self._connection.execute(
+            table.update()
+            .where(
+                table.c.state == _RUNNING,
+                table.c.lease_expires_at <= moment,
+                table.c.attempt_count >= table.c.max_attempts,
+            )
+            .values(
+                state=_FAILED,
+                lease_owner=None,
+                lease_expires_at=None,
+                last_error_code="lease_expired",
+                completed_at=moment,
+                updated_at=moment,
+            )
+        )
         candidate = self._connection.execute(
             select(table.c.work_id, table.c.principal_id)
             .where(

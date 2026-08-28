@@ -130,8 +130,9 @@ row is updated only after that review completes.
 
 ## Test and migration evidence
 
-The final pull-request head owns the authoritative results. The implementation
-uses these evidence classes:
+These results were measured on the frozen pre-commit campaign tree. The final
+pull-request head must retain the same tree content and pass the exact-head
+independent review. The implementation uses these evidence classes:
 
 - static: Ruff format/lint, configured mypy, `git diff --check`;
 - FAST: the repository's exact non-database marker expression;
@@ -147,9 +148,9 @@ uses these evidence classes:
 | Evidence | Exact result |
 |---|---|
 | Claimed-count guard | `16 passed in 64.85s` |
-| FAST | `14164 passed, 1543 deselected in 582.13s` |
-| Architecture, permission-matched synthetic local fixtures | `4706 passed in 303.78s` |
-| Architecture, restricted-sandbox attempt | `4703 passed, 3 failed in 296.28s`; all three failures were `PermissionError: [Errno 1]` at synthetic local TCP/Unix socket bind, and the permission-matched rerun above passed |
+| FAST after the lease corrective | `14165 passed, 1544 deselected in 579.83s` |
+| Architecture, permission-matched synthetic local fixtures | `4706 passed in 296.41s` |
+| Architecture, restricted-sandbox attempt | `4703 passed, 3 failed in 297.90s`; all three failures were `PermissionError: [Errno 1]` at synthetic local TCP/Unix socket bind, and the permission-matched rerun above passed |
 | Focused transport | `447 passed, 1 deselected` |
 | Transport parity | `257 passed` |
 | Policy/security exhaustive | `582 passed` |
@@ -157,9 +158,9 @@ uses these evidence classes:
 | Identity history/privacy/transport | `362 passed` |
 | Entity privacy regression | `96 passed` |
 | Remote-request replay | `55 passed` |
-| Ruff format | `1135 files already formatted` |
+| Ruff format | `895 files already formatted` |
 | Ruff lint | `All checks passed!` |
-| mypy | `Success: no issues found in 304 source files` |
+| mypy | `Success: no issues found in 424 source files` |
 | Whitespace | `git diff --check` passed |
 | Alembic graph | one head: `8e1c4a7b2d90` |
 | Alembic offline SQL | passed with a synthetic non-connecting PostgreSQL URL; the preceding no-URL attempt failed closed as required |
@@ -168,6 +169,57 @@ uses these evidence classes:
 The full database tier is not required by the campaign exception rule and was
 not run: `FULL_DB_TIER_NOT_RUN_TARGETED_EVIDENCE_SUFFICIENT`. No production,
 shared, or live-personal-data system was used.
+
+## Findings closure
+
+All integration findings discovered before the frozen FAST gate were corrected
+in scope:
+
+1. MCP catalog order now follows the closed `Capability` order filtered by the
+   implemented command map; transport schemas, annotations, and fixture maps
+   include all three added capabilities.
+2. Identity history first verifies the requested entity through the
+   Principal-partitioned entity repository, so a foreign entity identifier is
+   indistinguishable from an absent one.
+3. The new capability names are frozen into the migration's audit vocabulary;
+   upgrade and downgrade both restate the closed constraint without deriving a
+   historical revision from a mutable runtime enum.
+4. Revision, table, model, capability, and publication counts were reconciled
+   to one Alembic head, 77 revisions, 47 tables, 60 relationship dataclasses,
+   104 application capabilities, and 55 default MCP tools.
+5. The entity privacy sweep derives all 34 entity capabilities and now collects
+   96 cases; the remote profile distinguishes 11 reads from 23 writes.
+6. Split preview/apply joins the keyless write-replay map, preserving request
+   digest and result replay behavior for the new operator-only writes.
+7. Relationship Memory origin binding is immutable across merge/split, and
+   generated proposal payloads cover every accepted review family without
+   allowing review acceptance to execute identity correction.
+8. The separately claimed architecture tier initially produced three
+   restricted-harness `PermissionError` results for synthetic local sockets;
+   the permitted rerun passed all 4,706 tests. No repository correction was
+   indicated or made for those harness-only failures.
+9. Re-enrichment application now rejects a missing or expired lease before
+   currency evaluation or the mutation callback, so an expired worker cannot
+   apply after another worker becomes eligible to claim the same work.
+10. Claim recovery atomically marks expired final-attempt work `FAILED` before
+    selecting reclaimable rows, so a dead final worker cannot leave a permanent
+    `RUNNING` orphan.
+
+## Load-bearing and mutation controls
+
+The following controls are intentionally coupled to tests that fail when the
+guard is removed or weakened:
+
+| Control | Load-bearing evidence |
+|---|---|
+| Exact split inversion | Preview digest, source merge, effect count/digest, one-completed-split uniqueness, and stale-version checks |
+| Principal isolation | Entity-first history authorization, partition predicates on history and re-enrichment persistence, and cross-Principal not-found regressions |
+| Immutable history | Direct mutation events plus settled operation/effect ledgers and legacy merge lineage; proposals and review rows are not scraped as history |
+| Bounded re-enrichment | Exact nine-trigger enum, immutable binding digest, lease ownership/expiry, bounded attempts, retry timing, and stale-before-apply checks |
+| Proposal/review separation | Generated discriminated payload map covers every proposal family; identity-correction acceptance returns a preview handoff and cannot apply |
+| Remote write ceiling | Ordinary profiles cannot publish merge/split; exact `remote.operator`, server-resolved grants, purpose, feature, Principal, policy, audit, and global write gates all remain required |
+| Capability/audit closure | Architecture guards compare catalogs, commands, profiles, transports, fixtures, migration vocabularies, and spelled counts without deriving old migrations from current enums |
+| Database concurrency | Focused isolated-PostgreSQL tests cover settlement uniqueness, lease claims, replay, stale work, and cross-Principal persistence, but were collected rather than executed in this environment |
 
 ## Operator-only remaining actions
 

@@ -86,6 +86,8 @@ class EntityReenrichmentService:
         if work.state is not ReenrichmentState.RUNNING or work.lease_owner != owner:
             raise ValueError("re-enrichment application requires this worker's live claim")
         moment = ensure_utc(at)
+        if work.lease_expires_at is None or work.lease_expires_at <= moment:
+            raise ValueError("re-enrichment application requires this worker's live claim")
         currency = assess_currency(work.binding, current)
         if not currency.is_current:
             if not self._repository.mark_stale(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
@@ -95,11 +96,11 @@ class _Repository:
         work_id: str,
         *,
         owner: str,
-        reasons: tuple[StaleBindingReason, ...],
+        reasons: Sequence[StaleBindingReason],
         at: datetime,
     ) -> bool:
         assert principal_id == PRINCIPAL and owner == "worker_01" and at == WHEN
-        self.stale.append((work_id, reasons))
+        self.stale.append((work_id, tuple(reasons)))
         return True
 
     def complete(self, principal_id: str, work_id: str, *, owner: str, at: datetime) -> bool:
@@ -219,6 +220,26 @@ def test_current_work_applies_once_then_completes() -> None:
     assert currency.is_current
     assert applied == [binding.binding_sha256]
     assert repository.completed == ["erwk_aaaa0001aaaa0001"]
+
+
+def test_expired_claim_never_invokes_the_applier() -> None:
+    binding = _binding()
+    repository = _Repository()
+    applied: list[ReenrichmentBinding] = []
+    expired = replace(_claimed(binding), lease_expires_at=WHEN)
+
+    with pytest.raises(ValueError, match="live claim"):
+        EntityReenrichmentService(repository).apply_claimed(
+            expired,
+            owner="worker_01",
+            current=_Current(binding),
+            apply=applied.append,
+            at=WHEN,
+        )
+
+    assert applied == []
+    assert repository.stale == []
+    assert repository.completed == []
 
 
 def test_cross_principal_subject_binding_is_refused() -> None:

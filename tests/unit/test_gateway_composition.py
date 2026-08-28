@@ -157,6 +157,26 @@ def test_the_composition_wires_task_management_writes(runtime: GatewayRuntime) -
     assert isinstance(unit_of_work, SqlAlchemyTaskManagementUnitOfWork)
 
 
+def test_the_composition_wires_reenrichment_only_with_ri_writes() -> None:
+    closed = build_gateway_runtime(Settings(database_url=A_URL))
+    opened = build_gateway_runtime(
+        Settings(
+            database_url=A_URL,
+            relationship_intelligence_enabled=True,
+            relationship_intelligence_writes_enabled=True,
+        )
+    )
+    try:
+        assert closed.service._relationship_reenrichment_enabled is False
+        assert opened.service._relationship_reenrichment_enabled is True
+        unit_of_work = opened.service._unit_of_work()
+        with pytest.raises(RuntimeError, match="not inside a transaction"):
+            _ = unit_of_work.reenrichment
+    finally:
+        closed.close()
+        opened.close()
+
+
 def test_the_composition_reads_the_configured_limits() -> None:
     """The published limits are the configured ones, through the gateway too."""
     settings = Settings(database_url=A_URL, max_page_size=25, default_page_size=10)

@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from threading import Event
 from typing import Final
 
 import pytest
@@ -98,6 +100,40 @@ def _binding(trigger: ReenrichmentTrigger = ReenrichmentTrigger.NEW_ALIAS) -> Re
         producer_versions=(BindingVersion("resolver", "v3"),),
         policy_version="ri-v0.2",
     )
+
+
+class _Current:
+    def __init__(self, binding: ReenrichmentBinding) -> None:
+        self.binding = binding
+
+    def subject_version(
+        self, principal_id: str, kind: ReenrichmentSubjectKind, subject_id: str
+    ) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        return next(
+            (
+                item.version
+                for item in self.binding.subjects
+                if item.kind is kind and item.subject_id == subject_id
+            ),
+            None,
+        )
+
+    def input_version(self, principal_id: str, key: str) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        return next((item.version for item in self.binding.input_versions if item.key == key), None)
+
+    def producer_version(self, principal_id: str, key: str) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        return next(
+            (item.version for item in self.binding.producer_versions if item.key == key), None
+        )
+
+    def policy_version(self, principal_id: str) -> str | None:
+        return self.binding.policy_version if principal_id == PRINCIPAL else None
 
 
 def test_registration_is_deduplicated_by_the_complete_binding(engine: Engine) -> None:
@@ -194,3 +230,67 @@ def test_all_nine_trigger_values_are_admitted_at_head(engine: Engine) -> None:
             ).scalars()
         )
     assert stored == {trigger.value for trigger in ReenrichmentTrigger}
+
+
+def test_expiry_during_apply_rolls_back_effect_and_allows_one_reclaim(engine: Engine) -> None:
+    """A concurrent reclaimer sees the row fence; an expired callback leaves no effect."""
+    binding = _binding()
+    claimed_at = datetime.now(UTC)
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        registered = repository.register(binding, at=claimed_at)
+        claimed = repository.claim(owner="worker_a", at=claimed_at, lease_seconds=2)
+        assert claimed is not None
+
+    callback_started = Event()
+
+    def expire_inside_callback() -> int:
+        with engine.begin() as connection:
+            connection.execute(
+                text("CREATE TEMP TABLE reenrichment_effect_probe (effect_id text PRIMARY KEY)")
+            )
+            repository = SqlReenrichmentWorkRepository(connection, _tables())
+
+            def apply(_binding: ReenrichmentBinding, effect_id: str) -> None:
+                assert effect_id == binding.binding_sha256
+                connection.execute(
+                    text("INSERT INTO reenrichment_effect_probe (effect_id) VALUES (:effect_id)"),
+                    {"effect_id": effect_id},
+                )
+                callback_started.set()
+                connection.execute(text("SELECT pg_sleep(2.2)"))
+
+            with pytest.raises(RuntimeError, match="lease expired before atomic completion"):
+                repository.apply_claimed(
+                    PRINCIPAL,
+                    registered.work_id,
+                    owner="worker_a",
+                    current=_Current(binding),
+                    apply=apply,
+                    at=claimed_at,
+                )
+            return int(
+                connection.execute(
+                    text("SELECT count(*) FROM reenrichment_effect_probe")
+                ).scalar_one()
+            )
+
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        applying = executor.submit(expire_inside_callback)
+        assert callback_started.wait(timeout=2)
+        with engine.begin() as connection:
+            concurrent = SqlReenrichmentWorkRepository(connection, _tables()).claim(
+                owner="worker_b",
+                at=claimed_at + timedelta(seconds=10),
+            )
+        assert concurrent is None
+        assert applying.result(timeout=5) == 0
+
+    with engine.begin() as connection:
+        reclaimed = SqlReenrichmentWorkRepository(connection, _tables()).claim(
+            owner="worker_b",
+            at=claimed_at + timedelta(seconds=10),
+        )
+    assert reclaimed is not None
+    assert reclaimed.work_id == registered.work_id
+    assert reclaimed.attempt_count == 2

@@ -107,6 +107,7 @@ import base64
 import binascii
 import hashlib
 import json
+import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -259,6 +260,11 @@ from my_pa.application.entity_governance import (
 )
 from my_pa.application.entity_governance import (
     ProposedEvidence as EntityProposedEvidence,
+)
+from my_pa.application.entity_reenrichment import (
+    TRIGGERS_BY_MUTATION_CAPABILITY,
+    ReenrichmentWorkRepository,
+    register_mutation_reenrichment,
 )
 from my_pa.application.entity_resolution import (
     ACTIVE_ASSIGNMENT_STATUS,
@@ -2276,6 +2282,28 @@ def _complete_relationship_write(
     )
 
 
+_REENRICHMENT_CAUSE = re.compile(r"\A[A-Za-z][A-Za-z0-9]{1,15}_[A-Za-z0-9]{8,64}\Z")
+
+
+def _reenrichment_cause(result: _Result, audit_id: str) -> str:
+    """Choose the mutation's stable receipt identity, falling back to audit."""
+    for key in (
+        "identity_operation_id",
+        "decision_id",
+        "proposal_id",
+        "capture_version_id",
+        "enrollment_id",
+        "alias_id",
+        "assignment_id",
+        "entity_id",
+        "preference_id",
+    ):
+        value = result.payload.get(key)
+        if isinstance(value, str) and _REENRICHMENT_CAUSE.fullmatch(value):
+            return value
+    return audit_id
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -2293,6 +2321,7 @@ class ApplicationService:
         relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
         relationship_identity_correction_enabled: bool = False,
+        relationship_reenrichment_enabled: bool = False,
         producer_origins: ProducerOriginRegistry | None = None,
         gsqs_b0_ports: WorkflowPorts | None = None,
     ) -> None:
@@ -2332,6 +2361,10 @@ class ApplicationService:
         # that has not said the operation is composed gets a process that does
         # not serve it.
         self._relationship_identity_correction_enabled = relationship_identity_correction_enabled
+        # Registration is an internal consequence of already-authorized writes,
+        # never a separately published capability. Default closed keeps legacy
+        # and non-RI compositions from reaching the additive queue.
+        self._relationship_reenrichment_enabled = relationship_reenrichment_enabled
         self._gsqs_b0_ports = gsqs_b0_ports
         #: Explicit production composition of the optional proposal plane. The
         #: default gate is disabled; an enabled gate cannot be constructed
@@ -2583,9 +2616,22 @@ class ApplicationService:
                 )
                 if authorization.allowed:
                     try:
-                        return _HANDLERS[command.capability](
+                        result = _HANDLERS[command.capability](
                             self, unit_of_work, authorization, command
                         )
+                        if (
+                            self._relationship_reenrichment_enabled
+                            and command.capability.value in TRIGGERS_BY_MUTATION_CAPABILITY
+                        ):
+                            register_mutation_reenrichment(
+                                cast("ReenrichmentWorkRepository", unit_of_work.reenrichment),
+                                principal_id=authorization.principal.principal_id,
+                                capability=command.capability.value,
+                                cause_record_id=_reenrichment_cause(result, authorization.audit_id),
+                                policy_version=POLICY_VERSION,
+                                at=authorization.at,
+                            )
+                        return result
                     except _CommitRejectedConflictError as conflict:
                         # The handler raises this marker only after verifying a
                         # REJECTED receipt whose before/after/current versions

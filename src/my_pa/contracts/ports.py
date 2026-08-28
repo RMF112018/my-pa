@@ -3693,6 +3693,11 @@ class UnitOfWork(ABC):
         raise NotImplementedError
 
     @property
+    def reenrichment(self) -> object:
+        """Optional durable RI invalidation repository in this transaction."""
+        raise NotImplementedError
+
+    @property
     @abstractmethod
     def context_runs(self) -> ContextRunRepository:
         """Insert-only context-run metadata, inside this transaction.

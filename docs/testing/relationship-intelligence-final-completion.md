@@ -1,11 +1,11 @@
 # Relationship Intelligence final-completion traceability
 
-**Campaign:** `MYPA-RI-FINAL-COMPLETION-CAMPAIGN-20260828-001`  
-**Delivery model:** `STANDARD_TWO_GATE_DELIVERY` (non-AEOS)  
+**Campaign:** `MYPA-RI-FINAL-COMPLETION-CAMPAIGN-20260828-001`
+**Delivery model:** `STANDARD_TWO_GATE_DELIVERY` (non-AEOS)
 **Governing requirements:** Relationship Intelligence v0.2. The repository's
-v0.3 document remains a demoted, non-authoritative proposal.  
+v0.3 document remains a demoted, non-authoritative proposal.
 **Audited base:** commit `4d2dec1e32ebcef9f11066b258b9ff4b1e48525d`,
-tree `734fab4352279f949cb5b13a153b20850f0df3fa`  
+tree `734fab4352279f949cb5b13a153b20850f0df3fa`
 **Repository:** `RMF112018/my-pa`
 
 ## Objective and boundary
@@ -46,7 +46,7 @@ The IDs are identifiers and traceability anchors, not runtime configuration.
 |---|---|---|
 | `RI-FC-WP-01` Identity Correction | Governed split preview/apply is the exact inverse of one completed merge; stale state, digest, source-operation, Principal, and one-settlement guards fail closed. | IMPLEMENTED |
 | `RI-FC-WP-02` Identity History | One authoritative keyset-paginated history joins direct mutations, completed identity operations/effects, and legacy merge lineage without scraping proposal/review records. | IMPLEMENTED |
-| `RI-FC-WP-03` Re-enrichment | Nine exact triggers create immutable bindings; bounded lease/retry states and stale-before-apply checks prevent obsolete derived work from applying. | IMPLEMENTED |
+| `RI-FC-WP-03` Re-enrichment | All nine exact triggers are registered from existing authorized mutation paths in the same unit of work. Immutable bounded bindings, Principal/work locks, database-time lease checks, post-apply currency validation, and atomic settlement prevent obsolete or duplicate derived mutation. | IMPLEMENTED |
 | `RI-FC-WP-04` Proposal/Review | Generated discriminated payload schemas cover all proposal families; accepted merge/split proposals produce operator-preview handoffs and never execute identity correction. | IMPLEMENTED |
 | `RI-FC-WP-05` Security/Principal | `version_content(version_id)` remains an internal method behind the already Principal-scoped capture workflow; no RI capability can invoke it directly. | `NOT_APPLICABLE_TO_RI_FINAL_COMPLETION` |
 | `RI-FC-WP-06` MCP/Profiles/Documentation | The added public capability names, neutral commands, schemas, dispatch, purpose/profile bindings, runbooks, and current-state counts are synchronized. | IMPLEMENTED |
@@ -164,7 +164,7 @@ independent review. The implementation uses these evidence classes:
 | Whitespace | `git diff --check` passed |
 | Alembic graph | one head: `8e1c4a7b2d90` |
 | Alembic offline SQL | passed with a synthetic non-connecting PostgreSQL URL; the preceding no-URL attempt failed closed as required |
-| Isolated PostgreSQL affected set | `27` tests collected; not executed because `MY_PA_DATABASE_URL` is unset |
+| Isolated PostgreSQL affected set | `28` tests collected; not executed because `MY_PA_DATABASE_URL` is unset |
 
 The full database tier is not required by the campaign exception rule and was
 not run: `FULL_DB_TIER_NOT_RUN_TARGETED_EVIDENCE_SUFFICIENT`. No production,
@@ -198,12 +198,19 @@ in scope:
    restricted-harness `PermissionError` results for synthetic local sockets;
    the permitted rerun passed all 4,706 tests. No repository correction was
    indicated or made for those harness-only failures.
-9. Re-enrichment application now rejects a missing or expired lease before
-   currency evaluation or the mutation callback, so an expired worker cannot
-   apply after another worker becomes eligible to claim the same work.
+9. Re-enrichment is composed into the production unit of work and gateway. A
+   closed capability-to-trigger map reaches all nine v0.2 triggers from existing
+   authorized mutations without reimplementing those mutations.
 10. Claim recovery atomically marks expired final-attempt work `FAILED` before
     selecting reclaimable rows, so a dead final worker cannot leave a permanent
     `RUNNING` orphan.
+11. Re-enrichment application now holds the Principal advisory lock and work-row
+    lock through currency evaluation, mutation, post-mutation currency
+    validation, and terminal settlement. PostgreSQL wall-clock lease predicates
+    and a savepoint roll back a derived mutation if the lease expires or a
+    binding becomes stale; the binding digest is the callback's idempotency key.
+12. Input and producer version collections are capped at 100 unique keys in the
+    domain and by JSONB type/cardinality checks in the additive migration/schema.
 
 ## Load-bearing and mutation controls
 

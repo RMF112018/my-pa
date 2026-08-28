@@ -147,6 +147,10 @@ from my_pa.infrastructure.persistence.entity_proposal_review import (
     record_entity_proposal_review_decision,
     supersede_entity_proposal,
 )
+from my_pa.infrastructure.persistence.entity_reenrichment import (
+    ReenrichmentTables,
+    SqlReenrichmentWorkRepository,
+)
 from my_pa.infrastructure.persistence.extraction import coverage_for
 from my_pa.infrastructure.persistence.goodnotes import (
     decide_goodnotes_review,
@@ -198,6 +202,9 @@ from my_pa.infrastructure.persistence.tables import (
     JobState,
     capture_assertions,
     captures,
+    entity_reenrichment_subjects,
+    entity_reenrichment_version_watermarks,
+    entity_reenrichment_work,
 )
 from my_pa.infrastructure.persistence.task_management import SqlTaskManagementRepository
 from my_pa.infrastructure.persistence.worker_health import worker_plane_health
@@ -1099,6 +1106,18 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def identity_history(self) -> SqlIdentityHistoryQuery:
         """Authoritative identity history on this transaction's connection."""
         return SqlIdentityHistoryQuery(self._open)
+
+    @property
+    def reenrichment(self) -> SqlReenrichmentWorkRepository:
+        """Durable RI invalidation work on this transaction's connection."""
+        return SqlReenrichmentWorkRepository(
+            self._open,
+            ReenrichmentTables(
+                entity_reenrichment_work,
+                entity_reenrichment_subjects,
+                entity_reenrichment_version_watermarks,
+            ),
+        )
 
     @property
     def relationship_memory(self) -> RelationshipMemoryRepository:

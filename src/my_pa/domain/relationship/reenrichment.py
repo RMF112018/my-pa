@@ -23,6 +23,7 @@ from my_pa.domain.common.time import ensure_utc
 __all__ = [
     "DEFAULT_MAX_REENRICHMENT_ATTEMPTS",
     "MAX_REENRICHMENT_SUBJECTS",
+    "MAX_REENRICHMENT_VERSIONS",
     "BindingCurrency",
     "BindingVersion",
     "CurrentReenrichmentBindings",
@@ -38,6 +39,7 @@ __all__ = [
 ]
 
 MAX_REENRICHMENT_SUBJECTS: Final = 100
+MAX_REENRICHMENT_VERSIONS: Final = 100
 DEFAULT_MAX_REENRICHMENT_ATTEMPTS: Final = 3
 _MAX_VERSION_CHARACTERS: Final = 200
 _OPAQUE_CAUSE: Final = re.compile(r"\A[A-Za-z][A-Za-z0-9]{1,15}_[A-Za-z0-9]{8,64}\Z")
@@ -141,15 +143,18 @@ def _unique_subjects(
     ordered = tuple(
         sorted(values, key=lambda item: (item.kind.value, item.subject_id, item.version))
     )
-    if len(set(ordered)) != len(ordered):
-        raise ValueError("a re-enrichment binding names each item once")
+    identities = {(item.kind, item.subject_id) for item in ordered}
+    if len(identities) != len(ordered):
+        raise ValueError("a re-enrichment binding names each subject identity once")
     return ordered
 
 
 def _unique_versions(values: Sequence[BindingVersion]) -> tuple[BindingVersion, ...]:
+    if len(values) > MAX_REENRICHMENT_VERSIONS:
+        raise ValueError("a re-enrichment binding has bounded version sets")
     ordered = tuple(sorted(values, key=lambda item: (item.key, item.version)))
-    if len(set(ordered)) != len(ordered):
-        raise ValueError("a re-enrichment binding names each item once")
+    if len({item.key for item in ordered}) != len(ordered):
+        raise ValueError("a re-enrichment binding names each version key once")
     return ordered
 
 

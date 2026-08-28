@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 
 import pytest
 
 from my_pa.application.entity_reenrichment import (
+    MAX_REENRICHMENT_VERSIONS,
+    TRIGGERS_BY_MUTATION_CAPABILITY,
+    BindingCurrency,
     BindingVersion,
+    CurrentReenrichmentBindings,
     EntityReenrichmentService,
     ReenrichmentBinding,
     ReenrichmentLimitation,
@@ -20,6 +24,7 @@ from my_pa.application.entity_reenrichment import (
     ReenrichmentWork,
     StaleBindingReason,
     assess_currency,
+    register_mutation_reenrichment,
 )
 
 PRINCIPAL = "prn_aaaa0001aaaa0001aaaa0001"
@@ -73,6 +78,7 @@ class _Repository:
         self.registered: dict[str, ReenrichmentWork] = {}
         self.stale: list[tuple[str, tuple[StaleBindingReason, ...]]] = []
         self.completed: list[str] = []
+        self.live_claim = True
 
     def register(self, binding: ReenrichmentBinding, *, at: datetime) -> ReenrichmentWork:
         prior = self.registered.get(binding.binding_sha256)
@@ -90,23 +96,27 @@ class _Repository:
         self.registered[binding.binding_sha256] = work
         return work
 
-    def mark_stale(
+    def apply_claimed(
         self,
         principal_id: str,
         work_id: str,
         *,
         owner: str,
-        reasons: Sequence[StaleBindingReason],
+        current: CurrentReenrichmentBindings,
+        apply: Callable[[ReenrichmentBinding, str], None],
         at: datetime,
-    ) -> bool:
+    ) -> BindingCurrency:
         assert principal_id == PRINCIPAL and owner == "worker_01" and at == WHEN
-        self.stale.append((work_id, tuple(reasons)))
-        return True
-
-    def complete(self, principal_id: str, work_id: str, *, owner: str, at: datetime) -> bool:
-        assert principal_id == PRINCIPAL and owner == "worker_01" and at == WHEN
+        work = _claimed(_binding())
+        if not self.live_claim:
+            raise ValueError("re-enrichment application requires this worker's live claim")
+        currency = assess_currency(work.binding, current)
+        if not currency.is_current:
+            self.stale.append((work_id, currency.reasons))
+            return currency
+        apply(work.binding, work.binding.binding_sha256)
         self.completed.append(work_id)
-        return True
+        return currency
 
 
 def _claimed(binding: ReenrichmentBinding) -> ReenrichmentWork:
@@ -146,6 +156,40 @@ def test_binding_digest_is_order_independent_and_version_sensitive() -> None:
     changed = replace(binding, input_versions=(BindingVersion("resolution_rules", "rules-v3"),))
     assert reordered.binding_sha256 == binding.binding_sha256
     assert changed.binding_sha256 != binding.binding_sha256
+
+
+@pytest.mark.parametrize(
+    "subjects",
+    [
+        (
+            ReenrichmentSubject(ReenrichmentSubjectKind.ENTITY, ENTITY, "7"),
+            ReenrichmentSubject(ReenrichmentSubjectKind.ENTITY, ENTITY, "8"),
+        ),
+        (
+            ReenrichmentSubject(ReenrichmentSubjectKind.ENTITY, ENTITY, "7"),
+            ReenrichmentSubject(ReenrichmentSubjectKind.ENTITY, ENTITY, "7"),
+        ),
+    ],
+)
+def test_duplicate_subject_identity_is_rejected(
+    subjects: tuple[ReenrichmentSubject, ReenrichmentSubject],
+) -> None:
+    with pytest.raises(ValueError, match="subject identity once"):
+        _binding(subjects=subjects)
+
+
+@pytest.mark.parametrize(
+    "versions",
+    [
+        (BindingVersion("resolver", "v1"), BindingVersion("resolver", "v2")),
+        (BindingVersion("resolver", "v1"), BindingVersion("resolver", "v1")),
+    ],
+)
+def test_duplicate_version_key_is_rejected(
+    versions: tuple[BindingVersion, BindingVersion],
+) -> None:
+    with pytest.raises(ValueError, match="version key once"):
+        _binding(input_versions=versions)
 
 
 def test_an_identical_registration_dedupes_and_a_changed_version_does_not() -> None:
@@ -195,7 +239,7 @@ def test_stale_work_is_recorded_and_the_applier_is_never_called() -> None:
         _claimed(binding),
         owner="worker_01",
         current=current,
-        apply=applied.append,
+        apply=lambda held, _key: applied.append(held),
         at=WHEN,
     )
     assert currency.reasons == (StaleBindingReason.POLICY_VERSION_CHANGED,)
@@ -214,7 +258,7 @@ def test_current_work_applies_once_then_completes() -> None:
         _claimed(binding),
         owner="worker_01",
         current=_Current(binding),
-        apply=lambda held: applied.append(held.binding_sha256),
+        apply=lambda held, key: applied.append(key),
         at=WHEN,
     )
     assert currency.is_current
@@ -225,6 +269,7 @@ def test_current_work_applies_once_then_completes() -> None:
 def test_expired_claim_never_invokes_the_applier() -> None:
     binding = _binding()
     repository = _Repository()
+    repository.live_claim = False
     applied: list[ReenrichmentBinding] = []
     expired = replace(_claimed(binding), lease_expires_at=WHEN)
 
@@ -233,7 +278,7 @@ def test_expired_claim_never_invokes_the_applier() -> None:
             expired,
             owner="worker_01",
             current=_Current(binding),
-            apply=applied.append,
+            apply=lambda held, _key: applied.append(held),
             at=WHEN,
         )
 
@@ -265,3 +310,45 @@ def test_work_discloses_only_closed_safe_limitations() -> None:
 
 def test_the_old_merge_mutation_authority_no_longer_exists() -> None:
     assert not hasattr(EntityReenrichmentService, "after_merge")
+
+
+def test_every_governing_trigger_has_a_reachable_mutation_registration() -> None:
+    reached = {
+        trigger for triggers in TRIGGERS_BY_MUTATION_CAPABILITY.values() for trigger in triggers
+    }
+    assert reached == set(ReenrichmentTrigger)
+    assert all(capability.count(".") >= 1 for capability in TRIGGERS_BY_MUTATION_CAPABILITY)
+
+
+def test_every_mapped_mutation_can_register_its_trigger_work() -> None:
+    repository = _Repository()
+    produced: set[ReenrichmentTrigger] = set()
+    for ordinal, capability in enumerate(TRIGGERS_BY_MUTATION_CAPABILITY, start=1):
+        work = register_mutation_reenrichment(
+            repository,
+            principal_id=PRINCIPAL,
+            capability=capability,
+            cause_record_id=f"audit_{ordinal:016x}",
+            policy_version="ri-v0.2",
+            at=WHEN,
+        )
+        produced.update(item.binding.trigger for item in work)
+    assert produced == set(ReenrichmentTrigger)
+
+
+@pytest.mark.parametrize("field", ["input_versions", "producer_versions"])
+def test_version_bindings_are_bounded_and_keys_are_unique(field: str) -> None:
+    too_many = tuple(
+        BindingVersion(f"version_{index}", "v1") for index in range(MAX_REENRICHMENT_VERSIONS + 1)
+    )
+    with pytest.raises(ValueError, match="bounded version sets"):
+        _binding(**{field: too_many})
+    with pytest.raises(ValueError, match="version key once"):
+        _binding(
+            **{
+                field: (
+                    BindingVersion("same", "v1"),
+                    BindingVersion("same", "v2"),
+                )
+            }
+        )

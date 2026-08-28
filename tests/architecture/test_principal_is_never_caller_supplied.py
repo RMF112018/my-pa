@@ -387,13 +387,13 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # Re-enrichment has no transport command. Bindings are created by the
     # server-owned trigger path from the authenticated partition; these reads
     # carry that partition through digesting, currency checks, and completion.
-    "application/entity_reenrichment.py": (("binding", "principal_id"),) * 2,
+    "application/entity_reenrichment.py": (("binding", "principal_id"),),
     "domain/relationship/reenrichment.py": (("binding", "principal_id"),) * 4,
     # The SQL adapter receives the same server-composed binding. Candidate and
     # row values come from Principal-scoped work-table queries and are used to
     # preserve, never choose, the partition.
     "infrastructure/persistence/entity_reenrichment.py": (
-        (("binding", "principal_id"),) * 5
+        (("binding", "principal_id"),) * 6
         + (("candidate", "principal_id"),) * 2
         + (("row", "principal_id"),)
     ),

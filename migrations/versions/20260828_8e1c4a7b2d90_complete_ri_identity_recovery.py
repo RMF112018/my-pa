@@ -305,8 +305,12 @@ def upgrade() -> None:
              'accepted_quick_capture_correction','contradiction_resolution','policy_change')),
           cause_record_id text NOT NULL,
           binding_sha256 text NOT NULL CHECK (binding_sha256 ~ '^[0-9a-f]{{64}}$'),
-          input_versions jsonb NOT NULL,
-          producer_versions jsonb NOT NULL,
+          input_versions jsonb NOT NULL CHECK
+            (jsonb_typeof(input_versions) = 'array'
+             AND jsonb_array_length(input_versions) BETWEEN 0 AND 100),
+          producer_versions jsonb NOT NULL CHECK
+            (jsonb_typeof(producer_versions) = 'array'
+             AND jsonb_array_length(producer_versions) BETWEEN 0 AND 100),
           policy_version text NOT NULL,
           state text NOT NULL CHECK (state IN ('queued','running','succeeded','stale','failed')),
           attempt_count integer NOT NULL DEFAULT 0,

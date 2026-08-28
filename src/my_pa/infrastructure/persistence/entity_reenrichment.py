@@ -10,18 +10,20 @@ from __future__ import annotations
 
 import re
 import secrets
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Final, Protocol
+from typing import Final
 
-from sqlalchemy import Connection, Table, and_, or_, select
+from sqlalchemy import Connection, Table, and_, func, or_, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.relationship.reenrichment import (
+    BindingCurrency,
     BindingVersion,
+    CurrentReenrichmentBindings,
     ReenrichmentBinding,
     ReenrichmentState,
     ReenrichmentSubject,
@@ -29,6 +31,7 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentTrigger,
     ReenrichmentWork,
     StaleBindingReason,
+    assess_currency,
 )
 from my_pa.infrastructure.persistence import conflicting_row
 
@@ -47,10 +50,6 @@ _RUNNING = "running"
 _SUCCEEDED = "succeeded"
 _STALE = "stale"
 _FAILED = "failed"
-
-
-class _Value(Protocol):
-    value: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -87,6 +86,7 @@ class SqlReenrichmentWorkRepository:
 
     def register(self, binding: ReenrichmentBinding, *, at: datetime) -> ReenrichmentWork:
         moment = ensure_utc(at)
+        self._lock_principal(binding.principal_id)
         table = self._tables.work
         work_id = f"erwk_{secrets.token_hex(12)}"
         inserted = self._connection.execute(
@@ -138,6 +138,13 @@ class SqlReenrichmentWorkRepository:
         ).scalar_one_or_none()
         prior_id = str(conflicting_row(prior, "knowledge.entity_reenrichment_work"))
         return self._required(binding.principal_id, prior_id)
+
+    def _lock_principal(self, principal_id: str) -> None:
+        """Serialize invalidation registration and application per Principal."""
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        self._connection.execute(
+            select(func.pg_advisory_xact_lock(func.hashtextextended(principal_id, 0)))
+        ).scalar_one()
 
     def get(self, principal_id: str, work_id: str) -> ReenrichmentWork | None:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
@@ -223,13 +230,95 @@ class SqlReenrichmentWorkRepository:
     def complete(self, principal_id: str, work_id: str, *, owner: str, at: datetime) -> bool:
         return self._terminal(principal_id, work_id, owner=owner, state=_SUCCEEDED, at=at)
 
+    def apply_claimed(
+        self,
+        principal_id: str,
+        work_id: str,
+        *,
+        owner: str,
+        current: CurrentReenrichmentBindings,
+        apply: Callable[[ReenrichmentBinding, str], None],
+        at: datetime,
+    ) -> BindingCurrency:
+        """Validate, mutate, and settle under one transaction and lock set.
+
+        The row lock prevents reclaim while the callback runs. PostgreSQL's
+        wall clock, rather than the caller's pre-callback timestamp, gates both
+        entry and completion. The Principal advisory lock is shared with every
+        registration, closing the current-binding race. A savepoint lets a
+        post-callback currency failure discard the derived mutation before the
+        work is durably marked stale.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        ensure_utc(at)
+        owner = _owner(owner)
+        self._lock_principal(principal_id)
+        table = self._tables.work
+        row = self._connection.execute(
+            select(table)
+            .where(
+                table.c.principal_id == principal_id,
+                table.c.work_id == work_id,
+                table.c.state == _RUNNING,
+                table.c.lease_owner == owner,
+                table.c.lease_expires_at > func.clock_timestamp(),
+            )
+            .with_for_update(of=table)
+        ).one_or_none()
+        if row is None:
+            raise ValueError("re-enrichment application requires this worker's live claim")
+        work = self._hydrate(row)
+        currency = assess_currency(work.binding, current)
+        if not currency.is_current:
+            if not self._terminal_now(
+                principal_id,
+                work_id,
+                owner=owner,
+                state=_STALE,
+                stale_reasons=[reason.value for reason in currency.reasons],
+            ):
+                raise RuntimeError("the re-enrichment lease was lost before stale completion")
+            return currency
+
+        post_apply_currency = currency
+        lost_lease = False
+        with self._connection.begin_nested() as application:
+            apply(work.binding, work.binding.binding_sha256)
+            post_apply_currency = assess_currency(work.binding, current)
+            if not post_apply_currency.is_current:
+                # The savepoint contains every derived write made by the
+                # callback. Rolling it back before settling stale means a
+                # version change can never leave an untracked partial effect.
+                application.rollback()
+            elif not self._terminal_now(principal_id, work_id, owner=owner, state=_SUCCEEDED):
+                # The callback may have crossed the lease deadline. Settlement
+                # belongs inside the same savepoint as the mutation: if the
+                # database clock says the fence is gone, discard the mutation
+                # before reporting the lost claim, even when a caller catches
+                # the resulting exception and commits the outer transaction.
+                application.rollback()
+                lost_lease = True
+        if lost_lease:
+            raise RuntimeError("the re-enrichment lease expired before atomic completion")
+        if not post_apply_currency.is_current:
+            if not self._terminal_now(
+                principal_id,
+                work_id,
+                owner=owner,
+                state=_STALE,
+                stale_reasons=[reason.value for reason in post_apply_currency.reasons],
+            ):
+                raise RuntimeError("the re-enrichment lease was lost before stale completion")
+            return post_apply_currency
+        return post_apply_currency
+
     def mark_stale(
         self,
         principal_id: str,
         work_id: str,
         *,
         owner: str,
-        reasons: Sequence[_Value],
+        reasons: Sequence[StaleBindingReason],
         at: datetime,
     ) -> bool:
         values = sorted({reason.value for reason in reasons})
@@ -273,6 +362,36 @@ class SqlReenrichmentWorkRepository:
                 stale_reasons=stale_reasons,
                 completed_at=moment,
                 updated_at=moment,
+            )
+        )
+        return result.rowcount == 1
+
+    def _terminal_now(
+        self,
+        principal_id: str,
+        work_id: str,
+        *,
+        owner: str,
+        state: str,
+        stale_reasons: list[str] | None = None,
+    ) -> bool:
+        table = self._tables.work
+        result = self._connection.execute(
+            table.update()
+            .where(
+                table.c.principal_id == principal_id,
+                table.c.work_id == work_id,
+                table.c.state == _RUNNING,
+                table.c.lease_owner == owner,
+                table.c.lease_expires_at > func.clock_timestamp(),
+            )
+            .values(
+                state=state,
+                lease_owner=None,
+                lease_expires_at=None,
+                stale_reasons=stale_reasons,
+                completed_at=func.clock_timestamp(),
+                updated_at=func.clock_timestamp(),
             )
         )
         return result.rowcount == 1

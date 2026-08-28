@@ -661,6 +661,10 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
             relationship_identity_correction_enabled=(
                 settings.relationship_identity_correction_enabled
             ),
+            relationship_reenrichment_enabled=(
+                settings.relationship_intelligence_enabled
+                and settings.relationship_intelligence_writes_enabled
+            ),
             producer_origins=producer_origins,
             gsqs_b0_ports=WorkflowPorts(poster=post_chat_completion),
         ),

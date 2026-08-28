@@ -563,7 +563,7 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("self._tables.subjects", "principal_id"),
         ("self._tables.work", "principal_id"),
     )
-    + (("table", "principal_id"),) * 7,
+    + (("table", "principal_id"),) * 9,
     # `WP-RI-A-02`'s evidence check, and the one predicate on this plane that
     # cannot be reached through the guard. A governed entity write may cite a
     # capture span, and `capture_spans` carries no principal partition --

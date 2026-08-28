@@ -9199,6 +9199,16 @@ entity_reenrichment_work = Table(
     CheckConstraint("work_id ~ '^erwk_[0-9a-f]{24}$'", name="a_reenrichment_work_id_is_opaque"),
     CheckConstraint("binding_sha256 ~ '^[0-9a-f]{64}$'", name="a_reenrichment_binding_is_sha256"),
     CheckConstraint(
+        "jsonb_typeof(input_versions) = 'array' "
+        "AND jsonb_array_length(input_versions) BETWEEN 0 AND 100",
+        name="reenrichment_input_versions_are_bounded",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(producer_versions) = 'array' "
+        "AND jsonb_array_length(producer_versions) BETWEEN 0 AND 100",
+        name="reenrichment_producer_versions_are_bounded",
+    ),
+    CheckConstraint(
         "trigger IN ('corrected_identity','new_alias','project_mapping_change',"
         "'role_or_organization_change','source_version_change',"
         "'model_or_rule_version_change',"

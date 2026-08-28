@@ -5430,9 +5430,9 @@ def _merge_choices(value: object) -> tuple[Mapping[str, str], ...]:
     return value
 
 
-# --- WP-RI-B: the two producer paths and the governed merge -------------------
+# --- WP-RI-B: the two producer paths and governed identity correction --------
 #
-# Four commands, and what is *absent* from each is the contract. Operator §11,
+# Six commands, and what is *absent* from each is the contract. Operator §11,
 # §12, §19, §21 and §26 assign the Principal, the proposal method and model
 # identity, the review requirement, the review case, every server timestamp, the
 # dedupe digest, the actor authority and the idempotency key to the server, and

@@ -642,7 +642,7 @@ TASK_MANAGEMENT_EXEMPTION = frozenset(
 
 #: The Relationship Memory exemption (WP-RM-01), and it is deliberately **one
 #: name**, the way `MANAGED_DOCUMENT_EXEMPTION` is.
-#: `relationship_memory.create` is the only one of the eight the substring proxy
+#: `relationship_memory.create` is the only one of the nine the substring proxy
 #: refuses, and it is refused for the reason `capture.create` and
 #: `documents.create` are: a memory is a *product-owned* record under `ADR-003`
 #: — a note the user wrote about a person — and writing one mutates no source.
@@ -654,8 +654,8 @@ TASK_MANAGEMENT_EXEMPTION = frozenset(
 RELATIONSHIP_MEMORY_EXEMPTION = frozenset({Capability.RELATIONSHIP_MEMORY_CREATE})
 
 #: The fifth exemption (`WP-RI-A-02`), and it is a pair rather than a family.
-#: `entities.create` and `entities.update` are the only two of the plane's ten
-#: writes the substring proxy refuses, and both are refused for the reason
+#: `entities.create` and `entities.update` are the only two of WP-RI-A-02's ten
+#: original writes the substring proxy refuses, and both are refused for the reason
 #: `capture.create` and `documents.create` are: what they write is a
 #: *product-owned* record — this Principal's own account of who a person is —
 #: which `ADR-003` makes a third authority class that is neither a source-system
@@ -665,8 +665,9 @@ RELATIONSHIP_MEMORY_EXEMPTION = frozenset({Capability.RELATIONSHIP_MEMORY_CREATE
 #: the property the proxy stands for by driving every capability against a
 #: recording provider.
 #:
-#: The other eight writes are *not* exempt and still pass the name check, which
-#: is the check working rather than an omission: `archive`, `restore`, `bind`,
+#: The other eight writes in that original set are *not* exempt and still pass
+#: the name check, which is the check working rather than an omission: `archive`,
+#: `restore`, `bind`,
 #: `retire` and `supersede` are all names the proxy admits, and the plane was
 #: named that way partly because those verbs say what the write does without
 #: claiming a mutation of anything outside it.

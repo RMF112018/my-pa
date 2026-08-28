@@ -1478,7 +1478,7 @@ def _correction_patch(patch: Any) -> CorrectionPatch:  # noqa: ANN401 - a decode
         raise InvalidRequestError(SafeDetail.CORRECTED_VALUE) from None
 
 
-# --- WP-RI-B: the two producer paths and the governed merge -------------------
+# --- WP-RI-B: the two producer paths and governed identity correction --------
 #
 # Shape conversion and nothing else, exactly as every builder above is. JSON has
 # no enum and no tuple; a value outside a closed vocabulary is left as it arrived

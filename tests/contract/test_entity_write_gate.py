@@ -86,7 +86,7 @@ ENTITY_READS: Final[frozenset[Capability]] = _ENTITY_CAPABILITIES - ENTITY_WRITE
 def _service(*, plane: bool, writes: bool, identity: bool = True) -> ApplicationService:
     """One build per state, through the shared builder so only the flags differ.
 
-    `identity` defaults to *on* so that the two governed-merge names are inside
+    `identity` defaults to *on* so that the four governed identity-correction names are inside
     every assertion below rather than withheld by a third gate this file is not
     about. `test_the_identity_correction_gate_is_a_third_narrowing` is where that
     gate is the subject.
@@ -174,13 +174,13 @@ def test_the_identity_correction_gate_is_a_third_narrowing_of_the_same_plane() -
     """`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, on its own axis.
 
     The plane switch withholds the whole `entities.` family; the write switch
-    withholds its write half; this one withholds the governed merge out of that
-    half. Asserted
+    withholds its write half; this one withholds governed merge and split out of
+    that half. Asserted
     as a strict subset relation rather than as three memberships, because the
     failure this prevents is a gate that turned into the gate beside it -- a
     build with writes on and identity correction off must serve every other
-    write, and a build with identity correction off must serve no merge whatever
-    the other two switches say.
+    write, and a build with identity correction off must serve no merge or split
+    capability whatever the other two switches say.
     """
     from my_pa.application.service import _IDENTITY_CORRECTION_CAPABILITIES
 

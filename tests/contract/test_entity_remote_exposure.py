@@ -67,7 +67,7 @@ ENTITY_READS: Final[frozenset[str]] = frozenset(
 ENTITY_WRITES: Final[frozenset[str]] = ENTITY_CAPABILITIES - ENTITY_READS
 
 
-#: The identity-correction pair, which is *also* operator-only and therefore joins
+#: The merge/split preview/apply identity-correction set is *also* operator-only and joins
 #: only the exact ``remote.operator`` profile. Every ordinary remote profile still
 #: subtracts them: writes-enabled alone is deliberately insufficient.
 OPERATOR_ONLY_WRITES: Final[frozenset[str]] = frozenset(
@@ -80,7 +80,7 @@ OPERATOR_ONLY_WRITES: Final[frozenset[str]] = frozenset(
 )
 
 #: The write half a remote client can ever reach, which is the write half less
-#: the two above.
+#: the four above.
 REMOTE_REACHABLE_WRITES: Final[frozenset[str]] = ENTITY_WRITES - OPERATOR_ONLY_WRITES
 
 
@@ -207,18 +207,18 @@ def test_a_build_with_the_plane_withholds_every_write_until_writes_are_enabled()
 
     A remote client with `remote_writes_enabled` off can read who a person is
     and cannot decide it. The gate is the purpose mapping rather than a name
-    list, so this fails the moment one of the ten is mapped to `entity_read`.
+    list, so this fails the moment one of the twenty-three is mapped to `entity_read`.
     """
     withheld = remote_tool_names(_service(enabled=True), writes_enabled=False)
     assert withheld & ENTITY_WRITES == frozenset()
     granted = remote_tool_names(_service(enabled=True), writes_enabled=True)
     assert granted >= REMOTE_REACHABLE_WRITES
-    # And the two operator-only writes are still absent with writes enabled but
+    # And the four operator-only writes are still absent with writes enabled but
     # no server-resolved operator profile, which is the second gate.
     assert not granted & OPERATOR_ONLY_WRITES
 
 
-def test_only_the_exact_remote_operator_profile_adds_the_governed_merge() -> None:
+def test_only_the_exact_remote_operator_profile_adds_governed_identity_correction() -> None:
     service = _service(enabled=True)
     writes_off = remote_tool_names(
         service,

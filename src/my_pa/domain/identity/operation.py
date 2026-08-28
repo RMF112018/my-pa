@@ -986,10 +986,10 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # grant: a client granted this purpose can invoke exactly one capability
         # with it, and that capability writes a request.
         Capability.ENTITIES_PROPOSALS_CREATE: frozenset({Purpose.ENTITY_PROPOSAL}),
-        # Both identity-correction capabilities take the same purpose and only
-        # that purpose. The coupling is deliberate; `purpose.py` argues it, and
-        # `_WRITE_CAPABILITIES` below records the persistence behaviour that
-        # makes the preview a write.
+        # All four merge/split preview/apply capabilities take the same purpose
+        # and only that purpose. The coupling is deliberate; `purpose.py` argues
+        # it, and `_WRITE_CAPABILITIES` below records the persistence behaviour
+        # that makes both previews writes.
         Capability.ENTITIES_MERGE_PREVIEW: frozenset({Purpose.ENTITY_IDENTITY_CORRECTION}),
         Capability.ENTITIES_MERGE: frozenset({Purpose.ENTITY_IDENTITY_CORRECTION}),
         Capability.ENTITIES_IDENTITY_HISTORY: frozenset({Purpose.ENTITY_READ}),

@@ -9013,12 +9013,12 @@ _ENTITY_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
-        # Phase B's three `entities.` writes. The producer path is here because
-        # it inserts a proposal row, and the two identity-correction capabilities
-        # because the preview inserts a control row and the merge rewrites
-        # canonical ones -- so a build with the plane on and writes off serves
-        # none of the three, which is what `test_entity_write_gate` derives from
-        # the purpose map and compares against this set.
+        # Phase B added the proposal write and merge preview/apply; final identity
+        # recovery added split preview/apply. The producer inserts a proposal row,
+        # both previews insert control rows, and merge/split rewrite canonical rows
+        # -- so a build with the plane on and writes off serves none of the five,
+        # which `test_entity_write_gate` derives from the purpose map and compares
+        # against this set.
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,

@@ -698,9 +698,10 @@ def test_identity_correction_defaults_off_like_every_gate_below_it() -> None:
 def test_identity_correction_without_the_write_switch_refuses_to_start() -> None:
     """The second half of section 18's ordering, and it is checked against *writes*.
 
-    Checking the plane switch alone would admit a process serving governed merges
-    while refusing every ordinary entity write -- a build where an operator may
-    collapse two identities and may not correct a misspelled name. The write
+    Checking the plane switch alone would admit a process serving governed
+    identity correction while refusing every ordinary entity write -- a build
+    where an operator may collapse two identities and may not correct a
+    misspelled name. The write
     switch already requires the plane switch, so this one rule makes the whole
     chain transitive: identity correction is unavailable unless every lower gate
     is enabled.

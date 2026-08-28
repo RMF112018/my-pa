@@ -419,12 +419,12 @@ class Settings(StrictModel):
     #:
     #: A switch of its own rather than a reuse of the plane flag, on the argument
     #: `relationship_memory_enabled` makes beside it: the two admit different
-    #: things. The plane flag publishes ten reads over the acting Principal's own
+    #: things. The plane flag publishes eleven reads over the acting Principal's own
     #: entities. This one is a prerequisite for all twenty-three writes that decide
     #: who a person is, which external addresses resolve to them, who they report
     #: to, what a source said about them, or stage and apply Phase B governance.
-    #: The merge preview/apply pair additionally requires the identity-correction
-    #: switch; remotely it also requires the exact server-resolved
+    #: The merge and split preview/apply pairs additionally require the
+    #: identity-correction switch; remotely they also require the exact server-resolved
     #: `remote.operator` durable capability set. An operator who wants entity
     #: reads should not have to accept identity authoring to get them.
     #:
@@ -442,38 +442,38 @@ class Settings(StrictModel):
     #: plane that owns their subjects would be serving writes it cannot validate.
     #:
     #: A switch of its own rather than a reuse of the entity flag, because the
-    #: two admit different things. The entity flag publishes six *read*
-    #: capabilities over identity. This one publishes four reads and four
+    #: two admit different things. The entity flag publishes eleven *read*
+    #: capabilities over identity. This one publishes four reads and five
     #: **writes** over the most private records this product holds, and the
     #: remote MCP profile is derived from the capability set with no
     #: per-capability exclusion list — so "available" and "remotely reachable"
     #: are one decision, and an operator who wants entity reads should not have
     #: to accept memory authoring to get them.
     relationship_memory_enabled: bool = False
-    #: Process-local gate for the governed identity merge (WP-RI-06). Default
+    #: Process-local gate for governed identity merge and split (WP-RI-06). Default
     #: off, and it requires **both** switches above it: identity correction is
     #: unavailable unless every lower gate is enabled (operator §18). `_check`
     #: ends the process rather than resolving a contradiction, exactly as the
     #: write switch does.
     #:
     #: A third switch rather than a reuse of the write switch, because the two
-    #: admit different things. The write switch gates all twenty-one Entity
+    #: admit different things. The write switch gates all twenty-three Entity
     #: writes; the eighteen Phase A writes each change one record of one entity
-    #: and are reversible by their own inverse. This additionally publishes a
-    #: preview and an apply that between them collapse up to eleven identities
-    #: into one, reparent every child they own, and are undone only by a split
-    #: this phase does not implement. Remotely the pair still requires the exact
+    #: and are reversible by their own inverse. This additionally publishes
+    #: merge and split preview/apply pairs: merge collapses up to eleven identities
+    #: into one and reparents every child they own, while split restores the
+    #: recorded inverse. Remotely both pairs still require the exact
     #: server-resolved `remote.operator` durable capability set. An operator who
     #: wants entity authoring should not have to accept identity correction.
     #:
     #: **Off is fail-closed on every transport.**
     #: `ApplicationService.available_capabilities` subtracts
     #: `_IDENTITY_CORRECTION_CAPABILITIES`, which is what `capabilities.get` and
-    #: the MCP tool list read, and both handlers ask again through
+    #: the MCP tool list read, and all four handlers ask again through
     #: `_identity_correction_plane()` because the HTTP transport routes by path
-    #: segment straight into `_HANDLERS` and consults neither. Both capabilities
-    #: are operator-only as well, so the flag is the *second* of two independent
-    #: gates rather than the only one.
+    #: segment straight into `_HANDLERS` and consults neither. Every merge/split
+    #: preview/apply capability is operator-only as well, so the flag is the
+    #: *second* of two independent gates rather than the only one.
     relationship_identity_correction_enabled: bool = False
     goodnotes_self_improving_optimizer_enabled: bool = False
     goodnotes_rollout_stage: GoodNotesRolloutStage = GoodNotesRolloutStage.OBSERVE_ONLY

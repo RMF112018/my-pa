@@ -175,7 +175,7 @@ map.** Read section 0.1 above first.
 | WP-RI-03 | Exact resolution: alias table, namespace and alias normalization, effective-date filtering, entity-type and scope filtering, conflicting-identifier handling, historical resolution, same-name protection | **complete** |
 | WP-RI-04 | Contextual resolution: bounded candidate ranking, calibration, explainable evidence, collision-biased safety, false-resolution evaluation | **complete** |
 | WP-RI-05 | The capability and MCP surface: six `Capability` members, the `entity_read` purpose, the forward `ALTER`, commands, handlers, transport builders, scope policy, the composition gate, and a minimal context card | **complete** |
-| WP-RI-06 | Observation, proposal, and governed merge with lineage | **complete** |
+| WP-RI-06 | Observation, proposal, and governed merge/split with lineage | **complete** |
 | WP-RI-07 | Context card enrichment: coverage, freshness, and generation identity | **complete** |
 | WP-RI-08 | Legacy two-pass re-enrichment | **superseded** by the final-completion durable exact-nine-trigger invalidation mechanism; discovery/backfill scope remains separate and outstanding |
 | WP-RI-09 | Read-only operator inspection (`scripts/inspect_entity_plane.py`) | **complete** |

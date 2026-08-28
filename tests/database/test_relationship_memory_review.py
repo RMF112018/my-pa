@@ -2169,7 +2169,7 @@ def test_a_build_without_the_memory_plane_composed_never_reaches_a_memory_case(
 
     What the case would have carried is named rather than left implicit: a
     `subject_entity_id` and a `proposed_kind` about a person, in front of a
-    reviewer of a product whose eight `relationship_memory.` capability names
+    reviewer of a product whose nine `relationship_memory.` capability names
     `available_capabilities` withholds.
     """
     with two_principals.begin() as connection:

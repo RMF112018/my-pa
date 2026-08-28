@@ -10,7 +10,7 @@ The first version named the eight `relationship_memory.*` capabilities and
 stopped, so `entities.context` — which puts every carried memory's `statement`
 verbatim on a card served under `entity_read` — was disclosed by nothing. The
 correction added `entities.context` and `review.decide` and then asserted that
-"the enumeration of capabilities outside the eight is complete at two". It is
+"the enumeration of capabilities outside the then-eight is complete at two". It is
 three: `review.list` reads `relationship_memory_proposals` and correlates two
 subqueries over `relationship_memory_review_decisions`, so a `capture_review`
 grant learns a `subject_entity_id`, a `proposed_kind` and — after promotion — an
@@ -58,7 +58,7 @@ Ten claims, separated because they fail for different reasons:
 3. **The capability set is derived by a reachability walk and matches the
    declaration.** Exact set equality over `Capability` members, so a capability
    that starts reaching a memory row either updates the declaration or reddens.
-4. **Every capability beyond the eight carries a written reason.** The eight are
+4. **Every capability beyond the nine carries a written reason.** The nine are
    derived off the enum's own `relationship_memory.` prefix; the residue is the
    part `RM-API-AC-002` has to disclose, and each entry says what it discloses
    and under which purpose.
@@ -79,7 +79,7 @@ Ten claims, separated because they fail for different reasons:
    `test_claimed_test_counts_match_collection.py` is the precedent, and its
    lesson is taken with it: the pattern that matches
    nothing passes everything, so the parse asserts it found claims, asserts both
-   verbs appear, and asserts every capability beyond the eight carries one.
+   verbs appear, and asserts every capability beyond the nine carries one.
 8. **The port crossings that reach memory are the two planes**, which is
    anti-vacuity for claim 9 and a statement worth making on its own.
 9. **The walk's demonstrated blind spots are closed or declared.** Seven of them,
@@ -290,7 +290,7 @@ ROW: Final = "RM-API-AC-002"
 TABLE_PREFIX: Final = "relationship_memor"
 
 #: The prefix the plane's own capability values share, used to split the derived
-#: set into "the eight" and the residue that has to carry a reason. Matched
+#: set into "the nine" and the residue that has to carry a reason. Matched
 #: against `Capability` rather than against a hand-written list of the plane's
 #: members, so a further `relationship_memory.*` capability is counted as one of
 #: the plane's own rather than surfacing as an undocumented exception.
@@ -333,8 +333,8 @@ DECLARED: Final = frozenset(
         # own prefix that cannot reach `relationship_memories`.
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
         # `WP-RI-B-06`: the governed merge reads the memory plane to decide
-        # whether it may proceed, and writes nothing on it. Both are beyond the
-        # plane's own prefix and both carry a reason below.
+        # whether it may proceed; apply writes the three opaque-binding tables.
+        # Both are beyond the plane's own prefix and carry reasons below.
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
@@ -354,7 +354,7 @@ DECLARED: Final = frozenset(
 #: correction, one file further in than the row it was policing. An enumeration
 #: in a reason is written in the `N of the eight (…)` form on purpose: that form
 #: is what `_claims_in()` reads, and anything written another way is prose again.
-BEYOND_THE_EIGHT: Final = {
+BEYOND_THE_NINE: Final = {
     Capability.ENTITIES_SPLIT_PREVIEW: (
         "purpose `entity_identity_correction`. `entities.split.preview` reads three of the "
         "eight (`relationship_memories`, `relationship_memory_context_links`, "
@@ -417,15 +417,11 @@ BEYOND_THE_EIGHT: Final = {
         "`entities.merge.preview` reads three of the eight "
         "(`relationship_memories`, `relationship_memory_context_links`, "
         "`relationship_memory_proposals`) and writes "
-        "none of the eight: `IdentityCorrectionService` asks the memory port "
-        "which affected input Entities are a canonical memory subject, a proposal "
-        "subject, or the Entity target of a current canonical version's context "
-        "link, because `WP-08` owns the Relationship Memory side of an identity "
-        "change and this phase refuses rather than guesses. The privacy-safe "
-        "answer is only the subset and count of affected input Entity identifiers: "
-        "`subject_entity_ids` returns the subset, and merge analysis derives its "
-        "aggregate count. Neither returns a memory identifier, per-Entity memory "
-        "count, or statement. "
+        "none of the eight: `IdentityCorrectionService` asks the memory port for "
+        "content-free effect drafts over canonical memory subjects, proposal "
+        "subjects, and Entity context-link targets. Preview records no canonical "
+        "memory write and exposes no memory identifier, statement, classification, "
+        "evidence payload, or per-Entity memory count. "
         "Bounded by the operator gate, by "
         "`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, and by the plane "
         "composition."
@@ -544,11 +540,8 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
             }
         ),
     ),
-    # `WP-RI-B-06`. Both halves of the governed merge read the same three tables to
-    # decide whether they may proceed and write neither. The empty write set is
-    # the Phase B boundary: a merge naming a memory subject, proposal subject or
-    # current canonical Entity context target is refused, because `WP-08` owns
-    # the redistribution and this phase will not guess it.
+    # Governed merge preview reads the three opaque-binding tables without writing;
+    # merge apply reads and writes those same three tables, exactly as declared below.
     Capability.ENTITIES_MERGE_PREVIEW: (
         frozenset(
             {
@@ -1639,30 +1632,30 @@ def test_every_capability_that_reaches_a_memory_row_is_declared() -> None:
         f"{sorted(capability.value for capability in derived ^ DECLARED)} reaches a "
         "relationship-memory table without being declared, or is declared and no "
         "longer reaches one. If the code moved, update `DECLARED`, "
-        "`BEYOND_THE_EIGHT`, `DECLARED_TABLE_REACH` and `RM-API-AC-002` together — "
+        "`BEYOND_THE_NINE`, `DECLARED_TABLE_REACH` and `RM-API-AC-002` together — "
         "the acceptance row cites this test by name. If the code did not move, this "
         "is not a finding about the code; it is this walk failing, and the repair is "
         "in the walk"
     )
 
 
-def test_every_capability_beyond_the_eight_says_what_it_discloses() -> None:
+def test_every_capability_beyond_the_nine_says_what_it_discloses() -> None:
     """The residue is the disclosure, so the residue is what carries a reason.
 
-    The eight are derived off the enum's own prefix rather than subtracted from
-    a list here, so a ninth `relationship_memory.*` capability joins the plane
-    without landing in `BEYOND_THE_EIGHT` and being described as an exception.
+    The nine are derived off the enum's own prefix rather than subtracted from
+    a list here, so a tenth `relationship_memory.*` capability joins the plane
+    without landing in `BEYOND_THE_NINE` and being described as an exception.
     """
-    eight = frozenset(
+    nine = frozenset(
         capability for capability in Capability if capability.value.startswith(CAPABILITY_PREFIX)
     )
-    residue = reaching_capabilities() - eight
-    assert residue == frozenset(BEYOND_THE_EIGHT), (
-        f"{sorted(capability.value for capability in residue ^ frozenset(BEYOND_THE_EIGHT))} "
-        "reaches a memory row from outside the eight with no written reason, or "
+    residue = reaching_capabilities() - nine
+    assert residue == frozenset(BEYOND_THE_NINE), (
+        f"{sorted(capability.value for capability in residue ^ frozenset(BEYOND_THE_NINE))} "
+        "reaches a memory row from outside the nine with no written reason, or "
         "carries a reason and no longer reaches one"
     )
-    for capability, reason in BEYOND_THE_EIGHT.items():
+    for capability, reason in BEYOND_THE_NINE.items():
         purposes = permitted_purposes(capability)
         assert any(f"`{purpose.value}`" in reason for purpose in purposes), (
             f"{capability.value}'s reason names no purpose it actually holds "
@@ -2607,7 +2600,7 @@ def _acceptance_row() -> tuple[str, int]:
 def _documents() -> list[tuple[str, str, str]]:
     """`(label, text, default subject)` for everything parsed for a table set.
 
-    Two sources, because `BEYOND_THE_EIGHT`'s reason strings were the second
+    Two sources, because `BEYOND_THE_NINE`'s reason strings were the second
     place this repository restated a derived enumeration in unchecked prose — and
     the `review.decide` reason restated the exact false quantifier that blocked
     the correction the row was making. A guard that polices a document and not
@@ -2628,8 +2621,8 @@ def _documents() -> list[tuple[str, str, str]]:
     return [
         (f"{ACCEPTANCE.name}:{line}+{IDENTITY_ACCESS_DELTA.name}", row, ""),
         *(
-            (f"BEYOND_THE_EIGHT[{capability.value}]", reason, capability.value)
-            for capability, reason in BEYOND_THE_EIGHT.items()
+            (f"BEYOND_THE_NINE[{capability.value}]", reason, capability.value)
+            for capability, reason in BEYOND_THE_NINE.items()
         ),
     ]
 
@@ -2701,7 +2694,7 @@ def test_the_acceptance_row_states_a_table_set_for_every_capability_it_discloses
     below a guard over an empty list, which is the exact failure the precedent
     module records twice. So: claims exist, both verbs appear, and — the part
     that is derived rather than a floor — every capability in
-    `BEYOND_THE_EIGHT` carries both, in the row *and* in its own reason string.
+    `BEYOND_THE_NINE` carries both, in the row *and* in its own reason string.
     Those three are what the row exists to disclose, and they are the three whose
     prose has been wrong.
     """
@@ -2720,16 +2713,16 @@ def test_the_acceptance_row_states_a_table_set_for_every_capability_it_discloses
     row_claims = _claims_in(*_documents()[0])
     stated = {(capability, verb) for _l, capability, verb, _n, _t, _q in row_claims}
     required = {
-        (capability.value, verb) for capability in BEYOND_THE_EIGHT for verb in ("reads", "writes")
+        (capability.value, verb) for capability in BEYOND_THE_NINE for verb in ("reads", "writes")
     }
     assert required <= stated, (
         f"{sorted(required - stated)} is a capability `RM-API-AC-002` has to disclose "
-        f"and {ACCEPTANCE.name}:{line} states no table set for it. The three outside the "
-        "eight are the disclosure; leaving one's reach in unparsed prose is how it was "
+        f"and {ACCEPTANCE.name}:{line} states no table set for it. The seven outside the "
+        "nine are the disclosure; leaving one's reach in unparsed prose is how it was "
         "wrong three times"
     )
-    for capability, reason in BEYOND_THE_EIGHT.items():
-        label = f"BEYOND_THE_EIGHT[{capability.value}]"
+    for capability, reason in BEYOND_THE_NINE.items():
+        label = f"BEYOND_THE_NINE[{capability.value}]"
         own = {
             verb
             for _l, subject, verb, _n, _t, _q in _claims_in(label, reason, capability.value)
@@ -2753,7 +2746,7 @@ def test_the_acceptance_row_states_a_write_set_for_every_branch() -> None:
 
     **The population it is satisfied by is the acceptance row alone**, which
     `RM-API-AC-002` says of it and this test did not do. It read
-    `_all_branch_claims()`, which spans the row *and* `BEYOND_THE_EIGHT`'s reason
+    `_all_branch_claims()`, which spans the row *and* `BEYOND_THE_NINE`'s reason
     strings, and the `review.decide` reason states the `reject` and
     `mark_unresolved` branches itself — so deleting the `mark_unresolved`
     sentence from the row, or spelling its count in digits, or writing `of the 8`,
@@ -2789,7 +2782,7 @@ def test_the_acceptance_row_states_a_write_set_for_every_branch() -> None:
         f"siblings' and {label} states nothing for it. The union is a "
         "bound; a sentence about one disposition is a claim about one branch, and this "
         "row has already shipped one of those that was false. A reason string in "
-        "`BEYOND_THE_EIGHT` stating the same branch does not satisfy this: the row is "
+        "`BEYOND_THE_NINE` stating the same branch does not satisfy this: the row is "
         "what `RM-API-AC-002` is cited for"
     )
 
@@ -2914,11 +2907,11 @@ def test_no_reason_names_a_memory_table_outside_the_reach_it_describes() -> None
     reason cannot name `relationship_memory_submissions` in a sentence about
     `review.decide` and have the count beside it still add up.
     """
-    for capability, reason in BEYOND_THE_EIGHT.items():
+    for capability, reason in BEYOND_THE_NINE.items():
         reads, writes = capability_table_reach().get(capability, (frozenset(), frozenset()))
         named = frozenset(_BACKTICKED_TABLE.findall(reason)) & memory_tables()
         assert named <= reads | writes, (
-            f"BEYOND_THE_EIGHT[{capability.value}] names "
+            f"BEYOND_THE_NINE[{capability.value}] names "
             f"{sorted(named - (reads | writes))}, which the walk says it never reaches"
         )
 

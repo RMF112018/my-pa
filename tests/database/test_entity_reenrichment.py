@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from threading import Event
@@ -13,7 +14,7 @@ import pytest
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import Engine, text
-from sqlalchemy.engine import make_url
+from sqlalchemy.engine import Connection, make_url
 
 from my_pa.application.entity_reenrichment import (
     BindingVersion,
@@ -134,6 +135,48 @@ class _Current:
 
     def policy_version(self, principal_id: str) -> str | None:
         return self.binding.policy_version if principal_id == PRINCIPAL else None
+
+
+class _DatabaseCurrent(_Current):
+    def __init__(self, binding: ReenrichmentBinding, connection: Connection) -> None:
+        super().__init__(binding)
+        self.connection = connection
+
+    def input_version(self, principal_id: str, key: str) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        value = self.connection.execute(
+            text(
+                "SELECT version FROM knowledge.entity_reenrichment_version_watermarks "
+                "WHERE principal_id = :principal_id AND namespace = 'input' "
+                "AND binding_key = :binding_key"
+            ),
+            {"principal_id": principal_id, "binding_key": key},
+        ).scalar_one_or_none()
+        return None if value is None else str(value)
+
+
+class _CoordinatedDatabaseCurrent(_DatabaseCurrent):
+    def __init__(
+        self,
+        binding: ReenrichmentBinding,
+        connection: Connection,
+        *,
+        post_apply_read: Event,
+        release_post_apply_read: Event,
+    ) -> None:
+        super().__init__(binding, connection)
+        self.post_apply_read = post_apply_read
+        self.release_post_apply_read = release_post_apply_read
+        self.input_reads = 0
+
+    def input_version(self, principal_id: str, key: str) -> str | None:
+        value = super().input_version(principal_id, key)
+        self.input_reads += 1
+        if self.input_reads == 2:
+            self.post_apply_read.set()
+            assert self.release_post_apply_read.wait(timeout=10)
+        return value
 
 
 def test_registration_is_deduplicated_by_the_complete_binding(engine: Engine) -> None:
@@ -294,3 +337,111 @@ def test_expiry_during_apply_rolls_back_effect_and_allows_one_reclaim(engine: En
     assert reclaimed is not None
     assert reclaimed.work_id == registered.work_id
     assert reclaimed.attempt_count == 2
+
+
+def test_watermark_advance_waits_for_apply_fence_then_stales_future_work(
+    engine: Engine,
+) -> None:
+    """The Principal fence linearizes apply settlement before watermark advance."""
+    binding = _binding()
+    claimed_at = datetime.now(UTC)
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        repository.observe_version(
+            PRINCIPAL,
+            namespace="input",
+            key="source",
+            version="v2",
+            at=claimed_at,
+        )
+        registered = repository.register(binding, at=claimed_at)
+        claimed = repository.claim(owner="worker_a", at=claimed_at, lease_seconds=30)
+        assert claimed is not None
+
+    post_apply_read = Event()
+    release_post_apply_read = Event()
+    writer_attempted = Event()
+    writer_finished = Event()
+    writer_backend_pid: list[int] = []
+
+    def apply_current_binding() -> tuple[bool, ReenrichmentState]:
+        with engine.begin() as connection:
+            repository = SqlReenrichmentWorkRepository(connection, _tables())
+
+            def apply(held: ReenrichmentBinding, effect_id: str) -> None:
+                assert effect_id == held.binding_sha256
+
+            currency = repository.apply_claimed(
+                PRINCIPAL,
+                registered.work_id,
+                owner="worker_a",
+                current=_CoordinatedDatabaseCurrent(
+                    binding,
+                    connection,
+                    post_apply_read=post_apply_read,
+                    release_post_apply_read=release_post_apply_read,
+                ),
+                apply=apply,
+                at=claimed_at,
+            )
+            stored = repository.get(PRINCIPAL, registered.work_id)
+            assert stored is not None
+            return currency.is_current, stored.state
+
+    def advance_watermark() -> str | None:
+        try:
+            with engine.begin() as connection:
+                writer_backend_pid.append(
+                    int(connection.execute(text("SELECT pg_backend_pid()")).scalar_one())
+                )
+                writer_attempted.set()
+                observation = SqlReenrichmentWorkRepository(connection, _tables()).observe_version(
+                    PRINCIPAL,
+                    namespace="input",
+                    key="source",
+                    version="v3",
+                    at=claimed_at + timedelta(seconds=1),
+                )
+                return observation.previous
+        finally:
+            writer_finished.set()
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        applying = executor.submit(apply_current_binding)
+        assert post_apply_read.wait(timeout=5)
+        advancing = executor.submit(advance_watermark)
+        assert writer_attempted.wait(timeout=5)
+        assert not writer_finished.wait(timeout=0.2)
+        with engine.connect() as observer:
+            wait_type = observer.execute(
+                text("SELECT wait_event_type FROM pg_stat_activity WHERE pid = :pid"),
+                {"pid": writer_backend_pid[0]},
+            ).scalar_one()
+        assert wait_type == "Lock"
+        release_post_apply_read.set()
+        assert applying.result(timeout=10) == (True, ReenrichmentState.SUCCEEDED)
+        assert advancing.result(timeout=10) == "v2"
+
+    stale_binding = replace(binding, cause_record_id="eals_bbbb0002bbbb0002")
+    stale_at = claimed_at + timedelta(seconds=2)
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        stale_registered = repository.register(stale_binding, at=stale_at)
+        stale_claimed = repository.claim(owner="worker_b", at=stale_at, lease_seconds=30)
+        assert stale_claimed is not None
+
+    applied: list[str] = []
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        currency = repository.apply_claimed(
+            PRINCIPAL,
+            stale_registered.work_id,
+            owner="worker_b",
+            current=_DatabaseCurrent(stale_binding, connection),
+            apply=lambda _held, effect_id: applied.append(effect_id),
+            at=stale_at,
+        )
+        stored = repository.get(PRINCIPAL, stale_registered.work_id)
+    assert currency.reasons == (StaleBindingReason.INPUT_VERSION_CHANGED,)
+    assert applied == []
+    assert stored is not None and stored.state is ReenrichmentState.STALE

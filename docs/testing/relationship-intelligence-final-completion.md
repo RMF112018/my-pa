@@ -149,8 +149,8 @@ uses these evidence classes:
 
 | Evidence | Exact result |
 |---|---|
-| Final corrective FAST | `14196 passed, 1545 deselected in 554.28s` |
-| Final corrective document/count guards | `50 passed in 119.24s` |
+| Definitive final FAST | `14196 passed, 1546 deselected in 559.48s` |
+| Final corrective document/count guards | `50 passed in 114.42s` |
 | Historical standalone architecture, permission-matched synthetic local fixtures | `4706 passed in 296.41s`; the final corrective FAST includes the architecture selection |
 | Architecture, restricted-sandbox attempt | `4703 passed, 3 failed in 297.90s`; all three failures were `PermissionError: [Errno 1]` at synthetic local TCP/Unix socket bind, and the permission-matched rerun above passed |
 | Focused transport | `447 passed, 1 deselected` |
@@ -204,7 +204,9 @@ independent review:
    indicated or made for those harness-only failures.
 9. Re-enrichment is composed into the production unit of work and gateway. A
    closed capability-to-trigger map reaches all nine v0.2 triggers from existing
-   authorized mutations without reimplementing those mutations.
+   authorized mutations without reimplementing those mutations. Handler-attested
+   stable receipt identities register new mutations only; replay, no-op, and
+   invalidated-review results register nothing.
 10. Claim recovery atomically marks expired final-attempt work `FAILED` before
     selecting reclaimable rows, so a dead final worker cannot leave a permanent
     `RUNNING` orphan.
@@ -213,6 +215,9 @@ independent review:
     validation, and terminal settlement. PostgreSQL wall-clock lease predicates
     and a savepoint roll back a derived mutation if the lease expires or a
     binding becomes stale; the binding digest is the callback's idempotency key.
+    Watermark observation takes the same Principal transaction lock, so a
+    producer or policy version cannot advance between currentness validation and
+    successful settlement.
 12. Input and producer version collections are capped at 100 unique keys in the
     domain and by JSONB type/cardinality checks in the additive migration/schema.
 

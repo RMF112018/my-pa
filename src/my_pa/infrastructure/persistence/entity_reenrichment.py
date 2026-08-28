@@ -455,6 +455,7 @@ class SqlReenrichmentWorkRepository:
         if not _SAFE_TOKEN.fullmatch(namespace) or not _SAFE_TOKEN.fullmatch(key):
             raise ValueError("watermark names are safe bounded tokens")
         moment = ensure_utc(at)
+        self._lock_principal(principal_id)
         table = self._tables.version_watermarks
         row = self._connection.execute(
             select(table.c.version)

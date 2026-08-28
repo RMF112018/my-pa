@@ -165,7 +165,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from sqlalchemy import Engine
+from sqlalchemy import Connection, Engine
 
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.apple_machine import AppleBridgeIdentity, AppleMachineControl
@@ -328,6 +328,26 @@ def _client_credential(credential: str | None) -> str:
     return presented.strip()
 
 
+def _observe_reenrichment_versions(
+    connection: Connection,
+    *,
+    principal_id: str,
+    cause: str,
+    at: datetime,
+) -> tuple[ReenrichmentWork, ...]:
+    """Observe server versions on the caller's already-open transaction."""
+    tables = ReenrichmentTables(
+        entity_reenrichment_work,
+        entity_reenrichment_subjects,
+        entity_reenrichment_version_watermarks,
+    )
+    return ProductionReenrichmentCaller(
+        SqlReenrichmentWorkRepository(connection, tables),
+        principal_id=principal_id,
+        policy_version=POLICY_VERSION,
+    ).observe_process_versions(principal_id, cause=cause, at=at)
+
+
 def entra_authenticator(settings: Settings, work_engine: Engine) -> Authenticator:
     """Compose the per-request authentication `entra` mode performs.
 
@@ -372,15 +392,23 @@ def entra_authenticator(settings: Settings, work_engine: Engine) -> Authenticato
         claims = verifier.claims(_bearer_token(credential))
         declared = document.get(PAYLOAD_KEY)
         payload = declared if isinstance(declared, Mapping) else {}
+        moment = datetime.now(UTC)
         with work_engine.begin() as connection:
             authenticated = identity.authenticate(
-                connection, claims=claims, payload=payload, now=datetime.now(UTC)
+                connection, claims=claims, payload=payload, now=moment
             )
-        return Principal(
-            principal_id=capture_principal_id(authenticated.account.principal_id),
-            kind=PrincipalKind.OPERATOR,
-            authenticated=True,
-        )
+            principal = Principal(
+                principal_id=capture_principal_id(authenticated.account.principal_id),
+                kind=PrincipalKind.OPERATOR,
+                authenticated=True,
+            )
+            _observe_reenrichment_versions(
+                connection,
+                principal_id=principal.principal_id,
+                cause="gateway_http_request",
+                at=moment,
+            )
+            return principal
 
     return authenticate
 
@@ -625,17 +653,29 @@ class GatewayRuntime:
     ) -> tuple[ReenrichmentWork, ...]:
         """Observe server-owned versions and register only real advances."""
         moment = datetime.now(UTC) if at is None else at
-        tables = ReenrichmentTables(
-            entity_reenrichment_work,
-            entity_reenrichment_subjects,
-            entity_reenrichment_version_watermarks,
-        )
         with self.work_engine.begin() as connection:
-            return ProductionReenrichmentCaller(
-                SqlReenrichmentWorkRepository(connection, tables),
+            return _observe_reenrichment_versions(
+                connection,
                 principal_id=principal_id,
-                policy_version=POLICY_VERSION,
-            ).observe_process_versions(principal_id, cause=cause, at=moment)
+                cause=cause,
+                at=moment,
+            )
+
+    def observe_authenticated_principal(
+        self,
+        principal: Principal,
+        *,
+        cause: str,
+        at: datetime | None = None,
+    ) -> tuple[ReenrichmentWork, ...]:
+        """Observe versions for exactly one identity established by authentication."""
+        if not principal.authenticated:
+            raise TokenClaimsError("an authenticated Principal is required; access is denied")
+        return self.observe_reenrichment_versions(
+            principal_id=principal.principal_id,
+            cause=cause,
+            at=at,
+        )
 
 
 def build_gateway_runtime(settings: Settings) -> GatewayRuntime:

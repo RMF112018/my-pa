@@ -3,14 +3,26 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import inspect
+from collections.abc import Mapping
 from types import SimpleNamespace
+from typing import Any
+from uuid import UUID
 
 import apps.gateway as gateway
+import httpx2
 import pytest
+from tests.conftest import Scene, build_service
 
+import my_pa.bootstrap.gateway as bootstrap_gateway
+from my_pa.adapters.http import create_http_app
+from my_pa.application.commands import Command
 from my_pa.application.service import ApplicationService
-from my_pa.bootstrap.gateway import GatewayRuntime, local_principal
+from my_pa.bootstrap.gateway import local_principal
+from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.domain.identity.operation import Capability, permitted_purposes
+from my_pa.domain.identity.principal import Principal
 from my_pa.domain.relationship.reenrichment import ReenrichmentTrigger
 
 
@@ -158,6 +170,319 @@ def test_real_gateway_startup_observes_versions_before_each_transport_serves(
     ] * 3
 
 
+def test_entra_http_observes_each_authenticated_principal_before_application_dispatch(
+    monkeypatch: pytest.MonkeyPatch, scene: Scene
+) -> None:
+    events: list[str] = []
+    outcomes: list[bool] = []
+    watermark: dict[str, str] = {}
+    configured = {"policy": "policy-v1"}
+    service = build_service(scene.world, scene.providers)
+    invoke = service.invoke
+
+    def recording_invoke(
+        metadata: RequestMetadata, command: Command, *, principal: Principal
+    ) -> ResponseEnvelope:
+        events.append(f"application:{principal.principal_id}")
+        return invoke(metadata, command, principal=principal)
+
+    monkeypatch.setattr(service, "invoke", recording_invoke)
+
+    class Runtime:
+        principal = None
+        remote_client = None
+        apple_authenticate = None
+        apple_control = None
+        mcp_enabled = True
+        work_engine = SimpleNamespace(begin=lambda: None)
+
+        def __init__(self) -> None:
+            self.service = service
+
+        def authenticate(self, _credential: str | None, _document: Mapping[str, Any]) -> Principal:
+            events.append("authenticate")
+            self.observe_reenrichment_versions(
+                principal_id=scene.principal.principal_id,
+                cause="gateway_http_request",
+            )
+            return scene.principal
+
+        def observe_reenrichment_versions(
+            self, *, principal_id: str, cause: str
+        ) -> tuple[object, ...]:
+            assert cause == "gateway_http_request"
+            events.append(f"observe:{principal_id}")
+            if configured["policy"] == "fail":
+                raise RuntimeError("synthetic observation failure")
+            previous = watermark.get(principal_id)
+            current = configured["policy"]
+            changed = previous is not None and previous != current
+            watermark[principal_id] = current
+            outcomes.append(changed)
+            return (object(),) if changed else ()
+
+        def close(self) -> None:
+            events.append("close")
+
+    runtime = Runtime()
+    settings = SimpleNamespace(gateway_bind_host=lambda: "127.0.0.1")
+    monkeypatch.setattr(gateway, "load_settings", lambda: settings)
+    monkeypatch.setattr(gateway, "build_gateway_runtime", lambda _settings: runtime)
+    monkeypatch.setattr(gateway, "create_http_app", create_http_app)
+
+    class Config:
+        def __init__(self, application: object, **_kwargs: object) -> None:
+            self.application = application
+
+    class Server:
+        def __init__(self, config: Config) -> None:
+            self.application = config.application
+
+        def run(self) -> None:
+            async def exercise() -> None:
+                document = {
+                    "request_id": "req-entra-reenrichment",
+                    "purpose": sorted(permitted_purposes(Capability.CAPABILITIES_GET))[0].value,
+                    "principal_id": scene.principal.principal_id,
+                    "requested_at": "2026-08-28T12:00:00Z",
+                    "payload": {},
+                }
+                async with httpx2.AsyncClient(
+                    transport=httpx2.ASGITransport(
+                        app=self.application, raise_app_exceptions=False
+                    ),
+                    base_url="http://testserver",
+                ) as client:
+                    for expected in (False, False):
+                        response = await client.post(
+                            "/v1/capabilities.get",
+                            headers={"authorization": "Bearer synthetic"},
+                            json=document,
+                        )
+                        assert response.status_code == 200
+                        assert outcomes[-1] is expected
+                    configured["policy"] = "policy-v2"
+                    response = await client.post(
+                        "/v1/capabilities.get",
+                        headers={"authorization": "Bearer synthetic"},
+                        json=document,
+                    )
+                    assert response.status_code == 200
+                    assert outcomes[-1] is True
+                    application_calls = events.count(f"application:{scene.principal.principal_id}")
+                    configured["policy"] = "fail"
+                    response = await client.post(
+                        "/v1/capabilities.get",
+                        headers={"authorization": "Bearer synthetic"},
+                        json=document,
+                    )
+                    assert response.status_code == 500
+                    assert (
+                        events.count(f"application:{scene.principal.principal_id}")
+                        == application_calls
+                    )
+
+            asyncio.run(exercise())
+
+    monkeypatch.setattr(gateway.uvicorn, "Config", Config)
+    monkeypatch.setattr(gateway.uvicorn, "Server", Server)
+
+    assert gateway._run(argparse.Namespace(port=8765)) == 0
+    assert outcomes == [False, False, True]
+    assert [event.split(":", 1)[0] for event in events[:9]] == [
+        "authenticate",
+        "observe",
+        "application",
+    ] * 3
+    assert events[-1] == "close"
+
+
+def test_composed_entra_authenticator_observes_inside_identity_transaction(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    events: list[str] = []
+    connection = object()
+
+    class Transaction:
+        def __enter__(self) -> object:
+            events.append("begin")
+            return connection
+
+        def __exit__(self, *_error: object) -> None:
+            events.append("commit")
+
+    class Engine:
+        def begin(self) -> Transaction:
+            return Transaction()
+
+    class Verifier:
+        def claims(self, _credential: str) -> Mapping[str, object]:
+            events.append("verify")
+            return {"tid": "synthetic", "oid": "synthetic"}
+
+    class Identity:
+        def __init__(self, *, home_tenant_id: str) -> None:
+            assert home_tenant_id == "synthetic-tenant"
+
+        def authenticate(self, used_connection: object, **_kwargs: object) -> object:
+            assert used_connection is connection
+            events.append("identity")
+            return SimpleNamespace(
+                account=SimpleNamespace(principal_id=UUID("11111111-2222-3333-4444-555555555555"))
+            )
+
+    def observe(used_connection: object, **kwargs: object) -> tuple[object, ...]:
+        assert used_connection is connection
+        events.append(f"observe:{kwargs['principal_id']}")
+        return ()
+
+    monkeypatch.setattr(
+        bootstrap_gateway,
+        "EntraTokenVerifier",
+        lambda **_kwargs: Verifier(),
+    )
+    monkeypatch.setattr(
+        bootstrap_gateway,
+        "jwks_signing_key_source",
+        lambda _uri: lambda _token: object(),
+    )
+    monkeypatch.setattr(bootstrap_gateway, "PrincipalIdentityService", Identity)
+    monkeypatch.setattr(bootstrap_gateway, "_observe_reenrichment_versions", observe)
+    settings = SimpleNamespace(
+        entra_client_id="synthetic-client",
+        entra_issuer="https://issuer.invalid",
+        entra_jwks_uri="https://issuer.invalid/jwks",
+        entra_tenant_id="synthetic-tenant",
+    )
+    authenticate = bootstrap_gateway.entra_authenticator(settings, Engine())
+
+    principal = authenticate("Bearer synthetic", {"payload": {}})
+
+    assert principal.authenticated is True
+    assert events == [
+        "verify",
+        "begin",
+        "identity",
+        f"observe:{principal.principal_id}",
+        "commit",
+    ]
+
+
+def test_remote_mcp_observes_only_authenticated_request_principals_before_context(
+    monkeypatch: pytest.MonkeyPatch, scene: Scene
+) -> None:
+    events: list[str] = []
+    outcomes: list[bool] = []
+    contexts: list[object] = []
+    watermark: dict[str, str] = {}
+    configured = {"policy": "policy-v1"}
+
+    class Runtime:
+        principal = None
+        service = object()
+        work_engine = SimpleNamespace(begin=lambda: None)
+
+        def observe_reenrichment_versions(
+            self, *, principal_id: str, cause: str
+        ) -> tuple[object, ...]:
+            assert cause == "gateway_remote_request"
+            events.append(f"observe:{principal_id}")
+            if configured["policy"] == "fail":
+                raise RuntimeError("synthetic observation failure")
+            previous = watermark.get(principal_id)
+            current = configured["policy"]
+            changed = previous is not None and previous != current
+            watermark[principal_id] = current
+            outcomes.append(changed)
+            return (object(),) if changed else ()
+
+        def observe_authenticated_principal(
+            self, principal: Principal, *, cause: str
+        ) -> tuple[object, ...]:
+            assert principal.authenticated is True
+            return self.observe_reenrichment_versions(
+                principal_id=principal.principal_id,
+                cause=cause,
+            )
+
+        def close(self) -> None:
+            events.append("close")
+
+    runtime = Runtime()
+    settings = SimpleNamespace(
+        remote_mcp_enabled=True,
+        oauth_authorization_server="https://issuer.invalid",
+        oauth_audience="https://resource.invalid",
+        oauth_scopes="relationship.read",
+        remote_mcp_public_host="mcp.invalid",
+        mcp_surface_disabled=False,
+        remote_writes_enabled=False,
+        oauth_operator_secret=None,
+        compact_publication_for_client=lambda _client_id: False,
+    )
+    authenticated = SimpleNamespace(
+        principal=scene.principal,
+        capabilities=frozenset({Capability.CAPABILITIES_GET}),
+        write_allowed=True,
+        client_id="synthetic-client",
+        capability_purposes=frozenset(),
+    )
+
+    class Authenticator:
+        def authenticate(self, header: str | None) -> object:
+            events.append("authenticate")
+            if header != "Bearer synthetic":
+                raise gateway.RemoteAuthenticationError()
+            return authenticated
+
+    monkeypatch.setattr(gateway, "load_settings", lambda: settings)
+    monkeypatch.setattr(gateway, "build_gateway_runtime", lambda _settings: runtime)
+    monkeypatch.setattr(
+        gateway,
+        "OriginOAuthServer",
+        lambda **_kwargs: SimpleNamespace(introspect=lambda _token: None),
+    )
+    monkeypatch.setattr(gateway, "RemoteAuthenticator", lambda **_kwargs: Authenticator())
+    monkeypatch.setattr(gateway, "build_origin_oauth_routes", lambda *_args, **_kwargs: ())
+    monkeypatch.setattr(
+        gateway,
+        "create_remote_mcp_app",
+        lambda _service, *, resolve_access, **_kwargs: resolve_access,
+    )
+
+    def run(resolve_access: object, **_kwargs: object) -> None:
+        resolve = resolve_access
+        assert callable(resolve)
+        assert resolve("invalid") is None
+        assert events == ["authenticate"]
+        for expected in (False, False):
+            context = resolve("Bearer synthetic")
+            contexts.append(context)
+            events.append("context")
+            assert outcomes[-1] is expected
+        configured["policy"] = "policy-v2"
+        context = resolve("Bearer synthetic")
+        contexts.append(context)
+        events.append("context")
+        assert outcomes[-1] is True
+        configured["policy"] = "fail"
+        resolve("Bearer synthetic")
+
+    monkeypatch.setattr(gateway.uvicorn, "run", run)
+
+    with pytest.raises(RuntimeError, match="synthetic observation failure"):
+        gateway._mcp_remote(argparse.Namespace(host="127.0.0.1", port=8766))
+
+    assert outcomes == [False, False, True]
+    assert all(context.principal == scene.principal for context in contexts)
+    assert [event.split(":", 1)[0] for event in events[1:10]] == [
+        "authenticate",
+        "observe",
+        "context",
+    ] * 3
+    assert events[-1] == "close"
+
+
 def test_production_registration_challenge_covers_the_closed_vocabulary() -> None:
     handler_source = "\n".join(
         inspect.getsource(member)
@@ -166,7 +491,7 @@ def test_production_registration_challenge_covers_the_closed_vocabulary() -> Non
     )
     source_fetch = inspect.getsource(ApplicationService._sources_fetch)
     proposal_create = inspect.getsource(ApplicationService._entities_proposals_create)
-    startup_source = inspect.getsource(GatewayRuntime.observe_reenrichment_versions)
+    startup_source = inspect.getsource(bootstrap_gateway._observe_reenrichment_versions)
     covered = {
         trigger
         for trigger in ReenrichmentTrigger

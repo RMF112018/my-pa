@@ -634,7 +634,7 @@ such; it is not presented as execution of this rebased tree.
 
 | Claim | Evidence |
 |---|---|
-| FAST tier validation | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **14,241 passed** on the final startup-observation corrective tree. |
+| FAST tier validation | `pytest -m "not slow and not database and not network and not connector and not evaluation and not e2e and not recovery"` — **14,244 passed** on the final authenticated-Principal observation corrective tree. |
 | Architecture tier | Architecture tier **4,710 passed** on the same integrated corrective tree. This path-selected figure is stated separately so its checked claim cannot be mistaken for the FAST marker result. |
 | Lint and format | `ruff check .` — "All checks passed!"; `ruff format --check .` — clean, no file would be reformatted. **No file count is stated, and one was until CI disproved it.** This cell said "clean over 925 files", measured locally; CI reported 927 at the same commit and the run failed on the guard binding the figure. `ruff` walks the working directory, not the index — 683 Python files are tracked and it formats 950 here — so the number is a property of whatever happens to be on disk and differs between a developer checkout and a runner. Cleanliness is the repository fact; the corpus size is not one. `mypy`'s count below stays bound because it is derived from configured targets rather than from a directory walk |
 | Types | `mypy` (configured targets: `src`, `migrations`, `apps`, `ops`) — clean over 424 files. Re-derived for RI final completion after adding the five source modules in this campaign. |

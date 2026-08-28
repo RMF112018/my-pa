@@ -46,7 +46,7 @@ The IDs are identifiers and traceability anchors, not runtime configuration.
 |---|---|---|
 | `RI-FC-WP-01` Identity Correction | Governed split preview/apply is the exact inverse of one completed merge; stale state, digest, source-operation, Principal, and one-settlement guards fail closed. | IMPLEMENTED |
 | `RI-FC-WP-02` Identity History | One authoritative keyset-paginated history joins direct mutations, completed identity operations/effects, and legacy merge lineage without scraping proposal/review records. | IMPLEMENTED |
-| `RI-FC-WP-03` Re-enrichment | Seven exact triggers are registered from truthful authorized mutations; source-version and model/rule-version changes use exact version-observation hooks after a verified fetch or newly created authenticated proposal. HTTP, stdio MCP, and remote MCP all observe server-owned policy and producer versions through one shared, Principal-bounded startup composition before serving; first and unchanged observations are no-ops. Every subject/input/producer/policy key and value matches the exact `CurrentReenrichmentBindings` lookup used at apply. All registration shares the same Principal-fenced unit of work. Immutable bounded bindings, Principal/work locks, database-time lease checks, post-apply currency validation, and atomic settlement prevent obsolete or duplicate derived mutation. | IMPLEMENTED |
+| `RI-FC-WP-03` Re-enrichment | Seven exact triggers are registered from truthful authorized mutations; source-version and model/rule-version changes use exact version-observation hooks after a verified fetch or newly created authenticated proposal. Fixed-Principal startup observes before serving. Entra HTTP observes the exact server-resolved Principal inside the identity transaction before authentication returns, while authenticated remote MCP observes its exact resolved Principal before publishing request context. First and unchanged observations are no-ops. Every subject/input/producer/policy key and value matches the exact `CurrentReenrichmentBindings` lookup used at apply. All registration shares the same Principal-fenced unit of work. Immutable bounded bindings, Principal/work locks, database-time lease checks, post-apply currency validation, and atomic settlement prevent obsolete or duplicate derived mutation. | IMPLEMENTED |
 | `RI-FC-WP-04` Proposal/Review | Generated discriminated payload schemas cover all proposal families; accepted merge/split proposals produce operator-preview handoffs and never execute identity correction. | IMPLEMENTED |
 | `RI-FC-WP-05` Security/Principal | `version_content` and `span_faults` require a resolved Principal context and predicate `capture_versions.owner_principal_id`; foreign and absent opaque identifiers have the same result. Two-Principal controls make deletion of either predicate fail. | IMPLEMENTED_CORRECTIVE |
 | `RI-FC-WP-06` MCP/Profiles/Documentation | The added public capability names, neutral commands, schemas, dispatch, purpose/profile bindings, runbooks, and current-state counts are synchronized. | IMPLEMENTED |
@@ -145,15 +145,17 @@ uses these evidence classes:
   digest settlement deliberately fail-closed offline because canonical digests
   are data-dependent;
 - isolated PostgreSQL: test discovery and migration/test mapping only in this
-  environment because `MY_PA_DATABASE_URL` is unset. Collection proves that the
-  tests are selected; it does not prove their PostgreSQL behavior passes.
+  environment because no separately verified disposable target was established.
+  Collection proves that the tests are selected; it does not prove their
+  PostgreSQL behavior passes.
 
 | Evidence | Exact result |
 |---|---|
-| Integrated corrective FAST | `14,241 passed, 1,551 deselected` |
+| Integrated corrective FAST | `14,244 passed, 1,555 deselected` |
 | Integrated corrective architecture | `4,710 passed` |
 | Exact-observer focused unit/contract/architecture set | `65 passed in 0.82s` |
 | Startup lifecycle, re-enrichment, and affected child-process set | `74 passed in 4.91s` |
+| Authenticated-Principal observation and re-enrichment focused set | `81 passed in 0.71s` |
 | Preserved pre-final parallel FAST attempt | `3 failed, 14,238 passed, 1,551 deselected in 583.07s`; the three child processes used an intentionally unreachable database and exited at the new fail-closed startup observer before reaching their transport assertions; the tests now isolate only that separately proven observer boundary |
 | Exact-observer and currency-alignment affected set | `296 passed in 1.03s` |
 | Integrated focused application/contract set | `201 passed, 7 deselected` |
@@ -165,7 +167,8 @@ uses these evidence classes:
 | Whitespace | `git diff --check` passed |
 | Alembic graph | one head: `8e1c4a7b2d90` |
 | Alembic offline SQL | passed with a synthetic non-connecting PostgreSQL URL; the preceding no-URL attempt failed closed as required |
-| Isolated PostgreSQL affected persistence set | `111` tests collected from `test_entity_reenrichment.py`, `test_identity_correction_ledger.py`, and `test_identity_correction_merge.py`; the three corrected concurrency cases now construct the real transactional `SqlCurrentReenrichmentBindings` over synthetic schema rows and exact watermarks; not executed because no verified disposable database URL was available, so no database pass is claimed |
+| Isolated PostgreSQL affected persistence set | `114` tests collected from `test_entity_reenrichment.py`, `test_identity_correction_ledger.py`, and `test_identity_correction_merge.py`; source, producer, and generic mutation builders now have real `SqlCurrentReenrichmentBindings` callback/stale contracts in addition to the corrected concurrency cases; not executed because no verified disposable database URL was available, so no database pass is claimed |
+| Entra production-composition persistence set | `33` tests collected from `test_entra_authentication.py`, including the durable initial/repeat/policy-advance observer contract; not executed because no verified disposable database URL was available, so no database pass is claimed |
 
 The full database tier is not required by the campaign exception rule and was
 not run: `FULL_DB_TIER_NOT_RUN_TARGETED_EVIDENCE_SUFFICIENT`. No production,
@@ -239,6 +242,21 @@ independent review:
     SQL current-binding view, a versioned synthetic entity, and matching input,
     producer, and policy watermarks. They were collected, not executed, because
     this environment supplied no verified disposable database URL.
+16. Entra HTTP no longer skips policy observation when the process has no fixed
+    Principal. Token verification and identity resolution establish the exact
+    server-owned Principal, then the same authentication transaction observes
+    policy before returning it; observer failure therefore prevents application
+    dispatch. Authenticated remote MCP observes its resolved Principal through
+    the same runtime contract before returning request context. No Principal
+    enumeration, traversal, fallback identity, or backfill was added.
+17. Source-version, proposal-producer, and generic mutation builders now have
+    isolated-PostgreSQL contracts using the real SQL current-binding view. Each
+    new binding reaches its callback while current; advancing its actual source
+    or producer watermark produces the exact stale reason, excludes the callback,
+    and settles `STALE`. The Entra persistence contract likewise proves first and
+    repeat observation create no work while an old policy watermark advances to
+    one durable deduplicated `policy_change` item. These database-marked tests
+    were collected but not executed without a verified disposable target.
 
 ## Load-bearing and mutation controls
 

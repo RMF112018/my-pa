@@ -26,6 +26,9 @@ from my_pa.application.entity_reenrichment import (
     ReenrichmentSubjectKind,
     ReenrichmentTrigger,
     StaleBindingReason,
+    register_mutation_reenrichment,
+    register_producer_version_observation,
+    register_source_version_observation,
 )
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -36,9 +39,13 @@ from my_pa.infrastructure.persistence.entity_reenrichment import (
 )
 from my_pa.infrastructure.persistence.tables import (
     entities,
+    entity_proposals,
     entity_reenrichment_subjects,
     entity_reenrichment_version_watermarks,
     entity_reenrichment_work,
+    source_object_versions,
+    source_objects,
+    sources,
 )
 
 pytestmark = pytest.mark.database
@@ -47,6 +54,9 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 DISPOSABLE_DATABASE: Final = "my_pa_ri_reenrichment_test"
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 ENTITY: Final = "ent_aaaa0001aaaa0001"
+SOURCE: Final = "src_aaaa0001aaaa0001"
+SOURCE_OBJECT: Final = "obj_aaaa0001aaaa0001"
+PROPOSAL: Final = "eprp_aaaa0001aaaa0001"
 WHEN: Final = datetime(2026, 8, 28, 12, tzinfo=UTC)
 
 
@@ -167,6 +177,311 @@ def _stage_entity_binding_currency(
         version=binding.policy_version,
         at=WHEN,
     )
+
+
+def _stage_source(connection: Connection, *, at: datetime) -> None:
+    connection.execute(
+        sources.insert().values(
+            source_id=SOURCE,
+            provider_kind="fixture",
+            label="Synthetic re-enrichment source",
+            classification="synthetic_test",
+            native_root="fixture://reenrichment-currency",
+            configured_at=at,
+        )
+    )
+    connection.execute(
+        source_objects.insert().values(
+            source_object_id=SOURCE_OBJECT,
+            source_id=SOURCE,
+            kind="file",
+            native_locator="currency/source.txt",
+            first_observed_at=at,
+        )
+    )
+
+
+def _stage_source_version(
+    connection: Connection,
+    *,
+    version_id: str,
+    fingerprint: str,
+    observed_at: datetime,
+) -> None:
+    connection.execute(
+        source_object_versions.insert().values(
+            version_id=version_id,
+            source_object_id=SOURCE_OBJECT,
+            fingerprint=fingerprint,
+            media_type="text/plain",
+            size_bytes=16,
+            modified_at=observed_at,
+            observed_at=observed_at,
+        )
+    )
+
+
+def _stage_proposal(connection: Connection, *, at: datetime) -> None:
+    connection.execute(
+        entity_proposals.insert().values(
+            proposal_id=PROPOSAL,
+            principal_id=PRINCIPAL,
+            kind="create_entity",
+            state="proposed",
+            payload={"entity_type": "person", "display_name": "Synthetic Person"},
+            observation_ids=[],
+            proposed_at=at,
+            proposed_by="currency_contract_test",
+            method="rule",
+            method_version="v1",
+            dedupe_sha256="a" * 64,
+        )
+    )
+
+
+def test_source_observer_is_born_current_then_excludes_stale_callback(engine: Engine) -> None:
+    started_at = datetime.now(UTC)
+    versions = (
+        ("ver_aaaa0001aaaa0001", "a" * 64),
+        ("ver_bbbb0002bbbb0002", "b" * 64),
+        ("ver_cccc0003cccc0003", "c" * 64),
+        ("ver_dddd0004dddd0004", "d" * 64),
+    )
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        _stage_source(connection, at=started_at)
+        _stage_source_version(
+            connection,
+            version_id=versions[0][0],
+            fingerprint=versions[0][1],
+            observed_at=started_at,
+        )
+        assert (
+            register_source_version_observation(
+                repository,
+                principal_id=PRINCIPAL,
+                source_object_id=SOURCE_OBJECT,
+                source_version_id=versions[0][0],
+                policy_version="ri-v0.2",
+                at=started_at,
+            )
+            is None
+        )
+        _stage_source_version(
+            connection,
+            version_id=versions[1][0],
+            fingerprint=versions[1][1],
+            observed_at=started_at + timedelta(seconds=1),
+        )
+        current_work = register_source_version_observation(
+            repository,
+            principal_id=PRINCIPAL,
+            source_object_id=SOURCE_OBJECT,
+            source_version_id=versions[1][0],
+            policy_version="ri-v0.2",
+            at=started_at + timedelta(seconds=1),
+        )
+        assert current_work is not None
+        claimed = repository.claim(owner="source_current", at=started_at + timedelta(seconds=1))
+        assert claimed is not None and claimed.work_id == current_work.work_id
+        applied: list[str] = []
+        currency = repository.apply_claimed(
+            PRINCIPAL,
+            current_work.work_id,
+            owner="source_current",
+            current=SqlCurrentReenrichmentBindings(connection, _tables()),
+            apply=lambda _binding, effect_id: applied.append(effect_id),
+            at=started_at + timedelta(seconds=1),
+        )
+        assert currency.is_current
+        assert applied == [current_work.binding.binding_sha256]
+
+        _stage_source_version(
+            connection,
+            version_id=versions[2][0],
+            fingerprint=versions[2][1],
+            observed_at=started_at + timedelta(seconds=2),
+        )
+        stale_work = register_source_version_observation(
+            repository,
+            principal_id=PRINCIPAL,
+            source_object_id=SOURCE_OBJECT,
+            source_version_id=versions[2][0],
+            policy_version="ri-v0.2",
+            at=started_at + timedelta(seconds=2),
+        )
+        assert stale_work is not None
+        claimed = repository.claim(owner="source_stale", at=started_at + timedelta(seconds=2))
+        assert claimed is not None and claimed.work_id == stale_work.work_id
+        _stage_source_version(
+            connection,
+            version_id=versions[3][0],
+            fingerprint=versions[3][1],
+            observed_at=started_at + timedelta(seconds=3),
+        )
+        assert (
+            register_source_version_observation(
+                repository,
+                principal_id=PRINCIPAL,
+                source_object_id=SOURCE_OBJECT,
+                source_version_id=versions[3][0],
+                policy_version="ri-v0.2",
+                at=started_at + timedelta(seconds=3),
+            )
+            is not None
+        )
+        stale_applied: list[str] = []
+        stale_currency = repository.apply_claimed(
+            PRINCIPAL,
+            stale_work.work_id,
+            owner="source_stale",
+            current=SqlCurrentReenrichmentBindings(connection, _tables()),
+            apply=lambda _binding, effect_id: stale_applied.append(effect_id),
+            at=started_at + timedelta(seconds=3),
+        )
+        stale_stored = repository.get(PRINCIPAL, stale_work.work_id)
+    assert stale_currency.reasons == (
+        StaleBindingReason.INPUT_VERSION_CHANGED,
+        StaleBindingReason.SUBJECT_VERSION_CHANGED,
+    )
+    assert stale_applied == []
+    assert stale_stored is not None and stale_stored.state is ReenrichmentState.STALE
+
+
+def test_producer_observer_is_born_current_then_excludes_stale_callback(
+    engine: Engine,
+) -> None:
+    started_at = datetime.now(UTC)
+    common = {
+        "principal_id": PRINCIPAL,
+        "proposal_id": PROPOSAL,
+        "proposal_version": "proposed",
+        "method": "rule",
+        "model_id": None,
+        "model_version": None,
+        "policy_version": "ri-v0.2",
+    }
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        _stage_proposal(connection, at=started_at)
+        assert (
+            register_producer_version_observation(
+                repository, method_version="v1", at=started_at, **common
+            )
+            is None
+        )
+        current_work = register_producer_version_observation(
+            repository,
+            method_version="v2",
+            at=started_at + timedelta(seconds=1),
+            **common,
+        )
+        assert current_work is not None
+        claimed = repository.claim(owner="producer_current", at=started_at + timedelta(seconds=1))
+        assert claimed is not None and claimed.work_id == current_work.work_id
+        applied: list[str] = []
+        currency = repository.apply_claimed(
+            PRINCIPAL,
+            current_work.work_id,
+            owner="producer_current",
+            current=SqlCurrentReenrichmentBindings(connection, _tables()),
+            apply=lambda _binding, effect_id: applied.append(effect_id),
+            at=started_at + timedelta(seconds=1),
+        )
+        assert currency.is_current
+        assert applied == [current_work.binding.binding_sha256]
+
+        stale_work = register_producer_version_observation(
+            repository,
+            method_version="v3",
+            at=started_at + timedelta(seconds=2),
+            **common,
+        )
+        assert stale_work is not None
+        claimed = repository.claim(owner="producer_stale", at=started_at + timedelta(seconds=2))
+        assert claimed is not None and claimed.work_id == stale_work.work_id
+        assert (
+            register_producer_version_observation(
+                repository,
+                method_version="v4",
+                at=started_at + timedelta(seconds=3),
+                **common,
+            )
+            is not None
+        )
+        stale_applied: list[str] = []
+        stale_currency = repository.apply_claimed(
+            PRINCIPAL,
+            stale_work.work_id,
+            owner="producer_stale",
+            current=SqlCurrentReenrichmentBindings(connection, _tables()),
+            apply=lambda _binding, effect_id: stale_applied.append(effect_id),
+            at=started_at + timedelta(seconds=3),
+        )
+        stale_stored = repository.get(PRINCIPAL, stale_work.work_id)
+    assert stale_currency.reasons == (StaleBindingReason.PRODUCER_VERSION_CHANGED,)
+    assert stale_applied == []
+    assert stale_stored is not None and stale_stored.state is ReenrichmentState.STALE
+
+
+def test_mutation_registration_is_born_current_then_excludes_stale_callback(
+    engine: Engine,
+) -> None:
+    started_at = datetime.now(UTC)
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        (current_work,) = register_mutation_reenrichment(
+            repository,
+            principal_id=PRINCIPAL,
+            capability="entities.update",
+            cause_record_id="emut_aaaa0001aaaa0001",
+            policy_version="ri-v0.2",
+            at=started_at,
+        )
+        claimed = repository.claim(owner="mutation_current", at=started_at)
+        assert claimed is not None and claimed.work_id == current_work.work_id
+        applied: list[str] = []
+        currency = repository.apply_claimed(
+            PRINCIPAL,
+            current_work.work_id,
+            owner="mutation_current",
+            current=SqlCurrentReenrichmentBindings(connection, _tables()),
+            apply=lambda _binding, effect_id: applied.append(effect_id),
+            at=started_at,
+        )
+        assert currency.is_current
+        assert applied == [current_work.binding.binding_sha256]
+
+        (stale_work,) = register_mutation_reenrichment(
+            repository,
+            principal_id=PRINCIPAL,
+            capability="entities.update",
+            cause_record_id="emut_bbbb0002bbbb0002",
+            policy_version="ri-v0.2",
+            at=started_at + timedelta(seconds=1),
+        )
+        claimed = repository.claim(owner="mutation_stale", at=started_at + timedelta(seconds=1))
+        assert claimed is not None and claimed.work_id == stale_work.work_id
+        repository.observe_version(
+            PRINCIPAL,
+            namespace="producer",
+            key="relationship_intelligence",
+            version="relationship-intelligence-v0.3",
+            at=started_at + timedelta(seconds=2),
+        )
+        stale_applied: list[str] = []
+        stale_currency = repository.apply_claimed(
+            PRINCIPAL,
+            stale_work.work_id,
+            owner="mutation_stale",
+            current=SqlCurrentReenrichmentBindings(connection, _tables()),
+            apply=lambda _binding, effect_id: stale_applied.append(effect_id),
+            at=started_at + timedelta(seconds=2),
+        )
+        stale_stored = repository.get(PRINCIPAL, stale_work.work_id)
+    assert stale_currency.reasons == (StaleBindingReason.PRODUCER_VERSION_CHANGED,)
+    assert stale_applied == []
+    assert stale_stored is not None and stale_stored.state is ReenrichmentState.STALE
 
 
 def test_registration_is_deduplicated_by_the_complete_binding(engine: Engine) -> None:

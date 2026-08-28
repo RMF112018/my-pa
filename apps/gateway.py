@@ -282,6 +282,10 @@ def _mcp_remote(args: argparse.Namespace) -> int:
             authenticated = authenticator.authenticate(header)
         except RemoteAuthenticationError:
             return None
+        runtime.observe_authenticated_principal(
+            authenticated.principal,
+            cause="gateway_remote_request",
+        )
         capabilities = frozenset(capability.value for capability in authenticated.capabilities)
         if not authenticated.write_allowed:
             # The transport's canonical read-only profile performs the final

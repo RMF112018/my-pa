@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeoutError
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -18,6 +19,7 @@ from sqlalchemy.engine import Connection, make_url
 
 from my_pa.application.entity_reenrichment import (
     BindingVersion,
+    EntityReenrichmentService,
     ReenrichmentBinding,
     ReenrichmentState,
     ReenrichmentSubject,
@@ -29,6 +31,7 @@ from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity_reenrichment import (
     ReenrichmentTables,
+    SqlCurrentReenrichmentBindings,
     SqlReenrichmentWorkRepository,
 )
 from my_pa.infrastructure.persistence.tables import (
@@ -177,6 +180,33 @@ class _CoordinatedDatabaseCurrent(_DatabaseCurrent):
             self.post_apply_read.set()
             assert self.release_post_apply_read.wait(timeout=10)
         return value
+
+
+def _current_binding() -> ReenrichmentBinding:
+    return ReenrichmentBinding(
+        principal_id=PRINCIPAL,
+        trigger=ReenrichmentTrigger.POLICY_CHANGE,
+        cause_record_id="audit_aaaa0001aaaa0001",
+        subjects=(ReenrichmentSubject(ReenrichmentSubjectKind.PRINCIPAL, PRINCIPAL, "1"),),
+        input_versions=(BindingVersion("source", "v2"),),
+        producer_versions=(BindingVersion("resolver", "v3"),),
+        policy_version="ri-v0.2",
+    )
+
+
+def _observe_current_versions(repository: SqlReenrichmentWorkRepository) -> None:
+    for namespace, key, version in (
+        ("input", "source", "v2"),
+        ("producer", "resolver", "v3"),
+        ("policy", "current", "ri-v0.2"),
+    ):
+        repository.observe_version(
+            PRINCIPAL,
+            namespace=namespace,
+            key=key,
+            version=version,
+            at=WHEN,
+        )
 
 
 def test_registration_is_deduplicated_by_the_complete_binding(engine: Engine) -> None:
@@ -445,3 +475,76 @@ def test_watermark_advance_waits_for_apply_fence_then_stales_future_work(
     assert currency.reasons == (StaleBindingReason.INPUT_VERSION_CHANGED,)
     assert applied == []
     assert stored is not None and stored.state is ReenrichmentState.STALE
+
+
+def test_changed_input_is_marked_stale_before_the_applier_runs(engine: Engine) -> None:
+    applied: list[str] = []
+    with engine.begin() as connection:
+        repository = SqlReenrichmentWorkRepository(connection, _tables())
+        _observe_current_versions(repository)
+        repository.register(_current_binding(), at=WHEN)
+        claimed = repository.claim(owner="worker_a", at=WHEN)
+        assert claimed is not None
+        repository.observe_version(
+            PRINCIPAL,
+            namespace="input",
+            key="source",
+            version="v3",
+            at=WHEN,
+        )
+        currency = EntityReenrichmentService(repository).apply_claimed(
+            claimed,
+            owner="worker_a",
+            current=SqlCurrentReenrichmentBindings(connection, _tables()),
+            apply=lambda binding, _key: applied.append(binding.binding_sha256),
+            at=WHEN,
+        )
+        stored = repository.get(PRINCIPAL, claimed.work_id)
+    assert StaleBindingReason.INPUT_VERSION_CHANGED in currency.reasons
+    assert applied == []
+    assert stored is not None and stored.state == "stale"
+
+
+def test_currency_rows_remain_locked_until_apply_and_completion_commit(engine: Engine) -> None:
+    started = Event()
+    future: Future[None] | None = None
+    executor = ThreadPoolExecutor(max_workers=1)
+
+    def advance_policy() -> None:
+        with engine.begin() as other_connection:
+            started.set()
+            SqlReenrichmentWorkRepository(other_connection, _tables()).observe_version(
+                PRINCIPAL,
+                namespace="policy",
+                key="current",
+                version="ri-v0.3",
+                at=WHEN + timedelta(seconds=1),
+            )
+
+    try:
+        with engine.begin() as connection:
+            repository = SqlReenrichmentWorkRepository(connection, _tables())
+            _observe_current_versions(repository)
+            repository.register(_current_binding(), at=WHEN)
+            claimed = repository.claim(owner="worker_a", at=WHEN)
+            assert claimed is not None
+
+            def apply(_binding: ReenrichmentBinding, _key: str) -> None:
+                nonlocal future
+                future = executor.submit(advance_policy)
+                assert started.wait(timeout=2)
+                with pytest.raises(FuturesTimeoutError):
+                    future.result(timeout=0.2)
+
+            currency = EntityReenrichmentService(repository).apply_claimed(
+                claimed,
+                owner="worker_a",
+                current=SqlCurrentReenrichmentBindings(connection, _tables()),
+                apply=apply,
+                at=WHEN,
+            )
+            assert currency.is_current
+        assert future is not None
+        future.result(timeout=2)
+    finally:
+        executor.shutdown(wait=True)

@@ -48,7 +48,7 @@ The IDs are identifiers and traceability anchors, not runtime configuration.
 | `RI-FC-WP-02` Identity History | One authoritative keyset-paginated history joins direct mutations, completed identity operations/effects, and legacy merge lineage without scraping proposal/review records. | IMPLEMENTED |
 | `RI-FC-WP-03` Re-enrichment | All nine exact triggers are registered from existing authorized mutation paths in the same unit of work. Immutable bounded bindings, Principal/work locks, database-time lease checks, post-apply currency validation, and atomic settlement prevent obsolete or duplicate derived mutation. | IMPLEMENTED |
 | `RI-FC-WP-04` Proposal/Review | Generated discriminated payload schemas cover all proposal families; accepted merge/split proposals produce operator-preview handoffs and never execute identity correction. | IMPLEMENTED |
-| `RI-FC-WP-05` Security/Principal | `version_content(version_id)` remains an internal method behind the already Principal-scoped capture workflow; no RI capability can invoke it directly. | `NOT_APPLICABLE_TO_RI_FINAL_COMPLETION` |
+| `RI-FC-WP-05` Security/Principal | `version_content` and `span_faults` require a resolved Principal context and predicate `capture_versions.owner_principal_id`; foreign and absent opaque identifiers have the same result. Two-Principal controls make deletion of either predicate fail. | IMPLEMENTED_CORRECTIVE |
 | `RI-FC-WP-06` MCP/Profiles/Documentation | The added public capability names, neutral commands, schemas, dispatch, purpose/profile bindings, runbooks, and current-state counts are synchronized. | IMPLEMENTED |
 | `RI-FC-WP-07` Test/Mutation Audit | Executable non-database unit, contract, security, architecture, transport, and migration-shape tests exercise the new paths and known escape classes. Focused isolated-PostgreSQL tests define the database/concurrency evidence set but were collection-only in this environment. | IMPLEMENTED_PENDING_FRESH_HEAD_VALIDATION |
 | `RI-FC-WP-08` Commissioning | A fail-closed commissioning procedure is documented in `ops/runbooks/relationship-intelligence.md`. | PROCEDURE_ONLY_NOT_EXECUTED |
@@ -139,7 +139,8 @@ uses these evidence classes:
 - FAST: the repository's exact non-database marker expression;
 - focused application/transport/security/concurrency: identity correction,
   identity history, re-enrichment, proposal/review, remote exposure, Principal
-  isolation, and profile parity;
+  isolation (including capture-version and proposal-span validation), and
+  profile parity;
 - migration: a single Alembic head and offline SQL generation, with historical
   digest settlement deliberately fail-closed offline because canonical digests
   are data-dependent;
@@ -149,24 +150,16 @@ uses these evidence classes:
 
 | Evidence | Exact result |
 |---|---|
-| Definitive final FAST | `14196 passed, 1546 deselected in 559.48s` |
-| Final corrective document/count guards | `50 passed in 114.42s` |
-| Historical standalone architecture, permission-matched synthetic local fixtures | `4706 passed in 296.41s`; the final corrective FAST includes the architecture selection |
-| Architecture, restricted-sandbox attempt | `4703 passed, 3 failed in 297.90s`; all three failures were `PermissionError: [Errno 1]` at synthetic local TCP/Unix socket bind, and the permission-matched rerun above passed |
-| Focused transport | `447 passed, 1 deselected` |
-| Transport parity | `257 passed` |
-| Policy/security exhaustive | `582 passed` |
-| Focused schema/relationship | `126 passed, 434 deselected` |
-| Identity history/privacy/transport | `362 passed` |
-| Entity privacy regression | `96 passed` |
-| Remote-request replay | `55 passed` |
-| Ruff format | `895 files already formatted` |
+ | Integrated corrective FAST | pending exact frozen-tree rerun |
+ | Integrated corrective architecture | pending exact frozen-tree rerun |
+ | Integrated focused affected set | pending |
+ | Ruff format | pending post-integration check |
 | Ruff lint | `All checks passed!` |
 | mypy | `Success: no issues found in 424 source files` |
 | Whitespace | `git diff --check` passed |
 | Alembic graph | one head: `8e1c4a7b2d90` |
 | Alembic offline SQL | passed with a synthetic non-connecting PostgreSQL URL; the preceding no-URL attempt failed closed as required |
-| Isolated PostgreSQL affected set | `28` tests collected; not executed because `MY_PA_DATABASE_URL` is unset; no database pass is claimed |
+| Isolated PostgreSQL affected set | pending collection; not executed because `MY_PA_DATABASE_URL` is unset; no database pass is claimed |
 
 The full database tier is not required by the campaign exception rule and was
 not run: `FULL_DB_TIER_NOT_RUN_TARGETED_EVIDENCE_SUFFICIENT`. No production,

@@ -311,9 +311,17 @@ def test_split_preview_and_apply_restore_exact_states_in_inverse_order_and_repla
         (IdentityEffectFamily.RELATIONSHIP_MEMORY, "mem_aaaa0001aaaa01"),
         (IdentityEffectFamily.ENTITY, MERGED),
     ]
-    assert [(effect.before_state, effect.after_state) for effect in receipt.effects] == [
-        (source.after_state, source.before_state) for source in reversed(entities.effects)
-    ]
+    for effect, source in zip(receipt.effects, reversed(entities.effects), strict=True):
+        assert effect.before_state == source.after_state
+        expected_semantics = {
+            key: value for key, value in source.before_state.items() if key != "version"
+        }
+        restored_semantics = {
+            key: value for key, value in effect.after_state.items() if key != "version"
+        }
+        assert restored_semantics == expected_semantics
+        if effect.family is IdentityEffectFamily.ENTITY:
+            assert effect.after_state["version"] > source.after_state["version"]
 
     replay = _apply(service, _command(report))
     assert replay.replayed

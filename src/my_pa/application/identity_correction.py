@@ -129,7 +129,6 @@ from my_pa.domain.relationship.identity_correction import (
     plan_digest_for,
     preview_digest_for,
     sequence_effects,
-    sequence_inverse_effects,
     state_digest,
 )
 from my_pa.domain.relationship.proposal_payload import EntityProposalKind, schema_for
@@ -554,7 +553,7 @@ def plan_entities(survivor_entity_id: str, merged: Sequence[Entity]) -> tuple[_R
             after_state={
                 "status": EntityStatus.MERGED_REDIRECT.value,
                 "superseded_by_entity_id": survivor_entity_id,
-                "version": entity.version,
+                "version": entity.version + 1,
             },
             expected_version=entity.version,
         )
@@ -1617,8 +1616,8 @@ class IdentityCorrectionService:
                 self._memories.restore_identity_effect(command.principal_id, effect)
             else:
                 self._entities.restore_identity_effect(command.principal_id, effect)
-        effects = sequence_inverse_effects(
-            source_effects,
+        effects = _sequence_split_effects(
+            drafts,
             identity_operation_id=opened.identity_operation_id,
             principal_id=command.principal_id,
             recorded_at=moment,
@@ -2510,16 +2509,71 @@ _MEMORY_EFFECT_FAMILIES: Final = frozenset(
 
 
 def _inverse_drafts(effects: Sequence[IdentityEffect]) -> tuple[IdentityEffectDraft, ...]:
-    """The source ledger reversed as exact, content-blind row restorations."""
+    """The source ledger reversed as content-blind semantic restorations.
+
+    The source effect remains the immutable historical record of the exact
+    pre-merge state. A split must not write its old concurrency token back onto
+    the canonical row: doing so would create an ABA window in which a command
+    read before the merge could succeed after the split. The five version-owned
+    families therefore restore every semantic field while advancing from the
+    post-merge token.
+    """
+    versioned = {
+        IdentityEffectFamily.ENTITY,
+        IdentityEffectFamily.ALIAS,
+        IdentityEffectFamily.IDENTIFIER,
+        IdentityEffectFamily.ASSIGNMENT,
+        IdentityEffectFamily.RELATIONSHIP,
+    }
+
+    def restored_state(effect: IdentityEffect) -> Mapping[str, object]:
+        restored = dict(effect.before_state)
+        if effect.family in versioned:
+            current_version = effect.after_state.get("version")
+            if not isinstance(current_version, int):
+                raise ValueError("a versioned identity effect records its resulting version")
+            restored["version"] = current_version + 1
+        return restored
+
     return tuple(
         IdentityEffectDraft(
             family=effect.family,
             record_id=effect.record_id,
             kind=effect.kind,
             before_state=effect.after_state,
-            after_state=effect.before_state,
+            after_state=restored_state(effect),
         )
         for effect in reversed(effects)
+    )
+
+
+def _sequence_split_effects(
+    drafts: Sequence[IdentityEffectDraft],
+    *,
+    identity_operation_id: str,
+    principal_id: str,
+    recorded_at: datetime,
+) -> tuple[IdentityEffect, ...]:
+    """Materialize already reverse-ordered split effects without re-sorting them."""
+    subjects = [(draft.family, draft.record_id) for draft in drafts]
+    if len(set(subjects)) != len(subjects):
+        raise ValueError("an identity operation records one effect per record")
+    return tuple(
+        IdentityEffect(
+            effect_id=issue_identifier(IdKind.ENTITY_IDENTITY_EFFECT),
+            identity_operation_id=identity_operation_id,
+            principal_id=principal_id,
+            sequence=sequence,
+            family=draft.family,
+            record_id=draft.record_id,
+            kind=draft.kind,
+            before_state=draft.before_state,
+            after_state=draft.after_state,
+            before_sha256=state_digest(draft.before_state),
+            after_sha256=state_digest(draft.after_state),
+            recorded_at=recorded_at,
+        )
+        for sequence, draft in enumerate(drafts, start=1)
     )
 
 

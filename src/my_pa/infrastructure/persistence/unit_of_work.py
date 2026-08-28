@@ -99,6 +99,7 @@ from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.reveal import Reveal
 from my_pa.domain.capture.review import (
+    CorrectionPatch,
     Disposition,
     EntityProposalReviewCase,
     EntityProposalReviewDecision,
@@ -202,6 +203,7 @@ from my_pa.infrastructure.persistence.tables import (
     JobState,
     capture_assertions,
     captures,
+    entity_proposal_review_decisions,
     entity_reenrichment_subjects,
     entity_reenrichment_version_watermarks,
     entity_reenrichment_work,
@@ -714,6 +716,38 @@ class _Reviews(ReviewRepository):
             )
         )
 
+    def entity_proposal_decision(
+        self, principal_id: str, decision_id: str
+    ) -> EntityProposalReviewDecision | None:
+        row = _read(
+            lambda: (
+                self._connection.execute(
+                    select(entity_proposal_review_decisions).where(
+                        entity_proposal_review_decisions.c.principal_id == principal_id,
+                        entity_proposal_review_decisions.c.decision_id == decision_id,
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        )
+        if row is None:
+            return None
+        corrected = row["corrected_payload"]
+        return EntityProposalReviewDecision(
+            decision_id=str(row["decision_id"]),
+            proposal_id=str(row["proposal_id"]),
+            review_case_id=str(row["review_case_id"]),
+            principal_id=str(row["principal_id"]),
+            sequence=int(row["sequence"]),
+            disposition=Disposition(str(row["disposition"])),
+            reason=row["reason"],
+            corrected_payload=(None if corrected is None else CorrectionPatch.of(dict(corrected))),
+            correlation_id=str(row["correlation_id"]),
+            audit_id=str(row["audit_id"]),
+            decided_at=row["decided_at"],
+        )
+
     def record_entity_proposal_decision(
         self, principal_id: str, decision: EntityProposalReviewDecision
     ) -> None:
@@ -1036,6 +1070,17 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         )
 
     @property
+    def reenrichment(self) -> SqlReenrichmentWorkRepository:
+        return SqlReenrichmentWorkRepository(
+            self._open,
+            ReenrichmentTables(
+                entity_reenrichment_work,
+                entity_reenrichment_subjects,
+                entity_reenrichment_version_watermarks,
+            ),
+        )
+
+    @property
     def write_requests(self) -> WriteRequestRepository:
         return SqlWriteRequestRepository(self._open)
 
@@ -1106,18 +1151,6 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def identity_history(self) -> SqlIdentityHistoryQuery:
         """Authoritative identity history on this transaction's connection."""
         return SqlIdentityHistoryQuery(self._open)
-
-    @property
-    def reenrichment(self) -> SqlReenrichmentWorkRepository:
-        """Durable RI invalidation work on this transaction's connection."""
-        return SqlReenrichmentWorkRepository(
-            self._open,
-            ReenrichmentTables(
-                entity_reenrichment_work,
-                entity_reenrichment_subjects,
-                entity_reenrichment_version_watermarks,
-            ),
-        )
 
     @property
     def relationship_memory(self) -> RelationshipMemoryRepository:

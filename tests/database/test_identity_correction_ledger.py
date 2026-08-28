@@ -36,13 +36,17 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.ports import UnknownScopeError
+from my_pa.domain.relationship.entity import EntityStatus
 from my_pa.domain.relationship.identity_correction import (
     IDENTITY_PREVIEW_LIFETIME,
+    IdentityEffect,
     IdentityEffectFamily,
     IdentityEffectKind,
     state_digest,
 )
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 
 pytestmark = pytest.mark.database
 
@@ -417,6 +421,106 @@ def test_the_server_admits_one_split_bound_to_one_completed_merge(
             {"operation_id": split_operation},
         ).scalar_one()
     assert stored == OPERATION
+
+
+def test_completed_split_lookup_ignores_failed_and_in_progress_attempts(
+    migrated_engine: Engine,
+) -> None:
+    """RI-FC-WP-07: only a completed inverse prevents another split attempt."""
+    _insert_preview(migrated_engine)
+    _insert_operation(migrated_engine)
+    _insert_effect(migrated_engine)
+    for suffix, state in (("bbbb0002bbbb02", "failed"), ("cccc0003cccc03", "in_progress")):
+        preview_id = f"eipv_{suffix}"
+        _insert_preview(
+            migrated_engine,
+            preview_id=preview_id,
+            operation_type="split",
+            source_identity_operation_id=OPERATION,
+        )
+        _insert_operation(
+            migrated_engine,
+            identity_operation_id=f"eiop_{suffix}",
+            operation_type="split",
+            preview_id=preview_id,
+            idempotency_key=f"split-{state}",
+            receipt_id=f"rcpt_{suffix}",
+            state=state,
+            completed_at=None if state == "in_progress" else WHEN + timedelta(seconds=3),
+            source_identity_operation_id=OPERATION,
+        )
+    with migrated_engine.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        assert repository.split_for_source_operation(PRINCIPAL_A, OPERATION) is None
+    completed_preview = "eipv_dddd0004dddd04"
+    completed_operation = "eiop_dddd0004dddd04"
+    _insert_preview(
+        migrated_engine,
+        preview_id=completed_preview,
+        operation_type="split",
+        source_identity_operation_id=OPERATION,
+    )
+    _insert_operation(
+        migrated_engine,
+        identity_operation_id=completed_operation,
+        operation_type="split",
+        preview_id=completed_preview,
+        idempotency_key="split-completed",
+        receipt_id="rcpt_dddd0004dddd04",
+        source_identity_operation_id=OPERATION,
+    )
+    with migrated_engine.connect() as connection:
+        found = SqlEntityRepository(connection).split_for_source_operation(PRINCIPAL_A, OPERATION)
+    assert found is not None
+    assert found.identity_operation_id == completed_operation
+
+
+def test_entity_split_restores_semantics_with_a_monotonic_token(
+    migrated_engine: Engine,
+) -> None:
+    """RI-FC-WP-07: a pre-merge version cannot become current again after split."""
+    before = {"status": "active", "superseded_by_entity_id": None, "version": 1}
+    after = {
+        "status": "merged_redirect",
+        "superseded_by_entity_id": SURVIVOR,
+        "version": 2,
+    }
+    effect = IdentityEffect(
+        effect_id="eief_bbbb0002bbbb02",
+        identity_operation_id=OPERATION,
+        principal_id=PRINCIPAL_A,
+        sequence=1,
+        family=IdentityEffectFamily.ENTITY,
+        record_id=MERGED,
+        kind=IdentityEffectKind.ENTITY_REDIRECTED,
+        before_state=before,
+        after_state=after,
+        before_sha256=state_digest(before),
+        after_sha256=state_digest(after),
+        recorded_at=WHEN,
+    )
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                f"UPDATE {SCHEMA}.entities SET status = 'merged_redirect', "  # noqa: S608
+                "superseded_by_entity_id = :survivor, version = 2 WHERE entity_id = :merged"
+            ),
+            {"survivor": SURVIVOR, "merged": MERGED},
+        )
+        repository = SqlEntityRepository(connection)
+        repository.restore_identity_effect(PRINCIPAL_A, effect)
+        restored = repository.get(PRINCIPAL_A, MERGED)
+        assert restored is not None
+        assert restored.status is EntityStatus.ACTIVE
+        assert restored.superseded_by_entity_id is None
+        assert restored.version == 3
+        with pytest.raises(UnknownScopeError):
+            repository.redirect_entity(
+                PRINCIPAL_A,
+                MERGED,
+                SURVIVOR,
+                expected_version=1,
+            )
 
 
 # --- the append-only effect ledger -------------------------------------------

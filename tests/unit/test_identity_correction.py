@@ -17,14 +17,25 @@ about what may go in `before_state` and `after_state`.
 
 from __future__ import annotations
 
-from dataclasses import fields
+from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from itertools import permutations
 from typing import Final
 
 import pytest
 
+from my_pa.application.errors import ConflictError, DeniedError, NotFoundError
+from my_pa.application.identity_correction import (
+    IdentityCorrectionService,
+    SplitCommand,
+    SplitPreviewCommand,
+    SplitPreviewReport,
+    SplitReceipt,
+    _inverse_drafts,
+    plan_entities,
+)
 from my_pa.domain.common.identifiers import InvalidIdentifierError
+from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
 from my_pa.domain.relationship.governance import ActorClass
 from my_pa.domain.relationship.identity_correction import (
     IDENTITY_PREVIEW_LIFETIME,
@@ -48,11 +59,13 @@ from my_pa.domain.relationship.identity_correction import (
     sequence_inverse_effects,
     state_digest,
 )
+from my_pa.domain.relationship.normalization import normalize_name
 
 PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 SURVIVOR: Final = "ent_aaaa0001aaaa0001"
 MERGED: Final = "ent_bbbb0002bbbb0002"
 OTHER_MERGED: Final = "ent_cccc0003cccc0003"
+OTHER_PRINCIPAL: Final = "prn_bbbb0002bbbb0002bbbb0002"
 
 PREVIEW: Final = "eipv_aaaa0001aaaa01"
 OPERATION: Final = "eiop_aaaa0001aaaa01"
@@ -460,6 +473,353 @@ def test_an_effect_records_a_change_rather_than_a_repetition() -> None:
             kind=IdentityEffectKind.OWNER_REPARENTED,
             before_state={"entity_id": MERGED},
             after_state={"entity_id": MERGED},
+        )
+
+
+@pytest.mark.parametrize(
+    ("family", "record_id"),
+    [
+        (IdentityEffectFamily.ENTITY, MERGED),
+        (IdentityEffectFamily.ALIAS, "eals_aaaa0001aaaa01"),
+        (IdentityEffectFamily.IDENTIFIER, "xid_aaaa0001aaaa0001"),
+        (IdentityEffectFamily.ASSIGNMENT, "asn_aaaa0001aaaa0001"),
+        (IdentityEffectFamily.RELATIONSHIP, "erel_aaaa0001aaaa01"),
+    ],
+)
+def test_a_split_restores_semantics_without_restoring_an_old_version(
+    family: IdentityEffectFamily, record_id: str
+) -> None:
+    """RI-FC-WP-07: inverse state is historical evidence, not a reusable token."""
+    before = {"semantic": "before", "version": 7}
+    after = {"semantic": "after", "version": 8}
+    source = IdentityEffect(
+        effect_id=EFFECT,
+        identity_operation_id=OPERATION,
+        principal_id=PRINCIPAL,
+        sequence=1,
+        family=family,
+        record_id=record_id,
+        kind=(
+            IdentityEffectKind.ENTITY_REDIRECTED
+            if family is IdentityEffectFamily.ENTITY
+            else IdentityEffectKind.OWNER_REPARENTED
+        ),
+        before_state=before,
+        after_state=after,
+        before_sha256=state_digest(before),
+        after_sha256=state_digest(after),
+        recorded_at=WHEN,
+    )
+
+    restored = _inverse_drafts((source,))[0]
+
+    assert source.before_state == {"semantic": "before", "version": 7}
+    assert restored.before_state == {"semantic": "after", "version": 8}
+    assert restored.after_state == {"semantic": "before", "version": 9}
+
+
+def test_a_redirect_advances_the_merged_entity_version() -> None:
+    merged = Entity(
+        entity_id=MERGED,
+        principal_id=PRINCIPAL,
+        entity_type=EntityType.PERSON,
+        canonical_name=normalize_name("Synthetic Person"),
+        display_name="Synthetic Person",
+        status=EntityStatus.ACTIVE,
+        created_at=WHEN,
+        updated_at=WHEN,
+        version=7,
+    )
+
+    change = plan_entities(SURVIVOR, (merged,))[0]
+
+    assert change.before_state["version"] == 7
+    assert change.after_state["version"] == 8
+    assert change.expected_version == 7
+
+
+class _SplitEntities:
+    """The split service's exact port surface, kept deliberately in memory."""
+
+    def __init__(self, source: IdentityOperation, effects: tuple[IdentityEffect, ...]) -> None:
+        self.source = source
+        self.effects_by_operation = {source.identity_operation_id: effects}
+        self.preview: IdentityPreview | None = None
+        self.operations_by_key: dict[str, IdentityOperation] = {}
+        self.restored: list[IdentityEffect] = []
+        self.survivor = Entity(
+            entity_id=SURVIVOR,
+            principal_id=PRINCIPAL,
+            entity_type=EntityType.PERSON,
+            canonical_name=normalize_name("Synthetic Survivor"),
+            display_name="Synthetic Survivor",
+            status=EntityStatus.ACTIVE,
+            created_at=WHEN,
+            updated_at=WHEN,
+            version=3,
+        )
+
+    def identity_operation(self, principal_id: str, operation_id: str) -> IdentityOperation | None:
+        if principal_id != PRINCIPAL or operation_id != self.source.identity_operation_id:
+            return None
+        return self.source
+
+    def split_for_source_operation(
+        self, principal_id: str, source_operation_id: str
+    ) -> IdentityOperation | None:
+        if principal_id != PRINCIPAL:
+            return None
+        return next(
+            (
+                operation
+                for operation in self.operations_by_key.values()
+                if operation.source_identity_operation_id == source_operation_id
+                and operation.state is IdentityOperationState.COMPLETED
+            ),
+            None,
+        )
+
+    def identity_effects(self, principal_id: str, operation_id: str) -> list[IdentityEffect]:
+        if principal_id != PRINCIPAL:
+            return []
+        return list(self.effects_by_operation.get(operation_id, ()))
+
+    def identity_effect_matches_after_state(
+        self, principal_id: str, effect: IdentityEffect
+    ) -> bool:
+        return principal_id == PRINCIPAL
+
+    def get(self, principal_id: str, entity_id: str) -> Entity | None:
+        if principal_id == PRINCIPAL and entity_id == SURVIVOR:
+            return self.survivor
+        return None
+
+    def record_identity_preview(self, principal_id: str, preview: IdentityPreview) -> None:
+        assert principal_id == PRINCIPAL
+        self.preview = preview
+
+    def identity_operation_for_key(
+        self, principal_id: str, idempotency_key: str
+    ) -> IdentityOperation | None:
+        return None if principal_id != PRINCIPAL else self.operations_by_key.get(idempotency_key)
+
+    def identity_preview(self, principal_id: str, preview_id: str) -> IdentityPreview | None:
+        if (
+            principal_id != PRINCIPAL
+            or self.preview is None
+            or self.preview.preview_id != preview_id
+        ):
+            return None
+        return self.preview
+
+    def serialize_identifier_entity_scopes(
+        self, principal_id: str, entity_ids: frozenset[str]
+    ) -> None:
+        assert principal_id == PRINCIPAL
+        assert entity_ids == {SURVIVOR, MERGED}
+
+    def consume_identity_preview(self, principal_id: str, preview_id: str, *, at: datetime) -> bool:
+        if (
+            principal_id != PRINCIPAL
+            or self.preview is None
+            or self.preview.preview_id != preview_id
+            or self.preview.is_consumed
+        ):
+            return False
+        self.preview = replace(self.preview, consumed_at=at)
+        return True
+
+    def record_identity_operation(self, principal_id: str, operation: IdentityOperation) -> None:
+        assert principal_id == PRINCIPAL
+        self.operations_by_key[operation.idempotency_key] = operation
+
+    def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
+        assert principal_id == PRINCIPAL
+        self.restored.append(effect)
+
+    def record_identity_effects(
+        self, principal_id: str, effects: tuple[IdentityEffect, ...]
+    ) -> None:
+        assert principal_id == PRINCIPAL
+        assert self.operations_by_key
+        operation = next(reversed(self.operations_by_key.values()))
+        self.effects_by_operation[operation.identity_operation_id] = effects
+
+    def complete_identity_operation(self, principal_id: str, operation: IdentityOperation) -> None:
+        assert principal_id == PRINCIPAL
+        self.operations_by_key[operation.idempotency_key] = operation
+
+
+class _SplitMemories:
+    def __init__(self) -> None:
+        self.restored: list[IdentityEffect] = []
+
+    def identity_effect_matches_after_state(
+        self, principal_id: str, effect: IdentityEffect
+    ) -> bool:
+        return principal_id == PRINCIPAL
+
+    def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
+        assert principal_id == PRINCIPAL
+        self.restored.append(effect)
+
+
+def _split_fixture() -> tuple[_SplitEntities, _SplitMemories, IdentityCorrectionService]:
+    drafts = (
+        IdentityEffectDraft(
+            family=IdentityEffectFamily.ENTITY,
+            record_id=MERGED,
+            kind=IdentityEffectKind.ENTITY_REDIRECTED,
+            before_state={"status": "active", "superseded_by_entity_id": None, "version": 7},
+            after_state={
+                "status": "merged_redirect",
+                "superseded_by_entity_id": SURVIVOR,
+                "version": 8,
+            },
+        ),
+        IdentityEffectDraft(
+            family=IdentityEffectFamily.RELATIONSHIP_MEMORY,
+            record_id="mem_aaaa0001aaaa01",
+            kind=IdentityEffectKind.DERIVED_STATE_INVALIDATED,
+            before_state={"subject_entity_id": MERGED, "provenance": "source"},
+            after_state={"subject_entity_id": SURVIVOR, "provenance": "source"},
+        ),
+    )
+    effects = sequence_effects(
+        drafts,
+        identity_operation_id=OPERATION,
+        principal_id=PRINCIPAL,
+        recorded_at=WHEN,
+    )
+    source = an_operation(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=(MERGED,),
+        effect_count=len(effects),
+        effects_digest=effects_digest_for(effects),
+    )
+    entities = _SplitEntities(source, effects)
+    memories = _SplitMemories()
+    return entities, memories, IdentityCorrectionService(entities, memories)  # type: ignore[arg-type]
+
+
+def _split_preview(service: IdentityCorrectionService) -> SplitPreviewReport:
+    return service.split_preview(
+        SplitPreviewCommand(
+            principal_id=PRINCIPAL,
+            source_identity_operation_id=OPERATION,
+            reason="reverse the synthetic mistaken merge",
+        ),
+        at=WHEN,
+        requested_by="operator",
+        actor_class=ActorClass.USER,
+        has_operator_authority=True,
+    )
+
+
+def _split_apply(
+    service: IdentityCorrectionService, preview: IdentityPreview, **overrides: object
+) -> SplitReceipt:
+    values: dict[str, object] = {
+        "principal_id": PRINCIPAL,
+        "preview_id": preview.preview_id,
+        "preview_digest": preview.preview_digest,
+        "idempotency_key": "split-0001",
+        "reason": "reverse the synthetic mistaken merge",
+    }
+    values.update(overrides)
+    return service.split_apply(
+        SplitCommand(**values),
+        at=WHEN + timedelta(seconds=1),
+        correlation_id=CORRELATION,
+        audit_id=AUDIT,
+        performed_by="operator",
+        actor_class=ActorClass.USER,
+        has_operator_authority=True,
+    )
+
+
+def test_split_service_restores_semantics_memory_provenance_and_replays_exactly() -> None:
+    entities, memories, service = _split_fixture()
+    report = _split_preview(service)
+
+    first = _split_apply(service, report.preview)
+    replay = _split_apply(service, report.preview)
+
+    assert first.replayed is False
+    assert replay == replace(first, replayed=True)
+    assert [effect.family for effect in entities.restored] == [IdentityEffectFamily.ENTITY]
+    assert [effect.family for effect in memories.restored] == [
+        IdentityEffectFamily.RELATIONSHIP_MEMORY
+    ]
+    memory_inverse = next(
+        effect
+        for effect in first.effects
+        if effect.family is IdentityEffectFamily.RELATIONSHIP_MEMORY
+    )
+    assert memory_inverse.after_state == {
+        "subject_entity_id": MERGED,
+        "provenance": "source",
+    }
+    entity_inverse = next(
+        effect for effect in first.effects if effect.family is IdentityEffectFamily.ENTITY
+    )
+    assert entity_inverse.after_state["version"] == 9
+
+
+def test_split_service_refuses_expiry_stale_version_and_incomplete_ledger() -> None:
+    entities, _, service = _split_fixture()
+    report = _split_preview(service)
+    with pytest.raises(ConflictError):
+        service.split_apply(
+            SplitCommand(
+                principal_id=PRINCIPAL,
+                preview_id=report.preview.preview_id,
+                preview_digest=report.preview.preview_digest,
+                idempotency_key="expired",
+                reason="reverse the synthetic mistaken merge",
+            ),
+            at=report.preview.expires_at,
+            correlation_id=CORRELATION,
+            audit_id=AUDIT,
+            performed_by="operator",
+            actor_class=ActorClass.USER,
+            has_operator_authority=True,
+        )
+    entities.survivor = replace(entities.survivor, version=4)
+    with pytest.raises(ConflictError):
+        _split_apply(service, report.preview, idempotency_key="stale")
+
+    incomplete_entities, _, incomplete = _split_fixture()
+    incomplete_entities.source = replace(incomplete_entities.source, effect_count=99)
+    with pytest.raises(ConflictError):
+        _split_preview(incomplete)
+
+
+def test_split_service_refuses_cross_principal_and_missing_operator_authority() -> None:
+    _, _, service = _split_fixture()
+    with pytest.raises(NotFoundError):
+        service.split_preview(
+            SplitPreviewCommand(
+                principal_id=OTHER_PRINCIPAL,
+                source_identity_operation_id=OPERATION,
+                reason="reverse the synthetic mistaken merge",
+            ),
+            at=WHEN,
+            requested_by="operator",
+            actor_class=ActorClass.USER,
+            has_operator_authority=True,
+        )
+    with pytest.raises(DeniedError):
+        service.split_preview(
+            SplitPreviewCommand(
+                principal_id=PRINCIPAL,
+                source_identity_operation_id=OPERATION,
+                reason="reverse the synthetic mistaken merge",
+            ),
+            at=WHEN,
+            requested_by="operator",
+            actor_class=ActorClass.USER,
+            has_operator_authority=False,
         )
 
 

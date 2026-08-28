@@ -169,6 +169,12 @@ from sqlalchemy import Engine
 
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.apple_machine import AppleBridgeIdentity, AppleMachineControl
+from my_pa.application.entity_reenrichment import (
+    EntityReenrichmentService,
+    ProductionReenrichmentCaller,
+    ReenrichmentApplication,
+    ReenrichmentWork,
+)
 from my_pa.application.goodnotes_gsqs_b0_workflow import WorkflowPorts
 from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
@@ -181,6 +187,7 @@ from my_pa.domain.capture.errors import CaptureError
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.user_account import TokenClaimsError
+from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.gsqs_routellm_transport import post_chat_completion
 from my_pa.infrastructure.managed_document_stores.filesystem.store import (
@@ -194,8 +201,18 @@ from my_pa.infrastructure.persistence.capture_clients import authenticate_client
 from my_pa.infrastructure.persistence.commitment_management import (
     SqlAlchemyCommitmentManagementUnitOfWork,
 )
+from my_pa.infrastructure.persistence.entity_reenrichment import (
+    ReenrichmentTables,
+    SqlCurrentReenrichmentBindings,
+    SqlReenrichmentWorkRepository,
+)
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.registry import configured_source_roots
+from my_pa.infrastructure.persistence.tables import (
+    entity_reenrichment_subjects,
+    entity_reenrichment_version_watermarks,
+    entity_reenrichment_work,
+)
 from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
@@ -571,6 +588,55 @@ class GatewayRuntime:
         self.work_engine.dispose()
         self.audit_engine.dispose()
 
+    def run_reenrichment_once(
+        self,
+        *,
+        owner: str,
+        apply: ReenrichmentApplication,
+        at: datetime | None = None,
+    ) -> bool:
+        """Claim and atomically apply at most one bounded work item."""
+        moment = datetime.now(UTC) if at is None else at
+        tables = ReenrichmentTables(
+            entity_reenrichment_work,
+            entity_reenrichment_subjects,
+            entity_reenrichment_version_watermarks,
+        )
+        with self.work_engine.begin() as connection:
+            repository = SqlReenrichmentWorkRepository(connection, tables)
+            work = repository.claim(owner=owner, at=moment)
+            if work is None:
+                return False
+            EntityReenrichmentService(repository).apply_claimed(
+                work,
+                owner=owner,
+                current=SqlCurrentReenrichmentBindings(connection, tables),
+                apply=apply,
+                at=moment,
+            )
+        return True
+
+    def observe_reenrichment_versions(
+        self,
+        *,
+        principal_id: str,
+        cause: str,
+        at: datetime | None = None,
+    ) -> tuple[ReenrichmentWork, ...]:
+        """Observe server-owned versions and register only real advances."""
+        moment = datetime.now(UTC) if at is None else at
+        tables = ReenrichmentTables(
+            entity_reenrichment_work,
+            entity_reenrichment_subjects,
+            entity_reenrichment_version_watermarks,
+        )
+        with self.work_engine.begin() as connection:
+            return ProductionReenrichmentCaller(
+                SqlReenrichmentWorkRepository(connection, tables),
+                principal_id=principal_id,
+                policy_version=POLICY_VERSION,
+            ).observe_process_versions(principal_id, cause=cause, at=moment)
+
 
 def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     """Compose the gateway from validated configuration.
@@ -626,7 +692,6 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     entra = settings.auth_mode is AuthMode.ENTRA
     principal = None if entra else local_principal()
     producer_origins = relationship_producer_origins(principal)
-
     class _NoRemoteHost:
         def __getattr__(self, name: str) -> Any:  # noqa: ANN401 - refusing protocol sentinel
             raise RuntimeError(f"remote Apple control cannot call a local host: {name}")

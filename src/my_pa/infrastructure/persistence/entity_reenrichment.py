@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from typing import Final
 
-from sqlalchemy import Connection, Table, and_, func, or_, select
+from sqlalchemy import Connection, Table, and_, func, or_, select, tuple_
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
@@ -38,6 +38,7 @@ from my_pa.infrastructure.persistence import conflicting_row
 __all__ = [
     "DEFAULT_REENRICHMENT_LEASE_SECONDS",
     "ReenrichmentTables",
+    "SqlCurrentReenrichmentBindings",
     "SqlReenrichmentWorkRepository",
     "VersionObservation",
 ]
@@ -69,6 +70,187 @@ class VersionObservation:
     @property
     def changed(self) -> bool:
         return self.previous_version is not None and self.previous_version != self.current_version
+
+
+class SqlCurrentReenrichmentBindings:
+    """Current versions read and locked on the worker transaction."""
+
+    def __init__(self, connection: Connection, tables: ReenrichmentTables) -> None:
+        self.connection = connection
+        self._tables = tables
+        self._locked: dict[tuple[ReenrichmentSubjectKind, str], str | None] = {}
+
+    def lock(self, binding: ReenrichmentBinding) -> None:
+        for subject in binding.subjects:
+            self._locked[(subject.kind, subject.subject_id)] = self._read_subject(
+                binding.principal_id, subject.kind, subject.subject_id, lock=True
+            )
+        table = self._tables.version_watermarks
+        keys = [
+            *(("input", item.key) for item in binding.input_versions),
+            *(("producer", item.key) for item in binding.producer_versions),
+            ("policy", "current"),
+        ]
+        if keys:
+            self.connection.execute(
+                select(table.c.namespace, table.c.binding_key)
+                .where(
+                    table.c.principal_id == binding.principal_id,
+                    tuple_(table.c.namespace, table.c.binding_key).in_(keys),
+                )
+                .with_for_update(of=table)
+            ).all()
+
+    def subject_version(
+        self, principal_id: str, kind: ReenrichmentSubjectKind, subject_id: str
+    ) -> str | None:
+        key = (kind, subject_id)
+        if key in self._locked:
+            return self._locked[key]
+        return self._read_subject(principal_id, kind, subject_id, lock=False)
+
+    def input_version(self, principal_id: str, key: str) -> str | None:
+        return self._watermark(principal_id, "input", key)
+
+    def producer_version(self, principal_id: str, key: str) -> str | None:
+        return self._watermark(principal_id, "producer", key)
+
+    def policy_version(self, principal_id: str) -> str | None:
+        return self._watermark(principal_id, "policy", "current")
+
+    def _watermark(self, principal_id: str, namespace: str, key: str) -> str | None:
+        table = self._tables.version_watermarks
+        return self.connection.execute(
+            select(table.c.version).where(
+                table.c.principal_id == principal_id,
+                table.c.namespace == namespace,
+                table.c.binding_key == key,
+            )
+        ).scalar_one_or_none()
+
+    def _read_subject(
+        self,
+        principal_id: str,
+        kind: ReenrichmentSubjectKind,
+        subject_id: str,
+        *,
+        lock: bool,
+    ) -> str | None:
+        # Imported lazily to keep this adapter's injectable queue tables useful
+        # to focused tests without creating a second schema declaration.
+        from my_pa.infrastructure.persistence import tables as schema
+
+        if kind is ReenrichmentSubjectKind.PRINCIPAL:
+            return "1" if subject_id == principal_id else None
+        if kind is ReenrichmentSubjectKind.ENTITY:
+            table, id_column, version = (
+                schema.entities,
+                schema.entities.c.entity_id,
+                schema.entities.c.version,
+            )
+            ownership = schema.entities.c.principal_id
+        elif kind is ReenrichmentSubjectKind.ALIAS:
+            table, id_column, version = (
+                schema.entity_aliases,
+                schema.entity_aliases.c.alias_id,
+                schema.entity_aliases.c.version,
+            )
+            ownership = schema.entity_aliases.c.principal_id
+        elif kind is ReenrichmentSubjectKind.ASSIGNMENT:
+            table, id_column, version = (
+                schema.entity_assignments,
+                schema.entity_assignments.c.assignment_id,
+                schema.entity_assignments.c.version,
+            )
+            ownership = schema.entity_assignments.c.principal_id
+        elif kind is ReenrichmentSubjectKind.RELATIONSHIP:
+            table, id_column, version = (
+                schema.entity_relationships,
+                schema.entity_relationships.c.relationship_id,
+                schema.entity_relationships.c.version,
+            )
+            ownership = schema.entity_relationships.c.principal_id
+        elif kind is ReenrichmentSubjectKind.CAPTURE:
+            table, id_column, version = (
+                schema.captures,
+                schema.captures.c.capture_id,
+                schema.capture_versions.c.version_number,
+            )
+            ownership = schema.captures.c.owner_principal_id
+            statement = (
+                select(version)
+                .select_from(table.join(schema.capture_versions))
+                .where(id_column == subject_id, ownership == principal_id)
+                .order_by(version.desc())
+                .limit(1)
+            )
+            if lock:
+                statement = statement.with_for_update(of=table)
+            value = self.connection.execute(statement).scalar_one_or_none()
+            return None if value is None else str(value)
+        elif kind is ReenrichmentSubjectKind.CAPTURE_VERSION:
+            table, id_column, version = (
+                schema.capture_versions,
+                schema.capture_versions.c.version_id,
+                schema.capture_versions.c.version_number,
+            )
+            ownership = schema.capture_versions.c.owner_principal_id
+        elif kind is ReenrichmentSubjectKind.PROPOSAL:
+            table, id_column, version = (
+                schema.entity_proposals,
+                schema.entity_proposals.c.proposal_id,
+                schema.entity_proposals.c.state,
+            )
+            ownership = schema.entity_proposals.c.principal_id
+        elif kind is ReenrichmentSubjectKind.REVIEW_DECISION:
+            table, id_column, version = (
+                schema.entity_proposal_review_decisions,
+                schema.entity_proposal_review_decisions.c.decision_id,
+                schema.entity_proposal_review_decisions.c.sequence,
+            )
+            ownership = schema.entity_proposal_review_decisions.c.principal_id
+        elif kind is ReenrichmentSubjectKind.IDENTITY_OPERATION:
+            table, id_column, version = (
+                schema.entity_identity_operations,
+                schema.entity_identity_operations.c.identity_operation_id,
+                schema.entity_identity_operations.c.effects_digest,
+            )
+            ownership = schema.entity_identity_operations.c.principal_id
+        elif kind is ReenrichmentSubjectKind.SOURCE_VERSION:
+            table, id_column, version = (
+                schema.source_object_versions,
+                schema.source_object_versions.c.version_id,
+                schema.source_object_versions.c.version_id,
+            )
+            ownership = None
+        elif kind is ReenrichmentSubjectKind.SOURCE_OBJECT:
+            table, id_column, version = (
+                schema.source_objects,
+                schema.source_objects.c.source_object_id,
+                schema.source_object_versions.c.version_id,
+            )
+            ownership = None
+            statement = (
+                select(version)
+                .select_from(table.join(schema.source_object_versions))
+                .where(id_column == subject_id)
+                .order_by(schema.source_object_versions.c.observed_at.desc(), version.desc())
+                .limit(1)
+            )
+            if lock:
+                statement = statement.with_for_update(of=table)
+            value = self.connection.execute(statement).scalar_one_or_none()
+            return None if value is None else str(value)
+        else:  # pragma: no cover - closed enum exhaustiveness
+            raise AssertionError(kind)
+        criteria = [id_column == subject_id]
+        if ownership is not None:
+            criteria.append(ownership == principal_id)
+        statement = select(version).where(*criteria)
+        if lock:
+            statement = statement.with_for_update(of=table)
+        value = self.connection.execute(statement).scalar_one_or_none()
+        return None if value is None else str(value)
 
 
 def _owner(value: str) -> str:
@@ -174,6 +356,10 @@ class SqlReenrichmentWorkRepository:
         if not 1 <= lease_seconds <= 900:
             raise ValueError("a re-enrichment lease is bounded")
         table = self._tables.work
+        # A worker that spent its final attempt until the lease expired cannot
+        # be claimed again, but it also must not remain ``running`` forever.
+        # Terminalize those rows under the same transaction that searches for
+        # the next claim so operational status has no stranded final attempt.
         self._connection.execute(
             table.update()
             .where(
@@ -227,9 +413,6 @@ class SqlReenrichmentWorkRepository:
         )
         return self._required(str(candidate.principal_id), str(candidate.work_id))
 
-    def complete(self, principal_id: str, work_id: str, *, owner: str, at: datetime) -> bool:
-        return self._terminal(principal_id, work_id, owner=owner, state=_SUCCEEDED, at=at)
-
     def apply_claimed(
         self,
         principal_id: str,
@@ -252,6 +435,10 @@ class SqlReenrichmentWorkRepository:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         ensure_utc(at)
         owner = _owner(owner)
+        if not isinstance(current, SqlCurrentReenrichmentBindings):
+            raise TypeError("SQL re-enrichment requires its transactional current binding view")
+        if current.connection is not self._connection:
+            raise ValueError("re-enrichment currency and application share one transaction")
         self._lock_principal(principal_id)
         table = self._tables.work
         row = self._connection.execute(
@@ -268,6 +455,7 @@ class SqlReenrichmentWorkRepository:
         if row is None:
             raise ValueError("re-enrichment application requires this worker's live claim")
         work = self._hydrate(row)
+        current.lock(work.binding)
         currency = assess_currency(work.binding, current)
         if not currency.is_current:
             if not self._terminal_now(
@@ -311,6 +499,9 @@ class SqlReenrichmentWorkRepository:
                 raise RuntimeError("the re-enrichment lease was lost before stale completion")
             return post_apply_currency
         return post_apply_currency
+
+    def complete(self, principal_id: str, work_id: str, *, owner: str, at: datetime) -> bool:
+        return self._terminal(principal_id, work_id, owner=owner, state=_SUCCEEDED, at=at)
 
     def mark_stale(
         self,

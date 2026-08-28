@@ -249,11 +249,13 @@ from my_pa.application.entity_directed import EntityDirectedService
 from my_pa.application.entity_governance import (
     EntityGovernanceService,
     EntityProposalReviewService,
+    IdentityCorrectionHandoffState,
     ObserveCommand,
     QuarantinedObservationError,
     ResolutionNotPermittedError,
     ResolveMentionCommand,
     ReviewAuthorityError,
+    ReviewedPayloadSource,
     UnknownEntityError,
     UnknownObservationError,
 )
@@ -262,6 +264,7 @@ from my_pa.application.entity_governance import (
 )
 from my_pa.application.entity_reenrichment import (
     TRIGGERS_BY_MUTATION_CAPABILITY,
+    ProductionReenrichmentCaller,
     ReenrichmentWorkRepository,
     register_mutation_reenrichment,
 )
@@ -452,6 +455,7 @@ from my_pa.domain.relationship.entity import (
     StaleDirectedVersionError,
 )
 from my_pa.domain.relationship.governance import (
+    IDENTITY_CORRECTION_PROPOSAL_KINDS,
     ActorClass,
     EntityMutationConflictError,
     EntityObservation,
@@ -480,7 +484,12 @@ from my_pa.domain.relationship.memory import (
     StaleMemoryVersionError,
 )
 from my_pa.domain.relationship.normalization import NormalizationError
-from my_pa.domain.relationship.proposal_payload import ProposalPayloadError
+from my_pa.domain.relationship.proposal_payload import EntityProposalPayload, ProposalPayloadError
+from my_pa.domain.relationship.reenrichment import (
+    ReenrichmentSubject,
+    ReenrichmentSubjectKind,
+    ReenrichmentTrigger,
+)
 from my_pa.domain.relationship.resolution import EntityResolution
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -2307,6 +2316,21 @@ def _register_reenrichment_result(
     )
 
 
+# These handlers register a more precise subject binding directly. The generic
+# handler-attested path remains authoritative for every other mapped mutation;
+# skipping this closed overlap prevents duplicate Principal-wide work for the
+# same mutation while preserving the remote branch's additional callers.
+_DIRECT_REENRICHMENT_CAPABILITIES = frozenset(
+    {
+        "capture.revise",
+        "entities.aliases.add",
+        "entities.merge",
+        "entities.split",
+        "review.decide",
+    }
+)
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -2625,6 +2649,7 @@ class ApplicationService:
                         if (
                             self._relationship_reenrichment_enabled
                             and command.capability.value in TRIGGERS_BY_MUTATION_CAPABILITY
+                            and command.capability.value not in _DIRECT_REENRICHMENT_CAPABILITIES
                         ):
                             _register_reenrichment_result(
                                 cast("ReenrichmentWorkRepository", unit_of_work.reenrichment),
@@ -3638,16 +3663,24 @@ class ApplicationService:
                 )
             if replayed.result_family != "review_decision":
                 raise InternalError()
+            replay_payload: dict[str, object] = {
+                "review_case_id": replayed.result_secondary_id,
+                "decision_id": replayed.result_id,
+                "review_version": replayed.result_version,
+                "disposition": replayed.result_disposition,
+                "proposal_state": replayed.result_state,
+                "assertion_id": replayed.result_assertion_id,
+                "receipt_id": replayed.receipt_id,
+            }
+            handoff = self._replayed_identity_handoff(
+                unit_of_work,
+                authorization.principal.principal_id,
+                replayed.result_id,
+            )
+            if handoff is not None:
+                replay_payload["identity_correction_handoff"] = handoff
             return _Result(
-                payload={
-                    "review_case_id": replayed.result_secondary_id,
-                    "decision_id": replayed.result_id,
-                    "review_version": replayed.result_version,
-                    "disposition": replayed.result_disposition,
-                    "proposal_state": replayed.result_state,
-                    "assertion_id": replayed.result_assertion_id,
-                    "receipt_id": replayed.receipt_id,
-                },
+                payload=replay_payload,
                 disclosure=unenrolled_disclosure(
                     authorization.at,
                     trust_basis=("review_policy", "reviewed_promotion"),
@@ -3743,6 +3776,19 @@ class ApplicationService:
                 "effective_payload_source": identity_handoff.effective_payload_source.value,
                 "effective_payload": identity_handoff.effective_payload.as_mapping(),
             }
+        self._register_reenrichment(
+            unit_of_work,
+            authorization,
+            ReenrichmentTrigger.CONTRADICTION_RESOLUTION,
+            decision.decision_id,
+            (
+                ReenrichmentSubject(
+                    ReenrichmentSubjectKind.REVIEW_DECISION,
+                    decision.decision_id,
+                    str(decision.sequence),
+                ),
+            ),
+        )
         result = _Result(
             payload=response_payload,
             disclosure=unenrolled_disclosure(
@@ -3769,6 +3815,36 @@ class ApplicationService:
             ),
         )
         return result
+
+    def _replayed_identity_handoff(
+        self, unit_of_work: UnitOfWork, principal_id: str, decision_id: str
+    ) -> dict[str, object] | None:
+        """Reconstruct the original safe handoff from canonical persisted rows."""
+        try:
+            decision = unit_of_work.reviews.entity_proposal_decision(principal_id, decision_id)
+        except NotImplementedError:
+            return None
+        if decision is None:
+            return None
+        proposal = unit_of_work.entities.proposal(principal_id, decision.proposal_id)
+        if proposal is None or proposal.kind not in IDENTITY_CORRECTION_PROPOSAL_KINDS:
+            return None
+        corrected = decision.corrected_payload
+        effective = (
+            proposal.payload
+            if corrected is None
+            else EntityProposalPayload.of(proposal.kind, corrected.as_mapping())
+        )
+        source = (
+            ReviewedPayloadSource.PROPOSED if corrected is None else ReviewedPayloadSource.CORRECTED
+        )
+        return {
+            "state": IdentityCorrectionHandoffState.OPERATOR_PREVIEW_REQUIRED.value,
+            "proposal_id": proposal.proposal_id,
+            "proposal_kind": proposal.kind.value,
+            "effective_payload_source": source.value,
+            "effective_payload": effective.as_mapping(),
+        }
 
     def _entity_review(
         self,
@@ -5116,6 +5192,20 @@ class ApplicationService:
                 correlation_id=authorization.correlation_id,
                 audit_id=authorization.audit_id,
             )
+        if admission.created and command.source_version_id is not None:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
+                admission.observation_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.SOURCE_VERSION,
+                        command.source_version_id,
+                        command.source_version_id,
+                    ),
+                ),
+            )
         return _Result(
             payload={
                 "observation_id": admission.observation_id,
@@ -5569,6 +5659,26 @@ class ApplicationService:
                 audit_id=authorization.audit_id,
                 at=authorization.at,
             )
+        receipt = admission.receipt
+        if admission.created and receipt.child_id is not None and receipt.child_version is not None:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.NEW_ALIAS,
+                receipt.event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.ENTITY,
+                        receipt.entity_id,
+                        str(receipt.entity_version),
+                    ),
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.ALIAS,
+                        receipt.child_id,
+                        str(receipt.child_version),
+                    ),
+                ),
+            )
         return self._entity_receipt(authorization, admission)
 
     def _entities_aliases_retire(
@@ -5632,6 +5742,27 @@ class ApplicationService:
         """
         self._entity_writes()
         return unit_of_work.entities
+
+    def _register_reenrichment(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        trigger: ReenrichmentTrigger,
+        cause: str,
+        subjects: tuple[ReenrichmentSubject, ...],
+    ) -> None:
+        try:
+            repository = unit_of_work.reenrichment
+        except NotImplementedError:
+            # Compatibility for older isolated test doubles. Production's
+            # SqlAlchemyUnitOfWork always composes the durable repository.
+            return
+        caller = ProductionReenrichmentCaller(
+            repository,
+            principal_id=authorization.principal.principal_id,
+            policy_version=authorization.decision.policy_version,
+        )
+        caller.register(trigger, cause, subjects, at=authorization.at)
 
     def _entity_receipt(
         self, authorization: Authorization, admission: EntityMutationAdmission
@@ -5757,6 +5888,20 @@ class ApplicationService:
                 audit_id=authorization.audit_id,
                 at=authorization.at,
             )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.ASSIGNMENT,
+                        receipt.record_id,
+                        str(receipt.version),
+                    ),
+                ),
+            )
         return self._directed_receipt(authorization, receipt)
 
     def _entities_assignments_revise(
@@ -5774,6 +5919,18 @@ class ApplicationService:
                 principal_id=authorization.principal.principal_id,
                 audit_id=authorization.audit_id,
                 at=authorization.at,
+            )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.ASSIGNMENT, receipt.record_id, str(receipt.version)
+                    ),
+                ),
             )
         return self._directed_receipt(authorization, receipt)
 
@@ -5793,6 +5950,18 @@ class ApplicationService:
                 audit_id=authorization.audit_id,
                 at=authorization.at,
             )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.ASSIGNMENT, receipt.record_id, str(receipt.version)
+                    ),
+                ),
+            )
         return self._directed_receipt(authorization, receipt)
 
     def _entities_relationships_create(
@@ -5810,6 +5979,20 @@ class ApplicationService:
                 principal_id=authorization.principal.principal_id,
                 audit_id=authorization.audit_id,
                 at=authorization.at,
+            )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.RELATIONSHIP,
+                        receipt.record_id,
+                        str(receipt.version),
+                    ),
+                ),
             )
         return self._directed_receipt(authorization, receipt)
 
@@ -5829,6 +6012,20 @@ class ApplicationService:
                 audit_id=authorization.audit_id,
                 at=authorization.at,
             )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.RELATIONSHIP,
+                        receipt.record_id,
+                        str(receipt.version),
+                    ),
+                ),
+            )
         return self._directed_receipt(authorization, receipt)
 
     def _entities_relationships_end(
@@ -5846,6 +6043,20 @@ class ApplicationService:
                 principal_id=authorization.principal.principal_id,
                 audit_id=authorization.audit_id,
                 at=authorization.at,
+            )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.RELATIONSHIP,
+                        receipt.record_id,
+                        str(receipt.version),
+                    ),
+                ),
             )
         return self._directed_receipt(authorization, receipt)
 
@@ -7225,6 +7436,25 @@ class ApplicationService:
             raise InternalError()
 
         receipt = admission.receipt
+        if capture_id is not None and admission.created:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.ACCEPTED_QUICK_CAPTURE_CORRECTION,
+                receipt.receipt_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.CAPTURE,
+                        receipt.capture_id,
+                        str(receipt.version_number),
+                    ),
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.CAPTURE_VERSION,
+                        receipt.version_id,
+                        str(receipt.version_number),
+                    ),
+                ),
+            )
         return _Result(
             payload=CaptureReceiptView(
                 receipt_id=receipt.receipt_id,
@@ -8337,6 +8567,22 @@ class ApplicationService:
             has_operator_authority=self._operator_authority(authorization),
         )
         operation = receipt.operation
+        if not receipt.replayed:
+            if operation.effects_digest is None:  # pragma: no cover - completed operation invariant
+                raise InternalError()
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.CORRECTED_IDENTITY,
+                operation.identity_operation_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.IDENTITY_OPERATION,
+                        operation.identity_operation_id,
+                        operation.effects_digest,
+                    ),
+                ),
+            )
         return _Result(
             payload={
                 "identity_operation_id": operation.identity_operation_id,
@@ -8500,6 +8746,22 @@ class ApplicationService:
             has_operator_authority=self._operator_authority(authorization),
         )
         operation = receipt.operation
+        if not receipt.replayed:
+            if operation.effects_digest is None:  # pragma: no cover - completed operation invariant
+                raise InternalError()
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.CORRECTED_IDENTITY,
+                operation.identity_operation_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.IDENTITY_OPERATION,
+                        operation.identity_operation_id,
+                        operation.effects_digest,
+                    ),
+                ),
+            )
         return _Result(
             payload={
                 "identity_operation_id": operation.identity_operation_id,

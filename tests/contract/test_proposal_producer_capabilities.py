@@ -41,12 +41,14 @@ from my_pa.adapters.mcp.tools import payload_schema_for
 from my_pa.application.commands import (
     Command,
     CreateEntityProposal,
+    DecideReviewCase,
     ProposeRelationshipMemory,
 )
 from my_pa.application.entity_promotion import requires_expected_target_version
 from my_pa.application.producer_origin import ProducerOriginRegistry
 from my_pa.contracts.v1.errors import ErrorCode
 from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.identifiers import IdKind, parse_identifier
 from my_pa.domain.identity.operation import Capability
 from my_pa.domain.identity.purpose import Purpose
@@ -151,6 +153,47 @@ def test_entity_proposal_request_replay_returns_the_exact_original_receipt(
     assert first.error is None and retry.error is None
     assert retry.result == first.result
     assert len(scene.world.entity_proposals) == 1
+
+
+@pytest.mark.parametrize(
+    "kind", [EntityProposalKind.MERGE_ENTITIES, EntityProposalKind.SPLIT_IDENTITY]
+)
+def test_identity_review_replay_preserves_the_exact_operator_handoff(
+    scene: Scene, kind: EntityProposalKind
+) -> None:
+    retained, merged = staged_entities(scene)
+    payload = (
+        {
+            "retained_entity_id": retained.entity_id,
+            "merged_entity_id": merged.entity_id,
+            "reason": "synthetic duplicate identity",
+        }
+        if kind is EntityProposalKind.MERGE_ENTITIES
+        else {
+            "entity_id": retained.entity_id,
+            "reason": "synthetic mistaken merge",
+        }
+    )
+    proposal = _proposal(scene, kind=kind, payload=payload)
+    service = build_service(scene.world, scene.providers)
+    metadata = metadata_for(
+        Capability.REVIEW_DECIDE,
+        Purpose.REVIEW_DISPOSITION,
+        scene.principal,
+    )
+    command = DecideReviewCase(
+        review_case_id=str(proposal["review_case_id"]),
+        expected_review_version=0,
+        disposition=Disposition.ACCEPT,
+    )
+
+    first = service.invoke(metadata, command, principal=scene.principal)
+    retry = service.invoke(metadata, command, principal=scene.principal)
+
+    assert first.error is None and retry.error is None
+    assert first.result is not None
+    assert first.result["identity_correction_handoff"]
+    assert retry.result == first.result
 
 
 def test_same_request_identity_with_changed_material_conflicts(scene: Scene) -> None:

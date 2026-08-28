@@ -1418,6 +1418,18 @@ class _Reviews(ReviewRepository):
             )
         )
 
+    def entity_proposal_decision(
+        self, principal_id: str, decision_id: str
+    ) -> EntityProposalReviewDecision | None:
+        return next(
+            (
+                decision
+                for decision in self._world.entity_review_decisions
+                if decision.principal_id == principal_id and decision.decision_id == decision_id
+            ),
+            None,
+        )
+
     def record_entity_proposal_decision(
         self, principal_id: str, decision: EntityProposalReviewDecision
     ) -> None:

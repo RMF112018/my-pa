@@ -30,7 +30,9 @@ from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.persistence.principal_scope import (
     PrincipalContext,
+    capture_context,
     principal_scoped,
+    require_principal_context,
 )
 from my_pa.infrastructure.persistence.proposals import invalidate_proposal, span_faults
 from my_pa.infrastructure.persistence.tables import (
@@ -228,6 +230,7 @@ def decide_review(connection: Connection, request: ReviewDecisionRequest) -> Rev
     Principal from the authenticated request, and it must equal the owner the
     case was opened under, because both derive from the same capture.
     """
+    context = capture_context(request.principal_id)
     case = connection.execute(
         select(
             capture_review_cases.c.proposal_id,
@@ -294,7 +297,7 @@ def decide_review(connection: Connection, request: ReviewDecisionRequest) -> Rev
     }:
         raise ReviewUnsupportedError("the requested disposition has no eligible route")
     if request.disposition in {Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT}:
-        faults = span_faults(connection, str(case.proposal_id))
+        faults = span_faults(connection, str(case.proposal_id), context=context)
         if faults:
             invalidate_proposal(connection, str(case.proposal_id), faults[0].reason)
             return None
@@ -324,6 +327,7 @@ def decide_review(connection: Connection, request: ReviewDecisionRequest) -> Rev
             policy_version=request.policy_version,
             accepted_at=request.decided_at,
             corrected_value=request.corrected_value,
+            context=context,
         )
         state = (
             ProposalState.CORRECTED_ACCEPTED
@@ -366,6 +370,7 @@ def promote_proposal(
     policy_version: str,
     accepted_at: datetime,
     corrected_value: str | None = None,
+    context: PrincipalContext | None = None,
 ) -> tuple[str, str]:
     """Promote only under a stored accepting decision for this proposal.
 
@@ -381,29 +386,34 @@ def promote_proposal(
     if decision_id is None:
         raise ReviewRequiredError("canonical promotion requires a review disposition")
     validate_identifier(decision_id, IdKind.REVIEW_DECISION)
+    resolved = require_principal_context(context)
     row = connection.execute(
-        select(
-            capture_proposals.c.version_id,
-            capture_proposals.c.proposal_type,
-            capture_proposals.c.normalized_value,
-            capture_review_decisions.c.disposition,
-            capture_versions.c.owner_principal_id,
-        )
-        .join(
+        principal_scoped(
+            select(
+                capture_proposals.c.version_id,
+                capture_proposals.c.proposal_type,
+                capture_proposals.c.normalized_value,
+                capture_review_decisions.c.disposition,
+                capture_versions.c.owner_principal_id,
+            )
+            .join(
+                capture_versions,
+                capture_versions.c.version_id == capture_proposals.c.version_id,
+            )
+            .join(
+                capture_review_cases,
+                capture_review_cases.c.proposal_id == capture_proposals.c.proposal_id,
+            )
+            .join(
+                capture_review_decisions,
+                capture_review_decisions.c.review_case_id == capture_review_cases.c.review_case_id,
+            )
+            .where(
+                capture_proposals.c.proposal_id == proposal_id,
+                capture_review_decisions.c.decision_id == decision_id,
+            ),
             capture_versions,
-            capture_versions.c.version_id == capture_proposals.c.version_id,
-        )
-        .join(
-            capture_review_cases,
-            capture_review_cases.c.proposal_id == capture_proposals.c.proposal_id,
-        )
-        .join(
-            capture_review_decisions,
-            capture_review_decisions.c.review_case_id == capture_review_cases.c.review_case_id,
-        )
-        .where(
-            capture_proposals.c.proposal_id == proposal_id,
-            capture_review_decisions.c.decision_id == decision_id,
+            resolved,
         )
     ).one_or_none()
     if row is None or Disposition(row.disposition) not in {
@@ -414,7 +424,7 @@ def promote_proposal(
     disposition = Disposition(row.disposition)
     if (disposition is Disposition.CORRECT_AND_ACCEPT) is not (corrected_value is not None):
         raise ReviewRequiredError("the correction must match its accepting disposition")
-    if span_faults(connection, proposal_id):
+    if span_faults(connection, proposal_id, context=resolved):
         raise ReviewRequiredError("canonical promotion requires valid source spans")
 
     assertion_id = issue_identifier(IdKind.ASSERTION)

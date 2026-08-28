@@ -206,6 +206,13 @@ REACHED_THROUGH_THE_GUARD: Final = frozenset(
 #: relationship plane and registered the rest; a module added to this dict is a
 #: decision someone has to write down.
 QUARANTINED: Final = {
+    "bootstrap/gateway.py": (
+        "composition imports the three Principal-partitioned re-enrichment table "
+        "declarations only to construct ReenrichmentTables for "
+        "SqlReenrichmentWorkRepository. It builds no SQL; that repository owns "
+        "every predicate and receives the authenticated local Principal for "
+        "startup registration."
+    ),
     "bootstrap/apple_machine_control.py": (
         "every query is scoped through SqlNativeSourceControlStore._mine using the "
         "Principal derived from the verified Apple bridge credential; poll locks and "
@@ -249,11 +256,11 @@ QUARANTINED: Final = {
         "Partitioning that plane is explicitly out of WP-04's scope."
     ),
     "infrastructure/persistence/proposals.py": (
-        "`version_content` returns a capture version's text given only a "
-        "`version_id`, with no partition predicate. Registered rather than "
-        "repaired: its one caller is the pipeline, which already resolved the "
-        "owner, and closing it properly means giving the function a context, "
-        "which changes the pipeline's signature."
+        "capture validation now requires PrincipalContext and routes both "
+        "`version_content` and `span_faults` through `principal_scoped`; the "
+        "remaining module writes are pipeline-internal inserts whose rows derive "
+        "their version ownership from the admitted capture rather than accepting "
+        "a caller-stated Principal."
     ),
     "infrastructure/persistence/search.py": (
         "scopes the extraction plane by `enrollment_id`, relying on "
@@ -298,8 +305,10 @@ QUARANTINED: Final = {
     "infrastructure/persistence/unit_of_work.py": (
         "the shared Work unit of work validates an origin reference by querying "
         "accepted capture assertions and their owning captures with explicit "
-        "Principal predicates. The reference is never caller-supplied authority; "
-        "both comparisons are registered in HAND_WRITTEN_COMPARISONS below."
+        "Principal predicates, and reconstructs an idempotent Entity review "
+        "handoff from the exact Principal-bound decision row. The identifiers are "
+        "never caller-supplied authority; all comparisons are registered in "
+        "HAND_WRITTEN_COMPARISONS below."
     ),
 }
 
@@ -563,7 +572,7 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("self._tables.subjects", "principal_id"),
         ("self._tables.work", "principal_id"),
     )
-    + (("table", "principal_id"),) * 9,
+    + (("table", "principal_id"),) * 11,
     # `WP-RI-A-02`'s evidence check, and the one predicate on this plane that
     # cannot be reached through the guard. A governed entity write may cite a
     # capture span, and `capture_spans` carries no principal partition --
@@ -649,6 +658,7 @@ HAND_WRITTEN_COMPARISONS: Final = {
     "infrastructure/persistence/unit_of_work.py": (
         ("capture_assertions", "principal_id"),
         ("captures", "owner_principal_id"),
+        ("entity_proposal_review_decisions", "principal_id"),
     ),
 }
 

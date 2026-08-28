@@ -151,7 +151,14 @@ def test_an_injection_corpus_produces_bounded_proposals_and_no_widened_scope(
         checked = 0
         for version in saved:
             for proposal_id in presentable_proposals(connection, version.version_id):
-                assert span_faults(connection, proposal_id) == (), (
+                assert (
+                    span_faults(
+                        connection,
+                        proposal_id,
+                        context=capture_context(PRINCIPAL_ID),
+                    )
+                    == ()
+                ), (
                     f"{proposal_id} is filed against {version.version_id} and cites "
                     "evidence from another capture. A proposal has escaped the capture "
                     "it was derived from, which is `QC-AC-042`'s widened retrieval"

@@ -2,10 +2,10 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
-from typing import Protocol
 
+from my_pa.contracts.ports import ReenrichmentWorkRepository
 from my_pa.domain.common.time import ensure_utc
 from my_pa.domain.relationship.reenrichment import (
     DEFAULT_MAX_REENRICHMENT_ATTEMPTS,
@@ -34,6 +34,7 @@ __all__ = [
     "BindingVersion",
     "CurrentReenrichmentBindings",
     "EntityReenrichmentService",
+    "ProductionReenrichmentCaller",
     "ReenrichmentApplication",
     "ReenrichmentBinding",
     "ReenrichmentLimitation",
@@ -48,20 +49,7 @@ __all__ = [
     "register_mutation_reenrichment",
 ]
 
-
-class ReenrichmentWorkRepository(Protocol):
-    def register(self, binding: ReenrichmentBinding, *, at: datetime) -> ReenrichmentWork: ...
-
-    def apply_claimed(
-        self,
-        principal_id: str,
-        work_id: str,
-        *,
-        owner: str,
-        current: CurrentReenrichmentBindings,
-        apply: ReenrichmentApplication,
-        at: datetime,
-    ) -> BindingCurrency: ...
+REENRICHMENT_PRODUCER_VERSION = "relationship-intelligence-v0.2"
 
 
 type ReenrichmentApplication = Callable[[ReenrichmentBinding, str], None]
@@ -125,6 +113,151 @@ def register_mutation_reenrichment(
         )
         for trigger in triggers
     )
+
+
+class ProductionReenrichmentCaller:
+    """The nine production event callers, sharing one exact binding builder."""
+
+    def __init__(
+        self,
+        repository: ReenrichmentWorkRepository,
+        *,
+        principal_id: str,
+        policy_version: str,
+        producer_version: str = REENRICHMENT_PRODUCER_VERSION,
+    ) -> None:
+        self._repository = repository
+        self._principal_id = principal_id
+        self._policy_version = policy_version
+        self._producer_version = producer_version
+
+    def corrected_identity(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.CORRECTED_IDENTITY, cause, subjects, at=at)
+
+    def new_alias(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.NEW_ALIAS, cause, subjects, at=at)
+
+    def project_mapping_change(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.PROJECT_MAPPING_CHANGE, cause, subjects, at=at)
+
+    def role_or_organization_change(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(
+            ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE, cause, subjects, at=at
+        )
+
+    def source_version_change(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.SOURCE_VERSION_CHANGE, cause, subjects, at=at)
+
+    def model_or_rule_version_change(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(
+            ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE, cause, subjects, at=at
+        )
+
+    def accepted_quick_capture_correction(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(
+            ReenrichmentTrigger.ACCEPTED_QUICK_CAPTURE_CORRECTION, cause, subjects, at=at
+        )
+
+    def contradiction_resolution(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.CONTRADICTION_RESOLUTION, cause, subjects, at=at)
+
+    def policy_change(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.POLICY_CHANGE, cause, subjects, at=at)
+
+    def register(
+        self,
+        trigger: ReenrichmentTrigger,
+        cause: str,
+        subjects: Sequence[ReenrichmentSubject],
+        *,
+        at: datetime,
+    ) -> ReenrichmentWork:
+        """Register one closed trigger without dynamic attribute dispatch."""
+        return self._register(trigger, cause, subjects, at=at)
+
+    def observe_process_versions(
+        self, principal_id: str, *, cause: str, at: datetime
+    ) -> tuple[ReenrichmentWork, ...]:
+        """Register startup work only when a server-owned version advanced."""
+        moment = ensure_utc(at)
+        subject = (ReenrichmentSubject(ReenrichmentSubjectKind.PRINCIPAL, principal_id, "1"),)
+        producer = self._repository.observe_version(
+            principal_id,
+            namespace="producer",
+            key="relationship_intelligence",
+            version=self._producer_version,
+            at=moment,
+        )
+        policy = self._repository.observe_version(
+            principal_id,
+            namespace="policy",
+            key="current",
+            version=self._policy_version,
+            at=moment,
+        )
+        registered: list[ReenrichmentWork] = []
+        if producer.changed:
+            registered.append(self.model_or_rule_version_change(cause, subject, at=moment))
+        if policy.changed:
+            registered.append(self.policy_change(cause, subject, at=moment))
+        return tuple(registered)
+
+    def _register(
+        self,
+        trigger: ReenrichmentTrigger,
+        cause: str,
+        subjects: Sequence[ReenrichmentSubject],
+        *,
+        at: datetime,
+    ) -> ReenrichmentWork:
+        moment = ensure_utc(at)
+        principal_id = self._principal_id
+        self._repository.observe_version(
+            principal_id,
+            namespace="producer",
+            key="relationship_intelligence",
+            version=self._producer_version,
+            at=moment,
+        )
+        self._repository.observe_version(
+            principal_id,
+            namespace="policy",
+            key="current",
+            version=self._policy_version,
+            at=moment,
+        )
+        return self._repository.register(
+            ReenrichmentBinding(
+                principal_id=principal_id,
+                trigger=trigger,
+                cause_record_id=cause,
+                subjects=tuple(subjects),
+                input_versions=(),
+                producer_versions=(
+                    BindingVersion("relationship_intelligence", self._producer_version),
+                ),
+                policy_version=self._policy_version,
+            ),
+            at=moment,
+        )
 
 
 class EntityReenrichmentService:

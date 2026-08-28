@@ -393,7 +393,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # row values come from Principal-scoped work-table queries and are used to
     # preserve, never choose, the partition.
     "infrastructure/persistence/entity_reenrichment.py": (
-        (("binding", "principal_id"),) * 6
+        (("binding", "principal_id"),) * 8
         + (("candidate", "principal_id"),) * 2
         + (("row", "principal_id"),)
     ),
@@ -866,6 +866,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
     ),
     "infrastructure/persistence/review.py": (
+        ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),

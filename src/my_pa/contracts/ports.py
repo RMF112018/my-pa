@@ -42,12 +42,12 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
 from types import TracebackType
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Protocol
 
 from my_pa.contracts.v1.disclosure import Disclosure
 from my_pa.contracts.v1.status import SourceStatusState
@@ -165,6 +165,12 @@ from my_pa.domain.relationship.memory import (
     RelationshipMemoryVersion,
 )
 from my_pa.domain.relationship.profile import OrganizationProfile, PersonProfile
+from my_pa.domain.relationship.reenrichment import (
+    BindingCurrency,
+    CurrentReenrichmentBindings,
+    ReenrichmentBinding,
+    ReenrichmentWork,
+)
 from my_pa.domain.search.query import SearchMatch, SearchQuery, SearchRequest
 from my_pa.domain.situation.continuity import (
     ClosureEvidenceKind,
@@ -205,6 +211,40 @@ from my_pa.domain.task.task import Task as TaskAggregate
 
 class WorkCursorError(Exception):
     """A Work cursor anchor is absent from the authenticated Principal's partition."""
+
+
+class ReenrichmentWorkRepository(Protocol):
+    """Durable registration and atomic currency-bound application."""
+
+    def register(self, binding: ReenrichmentBinding, *, at: datetime) -> ReenrichmentWork: ...
+
+    def apply_claimed(
+        self,
+        principal_id: str,
+        work_id: str,
+        *,
+        owner: str,
+        current: CurrentReenrichmentBindings,
+        apply: Callable[[ReenrichmentBinding, str], None],
+        at: datetime,
+    ) -> BindingCurrency: ...
+
+    def observe_version(
+        self,
+        principal_id: str,
+        *,
+        namespace: str,
+        key: str,
+        version: str,
+        at: datetime,
+    ) -> ReenrichmentVersionObservation: ...
+
+
+class ReenrichmentVersionObservation(Protocol):
+    """Whether a server-owned current version advanced."""
+
+    @property
+    def changed(self) -> bool: ...
 
 
 class BulkIdempotencyConflictError(Exception):
@@ -3002,6 +3042,12 @@ class ReviewRepository(ABC):
         """Every decision already appended to this case, in sequence order."""
         raise NotImplementedError
 
+    def entity_proposal_decision(
+        self, principal_id: str, decision_id: str
+    ) -> EntityProposalReviewDecision | None:
+        """One persisted Entity proposal decision, partitioned by Principal."""
+        raise NotImplementedError
+
     def record_entity_proposal_decision(
         self, principal_id: str, decision: EntityProposalReviewDecision
     ) -> None:
@@ -3537,6 +3583,11 @@ class UnitOfWork(ABC):
         """The review and promotion plane, inside this transaction."""
 
     @property
+    def reenrichment(self) -> ReenrichmentWorkRepository:
+        """Relationship re-enrichment work in this transaction."""
+        raise NotImplementedError
+
+    @property
     def write_requests(self) -> WriteRequestRepository:
         """Server-bound proposal and Review replay ledger in this transaction."""
         raise NotImplementedError
@@ -3690,11 +3741,6 @@ class UnitOfWork(ABC):
         this object to its one-method ``IdentityHistoryQuery`` protocol before
         use; the canonical PostgreSQL composition supplies that implementation.
         """
-        raise NotImplementedError
-
-    @property
-    def reenrichment(self) -> object:
-        """Optional durable RI invalidation repository in this transaction."""
         raise NotImplementedError
 
     @property

@@ -15,6 +15,7 @@ from my_pa.application.entity_reenrichment import (
     BindingVersion,
     CurrentReenrichmentBindings,
     EntityReenrichmentService,
+    ProductionReenrichmentCaller,
     ReenrichmentBinding,
     ReenrichmentLimitation,
     ReenrichmentState,
@@ -80,6 +81,7 @@ class _Repository:
         self.stale: list[tuple[str, tuple[StaleBindingReason, ...]]] = []
         self.completed: list[str] = []
         self.live_claim = True
+        self.versions: dict[tuple[str, str], str] = {}
 
     def register(self, binding: ReenrichmentBinding, *, at: datetime) -> ReenrichmentWork:
         prior = self.registered.get(binding.binding_sha256)
@@ -118,6 +120,24 @@ class _Repository:
         apply(work.binding, work.binding.binding_sha256)
         self.completed.append(work_id)
         return currency
+
+    def observe_version(
+        self,
+        principal_id: str,
+        *,
+        namespace: str,
+        key: str,
+        version: str,
+        at: datetime,
+    ) -> object:
+        del principal_id, at
+        previous = self.versions.get((namespace, key))
+        self.versions[(namespace, key)] = version
+
+        class _Observation:
+            changed = previous is not None and previous != version
+
+        return _Observation()
 
 
 def _claimed(binding: ReenrichmentBinding) -> ReenrichmentWork:
@@ -420,3 +440,50 @@ def test_version_bindings_are_bounded_and_keys_are_unique(field: str) -> None:
                 )
             }
         )
+
+
+@pytest.mark.parametrize(
+    ("method_name", "trigger"),
+    [(trigger.value, trigger) for trigger in ReenrichmentTrigger],
+)
+def test_every_governing_trigger_has_a_load_bearing_production_caller(
+    method_name: str, trigger: ReenrichmentTrigger
+) -> None:
+    repository = _Repository()
+    caller = ProductionReenrichmentCaller(
+        repository,
+        principal_id=PRINCIPAL,
+        policy_version="policy-v1",
+    )
+    method = getattr(caller, method_name)
+    work = method(
+        f"event_{trigger.value.replace('_', '')[:16]}00000000",
+        (ReenrichmentSubject(ReenrichmentSubjectKind.PRINCIPAL, PRINCIPAL, "1"),),
+        at=WHEN,
+    )
+    assert work.binding.trigger is trigger
+    assert len(repository.registered) == 1
+    assert repository.versions[("producer", "relationship_intelligence")]
+    assert repository.versions[("policy", "current")] == "policy-v1"
+
+
+def test_process_version_observation_registers_only_real_advances() -> None:
+    repository = _Repository()
+    first = ProductionReenrichmentCaller(
+        repository,
+        principal_id=PRINCIPAL,
+        policy_version="policy-v1",
+        producer_version="resolver-v1",
+    )
+    assert first.observe_process_versions(PRINCIPAL, cause="boot_aaaaaaaa", at=WHEN) == ()
+    changed = ProductionReenrichmentCaller(
+        repository,
+        principal_id=PRINCIPAL,
+        policy_version="policy-v2",
+        producer_version="resolver-v2",
+    )
+    work = changed.observe_process_versions(PRINCIPAL, cause="boot_bbbbbbbb", at=WHEN)
+    assert {item.binding.trigger for item in work} == {
+        ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
+        ReenrichmentTrigger.POLICY_CHANGE,
+    }

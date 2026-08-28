@@ -617,7 +617,7 @@ def test_a_merge_redirects_the_merged_entity_and_leaves_the_survivor_alone(
         if effect.family is IdentityEffectFamily.ENTITY and effect.record_id == MERGED_ONE
     )
     assert redirected.before_state["version"] == 1
-    assert redirected.after_state["version"] == merged.version == 1
+    assert redirected.after_state["version"] == merged.version == 2
     assert receipt.operation.state is IdentityOperationState.COMPLETED
     assert receipt.replayed is False
     # Nothing was deleted: the merged-away entity is still a readable row.

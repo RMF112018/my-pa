@@ -3086,6 +3086,7 @@ class SqlEntityRepository(EntitiesRepository):
             .values(
                 status=EntityStatus.MERGED_REDIRECT.value,
                 superseded_by_entity_id=retained_entity_id,
+                version=entities.c.version + 1,
             )
         )
         if result.rowcount == 0:
@@ -3467,6 +3468,7 @@ class SqlEntityRepository(EntitiesRepository):
             select(entity_identity_operations).where(
                 _mine(entity_identity_operations, principal_id),
                 entity_identity_operations.c.operation_type == IdentityOperationType.SPLIT.value,
+                entity_identity_operations.c.state == IdentityOperationState.COMPLETED.value,
                 entity_identity_operations.c.source_identity_operation_id
                 == source_identity_operation_id,
             )
@@ -3530,6 +3532,11 @@ class SqlEntityRepository(EntitiesRepository):
         subject = _identity_effect_subject(effect.family)
         before = _identity_effect_values(effect.family, effect.before_state)
         after = _identity_effect_values(effect.family, effect.after_state)
+        if "version" in before:
+            current_version = after.get("version")
+            if not isinstance(current_version, int):
+                raise ValueError("a versioned identity effect records its resulting version")
+            before["version"] = current_version + 1
         conditions = [
             _mine(subject.table, principal_id),
             subject.table.c[subject.id_column] == effect.record_id,

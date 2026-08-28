@@ -399,7 +399,7 @@ class Settings(StrictModel):
     #: Process-local gate for the relationship-intelligence entity plane
     #: (WP-RI-05, widened through Phase A). Default off. True composes all
     #: thirty-four `entities.` names over the acting Principal's own entities
-    #: and publishes the ten that read; the eighteen that write need the switch
+    #: and publishes the eleven that read; the twenty-three that write need the switch
     #: below as well, so this flag on its own serves a read-only plane. It
     #: enables no source traversal, because none exists. Off by default because
     #: the remote MCP profile is derived from the capability set with no

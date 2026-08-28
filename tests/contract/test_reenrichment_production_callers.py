@@ -29,7 +29,6 @@ from my_pa.domain.relationship.reenrichment import ReenrichmentTrigger
             ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
         ),
         ("_entities_assignments_end", ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE),
-        ("_entities_observe", ReenrichmentTrigger.SOURCE_VERSION_CHANGE),
         ("_admit", ReenrichmentTrigger.ACCEPTED_QUICK_CAPTURE_CORRECTION),
         ("_review_decide", ReenrichmentTrigger.CONTRADICTION_RESOLUTION),
     ],
@@ -42,7 +41,7 @@ def test_each_production_mutation_path_registers_its_exact_trigger(
     assert f"ReenrichmentTrigger.{trigger.name}" in source
 
 
-def test_gateway_startup_observes_model_rule_and_policy_versions() -> None:
+def test_gateway_startup_observes_policy_version() -> None:
     source = inspect.getsource(GatewayRuntime.observe_reenrichment_versions)
     assert "ProductionReenrichmentCaller(" in source
     assert ".observe_process_versions(" in source
@@ -54,6 +53,8 @@ def test_production_registration_challenge_covers_the_closed_vocabulary() -> Non
         for name, member in vars(ApplicationService).items()
         if name.startswith("_") and callable(member)
     )
+    source_fetch = inspect.getsource(ApplicationService._sources_fetch)
+    proposal_create = inspect.getsource(ApplicationService._entities_proposals_create)
     startup_source = inspect.getsource(GatewayRuntime.observe_reenrichment_versions)
     covered = {
         trigger
@@ -61,11 +62,15 @@ def test_production_registration_challenge_covers_the_closed_vocabulary() -> Non
         if (
             f"ReenrichmentTrigger.{trigger.name}" in handler_source
             or (
-                trigger
-                in {
-                    ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
-                    ReenrichmentTrigger.POLICY_CHANGE,
-                }
+                trigger is ReenrichmentTrigger.SOURCE_VERSION_CHANGE
+                and "register_source_version_observation(" in source_fetch
+            )
+            or (
+                trigger is ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE
+                and "register_producer_version_observation(" in proposal_create
+            )
+            or (
+                trigger is ReenrichmentTrigger.POLICY_CHANGE
                 and ".observe_process_versions(" in startup_source
             )
         )

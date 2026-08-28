@@ -692,6 +692,7 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
     entra = settings.auth_mode is AuthMode.ENTRA
     principal = None if entra else local_principal()
     producer_origins = relationship_producer_origins(principal)
+
     class _NoRemoteHost:
         def __getattr__(self, name: str) -> Any:  # noqa: ANN401 - refusing protocol sentinel
             raise RuntimeError(f"remote Apple control cannot call a local host: {name}")

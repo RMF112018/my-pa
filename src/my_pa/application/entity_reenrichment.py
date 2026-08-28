@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
 
@@ -47,6 +49,8 @@ __all__ = [
     "StaleBindingReason",
     "assess_currency",
     "register_mutation_reenrichment",
+    "register_producer_version_observation",
+    "register_source_version_observation",
 ]
 
 REENRICHMENT_PRODUCER_VERSION = "relationship-intelligence-v0.2"
@@ -67,13 +71,121 @@ TRIGGERS_BY_MUTATION_CAPABILITY: Mapping[str, tuple[ReenrichmentTrigger, ...]] =
     "entities.assignments.revise": (ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,),
     "entities.assignments.end": (ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,),
     "entities.update": (ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,),
-    "sources.enroll": (ReenrichmentTrigger.SOURCE_VERSION_CHANGE,),
-    "entities.proposals.create": (ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,),
     "capture.revise": (ReenrichmentTrigger.ACCEPTED_QUICK_CAPTURE_CORRECTION,),
     "entities.unresolved_mentions.resolve": (ReenrichmentTrigger.CONTRADICTION_RESOLUTION,),
     "review.decide": (ReenrichmentTrigger.CONTRADICTION_RESOLUTION,),
     "context.feedback": (ReenrichmentTrigger.POLICY_CHANGE,),
 }
+
+
+def register_source_version_observation(
+    repository: ReenrichmentWorkRepository,
+    *,
+    principal_id: str,
+    source_object_id: str,
+    source_version_id: str,
+    policy_version: str,
+    at: datetime,
+) -> ReenrichmentWork | None:
+    """Register an exact source-version advance after a verified fetch."""
+    moment = ensure_utc(at)
+    watermark_key = f"source_{hashlib.sha256(source_object_id.encode()).hexdigest()[:40]}"
+    observation = repository.observe_version(
+        principal_id,
+        namespace="input",
+        key=watermark_key,
+        version=source_version_id,
+        at=moment,
+    )
+    if not observation.changed:
+        return None
+    return repository.register(
+        ReenrichmentBinding(
+            principal_id=principal_id,
+            trigger=ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
+            cause_record_id=source_version_id,
+            subjects=(
+                ReenrichmentSubject(
+                    ReenrichmentSubjectKind.SOURCE_OBJECT,
+                    source_object_id,
+                    source_version_id,
+                ),
+                ReenrichmentSubject(
+                    ReenrichmentSubjectKind.SOURCE_VERSION,
+                    source_version_id,
+                    source_version_id,
+                ),
+            ),
+            input_versions=(BindingVersion("source_version", source_version_id),),
+            producer_versions=(BindingVersion("source_pipeline", "sources.fetch.v1"),),
+            policy_version=policy_version,
+        ),
+        at=moment,
+    )
+
+
+def register_producer_version_observation(
+    repository: ReenrichmentWorkRepository,
+    *,
+    principal_id: str,
+    proposal_id: str,
+    proposal_version: str,
+    method: str,
+    method_version: str,
+    model_id: str | None,
+    model_version: str | None,
+    policy_version: str,
+    at: datetime,
+) -> ReenrichmentWork | None:
+    """Register an exact authenticated proposal-producer advance."""
+    moment = ensure_utc(at)
+    observed = {
+        "method": method,
+        "method_version": method_version,
+        "model_id": model_id,
+        "model_version": model_version,
+    }
+    digest = hashlib.sha256(
+        json.dumps(observed, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    observation = repository.observe_version(
+        principal_id,
+        namespace="producer",
+        key="entity_proposal",
+        version=digest,
+        at=moment,
+    )
+    if not observation.changed:
+        return None
+    producer_versions = [
+        BindingVersion("proposal_method", method),
+        BindingVersion("proposal_pipeline", method_version),
+    ]
+    if model_id is not None and model_version is not None:
+        producer_versions.extend(
+            (
+                BindingVersion("model_id", model_id),
+                BindingVersion("model_version", model_version),
+            )
+        )
+    return repository.register(
+        ReenrichmentBinding(
+            principal_id=principal_id,
+            trigger=ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
+            cause_record_id=proposal_id,
+            subjects=(
+                ReenrichmentSubject(
+                    ReenrichmentSubjectKind.PROPOSAL,
+                    proposal_id,
+                    proposal_version,
+                ),
+            ),
+            input_versions=(),
+            producer_versions=tuple(producer_versions),
+            policy_version=policy_version,
+        ),
+        at=moment,
+    )
 
 
 def register_mutation_reenrichment(
@@ -196,16 +308,9 @@ class ProductionReenrichmentCaller:
     def observe_process_versions(
         self, principal_id: str, *, cause: str, at: datetime
     ) -> tuple[ReenrichmentWork, ...]:
-        """Register startup work only when a server-owned version advanced."""
+        """Register startup work only when the server policy advanced."""
         moment = ensure_utc(at)
         subject = (ReenrichmentSubject(ReenrichmentSubjectKind.PRINCIPAL, principal_id, "1"),)
-        producer = self._repository.observe_version(
-            principal_id,
-            namespace="producer",
-            key="relationship_intelligence",
-            version=self._producer_version,
-            at=moment,
-        )
         policy = self._repository.observe_version(
             principal_id,
             namespace="policy",
@@ -214,8 +319,6 @@ class ProductionReenrichmentCaller:
             at=moment,
         )
         registered: list[ReenrichmentWork] = []
-        if producer.changed:
-            registered.append(self.model_or_rule_version_change(cause, subject, at=moment))
         if policy.changed:
             registered.append(self.policy_change(cause, subject, at=moment))
         return tuple(registered)

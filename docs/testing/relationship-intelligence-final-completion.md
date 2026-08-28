@@ -46,11 +46,11 @@ The IDs are identifiers and traceability anchors, not runtime configuration.
 |---|---|---|
 | `RI-FC-WP-01` Identity Correction | Governed split preview/apply is the exact inverse of one completed merge; stale state, digest, source-operation, Principal, and one-settlement guards fail closed. | IMPLEMENTED |
 | `RI-FC-WP-02` Identity History | One authoritative keyset-paginated history joins direct mutations, completed identity operations/effects, and legacy merge lineage without scraping proposal/review records. | IMPLEMENTED |
-| `RI-FC-WP-03` Re-enrichment | All nine exact triggers are registered from existing authorized mutation paths in the same unit of work. Immutable bounded bindings, Principal/work locks, database-time lease checks, post-apply currency validation, and atomic settlement prevent obsolete or duplicate derived mutation. | IMPLEMENTED |
+| `RI-FC-WP-03` Re-enrichment | Seven exact triggers are registered from truthful authorized mutations; source-version and model/rule-version changes use exact version-observation hooks after a verified fetch or newly created authenticated proposal. All registration shares the same Principal-fenced unit of work. Immutable bounded bindings, Principal/work locks, database-time lease checks, post-apply currency validation, and atomic settlement prevent obsolete or duplicate derived mutation. | IMPLEMENTED |
 | `RI-FC-WP-04` Proposal/Review | Generated discriminated payload schemas cover all proposal families; accepted merge/split proposals produce operator-preview handoffs and never execute identity correction. | IMPLEMENTED |
 | `RI-FC-WP-05` Security/Principal | `version_content` and `span_faults` require a resolved Principal context and predicate `capture_versions.owner_principal_id`; foreign and absent opaque identifiers have the same result. Two-Principal controls make deletion of either predicate fail. | IMPLEMENTED_CORRECTIVE |
 | `RI-FC-WP-06` MCP/Profiles/Documentation | The added public capability names, neutral commands, schemas, dispatch, purpose/profile bindings, runbooks, and current-state counts are synchronized. | IMPLEMENTED |
-| `RI-FC-WP-07` Test/Mutation Audit | Executable non-database unit, contract, security, architecture, transport, and migration-shape tests exercise the new paths and known escape classes. Focused isolated-PostgreSQL tests define the database/concurrency evidence set but were collection-only in this environment. | IMPLEMENTED_PENDING_FRESH_HEAD_VALIDATION |
+| `RI-FC-WP-07` Test/Mutation Audit | Executable non-database unit, contract, security, architecture, transport, and migration-shape tests exercise the new paths and known escape classes. Focused isolated-PostgreSQL tests define the database/concurrency evidence set but were collection-only in this environment. | IMPLEMENTED_PENDING_FRESH_EXACT_HEAD_REVIEW |
 | `RI-FC-WP-08` Commissioning | A fail-closed commissioning procedure is documented in `ops/runbooks/relationship-intelligence.md`. | PROCEDURE_ONLY_NOT_EXECUTED |
 | `RI-FC-WP-09` Synthetic live canary | A non-personal synthetic canary and rollback procedure is documented in the same runbook. | PROCEDURE_ONLY_NOT_EXECUTED |
 
@@ -150,16 +150,20 @@ uses these evidence classes:
 
 | Evidence | Exact result |
 |---|---|
- | Integrated corrective FAST | pending exact frozen-tree rerun |
- | Integrated corrective architecture | pending exact frozen-tree rerun |
- | Integrated focused affected set | pending |
- | Ruff format | pending post-integration check |
+| Integrated corrective FAST | `14,235 passed, 1,551 deselected in 570.80s` |
+| Integrated corrective architecture | `4,710 passed in 290.60s` |
+| Exact-observer focused unit/contract/architecture set | `65 passed in 0.82s` |
+| Exact-observer affected application/contract set | `292 passed in 5.20s` |
+| Integrated focused application/contract set | `201 passed, 7 deselected` |
+| Integrated focused architecture/schema/domain set | `960 passed, 81 deselected` |
+| Integrated focused concurrency/schema set | `114 passed, 457 deselected` |
+| Ruff format | `1,140 files already formatted` |
 | Ruff lint | `All checks passed!` |
 | mypy | `Success: no issues found in 424 source files` |
 | Whitespace | `git diff --check` passed |
 | Alembic graph | one head: `8e1c4a7b2d90` |
 | Alembic offline SQL | passed with a synthetic non-connecting PostgreSQL URL; the preceding no-URL attempt failed closed as required |
-| Isolated PostgreSQL affected set | pending collection; not executed because `MY_PA_DATABASE_URL` is unset; no database pass is claimed |
+| Isolated PostgreSQL affected persistence set | `111` tests collected from `test_entity_reenrichment.py`, `test_identity_correction_ledger.py`, and `test_identity_correction_merge.py`; not executed because `MY_PA_DATABASE_URL` is unset; no database pass is claimed |
 
 The full database tier is not required by the campaign exception rule and was
 not run: `FULL_DB_TIER_NOT_RUN_TARGETED_EVIDENCE_SUFFICIENT`. No production,
@@ -193,13 +197,19 @@ independent review:
    allowing review acceptance to execute identity correction.
 8. The separately claimed architecture tier initially produced three
    restricted-harness `PermissionError` results for synthetic local sockets;
-   the permitted rerun passed all 4,706 tests. No repository correction was
-   indicated or made for those harness-only failures.
+   the permitted rerun passed all 4,706 tests before the exact-observer correction. No repository correction was
+   indicated or made for those harness-only failures. The final integrated
+   architecture selection then passed all 4,710 tests.
 9. Re-enrichment is composed into the production unit of work and gateway. A
-   closed capability-to-trigger map reaches all nine v0.2 triggers from existing
-   authorized mutations without reimplementing those mutations. Handler-attested
-   stable receipt identities register new mutations only; replay, no-op, and
-   invalidated-review results register nothing.
+   closed capability-to-trigger map reaches seven v0.2 triggers from truthful
+   authorized mutations. Source-version and model/rule-version changes are not
+   proxy mappings: exact observation hooks run after metadata/fetch agreement
+   and authenticated proposal-origin resolution, respectively. First and
+   unchanged observations are no-ops; advances register one deduplicated work
+   item under the same Principal-fenced unit of work, and policy is excluded
+   from the observed-version digest. Handler-attested stable receipt identities
+   register new mutations only; replay, no-op, and invalidated-review results
+   register nothing.
 10. Claim recovery atomically marks expired final-attempt work `FAILED` before
     selecting reclaimable rows, so a dead final worker cannot leave a permanent
     `RUNNING` orphan.

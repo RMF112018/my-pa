@@ -267,6 +267,8 @@ from my_pa.application.entity_reenrichment import (
     ProductionReenrichmentCaller,
     ReenrichmentWorkRepository,
     register_mutation_reenrichment,
+    register_producer_version_observation,
+    register_source_version_observation,
 )
 from my_pa.application.entity_resolution import (
     ACTIVE_ASSIGNMENT_STATUS,
@@ -2652,7 +2654,7 @@ class ApplicationService:
                             and command.capability.value not in _DIRECT_REENRICHMENT_CAPABILITIES
                         ):
                             _register_reenrichment_result(
-                                cast("ReenrichmentWorkRepository", unit_of_work.reenrichment),
+                                unit_of_work.reenrichment,
                                 result=result,
                                 principal_id=authorization.principal.principal_id,
                                 capability=command.capability.value,
@@ -2880,6 +2882,18 @@ class ApplicationService:
         with _translated():
             observed = provider.metadata(command.source_object_id)
             content = provider.fetch(command.source_object_id, max_bytes=max_bytes)
+            if observed.version_id != content.version_id:
+                raise VersionChangedError
+
+        if self._relationship_reenrichment_enabled:
+            register_source_version_observation(
+                unit_of_work.reenrichment,
+                principal_id=authorization.principal.principal_id,
+                source_object_id=observed.source_object_id,
+                source_version_id=observed.version_id,
+                policy_version=authorization.decision.policy_version,
+                at=authorization.at,
+            )
 
         if command.representation is Representation.RAW_BYTES:
             payload: dict[str, Any] = {
@@ -3086,7 +3100,6 @@ class ApplicationService:
                 trust_level=TrustLevel.SOURCE_ORIGINAL,
                 trust_basis=("accepted_enrollment",),
             ),
-            reenrichment_cause_id=(enrollment.enrollment_id if acceptance.created else None),
         )
 
     def _knowledge_search(
@@ -5191,20 +5204,6 @@ class ApplicationService:
                 at=authorization.at,
                 correlation_id=authorization.correlation_id,
                 audit_id=authorization.audit_id,
-            )
-        if admission.created and command.source_version_id is not None:
-            self._register_reenrichment(
-                unit_of_work,
-                authorization,
-                ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
-                admission.observation_id,
-                (
-                    ReenrichmentSubject(
-                        ReenrichmentSubjectKind.SOURCE_VERSION,
-                        command.source_version_id,
-                        command.source_version_id,
-                    ),
-                ),
             )
         return _Result(
             payload={
@@ -8299,8 +8298,20 @@ class ApplicationService:
                 "audit_id": authorization.audit_id,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
-            reenrichment_cause_id=(admission.proposal_id if admission.created else None),
         )
+        if self._relationship_reenrichment_enabled and admission.created:
+            register_producer_version_observation(
+                unit_of_work.reenrichment,
+                principal_id=authorization.principal.principal_id,
+                proposal_id=admission.proposal_id,
+                proposal_version="1",
+                method=method.value,
+                method_version=method_version,
+                model_id=model_id,
+                model_version=model_version,
+                policy_version=authorization.decision.policy_version,
+                at=authorization.at,
+            )
         _complete_relationship_write(
             unit_of_work,
             authorization,

@@ -26,6 +26,8 @@ from my_pa.application.entity_reenrichment import (
     StaleBindingReason,
     assess_currency,
     register_mutation_reenrichment,
+    register_producer_version_observation,
+    register_source_version_observation,
 )
 from my_pa.application.service import _register_reenrichment_result, _Result
 
@@ -33,6 +35,9 @@ PRINCIPAL = "prn_aaaa0001aaaa0001aaaa0001"
 OTHER_PRINCIPAL = "prn_bbbb0002bbbb0002bbbb0002"
 ENTITY = "ent_aaaa0001aaaa0001"
 ALIAS = "eals_aaaa0001aaaa0001"
+SOURCE_OBJECT = "obj_aaaa0001aaaa0001"
+SOURCE_VERSION = "ver_aaaa0001aaaa0001"
+PROPOSAL = "eprp_aaaa0001aaaa0001"
 WHEN = datetime(2026, 8, 28, 12, tzinfo=UTC)
 
 
@@ -337,7 +342,10 @@ def test_every_governing_trigger_has_a_reachable_mutation_registration() -> None
     reached = {
         trigger for triggers in TRIGGERS_BY_MUTATION_CAPABILITY.values() for trigger in triggers
     }
-    assert reached == set(ReenrichmentTrigger)
+    assert reached == set(ReenrichmentTrigger) - {
+        ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
+        ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
+    }
     assert all(capability.count(".") >= 1 for capability in TRIGGERS_BY_MUTATION_CAPABILITY)
 
 
@@ -354,7 +362,103 @@ def test_every_mapped_mutation_can_register_its_trigger_work() -> None:
             at=WHEN,
         )
         produced.update(item.binding.trigger for item in work)
-    assert produced == set(ReenrichmentTrigger)
+    assert produced == set(ReenrichmentTrigger) - {
+        ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
+        ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
+    }
+
+
+def test_source_observer_registers_only_an_exact_version_advance() -> None:
+    repository = _Repository()
+    assert (
+        register_source_version_observation(
+            repository,
+            principal_id=PRINCIPAL,
+            source_object_id=SOURCE_OBJECT,
+            source_version_id=SOURCE_VERSION,
+            policy_version="policy-v1",
+            at=WHEN,
+        )
+        is None
+    )
+    assert (
+        register_source_version_observation(
+            repository,
+            principal_id=PRINCIPAL,
+            source_object_id=SOURCE_OBJECT,
+            source_version_id=SOURCE_VERSION,
+            policy_version="policy-v2",
+            at=WHEN,
+        )
+        is None
+    )
+    changed_version = "ver_bbbb0002bbbb0002"
+    work = register_source_version_observation(
+        repository,
+        principal_id=PRINCIPAL,
+        source_object_id=SOURCE_OBJECT,
+        source_version_id=changed_version,
+        policy_version="policy-v2",
+        at=WHEN,
+    )
+    assert work is not None
+    assert work.binding.trigger is ReenrichmentTrigger.SOURCE_VERSION_CHANGE
+    assert work.binding.subjects == (
+        ReenrichmentSubject(ReenrichmentSubjectKind.SOURCE_OBJECT, SOURCE_OBJECT, changed_version),
+        ReenrichmentSubject(
+            ReenrichmentSubjectKind.SOURCE_VERSION, changed_version, changed_version
+        ),
+    )
+    assert work.binding.input_versions == (BindingVersion("source_version", changed_version),)
+    assert work.binding.producer_versions == (
+        BindingVersion("source_pipeline", "sources.fetch.v1"),
+    )
+
+
+def test_producer_observer_excludes_policy_and_registers_exact_advance() -> None:
+    repository = _Repository()
+    arguments = {
+        "principal_id": PRINCIPAL,
+        "proposal_id": PROPOSAL,
+        "proposal_version": "1",
+        "method": "rules",
+        "method_version": "pipeline-v1",
+        "model_id": None,
+        "model_version": None,
+        "at": WHEN,
+    }
+    assert (
+        register_producer_version_observation(repository, policy_version="policy-v1", **arguments)
+        is None
+    )
+    assert (
+        register_producer_version_observation(repository, policy_version="policy-v2", **arguments)
+        is None
+    )
+    work = register_producer_version_observation(
+        repository,
+        policy_version="policy-v2",
+        **{**arguments, "method_version": "pipeline-v2"},
+    )
+    assert work is not None
+    assert work.binding.trigger is ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE
+    assert work.binding.subjects == (
+        ReenrichmentSubject(ReenrichmentSubjectKind.PROPOSAL, PROPOSAL, "1"),
+    )
+    assert work.binding.producer_versions == (
+        BindingVersion("proposal_method", "rules"),
+        BindingVersion("proposal_pipeline", "pipeline-v2"),
+    )
+
+
+def test_all_nine_triggers_are_covered_by_truthful_mutations_and_exact_observers() -> None:
+    mutation_triggers = {
+        trigger for triggers in TRIGGERS_BY_MUTATION_CAPABILITY.values() for trigger in triggers
+    }
+    assert mutation_triggers | {
+        ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
+        ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
+    } == set(ReenrichmentTrigger)
 
 
 @pytest.mark.parametrize("capability", tuple(TRIGGERS_BY_MUTATION_CAPABILITY))
@@ -483,7 +587,4 @@ def test_process_version_observation_registers_only_real_advances() -> None:
         producer_version="resolver-v2",
     )
     work = changed.observe_process_versions(PRINCIPAL, cause="boot_bbbbbbbb", at=WHEN)
-    assert {item.binding.trigger for item in work} == {
-        ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
-        ReenrichmentTrigger.POLICY_CHANGE,
-    }
+    assert {item.binding.trigger for item in work} == {ReenrichmentTrigger.POLICY_CHANGE}

@@ -14,16 +14,14 @@ from tests.security.test_cross_principal_review_isolation import (
     PRINCIPAL_A,
     PRINCIPAL_B,
     _seed_consequential_proposal,
-    disposable_database,
 )
-from tests.security.test_cross_principal_review_isolation import engine
 
 from my_pa.domain.capture.proposal import ProposalQuarantineReason
 from my_pa.domain.capture.version import digest_of
 from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.proposals import span_faults, version_content
 
-_ = disposable_database
+pytest_plugins = ("tests.security.test_cross_principal_review_isolation",)
 
 pytestmark = pytest.mark.database
 

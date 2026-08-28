@@ -150,8 +150,8 @@ uses these evidence classes:
 
 | Evidence | Exact result |
 |---|---|
-| Integrated corrective FAST | `14,241 passed, 1,551 deselected in 588.45s` |
-| Integrated corrective architecture | `4,710 passed in 294.82s` |
+| Integrated corrective FAST | `14,241 passed, 1,551 deselected` |
+| Integrated corrective architecture | `4,710 passed` |
 | Exact-observer focused unit/contract/architecture set | `65 passed in 0.82s` |
 | Startup lifecycle, re-enrichment, and affected child-process set | `74 passed in 4.91s` |
 | Preserved pre-final parallel FAST attempt | `3 failed, 14,238 passed, 1,551 deselected in 583.07s`; the three child processes used an intentionally unreachable database and exited at the new fail-closed startup observer before reaching their transport assertions; the tests now isolate only that separately proven observer boundary |

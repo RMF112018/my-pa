@@ -26,6 +26,7 @@ from my_pa.application.entity_reenrichment import (
     assess_currency,
     register_mutation_reenrichment,
 )
+from my_pa.application.service import _register_reenrichment_result, _Result
 
 PRINCIPAL = "prn_aaaa0001aaaa0001aaaa0001"
 OTHER_PRINCIPAL = "prn_bbbb0002bbbb0002bbbb0002"
@@ -334,6 +335,73 @@ def test_every_mapped_mutation_can_register_its_trigger_work() -> None:
         )
         produced.update(item.binding.trigger for item in work)
     assert produced == set(ReenrichmentTrigger)
+
+
+@pytest.mark.parametrize("capability", tuple(TRIGGERS_BY_MUTATION_CAPABILITY))
+def test_handler_attested_new_mutation_registers_once_and_replay_registers_zero(
+    capability: str,
+) -> None:
+    repository = _Repository()
+    created = _Result(
+        payload={},
+        disclosure=None,  # type: ignore[arg-type]
+        reenrichment_cause_id="emut_aaaa0001aaaa0001",
+    )
+    replay_or_noop = _Result(payload={}, disclosure=None)  # type: ignore[arg-type]
+
+    _register_reenrichment_result(
+        repository,
+        result=created,
+        principal_id=PRINCIPAL,
+        capability=capability,
+        policy_version="ri-v0.2",
+        at=WHEN,
+    )
+    assert len(repository.registered) == 1
+
+    _register_reenrichment_result(
+        repository,
+        result=replay_or_noop,
+        principal_id=PRINCIPAL,
+        capability=capability,
+        policy_version="ri-v0.2",
+        at=WHEN,
+    )
+    assert len(repository.registered) == 1
+
+
+def test_distinct_mutation_receipts_on_one_entity_register_distinct_work() -> None:
+    repository = _Repository()
+    for cause in ("emut_aaaa0001aaaa0001", "emut_bbbb0002bbbb0002"):
+        _register_reenrichment_result(
+            repository,
+            result=_Result(
+                payload={"entity_id": ENTITY},
+                disclosure=None,  # type: ignore[arg-type]
+                reenrichment_cause_id=cause,
+            ),
+            principal_id=PRINCIPAL,
+            capability="entities.update",
+            policy_version="ri-v0.2",
+            at=WHEN,
+        )
+    assert len(repository.registered) == 2
+
+
+def test_review_invalidated_success_has_no_reenrichment_effect() -> None:
+    repository = _Repository()
+    _register_reenrichment_result(
+        repository,
+        result=_Result(
+            payload={"review_case_id": "rvw_aaaa0001aaaa0001", "result": "invalidated"},
+            disclosure=None,  # type: ignore[arg-type]
+        ),
+        principal_id=PRINCIPAL,
+        capability="review.decide",
+        policy_version="ri-v0.2",
+        at=WHEN,
+    )
+    assert repository.registered == {}
 
 
 @pytest.mark.parametrize("field", ["input_versions", "producer_versions"])

@@ -107,7 +107,6 @@ import base64
 import binascii
 import hashlib
 import json
-import re
 import sys
 from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
@@ -546,6 +545,10 @@ class _Result:
 
     payload: dict[str, Any]
     disclosure: Disclosure
+    # Internal mutation evidence for durable re-enrichment registration. This
+    # never enters the response envelope. Absence means this invocation did not
+    # create a new authoritative mutation (including replay and no-op success).
+    reenrichment_cause_id: str | None = None
 
 
 class _CommitRejectedConflictError(Exception):
@@ -2282,26 +2285,26 @@ def _complete_relationship_write(
     )
 
 
-_REENRICHMENT_CAUSE = re.compile(r"\A[A-Za-z][A-Za-z0-9]{1,15}_[A-Za-z0-9]{8,64}\Z")
-
-
-def _reenrichment_cause(result: _Result, audit_id: str) -> str:
-    """Choose the mutation's stable receipt identity, falling back to audit."""
-    for key in (
-        "identity_operation_id",
-        "decision_id",
-        "proposal_id",
-        "capture_version_id",
-        "enrollment_id",
-        "alias_id",
-        "assignment_id",
-        "entity_id",
-        "preference_id",
-    ):
-        value = result.payload.get(key)
-        if isinstance(value, str) and _REENRICHMENT_CAUSE.fullmatch(value):
-            return value
-    return audit_id
+def _register_reenrichment_result(
+    repository: ReenrichmentWorkRepository,
+    *,
+    result: _Result,
+    principal_id: str,
+    capability: str,
+    policy_version: str,
+    at: datetime,
+) -> None:
+    """Register only a handler-attested new mutation, never payload inference."""
+    if result.reenrichment_cause_id is None:
+        return
+    register_mutation_reenrichment(
+        repository,
+        principal_id=principal_id,
+        capability=capability,
+        cause_record_id=result.reenrichment_cause_id,
+        policy_version=policy_version,
+        at=at,
+    )
 
 
 class ApplicationService:
@@ -2623,11 +2626,11 @@ class ApplicationService:
                             self._relationship_reenrichment_enabled
                             and command.capability.value in TRIGGERS_BY_MUTATION_CAPABILITY
                         ):
-                            register_mutation_reenrichment(
+                            _register_reenrichment_result(
                                 cast("ReenrichmentWorkRepository", unit_of_work.reenrichment),
+                                result=result,
                                 principal_id=authorization.principal.principal_id,
                                 capability=command.capability.value,
-                                cause_record_id=_reenrichment_cause(result, authorization.audit_id),
                                 policy_version=POLICY_VERSION,
                                 at=authorization.at,
                             )
@@ -3058,6 +3061,7 @@ class ApplicationService:
                 trust_level=TrustLevel.SOURCE_ORIGINAL,
                 trust_basis=("accepted_enrollment",),
             ),
+            reenrichment_cause_id=(enrollment.enrollment_id if acceptance.created else None),
         )
 
     def _knowledge_search(
@@ -3745,6 +3749,7 @@ class ApplicationService:
                 authorization.at,
                 trust_basis=("review_policy", "reviewed_promotion"),
             ),
+            reenrichment_cause_id=decision.decision_id,
         )
         _complete_relationship_write(
             unit_of_work,
@@ -5207,6 +5212,7 @@ class ApplicationService:
                 "audit_id": authorization.audit_id,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+            reenrichment_cause_id=(decided.decision_id if decided.created else None),
         )
 
     def _entities_relationships(
@@ -5663,6 +5669,7 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(
                 authorization.at, trust_basis=_ENTITY_AUTHORING_TRUST_BASIS
             ),
+            reenrichment_cause_id=(receipt.event_id if admission.created else None),
         )
 
     # ---- the directed-relationship family (WP-RI-A-03) ---------------------
@@ -5879,6 +5886,7 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(
                 authorization.at, trust_basis=_ENTITY_AUTHORING_TRUST_BASIS
             ),
+            reenrichment_cause_id=(receipt.mutation_event_id if not receipt.replayed else None),
         )
 
     def _tasks_read(
@@ -7019,6 +7027,7 @@ class ApplicationService:
                 "current": current,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=("context_policy",)),
+            reenrichment_cause_id=(admission.event.event_id if admission.created else None),
         )
 
     def _goodnotes_work(
@@ -7228,6 +7237,7 @@ class ApplicationService:
                 created=admission.created,
             ).to_canonical_dict(),
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CAPTURE_TRUST_BASIS),
+            reenrichment_cause_id=(receipt.receipt_id if admission.created else None),
         )
 
     # ---- shared helpers ----------------------------------------------------
@@ -8059,6 +8069,7 @@ class ApplicationService:
                 "audit_id": authorization.audit_id,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+            reenrichment_cause_id=(admission.proposal_id if admission.created else None),
         )
         _complete_relationship_write(
             unit_of_work,
@@ -8353,6 +8364,9 @@ class ApplicationService:
                 "audit_id": authorization.audit_id,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+            reenrichment_cause_id=(
+                operation.identity_operation_id if not receipt.replayed else None
+            ),
         )
 
     def _entities_identity_history(
@@ -8514,6 +8528,9 @@ class ApplicationService:
                 "audit_id": authorization.audit_id,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+            reenrichment_cause_id=(
+                operation.identity_operation_id if not receipt.replayed else None
+            ),
         )
 
 

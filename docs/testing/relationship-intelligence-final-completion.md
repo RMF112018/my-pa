@@ -130,11 +130,10 @@ row is updated only after that review completes.
 
 ## Test and migration evidence
 
-These results were measured on the frozen pre-corrective campaign tree. They are
-historical execution receipts, not validation of the current uncommitted
-corrective tree. The final pull-request head must rerun the applicable executable
-selection, retain the intended tree content, pass CI, and receive a fresh
-independent exact-head review. The implementation uses these evidence classes:
+The table distinguishes the final corrective-tree execution from preserved
+historical receipts. The final pull-request head must retain this tree content,
+pass CI, and receive a fresh independent exact-head review. The implementation
+uses these evidence classes:
 
 - static: Ruff format/lint, configured mypy, `git diff --check`;
 - FAST: the repository's exact non-database marker expression;
@@ -150,9 +149,9 @@ independent exact-head review. The implementation uses these evidence classes:
 
 | Evidence | Exact result |
 |---|---|
-| Claimed-count guard | `16 passed in 64.85s` |
-| FAST after the lease corrective | `14165 passed, 1544 deselected in 579.83s` |
-| Architecture, permission-matched synthetic local fixtures | `4706 passed in 296.41s` |
+| Final corrective FAST | `14196 passed, 1545 deselected in 554.28s` |
+| Final corrective document/count guards | `50 passed in 119.24s` |
+| Historical standalone architecture, permission-matched synthetic local fixtures | `4706 passed in 296.41s`; the final corrective FAST includes the architecture selection |
 | Architecture, restricted-sandbox attempt | `4703 passed, 3 failed in 297.90s`; all three failures were `PermissionError: [Errno 1]` at synthetic local TCP/Unix socket bind, and the permission-matched rerun above passed |
 | Focused transport | `447 passed, 1 deselected` |
 | Transport parity | `257 passed` |

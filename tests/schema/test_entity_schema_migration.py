@@ -297,6 +297,9 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "relationship_memory_proposals",
         "relationship_memory_proposal_evidence",
         "relationship_memory_review_decisions",
+        "entity_reenrichment_work",
+        "entity_reenrichment_subjects",
+        "entity_reenrichment_version_watermarks",
     }
 )
 

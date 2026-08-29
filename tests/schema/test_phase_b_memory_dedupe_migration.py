@@ -412,11 +412,12 @@ def test_upgrade_reconciles_version_drift_duplicates_without_deleting_history(
                     f"""
                     INSERT INTO {SCHEMA}.relationship_memory_proposals (
                       memory_proposal_id, principal_id, subject_entity_id,
+                      origin_subject_entity_id,
                       expected_subject_version, proposed_kind, proposed_statement,
                       proposed_statement_sha256, dedupe_sha256, state, method,
                       method_version, classification, proposed_at, review_case_id
                     ) VALUES (
-                      'mprop_cccc0003cccc0003', :principal, :subject, 2,
+                      'mprop_cccc0003cccc0003', :principal, :subject, :subject, 2,
                       'working_preference', :statement, :statement_digest, :dedupe,
                       'needs_review', 'rule', 'legacy-rule-v1', 'private_local', :at,
                       'rvw_cccc0003cccc0003'

@@ -36,6 +36,7 @@ from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.contracts.ports import ReenrichmentVersionObservation
 from my_pa.contracts.v1.envelope import RequestMetadata, ResponseEnvelope
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.principal import Principal
 from my_pa.domain.relationship.entity import (
@@ -54,6 +55,7 @@ from my_pa.domain.relationship.reenrichment import (
     ReenrichmentTrigger,
     ReenrichmentWork,
 )
+from my_pa.domain.source.registry import issue_identifier
 
 ASSIGNEE = "ent_rienrich01rienrich"
 PROJECT = "ent_riproject2riproject"
@@ -378,7 +380,11 @@ def test_real_gateway_startup_observes_versions_before_each_transport_serves(
     assert start() == 0
 
     assert outcomes == [False, False, True]
-    assert calls == [(principal.principal_id, "gateway_startup")] * 3
+    assert [principal_id for principal_id, _cause in calls] == [principal.principal_id] * 3
+    causes = [cause for _principal_id, cause in calls]
+    for cause in causes:
+        validate_identifier(cause, IdKind.OPERATION)
+    assert len(set(causes)) == 3
     assert [event for event in events if event in {"observe", "serve"}] == [
         "observe",
         "serve",
@@ -418,14 +424,14 @@ def test_entra_http_observes_each_authenticated_principal_before_application_dis
             events.append("authenticate")
             self.observe_reenrichment_versions(
                 principal_id=scene.principal.principal_id,
-                cause="gateway_http_request",
+                cause=issue_identifier(IdKind.OPERATION),
             )
             return scene.principal
 
         def observe_reenrichment_versions(
             self, *, principal_id: str, cause: str
         ) -> tuple[object, ...]:
-            assert cause == "gateway_http_request"
+            validate_identifier(cause, IdKind.OPERATION)
             events.append(f"observe:{principal_id}")
             if configured["policy"] == "fail":
                 raise RuntimeError("synthetic observation failure")
@@ -516,6 +522,7 @@ def test_composed_entra_authenticator_observes_inside_identity_transaction(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     events: list[str] = []
+    causes: list[str] = []
     connection = object()
 
     class Transaction:
@@ -548,6 +555,7 @@ def test_composed_entra_authenticator_observes_inside_identity_transaction(
 
     def observe(used_connection: object, **kwargs: object) -> tuple[object, ...]:
         assert used_connection is connection
+        causes.append(str(kwargs["cause"]))
         events.append(f"observe:{kwargs['principal_id']}")
         return ()
 
@@ -574,6 +582,8 @@ def test_composed_entra_authenticator_observes_inside_identity_transaction(
     principal = authenticate("Bearer synthetic", {"payload": {}})
 
     assert principal.authenticated is True
+    assert len(causes) == 1
+    validate_identifier(causes[0], IdKind.OPERATION)
     assert events == [
         "verify",
         "begin",
@@ -600,7 +610,7 @@ def test_remote_mcp_observes_only_authenticated_request_principals_before_contex
         def observe_reenrichment_versions(
             self, *, principal_id: str, cause: str
         ) -> tuple[object, ...]:
-            assert cause == "gateway_remote_request"
+            validate_identifier(cause, IdKind.OPERATION)
             events.append(f"observe:{principal_id}")
             if configured["policy"] == "fail":
                 raise RuntimeError("synthetic observation failure")

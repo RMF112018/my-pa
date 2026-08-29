@@ -414,8 +414,8 @@ def downgrade() -> None:
         ALTER TABLE {SCHEMA}.entity_identity_effects
           DROP CONSTRAINT an_identity_effect_family_is_known,
           ADD CONSTRAINT an_identity_effect_family_is_known CHECK (
-            record_family IN ('entity','alias','identifier','assignment','relationship',
-              'observation','proposal','review_case','derived_context')
+            record_family IN ('alias','assignment','derived_context','entity','identifier',
+              'observation','proposal','relationship','review_case')
           );
         ALTER TABLE {SCHEMA}.entity_identity_operations
           DROP CONSTRAINT a_completed_identity_operation_has_settled_effects,

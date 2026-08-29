@@ -1782,7 +1782,7 @@ def test_a_source_link_added_after_preview_makes_the_plan_stale(staged: Engine) 
     assert _row_count(staged, "entities", "status = 'merged_redirect'") == 0
 
 
-def test_a_current_memory_context_link_to_the_merged_identity_blocks_privately(
+def test_a_current_memory_context_link_to_the_merged_identity_reparents_with_origin(
     staged: Engine,
 ) -> None:
     statement = "Synthetic context-bound note."
@@ -1822,14 +1822,27 @@ def test_a_current_memory_context_link_to_the_merged_identity_blocks_privately(
     with staged.begin() as connection:
         report = _previewed(connection)
     assert _group(report, MergeFamily.RELATIONSHIP_MEMORY) == (
-        FamilyDisposition.BLOCKED,
+        FamilyDisposition.TRANSFORMED,
         1,
     )
     assert _group(report, MergeFamily.DERIVED_CONTEXT) == (
         FamilyDisposition.NOT_BOUND,
         0,
     )
-    assert all(conflict.record_id == MERGED_ONE for conflict in report.conflicts)
+    assert report.conflicts == ()
+    context_effect = next(
+        effect
+        for effect in report.projected_effects
+        if effect.family is IdentityEffectFamily.MEMORY_CONTEXT_LINK
+    )
+    assert context_effect.before_state == {
+        "target_id": MERGED_ONE,
+        "origin_subject_entity_id": MERGED_ONE,
+    }
+    assert context_effect.after_state == {
+        "target_id": SURVIVOR,
+        "origin_subject_entity_id": MERGED_ONE,
+    }
 
 
 def test_an_alias_reparents_and_a_duplicate_one_coalesces(staged: Engine) -> None:

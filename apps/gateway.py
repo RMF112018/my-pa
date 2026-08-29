@@ -83,7 +83,9 @@ from my_pa.adapters.mcp.server import SERVER_NAME
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
 from my_pa.bootstrap.relationship_intelligence_profiles import RELATIONSHIP_GRANT_PROFILES
 from my_pa.bootstrap.settings import Settings, load_settings
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.security import RemoteAuthenticationError, RemoteAuthenticator
 from my_pa.infrastructure.security.origin_authorization import OriginOAuthServer
 
@@ -155,7 +157,7 @@ def _build_serving_runtime(settings: Settings) -> GatewayRuntime:
     try:
         runtime.observe_reenrichment_versions(
             principal_id=principal.principal_id,
-            cause="gateway_startup",
+            cause=issue_identifier(IdKind.OPERATION),
         )
     except Exception:
         runtime.close()
@@ -284,7 +286,7 @@ def _mcp_remote(args: argparse.Namespace) -> int:
             return None
         runtime.observe_authenticated_principal(
             authenticated.principal,
-            cause="gateway_remote_request",
+            cause=issue_identifier(IdKind.OPERATION),
         )
         capabilities = frozenset(capability.value for capability in authenticated.capabilities)
         if not authenticated.write_allowed:

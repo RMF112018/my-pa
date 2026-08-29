@@ -700,7 +700,7 @@ def test_watermark_advance_waits_for_apply_fence_then_stales_future_work(
                     version="v3",
                     at=claimed_at + timedelta(seconds=1),
                 )
-                return observation.previous
+                return observation.previous_version
         finally:
             writer_finished.set()
 
@@ -747,25 +747,26 @@ def test_watermark_advance_waits_for_apply_fence_then_stales_future_work(
 
 def test_changed_input_is_marked_stale_before_the_applier_runs(engine: Engine) -> None:
     applied: list[str] = []
+    claimed_at = datetime.now(UTC)
     with engine.begin() as connection:
         repository = SqlReenrichmentWorkRepository(connection, _tables())
         _observe_current_versions(repository)
-        repository.register(_current_binding(), at=WHEN)
-        claimed = repository.claim(owner="worker_a", at=WHEN)
+        repository.register(_current_binding(), at=claimed_at)
+        claimed = repository.claim(owner="worker_a", at=claimed_at)
         assert claimed is not None
         repository.observe_version(
             PRINCIPAL,
             namespace="input",
             key="source",
             version="v3",
-            at=WHEN,
+            at=claimed_at,
         )
         currency = EntityReenrichmentService(repository).apply_claimed(
             claimed,
             owner="worker_a",
             current=SqlCurrentReenrichmentBindings(connection, _tables()),
             apply=lambda binding, _key: applied.append(binding.binding_sha256),
-            at=WHEN,
+            at=claimed_at,
         )
         stored = repository.get(PRINCIPAL, claimed.work_id)
     assert StaleBindingReason.INPUT_VERSION_CHANGED in currency.reasons
@@ -777,6 +778,7 @@ def test_currency_rows_remain_locked_until_apply_and_completion_commit(engine: E
     started = Event()
     future: Future[None] | None = None
     executor = ThreadPoolExecutor(max_workers=1)
+    claimed_at = datetime.now(UTC)
 
     def advance_policy() -> None:
         with engine.begin() as other_connection:
@@ -786,15 +788,15 @@ def test_currency_rows_remain_locked_until_apply_and_completion_commit(engine: E
                 namespace="policy",
                 key="current",
                 version="ri-v0.3",
-                at=WHEN + timedelta(seconds=1),
+                at=claimed_at + timedelta(seconds=1),
             )
 
     try:
         with engine.begin() as connection:
             repository = SqlReenrichmentWorkRepository(connection, _tables())
             _observe_current_versions(repository)
-            repository.register(_current_binding(), at=WHEN)
-            claimed = repository.claim(owner="worker_a", at=WHEN)
+            repository.register(_current_binding(), at=claimed_at)
+            claimed = repository.claim(owner="worker_a", at=claimed_at)
             assert claimed is not None
 
             def apply(_binding: ReenrichmentBinding, _key: str) -> None:
@@ -809,7 +811,7 @@ def test_currency_rows_remain_locked_until_apply_and_completion_commit(engine: E
                 owner="worker_a",
                 current=SqlCurrentReenrichmentBindings(connection, _tables()),
                 apply=apply,
-                at=WHEN,
+                at=claimed_at,
             )
             assert currency.is_current
         assert future is not None

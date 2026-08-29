@@ -30,6 +30,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import jwt
 import pytest
@@ -44,6 +45,8 @@ import my_pa.bootstrap.gateway as gateway
 from my_pa.adapters.http import create_http_app
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import ENV_PREFIX, AuthMode, Settings, SettingsError, load_settings
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.identity.binding import capture_principal_id
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
 from my_pa.domain.policy.decision import POLICY_VERSION
@@ -273,10 +276,14 @@ def test_composed_entra_auth_persists_and_dedupes_policy_change_work(
     engine = create_database_engine(disposable_database)
     try:
         with engine.connect() as connection:
-            principal_id = str(
-                connection.execute(
-                    text("SELECT principal_id FROM identity.user_accounts")
-                ).scalar_one()
+            principal_id = capture_principal_id(
+                UUID(
+                    str(
+                        connection.execute(
+                            text("SELECT principal_id FROM identity.user_accounts")
+                        ).scalar_one()
+                    )
+                )
             )
             watermark = connection.execute(
                 text(
@@ -340,7 +347,9 @@ def test_composed_entra_auth_persists_and_dedupes_policy_change_work(
                 ),
                 {"principal_id": principal_id},
             ).scalar_one()
-        assert tuple(work) == ("policy_change", "gateway_http_request", POLICY_VERSION, "queued")
+        trigger, cause, policy_version, state = tuple(work)
+        assert (trigger, policy_version, state) == ("policy_change", POLICY_VERSION, "queued")
+        validate_identifier(str(cause), IdKind.OPERATION)
         assert tuple(subject) == (principal_id, "principal", principal_id, "1")
         assert advanced == POLICY_VERSION
 

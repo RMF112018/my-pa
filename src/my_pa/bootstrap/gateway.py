@@ -184,10 +184,12 @@ from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import ManagedByteStore, UnitOfWork
 from my_pa.domain.capture.client import admit_client_binding, parse_client_credential
 from my_pa.domain.capture.errors import CaptureError
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.user_account import TokenClaimsError
 from my_pa.domain.policy.decision import POLICY_VERSION
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.gsqs_routellm_transport import post_chat_completion
 from my_pa.infrastructure.managed_document_stores.filesystem.store import (
@@ -405,7 +407,7 @@ def entra_authenticator(settings: Settings, work_engine: Engine) -> Authenticato
             _observe_reenrichment_versions(
                 connection,
                 principal_id=principal.principal_id,
-                cause="gateway_http_request",
+                cause=issue_identifier(IdKind.OPERATION),
                 at=moment,
             )
             return principal

@@ -9,7 +9,7 @@ returns a non-empty result, making deletion of either ownership predicate fail.
 from __future__ import annotations
 
 import pytest
-from sqlalchemy import Engine, text
+from sqlalchemy import Engine
 from tests.security.test_cross_principal_review_isolation import (
     PRINCIPAL_A,
     PRINCIPAL_B,
@@ -36,21 +36,15 @@ def test_version_content_and_span_faults_are_principal_owned(engine: Engine) -> 
     results so the refusal discloses no row existence.
     """
     with engine.begin() as connection:
-        proposal_a = _seed_consequential_proposal(connection, PRINCIPAL_A, 101)
-        proposal_b = _seed_consequential_proposal(connection, PRINCIPAL_B, 202)
+        wrong_digest = digest_of("not x")
+        proposal_a = _seed_consequential_proposal(
+            connection, PRINCIPAL_A, 101, span_digest=wrong_digest
+        )
+        proposal_b = _seed_consequential_proposal(
+            connection, PRINCIPAL_B, 202, span_digest=wrong_digest
+        )
         version_a = "capver_00000000000000000000000000000101"
         version_b = "capver_00000000000000000000000000000202"
-        connection.execute(
-            text(
-                "UPDATE knowledge.capture_spans SET quoted_text_sha256 = :wrong "
-                "WHERE span_id IN (:span_a, :span_b)"
-            ),
-            {
-                "wrong": digest_of("not x"),
-                "span_a": "span_00000000000000000000000000000101",
-                "span_b": "span_00000000000000000000000000000202",
-            },
-        )
 
     context_a = capture_context(PRINCIPAL_A)
     context_b = capture_context(PRINCIPAL_B)

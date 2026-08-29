@@ -45,6 +45,7 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityEffectKind,
     state_digest,
 )
+from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 
@@ -116,18 +117,21 @@ def migrated_engine(disposable_database: str) -> Iterator[Engine]:
                 (MERGED, PRINCIPAL_A),
                 (FOREIGN, PRINCIPAL_B),
             ):
+                display_name = f"Synthetic {entity_id}"
                 connection.execute(
                     text(
                         f"INSERT INTO {SCHEMA}.entities "  # noqa: S608
                         "(entity_id, principal_id, entity_type, canonical_name, display_name, "
                         " status, created_at, updated_at, version) "
-                        "VALUES (:entity_id, :principal_id, 'person', :name, :name, "
+                        "VALUES (:entity_id, :principal_id, 'person', :canonical_name, "
+                        ":display_name, "
                         " 'active', :when, :when, 1)"
                     ),
                     {
                         "entity_id": entity_id,
                         "principal_id": principal_id,
-                        "name": f"synthetic {entity_id}",
+                        "canonical_name": normalize_name(display_name),
+                        "display_name": display_name,
                         "when": WHEN,
                     },
                 )
@@ -362,21 +366,29 @@ def test_an_operation_is_updated_from_in_progress_to_completed(migrated_engine: 
         connection.execute(
             text(
                 f"UPDATE {SCHEMA}.entity_identity_operations "  # noqa: S608
-                "SET state = 'completed', completed_at = :when "
+                "SET state = 'completed', completed_at = :when, "
+                "effect_count = 1, effects_digest = :effects_digest "
                 "WHERE identity_operation_id = :identity_operation_id"
             ),
-            {"when": WHEN + timedelta(seconds=1), "identity_operation_id": OPERATION},
+            {
+                "when": WHEN + timedelta(seconds=1),
+                "effects_digest": DIGEST,
+                "identity_operation_id": OPERATION,
+            },
         )
     with migrated_engine.connect() as connection:
-        assert (
-            connection.execute(
-                text(
-                    f"SELECT state FROM {SCHEMA}.entity_identity_operations "  # noqa: S608
-                    "WHERE identity_operation_id = :identity_operation_id"
-                ),
-                {"identity_operation_id": OPERATION},
-            ).scalar_one()
-            == "completed"
+        settled = connection.execute(
+            text(
+                f"SELECT state, effect_count, effects_digest "  # noqa: S608
+                f"FROM {SCHEMA}.entity_identity_operations "
+                "WHERE identity_operation_id = :identity_operation_id"
+            ),
+            {"identity_operation_id": OPERATION},
+        ).one()
+        assert settled == (
+            "completed",
+            1,
+            DIGEST,
         )
 
 

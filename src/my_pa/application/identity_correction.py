@@ -1891,10 +1891,11 @@ class IdentityCorrectionService:
                 # so the split still refuses outright instead of asking a
                 # question nothing could settle. `_ATTRIBUTABLE_FAMILIES`
                 # remains the narrower set of families with actual per-row
-                # entity-plane storage; it drives `_post_merge_created`
-                # discovery and the `ASSIGN_TO_ENTITY` execution path
-                # (`_bound_records`, `reparent_entity_reference`), not whether
-                # an ambiguity is raised.
+                # entity-plane storage; it drives one of `_post_merge_created`'s
+                # three discovery mechanisms (the other two cover the four
+                # families this comment names) and the `ASSIGN_TO_ENTITY`
+                # execution path (`_bound_records`, `reparent_entity_reference`),
+                # not whether an ambiguity is raised.
                 raise ConflictError(SafeDetail.PREVIEW_STALE)
             ambiguities.append(
                 _SplitAmbiguity(
@@ -1930,32 +1931,57 @@ class IdentityCorrectionService:
     ) -> list[_SplitAmbiguity]:
         """Rows now bound to the survivor that the merge's ledger never named.
 
-        **Known limitation, stated rather than hidden.** The five tables this
-        walks carry no creation timestamp -- see `entity_aliases` and its three
-        siblings, whose only clock column is `updated_at` -- and the merge
-        records no effect for rows that already belonged to the survivor. So
-        "bound to the survivor and absent from the ledger" is the strongest
-        discriminator the persisted state supports, and it also matches a
-        survivor's own pre-merge rows. The consequence is over-reporting, never
+        **Known limitation, stated rather than hidden.** The tables the five
+        `_ATTRIBUTABLE_FAMILIES` walk carry no creation timestamp -- see
+        `entity_aliases` and its three siblings, whose only clock column is
+        `updated_at` -- and the merge records no effect for rows that already
+        belonged to the survivor. So "bound to the survivor and absent from the
+        ledger" is the strongest discriminator the persisted state supports for
+        them, and it also matches a survivor's own pre-merge rows.
+        `RELATIONSHIP_MEMORY`, `MEMORY_PROPOSAL` and `entity_proposals` (the
+        `PROPOSAL` table) *do* carry a creation-ish column -- `created_at` on
+        the first, `proposed_at` on the other two -- and this method
+        deliberately does not read it: a survivor's own row from before the
+        merge is exactly as undiscoverable by timestamp as one genuinely
+        created afterwards, since neither this method nor the merge ledger
+        records when the survivor's own history began. Reading the column
+        would narrow some rows correctly and drop others silently, and there is
+        no way from here to tell which is which. The consequence, for every
+        family this method discovers, is over-reporting, never
         under-reporting: an operator is asked to attribute a record whose owner
-        they can see immediately, and no record is silently attributed for them.
-        Narrowing it needs a creation time these tables do not have.
+        they can see immediately, and no record is silently attributed for
+        them.
 
-        **Second, stated limitation: scope.** This walks `_ATTRIBUTABLE_FAMILIES`
-        only -- the five families with per-row entity-plane storage -- and does
-        *not* cover `PROPOSAL` or the three memory families
-        (`RELATIONSHIP_MEMORY`, `MEMORY_PROPOSAL`, `MEMORY_CONTEXT_LINK`), even
-        though those four now raise `POST_MERGE_MODIFIED` ambiguities elsewhere
-        in this method. `records_bound_to_entity_outside` is an entities-
-        repository-specific mechanism, and no equivalent "bound to this entity,
-        absent from the ledger" query exists for the memory or proposal tables.
-        Building one is real new repository infrastructure, not a change to
-        this family's disposition set, and is out of scope for this fix. The
-        result is a deliberate, residual gap: a memory/proposal/context-link row
-        newly *bound* to the survivor after a merge with no ledger effect for it
-        is not yet detected as `POST_MERGE_CREATED`. A row the merge *changed*
-        (`POST_MERGE_MODIFIED`) is still caught, because that path reads the
-        merge's own effect ledger rather than this discovery query.
+        **What this method discovers, and how.** `PROPOSAL`, `RELATIONSHIP_MEMORY`,
+        `MEMORY_PROPOSAL` and `MEMORY_CONTEXT_LINK` used to be a stated, residual
+        gap here -- `_ATTRIBUTABLE_FAMILIES` is the five families with per-row
+        entity-plane storage, and a row newly bound to the survivor in one of
+        these other four was never looked for, even though a row the merge
+        itself *changed* was already caught as `POST_MERGE_MODIFIED` (that path
+        reads the effect ledger, not this discovery). Closing it needed two
+        more mechanisms beside `EntitiesRepository.records_bound_to_entity_outside`,
+        because the four sit on two different repositories and one of them has
+        no per-row entity column to query at all:
+
+        * `RELATIONSHIP_MEMORY`, `MEMORY_PROPOSAL` and `MEMORY_CONTEXT_LINK` are
+          `RelationshipMemoryRepository.records_bound_to_entity_outside` -- the
+          memory plane's own version of the entity plane's method of the same
+          name, over the same three columns `plan_identity_merge` reparents
+          when a bound entity is merged away (`subject_entity_id` twice,
+          `target_id` once).
+        * `PROPOSAL` has no such column: `entity_proposals` carries no entity
+          reference at all (see `_ATTRIBUTABLE_FAMILIES`'s own comment), only a
+          kind-typed payload. So this asks the question the way `preview()`
+          already asks whether a merge *materially affects* an open proposal --
+          `self._entities.proposals` read whole and
+          `_proposal_is_materially_affected` applied per row, here against
+          `{survivor_entity_id}` rather than the merged-away set, and over
+          every proposal state rather than only the open ones, on the
+          over-reporting argument above.
+
+        Every one of the four keeps the narrowed disposition set
+        `dispositions_for` already gives it (`LEAVE_UNRESOLVED` only): this
+        method finds the row, it does not decide what may be done about it.
         """
         found: list[_SplitAmbiguity] = []
         for family in _ATTRIBUTABLE_FAMILIES:
@@ -1968,20 +1994,59 @@ class IdentityCorrectionService:
                 limit=MAX_AFFECTED_RECORDS + 1,
             ):
                 found.append(
-                    _SplitAmbiguity(
-                        family=family,
-                        record_id=record_id,
-                        reason=AmbiguityReason.POST_MERGE_CREATED,
-                        allowed_dispositions=dispositions_for(family),
-                        allowed_target_entity_ids=participants,
-                        evidence_summary={
-                            "source_identity_operation_id": source.identity_operation_id,
-                            "bound_entity_id": source.survivor_entity_id,
-                            "recorded_effect_count": len(known),
-                        },
-                    )
+                    self._created_ambiguity(family, record_id, source, participants, known)
                 )
+        for family in _MEMORY_EFFECT_FAMILIES:
+            known = frozenset(effect.record_id for effect in effects if effect.family is family)
+            for record_id in self._memories.records_bound_to_entity_outside(
+                principal_id,
+                family,
+                source.survivor_entity_id,
+                known,
+                limit=MAX_AFFECTED_RECORDS + 1,
+            ):
+                found.append(
+                    self._created_ambiguity(family, record_id, source, participants, known)
+                )
+        proposal_known = frozenset(
+            effect.record_id for effect in effects if effect.family is IdentityEffectFamily.PROPOSAL
+        )
+        survivor_only = frozenset({source.survivor_entity_id})
+        bound_proposal_ids = sorted(
+            proposal.proposal_id
+            for proposal in self._entities.proposals(principal_id)
+            if proposal.proposal_id not in proposal_known
+            and self._proposal_is_materially_affected(principal_id, proposal, survivor_only)
+        )
+        for record_id in bound_proposal_ids[: MAX_AFFECTED_RECORDS + 1]:
+            found.append(
+                self._created_ambiguity(
+                    IdentityEffectFamily.PROPOSAL, record_id, source, participants, proposal_known
+                )
+            )
         return found
+
+    @staticmethod
+    def _created_ambiguity(
+        family: IdentityEffectFamily,
+        record_id: str,
+        source: IdentityOperation,
+        participants: tuple[str, ...],
+        known: frozenset[str],
+    ) -> _SplitAmbiguity:
+        """One `POST_MERGE_CREATED` ambiguity, in the shape every discovery loop above builds."""
+        return _SplitAmbiguity(
+            family=family,
+            record_id=record_id,
+            reason=AmbiguityReason.POST_MERGE_CREATED,
+            allowed_dispositions=dispositions_for(family),
+            allowed_target_entity_ids=participants,
+            evidence_summary={
+                "source_identity_operation_id": source.identity_operation_id,
+                "bound_entity_id": source.survivor_entity_id,
+                "recorded_effect_count": len(known),
+            },
+        )
 
     # --- apply ---------------------------------------------------------------
 
@@ -3026,10 +3091,14 @@ _MEMORY_EFFECT_FAMILIES: Final = frozenset(
 
 #: The families with actual per-row entity-plane storage, in the order this
 #: module walks them. **Not** "the families a split may raise an ambiguity
-#: for" -- that question is answered by `dispositions_for`, which as of this
-#: fix is broader than this tuple. This tuple answers a narrower pair of
-#: questions: which families `_post_merge_created` can run
-#: `records_bound_to_entity_outside` discovery against, and which families
+#: for" -- that question is answered by `dispositions_for`, which is broader
+#: than this tuple. **Not**, as of the fix that closed `RI-P2-BLK-001`'s last
+#: residual gap, "the families `_post_merge_created` discovers" either -- that
+#: is now every family `dispositions_for` admits a disposition for, discovered
+#: through three different mechanisms (see `_post_merge_created`). What this
+#: tuple answers is narrower and still exactly two questions: which families
+#: `EntitiesRepository.records_bound_to_entity_outside` can run its "which of
+#: these binds to the survivor" query against, and which families
 #: `_bound_records` and the `ASSIGN_TO_ENTITY` execution path
 #: (`reparent_entity_reference`) know how to move.
 #:
@@ -3058,14 +3127,16 @@ _MEMORY_EFFECT_FAMILIES: Final = frozenset(
 #: `LEAVE_UNRESOLVED` only -- `LEAVE_UNRESOLVED` needs no writer, so it remains
 #: honest to offer even though `ASSIGN_TO_ENTITY` is not.
 #:
-#: These four families are **not** in this tuple, but they *do* now raise
+#: These four families are **not** in this tuple, and they *do* now raise both
 #: `POST_MERGE_MODIFIED` ambiguities (via `dispositions_for`, not via this
-#: tuple) -- see the gate above this definition. What stays scoped to this
-#: tuple is `POST_MERGE_CREATED` discovery (`_post_merge_created`) and
-#: `ASSIGN_TO_ENTITY` execution (`_bound_records`); both are unreachable for
-#: the four families regardless, since `_bound_records` is only ever called
-#: for a disposition each family's own `allowed_dispositions` admits, and none
-#: of the four admits `ASSIGN_TO_ENTITY`.
+#: tuple -- see the gate above this definition) and `POST_MERGE_CREATED`
+#: ambiguities (via the two other discovery mechanisms `_post_merge_created`
+#: runs beside its walk of this tuple, not via
+#: `records_bound_to_entity_outside`). What *stays* scoped to this tuple, and
+#: unreachable for the four regardless of discovery, is `ASSIGN_TO_ENTITY`
+#: execution (`_bound_records`): it is only ever called for a disposition each
+#: family's own `allowed_dispositions` admits, and none of the four admits
+#: `ASSIGN_TO_ENTITY`.
 _ATTRIBUTABLE_FAMILIES: Final[tuple[IdentityEffectFamily, ...]] = (
     IdentityEffectFamily.ALIAS,
     IdentityEffectFamily.IDENTIFIER,

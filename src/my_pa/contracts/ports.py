@@ -4825,6 +4825,31 @@ class RelationshipMemoryRepository(ABC):
         """Restore one opaque memory binding to its immutable origin subject."""
         raise NotImplementedError
 
+    def records_bound_to_entity_outside(
+        self,
+        principal_id: str,
+        family: IdentityEffectFamily,
+        entity_id: str,
+        known_record_ids: Collection[str],
+        *,
+        limit: int,
+    ) -> list[str]:
+        """Identifiers in `family` now bound to `entity_id` that `known_record_ids` omits.
+
+        The memory plane's own half of `EntitiesRepository`'s method of the same
+        name, over the same question: a row that binds to the survivor and
+        appears in no effect the merge recorded was created after the merge, so
+        no lineage says which of the merged identities it belongs to. Declared
+        with a default that raises rather than as `@abstractmethod`, on
+        `identity_effect_matches_after_state`'s own terms above.
+
+        `limit` is required and carries no default, on `EntitiesRepository`'s own
+        argument: the caller owns the ceiling, and a default here could stop
+        agreeing with it. The answer is truncated at `limit` rather than reported
+        as complete.
+        """
+        raise NotImplementedError
+
 
 class RelationshipMemoryProposalRepository(ABC):
     """The producer's whole persistence surface on the memory plane: one insert.

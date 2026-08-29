@@ -60,6 +60,9 @@ from my_pa.domain.relationship.entity import (
 from my_pa.domain.relationship.governance import (
     ActorClass,
     EntityObservation,
+    EntityProposal,
+    EntityProposalMethod,
+    EntityProposalState,
     ObservationKind,
 )
 from my_pa.domain.relationship.identity_correction import (
@@ -74,15 +77,27 @@ from my_pa.domain.relationship.memory import (
     MemoryAuthority,
     MemoryKind,
     MemoryOperation,
+    MemoryProposalMethod,
+    MemoryProposalState,
+    RelationshipMemoryProposal,
     classification_floor_for,
+    memory_proposal_dedupe_digest,
     statement_digest,
 )
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.relationship.proposal_payload import (
+    EntityProposalKind,
+    EntityProposalPayload,
+    dedupe_digest,
+)
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.relationship_memory import (
     SqlRelationshipMemoryRepository,
+)
+from my_pa.infrastructure.persistence.relationship_memory_proposals import (
+    SqlRelationshipMemoryProposalRepository,
 )
 
 pytestmark = pytest.mark.database
@@ -101,6 +116,7 @@ PRINCIPAL_B: Final = "prn_bbbb0002bbbb0002bbbb0002"
 SURVIVOR: Final = "ent_aaaa0001aaaa0001"
 MERGED: Final = "ent_bbbb0002bbbb0002"
 FOREIGN: Final = "ent_eeee0005eeee0005"
+THIRD: Final = "ent_cccc0003cccc0003"
 
 MOVED_ALIAS: Final = "eals_aaaa0001aaaa01"
 LATER_OBSERVATION: Final = "eobs_bbbb0002bbbb02"
@@ -798,3 +814,347 @@ def test_a_relationship_memory_the_ledger_can_no_longer_prove_is_an_ambiguity_no
     assert [tuple(row) for row in settled] == [
         (ambiguity.ambiguity_id, "relationship_memory", memory_id, "leave_unresolved", None),
     ]
+
+
+def _assert_created_ambiguity_is_leave_unresolved_only(
+    engine: Engine,
+    merge: MergeReceipt,
+    *,
+    expected_family: IdentityEffectFamily,
+    expected_record_id: str,
+) -> SplitReceipt:
+    """The common shape RI-P2-BLK-001's closed gap proves for `PROPOSAL` and the
+    three memory families.
+
+    One row newly bound to the survivor, absent from the merge's ledger, is
+    discovered as `POST_MERGE_CREATED`; the family's own narrowed disposition
+    set (`LEAVE_UNRESOLVED` only -- none of these four has a writer that could
+    carry out `ASSIGN_TO_ENTITY`) is offered and enforced rather than merely
+    advisory; every refusal happens before the first write; and the one
+    settlement the operator can actually give carries the split through.
+    """
+    report = _split_preview(engine, merge.operation.identity_operation_id)
+    assert len(report.ambiguities) == 1
+    (ambiguity,) = report.ambiguities
+    assert ambiguity.record_family is expected_family
+    assert ambiguity.record_id == expected_record_id
+    assert ambiguity.reason == AmbiguityReason.POST_MERGE_CREATED
+    assert ambiguity.allowed_dispositions == (AmbiguityDisposition.LEAVE_UNRESOLVED.value,)
+    assert ambiguity.allowed_target_entity_ids == (SURVIVOR, MERGED)
+    assert all(
+        key.endswith(("_id", "_count", "_sequence", "_sha256"))
+        for key in ambiguity.evidence_summary
+    )
+
+    # (a) Fail-closed preserved: no disposition for this ambiguity still
+    # refuses, before anything is written.
+    with pytest.raises(InvalidRequestError):
+        _split_apply(engine, _split_command(report))
+
+    # (b) The narrowing is enforced, not advisory: `ASSIGN_TO_ENTITY` is
+    # rejected even naming an admissible target, because `_validated_dispositions`
+    # checks the chosen disposition against this ambiguity's own
+    # `allowed_dispositions` before anything is written -- and this family has
+    # no writer that could carry it out even if it were accepted.
+    with pytest.raises(InvalidRequestError):
+        _split_apply(
+            engine,
+            _split_command(
+                report,
+                (
+                    SplitDisposition(
+                        ambiguity.ambiguity_id,
+                        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+                        target_entity_id=SURVIVOR,
+                    ),
+                ),
+            ),
+        )
+    assert _row_count(engine, "entity_identity_operations", "operation_type = 'split'") == 0
+    assert _row_count(engine, "entity_identity_ambiguity_settlements") == 0
+
+    # (c) The one answer this family does admit carries the split through: a
+    # settlement row recorded, no writer invoked, the record left exactly
+    # where it already was.
+    receipt = _split_apply(
+        engine,
+        _split_command(
+            report,
+            (SplitDisposition(ambiguity.ambiguity_id, AmbiguityDisposition.LEAVE_UNRESOLVED),),
+        ),
+    )
+    assert receipt.operation.state is IdentityOperationState.COMPLETED
+    with engine.connect() as connection:
+        settled = connection.execute(
+            text(
+                f"SELECT ambiguity_id, record_family, record_id, disposition, target_entity_id "  # noqa: S608
+                f"FROM {SCHEMA}.entity_identity_ambiguity_settlements "
+                "WHERE identity_operation_id = :operation_id"
+            ),
+            {"operation_id": receipt.operation.identity_operation_id},
+        ).all()
+    assert [tuple(row) for row in settled] == [
+        (
+            ambiguity.ambiguity_id,
+            expected_family.value,
+            expected_record_id,
+            "leave_unresolved",
+            None,
+        ),
+    ]
+    return receipt
+
+
+def test_a_relationship_memory_created_after_the_merge_is_an_ambiguity_too(
+    staged: Engine,
+) -> None:
+    """RI-P2-BLK-001's `POST_MERGE_CREATED` path for `RELATIONSHIP_MEMORY`.
+
+    `test_a_relationship_memory_the_ledger_can_no_longer_prove_is_an_ambiguity_not_a_refusal`
+    above proves `POST_MERGE_MODIFIED` for this family: a memory the merge
+    itself reparented, that then changed again. This proves the other half a
+    split has to catch too: a memory admitted directly against the survivor
+    *after* the merge, naming no merged-away identity at any point, so the
+    merge's effect ledger carries no lineage for it at all.
+    """
+    merge = _merged(staged)
+    statement = "Synthetic note admitted directly against the survivor after the merge."
+    with staged.begin() as connection:
+        admission = SqlRelationshipMemoryRepository(connection).admit(
+            MemoryWriteRequest(
+                operation=MemoryOperation.CREATE,
+                memory_id=None,
+                memory_version_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+                expected_version=None,
+                principal_id=PRINCIPAL_A,
+                subject_entity_id=SURVIVOR,
+                memory_kind=MemoryKind.GENERAL_NOTE,
+                statement=statement,
+                statement_sha256=statement_digest(statement),
+                structured_value=None,
+                authority=MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE,
+                classification=classification_floor_for(MemoryKind.GENERAL_NOTE),
+                created_by_actor=MemoryActorClass.USER,
+                context_links=(),
+                pinned=False,
+                observed_at=None,
+                effective_from=None,
+                effective_to=None,
+                correction_reason=None,
+                idempotency_key="split-ambiguity-memory-created",
+                correlation_id=CORRELATION,
+                server_received_at=WHEN,
+            )
+        )
+    memory_id = admission.receipt.memory_id
+
+    _assert_created_ambiguity_is_leave_unresolved_only(
+        staged,
+        merge,
+        expected_family=IdentityEffectFamily.RELATIONSHIP_MEMORY,
+        expected_record_id=memory_id,
+    )
+    with staged.connect() as connection:
+        subject = connection.execute(
+            text(
+                f"SELECT subject_entity_id FROM {SCHEMA}.relationship_memories "  # noqa: S608
+                "WHERE memory_id = :memory_id"
+            ),
+            {"memory_id": memory_id},
+        ).scalar_one()
+    assert subject == SURVIVOR
+
+
+def test_an_entity_proposal_bound_to_the_survivor_after_the_merge_is_an_ambiguity_not_a_gap(
+    staged: Engine,
+) -> None:
+    """RI-P2-BLK-001's `POST_MERGE_CREATED` gap closed for `PROPOSAL`.
+
+    `entity_proposals` carries no entity column at all -- its reference lives
+    inside a kind-typed payload -- so discovery for this family cannot be
+    `EntitiesRepository.records_bound_to_entity_outside`, which only answers
+    for a row that names an entity in a column. This proves the mechanism the
+    fix uses instead (`self._entities.proposals` read whole and
+    `_proposal_is_materially_affected` applied against the survivor) still
+    finds a proposal filed directly against the survivor after the merge, with
+    no lineage in the merge's own effect ledger naming it, and that the
+    family's narrowed disposition set is enforced rather than advisory.
+    """
+    merge = _merged(staged)
+    proposal_id = issue_identifier(IdKind.ENTITY_PROPOSAL)
+    payload = EntityProposalPayload.of(
+        EntityProposalKind.RECORD_ALIAS,
+        {"entity_id": SURVIVOR, "alias_type": "nickname", "display_value": "Al"},
+    )
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).record_proposal(
+            PRINCIPAL_A,
+            EntityProposal(
+                proposal_id=proposal_id,
+                principal_id=PRINCIPAL_A,
+                kind=EntityProposalKind.RECORD_ALIAS,
+                state=EntityProposalState.PROPOSED,
+                payload=payload,
+                observation_ids=(),
+                proposed_at=WHEN,
+                proposed_by="synthetic-producer",
+                method=EntityProposalMethod.DETERMINISTIC,
+                method_version="v1",
+                dedupe_sha256=dedupe_digest(payload),
+            ),
+        )
+
+    _assert_created_ambiguity_is_leave_unresolved_only(
+        staged,
+        merge,
+        expected_family=IdentityEffectFamily.PROPOSAL,
+        expected_record_id=proposal_id,
+    )
+    with staged.connect() as connection:
+        untouched = SqlEntityRepository(connection).proposal(PRINCIPAL_A, proposal_id)
+    assert untouched is not None
+    assert untouched.state is EntityProposalState.PROPOSED
+
+
+def test_a_memory_proposal_bound_to_the_survivor_after_the_merge_is_an_ambiguity_not_a_gap(
+    staged: Engine,
+) -> None:
+    """RI-P2-BLK-001's `POST_MERGE_CREATED` gap closed for `MEMORY_PROPOSAL`.
+
+    A candidate memory recorded directly against the survivor after the
+    merge, through the producer's own insert-only surface
+    (`RelationshipMemoryProposalRepository.record_proposal`), with no lineage
+    in the merge's own effect ledger naming it.
+    """
+    merge = _merged(staged)
+    with staged.connect() as connection:
+        survivor = SqlEntityRepository(connection).get(PRINCIPAL_A, SURVIVOR)
+    assert survivor is not None
+    memory_proposal_id = issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL)
+    statement = "Synthetic candidate memory proposed directly against the survivor."
+    statement_sha256 = statement_digest(statement)
+    proposal = RelationshipMemoryProposal(
+        memory_proposal_id=memory_proposal_id,
+        principal_id=PRINCIPAL_A,
+        subject_entity_id=SURVIVOR,
+        expected_subject_version=survivor.version,
+        proposed_kind=MemoryKind.GENERAL_NOTE,
+        proposed_statement=statement,
+        proposed_statement_sha256=statement_sha256,
+        dedupe_sha256=memory_proposal_dedupe_digest(
+            principal_id=PRINCIPAL_A,
+            subject_entity_id=SURVIVOR,
+            proposed_kind=MemoryKind.GENERAL_NOTE,
+            proposed_statement_sha256=statement_sha256,
+            structured_value=None,
+            context_links=(),
+        ),
+        state=MemoryProposalState.PROPOSED,
+        method=MemoryProposalMethod.RULE,
+        method_version="synthetic-origin-v1",
+        classification=classification_floor_for(MemoryKind.GENERAL_NOTE),
+        proposed_at=WHEN,
+    )
+    with staged.begin() as connection:
+        SqlRelationshipMemoryProposalRepository(connection).record_proposal(proposal, ())
+
+    _assert_created_ambiguity_is_leave_unresolved_only(
+        staged,
+        merge,
+        expected_family=IdentityEffectFamily.MEMORY_PROPOSAL,
+        expected_record_id=memory_proposal_id,
+    )
+    with staged.connect() as connection:
+        row = connection.execute(
+            text(
+                "SELECT subject_entity_id, state "  # noqa: S608
+                f"FROM {SCHEMA}.relationship_memory_proposals "
+                "WHERE memory_proposal_id = :memory_proposal_id"
+            ),
+            {"memory_proposal_id": memory_proposal_id},
+        ).one()
+    assert row.subject_entity_id == SURVIVOR
+    assert row.state == MemoryProposalState.PROPOSED.value
+
+
+def test_a_memory_context_link_bound_to_the_survivor_after_the_merge_is_an_ambiguity_not_a_gap(
+    staged: Engine,
+) -> None:
+    """RI-P2-BLK-001's `POST_MERGE_CREATED` gap closed for `MEMORY_CONTEXT_LINK`.
+
+    The new memory's own subject is a third, uninvolved entity, so this proves
+    the context *link* is what discovery finds, not the memory's own
+    `subject_entity_id`: the memory this admission writes does not bind to the
+    survivor at all, only the `relationship_memory_context_links` row its
+    admission also writes does.
+    """
+    merge = _merged(staged)
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).create(PRINCIPAL_A, _entity(THIRD, name="Carol Synthetic"))
+    statement = "Synthetic note about a third person, contextualised by the survivor."
+    with staged.begin() as connection:
+        admission = SqlRelationshipMemoryRepository(connection).admit(
+            MemoryWriteRequest(
+                operation=MemoryOperation.CREATE,
+                memory_id=None,
+                memory_version_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+                expected_version=None,
+                principal_id=PRINCIPAL_A,
+                subject_entity_id=THIRD,
+                memory_kind=MemoryKind.GENERAL_NOTE,
+                statement=statement,
+                statement_sha256=statement_digest(statement),
+                structured_value=None,
+                authority=MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE,
+                classification=classification_floor_for(MemoryKind.GENERAL_NOTE),
+                created_by_actor=MemoryActorClass.USER,
+                context_links=(
+                    {"target_type": "entity", "target_id": SURVIVOR, "role": "related_to"},
+                ),
+                pinned=False,
+                observed_at=None,
+                effective_from=None,
+                effective_to=None,
+                correction_reason=None,
+                idempotency_key="split-ambiguity-context-link-created",
+                correlation_id=CORRELATION,
+                server_received_at=WHEN,
+            )
+        )
+    memory_id = admission.receipt.memory_id
+    with staged.connect() as connection:
+        context_link_id = connection.execute(
+            text(
+                f"SELECT context_link_id FROM {SCHEMA}.relationship_memory_context_links "  # noqa: S608
+                "WHERE target_id = :target_id"
+            ),
+            {"target_id": SURVIVOR},
+        ).scalar_one()
+
+    _assert_created_ambiguity_is_leave_unresolved_only(
+        staged,
+        merge,
+        expected_family=IdentityEffectFamily.MEMORY_CONTEXT_LINK,
+        expected_record_id=context_link_id,
+    )
+    with staged.connect() as connection:
+        target = connection.execute(
+            text(
+                f"SELECT target_id FROM {SCHEMA}.relationship_memory_context_links "  # noqa: S608
+                "WHERE context_link_id = :context_link_id"
+            ),
+            {"context_link_id": context_link_id},
+        ).scalar_one()
+    assert target == SURVIVOR
+    # The memory itself is untouched: this ambiguity is about the link, not
+    # about `relationship_memories.subject_entity_id`, which never named the
+    # survivor at any point.
+    with staged.connect() as connection:
+        memory_subject = connection.execute(
+            text(
+                f"SELECT subject_entity_id FROM {SCHEMA}.relationship_memories "  # noqa: S608
+                "WHERE memory_id = :memory_id"
+            ),
+            {"memory_id": memory_id},
+        ).scalar_one()
+    assert memory_subject == THIRD

@@ -39,7 +39,7 @@ from my_pa.application.identity_correction import (
 )
 from my_pa.domain.common.identifiers import InvalidIdentifierError
 from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
-from my_pa.domain.relationship.governance import ActorClass
+from my_pa.domain.relationship.governance import ActorClass, EntityProposal
 from my_pa.domain.relationship.identity_correction import (
     IDENTITY_PREVIEW_LIFETIME,
     MAX_MERGED_AWAY_ENTITIES,
@@ -687,6 +687,11 @@ class _SplitEntities:
         del preview_id
         return []
 
+    def proposals(self, principal_id: str) -> list[EntityProposal]:
+        """No proposal was ever filed against this synthetic merge's Principal."""
+        assert principal_id == PRINCIPAL
+        return []
+
     def get(self, principal_id: str, entity_id: str) -> Entity | None:
         if principal_id == PRINCIPAL and entity_id == SURVIVOR:
             return self.survivor
@@ -756,6 +761,20 @@ class _SplitMemories:
         self, principal_id: str, effect: IdentityEffect
     ) -> bool:
         return principal_id == PRINCIPAL
+
+    def records_bound_to_entity_outside(
+        self,
+        principal_id: str,
+        family: IdentityEffectFamily,
+        entity_id: str,
+        known_record_ids: Collection[str],
+        *,
+        limit: int,
+    ) -> list[str]:
+        """Nothing was created against the survivor after this synthetic merge."""
+        assert principal_id == PRINCIPAL and entity_id == SURVIVOR and limit > 0
+        del family, known_record_ids
+        return []
 
     def restore_identity_effect(
         self,

@@ -380,60 +380,118 @@ that a client cannot see this capability is therefore a durable per-client grant
 question or a compact-facade publication question — not a code-level profile
 omission, and not something a change to these profiles would fix.
 
-**4. WP-01 is PARTIAL, and the boundary is narrower than it was.** Corrected
-2026-08-29 (`7f5bda1`, closing the RI-P2-BLK-001 family-coverage gap this
-paragraph previously left open): split ambiguity discovery and disposition now
-cover all nine dispositionable record families, not only the five whose rows
-name an entity in a column. The gate is `not dispositions_for(effect.family)`
+**4. WP-01's family-coverage gap is closed on both its disposition and
+discovery sides.** Corrected 2026-08-29 (`7f5bda1`, closing the disposition-side
+half of the `RI-P2-BLK-001` family-coverage gap this paragraph previously left
+open) and corrected again the same day (closing the discovery-side half item 5
+below named as the reason WP-01 was still PARTIAL). The disposition-side gate,
+unchanged by the second correction, is `not dispositions_for(effect.family)`
 (`src/my_pa/application/identity_correction.py:1876`), which raises an ambiguity
 for any family `dispositions_for` admits at least one disposition for, rather
 than the narrower `not in _ATTRIBUTABLE_FAMILIES` test it replaced. `alias`,
 `identifier`, `assignment`, `relationship` and `observation` keep the full set
 `dispositions_for` gives them (`_ATTRIBUTABLE_FAMILIES`,
-`src/my_pa/application/identity_correction.py:3069`, unchanged at five members —
-it now gates only `POST_MERGE_CREATED` discovery and `ASSIGN_TO_ENTITY`
-execution, not whether a family can raise an ambiguity at all). For `proposal`,
-`relationship_memory`, `memory_proposal` and `memory_context_link` **no
-rebinding primitive exists**: `entity_proposals` carries `entity_columns=()`
-(`src/my_pa/infrastructure/persistence/entity.py:3838`) and makes its references
-inside its payload, so there is nothing for an assignment to rewrite; and
-`RelationshipMemoryRepository` publishes no operator-directed rebinding — its two
-identity writers apply and restore a planned merge effect. `LEAVE_UNRESOLVED`
-needs no such primitive — it is a settlement record, not a mutation — so it does
-not share `ASSIGN_TO_ENTITY`'s dependency on one:
-`_DISPOSITIONS_BY_FAMILY` narrows these four to `(LEAVE_UNRESOLVED,)` only
-(`src/my_pa/domain/relationship/identity_correction.py`), so a post-merge
-modification in any of them now raises a `POST_MERGE_MODIFIED` ambiguity the
-operator must explicitly settle, rather than the blanket, pre-existing
-fail-closed `PREVIEW_STALE` refusal this paragraph previously described.
+`src/my_pa/application/identity_correction.py:3140`, unchanged at five members).
+For `proposal`, `relationship_memory`, `memory_proposal` and
+`memory_context_link` **no rebinding primitive exists**: `entity_proposals`
+carries `entity_columns=()` (`src/my_pa/infrastructure/persistence/entity.py:3838`)
+and makes its references inside its payload, so there is nothing for an
+assignment to rewrite; and `RelationshipMemoryRepository` publishes no
+operator-directed rebinding — its two identity writers apply and restore a
+planned merge effect. `LEAVE_UNRESOLVED` needs no such primitive — it is a
+settlement record, not a mutation — so it does not share `ASSIGN_TO_ENTITY`'s
+dependency on one: `_DISPOSITIONS_BY_FAMILY` narrows these four to
+`(LEAVE_UNRESOLVED,)` only (`src/my_pa/domain/relationship/identity_correction.py`).
 `ASSIGN_TO_ENTITY` for one of the four is refused before any write
 (`InvalidRequestError`, since it is outside `allowed_dispositions`), and an
 unanswered ambiguity still blocks apply — fail-closed is preserved, not
-loosened. Proven end-to-end (raise, apply-with-no-disposition-fails,
-`ASSIGN_TO_ENTITY`-refused, `LEAVE_UNRESOLVED`-succeeds) for
-`relationship_memory` in `tests/database/test_identity_split_ambiguity.py` and
-`tests/unit/test_identity_split_service.py`; `proposal`, `memory_proposal` and
-`memory_context_link` are proven at the domain-disposition level (the same
-`_DISPOSITIONS_BY_FAMILY`/`dispositions_for` assertions, plus the shared,
-family-agnostic gate and settlement-validation logic all four run through) but
-do not each have their own end-to-end database-level case — a narrower, stated
-limitation rather than an implicit one. WP-01 remains PARTIAL, now for the
-reason in item 5 below (`POST_MERGE_CREATED` discovery is not extended to these
-four families), not for the reason this paragraph gave before this correction.
+loosened.
 
-**5. WP-01 known limitation — post-merge-created discovery over-reports.** The
-five tables `_post_merge_created` walks carry **no creation timestamp**:
-`entity_aliases`, `entity_external_identifiers`, `entity_assignments` and
-`entity_relationships` have only `updated_at`, and `entity_observations` has
-`observed_at`/`recorded_at`. A merge also records no effect for rows the survivor
-already held. So "bound to the survivor and absent from the ledger" — the
-strongest discriminator the persisted state supports — also matches the
-survivor's own pre-merge rows. The error direction is fail-closed: it
-**over-reports and never under-reports**, an operator is asked to attribute a
-record whose owner they can see immediately, and no record is silently attributed
-for them. Both dispositions an operator may choose are safe. Narrowing it needs a
-creation time these tables do not have. The limitation is also stated in the
-source at `src/my_pa/application/identity_correction.py:1917-1926`.
+The second correction closed what the first one could not reach: **discovery**,
+not just disposition. `not dispositions_for(effect.family)` only raises an
+ambiguity for a row the merge's own effect ledger already names, changed since
+(`POST_MERGE_MODIFIED`) — it says nothing about a row bound to the survivor that
+the ledger never mentions at all (`POST_MERGE_CREATED`), which is
+`_post_merge_created`'s (`src/my_pa/application/identity_correction.py:1925`)
+question, not this gate's. Before the second correction, `_post_merge_created`
+walked only `_ATTRIBUTABLE_FAMILIES`, so a `proposal`, `relationship_memory`,
+`memory_proposal` or `memory_context_link` row newly bound to the survivor after
+a merge, with no ledger effect for it, was never discovered as
+`POST_MERGE_CREATED` — the residual gap item 5 named and `RI-P2-BLK-001` was
+reopened over. `_ATTRIBUTABLE_FAMILIES` now gates only
+`EntitiesRepository.records_bound_to_entity_outside` discovery and
+`ASSIGN_TO_ENTITY` execution, not whether `POST_MERGE_CREATED` discovery runs
+for a family at all: `relationship_memory`, `memory_proposal` and
+`memory_context_link` are now also discovered through
+`RelationshipMemoryRepository.records_bound_to_entity_outside`
+(`src/my_pa/contracts/ports.py`, implemented in
+`src/my_pa/infrastructure/persistence/relationship_memory.py`) — the memory
+plane's own version of the same method, over the same three columns
+`plan_identity_merge` already reparents (`subject_entity_id` twice,
+`target_id` once). `proposal` has no such column to query at all, so it is
+discovered the way `preview()` already asks whether a merge materially affects
+an open proposal: `self._entities.proposals` read whole and
+`_proposal_is_materially_affected` applied against the survivor, over every
+proposal state rather than only the open ones. All four keep the disposition
+set they already had — this correction changed discovery, not what an operator
+may answer with.
+
+Proven end-to-end (raise, apply-with-no-disposition-fails,
+`ASSIGN_TO_ENTITY`-refused, `LEAVE_UNRESOLVED`-succeeds): `relationship_memory`
+for `POST_MERGE_MODIFIED`, pre-existing, in
+`tests/database/test_identity_split_ambiguity.py` and
+`tests/unit/test_identity_split_service.py`; `relationship_memory` for
+`POST_MERGE_CREATED`, added by the second correction, and `proposal`,
+`memory_proposal` and `memory_context_link` for `POST_MERGE_CREATED`, also
+added by the second correction, all four in
+`tests/database/test_identity_split_ambiguity.py` only — the second correction
+did not add unit-level (fake-repository) cases for the `POST_MERGE_CREATED`
+path, only database-tier ones; the unit-level fakes were extended just enough
+(`_Entities.proposals`, `_Memories.records_bound_to_entity_outside` and their
+counterparts in `tests/unit/test_identity_correction.py`) that the pre-existing
+unit suite keeps exercising the port surface correctly rather than crashing on
+an unimplemented method. What remains a narrower, stated limitation, unchanged
+by either correction: `proposal`, `memory_proposal` and `memory_context_link`'s
+`POST_MERGE_MODIFIED` path is proven at the domain-disposition level only (the
+same `_DISPOSITIONS_BY_FAMILY`/`dispositions_for` assertions, plus the shared,
+family-agnostic gate and settlement-validation logic all four run through), not
+with its own end-to-end database-level case. WP-01 is no longer PARTIAL for the
+reason item 5 below named — `POST_MERGE_CREATED` discovery not extended to
+these four families — because that reason is now closed.
+
+**5. WP-01 known limitation — post-merge-created discovery over-reports, by
+design, for all nine families now, not only the original five.** This item
+named the discovery-scope gap item 4 above records as now closed by the second
+2026-08-29 correction. It also names a second thing, which that correction did
+not close and was never meant to: over-reporting is an accepted, deliberate
+fail-safe property of the discovery mechanism itself, not a defect, and it now
+applies uniformly across every family the mechanism reaches. The five tables
+`_post_merge_created` walked before that correction carry **no creation
+timestamp**: `entity_aliases`,
+`entity_external_identifiers`, `entity_assignments` and `entity_relationships`
+have only `updated_at`, and `entity_observations` has `observed_at`/`recorded_at`.
+The four families the second correction added discovery for are not uniformly
+the same: `relationship_memories` carries `created_at`, and
+`relationship_memory_proposals`/`entity_proposals` carry `proposed_at` — three
+of the four newly-discovered tables *do* have a creation-ish column, and
+`_post_merge_created` deliberately does not read any of them. A survivor's own
+row from before the merge is exactly as invisible to a timestamp check as one
+genuinely created afterward, because neither this method nor the merge ledger
+records when the survivor's own history began; reading the column would narrow
+some rows correctly and drop others silently, with no way from the persisted
+state to tell which is which. So "bound to the survivor and absent from the
+ledger" — the strongest discriminator the persisted state supports — also
+matches the survivor's own pre-merge rows, for every one of the nine families
+this method now discovers, not only the original five. The error direction is
+fail-closed throughout: it **over-reports and never under-reports**, an operator
+is asked to attribute a record whose owner they can see immediately, and no
+record is silently attributed for them. Every disposition an operator may
+choose is safe (all three, for the five with a rebinding writer; the one
+disposition, `LEAVE_UNRESOLVED`, for the four narrowed to it). Narrowing it
+needs a creation time these tables do not have, and even where one exists it
+cannot distinguish a pre-merge row from a post-merge one, so it is not read.
+The limitation is stated in the source at
+`src/my_pa/application/identity_correction.py:1934-1953`.
 
 **6. WP-04 is PARTIAL, and the residue is an operator decision.** Removing the
 unconditional `CONTRADICTION_RESOLUTION` registration

@@ -42,7 +42,7 @@ from my_pa.domain.relationship.entity import (
     EntityStatus,
     EntityType,
 )
-from my_pa.domain.relationship.governance import ActorClass
+from my_pa.domain.relationship.governance import ActorClass, EntityProposal
 from my_pa.domain.relationship.identity_correction import (
     AmbiguityDisposition,
     AmbiguityReason,
@@ -166,10 +166,22 @@ class _Entities:
         self.reparented: list[tuple[IdentityEffectFamily, str, str, int]] = []
         self.bound_aliases: list[EntityAlias] = []
         self.mismatched: set[str] = set()
+        self.proposals_list: list[EntityProposal] = []
 
     def observation(self, principal_id: str, reference: str) -> None:
         del principal_id, reference
         return None
+
+    def proposals(self, principal_id: str) -> list[EntityProposal]:
+        """No proposal-family `POST_MERGE_CREATED` case is exercised at this layer.
+
+        `tests/database/test_identity_split_ambiguity.py` proves it against a
+        real `entity_proposals` row and its payload; this fake stays empty so
+        `_post_merge_created`'s proposal-discovery loop is a no-op here rather
+        than an `AttributeError`.
+        """
+        assert principal_id == PRINCIPAL
+        return list(self.proposals_list)
 
     def identity_operation(self, principal_id: str, operation_id: str) -> IdentityOperation | None:
         if principal_id != PRINCIPAL or operation_id != SOURCE_OPERATION:
@@ -322,11 +334,35 @@ class _Memories:
         self.restored: list[tuple[IdentityEffectFamily, str]] = []
         self.restoration_order: list[tuple[IdentityEffectFamily, str]] = []
         self.states_match = True
+        self.created_after_merge: dict[IdentityEffectFamily, tuple[str, ...]] = {}
 
     def identity_effect_matches_after_state(
         self, principal_id: str, effect: IdentityEffect
     ) -> bool:
         return principal_id == PRINCIPAL and self.states_match
+
+    def records_bound_to_entity_outside(
+        self,
+        principal_id: str,
+        family: IdentityEffectFamily,
+        entity_id: str,
+        known_record_ids: Collection[str],
+        *,
+        limit: int,
+    ) -> list[str]:
+        """The memory plane's half of `_Entities.records_bound_to_entity_outside` above.
+
+        No `RELATIONSHIP_MEMORY`/`MEMORY_PROPOSAL`/`MEMORY_CONTEXT_LINK`
+        `POST_MERGE_CREATED` case is exercised at this layer either -- see
+        `_Entities.proposals`'s docstring for why that lives at the database
+        tier instead.
+        """
+        assert principal_id == PRINCIPAL and entity_id == SURVIVOR and limit > 0
+        return [
+            record_id
+            for record_id in self.created_after_merge.get(family, ())
+            if record_id not in known_record_ids
+        ]
 
     def restore_identity_effect(
         self,

@@ -483,7 +483,14 @@ def test_split_refuses_a_corrupt_source_ledger_and_a_stale_effect_state() -> Non
         _preview(entities, memories)
 
     entities = _Entities()
-    memories.states_match = False
+    # `ENTITY` and not `RELATIONSHIP_MEMORY`: `dispositions_for(ENTITY)` is
+    # empty, so a mismatched `ENTITY` effect still refuses outright exactly as
+    # a corrupt ledger does. `RELATIONSHIP_MEMORY` no longer proves this --
+    # since the fix this module tests, it admits `LEAVE_UNRESOLVED` and a
+    # mismatched effect for it is an ambiguity, not a refusal (see
+    # `test_dispositions_for_the_four_writerless_families_is_leave_unresolved_only`
+    # and the `RELATIONSHIP_MEMORY`-family test below).
+    entities.states_match = False
     with pytest.raises(ConflictError):
         _preview(entities, memories)
     assert entities.preview is None
@@ -717,3 +724,72 @@ def test_preserve_shared_is_admitted_for_evidence_and_for_nothing_else() -> None
     assert dispositions_for(IdentityEffectFamily.ENTITY) == ()
     assert dispositions_for(IdentityEffectFamily.REVIEW_CASE) == ()
     assert dispositions_for(IdentityEffectFamily.DERIVED_CONTEXT) == ()
+
+
+def test_dispositions_for_the_four_writerless_families_is_leave_unresolved_only() -> None:
+    """`PROPOSAL` and the three memory families admit exactly `LEAVE_UNRESOLVED`.
+
+    None of the four has an operator-directed rebinding writer this revision
+    can call: `entity_proposals` carries no entity column for `PROPOSAL`, and
+    `RelationshipMemoryRepository` / `RelationshipMemoryProposalRepository`
+    publish no update-or-rebind method at all for the other three. So
+    `ASSIGN_TO_ENTITY` -- which this mapping wrongly offered before this fix --
+    is absent, and `LEAVE_UNRESOLVED` is the one answer left, because it needs
+    no writer: it is a settlement row, not a mutation of the record.
+    """
+    writerless = (
+        IdentityEffectFamily.PROPOSAL,
+        IdentityEffectFamily.RELATIONSHIP_MEMORY,
+        IdentityEffectFamily.MEMORY_PROPOSAL,
+        IdentityEffectFamily.MEMORY_CONTEXT_LINK,
+    )
+    for family in writerless:
+        assert dispositions_for(family) == (AmbiguityDisposition.LEAVE_UNRESOLVED,)
+
+
+def test_a_relationship_memory_changed_after_the_merge_is_an_ambiguity_not_a_refusal() -> None:
+    """The gap this fix closes, proved at the unit level with the existing `_Memories` fake.
+
+    Before this fix, a `RELATIONSHIP_MEMORY` effect whose `after_state` no
+    longer matched (`_Memories.states_match = False`, already how this suite's
+    fake represents a memory-family post-merge modification -- no new fixture
+    needed) hit `effect.family not in _ATTRIBUTABLE_FAMILIES` and refused the
+    whole split with `PREVIEW_STALE`, exactly `RI-P2-BLK-001` for a family
+    nobody had closed it for yet. It is now an ambiguity, narrowed to the one
+    disposition this family can honestly offer.
+    """
+    entities, memories = _Entities(), _Memories()
+    memories.states_match = False
+    service = _service(entities, memories)
+    report = _preview(entities, memories)
+
+    (ambiguity,) = report.ambiguities
+    assert ambiguity.record_family is IdentityEffectFamily.RELATIONSHIP_MEMORY
+    assert ambiguity.record_id == "mem_aaaa0001aaaa01"
+    assert ambiguity.reason == AmbiguityReason.POST_MERGE_MODIFIED
+    assert ambiguity.allowed_dispositions == (AmbiguityDisposition.LEAVE_UNRESOLVED.value,)
+    # The deterministic half is untouched: the `ENTITY` effect the ledger still
+    # proves is projected and restored without becoming a question.
+    assert {draft.record_id for draft in report.projected_effects} == {MERGED}
+
+    # Fail-closed: no disposition for it still refuses.
+    with pytest.raises(InvalidRequestError):
+        _apply(service, _command(report))
+    # The narrowing is enforced: `ASSIGN_TO_ENTITY` is rejected even with an
+    # admissible target, because `_validated_dispositions` checks the chosen
+    # disposition against this ambiguity's own `allowed_dispositions`.
+    with pytest.raises(InvalidRequestError):
+        _apply(
+            service,
+            _settle(report, AmbiguityDisposition.ASSIGN_TO_ENTITY, target_entity_id=MERGED),
+        )
+    assert entities.operations == [] and entities.settlements == ()
+
+    receipt = _apply(service, _settle(report, AmbiguityDisposition.LEAVE_UNRESOLVED))
+    assert receipt.operation.state is IdentityOperationState.COMPLETED
+    assert entities.reparented == []
+    (settlement,) = entities.settlements
+    assert settlement.record_family == IdentityEffectFamily.RELATIONSHIP_MEMORY
+    assert settlement.disposition == AmbiguityDisposition.LEAVE_UNRESOLVED.value
+    assert settlement.target_entity_id is None
+    assert entities.restored == [(IdentityEffectFamily.ENTITY, MERGED)]

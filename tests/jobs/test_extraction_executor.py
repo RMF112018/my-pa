@@ -1037,22 +1037,23 @@ def test_the_executor_is_the_handler_the_worker_process_wires() -> None:
     Runs in every tier, because it needs no server. Without it, this file could
     prove a great deal about a function nothing calls.
 
-    Read off `_PLANES` rather than out of `_run`'s bytecode, because WP-7 gave
-    the process a second plane and the dispatch moved from a literal argument
-    into that mapping. A name-in-`co_names` check would now pass for a build that
-    imported the handler and wired the other one — which is the failure it was
-    written to catch, so the assertion follows the wiring rather than the file.
+    Read off `_JOB_PLANES` rather than out of `_run`'s bytecode, because WP-7
+    gave the process a second plane and the dispatch moved from a literal
+    argument into that mapping. A name-in-`co_names` check would now pass for
+    a build that imported the handler and wired the other one — which is the
+    failure it was written to catch, so the assertion follows the wiring
+    rather than the file.
     """
     import apps.worker as worker_process
 
     assert worker_process.extract_enrollment is extract_enrollment
-    plane, handler = worker_process._PLANES["enrollment"]
+    plane, handler = worker_process._JOB_PLANES["enrollment"]
     assert handler is extract_enrollment
     assert plane is ENROLLMENT_JOBS
 
     # The control: the mapping distinguishes its planes, so the assertion above
     # is about this handler and not about the only entry there is.
-    assert worker_process._PLANES["capture"][1] is not extract_enrollment
+    assert worker_process._JOB_PLANES["capture"][1] is not extract_enrollment
 
 
 def test_the_outcome_types_this_file_relies_on_are_the_ones_that_exist() -> None:

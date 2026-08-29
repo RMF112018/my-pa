@@ -330,6 +330,25 @@ class AmbiguityDisposition(StrEnum):
 #: default that admitted them would be this mapping deciding, per row, a
 #: question no recorded evidence answers.
 #:
+#: `PROPOSAL`, `RELATIONSHIP_MEMORY`, `MEMORY_PROPOSAL` and `MEMORY_CONTEXT_LINK`
+#: admit `LEAVE_UNRESOLVED` only, and the reason is a different kind of absence
+#: than the "default deny" above: this is not doubt about which rows qualify,
+#: it is that **no writer exists to carry out `ASSIGN_TO_ENTITY` for any of
+#: them**. `entity_proposals` carries no entity column at all -- there is
+#: nothing on the row an assignment could set -- so `PROPOSAL` cannot be
+#: attributed no matter how clean the evidence is. `RelationshipMemoryRepository`
+#: and `RelationshipMemoryProposalRepository` (`src/my_pa/contracts/ports.py`)
+#: expose no update-or-rebind method at all -- the former is read/admit/replay
+#: only, the latter is insert-only (`record_proposal`) -- so `RELATIONSHIP_MEMORY`
+#: and `MEMORY_PROPOSAL` have no operator-directed writer to move a row to a
+#: different entity either, and `MEMORY_CONTEXT_LINK` has none for the same
+#: reason. `LEAVE_UNRESOLVED` needs no writer -- it is a settlement row recorded
+#: against the ambiguity, not a mutation of the record -- so it is the one
+#: disposition these four families can honestly offer today. Extending them to
+#: `ASSIGN_TO_ENTITY` is future work that first requires building that writer;
+#: claiming the disposition ahead of the writer (as this mapping used to) would
+#: admit a choice this revision cannot execute.
+#:
 #: `ENTITY` never appears because an entity's own redirect is provable from the
 #: ledger or the split is refused; `REVIEW_CASE` is ledger-only and writes no
 #: row; `DERIVED_CONTEXT` is recomputed rather than attributed. A family absent
@@ -358,22 +377,10 @@ _DISPOSITIONS_BY_FAMILY: Final[dict[IdentityEffectFamily, tuple[AmbiguityDisposi
         AmbiguityDisposition.PRESERVE_SHARED,
         AmbiguityDisposition.LEAVE_UNRESOLVED,
     ),
-    IdentityEffectFamily.PROPOSAL: (
-        AmbiguityDisposition.ASSIGN_TO_ENTITY,
-        AmbiguityDisposition.LEAVE_UNRESOLVED,
-    ),
-    IdentityEffectFamily.RELATIONSHIP_MEMORY: (
-        AmbiguityDisposition.ASSIGN_TO_ENTITY,
-        AmbiguityDisposition.LEAVE_UNRESOLVED,
-    ),
-    IdentityEffectFamily.MEMORY_PROPOSAL: (
-        AmbiguityDisposition.ASSIGN_TO_ENTITY,
-        AmbiguityDisposition.LEAVE_UNRESOLVED,
-    ),
-    IdentityEffectFamily.MEMORY_CONTEXT_LINK: (
-        AmbiguityDisposition.ASSIGN_TO_ENTITY,
-        AmbiguityDisposition.LEAVE_UNRESOLVED,
-    ),
+    IdentityEffectFamily.PROPOSAL: (AmbiguityDisposition.LEAVE_UNRESOLVED,),
+    IdentityEffectFamily.RELATIONSHIP_MEMORY: (AmbiguityDisposition.LEAVE_UNRESOLVED,),
+    IdentityEffectFamily.MEMORY_PROPOSAL: (AmbiguityDisposition.LEAVE_UNRESOLVED,),
+    IdentityEffectFamily.MEMORY_CONTEXT_LINK: (AmbiguityDisposition.LEAVE_UNRESOLVED,),
 }
 
 

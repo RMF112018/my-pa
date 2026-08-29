@@ -46,7 +46,9 @@ from my_pa.application.identity_correction import (
     SplitReceipt,
 )
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.ports import MemoryWriteRequest
 from my_pa.domain.common.classification import Classification
+from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.relationship.entity import (
     AliasState,
     AliasType,
@@ -67,7 +69,16 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityOperationState,
     IdentityOperationType,
 )
+from my_pa.domain.relationship.memory import (
+    MemoryActorClass,
+    MemoryAuthority,
+    MemoryKind,
+    MemoryOperation,
+    classification_floor_for,
+    statement_digest,
+)
 from my_pa.domain.relationship.normalization import normalize_name
+from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.relationship_memory import (
@@ -614,17 +625,28 @@ def test_only_one_of_two_concurrent_settled_splits_is_admitted(staged: Engine) -
     assert _row_count(staged, "entity_identity_ambiguity_settlements") == 2
 
 
-def test_relationship_memory_and_the_other_unattributable_families_still_refuse(
+def test_entity_still_refuses_outright_with_no_disposition_to_offer(
     staged: Engine,
 ) -> None:
-    """The boundary is unchanged behaviour, and it is asserted rather than assumed.
+    """`ENTITY` has no admissible disposition, so it keeps the original refusal.
 
-    Attribution needs a column saying which entity a row belongs to and a writer
-    that can move it. A `PROPOSAL` has neither, and `Classification` is imported
-    here only to keep the fixture honest about what a memory would carry -- the
-    families outside that set keep the refusal they have always had, so a
-    modified `entity` row still stops the split outright rather than becoming a
-    question nothing could answer.
+    `dispositions_for(ENTITY)` returns `()`: an entity's own redirect is
+    provable from the merge ledger or the split is refused outright, so there
+    is no question a post-merge modification to it could raise -- not even
+    `LEAVE_UNRESOLVED`, which needs no writer but is still an *answer*, and
+    there is no admissible answer here to record. `REVIEW_CASE` (writes no
+    row) and `DERIVED_CONTEXT` (recomputed rather than attributed) keep the
+    same refusal for the same reason -- an empty `dispositions_for` -- but only
+    `ENTITY` is exercised here, being the one of the three with a plain row to
+    perturb. `Classification` is imported only to keep this module's fixture
+    surface honest about what a memory write below carries.
+
+    This is **not** the boundary `PROPOSAL`, `RELATIONSHIP_MEMORY`,
+    `MEMORY_PROPOSAL` and `MEMORY_CONTEXT_LINK` sit on any more: they now admit
+    `LEAVE_UNRESOLVED`, so a post-merge modification to one of them raises an
+    ambiguity rather than refusing the split -- see
+    `test_a_relationship_memory_the_ledger_can_no_longer_prove_is_an_ambiguity_not_a_refusal`
+    below.
     """
     assert Classification.PRIVATE_LOCAL is not None
     merge = _merged(staged)
@@ -639,3 +661,140 @@ def test_relationship_memory_and_the_other_unattributable_families_still_refuse(
     with pytest.raises(ConflictError):
         _split_preview(staged, merge.operation.identity_operation_id)
     assert _row_count(staged, "entity_identity_preview_ambiguities") == 0
+
+
+def test_a_relationship_memory_the_ledger_can_no_longer_prove_is_an_ambiguity_not_a_refusal(
+    staged: Engine,
+) -> None:
+    """RI-P2-BLK-001's gap closed for a fourth family: `RELATIONSHIP_MEMORY`.
+
+    Before this fix, a `RELATIONSHIP_MEMORY` row that changed while the merge
+    held it -- exactly the same shape of problem `ALIAS`/`IDENTIFIER`/
+    `ASSIGNMENT`/`RELATIONSHIP`/`OBSERVATION` were fixed for -- still hit
+    `raise ConflictError(SafeDetail.PREVIEW_STALE)` at the top of the family
+    loop, refusing the whole split. `RelationshipMemoryRepository` has no
+    operator-directed rebinding writer (it is read/admit/replay only), so
+    `ASSIGN_TO_ENTITY` genuinely cannot be carried out for this family --
+    but `LEAVE_UNRESOLVED` needs no writer at all, only a settlement row, so
+    the fix narrows this family to exactly that one admissible answer instead
+    of refusing outright. This test proves three things: the ambiguity is
+    raised with the narrowed disposition set (not the old, wider one that
+    falsely offered `ASSIGN_TO_ENTITY`); applying with no disposition for it
+    still fails closed; and applying with `ASSIGN_TO_ENTITY` for it is rejected
+    rather than silently accepted, proving the narrowing is enforced by
+    `_validated_dispositions` and not merely advisory in a comment.
+    """
+    statement = "Synthetic relationship note admitted before the merge."
+    with staged.begin() as connection:
+        admission = SqlRelationshipMemoryRepository(connection).admit(
+            MemoryWriteRequest(
+                operation=MemoryOperation.CREATE,
+                memory_id=None,
+                memory_version_id=issue_identifier(IdKind.RELATIONSHIP_MEMORY_VERSION),
+                expected_version=None,
+                principal_id=PRINCIPAL_A,
+                subject_entity_id=MERGED,
+                memory_kind=MemoryKind.GENERAL_NOTE,
+                statement=statement,
+                statement_sha256=statement_digest(statement),
+                structured_value=None,
+                authority=MemoryAuthority.USER_AUTHORED_PRIVATE_NOTE,
+                classification=classification_floor_for(MemoryKind.GENERAL_NOTE),
+                created_by_actor=MemoryActorClass.USER,
+                context_links=(),
+                pinned=False,
+                observed_at=None,
+                effective_from=None,
+                effective_to=None,
+                correction_reason=None,
+                idempotency_key="split-ambiguity-memory-create",
+                correlation_id=CORRELATION,
+                server_received_at=WHEN,
+            )
+        )
+    memory_id = admission.receipt.memory_id
+
+    # The merge reparents the memory to the survivor deterministically, then
+    # the world moves under it exactly as `_disturbed` moves the alias: a
+    # further change to the same row the merge already touched, so the split's
+    # recorded `after_state` no longer describes it.
+    merge = _merged(staged)
+    with staged.begin() as connection:
+        connection.execute(
+            text(
+                f"UPDATE {SCHEMA}.relationship_memories "  # noqa: S608
+                "SET version = version + 1, updated_at = :at WHERE memory_id = :memory_id"
+            ),
+            {"at": WHEN + timedelta(minutes=1), "memory_id": memory_id},
+        )
+
+    report = _split_preview(staged, merge.operation.identity_operation_id)
+
+    assert len(report.ambiguities) == 1
+    (ambiguity,) = report.ambiguities
+    assert ambiguity.record_family is IdentityEffectFamily.RELATIONSHIP_MEMORY
+    assert ambiguity.record_id == memory_id
+    assert ambiguity.reason == AmbiguityReason.POST_MERGE_MODIFIED
+    # (a) Narrowed: `LEAVE_UNRESOLVED` only, not the old, wider pair that
+    # falsely offered `ASSIGN_TO_ENTITY` for a family with no writer to run it.
+    assert ambiguity.allowed_dispositions == (AmbiguityDisposition.LEAVE_UNRESOLVED.value,)
+    assert ambiguity.allowed_target_entity_ids == (SURVIVOR, MERGED)
+
+    # (b) Fail-closed preserved: no disposition for this ambiguity still
+    # refuses, exactly as it does for every other family's ambiguity.
+    with pytest.raises(InvalidRequestError):
+        _split_apply(staged, _split_command(report))
+
+    # (c) The narrowing is enforced, not advisory: `ASSIGN_TO_ENTITY` is
+    # rejected even though the caller names an admissible target, because
+    # `_validated_dispositions` checks the chosen disposition against this
+    # ambiguity's own `allowed_dispositions` before anything is written.
+    with pytest.raises(InvalidRequestError):
+        _split_apply(
+            staged,
+            _split_command(
+                report,
+                (
+                    SplitDisposition(
+                        ambiguity.ambiguity_id,
+                        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+                        target_entity_id=SURVIVOR,
+                    ),
+                ),
+            ),
+        )
+    assert _row_count(staged, "entity_identity_operations", "operation_type = 'split'") == 0
+    assert _row_count(staged, "entity_identity_ambiguity_settlements") == 0
+
+    # And the one answer this family does admit carries the split through:
+    # a settlement row recorded, no writer invoked, and the record left where
+    # the merge's own deterministic reparent put it.
+    receipt = _split_apply(
+        staged,
+        _split_command(
+            report,
+            (SplitDisposition(ambiguity.ambiguity_id, AmbiguityDisposition.LEAVE_UNRESOLVED),),
+        ),
+    )
+    assert receipt.operation.state is IdentityOperationState.COMPLETED
+    with staged.connect() as connection:
+        settled_subject = connection.execute(
+            text(
+                f"SELECT subject_entity_id FROM {SCHEMA}.relationship_memories "  # noqa: S608
+                "WHERE memory_id = :memory_id"
+            ),
+            {"memory_id": memory_id},
+        ).scalar_one()
+    assert settled_subject == SURVIVOR
+    with staged.connect() as connection:
+        settled = connection.execute(
+            text(
+                f"SELECT ambiguity_id, record_family, record_id, disposition, target_entity_id "  # noqa: S608
+                f"FROM {SCHEMA}.entity_identity_ambiguity_settlements "
+                "WHERE identity_operation_id = :operation_id"
+            ),
+            {"operation_id": receipt.operation.identity_operation_id},
+        ).all()
+    assert [tuple(row) for row in settled] == [
+        (ambiguity.ambiguity_id, "relationship_memory", memory_id, "leave_unresolved", None),
+    ]

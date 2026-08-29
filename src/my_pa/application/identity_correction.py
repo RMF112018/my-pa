@@ -1873,12 +1873,28 @@ class IdentityCorrectionService:
             if matched:
                 provable.append(effect)
                 continue
-            if effect.family not in _ATTRIBUTABLE_FAMILIES:
-                # Unchanged refusal, and deliberately so. Attribution needs a
-                # column that says which entity a row belongs to and a writer
-                # that can move it; the families outside `_ATTRIBUTABLE_FAMILIES`
-                # have neither, so admitting an ambiguity for one would admit a
-                # disposition nothing could carry out.
+            if not dispositions_for(effect.family):
+                # Refused, and deliberately so, but the boundary is
+                # `dispositions_for` -- the domain-level, per-family truth of
+                # which answers a family admits at all -- and not the narrower
+                # `_ATTRIBUTABLE_FAMILIES` immediately below. A family raises an
+                # ambiguity whenever it has *any* admissible disposition, and
+                # `LEAVE_UNRESOLVED` is one such disposition that needs no
+                # rebinding writer at all: it is a settlement row recorded
+                # against the ambiguity, not a mutation of the record. That is
+                # why `PROPOSAL`, `RELATIONSHIP_MEMORY`, `MEMORY_PROPOSAL` and
+                # `MEMORY_CONTEXT_LINK` are ambiguities here even though none of
+                # them has a writer that could execute `ASSIGN_TO_ENTITY` for
+                # them (see `_DISPOSITIONS_BY_FAMILY`'s comment). Only `ENTITY`,
+                # `REVIEW_CASE` and `DERIVED_CONTEXT` admit no disposition at
+                # all -- for them there is no answer an operator could give,
+                # so the split still refuses outright instead of asking a
+                # question nothing could settle. `_ATTRIBUTABLE_FAMILIES`
+                # remains the narrower set of families with actual per-row
+                # entity-plane storage; it drives `_post_merge_created`
+                # discovery and the `ASSIGN_TO_ENTITY` execution path
+                # (`_bound_records`, `reparent_entity_reference`), not whether
+                # an ambiguity is raised.
                 raise ConflictError(SafeDetail.PREVIEW_STALE)
             ambiguities.append(
                 _SplitAmbiguity(
@@ -1924,6 +1940,22 @@ class IdentityCorrectionService:
         under-reporting: an operator is asked to attribute a record whose owner
         they can see immediately, and no record is silently attributed for them.
         Narrowing it needs a creation time these tables do not have.
+
+        **Second, stated limitation: scope.** This walks `_ATTRIBUTABLE_FAMILIES`
+        only -- the five families with per-row entity-plane storage -- and does
+        *not* cover `PROPOSAL` or the three memory families
+        (`RELATIONSHIP_MEMORY`, `MEMORY_PROPOSAL`, `MEMORY_CONTEXT_LINK`), even
+        though those four now raise `POST_MERGE_MODIFIED` ambiguities elsewhere
+        in this method. `records_bound_to_entity_outside` is an entities-
+        repository-specific mechanism, and no equivalent "bound to this entity,
+        absent from the ledger" query exists for the memory or proposal tables.
+        Building one is real new repository infrastructure, not a change to
+        this family's disposition set, and is out of scope for this fix. The
+        result is a deliberate, residual gap: a memory/proposal/context-link row
+        newly *bound* to the survivor after a merge with no ledger effect for it
+        is not yet detected as `POST_MERGE_CREATED`. A row the merge *changed*
+        (`POST_MERGE_MODIFIED`) is still caught, because that path reads the
+        merge's own effect ledger rather than this discovery query.
         """
         found: list[_SplitAmbiguity] = []
         for family in _ATTRIBUTABLE_FAMILIES:
@@ -2992,33 +3024,48 @@ _MEMORY_EFFECT_FAMILIES: Final = frozenset(
     }
 )
 
-#: The families a split may raise an ambiguity for, in the order it walks them.
+#: The families with actual per-row entity-plane storage, in the order this
+#: module walks them. **Not** "the families a split may raise an ambiguity
+#: for" -- that question is answered by `dispositions_for`, which as of this
+#: fix is broader than this tuple. This tuple answers a narrower pair of
+#: questions: which families `_post_merge_created` can run
+#: `records_bound_to_entity_outside` discovery against, and which families
+#: `_bound_records` and the `ASSIGN_TO_ENTITY` execution path
+#: (`reparent_entity_reference`) know how to move.
 #:
 #: **The five whose rows name an entity in a column.** These are exactly
 #: `SqlEntityRepository._CHILD_SUBJECTS`, which is not a coincidence: they are
 #: the families `records_bound_to_entity_outside` can ask "which of these binds
 #: to the survivor" of, and the families `reparent_entity_reference` can move.
-#: An ambiguity is a question whose answers must all be performable, so a family
-#: with no binding column and no writer that can change one cannot raise one.
 #:
 #: What that leaves out, and why each is left out rather than forgotten.
-#: `ENTITY` and `REVIEW_CASE` and `DERIVED_CONTEXT` are excluded by the contract
-#: itself -- an entity's redirect is provable or the split is refused, a review
-#: case writes no row, and derived context is recomputed rather than attributed.
-#: `PROPOSAL` is excluded on repository truth: `entity_proposals` carries no
-#: entity column at all and makes its references inside its payload, so there is
-#: nothing for an assignment to rewrite. The three memory families are excluded
-#: because `RelationshipMemoryRepository` publishes no operator-directed
-#: rebinding -- its two identity writers apply and restore a planned merge
-#: effect -- and because a memory is "one durable statement about **one**
-#: generalized `Entity`" (`docs/specs/relationship-memory-v0.1.md` lines 20-22),
-#: so moving one between subjects is a governed memory operation and not a
-#: consequence a split may take on itself.
+#: `ENTITY` and `REVIEW_CASE` and `DERIVED_CONTEXT` admit no disposition at all
+#: (see `_DISPOSITIONS_BY_FAMILY`) and so need no entry here either -- an
+#: entity's redirect is provable or the split is refused, a review case writes
+#: no row, and derived context is recomputed rather than attributed. `PROPOSAL`
+#: is excluded on repository truth: `entity_proposals` carries no entity column
+#: at all and makes its references inside its payload, so there is nothing for
+#: an assignment to rewrite -- and correspondingly `dispositions_for(PROPOSAL)`
+#: no longer offers `ASSIGN_TO_ENTITY`, only `LEAVE_UNRESOLVED`. The three
+#: memory families are excluded from *this tuple* for the same reason:
+#: `RelationshipMemoryRepository` and `RelationshipMemoryProposalRepository`
+#: publish no operator-directed rebinding -- the former is read/admit/replay
+#: only and the latter is insert-only -- and a memory is "one durable statement
+#: about **one** generalized `Entity`" (`docs/specs/relationship-memory-v0.1.md`
+#: lines 20-22), so moving one between subjects would need a governed memory
+#: operation this plane does not have. That absence of a writer is exactly why
+#: `dispositions_for` narrows those three (and `PROPOSAL`) to
+#: `LEAVE_UNRESOLVED` only -- `LEAVE_UNRESOLVED` needs no writer, so it remains
+#: honest to offer even though `ASSIGN_TO_ENTITY` is not.
 #:
-#: For every excluded family a post-merge modification keeps the refusal it has
-#: today. That is unchanged behavior and fail-closed, and it is recorded here so
-#: the boundary is legible rather than inferred from what the code happens to
-#: reach.
+#: These four families are **not** in this tuple, but they *do* now raise
+#: `POST_MERGE_MODIFIED` ambiguities (via `dispositions_for`, not via this
+#: tuple) -- see the gate above this definition. What stays scoped to this
+#: tuple is `POST_MERGE_CREATED` discovery (`_post_merge_created`) and
+#: `ASSIGN_TO_ENTITY` execution (`_bound_records`); both are unreachable for
+#: the four families regardless, since `_bound_records` is only ever called
+#: for a disposition each family's own `allowed_dispositions` admits, and none
+#: of the four admits `ASSIGN_TO_ENTITY`.
 _ATTRIBUTABLE_FAMILIES: Final[tuple[IdentityEffectFamily, ...]] = (
     IdentityEffectFamily.ALIAS,
     IdentityEffectFamily.IDENTIFIER,

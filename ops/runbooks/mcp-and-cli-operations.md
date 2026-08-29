@@ -270,8 +270,9 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
-**one hundred and four** current capabilities, and the schema has **seventy-seven**
-revisions at head `8e1c4a7b2d90`; the
+**one hundred and four** current capabilities, and the schema has **seventy-eight**
+revisions at head `b727e870d45e` (corrected 2026-08-29 from seventy-seven at
+`8e1c4a7b2d90`, which the corrective revision is additive on); the
 merged chain admits GSQS at `c4b0a1d9e827` immediately before Phase B continues
 at `c7a1f04b9e63`. `capabilities.get` also reports content-free
 `worker_planes`. The dated transcript below remains historical evidence for its

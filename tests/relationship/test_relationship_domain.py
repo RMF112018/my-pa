@@ -786,6 +786,10 @@ EXPECTED_MODEL_FIELDS = {
             "correlation_id",
             "audit_id",
             "reason",
+            # RI-P2-HIGH-001: governed lineage. Both are opaque identifiers the
+            # operation ledger already holds, and neither discloses content.
+            "source_identity_operation_id",
+            "receipt_id",
         }
     ),
     "my_pa.domain.relationship.identity_history.IdentityHistoryPosition": frozenset(
@@ -822,6 +826,7 @@ EXPECTED_MODEL_FIELDS = {
             "lease_expires_at",
             "completed_at",
             "stale_reasons",
+            "limitations",
             "last_error_code",
         }
     ),
@@ -1430,6 +1435,7 @@ EXPECTED_TABLE_COLUMNS = {
             "lease_expires_at",
             "next_attempt_at",
             "stale_reasons",
+            "limitations",
             "last_error_code",
             "created_at",
             "updated_at",
@@ -1448,6 +1454,32 @@ EXPECTED_TABLE_COLUMNS = {
     ),
     "entity_reenrichment_version_watermarks": frozenset(
         {"principal_id", "namespace", "binding_key", "version", "updated_at"}
+    ),
+    "entity_identity_preview_ambiguities": frozenset(
+        {
+            "preview_id",
+            "ambiguity_id",
+            "principal_id",
+            "record_family",
+            "record_id",
+            "ambiguity_reason",
+            "allowed_dispositions",
+            "allowed_target_entity_ids",
+            "evidence_summary",
+            "created_at",
+        }
+    ),
+    "entity_identity_ambiguity_settlements": frozenset(
+        {
+            "identity_operation_id",
+            "ambiguity_id",
+            "principal_id",
+            "record_family",
+            "record_id",
+            "disposition",
+            "target_entity_id",
+            "settled_at",
+        }
     ),
 }
 
@@ -1483,10 +1515,11 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
     assert len(actual_model_fields) == 60
-    # Forty-seven after RI final completion added the three durable
-    # re-enrichment tables. The figure makes the allow-list closed in both
-    # directions, so it moves with the declaration and never ahead of it.
-    assert len(actual_table_columns) == 47
+    # Forty-nine after `b727e870d45e` added the identity-ambiguity pair to the
+    # three durable re-enrichment tables RI final completion brought. The figure
+    # makes the allow-list closed in both directions, so it moves with the
+    # declaration and never ahead of it.
+    assert len(actual_table_columns) == 49
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

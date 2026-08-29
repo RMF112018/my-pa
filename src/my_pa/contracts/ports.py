@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import json
 from abc import ABC, abstractmethod
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Collection, Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 from hashlib import sha256
@@ -1099,6 +1099,79 @@ class DirectedReceipt:
     evidence_refs: tuple[str, ...]
     issued_at: datetime
     replayed: bool
+
+
+@dataclass(frozen=True, slots=True)
+class PreviewAmbiguity:
+    """One record a merge preview could not attribute to a single identity.
+
+    `reason` and `allowed_dispositions` are strings rather than closed domain
+    vocabularies because the vocabularies belong to the work package that decides
+    *how* an ambiguity is settled, and this port only has to carry the answer to
+    the row. Both are closed at the server -- `a_preview_ambiguity_reason_is_known`
+    and `a_preview_ambiguity_offers_a_bounded_choice` -- so an unknown value is
+    refused rather than stored, which is the fail-closed half of the rule this
+    dataclass cannot yet state in types.
+
+    `evidence_summary` is counts and identifiers. A summary column on a record
+    whose subject is somebody's identity is where source text eventually lands,
+    so what may go in it is the writer's contract and the server checks only its
+    shape.
+    """
+
+    preview_id: str
+    ambiguity_id: str
+    record_family: IdentityEffectFamily
+    record_id: str
+    reason: str
+    allowed_dispositions: tuple[str, ...]
+    allowed_target_entity_ids: tuple[str, ...]
+    evidence_summary: Mapping[str, object]
+    created_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.preview_id, IdKind.ENTITY_IDENTITY_PREVIEW)
+        validate_identifier(self.ambiguity_id, IdKind.ENTITY_IDENTITY_AMBIGUITY)
+        validate_identifier(self.record_id)
+        if not isinstance(self.record_family, IdentityEffectFamily):
+            raise ValueError("a preview ambiguity names a closed record family")
+        if not self.allowed_dispositions:
+            raise ValueError("a preview ambiguity offers at least one disposition")
+        for entity_id in self.allowed_target_entity_ids:
+            validate_identifier(entity_id, IdKind.ENTITY)
+        ensure_utc(self.created_at)
+
+
+@dataclass(frozen=True, slots=True)
+class AmbiguitySettlement:
+    """What one identity operation did about one ambiguity the preview raised.
+
+    `target_entity_id` is present exactly when the disposition assigns one, which
+    is checked here and again by
+    `an_ambiguity_settlement_names_a_target_exactly_when_it_assigns`: a target
+    without an assignment and an assignment without a target are both records of
+    a decision that was not made.
+    """
+
+    identity_operation_id: str
+    ambiguity_id: str
+    record_family: IdentityEffectFamily
+    record_id: str
+    disposition: str
+    target_entity_id: str | None
+    settled_at: datetime
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
+        validate_identifier(self.ambiguity_id, IdKind.ENTITY_IDENTITY_AMBIGUITY)
+        validate_identifier(self.record_id)
+        if not isinstance(self.record_family, IdentityEffectFamily):
+            raise ValueError("an ambiguity settlement names a closed record family")
+        if (self.disposition == "assign_to_entity") is not (self.target_entity_id is not None):
+            raise ValueError("an ambiguity settlement names a target exactly when it assigns one")
+        if self.target_entity_id is not None:
+            validate_identifier(self.target_entity_id, IdKind.ENTITY)
+        ensure_utc(self.settled_at)
 
 
 class EntitiesRepository(ABC):
@@ -2368,6 +2441,64 @@ class EntitiesRepository(ABC):
 
     def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
         """Restore semantics with a fresh concurrency token under an after-state guard."""
+        raise NotImplementedError
+
+    def record_preview_ambiguities(
+        self, principal_id: str, ambiguities: tuple[PreviewAmbiguity, ...]
+    ) -> None:
+        """Append one preview's whole set of unattributable records.
+
+        The tuple rather than a row at a time, on `record_identity_effects`'
+        argument: the questions a preview could not answer are the preview's
+        completeness claim, and a writer that could add one later could add one
+        after the operator had already read the preview and decided.
+        """
+        raise NotImplementedError
+
+    def preview_ambiguities(self, principal_id: str, preview_id: str) -> list[PreviewAmbiguity]:
+        """One preview's ambiguities, in identifier order.
+
+        Read back at apply time, because an operator's dispositions have to be
+        checked against the questions the preview actually asked rather than
+        against a fresh analysis of a world the preview may no longer describe.
+        """
+        raise NotImplementedError
+
+    def record_ambiguity_settlements(
+        self, principal_id: str, settlements: tuple[AmbiguitySettlement, ...]
+    ) -> None:
+        """Append one operation's whole set of ambiguity settlements.
+
+        Whole for the same reason the effect ledger is, and append-only at the
+        server: a settlement is what a later inversion reads to know what the
+        operator chose, so a settlement that could be edited afterwards would
+        make the inversion's evidence a claim about the present instead.
+        """
+        raise NotImplementedError
+
+    def records_bound_to_entity_outside(
+        self,
+        principal_id: str,
+        family: IdentityEffectFamily,
+        entity_id: str,
+        known_record_ids: Collection[str],
+        *,
+        limit: int,
+    ) -> list[str]:
+        """Identifiers in `family` now bound to `entity_id` that `known_record_ids` omits.
+
+        The post-merge-created half of ambiguity discovery: a row that binds to
+        the survivor and appears in no effect the merge recorded was created
+        after the merge, so no lineage says which of the merged identities it
+        belongs to.
+
+        `limit` is required and carries no default, because the caller owns the
+        ceiling -- the application's `MAX_AFFECTED_RECORDS` -- and a default here
+        would be a second bound that could stop agreeing with it. The answer is
+        truncated at `limit` rather than reported as complete, so a caller that
+        receives exactly `limit` identifiers must treat the set as bounded rather
+        than as whole.
+        """
         raise NotImplementedError
 
 

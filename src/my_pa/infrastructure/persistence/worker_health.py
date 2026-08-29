@@ -36,7 +36,12 @@ def record_worker_heartbeat(
     stopped: bool = False,
 ) -> None:
     validate_identifier(principal_id, IdKind.PRINCIPAL)
-    if plane not in {"capture", "enrollment"}:
+    # `reenrichment` is admitted here and not in `worker_plane_health` below: the
+    # re-enrichment worker reports liveness like the other two, and its backlog
+    # lives in its own table rather than in a `JobPlane`, so the read below has
+    # nothing to answer for it and says so by refusing rather than by returning a
+    # zero backlog that would read as "idle".
+    if plane not in {"capture", "enrollment", "reenrichment"}:
         raise ValueError("unknown worker plane")
     context = capture_context(principal_id)
     statement = insert(worker_heartbeats).values(

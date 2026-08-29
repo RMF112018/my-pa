@@ -1553,9 +1553,10 @@ def _preview_entity_split(payload: Mapping[str, Any]) -> Command:
 
 def _split_entity(payload: Mapping[str, Any]) -> Command:
     converted = dict(payload)
-    evidence_refs = converted.get("evidence_refs")
-    if isinstance(evidence_refs, list):
-        converted["evidence_refs"] = tuple(evidence_refs)
+    for name in ("dispositions", "evidence_refs"):
+        value = converted.get(name)
+        if isinstance(value, list):
+            converted[name] = tuple(value)
     return SplitEntity(**converted)
 
 

@@ -170,9 +170,7 @@ from sqlalchemy import Connection, Engine
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.apple_machine import AppleBridgeIdentity, AppleMachineControl
 from my_pa.application.entity_reenrichment import (
-    EntityReenrichmentService,
     ProductionReenrichmentCaller,
-    ReenrichmentApplication,
     ReenrichmentWork,
 )
 from my_pa.application.goodnotes_gsqs_b0_workflow import WorkflowPorts
@@ -192,6 +190,10 @@ from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.gsqs_routellm_transport import post_chat_completion
+from my_pa.infrastructure.jobs.reenrichment import (
+    claim_reenrichment_work,
+    settle_reenrichment_work,
+)
 from my_pa.infrastructure.managed_document_stores.filesystem.store import (
     FilesystemManagedByteStore,
 )
@@ -205,7 +207,6 @@ from my_pa.infrastructure.persistence.commitment_management import (
 )
 from my_pa.infrastructure.persistence.entity_reenrichment import (
     ReenrichmentTables,
-    SqlCurrentReenrichmentBindings,
     SqlReenrichmentWorkRepository,
 )
 from my_pa.infrastructure.persistence.principal_scope import capture_context
@@ -622,29 +623,31 @@ class GatewayRuntime:
         self,
         *,
         owner: str,
-        apply: ReenrichmentApplication,
         at: datetime | None = None,
-    ) -> bool:
-        """Claim and atomically apply at most one bounded work item."""
+    ) -> str | None:
+        """Claim and settle at most one bounded work item; name the state it reached.
+
+        The one-shot form of the re-enrichment plane, and it is a *delegation*
+        rather than a second implementation. Until WP-03 this method built the
+        claim and the apply itself and had no caller anywhere in the repository
+        (`RI-P3-BLK-001`), which meant the protocol it spelled was never
+        executed and could drift from any protocol that later was. It now runs
+        the same two steps `infrastructure.jobs.reenrichment` runs in its loop,
+        so an operator running one item and the worker running a thousand are
+        exercising the same code.
+
+        Returns the terminal state -- `"succeeded"`, `"partial"`, `"stale"` or
+        `"failed"` -- or `None` when there was nothing claimable. A boolean
+        could not distinguish an item that settled `partial` from one that
+        settled `succeeded`, which is exactly the distinction WP-05 exists to
+        preserve.
+        """
         moment = datetime.now(UTC) if at is None else at
-        tables = ReenrichmentTables(
-            entity_reenrichment_work,
-            entity_reenrichment_subjects,
-            entity_reenrichment_version_watermarks,
-        )
-        with self.work_engine.begin() as connection:
-            repository = SqlReenrichmentWorkRepository(connection, tables)
-            work = repository.claim(owner=owner, at=moment)
-            if work is None:
-                return False
-            EntityReenrichmentService(repository).apply_claimed(
-                work,
-                owner=owner,
-                current=SqlCurrentReenrichmentBindings(connection, tables),
-                apply=apply,
-                at=moment,
-            )
-        return True
+        work = claim_reenrichment_work(self.work_engine, owner=owner, at=moment)
+        if work is None:
+            return None
+        state, _outcome = settle_reenrichment_work(self.work_engine, work, owner=owner, at=moment)
+        return state
 
     def observe_reenrichment_versions(
         self,

@@ -16,6 +16,8 @@ Related: [`docs/plans/relationship-intelligence-implementation-plan.md`](../../d
 | Purposes | Five. `entity_read` covers all eleven reads; `entity_observation_ingest` covers `entities.observe`; `entity_authoring` covers the seventeen Phase A writes; `entity_proposal` covers the producer path; and `entity_identity_correction` covers merge and split preview/apply. Preview and apply intentionally share the correction purpose without collapsing their two-gate protocol |
 | Tables | `entities`, `entity_aliases`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, `entity_observations`, `entity_proposals`, `entity_merge_records`, `entity_mutation_events`, `entity_fact_evidence_links`, `entity_resolution_decisions`, and Phase B's seven: `entity_proposal_evidence_links`, `entity_proposal_review_decisions`, `entity_identity_previews`, `entity_identity_operations`, the append-only `entity_identity_effects`, `relationship_write_requests`, and its append-only child `relationship_write_request_evidence` |
 | Final-completion revision | `8e1c4a7b2d90`, additive on `3d07af4dc513`; it adds the recovery/origin/re-enrichment state and widens frozen audit vocabulary for identity history and split without deriving a historical constraint from the current enum |
+| Corrective revision | `b727e870d45e`, additive on `8e1c4a7b2d90` and the chain's current single head. It adds `entity_identity_preview_ambiguities` and `entity_identity_ambiguity_settlements` (the latter append-only by its own per-plane trigger), the `partial` re-enrichment state with the `limitations` column that must be written with it, the `reenrichment` value in `worker_heartbeats`, and `entity_proposal_review_decisions_are_append_only` — a `BEFORE UPDATE OR DELETE` trigger the entity review ledger had never carried while its Relationship Memory sibling had carried one since `f1c6b904a2d7`. Every closed set in it is spelled as a literal rather than derived from a live enum |
+| Re-enrichment plane | A **third worker plane**, `reenrichment`, run as `python apps/worker.py run --plane reenrichment`. One claimed item is one durable Relationship Intelligence invalidation: the binding's exact subject, input, producer and policy versions are re-read and locked, and the item is applied only if none has moved since registration. What it applies is a deterministic re-resolution of mention→identity linkage against the corrected identity graph — **there is no cache to invalidate** (`src/my_pa/domain/relationship/context_card.py:18`; zero materialized views exist in `migrations/`), so RI v0.2 section 15.3 is discharged by recomputation. It reads no source, opens no socket and calls no model, and it settles `partial` rather than `succeeded` whenever it left something undone. See [`worker-operations.md`](worker-operations.md) |
 | Calibration | [`tests/evaluation/RESOLUTION_CALIBRATION.md`](../../tests/evaluation/RESOLUTION_CALIBRATION.md) |
 | Frontend | Not implemented. Held by the operator's `D-09` instruction |
 
@@ -377,6 +379,73 @@ candidate is the honest answer.
   three were append-only by trigger, and a live server shows zero triggers on
   the third.
 
+- **The new append-only review trigger is a control, not a privilege
+  boundary.** `b727e870d45e` puts
+  `entity_proposal_review_decisions_are_append_only` on
+  `knowledge.entity_proposal_review_decisions`, and it is real — a trigger of
+  this kind fires for superusers, so an `UPDATE` or `DELETE` against a decided
+  review row is refused at the server. What it does not do is constrain the role
+  this repository runs as. There is exactly **one** database role, `my_pa`,
+  created by initdb from `POSTGRES_USER` (`ops/compose/postgres.yml`,
+  `ops/nas/compose.example.yml`); it is cluster superuser and the owner of schema
+  `knowledge`; and there are **zero** `GRANT`, `REVOKE`, `CREATE ROLE`,
+  `CREATE USER` or `ALTER ROLE` statements anywhere in this repository. That role
+  can `ALTER TABLE … DISABLE TRIGGER`, `SET session_replication_role = 'replica'`
+  or `DROP TRIGGER`. The trigger stops the accident and the ordinary mistake; it
+  does not stop the operator. Reducing that privilege was evaluated during the RI
+  remediation campaign and **deliberately deferred**: there is no role, grant or
+  ownership statement anywhere to extend, so it is net-new design with zero
+  repository precedent, and `AGENTS.md` sections 2 and 3 put that outside a
+  remediation's authority. Recorded, not closed.
+- **Split ambiguity discovery covers five of the effect families and refuses the
+  rest.** Discovery and disposition reach `alias`, `identifier`, `assignment`,
+  `relationship` and `observation` — the families whose rows name an entity in a
+  column and which `reparent_entity_reference` can move
+  (`_ATTRIBUTABLE_FAMILIES`, `src/my_pa/application/identity_correction.py`).
+  For `proposal`, `relationship_memory`, `memory_proposal` and
+  `memory_context_link` **no rebinding primitive exists**: `entity_proposals`
+  declares `entity_columns=()` and keeps its references inside its payload, so
+  there is nothing for a disposition to rewrite, and
+  `RelationshipMemoryRepository` publishes no operator-directed rebinding at all.
+  An ambiguity is a question whose answers must all be performable, so these four
+  raise none, and a post-merge modification in any of them keeps the
+  **pre-existing** fail-closed `PREVIEW_STALE` refusal. Unchanged behaviour
+  rather than new breakage — and the reason the identity-correction work package
+  is PARTIAL rather than complete.
+- **Post-merge-created discovery over-reports, and does so on purpose.** The five
+  tables it walks carry no creation timestamp — `entity_aliases`,
+  `entity_external_identifiers`, `entity_assignments` and `entity_relationships`
+  have only `updated_at`, and `entity_observations` has `observed_at` /
+  `recorded_at` — and a merge records no effect for rows the survivor already
+  held. So "bound to the survivor and absent from the ledger" is the strongest
+  discriminator the persisted state supports, and it also matches the survivor's
+  own pre-merge rows. The error direction is fail-closed: it **over-reports and
+  never under-reports**. An operator is asked to attribute a record whose owner
+  they can see immediately, no record is silently attributed for them, and both
+  dispositions they may choose are safe. Narrowing it needs a creation time these
+  tables do not have.
+- **Three ACCEPT events that change canonical state now register no
+  re-enrichment work, and that is open for an operator decision.** Removing the
+  unconditional `CONTRADICTION_RESOLUTION` registration eliminated false
+  contradiction work for all eight review dispositions and all four review
+  subject kinds, which is the correction that was needed. What it leaves is that
+  an ACCEPT on the `capture_proposal`, `goodnotes_region` and
+  `relationship_memory` subject kinds registers **nothing**: those three reach
+  the decision handler naming no proposed Entity mutation, and no
+  evidence-grounded member of the closed nine triggers fits the latter two.
+  Registering one anyway would mean inventing a trigger RI v0.2 section 27.4 does
+  not name. Stated here so the residue is decided rather than inherited.
+- **`merge_entities` has the same proposal/command mismatch that split had, and
+  it is not fixed.** The `merge_entities` proposal payload requires
+  `{retained_entity_id, merged_entity_id}` with an optional `{reason}`; the
+  command it would have to become is
+  `PreviewEntityMerge(survivor_entity_id, expected_survivor_version, merged_away,
+  reason, evidence_refs)`. The identifier overlap between the two is exactly
+  `{"reason"}`. This was scoped out of the RI remediation campaign, whose
+  identity-correction work package is split. It is **not fixed and not designed
+  around**; it is written down so the next reader finds it rather than
+  rediscovering it.
+
 ## 8. WP-08 commissioning procedure — prepared, not executed
 
 This is a fail-closed checklist for a later operator-authorized commissioning.
@@ -438,3 +507,86 @@ state, both immutable operations remain visible in history, all negative probes
 leave counts/digests unchanged, and no sensitive payload appears in logs or the
 evidence package. Any other result is a stop, rollback, and operator escalation;
 it is not permission to repair production data in place.
+
+## 10. NAS `worker-reenrichment` service — prepared, NOT executed
+
+**Nothing in this section has been carried out, and this section grants no
+authority to carry it out.** It follows the same rule sections 8 and 9 follow and
+that [`docs/00_REPOSITORY_SOURCE_INDEX.md`](../../docs/00_REPOSITORY_SOURCE_INDEX.md)
+states for the whole of `ops/runbooks/`: a procedure written before execution
+must label itself unexecuted.
+
+**Why it is a procedure and not a change.** The `reenrichment` plane is a third
+worker plane and a NAS deployment that ran the other two would eventually want a
+third service for it. A `worker-reenrichment` row was deliberately **not** added
+to [`ops/nas/compose.example.yml`](../nas/compose.example.yml) by the RI
+remediation campaign, for two repository reasons:
+
+1. The NAS runtime contract treats the service set as **closed**. Seven programs
+   under `ops/nas/` each declare that set as a literal and refuse anything else —
+   `ingress_gate.py` (`SERVICES`, plus a per-service `NETWORKS` map),
+   `runtime_gate.py` (`SERVICES`, `MOUNTS`, `COMPOSE_SERVICES`),
+   `lifecycle_gate.py` (`RUNTIME_SERVICES`), `runtime_identity_gate.py`
+   (`SERVICES` and `APP_SERVICES`), `nas10_acceptance_gate.py`
+   (`RUNTIME_SERVICES`), `admit-operator-runtime.py` (`COMPOSE_SERVICES`) and
+   `generate-runtime-admission.py` (`SERVICES`). Adding a service to the compose
+   file alone would make every one of them fail closed on `service_set`, which is
+   the contract working, not a defect to route around.
+2. Those gates are **live-verified**. `ops/nas/ingress_gate.py` requires a
+   per-service `container_id` and `image_id` (`sha256:` plus 64 hex) for every
+   member of its set, and `runtime_identity_gate.py`,
+   `admit-operator-runtime.py` and `generate-runtime-admission.py` reach `docker`
+   for the same identities. Those values are **deployment evidence**. This
+   campaign is prohibited from producing deployment evidence, so writing the
+   service row would have created a contract that could only be satisfied by an
+   act nobody authorized.
+
+**The exact intended service definition**, mirroring `worker-capture` in that
+file element for element and differing only in the service name and the plane
+argument:
+
+```yaml
+  worker-reenrichment:
+    profiles: [nas-01-contract-only]
+    image: "${MY_PA_APP_IMAGE_ID:?sha256 loaded image id required}"
+    platform: linux/amd64
+    user: "${MY_PA_UID:?}:${MY_PA_GID:?}"
+    restart: "no"
+    cap_drop: [ALL]
+    security_opt: ["no-new-privileges:true"]
+    command: [python, apps/worker.py, run, --plane, reenrichment]
+    env_file: ["${MY_PA_NAS_ENV_FILE:?}"]
+    volumes:
+      - {type: bind, source: "${MY_PA_NAS_ROOT:?}/config", target: /srv/my-pa/config, read_only: true}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks: [data-plane]
+```
+
+`data-plane` only, exactly as `worker-capture` has it: the re-enrichment plane
+reads no source, opens no socket and calls no model, so it needs no
+ingress-plane membership and must not be given one.
+
+**What a future operator must also update, in the same authorized change.**
+Adding the compose row by itself will not pass the gates. The closed set is also
+declared or asserted in:
+
+- the seven `ops/nas/` programs listed above — the service name, and where the
+  program carries one, its network map, mount map and compose-name map;
+- the example and contract data files that enumerate the same set:
+  `ops/nas/compose.pilot.example.yml`, `ops/nas/ingress-manifest.example.toml`,
+  `ops/nas/runtime-admission.example.toml`,
+  `ops/nas/runtime-services.example.toml` and `ops/nas/runtime-contract.toml`;
+- the operator scripts that name each service: `ops/nas/emergency-shutdown.sh`
+  and `ops/nas/logs.sh`;
+- the architecture tests that hold the gates to their sets —
+  `tests/architecture/test_nas_runtime_services.py`,
+  `test_nas_runtime_scaffold.py`, `test_nas_acceptance.py`,
+  `test_nas_lifecycle.py`, `test_nas_operator_runtime.py`,
+  `test_nas_source_placement.py` and `test_nas_postgres_bootstrap.py`.
+
+That change also requires the live `container_id` / `image_id` evidence the
+ingress and runtime-identity gates demand, which means a real deployment under
+`AGENTS.md` section 5 operator authorization. Until then this section is the
+record of the intended definition and nothing more.

@@ -108,6 +108,18 @@ MERGE_PAYLOAD: Final[dict[str, str | bool]] = {
     "retained_entity_id": ALICE,
     "merged_entity_id": BOB,
 }
+#: WP-06 / AC-REM-011 (RI-P4-HIGH-001). `source_identity_operation_id` names the
+#: completed governed merge a split reverses, and is the only subject
+#: `entities.split_preview` takes. Two of them, because a reviewer correcting
+#: *which* merge was meant is the case that proves the field is reviewable
+#: intent rather than a value the server could have derived.
+SOURCE_OPERATION: Final = "eiop_aaaa0001aaaa0001"
+OTHER_SOURCE_OPERATION: Final = "eiop_bbbb0002bbbb0002"
+SPLIT_PAYLOAD: Final[dict[str, str | bool]] = {
+    "entity_id": ALICE,
+    "reason": "the source merge was mistaken",
+    "source_identity_operation_id": SOURCE_OPERATION,
+}
 #: The dispositions section 13 gives a reason. Restated in the test rather than
 #: imported from the private set on `ReviewDecisionRequest`, so a widening of
 #: that set has to be restated here deliberately rather than absorbed.
@@ -991,7 +1003,7 @@ def test_accepting_a_split_proposal_hands_off_intent_and_executes_nothing(
     reviews: FakeReviews,
 ) -> None:
     entities.create(PRINCIPAL, an_entity())
-    payload = {"entity_id": ALICE, "reason": "the source merge was mistaken"}
+    payload = dict(SPLIT_PAYLOAD)
     admitted = _propose(governing, kind=EntityProposalKind.SPLIT_IDENTITY, payload=payload)
     case = _case_of(reviews, admitted.proposal_id)
 
@@ -1008,6 +1020,108 @@ def test_accepting_a_split_proposal_hands_off_intent_and_executes_nothing(
     assert handoff.proposal_kind is EntityProposalKind.SPLIT_IDENTITY
     assert handoff.effective_payload.as_mapping() == payload
     assert held is not None and held.accepted_record_id is None
+    assert entity is not None and entity.version == 1
+
+
+def test_the_split_handoff_carries_the_source_merge_the_operator_must_preview(
+    entities: FakeEntities,
+    governing: EntityGovernanceService,
+    reviewing: EntityProposalReviewService,
+    reviews: FakeReviews,
+) -> None:
+    """WP-06 / AC-REM-011, and the boundary it must not cross to satisfy it.
+
+    RI-P4-HIGH-001 was that reviewed split intent and `entities.split_preview`
+    shared no identifier, so an accepted proposal reached the operator as
+    something no preview could be built from. The handoff now carries
+    `source_identity_operation_id`, which is the whole of what that preview
+    takes as its subject.
+
+    Carrying it is not performing it. The state is still
+    `OPERATOR_PREVIEW_REQUIRED`, the proposal still names no canonical record,
+    the entity is still at the version it was created at, and the handoff still
+    has no preview identifier, digest, expected version or authority on it --
+    the four values that would make it executable. Approve-intent remains not
+    execute-split.
+    """
+    entities.create(PRINCIPAL, an_entity())
+    admitted = _propose(
+        governing, kind=EntityProposalKind.SPLIT_IDENTITY, payload=dict(SPLIT_PAYLOAD)
+    )
+    case = _case_of(reviews, admitted.proposal_id)
+    before = entities.get(PRINCIPAL, ALICE)
+
+    decision = reviewing.decide(
+        _request(case, Disposition.ACCEPT),
+        decided_by="operator",
+        has_operator_authority=True,
+    )
+
+    handoff = decision.identity_correction_handoff
+    assert isinstance(handoff, EntityIdentityCorrectionHandoff)
+    assert handoff.effective_payload.as_mapping()["source_identity_operation_id"] == (
+        SOURCE_OPERATION
+    )
+    assert handoff.effective_payload_source is ReviewedPayloadSource.PROPOSED
+    assert handoff.state is IdentityCorrectionHandoffState.OPERATOR_PREVIEW_REQUIRED
+    for absent in ("preview_id", "preview_digest", "expected_version", "authority"):
+        assert not hasattr(handoff, absent)
+    held = entities.proposal(PRINCIPAL, admitted.proposal_id)
+    after = entities.get(PRINCIPAL, ALICE)
+    assert held is not None and held.accepted_record_id is None
+    assert before is not None and after is not None
+    assert after.version == before.version
+    assert after.status is before.status
+    assert after.superseded_by_entity_id == before.superseded_by_entity_id
+
+
+def test_a_reviewer_may_correct_which_merge_a_split_reverses(
+    entities: FakeEntities,
+    governing: EntityGovernanceService,
+    reviewing: EntityProposalReviewService,
+    reviews: FakeReviews,
+) -> None:
+    """The field is reviewable intent, which is why it belongs in the payload.
+
+    A producer can be wrong about *which* completed merge an entity's history
+    should be unwound to, and an entity merged more than once has more than one
+    candidate. `correct_and_accept` validates the patch against
+    `schema_for(split_identity)`, so admitting the field to that schema is what
+    makes the correction expressible at all -- before it was refused as a field
+    the kind's command does not take. The stored proposal keeps the producer's
+    original; the handoff carries the reviewer's.
+    """
+    entities.create(PRINCIPAL, an_entity())
+    admitted = _propose(
+        governing, kind=EntityProposalKind.SPLIT_IDENTITY, payload=dict(SPLIT_PAYLOAD)
+    )
+    case = _case_of(reviews, admitted.proposal_id)
+    corrected = {
+        "entity_id": ALICE,
+        "reason": "the earlier merge is the mistaken one",
+        "source_identity_operation_id": OTHER_SOURCE_OPERATION,
+    }
+
+    decision = reviewing.decide(
+        _request(
+            case,
+            Disposition.CORRECT_AND_ACCEPT,
+            correction_patch=CorrectionPatch.of(corrected),
+        ),
+        decided_by="operator",
+        has_operator_authority=True,
+    )
+
+    handoff = decision.identity_correction_handoff
+    held = entities.proposal(PRINCIPAL, admitted.proposal_id)
+    entity = entities.get(PRINCIPAL, ALICE)
+    assert handoff is not None
+    assert handoff.effective_payload.as_mapping() == corrected
+    assert handoff.effective_payload_source is ReviewedPayloadSource.CORRECTED
+    assert handoff.state is IdentityCorrectionHandoffState.OPERATOR_PREVIEW_REQUIRED
+    assert held is not None
+    assert held.payload.as_mapping() == SPLIT_PAYLOAD
+    assert held.accepted_record_id is None
     assert entity is not None and entity.version == 1
 
 

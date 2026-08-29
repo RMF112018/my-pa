@@ -11,8 +11,16 @@ runbook drives; the capture outbox it creates is consumed by nothing until WP-7.
 *Disclosure added 2026-08-03: the date above is the same string the re-executed
 runbooks use for their 2026-08-03 markers, so date alone cannot tell a reader
 which transcripts are current. It is the head that discriminates, and this file's
-is `af3d35efb9c0`.* Nothing here was run against the canonical `my_pa` database,
-and
+is `af3d35efb9c0`.*
+
+*Amended 2026-08-29: the "Which plane" section below was added by the RI
+remediation campaign, so this file is **no longer unchanged since `6660dbb`**.
+Nothing in that section is a transcript — the re-enrichment counts shown there
+are the shape `apps/worker.py::_report_reenrichment` prints, read from the
+source. Every transcript in this file is still the 2026-08-03 `enrollment` run
+described above, and none was re-executed.*
+
+Nothing here was run against the canonical `my_pa` database, and
 nothing here needs to be: the worker writes to the `knowledge` schema's job
 plane, and pointing it at the canonical database before there is work worth
 doing would put attempt counts on rows nobody queued.
@@ -108,6 +116,84 @@ installation.
 # A bounded drain.
 .venv/bin/python apps/worker.py run --max-iterations 20 --lease-seconds 60
 ```
+
+### Which plane
+
+One process serves one plane, named by `--plane`. `apps/worker.py` derives the
+flag's `choices` from its own closed `_PLANES` set, so a plane cannot exist that
+the flag will not accept, and running more than one plane means running the
+command more than once. There are three:
+
+```bash
+# The default. Extraction over enrolled source objects.
+.venv/bin/python apps/worker.py run --plane enrollment
+
+# The capture pipeline over stored capture versions.
+.venv/bin/python apps/worker.py run --plane capture
+
+# Relationship Intelligence re-enrichment.
+.venv/bin/python apps/worker.py run --plane reenrichment
+```
+
+- `enrollment` is what the rest of this runbook is about, and what `run` with no
+  `--plane` selects.
+- `capture` runs the capture pipeline over one stored capture version. It reads
+  no source, opens no socket and calls no model: everything it works from is text
+  already in the database.
+- **`reenrichment`** is the Relationship Intelligence plane, added with the RI
+  remediation work. One claimed item is one durable invalidation: the binding's
+  exact subject, input, producer and policy versions are re-read and locked, and
+  the item is applied only if none of them has moved since it was registered.
+  What it applies is a deterministic re-resolution of mention→identity linkage
+  against the corrected identity graph — there is no derived cache anywhere in
+  this repository to invalidate, so the obligation is met by recomputation. It
+  reads no source, opens no socket and calls no model either.
+
+**`reenrichment` is not on the shared job loop, and the reason is in the table
+rather than in a preference.** `knowledge.entity_reenrichment_work` is
+deliberately not a `JobPlane`: it carries its own lease columns, its own
+`next_attempt_at`, a terminal vocabulary that includes `partial` and `stale`, and
+a version-currency fence no job plane has. So it has its own loop in
+`infrastructure/jobs/reenrichment.py`, and it prints its own counts rather than
+the shared ones — `succeeded`, `partial`, `stale`, `failed`, `idle` and
+`rebound` in place of `completed`, `released` and `lost`:
+
+```text
+owner        worker-<token>
+plane        reenrichment
+iterations   …
+claimed      …
+succeeded    …
+partial      …
+stale        …
+failed       …
+idle         …
+rebound      …
+```
+
+`partial` is the line to read first. A re-enrichment that produced some of its
+intended effects settles `partial` rather than `succeeded` or `failed`, because
+both of those would be false, and the migration that admitted the state
+(`b727e870d45e`) pairs it with a `limitations` column that must be written with
+it. `stale` means a version moved between registration and apply and the item was
+correctly not applied. Neither is an error to chase.
+
+The heartbeat is the same content-free row the other two planes write;
+`worker_health.record_worker_heartbeat` admits `reenrichment` as a plane, so an
+absent re-enrichment worker and a working one are no longer the same observation.
+It differs only in where it finds the Principals to report for: there is no
+`JobPlane.table` to select from, so the outstanding partition comes from
+`entity_reenrichment_work` itself.
+
+`--poll-seconds` still overrides the interval, so an operator sets one flag
+either way. The operator document for the plane this serves is
+[`relationship-intelligence.md`](relationship-intelligence.md).
+
+**Not executed.** The transcripts in the rest of this runbook are from observed
+`enrollment` runs. The `reenrichment` output above is the shape
+`apps/worker.py::_report_reenrichment` prints, read from the source rather than
+captured from a run; no re-enrichment worker has been run against a populated
+queue here.
 
 Every run prints counts and nothing else. Observed against the disposable
 database with one queued enrollment and `--max-iterations 2`:

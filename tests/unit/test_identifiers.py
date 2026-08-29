@@ -153,6 +153,11 @@ def test_contract_prefixes_are_stable() -> None:
         "eipv",
         "eiop",
         "eief",
+        # `b727e870d45e`'s identity-ambiguity identifier: one question a merge
+        # preview could not answer. It crosses the wire for the same reason
+        # `eipv` does -- the preview returns its ambiguities and `entities.merge`
+        # is handed back the ambiguity ids the operator settled.
+        "eiam",
     }
 
 

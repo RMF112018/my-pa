@@ -7,25 +7,45 @@ preview consumption remain load-bearing without a database runtime.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from typing import Final, cast
 
 import pytest
 
-from my_pa.application.errors import ConflictError, DeniedError, NotFoundError
+from my_pa.application.errors import (
+    ConflictError,
+    DeniedError,
+    InvalidRequestError,
+    NotFoundError,
+)
 from my_pa.application.identity_correction import (
     IdentityCorrectionService,
     SplitCommand,
+    SplitDisposition,
     SplitPreviewCommand,
     SplitPreviewReport,
     SplitReceipt,
 )
-from my_pa.contracts.ports import EntitiesRepository, RelationshipMemoryRepository
-from my_pa.domain.relationship.entity import Entity, EntityStatus, EntityType
+from my_pa.contracts.ports import (
+    AmbiguitySettlement,
+    EntitiesRepository,
+    PreviewAmbiguity,
+    RelationshipMemoryRepository,
+)
+from my_pa.domain.relationship.entity import (
+    AliasState,
+    AliasType,
+    Entity,
+    EntityAlias,
+    EntityStatus,
+    EntityType,
+)
 from my_pa.domain.relationship.governance import ActorClass
 from my_pa.domain.relationship.identity_correction import (
+    AmbiguityDisposition,
+    AmbiguityReason,
     IdentityEffect,
     IdentityEffectDraft,
     IdentityEffectFamily,
@@ -34,6 +54,7 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityOperationState,
     IdentityOperationType,
     IdentityPreview,
+    dispositions_for,
     effects_digest_for,
     sequence_effects,
 )
@@ -139,6 +160,12 @@ class _Entities:
         self.restoration_order: list[tuple[IdentityEffectFamily, str]] = []
         self.consume_wins = True
         self.states_match = True
+        self.created_after_merge: dict[IdentityEffectFamily, tuple[str, ...]] = {}
+        self.ambiguities: tuple[PreviewAmbiguity, ...] = ()
+        self.settlements: tuple[AmbiguitySettlement, ...] = ()
+        self.reparented: list[tuple[IdentityEffectFamily, str, str, int]] = []
+        self.bound_aliases: list[EntityAlias] = []
+        self.mismatched: set[str] = set()
 
     def observation(self, principal_id: str, reference: str) -> None:
         del principal_id, reference
@@ -173,8 +200,42 @@ class _Entities:
         return (
             principal_id == PRINCIPAL
             and self.states_match
+            and effect.record_id not in self.mismatched
             and effect.family is not IdentityEffectFamily.RELATIONSHIP_MEMORY
         )
+
+    def records_bound_to_entity_outside(
+        self,
+        principal_id: str,
+        family: IdentityEffectFamily,
+        entity_id: str,
+        known_record_ids: Collection[str],
+        *,
+        limit: int,
+    ) -> list[str]:
+        """What was created against the survivor after the merge, per family."""
+        assert principal_id == PRINCIPAL and entity_id == SURVIVOR and limit > 0
+        return [
+            record_id
+            for record_id in self.created_after_merge.get(family, ())
+            if record_id not in known_record_ids
+        ]
+
+    def record_preview_ambiguities(
+        self, principal_id: str, ambiguities: tuple[PreviewAmbiguity, ...]
+    ) -> None:
+        assert principal_id == PRINCIPAL
+        self.ambiguities = ambiguities
+
+    def preview_ambiguities(self, principal_id: str, preview_id: str) -> list[PreviewAmbiguity]:
+        assert principal_id == PRINCIPAL
+        return [ambiguity for ambiguity in self.ambiguities if ambiguity.preview_id == preview_id]
+
+    def record_ambiguity_settlements(
+        self, principal_id: str, settlements: tuple[AmbiguitySettlement, ...]
+    ) -> None:
+        assert principal_id == PRINCIPAL
+        self.settlements = settlements
 
     def get(self, principal_id: str, entity_id: str) -> Entity | None:
         return self.entities.get(entity_id) if principal_id == PRINCIPAL else None
@@ -224,6 +285,26 @@ class _Entities:
         assert principal_id == PRINCIPAL
         self.restored.append((effect.family, effect.record_id))
         self.restoration_order.append((effect.family, effect.record_id))
+
+    def aliases(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityAlias]:
+        assert principal_id == PRINCIPAL and limit is not None
+        return [alias for alias in self.bound_aliases if alias.entity_id == entity_id]
+
+    def reparent_entity_reference(
+        self,
+        principal_id: str,
+        *,
+        family: IdentityEffectFamily,
+        record_id: str,
+        from_entity_ids: frozenset[str],
+        to_entity_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        assert principal_id == PRINCIPAL and from_entity_ids == frozenset({SURVIVOR}) and at
+        self.reparented.append((family, record_id, to_entity_id, expected_version))
 
     def record_identity_effects(
         self, principal_id: str, effects: tuple[IdentityEffect, ...]
@@ -417,3 +498,222 @@ def test_only_one_concurrent_split_apply_can_consume_the_preview() -> None:
     with pytest.raises(ConflictError):
         _apply(service, _command(report))
     assert entities.operations == [] and entities.restored == [] and memories.restored == []
+
+
+# --- RI-P2-BLK-001 / WP-01: what the merge ledger does not prove --------------
+
+NEW_ALIAS: Final = "eals_cccc0003cccc0003cccc0003cccc"
+MOVED_ALIAS: Final = "eals_dddd0004dddd0004dddd0004dddd"
+FOREIGN_ENTITY: Final = "ent_ffff0006ffff0006"
+
+
+def _alias(alias_id: str, entity_id: str, *, version: int = 1) -> EntityAlias:
+    return EntityAlias(
+        alias_id=alias_id,
+        entity_id=entity_id,
+        alias_type=AliasType.NICKNAME,
+        normalized_value="synthetic",
+        display_value="Synthetic",
+        principal_id=PRINCIPAL,
+        state=AliasState.ACTIVE,
+        version=version,
+    )
+
+
+def _with_alias_effect() -> _Entities:
+    """A source merge that also reparented one alias onto the survivor."""
+    entities = _Entities()
+    entities.effects = sequence_effects(
+        (
+            *(
+                IdentityEffectDraft(
+                    family=effect.family,
+                    record_id=effect.record_id,
+                    kind=effect.kind,
+                    before_state=effect.before_state,
+                    after_state=effect.after_state,
+                )
+                for effect in entities.effects
+            ),
+            IdentityEffectDraft(
+                family=IdentityEffectFamily.ALIAS,
+                record_id=MOVED_ALIAS,
+                kind=IdentityEffectKind.OWNER_REPARENTED,
+                before_state={
+                    "entity_id": MERGED,
+                    "state": "active",
+                    "version": 1,
+                    "superseded_by_alias_id": None,
+                    "updated_at": None,
+                },
+                after_state={
+                    "entity_id": SURVIVOR,
+                    "state": "active",
+                    "version": 2,
+                    "superseded_by_alias_id": None,
+                    "updated_at": None,
+                },
+            ),
+        ),
+        identity_operation_id=SOURCE_OPERATION,
+        principal_id=PRINCIPAL,
+        recorded_at=WHEN,
+    )
+    entities.source = _source(effects=entities.effects)
+    return entities
+
+
+def _settle(
+    report: SplitPreviewReport,
+    disposition: AmbiguityDisposition,
+    *,
+    target_entity_id: str | None = None,
+) -> SplitCommand:
+    return replace(
+        _command(report),
+        dispositions=tuple(
+            SplitDisposition(
+                ambiguity_id=ambiguity.ambiguity_id,
+                disposition=disposition,
+                target_entity_id=target_entity_id,
+            )
+            for ambiguity in report.ambiguities
+        ),
+    )
+
+
+def test_a_row_created_against_the_survivor_after_the_merge_is_reported_not_ignored() -> None:
+    """RI-P2-BLK-001: discovery, the bounded answers, and the refusals before any write."""
+    entities, memories = _Entities(), _Memories()
+    entities.created_after_merge = {IdentityEffectFamily.ALIAS: (NEW_ALIAS,)}
+    entities.bound_aliases = [_alias(NEW_ALIAS, SURVIVOR, version=1)]
+    service = _service(entities, memories)
+    report = _preview(entities, memories)
+
+    (ambiguity,) = report.ambiguities
+    assert ambiguity.record_family is IdentityEffectFamily.ALIAS
+    assert ambiguity.record_id == NEW_ALIAS
+    assert ambiguity.reason == AmbiguityReason.POST_MERGE_CREATED
+    assert ambiguity.allowed_dispositions == (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY.value,
+        AmbiguityDisposition.LEAVE_UNRESOLVED.value,
+    )
+    assert ambiguity.allowed_target_entity_ids == (SURVIVOR, MERGED)
+    assert set(ambiguity.evidence_summary) == {
+        "source_identity_operation_id",
+        "bound_entity_id",
+        "recorded_effect_count",
+    }
+
+    with pytest.raises(InvalidRequestError):
+        _apply(service, _command(report))
+    with pytest.raises(InvalidRequestError):
+        _apply(service, _settle(report, AmbiguityDisposition.PRESERVE_SHARED))
+    with pytest.raises(InvalidRequestError):
+        _apply(
+            service,
+            replace(
+                _command(report),
+                dispositions=(
+                    SplitDisposition(
+                        "eiam_9999999999999999999999999999999a",
+                        AmbiguityDisposition.LEAVE_UNRESOLVED,
+                    ),
+                ),
+            ),
+        )
+    with pytest.raises(InvalidRequestError):
+        _apply(
+            service,
+            replace(
+                _command(report),
+                dispositions=(
+                    SplitDisposition(ambiguity.ambiguity_id, AmbiguityDisposition.LEAVE_UNRESOLVED),
+                    SplitDisposition(ambiguity.ambiguity_id, AmbiguityDisposition.LEAVE_UNRESOLVED),
+                ),
+            ),
+        )
+    with pytest.raises(InvalidRequestError):
+        _apply(
+            service,
+            _settle(
+                report,
+                AmbiguityDisposition.ASSIGN_TO_ENTITY,
+                target_entity_id=FOREIGN_ENTITY,
+            ),
+        )
+    assert entities.operations == [] and entities.reparented == []
+    assert entities.settlements == ()
+
+    receipt = _apply(
+        service,
+        _settle(report, AmbiguityDisposition.ASSIGN_TO_ENTITY, target_entity_id=MERGED),
+    )
+    assert receipt.operation.state is IdentityOperationState.COMPLETED
+    assert entities.reparented == [(IdentityEffectFamily.ALIAS, NEW_ALIAS, MERGED, 1)]
+    (settlement,) = entities.settlements
+    assert settlement.ambiguity_id == ambiguity.ambiguity_id
+    assert settlement.disposition == AmbiguityDisposition.ASSIGN_TO_ENTITY.value
+    assert settlement.target_entity_id == MERGED
+    assert settlement.identity_operation_id == receipt.operation.identity_operation_id
+
+
+def test_a_row_changed_after_the_merge_is_classified_instead_of_refusing_the_split() -> None:
+    """RI-P2-BLK-001: the deterministic half still runs; the changed row is settled."""
+    entities, memories = _with_alias_effect(), _Memories()
+    entities.mismatched = {MOVED_ALIAS}
+    service = _service(entities, memories)
+    report = _preview(entities, memories)
+
+    (ambiguity,) = report.ambiguities
+    assert ambiguity.record_id == MOVED_ALIAS
+    assert ambiguity.reason == AmbiguityReason.POST_MERGE_MODIFIED
+    assert set(ambiguity.evidence_summary) == {
+        "source_identity_operation_id",
+        "source_effect_id",
+        "source_effect_sequence",
+        "recorded_after_sha256",
+    }
+    # The alias is the one record with no projected effect. Everything the
+    # ledger still proves is restored without the operator choosing anything.
+    assert {draft.record_id for draft in report.projected_effects} == {
+        MERGED,
+        "mem_aaaa0001aaaa01",
+    }
+
+    receipt = _apply(service, _settle(report, AmbiguityDisposition.LEAVE_UNRESOLVED))
+    assert len(receipt.effects) == len(entities.effects) - 1
+    assert entities.reparented == []
+    (settlement,) = entities.settlements
+    assert settlement.disposition == AmbiguityDisposition.LEAVE_UNRESOLVED.value
+    assert settlement.target_entity_id is None
+    assert entities.restored == [(IdentityEffectFamily.ENTITY, MERGED)]
+
+
+def test_an_assignment_this_transaction_cannot_perform_is_refused_before_any_write() -> None:
+    """A record that no longer binds to the survivor cannot be moved off it."""
+    entities, memories = _Entities(), _Memories()
+    entities.created_after_merge = {IdentityEffectFamily.ALIAS: (NEW_ALIAS,)}
+    service = _service(entities, memories)
+    report = _preview(entities, memories)
+
+    with pytest.raises(ConflictError):
+        _apply(
+            service,
+            _settle(report, AmbiguityDisposition.ASSIGN_TO_ENTITY, target_entity_id=MERGED),
+        )
+    assert entities.operations == [] and entities.reparented == []
+    assert entities.settlements == () and entities.restored == []
+
+
+def test_preserve_shared_is_admitted_for_evidence_and_for_nothing_else() -> None:
+    """RI v0.2 section 15.4 line 1186 is about evidence, and an observation is evidence."""
+    shared = {
+        family
+        for family in IdentityEffectFamily
+        if AmbiguityDisposition.PRESERVE_SHARED in dispositions_for(family)
+    }
+    assert shared == {IdentityEffectFamily.OBSERVATION}
+    assert dispositions_for(IdentityEffectFamily.ENTITY) == ()
+    assert dispositions_for(IdentityEffectFamily.REVIEW_CASE) == ()
+    assert dispositions_for(IdentityEffectFamily.DERIVED_CONTEXT) == ()

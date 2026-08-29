@@ -40,7 +40,7 @@ PHASE_B = "b64e29a0f7c1"
 PHASE_B_HEAD = "3d07af4dc513"
 GSQS_REVISION = "c4b0a1d9e827"
 PHASE_B_START = "c7a1f04b9e63"
-HEAD = "8e1c4a7b2d90"
+HEAD = "b727e870d45e"
 REVISION_PATH = (
     ROOT
     / "migrations"

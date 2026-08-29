@@ -91,6 +91,13 @@ class IdentityHistoryEntry:
     correlation_id: str | None = None
     audit_id: str | None = None
     reason: str | None = field(default=None, repr=False)
+    #: The governed merge this operation descended from, present exactly when
+    #: the governed ledger recorded one -- which is what makes a split readable
+    #: as lineage rather than as an unexplained appearance of two entities.
+    source_identity_operation_id: str | None = None
+    #: The authorization receipt the governed operation was admitted under, so a
+    #: history entry can be tied back to the act that authorized it.
+    receipt_id: str | None = None
 
     def __post_init__(self) -> None:
         validate_identifier(self.history_id)
@@ -111,6 +118,20 @@ class IdentityHistoryEntry:
             raise ValueError("an identity history entry names a non-blank actor")
         if self.reason is not None and not self.reason.strip():
             raise ValueError("an identity history reason is not blank")
+        if self.source_identity_operation_id is not None:
+            validate_identifier(self.source_identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
+        if self.receipt_id is not None:
+            validate_identifier(self.receipt_id, IdKind.RECEIPT)
+        # A direct mutation and a legacy merge predate the governed operation
+        # ledger, so neither has an operation to descend from or a receipt to
+        # cite. Stated here so that a `None` on those sources is the contract
+        # rather than a projection that happened not to fill the columns in.
+        if self.source is not IdentityHistorySource.IDENTITY_OPERATION and (
+            self.source_identity_operation_id is not None or self.receipt_id is not None
+        ):
+            raise ValueError(
+                "only a governed identity operation names a source operation or a receipt"
+            )
 
 
 @dataclass(frozen=True, slots=True)

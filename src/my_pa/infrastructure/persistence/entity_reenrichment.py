@@ -25,6 +25,7 @@ from my_pa.domain.relationship.reenrichment import (
     BindingVersion,
     CurrentReenrichmentBindings,
     ReenrichmentBinding,
+    ReenrichmentLimitation,
     ReenrichmentState,
     ReenrichmentSubject,
     ReenrichmentSubjectKind,
@@ -49,6 +50,7 @@ _SAFE_TOKEN = re.compile(r"\A[a-z][a-z0-9_]{0,63}\Z")
 _QUEUED = "queued"
 _RUNNING = "running"
 _SUCCEEDED = "succeeded"
+_PARTIAL = "partial"
 _STALE = "stale"
 _FAILED = "failed"
 
@@ -524,6 +526,38 @@ class SqlReenrichmentWorkRepository:
             stale_reasons=values,
         )
 
+    def mark_partial(
+        self,
+        principal_id: str,
+        work_id: str,
+        *,
+        owner: str,
+        limitations: Sequence[ReenrichmentLimitation],
+        at: datetime,
+    ) -> bool:
+        """Settle work that did some of what it was registered for, and says which part.
+
+        The third terminal outcome beside `mark_stale` and `fail`, and it exists
+        because the two of them plus `complete` could not express it: a
+        re-enrichment that produced some of its intended effects had to report
+        `succeeded` -- claiming effects it did not produce -- or `failed`,
+        discarding the ones it did. `partial_reenrichment_states_its_limitations`
+        makes the state and the column that explains it true together, so this
+        settlement cannot land without saying what it left undone, exactly as
+        `mark_stale` cannot land without saying what moved.
+        """
+        values = sorted({limitation.value for limitation in limitations})
+        if not values:
+            raise ValueError("partial work states its limitations")
+        return self._terminal(
+            principal_id,
+            work_id,
+            owner=owner,
+            state=_PARTIAL,
+            at=at,
+            limitations=values,
+        )
+
     def _terminal(
         self,
         principal_id: str,
@@ -533,6 +567,7 @@ class SqlReenrichmentWorkRepository:
         state: str,
         at: datetime,
         stale_reasons: list[str] | None = None,
+        limitations: list[str] | None = None,
     ) -> bool:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         moment = ensure_utc(at)
@@ -551,6 +586,7 @@ class SqlReenrichmentWorkRepository:
                 lease_owner=None,
                 lease_expires_at=None,
                 stale_reasons=stale_reasons,
+                limitations=limitations,
                 completed_at=moment,
                 updated_at=moment,
             )
@@ -730,4 +766,7 @@ class SqlReenrichmentWorkRepository:
                 StaleBindingReason(value) for value in (getattr(row, "stale_reasons", None) or ())
             ),
             last_error_code=getattr(row, "last_error_code", None),
+            limitations=tuple(
+                ReenrichmentLimitation(v) for v in (getattr(row, "limitations", None) or ())
+            ),
         )

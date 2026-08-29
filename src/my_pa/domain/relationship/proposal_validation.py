@@ -47,6 +47,12 @@ _IDS: Final = {
     "assignment_id": IdKind.ASSIGNMENT,
     "relationship_id": IdKind.ENTITY_RELATIONSHIP,
     "observation_id": IdKind.ENTITY_OBSERVATION,
+    # WP-06 / RI-P4-HIGH-001. `split_identity` names the completed governed merge
+    # it reverses, and `PreviewEntitySplit` validates that value against
+    # `ENTITY_IDENTITY_OPERATION`. Checked here so the proposal refuses a subject
+    # the preview would refuse, rather than storing reviewed intent that cannot
+    # survive the one command it exists to reach.
+    "source_identity_operation_id": IdKind.ENTITY_IDENTITY_OPERATION,
 }
 
 

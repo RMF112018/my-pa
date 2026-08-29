@@ -47,6 +47,10 @@ from my_pa.domain.relationship.proposal_payload import (
 
 ALICE: Final = "ent_aaaa0001aaaa0001"
 ALICE_TWO: Final = "ent_bbbb0002bbbb0002"
+#: The completed governed merge a split proposal asks to reverse. `eiop_` is
+#: `ENTITY_IDENTITY_OPERATION`, which is the kind `PreviewEntitySplit` validates
+#: `source_identity_operation_id` against.
+SOURCE_OPERATION: Final = "eiop_aaaa0001aaaa0001"
 
 #: One valid payload per kind, so every test below can reach every kind without
 #: each of them restating seventeen mappings.
@@ -127,7 +131,10 @@ VALID: Final[dict[EntityProposalKind, dict[str, str | bool]]] = {
         "retained_entity_id": ALICE,
         "merged_entity_id": ALICE_TWO,
     },
-    EntityProposalKind.SPLIT_IDENTITY: {"entity_id": ALICE},
+    EntityProposalKind.SPLIT_IDENTITY: {
+        "entity_id": ALICE,
+        "source_identity_operation_id": SOURCE_OPERATION,
+    },
 }
 
 
@@ -315,8 +322,54 @@ def test_identity_correction_discovery_is_closed_and_self_describing() -> None:
         "reason",
     }
     assert set(merge["required"]) == {"retained_entity_id", "merged_entity_id"}  # type: ignore[index]
-    assert set(split["properties"]) == {"entity_id", "reason"}  # type: ignore[index]
-    assert set(split["required"]) == {"entity_id"}  # type: ignore[index]
+    assert set(split["properties"]) == {  # type: ignore[index]
+        "entity_id",
+        "reason",
+        "source_identity_operation_id",
+    }
+    assert set(split["required"]) == {"entity_id", "source_identity_operation_id"}  # type: ignore[index]
+
+
+# --- WP-06 / AC-REM-011: a split proposal names the merge it reverses ---------
+#
+# RI-P4-HIGH-001. `split_identity` used to name only its subject, and the
+# identifier overlap between that payload and `PreviewEntitySplit` -- the one
+# command that carries a split out -- was empty apart from an optional `reason`.
+# An accepted split proposal therefore reached the operator as intent no preview
+# could be built from, and no reviewer correction could bridge it, because
+# `correct_and_accept` validates the patch against this same schema.
+
+
+def test_a_split_payload_names_the_source_merge_operation() -> None:
+    """The one field `entities.split_preview` requires of its caller.
+
+    Not derivable from the subject: an entity may have been merged more than
+    once, so `entity_id` alone cannot say which completed merge the reviewer
+    approved reversing. Naming it in the payload is what makes acceptance carry
+    the operator's intent rather than a guess reconstructed after the fact.
+    """
+    schema = schema_for(EntityProposalKind.SPLIT_IDENTITY)
+    assert "source_identity_operation_id" in schema.required
+    payload = EntityProposalPayload.of(
+        EntityProposalKind.SPLIT_IDENTITY,
+        {"entity_id": ALICE, "source_identity_operation_id": SOURCE_OPERATION},
+    )
+    assert payload.as_mapping()["source_identity_operation_id"] == SOURCE_OPERATION
+
+
+def test_a_split_payload_omitting_the_source_merge_operation_is_refused() -> None:
+    """Required rather than optional: an omitted value is an unbuildable preview."""
+    with pytest.raises(ProposalPayloadError, match="every field its kind requires"):
+        EntityProposalPayload.of(EntityProposalKind.SPLIT_IDENTITY, {"entity_id": ALICE})
+
+
+def test_a_split_payloads_source_merge_operation_is_a_checked_identifier() -> None:
+    """An Entity identifier here would name a record `PreviewEntitySplit` refuses."""
+    with pytest.raises(ProposalPayloadError, match="valid source_identity_operation_id"):
+        EntityProposalPayload.of(
+            EntityProposalKind.SPLIT_IDENTITY,
+            {"entity_id": ALICE, "source_identity_operation_id": ALICE},
+        )
 
 
 @pytest.mark.parametrize("kind", list(EntityProposalKind))
@@ -484,7 +537,7 @@ def test_the_same_payload_under_a_different_kind_digests_differently() -> None:
         EntityProposalKind.MERGE_ENTITIES,
         {"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
     )
-    split = EntityProposalPayload.of(EntityProposalKind.SPLIT_IDENTITY, {"entity_id": ALICE})
+    split = a_payload(EntityProposalKind.SPLIT_IDENTITY)
     assert dedupe_digest(merge) != dedupe_digest(split)
 
 

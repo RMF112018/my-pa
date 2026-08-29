@@ -124,7 +124,10 @@ from my_pa.domain.relationship.governance import (
     ObservationKind,
     ResolutionDisposition,
 )
-from my_pa.domain.relationship.identity_correction import MAX_MERGED_AWAY_ENTITIES
+from my_pa.domain.relationship.identity_correction import (
+    MAX_MERGED_AWAY_ENTITIES,
+    AmbiguityDisposition,
+)
 from my_pa.domain.relationship.memory import (
     MAX_CORRECTION_REASON_CHARACTERS,
     MAX_STATEMENT_CHARACTERS,
@@ -5430,6 +5433,49 @@ def _merge_choices(value: object) -> tuple[Mapping[str, str], ...]:
     return value
 
 
+def _split_dispositions(value: object) -> tuple[Mapping[str, str], ...]:
+    """One settlement per ambiguity the split preview reported, named once each.
+
+    Shape only, on `_merge_choices`' argument: whether these are *exactly* the
+    ambiguities the preview persisted, whether the family admits the disposition
+    and whether the target is one of this split's participants are all decided
+    against the stored rows, which this layer has none of. What it can decide is
+    that a target is present exactly when the disposition assigns one -- the
+    equivalence the server states as
+    `an_ambiguity_settlement_names_a_target_exactly_when_it_assigns` -- so a
+    caller learns that from the field name rather than from an identity error.
+    """
+    if not isinstance(value, tuple):
+        raise InvalidRequestError(SafeDetail.DISPOSITION)
+    if len(value) > MAX_MERGED_AWAY_ENTITIES * MAX_EVIDENCE_REFERENCES:
+        raise InvalidRequestError(SafeDetail.DISPOSITION)
+    seen: set[str] = set()
+    for entry in value:
+        if not isinstance(entry, Mapping) or not set(entry) <= {
+            "ambiguity_id",
+            "disposition",
+            "target_entity_id",
+        }:
+            raise InvalidRequestError(SafeDetail.DISPOSITION)
+        if not {"ambiguity_id", "disposition"} <= set(entry):
+            raise InvalidRequestError(SafeDetail.DISPOSITION)
+        ambiguity_id = entry["ambiguity_id"]
+        _identifier(ambiguity_id, IdKind.ENTITY_IDENTITY_AMBIGUITY, SafeDetail.DISPOSITION)
+        if ambiguity_id in seen:
+            raise InvalidRequestError(SafeDetail.DISPOSITION)
+        seen.add(str(ambiguity_id))
+        try:
+            disposition = AmbiguityDisposition(entry["disposition"])
+        except ValueError:
+            raise InvalidRequestError(SafeDetail.DISPOSITION) from None
+        target = entry.get("target_entity_id")
+        if (disposition is AmbiguityDisposition.ASSIGN_TO_ENTITY) is not (target is not None):
+            raise InvalidRequestError(SafeDetail.DISPOSITION, SafeDetail.ENTITY_ID)
+        if target is not None:
+            _identifier(target, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+    return value
+
+
 # --- WP-RI-B: the two producer paths and governed identity correction --------
 #
 # Six commands, and what is *absent* from each is the contract. Operator §11,
@@ -5772,20 +5818,57 @@ class SplitEntity:
     Operator-only, atomic, expected-state guarded and replay safe. It restores
     the source merge's recorded before states and appends a new split operation;
     it deletes neither the merge nor its provenance.
+
+    Send back one disposition for each ambiguity the preview listed — no more
+    and no fewer. Records the preview could attribute on its own are restored
+    without being offered to you, because their answer is proven by the merge's
+    own ledger rather than chosen.
     """
 
     capability: ClassVar[Capability] = Capability.ENTITIES_SPLIT
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, object]]] = MappingProxyType(
+        {
+            "dispositions": {
+                "description": (
+                    "One entry per ambiguity the preview reported. Each names "
+                    "ambiguity_id and a disposition of assign_to_entity, "
+                    "preserve_shared or leave_unresolved, chosen from that "
+                    "ambiguity's allowed_dispositions. target_entity_id is "
+                    "required for assign_to_entity, must be one of that "
+                    "ambiguity's allowed_target_entity_ids, and must be absent "
+                    "otherwise. No more and no fewer."
+                ),
+                "maxItems": MAX_MERGED_AWAY_ENTITIES * MAX_EVIDENCE_REFERENCES,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "ambiguity_id": {"type": "string"},
+                        "disposition": {
+                            "type": "string",
+                            "enum": [disposition.value for disposition in AmbiguityDisposition],
+                        },
+                        "target_entity_id": {"type": "string"},
+                    },
+                    "required": ["ambiguity_id", "disposition"],
+                    "additionalProperties": False,
+                },
+            }
+        }
+    )
 
     preview_id: str
     preview_digest: str
     reason: str = field(repr=False)
     evidence_refs: tuple[str, ...] = ()
+    dispositions: tuple[Mapping[str, str], ...] = ()
 
     def __post_init__(self) -> None:
         _identifier(self.preview_id, IdKind.ENTITY_IDENTITY_PREVIEW, SafeDetail.PREVIEW_ID)
         _sha256_digest(self.preview_digest, SafeDetail.PREVIEW_DIGEST)
         _bounded_reason(self.reason, SafeDetail.REASON)
         _proposal_observation_ids(self.evidence_refs, detail=SafeDetail.EVIDENCE_REFS)
+        _split_dispositions(self.dispositions)
 
 
 type Command = (

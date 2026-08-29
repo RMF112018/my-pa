@@ -81,7 +81,7 @@ PHASE_B_REVISION = "b64e29a0f7c1"
 PHASE_B_HEAD = "3d07af4dc513"
 GSQS_REVISION = "c4b0a1d9e827"
 PHASE_B_START = "c7a1f04b9e63"
-HEAD_REVISION = "8e1c4a7b2d90"
+HEAD_REVISION = "b727e870d45e"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -185,7 +185,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(PHASE_B_REVISION).down_revision == "a1f7d3c85e40"
     assert script.get_revision(PHASE_B_HEAD).down_revision == PHASE_B_REVISION
     assert script.get_heads() == [HEAD_REVISION]
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 77
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 78
 
 
 @pytest.mark.database

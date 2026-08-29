@@ -59,6 +59,8 @@ PRINCIPAL: Final = "prn_aaaa0001aaaa0001aaaa0001"
 PROPOSAL: Final = "eprp_aaaa0001aaaa0001"
 ALICE: Final = "ent_aaaa0001aaaa0001"
 ACME: Final = "ent_bbbb0002bbbb0002"
+#: The completed governed merge a `split_identity` proposal asks to reverse.
+SOURCE_OPERATION: Final = "eiop_aaaa0001aaaa0001"
 ALIAS: Final = "eals_aaaa0001aaaa0001"
 IDENTIFIER: Final = "xid_aaaa0001aaaa0001"
 ASSIGNMENT: Final = "asn_aaaa0001aaaa0001"
@@ -189,7 +191,13 @@ def public_payload(kind: EntityProposalKind) -> dict[str, str | bool]:
         return PAYLOADS[kind]
     if kind is EntityProposalKind.MERGE_ENTITIES:
         return {"retained_entity_id": ALICE, "merged_entity_id": ACME, "reason": "duplicate"}
-    return {"entity_id": ALICE, "reason": "incorrect prior merge"}
+    # WP-06 / RI-P4-HIGH-001: a split proposal names the completed governed
+    # merge it reverses, which is the subject `entities.split_preview` takes.
+    return {
+        "entity_id": ALICE,
+        "reason": "incorrect prior merge",
+        "source_identity_operation_id": SOURCE_OPERATION,
+    }
 
 
 @pytest.mark.parametrize("kind", tuple(EntityProposalKind), ids=lambda kind: kind.value)
@@ -324,7 +332,7 @@ def test_an_accepted_identity_correction_promotes_nothing(kind: EntityProposalKi
         kind,
         {"retained_entity_id": ALICE, "merged_entity_id": ACME}
         if kind is EntityProposalKind.MERGE_ENTITIES
-        else {"entity_id": ALICE},
+        else {"entity_id": ALICE, "source_identity_operation_id": SOURCE_OPERATION},
     )
     accepted = EntityProposal(
         proposal_id=PROPOSAL,

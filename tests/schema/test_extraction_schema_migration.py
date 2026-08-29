@@ -353,6 +353,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "entity_reenrichment_version_watermarks",
         }
     ),
+    # `WP-RI-06`'s identity-ambiguity pair: what a merge preview could not decide,
+    # and what the operator chose about each on the operation that carried the
+    # choice out. The same revision adds `entity_reenrichment_work.limitations`
+    # and widens three frozen CHECKs, which this map does not read -- it names
+    # tables a revision *creates*.
+    "b727e870d45e": frozenset(
+        {
+            "entity_identity_preview_ambiguities",
+            "entity_identity_ambiguity_settlements",
+        }
+    ),
     # `a1f7d3c85e40` and `b64e29a0f7c1` create no table: the first widens two
     # frozen disposition CHECKs and the second widens the two `audit_events`
     # vocabularies. They are absent from this map rather than mapped to an empty

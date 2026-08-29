@@ -17,7 +17,7 @@ about what may go in `before_state` and `after_state`.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import fields, replace
 from datetime import UTC, datetime, timedelta
 from itertools import permutations
@@ -666,6 +666,26 @@ class _SplitEntities:
         self, principal_id: str, effect: IdentityEffect
     ) -> bool:
         return principal_id == PRINCIPAL
+
+    def records_bound_to_entity_outside(
+        self,
+        principal_id: str,
+        family: IdentityEffectFamily,
+        entity_id: str,
+        known_record_ids: Collection[str],
+        *,
+        limit: int,
+    ) -> list[str]:
+        """Nothing was created against the survivor after this synthetic merge."""
+        assert principal_id == PRINCIPAL and entity_id == SURVIVOR and limit > 0
+        del family, known_record_ids
+        return []
+
+    def preview_ambiguities(self, principal_id: str, preview_id: str) -> list[object]:
+        """This merge's whole ledger still matches, so the preview asked nothing."""
+        assert principal_id == PRINCIPAL
+        del preview_id
+        return []
 
     def get(self, principal_id: str, entity_id: str) -> Entity | None:
         if principal_id == PRINCIPAL and entity_id == SURVIVOR:

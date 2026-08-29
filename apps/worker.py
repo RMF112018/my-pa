@@ -3,6 +3,7 @@
     .venv/bin/python apps/worker.py run
     .venv/bin/python apps/worker.py run --once
     .venv/bin/python apps/worker.py run --plane capture
+    .venv/bin/python apps/worker.py run --plane reenrichment
     .venv/bin/python apps/worker.py run --max-iterations 20 --lease-seconds 60
 
 This is the only place in the worker that chooses an implementation
@@ -22,7 +23,9 @@ because an operator asking twice is asking for the process to go now and this
 script should not be the thing that refuses.
 
 **What this worker executes, and on which plane.** One process serves one plane,
-named by `--plane`, and each plane's handler travels with it in `_PLANES`.
+named by `--plane`; `_PLANES` is the closed set of names and is what `--plane`'s
+`choices` are derived from, so a plane cannot exist that the flag will not
+accept.
 
 * `enrollment` (the default) runs `infrastructure.jobs.extraction.extract_enrollment`.
   One claimed job is one enrollment's outstanding objects: for each, the provider
@@ -39,10 +42,28 @@ named by `--plane`, and each plane's handler travels with it in `_PLANES`.
   reads no source, opens no socket, and calls no model.** Everything it works
   from is text already in the database, which is why WP-7 needed no new
   configuration and no new credential.
+* `reenrichment` runs `infrastructure.jobs.reenrichment.run_reenrichment_worker`
+  (`WP-03` / `RI-P3-BLK-001`). One claimed item is one durable Relationship
+  Intelligence invalidation: the binding's exact subject, input, producer and
+  policy versions are re-read and locked, and the item is applied only if none
+  of them has moved since it was registered. What it applies is a deterministic
+  re-resolution of mention/identity linkage against the corrected identity
+  graph. **It reads no source, opens no socket and calls no model either**, and
+  it settles `partial` rather than `succeeded` whenever it left something
+  undone. Before this plane existed the claim-and-settle primitive had no caller
+  anywhere in the repository and no durable work was ever executed.
 
-Two planes and one loop: `run_worker` is parameterised over the plane
-(`D-76`, `D-77`), so the lease protocol has one implementation and two tables it
-runs against. Running both planes means running the command twice.
+Two planes and one loop for the job planes: `run_worker` is parameterised over
+the plane (`D-76`, `D-77`), so the lease protocol has one implementation and two
+tables it runs against. The third plane is **not** on that loop, and the reason
+is in the table rather than in a preference: `entity_reenrichment_work` is
+deliberately not a `JobPlane` -- it carries its own lease columns, its own
+`next_attempt_at`, a terminal vocabulary that includes `partial` and `stale`,
+and a version-currency fence no job plane has. Parameterising `run_worker` over
+a second lease protocol would have made one function mean two things, so the
+re-enrichment loop is its own small one in `infrastructure.jobs.reenrichment`
+and this file dispatches to whichever the chosen plane names. Running more than
+one plane means running the command more than once.
 
 **What it still does not do, stated rather than left as an absence.** PDFs are
 recorded as `unsupported` and counted; nothing here extracts them, because
@@ -74,6 +95,11 @@ from my_pa.bootstrap.settings import AuthMode, load_settings
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.jobs.capture_pipeline import process_capture_version
 from my_pa.infrastructure.jobs.extraction import extract_enrollment
+from my_pa.infrastructure.jobs.reenrichment import (
+    DEFAULT_REENRICHMENT_POLL_SECONDS,
+    ReenrichmentRun,
+    run_reenrichment_worker,
+)
 from my_pa.infrastructure.jobs.worker import (
     DEFAULT_LEASE_SECONDS,
     DEFAULT_POLL_SECONDS,
@@ -83,21 +109,29 @@ from my_pa.infrastructure.jobs.worker import (
     run_worker,
 )
 from my_pa.infrastructure.persistence.jobs import CAPTURE_JOBS, ENROLLMENT_JOBS, JobPlane
-from my_pa.infrastructure.persistence.tables import JobState
+from my_pa.infrastructure.persistence.tables import JobState, entity_reenrichment_work
 from my_pa.infrastructure.persistence.worker_health import record_worker_heartbeat
 
-#: The two planes this process can serve, and the handler each one's work needs.
-#: A mapping rather than an `if`, so that a third plane arrives as a row here and
-#: `--plane`'s `choices` cannot disagree with what `_run` can dispatch. The
-#: handler travels with the plane because the pairing is not a preference: a
-#: `capver_…` claimed off `knowledge.jobs` would be a subject of the wrong kind,
-#: and `JobPlane.subject_kind` is what refuses one.
-_PLANES: Mapping[str, tuple[JobPlane, JobHandler]] = MappingProxyType(
+#: The two *job* planes this process can serve, and the handler each one's work
+#: needs. A mapping rather than an `if`, so that a plane cannot be added without
+#: `--plane`'s `choices` learning about it. The handler travels with the plane
+#: because the pairing is not a preference: a `capver_…` claimed off
+#: `knowledge.jobs` would be a subject of the wrong kind, and
+#: `JobPlane.subject_kind` is what refuses one.
+_JOB_PLANES: Mapping[str, tuple[JobPlane, JobHandler]] = MappingProxyType(
     {
         "enrollment": (ENROLLMENT_JOBS, extract_enrollment),
         "capture": (CAPTURE_JOBS, process_capture_version),
     }
 )
+
+#: Every plane `--plane` accepts, which is the two above plus `reenrichment`.
+#: The third one is named here and not in `_JOB_PLANES` because it does not
+#: claim off a `JobPlane` at all -- see the module docstring -- and putting it in
+#: that mapping would have required a `JobPlane` for a table that deliberately
+#: is not one. `sorted(_PLANES)` is still the single source of `--plane`'s
+#: choices, so the two cannot disagree.
+_PLANES: frozenset[str] = frozenset({*_JOB_PLANES, "reenrichment"})
 
 #: The signals an operator stops this process with. `SIGHUP` is deliberately
 #: absent: it has no defined meaning for this process, and claiming one would be
@@ -130,10 +164,98 @@ def _report(owner: str, plane: str, run: WorkerRun) -> None:
     print(f"idle         {run.idle}")
 
 
-def _run(args: argparse.Namespace) -> int:
+def _report_reenrichment(owner: str, run: ReenrichmentRun) -> None:
+    """The re-enrichment plane's own counts.
+
+    A separate function rather than a shared one, because the two runs do not
+    settle in the same vocabulary and printing them under one set of headings
+    would have to call a `partial` settlement either `completed` or `released`.
+    `partial` and `stale` are the two an operator most needs to see, so they get
+    their own lines.
+    """
+    print(f"owner        {owner}")
+    print("plane        reenrichment")
+    print(f"iterations   {run.iterations}")
+    print(f"claimed      {run.claimed}")
+    print(f"succeeded    {run.succeeded}")
+    print(f"partial      {run.partial}")
+    print(f"stale        {run.stale}")
+    print(f"failed       {run.failed}")
+    print(f"idle         {run.idle}")
+    print(f"rebound      {run.rebound}")
+
+
+def _run_reenrichment(args: argparse.Namespace) -> int:
+    """Serve the re-enrichment plane. Same process, same signals, own loop.
+
+    The heartbeat is the same content-free row the other two planes write and
+    `worker_health.record_worker_heartbeat` already admits `reenrichment` as a
+    plane. It differs in where it finds the Principals to report for: there is
+    no `JobPlane.table` to select from, so the outstanding partition comes from
+    `entity_reenrichment_work` itself.
+
+    `poll_seconds` has its own default because it belongs to a different loop;
+    `--poll-seconds` still overrides it, so an operator sets one flag either
+    way.
+    """
     settings = load_settings()
     engine = create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
-    plane, handler = _PLANES[args.plane]
+    owner = issue_worker_owner()
+    stop = threading.Event()
+    _install_stop_handlers(stop)
+    principal_id = (
+        local_principal().principal_id if settings.auth_mode is AuthMode.LOCAL_OPERATOR else None
+    )
+    heartbeat_principals: set[str] = {principal_id} if principal_id is not None else set()
+
+    def heartbeat(*, stopped: bool = False) -> None:
+        with engine.begin() as connection:
+            if not stopped:
+                heartbeat_principals.update(
+                    str(value)
+                    for value in connection.scalars(
+                        select(entity_reenrichment_work.c.principal_id)
+                        .where(entity_reenrichment_work.c.state.in_(["queued", "running"]))
+                        .distinct()
+                    )
+                )
+            for heartbeat_principal in heartbeat_principals:
+                record_worker_heartbeat(
+                    connection,
+                    owner=owner,
+                    principal_id=heartbeat_principal,
+                    plane="reenrichment",
+                    stopped=stopped,
+                )
+
+    try:
+        heartbeat()
+        run = run_reenrichment_worker(
+            engine,
+            owner=owner,
+            stop=stop,
+            max_iterations=1 if args.once else args.max_iterations,
+            lease_seconds=args.lease_seconds,
+            poll_seconds=(
+                DEFAULT_REENRICHMENT_POLL_SECONDS
+                if args.poll_seconds == DEFAULT_POLL_SECONDS
+                else args.poll_seconds
+            ),
+            heartbeat=heartbeat,
+        )
+    finally:
+        heartbeat(stopped=True)
+        engine.dispose()
+    _report_reenrichment(owner, run)
+    return 0
+
+
+def _run(args: argparse.Namespace) -> int:
+    if args.plane == "reenrichment":
+        return _run_reenrichment(args)
+    settings = load_settings()
+    engine = create_database_engine(settings.parsed_database_url(), statement_timeout_ms=30_000)
+    plane, handler = _JOB_PLANES[args.plane]
     owner = issue_worker_owner()
     stop = threading.Event()
     _install_stop_handlers(stop)

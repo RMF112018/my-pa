@@ -251,13 +251,36 @@ class PayloadSchema:
 #: proposer could widen, and the field set is the whole of what stops a payload
 #: naming a server-owned value.
 #:
-#: `merge_entities` and `split_identity` are the two entries with no command to
-#: read: WP-06 owns the first and WP-07 the second, and neither exists at this
-#: revision. `merge_entities` names the two entities `EntityMergeRecord` already
-#: names, so reviewed intent and the lineage it eventually produces speak about
-#: the same pair. `split_identity` names only its subject, deliberately: a Phase
-#: B proposal that pre-declared the shape of a split operation would be this
-#: phase deciding WP-07's contract from outside it.
+#: `merge_entities` and `split_identity` are the two entries with no *promotion*
+#: command to read: accepting either records reviewed intent and mutates no
+#: identity, so neither schema is a command's argument list the way the other
+#: fifteen are. `merge_entities` names the two entities `EntityMergeRecord`
+#: already names, so reviewed intent and the lineage it eventually produces speak
+#: about the same pair.
+#:
+#: `split_identity` used to name only its subject, on the argument that a Phase B
+#: proposal pre-declaring the shape of a split would be deciding WP-07's contract
+#: from outside it. WP-06 published that contract, and the deferral it justified
+#: closed as `RI-P4-HIGH-001`: `PreviewEntitySplit` takes
+#: `source_identity_operation_id` and nothing else as its subject, so a payload
+#: naming only `entity_id` shared no identifier with the one command that could
+#: carry the split out. An accepted proposal reached the operator as intent no
+#: preview could be built from, and `correct_and_accept` could not bridge it
+#: either, because a reviewer's patch is validated against this same table.
+#:
+#: So the schema names the completed governed merge the split reverses, and names
+#: it as *required*. It is not derivable: the partial unique index
+#: `one_completed_split_per_source_merge` proves at most one completed split per
+#: source merge, but an entity merged more than once has more than one candidate
+#: source, and choosing between them is the operator intent acceptance exists to
+#: preserve. Naming the subject as well is not redundant -- `entity_id` is what
+#: makes a split proposal a reference to an identity a merge removed, which is
+#: what `_ENTITY_REFERENCE_FIELDS_BY_PROPOSAL_KIND` reads to invalidate it.
+#:
+#: Carrying the field does not make acceptance executable. The handoff stays in
+#: `OPERATOR_PREVIEW_REQUIRED`, and the preview identifier, digest, live versions
+#: and authority a split is actually performed under remain values no proposal
+#: has and no reviewer can supply.
 _SCHEMA_BY_KIND: Mapping[EntityProposalKind, PayloadSchema] = MappingProxyType(
     {
         EntityProposalKind.CREATE_ENTITY: PayloadSchema(
@@ -356,7 +379,7 @@ _SCHEMA_BY_KIND: Mapping[EntityProposalKind, PayloadSchema] = MappingProxyType(
             optional=frozenset({"reason"}),
         ),
         EntityProposalKind.SPLIT_IDENTITY: PayloadSchema(
-            required=frozenset({"entity_id"}),
+            required=frozenset({"entity_id", "source_identity_operation_id"}),
             optional=frozenset({"reason"}),
         ),
     }

@@ -1290,7 +1290,12 @@ worker_heartbeats = Table(
     Column("heartbeat_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("stopped_at", DateTime(timezone=True)),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
-    CheckConstraint("plane IN ('capture', 'enrollment')", name="worker_plane_is_known"),
+    # `reenrichment` joins the two queue planes because the re-enrichment worker
+    # is a third one: without it that worker's liveness was unrecordable, and an
+    # absent re-enrichment worker read exactly like a working one.
+    CheckConstraint(
+        "plane IN ('capture', 'enrollment', 'reenrichment')", name="worker_plane_is_known"
+    ),
     CheckConstraint(
         "worker_owner ~ '^[A-Za-z0-9_-]{4,64}$'",
         name="worker_owner_is_a_bounded_opaque_token",
@@ -9170,6 +9175,149 @@ entity_identity_effects = Table(
     Index("entity_identity_effects_by_operation", "identity_operation_id", "sequence"),
 )
 
+#: WP-01: one record a merge preview could not attribute to a single identity.
+#:
+#: **It hangs off the preview and dies with it.** The composite reference is to
+#: `(preview_id, principal_id)` rather than to `preview_id` alone, on the argument
+#: `a_preview_is_identified_within_its_principal` was declared for: a
+#: single-column reference spans every Principal, so an ambiguity owned by one
+#: Principal could name another's preview. `ON DELETE CASCADE` is what makes the
+#: fifteen-minute expiry cover the questions as well as the binding -- a question
+#: outliving the preview that asked it would be answerable against versions
+#: nobody read.
+#:
+#: **`allowed_dispositions` is bounded below as well as above.** An ambiguity
+#: offering no disposition is a question with no admissible answer, which is a row
+#: that can only ever block an apply; the array form is checked with `<@` because
+#: `IN` cannot express containment of an array.
+#:
+#: `record_id` carries no foreign key for the reason `entity_identity_effects`
+#: gives for the same column shape: it names a row in whichever of twelve families
+#: `record_family` says, and no single reference can express that.
+entity_identity_preview_ambiguities = Table(
+    "entity_identity_preview_ambiguities",
+    METADATA,
+    Column("preview_id", Text, nullable=False),
+    Column("ambiguity_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("record_family", Text, nullable=False),
+    Column("record_id", Text, nullable=False),
+    Column("ambiguity_reason", Text, nullable=False),
+    Column("allowed_dispositions", ARRAY(Text), nullable=False),
+    Column("allowed_target_entity_ids", ARRAY(Text), nullable=False),
+    #: Content-free counts and identifiers only. A summary column on a record
+    #: whose subject is somebody's identity is where source text eventually
+    #: lands, so the shape is checked and the content is the writer's contract.
+    Column("evidence_summary", JSONB, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint(
+        "preview_id", "ambiguity_id", name="one_ambiguity_per_preview_and_identifier"
+    ),
+    _is_identifier("preview_id", IdKind.ENTITY_IDENTITY_PREVIEW),
+    _is_identifier("ambiguity_id", IdKind.ENTITY_IDENTITY_AMBIGUITY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("record_family", IdentityEffectFamily, name="a_preview_ambiguity_family_is_known"),
+    CheckConstraint(
+        f"record_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="a_preview_ambiguity_record_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "ambiguity_reason IN ('post_merge_modified','post_merge_created',"
+        "'conflicting_lineage','shared_evidence','ownership_indeterminate')",
+        name="a_preview_ambiguity_reason_is_known",
+    ),
+    CheckConstraint(
+        # Three is the whole vocabulary the constraint beside it admits, so the
+        # upper bound is the set's own size rather than a second budget.
+        "cardinality(allowed_dispositions) BETWEEN 1 AND 3 "
+        "AND allowed_dispositions <@ "
+        "ARRAY['assign_to_entity','preserve_shared','leave_unresolved']::text[]",
+        name="a_preview_ambiguity_offers_a_bounded_choice",
+    ),
+    CheckConstraint(
+        f"cardinality(allowed_target_entity_ids) BETWEEN 0 AND {MAX_MERGED_AWAY_ENTITIES + 1}",
+        name="a_preview_ambiguity_names_bounded_targets",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(evidence_summary) = 'object'",
+        name="a_preview_ambiguity_evidence_summary_is_an_object",
+    ),
+    ForeignKeyConstraint(
+        ["preview_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_identity_previews.preview_id",
+            f"{SCHEMA}.entity_identity_previews.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="a_preview_ambiguity_belongs_to_a_preview_of_its_principal",
+    ),
+    Index("entity_identity_preview_ambiguities_by_principal", "principal_id"),
+)
+
+#: WP-01: what the operator chose about one ambiguity, on the operation that
+#: carried the choice out.
+#:
+#: **The target is present exactly when the disposition assigns one**, stated as
+#: an equivalence rather than as two implications so that neither a target
+#: without an assignment nor an assignment without a target is storable. The
+#: composite reference to `entities` is what keeps the assignment inside the
+#: acting Principal, on `an_entity_is_identified_within_its_principal`; it carries
+#: no `ON DELETE` action, because a settlement is evidence of a decision and an
+#: entity's removal is not a reason to forget the decision was made.
+#:
+#: **`UPDATE` and `DELETE` are refused by trigger, on its own function.** A
+#: settlement is what a later split reads to know what the operator chose, and a
+#: rule enforced only by the current writer is a rule the next writer does not
+#: inherit. The function is per-plane rather than a reuse of
+#: `identity_effect_rows_stay_as_written` so that dropping one plane's trigger
+#: cannot silently disarm another's.
+entity_identity_ambiguity_settlements = Table(
+    "entity_identity_ambiguity_settlements",
+    METADATA,
+    Column("identity_operation_id", Text, nullable=False),
+    Column("ambiguity_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("record_family", Text, nullable=False),
+    Column("record_id", Text, nullable=False),
+    Column("disposition", Text, nullable=False),
+    Column("target_entity_id", Text),
+    Column("settled_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint(
+        "identity_operation_id", "ambiguity_id", name="one_settlement_per_operation_and_ambiguity"
+    ),
+    _is_identifier("identity_operation_id", IdKind.ENTITY_IDENTITY_OPERATION),
+    _is_identifier("ambiguity_id", IdKind.ENTITY_IDENTITY_AMBIGUITY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("record_family", IdentityEffectFamily, name="an_ambiguity_settlement_family_is_known"),
+    CheckConstraint(
+        f"record_id ~ '^[a-z]+_{_IDENTIFIER_SUFFIX}$'",
+        name="an_ambiguity_settlement_record_id_is_an_opaque_identifier",
+    ),
+    CheckConstraint(
+        "disposition IN ('assign_to_entity','preserve_shared','leave_unresolved')",
+        name="an_ambiguity_settlement_disposition_is_known",
+    ),
+    CheckConstraint(
+        "(disposition = 'assign_to_entity') = (target_entity_id IS NOT NULL)",
+        name="an_ambiguity_settlement_names_a_target_exactly_when_it_assigns",
+    ),
+    ForeignKeyConstraint(
+        ["identity_operation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_identity_operations.identity_operation_id",
+            f"{SCHEMA}.entity_identity_operations.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="an_ambiguity_settlement_records_an_operation_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["target_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        name="an_ambiguity_settlement_assigns_an_entity_of_its_principal",
+    ),
+    Index("entity_identity_ambiguity_settlements_by_principal", "principal_id"),
+)
+
 #: RI-FC-WP-03: durable, Principal-scoped re-enrichment work. This is a
 #: distinct queue because its binding and stale-input contract are not capture
 #: processing semantics.
@@ -9191,6 +9339,10 @@ entity_reenrichment_work = Table(
     Column("lease_expires_at", DateTime(timezone=True)),
     Column("next_attempt_at", DateTime(timezone=True), nullable=False),
     Column("stale_reasons", ARRAY(Text)),
+    #: Why a `partial` settlement is partial, in the same shape `stale_reasons`
+    #: uses for the same reason: a terminal state that cannot say what it left
+    #: undone reports "done" and "not done" as one answer.
+    Column("limitations", ARRAY(Text)),
     Column("last_error_code", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
@@ -9216,7 +9368,7 @@ entity_reenrichment_work = Table(
         name="a_reenrichment_trigger_is_known",
     ),
     CheckConstraint(
-        "state IN ('queued','running','succeeded','stale','failed')",
+        "state IN ('queued','running','succeeded','partial','stale','failed')",
         name="a_reenrichment_state_is_known",
     ),
     CheckConstraint(
@@ -9228,12 +9380,16 @@ entity_reenrichment_work = Table(
         name="running_reenrichment_has_a_complete_lease",
     ),
     CheckConstraint(
-        "(state IN ('succeeded','stale','failed')) = (completed_at IS NOT NULL)",
+        "(state IN ('succeeded','partial','stale','failed')) = (completed_at IS NOT NULL)",
         name="terminal_reenrichment_records_completion",
     ),
     CheckConstraint(
         "(state = 'stale') = (coalesce(cardinality(stale_reasons), 0) > 0)",
         name="stale_reenrichment_states_why",
+    ),
+    CheckConstraint(
+        "(state = 'partial') = (coalesce(cardinality(limitations), 0) > 0)",
+        name="partial_reenrichment_states_its_limitations",
     ),
     UniqueConstraint("principal_id", "binding_sha256", name="one_entity_reenrichment_binding"),
     UniqueConstraint(

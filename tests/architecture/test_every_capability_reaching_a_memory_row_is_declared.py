@@ -719,6 +719,30 @@ UNCLASSIFIED_TABLE_MENTIONS: Final[dict[tuple[str, str, str], str]] = {
         "'context_link_id', {'target_id', 'origin_subject_entity_id'})}",
     ): "the separately named closed map feeds only guarded merge/split updates; no content "
     "column is admitted",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "_memory_creation_discovery_subject",
+        "return (relationship_memories, 'memory_id', "
+        "(relationship_memories.c.subject_entity_id == entity_id,))",
+    ): "one branch of the closed post-merge-created discovery map; "
+    "`records_bound_to_entity_outside` issues the one `select` this feeds, over the "
+    "identifier column alone",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "_memory_creation_discovery_subject",
+        "return (relationship_memory_proposals, 'memory_proposal_id', "
+        "(relationship_memory_proposals.c.subject_entity_id == entity_id,))",
+    ): "the same map's proposal branch; read-only for the same reason",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "_memory_creation_discovery_subject",
+        "return (relationship_memory_context_links, 'context_link_id', "
+        "(relationship_memory_context_links.c.target_type == "
+        "ContextLinkTargetType.ENTITY.value, "
+        "relationship_memory_context_links.c.target_id == entity_id))",
+    ): "the same map's context-link branch, binding through the polymorphic "
+    "`target_type`/`target_id` pair rather than a direct `subject_entity_id` column; "
+    "still read-only for the same reason",
 }
 
 UNCLASSIFIED_WRITE_TABLE_MENTIONS: Final = frozenset(

@@ -111,6 +111,12 @@ class SqlIdentityHistoryQuery:
             entity_mutation_events.c.record_id,
             entity_mutation_events.c.before_state,
             entity_mutation_events.c.after_state,
+            # A direct mutation predates the governed operation ledger: it
+            # descends from no operation and cites no identity-operation
+            # receipt. Projected as NULL rather than omitted so every branch of
+            # the union states the same shape and a reader sees the absence.
+            cast(literal(None), String).label("source_identity_operation_id"),
+            cast(literal(None), String).label("receipt_id"),
         ).where(
             entity_mutation_events.c.principal_id == principal_id,
             entity_mutation_events.c.capability.in_(_DIRECT_CAPABILITIES),
@@ -137,6 +143,12 @@ class SqlIdentityHistoryQuery:
             cast(literal(None), String).label("record_id"),
             empty_object.label("before_state"),
             empty_object.label("after_state"),
+            # The governed lineage: which merge a split descended from, and the
+            # receipt the operation was authorized under. Both are held on the
+            # operation row itself, so history reads them rather than deriving
+            # them.
+            entity_identity_operations.c.source_identity_operation_id,
+            entity_identity_operations.c.receipt_id,
         ).where(
             entity_identity_operations.c.principal_id == principal_id,
             entity_identity_operations.c.state == "completed",
@@ -165,6 +177,10 @@ class SqlIdentityHistoryQuery:
             cast(literal(None), String).label("record_id"),
             empty_object.label("before_state"),
             empty_object.label("after_state"),
+            # A legacy merge is the lineage an accepted proposal left before the
+            # governed operation ledger existed, so it names neither.
+            cast(literal(None), String).label("source_identity_operation_id"),
+            cast(literal(None), String).label("receipt_id"),
         ).where(
             entity_merge_records.c.principal_id == principal_id,
             or_(
@@ -235,6 +251,12 @@ class SqlIdentityHistoryQuery:
             correlation_id=None if row.correlation_id is None else str(row.correlation_id),
             audit_id=None if row.audit_id is None else str(row.audit_id),
             reason=None if row.reason is None else str(row.reason),
+            source_identity_operation_id=(
+                None
+                if row.source_identity_operation_id is None
+                else str(row.source_identity_operation_id)
+            ),
+            receipt_id=None if row.receipt_id is None else str(row.receipt_id),
         )
 
 

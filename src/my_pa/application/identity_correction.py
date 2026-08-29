@@ -83,7 +83,12 @@ from my_pa.application.errors import (
     NotFoundError,
     SafeDetail,
 )
-from my_pa.contracts.ports import EntitiesRepository, RelationshipMemoryRepository
+from my_pa.contracts.ports import (
+    AmbiguitySettlement,
+    EntitiesRepository,
+    PreviewAmbiguity,
+    RelationshipMemoryRepository,
+)
 from my_pa.domain.common.identifiers import (
     IdKind,
     InvalidIdentifierError,
@@ -112,6 +117,8 @@ from my_pa.domain.relationship.governance import (
 from my_pa.domain.relationship.identity_correction import (
     IDENTITY_PREVIEW_LIFETIME,
     MAX_MERGED_AWAY_ENTITIES,
+    AmbiguityDisposition,
+    AmbiguityReason,
     IdentityConflict,
     IdentityConflictKind,
     IdentityEffect,
@@ -122,7 +129,9 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityOperationState,
     IdentityOperationType,
     IdentityPreview,
+    ambiguity_digest_for,
     conflict_digest_for,
+    dispositions_for,
     effects_digest_for,
     plan_digest_for,
     preview_digest_for,
@@ -143,6 +152,7 @@ __all__ = [
     "MergePreviewReport",
     "MergeReceipt",
     "SplitCommand",
+    "SplitDisposition",
     "SplitPreviewCommand",
     "SplitPreviewReport",
     "SplitReceipt",
@@ -353,8 +363,31 @@ class SplitPreviewCommand:
 
 
 @dataclass(frozen=True, slots=True)
+class SplitDisposition:
+    """One operator answer to one question a split preview could not answer itself.
+
+    A record rather than the pair `MergeCommand.choices` uses, because a split's
+    answer has three parts and not two: an assignment names where the record
+    goes, and the other two dispositions name no entity at all. Frozen so the
+    request digest can bind it by content.
+    """
+
+    ambiguity_id: str
+    disposition: AmbiguityDisposition
+    target_entity_id: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class SplitCommand:
-    """Apply the semantic inverse while advancing persisted concurrency tokens."""
+    """Apply the semantic inverse while advancing persisted concurrency tokens.
+
+    `dispositions` names one settlement per ambiguity the preview persisted --
+    no more, no fewer, and apply refuses before its first write when the set
+    does not match exactly. This is `MergeCommand.choices`' rule on the
+    inverse operation, and deliberately the same rule: a merge that admitted a
+    partial set of dispositions and a split that admitted one would be two
+    different promises about the same guarantee.
+    """
 
     principal_id: str
     preview_id: str
@@ -362,6 +395,7 @@ class SplitCommand:
     idempotency_key: str = field(repr=False)
     reason: str = field(repr=False)
     evidence_refs: tuple[str, ...] = ()
+    dispositions: tuple[SplitDisposition, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -369,6 +403,12 @@ class SplitPreviewReport:
     preview: IdentityPreview
     source_operation: IdentityOperation
     projected_effects: tuple[IdentityEffectDraft, ...]
+    #: Every record whose correct inverse the merge ledger does not prove, as
+    #: persisted. `projected_effects` and this are disjoint by construction: a
+    #: record the ledger proves is restored without an operator ever seeing it,
+    #: and a record it does not prove has no projected effect until they settle
+    #: it.
+    ambiguities: tuple[PreviewAmbiguity, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -413,6 +453,63 @@ class _RowChange:
             before_state=self.before_state,
             after_state=self.after_state,
         )
+
+
+@dataclass(frozen=True, slots=True)
+class _SplitAmbiguity:
+    """One record a split cannot attribute from the merge ledger, before it is stored.
+
+    Separate from `PreviewAmbiguity` because the identifier is not part of the
+    finding: an ambiguity identifier is issued when the preview persists the
+    question and is what the operator answers against, while the finding itself
+    is re-derived at apply and compared by content. Binding the identifier into
+    that comparison would make it fail on every recomputation.
+    """
+
+    family: IdentityEffectFamily
+    record_id: str
+    reason: AmbiguityReason
+    allowed_dispositions: tuple[AmbiguityDisposition, ...]
+    allowed_target_entity_ids: tuple[str, ...]
+    evidence_summary: Mapping[str, object] = field(repr=False)
+
+    @property
+    def digest_key(
+        self,
+    ) -> tuple[str, str, str, tuple[str, ...], tuple[str, ...], Mapping[str, object]]:
+        """This finding in the form `ambiguity_digest_for` binds."""
+        return (
+            self.family.value,
+            self.record_id,
+            self.reason.value,
+            tuple(disposition.value for disposition in self.allowed_dispositions),
+            self.allowed_target_entity_ids,
+            self.evidence_summary,
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class _BoundRecord:
+    """One current row a settlement may reassign: its guard, and what it names.
+
+    `entity_ids` is every entity reference on the row and not just its holder,
+    because `reparent_entity_reference` substitutes all of them at once and a
+    row that already names the target somewhere else cannot be moved onto it
+    without collapsing two references into one.
+    """
+
+    expected_version: int
+    entity_ids: frozenset[str]
+
+
+@dataclass(frozen=True, slots=True)
+class _Assignment:
+    """One settled `ASSIGN_TO_ENTITY`, resolved against the world before any write."""
+
+    family: IdentityEffectFamily
+    record_id: str
+    expected_version: int
+    target_entity_id: str
 
 
 @dataclass(frozen=True, slots=True)
@@ -1475,6 +1572,7 @@ class IdentityCorrectionService:
     ) -> SplitPreviewReport:
         """Persist a content-blind semantic inverse with monotonic concurrency tokens."""
         self._require_operator(has_operator_authority)
+        principal_id = command.principal_id
         validate_identifier(command.principal_id, IdKind.PRINCIPAL)
         validate_identifier(command.source_identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
         self._require_reason(command.reason)
@@ -1482,7 +1580,7 @@ class IdentityCorrectionService:
         source, effects = self._split_source(
             command.principal_id, command.source_identity_operation_id
         )
-        self._require_split_states(command.principal_id, effects)
+        provable, ambiguities = self._classify_split_states(principal_id, source, effects)
         survivor = self._entities.get(command.principal_id, source.survivor_entity_id)
         if survivor is None:
             raise NotFoundError(SafeDetail.ENTITY_ID)
@@ -1491,7 +1589,7 @@ class IdentityCorrectionService:
             for effect in effects
             if effect.family is IdentityEffectFamily.ENTITY
         )
-        drafts = _inverse_drafts(effects)
+        drafts = _inverse_drafts(provable)
         plan_digest = _split_plan_digest(drafts)
         created_at = ensure_utc(at)
         preview = IdentityPreview(
@@ -1510,7 +1608,14 @@ class IdentityCorrectionService:
                 plan_digest=plan_digest,
                 source_identity_operation_id=source.identity_operation_id,
             ),
-            conflict_digest=conflict_digest_for(()),
+            # The column a merge fills with `conflict_digest_for`. A split's
+            # ambiguities are the same thing on the inverse operation -- the set
+            # the operator, not the server, must settle -- so binding them here
+            # gives split apply the staleness check merge already has instead of
+            # a second one that could disagree with it. A split with nothing to
+            # settle digests the empty set and produces exactly the token
+            # `conflict_digest_for(())` produced before this hook was used.
+            conflict_digest=ambiguity_digest_for(ambiguity.digest_key for ambiguity in ambiguities),
             plan_digest=plan_digest,
             created_by=requested_by,
             actor_class=actor_class,
@@ -1519,7 +1624,25 @@ class IdentityCorrectionService:
             source_identity_operation_id=source.identity_operation_id,
         )
         self._entities.record_identity_preview(command.principal_id, preview)
-        return SplitPreviewReport(preview, source, drafts)
+        recorded = tuple(
+            PreviewAmbiguity(
+                preview_id=preview.preview_id,
+                ambiguity_id=issue_identifier(IdKind.ENTITY_IDENTITY_AMBIGUITY),
+                record_family=ambiguity.family,
+                record_id=ambiguity.record_id,
+                reason=ambiguity.reason.value,
+                allowed_dispositions=tuple(
+                    disposition.value for disposition in ambiguity.allowed_dispositions
+                ),
+                allowed_target_entity_ids=ambiguity.allowed_target_entity_ids,
+                evidence_summary=ambiguity.evidence_summary,
+                created_at=created_at,
+            )
+            for ambiguity in ambiguities
+        )
+        if recorded:
+            self._entities.record_preview_ambiguities(principal_id, recorded)
+        return SplitPreviewReport(preview, source, drafts, recorded)
 
     def split_apply(
         self,
@@ -1534,6 +1657,7 @@ class IdentityCorrectionService:
     ) -> SplitReceipt:
         """Atomically restore source semantics with monotonic concurrency tokens."""
         self._require_operator(has_operator_authority)
+        principal_id = command.principal_id
         self._require_reason(command.reason)
         self._require_evidence(command.principal_id, command.evidence_refs)
         request_digest = _split_request_digest(command)
@@ -1578,8 +1702,31 @@ class IdentityCorrectionService:
             raise ConflictError(SafeDetail.PREVIEW_STALE)
         participants = frozenset({source.survivor_entity_id, *source.merged_entity_ids})
         self._entities.serialize_identifier_entity_scopes(command.principal_id, participants)
-        self._require_split_states(command.principal_id, source_effects)
-        drafts = _inverse_drafts(source_effects)
+        provable, ambiguities = self._classify_split_states(principal_id, source, source_effects)
+        if (
+            ambiguity_digest_for(ambiguity.digest_key for ambiguity in ambiguities)
+            != preview.conflict_digest
+        ):
+            # The world moved between the preview and this apply in a way the
+            # entity versions cannot see: a row was changed, or one was created
+            # against the survivor. Refused on the digest merge already refuses
+            # on, so an operator's dispositions can never settle a question they
+            # were not shown.
+            raise ConflictError(SafeDetail.PREVIEW_STALE)
+        asked = tuple(self._entities.preview_ambiguities(principal_id, preview.preview_id))
+        if (
+            ambiguity_digest_for(_stored_digest_key(ambiguity) for ambiguity in asked)
+            != preview.conflict_digest
+        ):
+            # The stored questions disagree with the token the operator answered
+            # under, which is the one path the repository's own writes do not
+            # cover. Recomputing is the only check that can see it.
+            raise ConflictError(SafeDetail.PREVIEW_STALE)
+        settled = self._validated_dispositions(command.dispositions, asked)
+        reassignments = self._resolved_assignments(
+            principal_id, source.survivor_entity_id, asked, settled
+        )
+        drafts = _inverse_drafts(provable)
         if _split_plan_digest(drafts) != preview.plan_digest:
             raise ConflictError(SafeDetail.PREVIEW_STALE)
         if not self._entities.consume_identity_preview(
@@ -1608,7 +1755,7 @@ class IdentityCorrectionService:
         )
         self._entities.record_identity_operation(command.principal_id, opened)
         restored_states = {(draft.family, draft.record_id): draft.after_state for draft in drafts}
-        for effect in reversed(source_effects):
+        for effect in reversed(provable):
             if effect.family is IdentityEffectFamily.REVIEW_CASE:
                 continue
             if effect.family in _MEMORY_EFFECT_FAMILIES:
@@ -1619,6 +1766,35 @@ class IdentityCorrectionService:
                 )
             else:
                 self._entities.restore_identity_effect(command.principal_id, effect)
+        for reassignment in reassignments:
+            # Only `ASSIGN_TO_ENTITY` writes. `PRESERVE_SHARED` leaves the record
+            # exactly where it stands -- that is what preserving shared evidence
+            # is -- and `LEAVE_UNRESOLVED` changes nothing by definition. Both
+            # are recorded as settlements below, so "nothing was written" and
+            # "nothing was decided" stay different facts.
+            self._entities.reparent_entity_reference(
+                principal_id,
+                family=reassignment.family,
+                record_id=reassignment.record_id,
+                from_entity_ids=frozenset({source.survivor_entity_id}),
+                to_entity_id=reassignment.target_entity_id,
+                expected_version=reassignment.expected_version,
+                at=moment,
+            )
+        settlements = tuple(
+            AmbiguitySettlement(
+                identity_operation_id=opened.identity_operation_id,
+                ambiguity_id=ambiguity.ambiguity_id,
+                record_family=ambiguity.record_family,
+                record_id=ambiguity.record_id,
+                disposition=settled[ambiguity.ambiguity_id].disposition.value,
+                target_entity_id=settled[ambiguity.ambiguity_id].target_entity_id,
+                settled_at=moment,
+            )
+            for ambiguity in asked
+        )
+        if settlements:
+            self._entities.record_ambiguity_settlements(principal_id, settlements)
         effects = _sequence_split_effects(
             drafts,
             identity_operation_id=opened.identity_operation_id,
@@ -1659,16 +1835,218 @@ class IdentityCorrectionService:
             raise ConflictError(SafeDetail.IDENTITY_CORRECTION_CONFLICT)
         return source, effects
 
-    def _require_split_states(self, principal_id: str, effects: Sequence[IdentityEffect]) -> None:
+    def _classify_split_states(
+        self,
+        principal_id: str,
+        source: IdentityOperation,
+        effects: Sequence[IdentityEffect],
+    ) -> tuple[tuple[IdentityEffect, ...], tuple[_SplitAmbiguity, ...]]:
+        """Sort one merge's ledger into what a split can prove and what it cannot.
+
+        **This used to be a blanket refusal, and that was `RI-P2-BLK-001`.** Any
+        row whose current state no longer equalled the recorded `after_state`
+        refused the whole split, and a row created against the survivor after the
+        merge was never looked for at all -- so the one case an inversion most
+        needs to handle, a world that moved while two identities were one, was
+        the case it could not handle.
+
+        What is unchanged is the deterministic path. Where the recorded
+        `after_state` still describes the row, the correct inverse is provable
+        from the ledger and the system performs it. That is derived, not chosen:
+        offering an operator a decision about a record whose answer the ledger
+        already proves would be asking them to authorise something they cannot
+        check and could get wrong.
+
+        What is new is the other half. A row that moved is `POST_MERGE_MODIFIED`;
+        a row bound to the survivor that the ledger never mentions is
+        `POST_MERGE_CREATED`. Both become questions with a bounded set of
+        answers, and apply refuses until each has exactly one.
+        """
+        participants = tuple(sorted({source.survivor_entity_id, *source.merged_entity_ids}))
+        provable: list[IdentityEffect] = []
+        ambiguities: list[_SplitAmbiguity] = []
         for effect in effects:
-            if effect.family is IdentityEffectFamily.REVIEW_CASE:
-                matched = self._entities.identity_effect_matches_after_state(principal_id, effect)
-            elif effect.family in _MEMORY_EFFECT_FAMILIES:
+            if effect.family in _MEMORY_EFFECT_FAMILIES:
                 matched = self._memories.identity_effect_matches_after_state(principal_id, effect)
             else:
                 matched = self._entities.identity_effect_matches_after_state(principal_id, effect)
-            if not matched:
+            if matched:
+                provable.append(effect)
+                continue
+            if not dispositions_for(effect.family):
+                # Refused, and deliberately so, but the boundary is
+                # `dispositions_for` -- the domain-level, per-family truth of
+                # which answers a family admits at all -- and not the narrower
+                # `_ATTRIBUTABLE_FAMILIES` immediately below. A family raises an
+                # ambiguity whenever it has *any* admissible disposition, and
+                # `LEAVE_UNRESOLVED` is one such disposition that needs no
+                # rebinding writer at all: it is a settlement row recorded
+                # against the ambiguity, not a mutation of the record. That is
+                # why `PROPOSAL`, `RELATIONSHIP_MEMORY`, `MEMORY_PROPOSAL` and
+                # `MEMORY_CONTEXT_LINK` are ambiguities here even though none of
+                # them has a writer that could execute `ASSIGN_TO_ENTITY` for
+                # them (see `_DISPOSITIONS_BY_FAMILY`'s comment). Only `ENTITY`,
+                # `REVIEW_CASE` and `DERIVED_CONTEXT` admit no disposition at
+                # all -- for them there is no answer an operator could give,
+                # so the split still refuses outright instead of asking a
+                # question nothing could settle. `_ATTRIBUTABLE_FAMILIES`
+                # remains the narrower set of families with actual per-row
+                # entity-plane storage; it drives one of `_post_merge_created`'s
+                # three discovery mechanisms (the other two cover the four
+                # families this comment names) and the `ASSIGN_TO_ENTITY`
+                # execution path (`_bound_records`, `reparent_entity_reference`),
+                # not whether an ambiguity is raised.
                 raise ConflictError(SafeDetail.PREVIEW_STALE)
+            ambiguities.append(
+                _SplitAmbiguity(
+                    family=effect.family,
+                    record_id=effect.record_id,
+                    reason=AmbiguityReason.POST_MERGE_MODIFIED,
+                    allowed_dispositions=dispositions_for(effect.family),
+                    allowed_target_entity_ids=participants,
+                    evidence_summary={
+                        "source_identity_operation_id": source.identity_operation_id,
+                        "source_effect_id": effect.effect_id,
+                        "source_effect_sequence": effect.sequence,
+                        "recorded_after_sha256": effect.after_sha256,
+                    },
+                )
+            )
+        ambiguities.extend(self._post_merge_created(principal_id, source, effects, participants))
+        if len(ambiguities) > MAX_AFFECTED_RECORDS:
+            # `MAX_AFFECTED_RECORDS`' own rule: a preview past the ceiling is
+            # refused rather than truncated, because the missing half of a
+            # truncated inversion is the part that would have stopped the
+            # operator.
+            raise ConflictError(SafeDetail.IDENTITY_CORRECTION_CONFLICT, SafeDetail.MAX_ITEMS)
+        ambiguities.sort(key=lambda ambiguity: (ambiguity.family.value, ambiguity.record_id))
+        return tuple(provable), tuple(ambiguities)
+
+    def _post_merge_created(
+        self,
+        principal_id: str,
+        source: IdentityOperation,
+        effects: Sequence[IdentityEffect],
+        participants: tuple[str, ...],
+    ) -> list[_SplitAmbiguity]:
+        """Rows now bound to the survivor that the merge's ledger never named.
+
+        **Known limitation, stated rather than hidden.** The tables the five
+        `_ATTRIBUTABLE_FAMILIES` walk carry no creation timestamp -- see
+        `entity_aliases` and its three siblings, whose only clock column is
+        `updated_at` -- and the merge records no effect for rows that already
+        belonged to the survivor. So "bound to the survivor and absent from the
+        ledger" is the strongest discriminator the persisted state supports for
+        them, and it also matches a survivor's own pre-merge rows.
+        `RELATIONSHIP_MEMORY`, `MEMORY_PROPOSAL` and `entity_proposals` (the
+        `PROPOSAL` table) *do* carry a creation-ish column -- `created_at` on
+        the first, `proposed_at` on the other two -- and this method
+        deliberately does not read it: a survivor's own row from before the
+        merge is exactly as undiscoverable by timestamp as one genuinely
+        created afterwards, since neither this method nor the merge ledger
+        records when the survivor's own history began. Reading the column
+        would narrow some rows correctly and drop others silently, and there is
+        no way from here to tell which is which. The consequence, for every
+        family this method discovers, is over-reporting, never
+        under-reporting: an operator is asked to attribute a record whose owner
+        they can see immediately, and no record is silently attributed for
+        them.
+
+        **What this method discovers, and how.** `PROPOSAL`, `RELATIONSHIP_MEMORY`,
+        `MEMORY_PROPOSAL` and `MEMORY_CONTEXT_LINK` used to be a stated, residual
+        gap here -- `_ATTRIBUTABLE_FAMILIES` is the five families with per-row
+        entity-plane storage, and a row newly bound to the survivor in one of
+        these other four was never looked for, even though a row the merge
+        itself *changed* was already caught as `POST_MERGE_MODIFIED` (that path
+        reads the effect ledger, not this discovery). Closing it needed two
+        more mechanisms beside `EntitiesRepository.records_bound_to_entity_outside`,
+        because the four sit on two different repositories and one of them has
+        no per-row entity column to query at all:
+
+        * `RELATIONSHIP_MEMORY`, `MEMORY_PROPOSAL` and `MEMORY_CONTEXT_LINK` are
+          `RelationshipMemoryRepository.records_bound_to_entity_outside` -- the
+          memory plane's own version of the entity plane's method of the same
+          name, over the same three columns `plan_identity_merge` reparents
+          when a bound entity is merged away (`subject_entity_id` twice,
+          `target_id` once).
+        * `PROPOSAL` has no such column: `entity_proposals` carries no entity
+          reference at all (see `_ATTRIBUTABLE_FAMILIES`'s own comment), only a
+          kind-typed payload. So this asks the question the way `preview()`
+          already asks whether a merge *materially affects* an open proposal --
+          `self._entities.proposals` read whole and
+          `_proposal_is_materially_affected` applied per row, here against
+          `{survivor_entity_id}` rather than the merged-away set, and over
+          every proposal state rather than only the open ones, on the
+          over-reporting argument above.
+
+        Every one of the four keeps the narrowed disposition set
+        `dispositions_for` already gives it (`LEAVE_UNRESOLVED` only): this
+        method finds the row, it does not decide what may be done about it.
+        """
+        found: list[_SplitAmbiguity] = []
+        for family in _ATTRIBUTABLE_FAMILIES:
+            known = frozenset(effect.record_id for effect in effects if effect.family is family)
+            for record_id in self._entities.records_bound_to_entity_outside(
+                principal_id,
+                family,
+                source.survivor_entity_id,
+                known,
+                limit=MAX_AFFECTED_RECORDS + 1,
+            ):
+                found.append(
+                    self._created_ambiguity(family, record_id, source, participants, known)
+                )
+        for family in _MEMORY_EFFECT_FAMILIES:
+            known = frozenset(effect.record_id for effect in effects if effect.family is family)
+            for record_id in self._memories.records_bound_to_entity_outside(
+                principal_id,
+                family,
+                source.survivor_entity_id,
+                known,
+                limit=MAX_AFFECTED_RECORDS + 1,
+            ):
+                found.append(
+                    self._created_ambiguity(family, record_id, source, participants, known)
+                )
+        proposal_known = frozenset(
+            effect.record_id for effect in effects if effect.family is IdentityEffectFamily.PROPOSAL
+        )
+        survivor_only = frozenset({source.survivor_entity_id})
+        bound_proposal_ids = sorted(
+            proposal.proposal_id
+            for proposal in self._entities.proposals(principal_id)
+            if proposal.proposal_id not in proposal_known
+            and self._proposal_is_materially_affected(principal_id, proposal, survivor_only)
+        )
+        for record_id in bound_proposal_ids[: MAX_AFFECTED_RECORDS + 1]:
+            found.append(
+                self._created_ambiguity(
+                    IdentityEffectFamily.PROPOSAL, record_id, source, participants, proposal_known
+                )
+            )
+        return found
+
+    @staticmethod
+    def _created_ambiguity(
+        family: IdentityEffectFamily,
+        record_id: str,
+        source: IdentityOperation,
+        participants: tuple[str, ...],
+        known: frozenset[str],
+    ) -> _SplitAmbiguity:
+        """One `POST_MERGE_CREATED` ambiguity, in the shape every discovery loop above builds."""
+        return _SplitAmbiguity(
+            family=family,
+            record_id=record_id,
+            reason=AmbiguityReason.POST_MERGE_CREATED,
+            allowed_dispositions=dispositions_for(family),
+            allowed_target_entity_ids=participants,
+            evidence_summary={
+                "source_identity_operation_id": source.identity_operation_id,
+                "bound_entity_id": source.survivor_entity_id,
+                "recorded_effect_count": len(known),
+            },
+        )
 
     # --- apply ---------------------------------------------------------------
 
@@ -2359,6 +2737,194 @@ class IdentityCorrectionService:
                 raise InvalidRequestError(SafeDetail.IDENTITY_CORRECTION_CONFLICT)
         return dict(choices)
 
+    def _validated_dispositions(
+        self,
+        dispositions: tuple[SplitDisposition, ...],
+        asked: Sequence[PreviewAmbiguity],
+    ) -> dict[str, SplitDisposition]:
+        """Exactly one admissible settlement per persisted ambiguity, or a refusal.
+
+        `_validated_choices`' shape and `apply`'s set equality in one place,
+        because a split's questions are only ever answerable against the rows
+        the preview stored: their identifiers are issued there, and the
+        admissible answers and targets were computed there and read by the
+        operator there. Checking against a fresh analysis instead would check the
+        answers against a question nobody was asked.
+
+        Every refusal here happens before the first write.
+        """
+        named = [decision.ambiguity_id for decision in dispositions]
+        if len(set(named)) != len(named):
+            raise InvalidRequestError(SafeDetail.DISPOSITION)
+        for decision in dispositions:
+            try:
+                validate_identifier(decision.ambiguity_id, IdKind.ENTITY_IDENTITY_AMBIGUITY)
+            except InvalidIdentifierError as error:
+                raise InvalidRequestError(SafeDetail.DISPOSITION) from error
+            if not isinstance(decision.disposition, AmbiguityDisposition):
+                raise InvalidRequestError(SafeDetail.DISPOSITION)
+            assigns = decision.disposition is AmbiguityDisposition.ASSIGN_TO_ENTITY
+            if assigns is not (decision.target_entity_id is not None):
+                # An assignment with no target and a target with no assignment
+                # are both records of a decision that was not made, which is the
+                # equivalence `an_ambiguity_settlement_names_a_target_exactly_
+                # when_it_assigns` states at the server.
+                raise InvalidRequestError(SafeDetail.DISPOSITION, SafeDetail.ENTITY_ID)
+            if decision.target_entity_id is not None:
+                try:
+                    validate_identifier(decision.target_entity_id, IdKind.ENTITY)
+                except InvalidIdentifierError as error:
+                    raise InvalidRequestError(SafeDetail.ENTITY_ID) from error
+        settled = {decision.ambiguity_id: decision for decision in dispositions}
+        if frozenset(settled) != frozenset(ambiguity.ambiguity_id for ambiguity in asked):
+            raise InvalidRequestError(
+                SafeDetail.IDENTITY_CORRECTION_CONFLICT, SafeDetail.DISPOSITION
+            )
+        for ambiguity in asked:
+            decision = settled[ambiguity.ambiguity_id]
+            if decision.disposition.value not in ambiguity.allowed_dispositions:
+                raise InvalidRequestError(SafeDetail.DISPOSITION)
+            if (
+                decision.target_entity_id is not None
+                and decision.target_entity_id not in ambiguity.allowed_target_entity_ids
+            ):
+                # The admissible targets are this split's own participants, so a
+                # target from another Principal fails here for the same reason a
+                # target from another merge does: it is not one of the identities
+                # this operation restores.
+                raise InvalidRequestError(SafeDetail.ENTITY_ID, SafeDetail.DISPOSITION)
+        return settled
+
+    def _resolved_assignments(
+        self,
+        principal_id: str,
+        survivor_entity_id: str,
+        asked: Sequence[PreviewAmbiguity],
+        settled: Mapping[str, SplitDisposition],
+    ) -> tuple[_Assignment, ...]:
+        """Bind every `ASSIGN_TO_ENTITY` to a row and a guard, or refuse before writing.
+
+        The concurrency token comes from the row as it stands now rather than
+        from the ledger, because the whole reason these records are ambiguous is
+        that the ledger no longer describes them.
+
+        Two refusals, and both are the same rule stated twice: a settlement this
+        transaction cannot carry out is refused while nothing has been written,
+        rather than discovered by a write that finds no row. A record that no
+        longer binds to the survivor cannot be moved off it, and a record that
+        already names the target elsewhere cannot be moved onto it without
+        folding two of its references into one -- which is the state a directed
+        edge's own `from <> to` refuses.
+        """
+        wanted = [
+            (ambiguity, settled[ambiguity.ambiguity_id].target_entity_id)
+            for ambiguity in asked
+            if settled[ambiguity.ambiguity_id].disposition is AmbiguityDisposition.ASSIGN_TO_ENTITY
+        ]
+        if not wanted:
+            return ()
+        bound: dict[IdentityEffectFamily, dict[str, _BoundRecord]] = {}
+        resolved: list[_Assignment] = []
+        for ambiguity, target_entity_id in wanted:
+            family = ambiguity.record_family
+            if family not in bound:
+                bound[family] = self._bound_records(principal_id, family, survivor_entity_id)
+            record = bound[family].get(ambiguity.record_id)
+            if record is None or survivor_entity_id not in record.entity_ids:
+                raise ConflictError(SafeDetail.IDENTITY_CORRECTION_CONFLICT)
+            if target_entity_id is None:  # pragma: no cover - checked by _validated_dispositions
+                raise InvalidRequestError(SafeDetail.DISPOSITION)
+            if target_entity_id != survivor_entity_id and target_entity_id in record.entity_ids:
+                raise ConflictError(SafeDetail.IDENTITY_CORRECTION_CONFLICT)
+            resolved.append(
+                _Assignment(
+                    family=family,
+                    record_id=ambiguity.record_id,
+                    expected_version=record.expected_version,
+                    target_entity_id=target_entity_id,
+                )
+            )
+        return tuple(resolved)
+
+    def _bound_records(
+        self, principal_id: str, family: IdentityEffectFamily, entity_id: str
+    ) -> dict[str, _BoundRecord]:
+        """Every row of `family` currently naming `entity_id`, with its guard.
+
+        Both reads for the two families whose rows name an entity in more than
+        one column, on `_affected_assignments`' argument: an assignment scoped to
+        the survivor is as much the survivor's row as one it holds, and reading
+        only the first would leave a settlement unresolvable that the discovery
+        walk had already reported.
+        """
+        limit = MAX_AFFECTED_RECORDS
+        if family is IdentityEffectFamily.ALIAS:
+            return {
+                alias.alias_id: _BoundRecord(alias.version, frozenset({alias.entity_id}))
+                for alias in self._entities.aliases(principal_id, entity_id, limit=limit)
+            }
+        if family is IdentityEffectFamily.IDENTIFIER:
+            return {
+                identifier.identifier_id: _BoundRecord(
+                    identifier.version, frozenset({identifier.entity_id})
+                )
+                for identifier in self._entities.external_identifiers(
+                    principal_id, entity_id, limit=limit
+                )
+            }
+        if family is IdentityEffectFamily.ASSIGNMENT:
+            return {
+                assignment.assignment_id: _BoundRecord(
+                    assignment.version,
+                    frozenset(
+                        name
+                        for name in (assignment.entity_id, assignment.scope_entity_id)
+                        if name is not None
+                    ),
+                )
+                for assignment in (
+                    *self._entities.assignments(
+                        principal_id, entity_id, active_only=False, limit=limit
+                    ),
+                    *self._entities.assignments_scoped_by(principal_id, entity_id, limit=limit),
+                )
+            }
+        if family is IdentityEffectFamily.RELATIONSHIP:
+            return {
+                edge.relationship_id: _BoundRecord(
+                    edge.version,
+                    frozenset(
+                        name
+                        for name in (
+                            edge.from_entity_id,
+                            edge.to_entity_id,
+                            edge.scope_entity_id,
+                        )
+                        if name is not None
+                    ),
+                )
+                for edge in (
+                    *self._entities.relationships(principal_id, entity_id, limit=limit),
+                    *self._entities.relationships_scoped_by(principal_id, entity_id, limit=limit),
+                )
+            }
+        if family is IdentityEffectFamily.OBSERVATION:
+            # `resolution_version` and not `version`: an observation's guard is
+            # the token `reparent_entity_reference` reads for it, and a rebinding
+            # does not advance it.
+            return {
+                observation.observation_id: _BoundRecord(
+                    observation.resolution_version,
+                    frozenset({observation.entity_id})
+                    if observation.entity_id is not None
+                    else frozenset(),
+                )
+                for observation in self._entities.observations(principal_id, entity_id, limit=limit)
+            }
+        raise ConflictError(  # pragma: no cover - _ATTRIBUTABLE_FAMILIES admits five
+            SafeDetail.IDENTITY_CORRECTION_CONFLICT
+        )
+
     def _require_current_entities(
         self,
         principal_id: str,
@@ -2429,6 +2995,16 @@ def _disposition(changed: bool) -> FamilyDisposition:
 #: touches no commitment" and "nothing connects a commitment to an identity yet"
 #: is exactly what a later work package changes, and a report that omitted the
 #: family would look identical before and after.
+#:
+#: **This is also how a split discharges RI v0.2 section 15.4's "avoid
+#: duplicating commitments silently".** It is discharged structurally rather
+#: than by a rule the inversion has to remember: with no binding for a merge to
+#: find, there is no commitment in any effect for a split to invert and no
+#: commitment an operator's disposition could reach. Verified at this revision --
+#: `knowledge.commitments.counterparty_person_id` is `IdKind.PERSON` with no
+#: foreign key to `knowledge.entities`, and `knowledge.tasks` names no entity at
+#: all -- and it stops being true the moment either binding is added, which is
+#: the change that would turn these two members into `TRANSFORMED`.
 _UNBOUND_GROUPS: Final[tuple[MergeAffectedGroup, ...]] = (
     MergeAffectedGroup(MergeFamily.TASK, FamilyDisposition.NOT_BOUND, 0),
     MergeAffectedGroup(MergeFamily.COMMITMENT, FamilyDisposition.NOT_BOUND, 0),
@@ -2512,6 +3088,76 @@ _MEMORY_EFFECT_FAMILIES: Final = frozenset(
         IdentityEffectFamily.MEMORY_CONTEXT_LINK,
     }
 )
+
+#: The families with actual per-row entity-plane storage, in the order this
+#: module walks them. **Not** "the families a split may raise an ambiguity
+#: for" -- that question is answered by `dispositions_for`, which is broader
+#: than this tuple. **Not**, as of the fix that closed `RI-P2-BLK-001`'s last
+#: residual gap, "the families `_post_merge_created` discovers" either -- that
+#: is now every family `dispositions_for` admits a disposition for, discovered
+#: through three different mechanisms (see `_post_merge_created`). What this
+#: tuple answers is narrower and still exactly two questions: which families
+#: `EntitiesRepository.records_bound_to_entity_outside` can run its "which of
+#: these binds to the survivor" query against, and which families
+#: `_bound_records` and the `ASSIGN_TO_ENTITY` execution path
+#: (`reparent_entity_reference`) know how to move.
+#:
+#: **The five whose rows name an entity in a column.** These are exactly
+#: `SqlEntityRepository._CHILD_SUBJECTS`, which is not a coincidence: they are
+#: the families `records_bound_to_entity_outside` can ask "which of these binds
+#: to the survivor" of, and the families `reparent_entity_reference` can move.
+#:
+#: What that leaves out, and why each is left out rather than forgotten.
+#: `ENTITY` and `REVIEW_CASE` and `DERIVED_CONTEXT` admit no disposition at all
+#: (see `_DISPOSITIONS_BY_FAMILY`) and so need no entry here either -- an
+#: entity's redirect is provable or the split is refused, a review case writes
+#: no row, and derived context is recomputed rather than attributed. `PROPOSAL`
+#: is excluded on repository truth: `entity_proposals` carries no entity column
+#: at all and makes its references inside its payload, so there is nothing for
+#: an assignment to rewrite -- and correspondingly `dispositions_for(PROPOSAL)`
+#: no longer offers `ASSIGN_TO_ENTITY`, only `LEAVE_UNRESOLVED`. The three
+#: memory families are excluded from *this tuple* for the same reason:
+#: `RelationshipMemoryRepository` and `RelationshipMemoryProposalRepository`
+#: publish no operator-directed rebinding -- the former is read/admit/replay
+#: only and the latter is insert-only -- and a memory is "one durable statement
+#: about **one** generalized `Entity`" (`docs/specs/relationship-memory-v0.1.md`
+#: lines 20-22), so moving one between subjects would need a governed memory
+#: operation this plane does not have. That absence of a writer is exactly why
+#: `dispositions_for` narrows those three (and `PROPOSAL`) to
+#: `LEAVE_UNRESOLVED` only -- `LEAVE_UNRESOLVED` needs no writer, so it remains
+#: honest to offer even though `ASSIGN_TO_ENTITY` is not.
+#:
+#: These four families are **not** in this tuple, and they *do* now raise both
+#: `POST_MERGE_MODIFIED` ambiguities (via `dispositions_for`, not via this
+#: tuple -- see the gate above this definition) and `POST_MERGE_CREATED`
+#: ambiguities (via the two other discovery mechanisms `_post_merge_created`
+#: runs beside its walk of this tuple, not via
+#: `records_bound_to_entity_outside`). What *stays* scoped to this tuple, and
+#: unreachable for the four regardless of discovery, is `ASSIGN_TO_ENTITY`
+#: execution (`_bound_records`): it is only ever called for a disposition each
+#: family's own `allowed_dispositions` admits, and none of the four admits
+#: `ASSIGN_TO_ENTITY`.
+_ATTRIBUTABLE_FAMILIES: Final[tuple[IdentityEffectFamily, ...]] = (
+    IdentityEffectFamily.ALIAS,
+    IdentityEffectFamily.IDENTIFIER,
+    IdentityEffectFamily.ASSIGNMENT,
+    IdentityEffectFamily.RELATIONSHIP,
+    IdentityEffectFamily.OBSERVATION,
+)
+
+
+def _stored_digest_key(
+    ambiguity: PreviewAmbiguity,
+) -> tuple[str, str, str, tuple[str, ...], tuple[str, ...], Mapping[str, object]]:
+    """One persisted ambiguity in the form `ambiguity_digest_for` binds."""
+    return (
+        ambiguity.record_family.value,
+        ambiguity.record_id,
+        ambiguity.reason,
+        tuple(ambiguity.allowed_dispositions),
+        tuple(ambiguity.allowed_target_entity_ids),
+        ambiguity.evidence_summary,
+    )
 
 
 def _inverse_drafts(effects: Sequence[IdentityEffect]) -> tuple[IdentityEffectDraft, ...]:
@@ -2635,5 +3281,18 @@ def _split_request_digest(command: SplitCommand) -> str:
             "preview_digest": command.preview_digest,
             "reason": command.reason,
             "evidence_refs": sorted(command.evidence_refs),
+            # The dispositions are part of what the operator authorised, on
+            # `_request_digest`'s argument for a merge's choices. Without them a
+            # retry under the same key that settled the same ambiguities
+            # differently would be answered with the first attempt's receipt --
+            # reporting a split as performed that was never asked for.
+            "dispositions": sorted(
+                [
+                    decision.ambiguity_id,
+                    decision.disposition.value,
+                    decision.target_entity_id or "",
+                ]
+                for decision in command.dispositions
+            ),
         }
     )

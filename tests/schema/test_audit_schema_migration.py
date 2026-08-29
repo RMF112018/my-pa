@@ -261,6 +261,11 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "entity_reenrichment_work",
         "entity_reenrichment_subjects",
         "entity_reenrichment_version_watermarks",
+        # `b727e870d45e`'s identity-ambiguity pair: what a merge preview could
+        # not decide, and what the operator chose about each. Stacked above this
+        # revision like the rest of this set, and named for the same reason.
+        "entity_identity_preview_ambiguities",
+        "entity_identity_ambiguity_settlements",
     }
 )
 

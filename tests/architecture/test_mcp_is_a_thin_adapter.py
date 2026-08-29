@@ -310,6 +310,15 @@ EXEMPT_PROPERTIES: Final[frozenset[tuple[str, str]]] = frozenset(
         # to dodge the scan would put the wire, the domain and the schema out of
         # step to satisfy a substring.
         ("entities.proposals.create", "expected_target_version"),
+        # The Entity a settled split ambiguity is assigned to, not where a file
+        # lives. Exempt on the `expected_target_version` precedent above: it
+        # trips the scan on the substring "target", it carries an opaque `ent_`
+        # identifier, and apply refuses any value outside that ambiguity's own
+        # `allowed_target_entity_ids`, so no string a caller sends through it
+        # can be a path. The name is the port dataclass's and the column's, so
+        # renaming it to dodge the scan would put the wire, the domain and the
+        # schema out of step to satisfy a substring.
+        ("entities.split", "target_entity_id"),
     }
 )
 
@@ -603,11 +612,13 @@ def test_the_location_scan_would_catch_one() -> None:
     # The exemption names tools that exist, and the properties they name are
     # really published — so it cannot rot into a permission for a property that
     # has since changed meaning or disappeared.
-    # Eight exact non-location uses: the three Commitment direction filters,
-    # the entity-edge direction, three inherited opaque/non-location fields, and
+    # Nine exact non-location uses: the three Commitment direction filters,
+    # the entity-edge direction, three inherited opaque/non-location fields,
     # `WP-RI-B-05`'s expected target version -- an integer record version whose
-    # name trips the scan on "target".
-    assert len(EXEMPT_PROPERTIES) == 8
+    # name trips the scan on "target" -- and WP-01's settled-ambiguity target
+    # Entity, an opaque `ent_` identifier that apply refuses outside that
+    # ambiguity's own `allowed_target_entity_ids`.
+    assert len(EXEMPT_PROPERTIES) == 9
     for tool_name, property_name in EXEMPT_PROPERTIES:
         tool = next(entry for entry in TOOLS if entry.name == tool_name)
         assert property_name in set(_schema_property_names(tool.input_schema))

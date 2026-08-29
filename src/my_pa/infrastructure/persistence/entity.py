@@ -84,7 +84,7 @@ write.
 
 from __future__ import annotations
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
@@ -111,6 +111,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.sql.elements import ColumnElement, Label
 
 from my_pa.contracts.ports import (
+    AmbiguitySettlement,
     AssignmentWriteRequest,
     DirectedReceipt,
     EntitiesRepository,
@@ -119,6 +120,7 @@ from my_pa.contracts.ports import (
     EntityMutationReceipt,
     EntitySummary,
     EntityWriteRequest,
+    PreviewAmbiguity,
     ProposalAdmissionConflictError,
     ProposalEvidenceConflictError,
     ProposalReviewScopeConflictError,
@@ -221,8 +223,10 @@ from my_pa.infrastructure.persistence.tables import (
     entity_assignments,
     entity_external_identifiers,
     entity_fact_evidence_links,
+    entity_identity_ambiguity_settlements,
     entity_identity_effects,
     entity_identity_operations,
+    entity_identity_preview_ambiguities,
     entity_identity_previews,
     entity_merge_records,
     entity_mutation_events,
@@ -3549,6 +3553,118 @@ class SqlEntityRepository(EntitiesRepository):
         if result.rowcount != 1:
             raise UnknownScopeError("an identity split effect no longer matches its source merge")
 
+    def record_preview_ambiguities(
+        self, principal_id: str, ambiguities: tuple[PreviewAmbiguity, ...]
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if not ambiguities:
+            return
+        self._require_own_entities(
+            principal_id,
+            *(
+                entity_id
+                for ambiguity in ambiguities
+                for entity_id in ambiguity.allowed_target_entity_ids
+            ),
+        )
+        self._connection.execute(
+            insert(entity_identity_preview_ambiguities),
+            [
+                _bound(
+                    entity_identity_preview_ambiguities,
+                    principal_id,
+                    preview_id=ambiguity.preview_id,
+                    ambiguity_id=ambiguity.ambiguity_id,
+                    record_family=ambiguity.record_family.value,
+                    record_id=ambiguity.record_id,
+                    ambiguity_reason=ambiguity.reason,
+                    allowed_dispositions=list(ambiguity.allowed_dispositions),
+                    allowed_target_entity_ids=list(ambiguity.allowed_target_entity_ids),
+                    evidence_summary=dict(ambiguity.evidence_summary),
+                    created_at=ambiguity.created_at,
+                )
+                for ambiguity in ambiguities
+            ],
+        )
+
+    def preview_ambiguities(self, principal_id: str, preview_id: str) -> list[PreviewAmbiguity]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(preview_id, IdKind.ENTITY_IDENTITY_PREVIEW)
+        rows = self._connection.execute(
+            select(entity_identity_preview_ambiguities)
+            .where(
+                _mine(entity_identity_preview_ambiguities, principal_id),
+                entity_identity_preview_ambiguities.c.preview_id == preview_id,
+            )
+            .order_by(entity_identity_preview_ambiguities.c.ambiguity_id)
+        ).all()
+        return [_row_to_preview_ambiguity(row) for row in rows]
+
+    def record_ambiguity_settlements(
+        self, principal_id: str, settlements: tuple[AmbiguitySettlement, ...]
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if not settlements:
+            return
+        self._require_own_entities(
+            principal_id, *(settlement.target_entity_id for settlement in settlements)
+        )
+        self._connection.execute(
+            insert(entity_identity_ambiguity_settlements),
+            [
+                _bound(
+                    entity_identity_ambiguity_settlements,
+                    principal_id,
+                    identity_operation_id=settlement.identity_operation_id,
+                    ambiguity_id=settlement.ambiguity_id,
+                    record_family=settlement.record_family.value,
+                    record_id=settlement.record_id,
+                    disposition=settlement.disposition,
+                    target_entity_id=settlement.target_entity_id,
+                    settled_at=settlement.settled_at,
+                )
+                for settlement in settlements
+            ],
+        )
+
+    def records_bound_to_entity_outside(
+        self,
+        principal_id: str,
+        family: IdentityEffectFamily,
+        entity_id: str,
+        known_record_ids: Collection[str],
+        *,
+        limit: int,
+    ) -> list[str]:
+        """Identifiers in `family` now bound to `entity_id` that `known_record_ids` omits.
+
+        `_CHILD_SUBJECTS` rather than `_IDENTITY_EFFECT_SUBJECTS`, because this
+        question is only askable of a family whose rows *name* an entity: the
+        `entity` and `proposal` families carry no such column, and answering
+        "which of these binds to the survivor" for them would silently mean
+        something else.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        subject = _CHILD_SUBJECTS.get(family)
+        if subject is None:
+            raise ValueError("post-merge discovery names a family whose rows bind to an entity")
+        identifier = subject.table.c[subject.id_column]
+        rows = self._connection.execute(
+            select(identifier)
+            .where(
+                _mine(subject.table, principal_id),
+                or_(*(subject.table.c[name] == entity_id for name in subject.entity_columns)),
+                _optional(
+                    identifier.notin_(sorted(known_record_ids)) if known_record_ids else None
+                ),
+            )
+            .order_by(identifier)
+            .limit(limit)
+        ).scalars()
+        return [str(value) for value in rows]
+
     def _identity_effect_state(
         self, principal_id: str, effect: IdentityEffect
     ) -> dict[str, object] | None:
@@ -4341,4 +4457,24 @@ def _row_to_identity_effect(row: Row[Any]) -> IdentityEffect:
         before_sha256=str(row.before_sha256),
         after_sha256=str(row.after_sha256),
         recorded_at=row.recorded_at,
+    )
+
+
+def _row_to_preview_ambiguity(row: Row[Any]) -> PreviewAmbiguity:
+    """One stored ambiguity, back through the record that refuses an empty choice.
+
+    `ambiguity_reason` against `reason` for the reason `_row_to_identity_effect`
+    gives for the same asymmetry: the column says what kind of value it holds and
+    the record says what the field means to a reader of it.
+    """
+    return PreviewAmbiguity(
+        preview_id=str(row.preview_id),
+        ambiguity_id=str(row.ambiguity_id),
+        record_family=IdentityEffectFamily(str(row.record_family)),
+        record_id=str(row.record_id),
+        reason=str(row.ambiguity_reason),
+        allowed_dispositions=tuple(str(value) for value in row.allowed_dispositions),
+        allowed_target_entity_ids=tuple(str(value) for value in row.allowed_target_entity_ids),
+        evidence_summary=row.evidence_summary,
+        created_at=row.created_at,
     )

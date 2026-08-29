@@ -32,6 +32,10 @@ from my_pa.application.commands import (
     EndEntityAssignment,
     ReviseEntityAssignment,
 )
+from my_pa.application.entity_reenrichment import (
+    TRIGGERS_BY_ACCEPTED_PROPOSAL_KIND,
+    reenrichment_trigger_for_review_decision,
+)
 from my_pa.application.service import ApplicationService
 from my_pa.bootstrap.gateway import local_principal
 from my_pa.contracts.ports import ReenrichmentVersionObservation
@@ -149,7 +153,26 @@ def test_each_production_mutation_path_registers_its_exact_trigger(
 ) -> None:
     source = inspect.getsource(getattr(ApplicationService, handler_name))
     assert "_register_reenrichment(" in source
-    assert f"ReenrichmentTrigger.{trigger.name}" in source
+    # `_review_decide` is the one handler whose trigger is not a literal of its
+    # own. WP-04 / RI-P3-HIGH-001 moved that decision into the pure, total
+    # `reenrichment_trigger_for_review_decision`, because the handler
+    # registered CONTRADICTION_RESOLUTION for every committed decision -- all
+    # eight dispositions, all four review subject kinds -- and no literal in a
+    # handler can say "only an accepted `resolve_mention`". The assertion still
+    # requires the trigger to be named in production source reachable from the
+    # capability; it now searches the delegate too rather than pretending the
+    # decision is still spelled here. What the move bought is proved
+    # exhaustively (17 kinds x 8 dispositions) in
+    # `tests/unit/test_entity_reenrichment.py`.
+    if handler_name == "_review_decide":
+        # The literal lives in the delegate's module-level closed table, which
+        # `inspect.getsource` of a function cannot reach. Assert the delegation
+        # is real and that the table genuinely produces this trigger -- both
+        # stronger than the substring, which a comment could satisfy.
+        assert f"{reenrichment_trigger_for_review_decision.__name__}(" in source
+        assert trigger in set(TRIGGERS_BY_ACCEPTED_PROPOSAL_KIND.values())
+    else:
+        assert f"ReenrichmentTrigger.{trigger.name}" in source
 
 
 def test_assignment_invocations_register_role_change_once_and_replays_register_zero(
@@ -733,6 +756,13 @@ def test_production_registration_challenge_covers_the_closed_vocabulary() -> Non
             or (
                 trigger is ReenrichmentTrigger.POLICY_CHANGE
                 and ".observe_process_versions(" in startup_source
+            )
+            # WP-04: `review.decide` no longer spells its trigger in the
+            # handler. It is produced by the delegate's closed accepted-kind
+            # table, which `_review_decide` calls.
+            or (
+                trigger in set(TRIGGERS_BY_ACCEPTED_PROPOSAL_KIND.values())
+                and "reenrichment_trigger_for_review_decision(" in handler_source
             )
         )
     }

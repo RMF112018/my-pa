@@ -26,12 +26,16 @@ from my_pa.application.entity_reenrichment import (
     ReenrichmentWork,
     StaleBindingReason,
     assess_currency,
+    reenrichment_trigger_for_review_decision,
     register_mutation_reenrichment,
     register_producer_version_observation,
     register_source_version_observation,
 )
 from my_pa.application.service import _register_reenrichment_result, _Result
 from my_pa.contracts.ports import ReenrichmentVersionObservation
+from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import Disposition
+from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 
 PRINCIPAL = "prn_aaaa0001aaaa0001aaaa0001"
 OTHER_PRINCIPAL = "prn_bbbb0002bbbb0002bbbb0002"
@@ -398,12 +402,13 @@ def test_cross_principal_subject_binding_is_refused() -> None:
 
 
 def test_work_discloses_only_closed_safe_limitations() -> None:
-    limitations = _claimed(_binding()).limitations
-    assert limitations == tuple(ReenrichmentLimitation)
+    # Running work has hit no limitation, and the vocabulary an operational
+    # surface may draw one from stays closed and content-free.
+    assert _claimed(_binding()).limitations == ()
     assert all(
         "identity" not in item.value
         or item is ReenrichmentLimitation.NO_AUTONOMOUS_IDENTITY_MUTATION
-        for item in limitations
+        for item in ReenrichmentLimitation
     )
 
 
@@ -795,3 +800,260 @@ def test_process_version_observation_registers_only_real_advances() -> None:
     )
     work = changed.observe_process_versions(PRINCIPAL, cause="boot_bbbbbbbb", at=WHEN)
     assert {item.binding.trigger for item in work} == {ReenrichmentTrigger.POLICY_CHANGE}
+
+
+# ---- WP-05 / RI-P3-MED-001: a durable, truthful PARTIAL outcome -----------
+#
+# RI v0.2 section 27.5: "Partial processing never appears complete." The state
+# vocabulary has to distinguish complete success, partial success, stale,
+# retryable failure and terminal failure, and `limitations` has to carry what
+# was actually persisted rather than the whole closed vocabulary.
+
+
+def test_the_state_vocabulary_distinguishes_every_settled_outcome() -> None:
+    assert set(ReenrichmentState) == {
+        ReenrichmentState.QUEUED,
+        ReenrichmentState.RUNNING,
+        ReenrichmentState.SUCCEEDED,
+        ReenrichmentState.PARTIAL,
+        ReenrichmentState.STALE,
+        ReenrichmentState.FAILED,
+    }
+
+
+def test_partial_work_is_terminal_and_never_reports_succeeded() -> None:
+    partial = _terminal_work(
+        ReenrichmentState.PARTIAL,
+        limitations=(ReenrichmentLimitation.BOUNDED_SUBJECT_SET,),
+    )
+    assert partial.state is ReenrichmentState.PARTIAL
+    assert partial.state is not ReenrichmentState.SUCCEEDED
+    assert partial.state.value != ReenrichmentState.SUCCEEDED.value
+    assert partial.completed_at is not None
+    with pytest.raises(ValueError, match="terminal"):
+        replace(partial, completed_at=None)
+
+
+def test_partial_work_states_which_limitations_it_settled_under() -> None:
+    with pytest.raises(ValueError, match="limitation"):
+        _terminal_work(ReenrichmentState.PARTIAL, limitations=())
+
+
+def test_only_partial_work_carries_limitations() -> None:
+    for state in (
+        ReenrichmentState.SUCCEEDED,
+        ReenrichmentState.STALE,
+        ReenrichmentState.FAILED,
+    ):
+        with pytest.raises(ValueError, match="limitation"):
+            _terminal_work(
+                state,
+                limitations=(ReenrichmentLimitation.BOUNDED_SUBJECT_SET,),
+            )
+
+
+def test_limitations_are_the_persisted_set_and_not_the_whole_vocabulary() -> None:
+    one = _terminal_work(
+        ReenrichmentState.PARTIAL,
+        limitations=(ReenrichmentLimitation.STABLE_EXTRACTION_REUSED,),
+    )
+    assert one.limitations == (ReenrichmentLimitation.STABLE_EXTRACTION_REUSED,)
+    assert one.limitations != tuple(ReenrichmentLimitation)
+
+
+def _terminal_work(
+    state: ReenrichmentState,
+    *,
+    limitations: tuple[ReenrichmentLimitation, ...],
+) -> ReenrichmentWork:
+    return ReenrichmentWork(
+        work_id="erwk_aaaa0001aaaa0001",
+        binding=_binding(),
+        state=state,
+        attempt_count=1,
+        max_attempts=3,
+        created_at=WHEN - timedelta(minutes=1),
+        updated_at=WHEN,
+        completed_at=WHEN,
+        stale_reasons=(
+            (StaleBindingReason.POLICY_VERSION_CHANGED,) if state is ReenrichmentState.STALE else ()
+        ),
+        limitations=limitations,
+    )
+
+
+# ---- WP-04 / RI-P3-HIGH-001: which review decisions imply re-enrichment ----
+#
+# `review.decide` used to register CONTRADICTION_RESOLUTION for every committed
+# decision, which every `Disposition` member and every
+# `ReviewSubjectKind` value reach. RI v0.2 section 10.11 scopes a contradiction
+# to conflicting *assertions* a reviewer chooses between; the repository's own
+# `TRIGGERS_BY_MUTATION_CAPABILITY` sends only `entities.unresolved_mentions.resolve`
+# there. The matrix below is the whole predicate: seventeen proposal kinds by
+# eight dispositions, spelled out independently of the mapping under test.
+
+_ACCEPTING = frozenset({Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT})
+
+#: The state a decision of each disposition settles the proposal in.
+_SETTLED_STATE: dict[Disposition, ProposalState] = {
+    Disposition.ACCEPT: ProposalState.ACCEPTED,
+    Disposition.CORRECT_AND_ACCEPT: ProposalState.CORRECTED_ACCEPTED,
+    Disposition.REJECT: ProposalState.REJECTED,
+    Disposition.DEFER: ProposalState.DEFERRED,
+    Disposition.MARK_UNRESOLVED: ProposalState.UNRESOLVED,
+    Disposition.REPROCESS: ProposalState.NEEDS_REVIEW,
+    Disposition.ESCALATE: ProposalState.NEEDS_REVIEW,
+    Disposition.INVALIDATE: ProposalState.INVALIDATED,
+}
+
+#: The trigger the *equivalent direct mutation* already registers, restated here
+#: rather than imported, so the test disagrees with the implementation when the
+#: implementation changes.
+_EXPECTED_ACCEPTED_TRIGGER: dict[EntityProposalKind, ReenrichmentTrigger | None] = {
+    EntityProposalKind.CREATE_ENTITY: None,
+    EntityProposalKind.UPDATE_ENTITY: ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    EntityProposalKind.BIND_IDENTIFIER: None,
+    EntityProposalKind.RETIRE_IDENTIFIER: None,
+    EntityProposalKind.SUPERSEDE_IDENTIFIER: None,
+    EntityProposalKind.RECORD_ALIAS: ReenrichmentTrigger.NEW_ALIAS,
+    EntityProposalKind.RETIRE_ALIAS: ReenrichmentTrigger.NEW_ALIAS,
+    EntityProposalKind.SUPERSEDE_ALIAS: ReenrichmentTrigger.NEW_ALIAS,
+    EntityProposalKind.RECORD_ASSIGNMENT: ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    EntityProposalKind.REVISE_ASSIGNMENT: ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    EntityProposalKind.END_ASSIGNMENT: ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    EntityProposalKind.RECORD_RELATIONSHIP: ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+    EntityProposalKind.REVISE_RELATIONSHIP: ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+    EntityProposalKind.END_RELATIONSHIP: ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+    EntityProposalKind.RESOLVE_MENTION: ReenrichmentTrigger.CONTRADICTION_RESOLUTION,
+    EntityProposalKind.MERGE_ENTITIES: None,
+    EntityProposalKind.SPLIT_IDENTITY: None,
+}
+
+
+def test_the_expected_matrix_covers_every_proposal_kind_and_disposition() -> None:
+    assert set(_EXPECTED_ACCEPTED_TRIGGER) == set(EntityProposalKind)
+    assert len(EntityProposalKind) == 17
+    assert set(_SETTLED_STATE) == set(Disposition)
+    assert len(Disposition) == 8
+
+
+@pytest.mark.parametrize("kind", list(EntityProposalKind), ids=lambda item: item.value)
+@pytest.mark.parametrize("disposition", list(Disposition), ids=lambda item: item.value)
+def test_every_kind_by_disposition_registers_exactly_its_equivalent_trigger(
+    kind: EntityProposalKind, disposition: Disposition
+) -> None:
+    trigger = reenrichment_trigger_for_review_decision(
+        proposed_kind=kind,
+        disposition=disposition,
+        proposal_state=_SETTLED_STATE[disposition],
+    )
+    expected = _EXPECTED_ACCEPTED_TRIGGER[kind] if disposition in _ACCEPTING else None
+    assert trigger == expected
+
+
+def test_only_an_accepted_mention_resolution_reaches_contradiction_resolution() -> None:
+    reaching = {
+        (kind, disposition)
+        for kind in EntityProposalKind
+        for disposition in Disposition
+        if reenrichment_trigger_for_review_decision(
+            proposed_kind=kind,
+            disposition=disposition,
+            proposal_state=_SETTLED_STATE[disposition],
+        )
+        is ReenrichmentTrigger.CONTRADICTION_RESOLUTION
+    }
+    assert reaching == {
+        (EntityProposalKind.RESOLVE_MENTION, Disposition.ACCEPT),
+        (EntityProposalKind.RESOLVE_MENTION, Disposition.CORRECT_AND_ACCEPT),
+    }
+
+
+def test_an_unrelated_accept_registers_no_contradiction_work() -> None:
+    for kind in (
+        EntityProposalKind.RECORD_ALIAS,
+        EntityProposalKind.UPDATE_ENTITY,
+        EntityProposalKind.RECORD_RELATIONSHIP,
+        EntityProposalKind.CREATE_ENTITY,
+    ):
+        assert (
+            reenrichment_trigger_for_review_decision(
+                proposed_kind=kind,
+                disposition=Disposition.ACCEPT,
+                proposal_state=ProposalState.ACCEPTED,
+            )
+            is not ReenrichmentTrigger.CONTRADICTION_RESOLUTION
+        )
+
+
+@pytest.mark.parametrize(
+    ("disposition", "state"),
+    [
+        (Disposition.REJECT, ProposalState.REJECTED),
+        (Disposition.INVALIDATE, ProposalState.INVALIDATED),
+        (Disposition.DEFER, ProposalState.DEFERRED),
+        (Disposition.MARK_UNRESOLVED, ProposalState.UNRESOLVED),
+        (Disposition.REPROCESS, ProposalState.NEEDS_REVIEW),
+        (Disposition.ESCALATE, ProposalState.NEEDS_REVIEW),
+    ],
+    ids=lambda item: getattr(item, "value", item),
+)
+def test_no_non_accepting_disposition_registers_anything(
+    disposition: Disposition, state: ProposalState
+) -> None:
+    for kind in EntityProposalKind:
+        assert (
+            reenrichment_trigger_for_review_decision(
+                proposed_kind=kind, disposition=disposition, proposal_state=state
+            )
+            is None
+        )
+
+
+def test_accepting_merge_or_split_through_review_registers_nothing() -> None:
+    # Accepting either through review executes nothing: it emits an
+    # `EntityIdentityCorrectionHandoff` in `OPERATOR_PREVIEW_REQUIRED`
+    # (`tests/unit/test_entity_proposal_review.py`). The later operator
+    # `entities.merge` / `entities.split` registers CORRECTED_IDENTITY itself.
+    for kind in (EntityProposalKind.MERGE_ENTITIES, EntityProposalKind.SPLIT_IDENTITY):
+        for disposition in _ACCEPTING:
+            assert (
+                reenrichment_trigger_for_review_decision(
+                    proposed_kind=kind,
+                    disposition=disposition,
+                    proposal_state=_SETTLED_STATE[disposition],
+                )
+                is None
+            )
+
+
+def test_an_accepting_disposition_that_did_not_land_accepted_registers_nothing() -> None:
+    for state in (
+        ProposalState.NEEDS_REVIEW,
+        ProposalState.INVALIDATED,
+        ProposalState.SUPERSEDED,
+        ProposalState.REJECTED,
+    ):
+        assert (
+            reenrichment_trigger_for_review_decision(
+                proposed_kind=EntityProposalKind.RESOLVE_MENTION,
+                disposition=Disposition.ACCEPT,
+                proposal_state=state,
+            )
+            is None
+        )
+
+
+def test_a_review_subject_that_is_not_an_entity_proposal_registers_nothing() -> None:
+    # `capture_proposal`, `goodnotes_region` and `relationship_memory` reach
+    # `_review_decide` with `entity_case is None`, so there is no proposed kind
+    # and therefore no equivalent direct mutation to name.
+    for disposition in Disposition:
+        assert (
+            reenrichment_trigger_for_review_decision(
+                proposed_kind=None,
+                disposition=disposition,
+                proposal_state=_SETTLED_STATE[disposition],
+            )
+            is None
+        )

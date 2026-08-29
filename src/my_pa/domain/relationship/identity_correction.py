@@ -45,7 +45,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import StrEnum
@@ -59,6 +59,8 @@ from my_pa.domain.source.registry import issue_identifier
 __all__ = [
     "IDENTITY_PREVIEW_LIFETIME",
     "MAX_MERGED_AWAY_ENTITIES",
+    "AmbiguityDisposition",
+    "AmbiguityReason",
     "IdentityConflict",
     "IdentityConflictKind",
     "IdentityEffect",
@@ -69,8 +71,10 @@ __all__ = [
     "IdentityOperationState",
     "IdentityOperationType",
     "IdentityPreview",
+    "ambiguity_digest_for",
     "blocks_merge",
     "conflict_digest_for",
+    "dispositions_for",
     "effects_digest_for",
     "plan_digest_for",
     "preview_digest_for",
@@ -234,6 +238,155 @@ class IdentityEffectFamily(StrEnum):
     MEMORY_PROPOSAL = "memory_proposal"
     MEMORY_CONTEXT_LINK = "memory_context_link"
     DERIVED_CONTEXT = "derived_context"
+
+
+class AmbiguityReason(StrEnum):
+    """Why a split cannot prove, from the merge ledger alone, where one record belongs.
+
+    **Separate from what the operator decides about it.** A reason is the
+    server's finding and a disposition is the operator's answer, and collapsing
+    them would let a caller assert the finding: "assign it to this entity
+    because it was created after the merge" is two claims, and only the second
+    is theirs to make.
+
+    Closed at five members, and the same five the server admits on
+    `a_preview_ambiguity_reason_is_known`. `POST_MERGE_MODIFIED` and
+    `POST_MERGE_CREATED` are the two this work package discovers -- the recorded
+    `after_state` no longer describes the row, and a row bound to the survivor
+    that the merge's ledger never mentions. The other three name findings a
+    later analysis can raise without this vocabulary having to change under it.
+    """
+
+    #: The row still exists and the merge's recorded `after_state` no longer
+    #: describes it, so restoring the recorded `before_state` would discard a
+    #: change nobody in this operation authored.
+    POST_MERGE_MODIFIED = "post_merge_modified"
+    #: The row binds to the survivor and appears in no effect the merge
+    #: recorded, so the merge ledger carries no lineage saying which of the
+    #: participating identities it belongs to.
+    POST_MERGE_CREATED = "post_merge_created"
+    #: Two lineages disagree about the row's owner.
+    CONFLICTING_LINEAGE = "conflicting_lineage"
+    #: The row is evidence more than one participant genuinely shares.
+    SHARED_EVIDENCE = "shared_evidence"
+    #: Ownership cannot be established from any recorded evidence.
+    OWNERSHIP_INDETERMINATE = "ownership_indeterminate"
+
+
+class AmbiguityDisposition(StrEnum):
+    """What an operator settles one ambiguity with. Exactly three, and no fourth.
+
+    **There is no `DELETE`, no `IGNORE`, no `COPY` and no `QUARANTINE`, and the
+    absence is the contract.** Section 10.11's rule that nothing on this plane is
+    destroyed holds through an inversion exactly as it holds through a merge, so
+    a disposition that removed a row would be the one path around it; a
+    disposition that duplicated one would manufacture evidence that no source
+    ever produced. What is left is the three answers a person can actually give
+    about a record whose owner the ledger cannot prove.
+
+    `LEAVE_UNRESOLVED` is an answer and not an omission. RI v0.2 section 15.4
+    asks a split to preserve shared and ambiguous evidence rather than force it
+    onto a nearest identity, and a settlement row saying "the evidence does not
+    establish an owner" is what preserving it looks like in the record. A missing
+    disposition is refused instead, because silence is not a decision.
+    """
+
+    #: Bind the record to one named participant of this split.
+    ASSIGN_TO_ENTITY = "assign_to_entity"
+    #: Leave the record where it stands as evidence more than one identity
+    #: shares. Admissible only where the record family's own contract supports
+    #: non-exclusive semantics; see `_DISPOSITIONS_BY_FAMILY`.
+    PRESERVE_SHARED = "preserve_shared"
+    #: Record that the evidence does not establish an owner, and change nothing.
+    LEAVE_UNRESOLVED = "leave_unresolved"
+
+
+#: Which dispositions each record family admits, and `PRESERVE_SHARED` is the
+#: column the evidence actually decides.
+#:
+#: **`PRESERVE_SHARED` is legal for `OBSERVATION` and nowhere else.** The sole
+#: textual warrant for a shared outcome is RI v0.2 section 15.4 line 1186,
+#: "preserve shared and ambiguous evidence", and it is about *evidence*: an
+#: observation is a record of something a source said, and one utterance can
+#: mention two identities without either owning it. Every other family on this
+#: plane records an exclusive fact about one identity, so "shared" there would
+#: mean a second copy -- which section 15.4 line 1187 forbids in the same breath
+#: ("avoid duplicating commitments silently").
+#:
+#: `RELATIONSHIP_MEMORY` is denied on its own specification rather than by
+#: analogy: `docs/specs/relationship-memory-v0.1.md` lines 20-22 define a memory
+#: as "one durable statement about **one** generalized `Entity`", so a memory
+#: shared between two subjects is not a memory this plane can hold. An
+#: `IDENTIFIER` is denied because a canonical address is what the resolver
+#: matches on, and two identities holding one current address is the ambiguity
+#: the plane exists to prevent. A `PROPOSAL` is denied because sharing one would
+#: mean copying it, and a copied proposal carries provenance for a request
+#: nobody made.
+#:
+#: `ALIAS`, `ASSIGNMENT` and `RELATIONSHIP` are **default deny**: each *might*
+#: support a non-exclusive reading for some subset of its rows -- a
+#: non-canonical alias type, a genuinely non-exclusive domain relation -- and
+#: none of them carries a column that proves which subset a given row is in. A
+#: default that admitted them would be this mapping deciding, per row, a
+#: question no recorded evidence answers.
+#:
+#: `PROPOSAL`, `RELATIONSHIP_MEMORY`, `MEMORY_PROPOSAL` and `MEMORY_CONTEXT_LINK`
+#: admit `LEAVE_UNRESOLVED` only, and the reason is a different kind of absence
+#: than the "default deny" above: this is not doubt about which rows qualify,
+#: it is that **no writer exists to carry out `ASSIGN_TO_ENTITY` for any of
+#: them**. `entity_proposals` carries no entity column at all -- there is
+#: nothing on the row an assignment could set -- so `PROPOSAL` cannot be
+#: attributed no matter how clean the evidence is. `RelationshipMemoryRepository`
+#: and `RelationshipMemoryProposalRepository` (`src/my_pa/contracts/ports.py`)
+#: expose no update-or-rebind method at all -- the former is read/admit/replay
+#: only, the latter is insert-only (`record_proposal`) -- so `RELATIONSHIP_MEMORY`
+#: and `MEMORY_PROPOSAL` have no operator-directed writer to move a row to a
+#: different entity either, and `MEMORY_CONTEXT_LINK` has none for the same
+#: reason. `LEAVE_UNRESOLVED` needs no writer -- it is a settlement row recorded
+#: against the ambiguity, not a mutation of the record -- so it is the one
+#: disposition these four families can honestly offer today. Extending them to
+#: `ASSIGN_TO_ENTITY` is future work that first requires building that writer;
+#: claiming the disposition ahead of the writer (as this mapping used to) would
+#: admit a choice this revision cannot execute.
+#:
+#: `ENTITY` never appears because an entity's own redirect is provable from the
+#: ledger or the split is refused; `REVIEW_CASE` is ledger-only and writes no
+#: row; `DERIVED_CONTEXT` is recomputed rather than attributed. A family absent
+#: from this mapping offers no disposition, which is why `dispositions_for`
+#: answers with an empty tuple rather than raising: "this family is not
+#: dispositioned" is a fact a caller acts on, not an error.
+_DISPOSITIONS_BY_FAMILY: Final[dict[IdentityEffectFamily, tuple[AmbiguityDisposition, ...]]] = {
+    IdentityEffectFamily.IDENTIFIER: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.ALIAS: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.ASSIGNMENT: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.RELATIONSHIP: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.OBSERVATION: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.PRESERVE_SHARED,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.PROPOSAL: (AmbiguityDisposition.LEAVE_UNRESOLVED,),
+    IdentityEffectFamily.RELATIONSHIP_MEMORY: (AmbiguityDisposition.LEAVE_UNRESOLVED,),
+    IdentityEffectFamily.MEMORY_PROPOSAL: (AmbiguityDisposition.LEAVE_UNRESOLVED,),
+    IdentityEffectFamily.MEMORY_CONTEXT_LINK: (AmbiguityDisposition.LEAVE_UNRESOLVED,),
+}
+
+
+def dispositions_for(family: IdentityEffectFamily) -> tuple[AmbiguityDisposition, ...]:
+    """The dispositions `family` admits, in vocabulary order, or none at all."""
+    return _DISPOSITIONS_BY_FAMILY.get(family, ())
 
 
 class IdentityEffectKind(StrEnum):
@@ -445,6 +598,50 @@ def conflict_digest_for(conflicts: Iterable[IdentityConflict]) -> str:
             {
                 (conflict.kind.value, conflict.family.value, conflict.record_id)
                 for conflict in conflicts
+            }
+        )
+    )
+
+
+def ambiguity_digest_for(
+    ambiguities: Iterable[tuple[str, str, str, Sequence[str], Sequence[str], Mapping[str, object]]],
+) -> str:
+    """The digest over every question a split preview could not answer for itself.
+
+    **The same column `conflict_digest_for` fills for a merge, and deliberately
+    so.** A merge's conflicts and a split's ambiguities are one thing seen on two
+    operations: the set of records the operator, not the server, has to settle
+    before an apply may proceed. `entity_identity_previews.conflict_digest`
+    already carries that set for a merge and apply already refuses when it moved,
+    so a split binding its ambiguities there inherits the whole staleness
+    mechanism rather than adding a second one that could disagree with it.
+
+    A split with no ambiguities digests the empty set and therefore produces
+    exactly what `conflict_digest_for(())` produces, which is what previously
+    stood in this column. That equality is not a coincidence to be preserved by
+    hand -- both digest `sorted(set())` -- and it is why closing this defect
+    changes no token on a split whose inverse was already provable.
+
+    `ambiguity_id` is **not** bound. Identifiers are issued per preview, so
+    binding them would make the digest differ from any recomputation and the
+    check could never pass. What is bound is everything the operator reads and
+    answers against: the family, the record, the finding, the admissible
+    answers, the admissible targets, and the evidence summary shown beside them.
+    Plain tuples rather than a record, on `plan_digest_for`'s argument for
+    `groups`: this is a digest input and not a thing the domain otherwise holds.
+    """
+    return _digest(
+        sorted(
+            {
+                (
+                    family,
+                    record_id,
+                    reason,
+                    tuple(sorted(dispositions)),
+                    tuple(sorted(targets)),
+                    _canonical(dict(evidence)),
+                )
+                for family, record_id, reason, dispositions, targets, evidence in ambiguities
             }
         )
     )

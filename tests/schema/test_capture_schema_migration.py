@@ -1067,6 +1067,15 @@ def test_the_span_cardinality_triggers_are_deferred_and_leave_no_residue(
             # what makes a crashed apply legible rather than indistinguishable
             # from a finished one.
             "entity_identity_effects_are_append_only",
+            # `b727e870d45e`'s ambiguity settlements, on a third function of its
+            # own for the same reason, and the entity plane's review ledger,
+            # which carried no trigger at all until that revision -- its sibling
+            # `relationship_memory_decisions_are_append_only` had held one since
+            # `f1c6b904a2d7`, so a reviewer's entity disposition was the one
+            # review decision in the schema that anything holding the connection
+            # could edit.
+            "identity_ambiguity_settlements_are_append_only",
+            "entity_proposal_review_decisions_are_append_only",
             "relationship_write_requests_complete_once",
             "relationship_write_requests_finish_in_transaction",
             "relationship_write_request_evidence_is_append_only",

@@ -266,6 +266,7 @@ from my_pa.application.entity_reenrichment import (
     TRIGGERS_BY_MUTATION_CAPABILITY,
     ProductionReenrichmentCaller,
     ReenrichmentWorkRepository,
+    reenrichment_trigger_for_review_decision,
     register_mutation_reenrichment,
     register_producer_version_observation,
     register_source_version_observation,
@@ -312,6 +313,7 @@ from my_pa.application.identity_correction import (
     MergeCommand,
     MergePreviewCommand,
     SplitCommand,
+    SplitDisposition,
     SplitPreviewCommand,
 )
 from my_pa.application.identity_history import (
@@ -468,7 +470,10 @@ from my_pa.domain.relationship.governance import (
     StaleResolutionVersionError,
     origin_of,
 )
-from my_pa.domain.relationship.identity_correction import IdentityConflict
+from my_pa.domain.relationship.identity_correction import (
+    AmbiguityDisposition,
+    IdentityConflict,
+)
 from my_pa.domain.relationship.memory import (
     EvidenceLinkRole,
     MemoryAdmission,
@@ -3724,6 +3729,7 @@ class ApplicationService:
         unsupported = False
         denied = False
         invalid = False
+        entity_case: EntityProposalReviewCase | None = None
         with _translated(), _entity_governance_translated():
             try:
                 entity_case = unit_of_work.reviews.entity_proposal_case(
@@ -3795,19 +3801,37 @@ class ApplicationService:
                 "effective_payload_source": identity_handoff.effective_payload_source.value,
                 "effective_payload": identity_handoff.effective_payload.as_mapping(),
             }
-        self._register_reenrichment(
-            unit_of_work,
-            authorization,
-            ReenrichmentTrigger.CONTRADICTION_RESOLUTION,
-            decision.decision_id,
-            (
-                ReenrichmentSubject(
-                    ReenrichmentSubjectKind.REVIEW_DECISION,
-                    decision.decision_id,
-                    str(decision.sequence),
-                ),
-            ),
+        # WP-04 / RI-P3-HIGH-001. This used to register
+        # `CONTRADICTION_RESOLUTION` unconditionally, which every
+        # `Disposition` member and every `ReviewSubjectKind` value
+        # reached -- a deferred GoodNotes region and a rejected alias proposal
+        # both filed contradiction work. RI v0.2 section 10.11 scopes a
+        # contradiction to conflicting *assertions* a reviewer chooses between,
+        # and `TRIGGERS_BY_MUTATION_CAPABILITY` sends only
+        # `entities.unresolved_mentions.resolve` there. The predicate is pure,
+        # total and tested exhaustively (17 proposal kinds x 8 dispositions) in
+        # `tests/unit/test_entity_reenrichment.py`; it reads three closed values
+        # the decision already carries and never the proposal payload, which
+        # `EntityProposalReviewCase` withholds as a disclosure control.
+        trigger = reenrichment_trigger_for_review_decision(
+            proposed_kind=None if entity_case is None else entity_case.proposed_kind,
+            disposition=decision.disposition,
+            proposal_state=decision.proposal_state,
         )
+        if trigger is not None:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                trigger,
+                decision.decision_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.REVIEW_DECISION,
+                        decision.decision_id,
+                        str(decision.sequence),
+                    ),
+                ),
+            )
         result = _Result(
             payload=response_payload,
             disclosure=unenrolled_disclosure(
@@ -8684,6 +8708,11 @@ class ApplicationService:
                         "correlation_id": entry.correlation_id,
                         "audit_id": entry.audit_id,
                         "reason": entry.reason,
+                        # Governed lineage. Both are opaque identifiers, and
+                        # both are null on the sources that have no governed
+                        # operation behind them.
+                        "source_identity_operation_id": entry.source_identity_operation_id,
+                        "receipt_id": entry.receipt_id,
                     }
                     for entry in page.entries
                 ],
@@ -8732,6 +8761,23 @@ class ApplicationService:
                     }
                     for draft in report.projected_effects
                 ],
+                # The questions this preview could not answer for itself, each
+                # with the answers it admits. `entities.split` refuses until
+                # every one of them carries exactly one; a record that is absent
+                # from here is one the merge ledger proves, and it is restored
+                # without an operator ever choosing anything about it.
+                "ambiguities": [
+                    {
+                        "ambiguity_id": ambiguity.ambiguity_id,
+                        "record_family": ambiguity.record_family.value,
+                        "record_id": ambiguity.record_id,
+                        "ambiguity_reason": ambiguity.reason,
+                        "allowed_dispositions": list(ambiguity.allowed_dispositions),
+                        "allowed_target_entity_ids": list(ambiguity.allowed_target_entity_ids),
+                        "evidence_summary": dict(ambiguity.evidence_summary),
+                    }
+                    for ambiguity in report.ambiguities
+                ],
                 "audit_id": authorization.audit_id,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
@@ -8756,6 +8802,18 @@ class ApplicationService:
                 idempotency_key=_split_idempotency_key(principal_id, command.preview_id),
                 reason=command.reason,
                 evidence_refs=command.evidence_refs,
+                dispositions=tuple(
+                    SplitDisposition(
+                        ambiguity_id=str(entry["ambiguity_id"]),
+                        disposition=AmbiguityDisposition(entry["disposition"]),
+                        target_entity_id=(
+                            None
+                            if entry.get("target_entity_id") is None
+                            else str(entry["target_entity_id"])
+                        ),
+                    )
+                    for entry in command.dispositions
+                ),
             ),
             at=authorization.at,
             correlation_id=authorization.correlation_id,

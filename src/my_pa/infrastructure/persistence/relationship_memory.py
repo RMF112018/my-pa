@@ -36,7 +36,7 @@ version, so a replayed archive returns the same receipt as the original.
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
+from collections.abc import Collection, Mapping
 from dataclasses import replace
 from datetime import datetime
 from typing import Any
@@ -1238,6 +1238,75 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         result = self._connection.execute(update(table).where(*conditions).values(**restored))
         if result.rowcount != 1:
             raise UnknownScopeError("a memory binding no longer matches its source merge")
+
+    def records_bound_to_entity_outside(
+        self,
+        principal_id: str,
+        family: IdentityEffectFamily,
+        entity_id: str,
+        known_record_ids: Collection[str],
+        *,
+        limit: int,
+    ) -> list[str]:
+        """Identifiers in `family` now bound to `entity_id` that `known_record_ids` omits.
+
+        The same three columns `plan_identity_merge` reparents when a bound
+        entity is merged away -- `relationship_memories.subject_entity_id`,
+        `relationship_memory_proposals.subject_entity_id`, and
+        `relationship_memory_context_links.target_id` where `target_type` is
+        `entity` -- read in the other direction: which rows bind to the
+        survivor now, rather than which bound to a merged-away identity then.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        if limit < 1:
+            raise ValueError("post-merge discovery asks for at least one row")
+        if family is IdentityEffectFamily.RELATIONSHIP_MEMORY:
+            statement = select(relationship_memories.c.memory_id).where(
+                _mine(relationship_memories, principal_id),
+                relationship_memories.c.subject_entity_id == entity_id,
+            )
+            if known_record_ids:
+                statement = statement.where(
+                    relationship_memories.c.memory_id.notin_(sorted(known_record_ids))
+                )
+            statement = statement.order_by(relationship_memories.c.memory_id).limit(limit)
+        elif family is IdentityEffectFamily.MEMORY_PROPOSAL:
+            statement = select(relationship_memory_proposals.c.memory_proposal_id).where(
+                _mine(relationship_memory_proposals, principal_id),
+                relationship_memory_proposals.c.subject_entity_id == entity_id,
+            )
+            if known_record_ids:
+                statement = statement.where(
+                    relationship_memory_proposals.c.memory_proposal_id.notin_(
+                        sorted(known_record_ids)
+                    )
+                )
+            statement = statement.order_by(
+                relationship_memory_proposals.c.memory_proposal_id
+            ).limit(limit)
+        elif family is IdentityEffectFamily.MEMORY_CONTEXT_LINK:
+            statement = select(relationship_memory_context_links.c.context_link_id).where(
+                _mine(relationship_memory_context_links, principal_id),
+                relationship_memory_context_links.c.target_type
+                == ContextLinkTargetType.ENTITY.value,
+                relationship_memory_context_links.c.target_id == entity_id,
+            )
+            if known_record_ids:
+                statement = statement.where(
+                    relationship_memory_context_links.c.context_link_id.notin_(
+                        sorted(known_record_ids)
+                    )
+                )
+            statement = statement.order_by(
+                relationship_memory_context_links.c.context_link_id
+            ).limit(limit)
+        else:
+            raise ValueError(
+                "post-merge discovery on the memory plane names a family this repository owns"
+            )
+        rows = self._connection.execute(statement).scalars()
+        return [str(value) for value in rows]
 
 
 def _memory_identity_effect_read_subject(family: IdentityEffectFamily) -> tuple[Any, str, set[str]]:

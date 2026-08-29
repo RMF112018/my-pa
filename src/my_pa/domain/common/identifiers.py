@@ -308,6 +308,16 @@ class IdKind(StrEnum):
     ENTITY_IDENTITY_PREVIEW = "eipv"
     ENTITY_IDENTITY_OPERATION = "eiop"
     ENTITY_IDENTITY_EFFECT = "eief"
+    #: One record a preview could not attribute to a single identity, and the
+    #: settlement of it. Its own prefix rather than a reuse of
+    #: `ENTITY_IDENTITY_EFFECT` (`eief`): that one names a change the operation
+    #: made, and this one names a question the preview could not answer -- a
+    #: reference carrying one prefix for both could not say whether it points at
+    #: something that happened or at something still open. The preview's
+    #: ambiguity and the operation's settlement of it share this prefix because
+    #: they are two records of one question, and the settlement is keyed on the
+    #: ambiguity it settles.
+    ENTITY_IDENTITY_AMBIGUITY = "eiam"
 
 
 class InvalidIdentifierError(ValueError):

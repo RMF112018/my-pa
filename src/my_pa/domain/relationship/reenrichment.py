@@ -213,9 +213,28 @@ class ReenrichmentBinding:
 
 
 class ReenrichmentState(StrEnum):
+    """The six outcomes one work item can be in, and why there are six.
+
+    v0.2 section 27.5 requires that "partial processing never appears
+    complete", which the five-state vocabulary could not express: a run that
+    produced some of its intended effects had to settle `succeeded`, claiming
+    effects it never produced, or `failed`, discarding the ones it did. So the
+    five distinctions a reader needs are each their own state — complete
+    success is `SUCCEEDED`, partial success is `PARTIAL`, a binding that moved
+    is `STALE`, a retryable failure returns to `QUEUED` with the attempt spent
+    and `last_error_code` set, and a terminal failure is `FAILED`.
+
+    `PARTIAL` is terminal, exactly as the server's
+    `terminal_reenrichment_records_completion` CHECK now says: a settled
+    partial result is a finished answer about what was and was not done, not a
+    run waiting to be resumed. Re-running what it left undone is new work with
+    its own binding, which is what `binding_sha256` already makes true.
+    """
+
     QUEUED = "queued"
     RUNNING = "running"
     SUCCEEDED = "succeeded"
+    PARTIAL = "partial"
     STALE = "stale"
     FAILED = "failed"
 
@@ -249,6 +268,14 @@ class ReenrichmentWork:
     completed_at: datetime | None = None
     stale_reasons: tuple[StaleBindingReason, ...] = ()
     last_error_code: str | None = None
+    #: What this run did not do, and only when it says so by settling
+    #: `PARTIAL`. A stored field rather than a derived one: it used to be a
+    #: property returning the whole `ReenrichmentLimitation` vocabulary for
+    #: every work item in every state, which made an operational surface
+    #: report limitations no run had actually hit and made a truthful partial
+    #: result unrepresentable. The set now comes from the row, mirroring
+    #: `partial_reenrichment_states_its_limitations` at the server.
+    limitations: tuple[ReenrichmentLimitation, ...] = ()
 
     def __post_init__(self) -> None:
         if not re.fullmatch(r"erwk_[A-Za-z0-9]{8,64}", self.work_id):
@@ -265,17 +292,21 @@ class ReenrichmentWork:
             raise ValueError("only running re-enrichment work holds a complete lease")
         if (self.state is ReenrichmentState.STALE) is not bool(self.stale_reasons):
             raise ValueError("only stale work names why its binding moved")
+        # The same biconditional the server states as
+        # `partial_reenrichment_states_its_limitations`: a partial settlement
+        # that could not say what it left undone would be a `succeeded` in a
+        # different word, and a limitation on a complete run would name a
+        # shortfall that did not happen.
+        if (self.state is ReenrichmentState.PARTIAL) is not bool(self.limitations):
+            raise ValueError("only partial work states its limitations")
         terminal = self.state in {
             ReenrichmentState.SUCCEEDED,
+            ReenrichmentState.PARTIAL,
             ReenrichmentState.STALE,
             ReenrichmentState.FAILED,
         }
         if terminal is not (self.completed_at is not None):
             raise ValueError("only terminal re-enrichment work records completion")
-
-    @property
-    def limitations(self) -> tuple[ReenrichmentLimitation, ...]:
-        return tuple(ReenrichmentLimitation)
 
 
 class CurrentReenrichmentBindings(Protocol):

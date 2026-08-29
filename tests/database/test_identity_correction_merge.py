@@ -2174,7 +2174,11 @@ def test_every_typed_entity_reference_field_invalidates_an_open_proposal(
         (
             "eprp_refq0017refq17",
             EntityProposalKind.SPLIT_IDENTITY,
-            {"entity_id": MERGED_ONE},
+            # WP-06 / RI-P4-HIGH-001 made `source_identity_operation_id`
+            # required, so the payload now names the governed merge the split
+            # would reverse. Inert to what this case asserts -- it needs only a
+            # split proposal referencing MERGED_ONE for the merge to invalidate.
+            {"entity_id": MERGED_ONE, "source_identity_operation_id": "eiop_aaaa0001aaaa0001"},
             None,
         ),
     )

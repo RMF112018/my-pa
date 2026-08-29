@@ -6,9 +6,13 @@ import hashlib
 import json
 from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime
+from typing import Final
 
 from my_pa.contracts.ports import ReenrichmentWorkRepository
+from my_pa.domain.capture.proposal import ProposalState
+from my_pa.domain.capture.review import Disposition
 from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.relationship.proposal_payload import EntityProposalKind
 from my_pa.domain.relationship.reenrichment import (
     DEFAULT_MAX_REENRICHMENT_ATTEMPTS,
     MAX_REENRICHMENT_SUBJECTS,
@@ -31,6 +35,7 @@ __all__ = [
     "DEFAULT_MAX_REENRICHMENT_ATTEMPTS",
     "MAX_REENRICHMENT_SUBJECTS",
     "MAX_REENRICHMENT_VERSIONS",
+    "TRIGGERS_BY_ACCEPTED_PROPOSAL_KIND",
     "TRIGGERS_BY_MUTATION_CAPABILITY",
     "BindingCurrency",
     "BindingVersion",
@@ -48,6 +53,7 @@ __all__ = [
     "ReenrichmentWorkRepository",
     "StaleBindingReason",
     "assess_currency",
+    "reenrichment_trigger_for_review_decision",
     "register_mutation_reenrichment",
     "register_producer_version_observation",
     "register_source_version_observation",
@@ -71,6 +77,99 @@ TRIGGERS_BY_MUTATION_CAPABILITY: Mapping[str, tuple[ReenrichmentTrigger, ...]] =
     "entities.unresolved_mentions.resolve": (ReenrichmentTrigger.CONTRADICTION_RESOLUTION,),
     "context.feedback": (ReenrichmentTrigger.POLICY_CHANGE,),
 }
+
+
+#: The dispositions that accept, and the states an accepted proposal lands in.
+#: Both halves are required: `review.decide` can append an accepting disposition
+#: whose promotion did not land -- a span fault invalidates the proposal instead
+#: -- and re-enrichment must follow the mutation that actually happened, not the
+#: intention that was recorded.
+_ACCEPTING_DISPOSITIONS: Final = frozenset({Disposition.ACCEPT, Disposition.CORRECT_AND_ACCEPT})
+#: A tuple rather than a `frozenset` deliberately. `tests/architecture/
+#: test_no_revision_derives_a_closed_set_from_an_enum.py` harvests every
+#: module-level `frozenset` of strings and keys it by *value set*, because
+#: "the emitted DDL carries no trace of which enum produced it". These two
+#: values collide exactly with `f1c6b904a2d7`'s literal
+#: `a_memory_proposal_names_its_result_exactly_when_accepted` vocabulary, so
+#: declaring them as a frozenset made that old, unchanged revision report as
+#: deriving its CHECK from live code. Membership is all this needs.
+_ACCEPTED_PROPOSAL_STATES: Final = (ProposalState.ACCEPTED, ProposalState.CORRECTED_ACCEPTED)
+
+
+#: What an *accepted* Entity proposal of each kind actually changed, expressed
+#: as the trigger the equivalent direct mutation already registers.
+#:
+#: RI v0.2 section 10.11 defines a contradiction as two or more relevant
+#: **assertions** in conflict, which "the user may accept one for current use,
+#: retain multiple time-bounded truths, mark disputed, or defer". That is one
+#: review outcome, not every review outcome, and `ConsequentialClass` says the
+#: same thing structurally by listing `IDENTITY_MERGE` and `CONTRADICTION` as
+#: distinct members. `TRIGGERS_BY_MUTATION_CAPABILITY` above is the repository's
+#: own authoritative statement of which mutation implies which trigger:
+#: `entities.unresolved_mentions.resolve` is the only one that reaches
+#: `CONTRADICTION_RESOLUTION`, `entities.aliases.supersede` reaches `NEW_ALIAS`,
+#: and `entities.update` reaches `ROLE_OR_ORGANIZATION_CHANGE`. Accepting a
+#: proposal executes that same mutation, so it registers that same trigger.
+#:
+#: **The seven absent kinds are absent because accepting them registers
+#: nothing, and each absence has its own reason.**
+#:
+#: `MERGE_ENTITIES` and `SPLIT_IDENTITY` execute nothing at review time: an
+#: acceptance emits an `EntityIdentityCorrectionHandoff` in
+#: `OPERATOR_PREVIEW_REQUIRED` and stops there. The later operator
+#: `entities.merge` / `entities.split` registers `CORRECTED_IDENTITY` itself.
+#: Registering here would name an identity correction that has not happened and
+#: may never be authorized.
+#:
+#: `CREATE_ENTITY`, `BIND_IDENTIFIER`, `RETIRE_IDENTIFIER` and
+#: `SUPERSEDE_IDENTIFIER` have no entry in `TRIGGERS_BY_MUTATION_CAPABILITY`
+#: either: their direct `entities.*` capabilities register no re-enrichment, so
+#: naming a trigger for the reviewed form would make the reviewed path claim an
+#: invalidation the direct path does not.
+TRIGGERS_BY_ACCEPTED_PROPOSAL_KIND: Mapping[EntityProposalKind, ReenrichmentTrigger] = {
+    EntityProposalKind.RESOLVE_MENTION: ReenrichmentTrigger.CONTRADICTION_RESOLUTION,
+    EntityProposalKind.RECORD_ALIAS: ReenrichmentTrigger.NEW_ALIAS,
+    EntityProposalKind.SUPERSEDE_ALIAS: ReenrichmentTrigger.NEW_ALIAS,
+    EntityProposalKind.RETIRE_ALIAS: ReenrichmentTrigger.NEW_ALIAS,
+    EntityProposalKind.UPDATE_ENTITY: ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    EntityProposalKind.RECORD_ASSIGNMENT: ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    EntityProposalKind.REVISE_ASSIGNMENT: ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    EntityProposalKind.END_ASSIGNMENT: ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+    EntityProposalKind.RECORD_RELATIONSHIP: ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+    EntityProposalKind.REVISE_RELATIONSHIP: ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+    EntityProposalKind.END_RELATIONSHIP: ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+}
+
+
+def reenrichment_trigger_for_review_decision(
+    *,
+    proposed_kind: EntityProposalKind | None,
+    disposition: Disposition,
+    proposal_state: ProposalState,
+) -> ReenrichmentTrigger | None:
+    """Which invalidation one committed review decision implies, or none.
+
+    Pure and total: it reads three closed values a decision already carries and
+    returns a trigger or `None`. It reads no payload, because
+    `EntityProposalReviewCase` deliberately withholds payload values as a
+    disclosure control and a predicate that needed them would have to defeat it.
+
+    `proposed_kind` is `None` for the three review subject kinds that are not
+    Entity proposals -- `capture_proposal`, `goodnotes_region` and
+    `relationship_memory`. They reach the decision handler with no proposed
+    Entity mutation, so there is no equivalent direct mutation whose trigger
+    this could name, and it names none. That is narrower than the behaviour it
+    replaces, which registered `CONTRADICTION_RESOLUTION` for all four subject
+    kinds and all eight dispositions; see the module note in
+    `tests/unit/test_entity_reenrichment.py` for what that leaves open.
+    """
+    if proposed_kind is None:
+        return None
+    if disposition not in _ACCEPTING_DISPOSITIONS:
+        return None
+    if proposal_state not in _ACCEPTED_PROPOSAL_STATES:
+        return None
+    return TRIGGERS_BY_ACCEPTED_PROPOSAL_KIND.get(proposed_kind)
 
 
 def register_source_version_observation(

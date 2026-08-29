@@ -172,6 +172,9 @@ def test_identity_review_replay_preserves_the_exact_operator_handoff(
         else {
             "entity_id": retained.entity_id,
             "reason": "synthetic mistaken merge",
+            # WP-06 / RI-P4-HIGH-001: the completed governed merge the split
+            # reverses, and the only subject `entities.split_preview` takes.
+            "source_identity_operation_id": "eiop_aaaa0001aaaa0001",
         }
     )
     proposal = _proposal(scene, kind=kind, payload=payload)
@@ -192,7 +195,13 @@ def test_identity_review_replay_preserves_the_exact_operator_handoff(
 
     assert first.error is None and retry.error is None
     assert first.result is not None
-    assert first.result["identity_correction_handoff"]
+    handoff = first.result["identity_correction_handoff"]
+    assert handoff
+    # WP-06 / RI-P4-HIGH-001: the emitted handoff reaches the operator still in
+    # `OPERATOR_PREVIEW_REQUIRED` and carrying the reviewed payload verbatim, so
+    # the subject the matching preview command takes survives the transport.
+    assert handoff["state"] == "operator_preview_required"
+    assert handoff["effective_payload"] == payload
     assert retry.result == first.result
 
 

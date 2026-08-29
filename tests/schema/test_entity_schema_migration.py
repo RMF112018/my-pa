@@ -300,6 +300,12 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "entity_reenrichment_work",
         "entity_reenrichment_subjects",
         "entity_reenrichment_version_watermarks",
+        # `b727e870d45e`'s identity-ambiguity pair, stacked above the plane by a
+        # revision this suite does not own. Named here rather than added to
+        # `PHASE_B_TABLES` because they arrive above head-at-Phase-B, and the
+        # parity groups below parameterize on the plane rather than on the chain.
+        "entity_identity_preview_ambiguities",
+        "entity_identity_ambiguity_settlements",
     }
 )
 

@@ -101,6 +101,17 @@ DECLARATIONS: Final = PACKAGE / "infrastructure" / "persistence" / "tables.py"
 REACHED_THROUGH_THE_GUARD: Final = frozenset(
     {
         "infrastructure/jobs/capture_pipeline.py",
+        # WP-03's re-enrichment plane, and the same shape as the line above it:
+        # it derives the Principal from the *stored* work row it holds the
+        # lease on and scopes every subsequent statement through
+        # `partition_criterion` -- the merged-away subquery over `entities`,
+        # the candidate read and the rebinding `UPDATE` over
+        # `entity_observations`, both correlated `EXISTS` subqueries over
+        # `entities` and `entity_aliases`, and the settlement correction over
+        # `entity_reenrichment_work`. It names
+        # `entity_reenrichment_work.principal_id` to read that owner and
+        # nothing else.
+        "infrastructure/jobs/reenrichment.py",
         "infrastructure/persistence/capture.py",
         # WP-10's client plane. Three of its four statements reach the partition
         # — the insert through `principal_bound_values`, the revoke through
@@ -388,6 +399,16 @@ PER_MODULE_ONLY: Final = {
         "processing and hands it to the modules that query. Its own two "
         "statements read `capture_versions` by `version_id` to find that owner, "
         "so they are the derivation the partition comes from rather than uses."
+    ),
+    "infrastructure/jobs/reenrichment.py": (
+        "every statement it builds over a partitioned table carries "
+        "`partition_criterion` on a context derived from the stored work row, "
+        "including the rebinding UPDATE and both correlated EXISTS subqueries. "
+        "The one statement that does not is `work_partition`, which reads that "
+        "row's own `principal_id` by `work_id` in order to establish the "
+        "partition -- the derivation the partition comes from rather than uses, "
+        "exactly as `jobs.job_principal` is registered for. The module has not "
+        "yet joined a dedicated statement-level scanner."
     ),
     "infrastructure/persistence/capture.py": (
         "three statements of eight — the receipt read, the submission upsert, and "

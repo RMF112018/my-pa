@@ -102,7 +102,7 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # still requires `idempotency_key`; the server stamps it because the
         # caller must not.
         Capability.GSQS_START,
-        # The entity plane's eighteen writes (Phase A). Every one of them
+        # The entity plane's eighteen keyed writes (Phase A). Every one of them
         # carries an `idempotency_key` its command validates and its repository
         # arbitrates against
         # `entity_mutation_events (principal_id, capability, idempotency_key)`,
@@ -127,31 +127,27 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
-        # **None of Phase B's four writes is here, and the reason is this set's
+        # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it
         # into the payload*, so a capability here must have an
-        # `idempotency_key` field on its command. None of the four does, and
+        # `idempotency_key` field on its command. None of the six does, and
         # that absence is itself the contract:
         #
-        # * `entities.proposals.create` and `relationship_memory.propose` carry
-        #   no key because a proposal is not arbitrated by one. The entity
-        #   producer's replay identity is the server-derived `dedupe_sha256`
-        #   under `UNIQUE (principal_id, dedupe_sha256)` on the open states, so a
-        #   repeat is answered by the open proposal with `created=False` and
-        #   writes nothing — a stronger guarantee than a caller-shaped key, and
-        #   one that holds on every transport rather than only this one. The
-        #   memory producer has neither, which B3 recorded as a real gap; adding
-        #   it here would advertise a replay guarantee nothing implements.
-        # * `entities.merge` is arbitrated by
+        # * `entities.proposals.create` and `relationship_memory.propose` use
+        #   the canonical Principal-scoped request ledger. The remote boundary
+        #   gives an identical request a deterministic request ID, so the
+        #   application handler replays its persisted result without inserting
+        #   a caller-shaped field into either proposal command.
+        # * `entities.merge` and `entities.split` are arbitrated by
         #   `UNIQUE (principal_id, idempotency_key)` on
-        #   `entity_identity_operations`, and its key is derived by the handler
+        #   `entity_identity_operations`, and each key is derived by the handler
         #   from the preview it consumes — so an identical retry replays and a
         #   materially different request against the same preview conflicts, on
         #   local MCP, remote MCP and HTTP alike. Deriving it here would give the
         #   guarantee to one transport out of three.
-        # * `entities.merge.preview` mints a fresh preview on every call and has
-        #   no replay identity to key on at all.
+        # * `entities.merge.preview` and `entities.split.preview` mint a fresh
+        #   preview on every call and have no replay identity to key on at all.
         #
         # `REMOTE_OWNED_PAYLOAD_FIELDS` still refuses a caller-supplied
         # `idempotency_key` on every one of these paths, which is what operator §23's "do not

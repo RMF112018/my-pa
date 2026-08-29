@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred one capability names and none of them
+  ends: the transport routes one hundred and four capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -216,14 +216,14 @@ def document(
 def _service(marked: Scene) -> ApplicationService:
     """The service every wire in this file is built over.
 
-    Composed **without** the governed merge, and the reason is the same one
+    Composed **without** governed identity correction, and the reason is the same one
     `tests/contract/test_transport_parity.py` records: `_Entities` implements none
     of the sixteen identity-correction port methods, so a build that composed the
-    plane would answer `internal_error` for the merge pair and this file's
+    plane would answer `internal_error` for merge/split and this file's
     all-succeed sweeps would be measuring a crash. The two are still driven --
     every negative sweep here sends them and reads the refusal -- and what they
     are exempted from is the *positive* sweep, which asserts a successful answer.
-    The merge itself is proved against a real server in `tests/database` and
+    Identity correction itself is proved against a real server in `tests/database` and
     `tests/recovery`.
     """
     return build_service(
@@ -233,10 +233,15 @@ def _service(marked: Scene) -> ApplicationService:
     )
 
 
-#: The two this file drives for refusals and not for answers, because the harness
-#: composes no governed merge.
+#: These are driven for refusals and not for answers, because the harness
+#: composes no governed identity-correction ledger.
 UNCOMPOSED_HERE: frozenset[Capability] = frozenset(
-    {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
+    {
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
+    }
 )
 
 
@@ -851,6 +856,19 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "preview_digest": "0" * 64,
             "reason": MARKER_CONTENT,
         },
+        Capability.ENTITIES_IDENTITY_HISTORY: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_SPLIT_PREVIEW: {
+            "source_identity_operation_id": issue_identifier(IdKind.ENTITY_IDENTITY_OPERATION),
+            "reason": MARKER_CONTENT,
+        },
+        Capability.ENTITIES_SPLIT: {
+            "preview_id": "eipv_wirewire02wirewire02",
+            "preview_digest": "1" * 64,
+            "reason": MARKER_CONTENT,
+        },
         Capability.RELATIONSHIP_MEMORY_GET: {"memory_id": read_memory},
         Capability.RELATIONSHIP_MEMORY_LIST: {"entity_id": person.entity_id},
         Capability.RELATIONSHIP_MEMORY_SEARCH: {"query": MARKER_QUERY},
@@ -1230,6 +1248,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_IDENTITY_HISTORY,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
     }
 ]
@@ -1367,15 +1388,16 @@ TASK_MANAGEMENT_EXEMPTION = frozenset(
 
 #: The Relationship Memory exemption (WP-RM-01), and it is deliberately **one
 #: name**, the way `MANAGED_DOCUMENT_EXEMPTION` is. `relationship_memory.create`
-#: is the only one of the eight the substring proxy refuses, and it is refused
+#: is the only one of the nine the substring proxy refuses, and it is refused
 #: for the reason `capture.create` and `documents.create` are: a memory is a
 #: *product-owned* record under `ADR-003` — a note the user wrote about a person
 #: — and writing one mutates no source. Its rows carry no `source_id`, and the
 #: plane reaches no `SourceProvider` at all.
 #:
 #: This is an extension of the registry the rule reads and not a relaxation of
-#: the rule: the four writes on this plane are `create`, `revise`, `archive` and
-#: `restore`, and only the first is exempted, because the other three pass the
+#: the rule: the four direct canonical writes are `create`, `revise`, `archive`
+#: and `restore`, while `propose` is the separate producer write. Only canonical
+#: `create` is exempted, because the other three direct writes pass the
 #: name check unaided. A future `relationship_memory.delete` is still caught
 #: here — and could not exist in any case, since archive is reversible and there
 #: is no capability that destroys a memory. The property the proxy stands for is
@@ -1386,8 +1408,8 @@ TASK_MANAGEMENT_EXEMPTION = frozenset(
 RELATIONSHIP_MEMORY_EXEMPTION = frozenset({Capability.RELATIONSHIP_MEMORY_CREATE})
 
 #: The fifth exemption (`WP-RI-A-02`), and it is a pair rather than a family.
-#: `entities.create` and `entities.update` are the only two of the plane's ten
-#: writes the substring proxy refuses, and both are refused for the reason
+#: `entities.create` and `entities.update` are the only two of WP-RI-A-02's ten
+#: original writes the substring proxy refuses, and both are refused for the reason
 #: `capture.create` and `documents.create` are: what they write is a
 #: *product-owned* record — this Principal's own account of who a person is —
 #: which `ADR-003` makes a third authority class that is neither a source-system
@@ -1397,8 +1419,9 @@ RELATIONSHIP_MEMORY_EXEMPTION = frozenset({Capability.RELATIONSHIP_MEMORY_CREATE
 #: the property the proxy stands for by driving every capability against a
 #: recording provider.
 #:
-#: The other eight writes are *not* exempt and still pass the name check, which
-#: is the check working rather than an omission: `archive`, `restore`, `bind`,
+#: The other eight writes in that original set are *not* exempt and still pass
+#: the name check, which is the check working rather than an omission: `archive`,
+#: `restore`, `bind`,
 #: `retire` and `supersede` are all names the proxy admits, and the plane was
 #: named that way partly because those verbs say what the write does without
 #: claiming a mutation of anything outside it.

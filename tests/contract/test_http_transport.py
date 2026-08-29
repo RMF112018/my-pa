@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred one capabilities is addressable
+**Reachability.** Every one of the one hundred and four capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-second capability added to the domain arrives as
-a failing row instead of as an untested one. Nine of the one hundred one answer a
+written here, so a one-hundred-fifth capability added to the domain arrives as
+a failing row instead of as an untested one. Thirteen of the one hundred and four answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -111,6 +111,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityIdentityHistory,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -141,6 +142,7 @@ from my_pa.application.commands import (
     ObserveEntityMention,
     PrepareContext,
     PreviewEntityMerge,
+    PreviewEntitySplit,
     ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
@@ -173,6 +175,7 @@ from my_pa.application.commands import (
     SearchKnowledge,
     SearchRelationshipMemories,
     SearchTasks,
+    SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
@@ -283,6 +286,8 @@ _UNCOMPOSED_CAPABILITIES = frozenset(
         # merge is proved, against a real server.
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 
@@ -912,6 +917,21 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "preview_digest": "0" * 64,
             "reason": "A synthetic identity correction.",
         },
+        Capability.ENTITIES_IDENTITY_HISTORY: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_SPLIT_PREVIEW: {
+            "source_identity_operation_id": make_identifier(
+                IdKind.ENTITY_IDENTITY_OPERATION, "httpwiresplitsource"
+            ),
+            "reason": "A synthetic identity correction reversal.",
+        },
+        Capability.ENTITIES_SPLIT: {
+            "preview_id": "eipv_httpwire02httpwire02",
+            "preview_digest": "1" * 64,
+            "reason": "A synthetic identity correction reversal.",
+        },
         Capability.RELATIONSHIP_MEMORY_GET: {
             "memory_id": MEMORY_ID,
             "include_statement": True,
@@ -1475,6 +1495,21 @@ def commands_for(
             preview_id="eipv_httpwire01httpwire01",
             preview_digest="0" * 64,
             reason="A synthetic identity correction.",
+        ),
+        Capability.ENTITIES_IDENTITY_HISTORY: GetEntityIdentityHistory(
+            entity_id=person.entity_id,
+            page_size=10,
+        ),
+        Capability.ENTITIES_SPLIT_PREVIEW: PreviewEntitySplit(
+            source_identity_operation_id=make_identifier(
+                IdKind.ENTITY_IDENTITY_OPERATION, "httpwiresplitsource"
+            ),
+            reason="A synthetic identity correction reversal.",
+        ),
+        Capability.ENTITIES_SPLIT: SplitEntity(
+            preview_id="eipv_httpwire02httpwire02",
+            preview_digest="1" * 64,
+            reason="A synthetic identity correction reversal.",
         ),
         Capability.RELATIONSHIP_MEMORY_GET: GetRelationshipMemory(
             memory_id=MEMORY_ID, include_statement=True

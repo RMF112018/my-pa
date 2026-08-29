@@ -71,12 +71,12 @@ hash.
 
 
 The repository is an executable local candidate, not a documentation scaffold.
-The `my_pa` application defines and wires one hundred one capabilities through HTTP,
+The `my_pa` application defines and wires one hundred and four capabilities through HTTP,
 MCP, and CLI composition, with PostgreSQL Principal partitioning and two worker
 planes. **A default composition exposes fifty-five of them.** The six
 `documents.` names require `MY_PA_MANAGED_DOCUMENT_ROOT`, the
-thirty-one `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
-(and its twenty-one writes a second switch beside it), and the
+thirty-four `entities.` names require `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
+(and its twenty-three writes a second switch beside it), and the
 nine `relationship_memory.` names require that variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`, because a memory binds an Entity as its
 subject and ownership is proven by reading `knowledge.entities`; none has
@@ -95,7 +95,7 @@ Corrected 2026-08-19: this sentence read
 "exposes one hundred one capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns seventy-six revisions at head `3d07af4dc513`; its linear history places the GSQS admission
+Alembic owns seventy-seven revisions at head `8e1c4a7b2d90`; its linear history places the GSQS admission
 `c4b0a1d9e827` immediately before Phase B's `c7a1f04b9e63`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the
@@ -430,7 +430,7 @@ read/write provider that allows accidental source mutation.
 - `SC-INV-012`: User-authored records are product-owned and append-only, and are neither source mutation nor managed-document writes.
 - `SC-INV-013`: No composite relationship score exists, and no protected- or sensitive-trait inference exists at all. Transparent single-basis indicators are permitted and each states its calculation basis and time window.
 - `SC-INV-014`: A canonical person is established only through governed identity resolution; merge and split are reversible and review-required.
-  - **Half of this invariant constrains nothing yet, and the list did not say so.** Merge exists and is review-required (`EntityProposalKind.MERGE_ENTITIES` maps to `REQUIRES_OPERATOR` in `domain/relationship/governance.py`, and `redirect_entity` records the lineage). **Split does not exist** — there is no split proposal kind, no repository method, and no capability; a search of `src/my_pa` for a split of an entity returns only an unrelated PDF splitter and a SQL statement splitter. [`ops/runbooks/relationship-intelligence.md`](../../ops/runbooks/relationship-intelligence.md) states the same ("No split. Section 15.4's split requirements are not implemented; only merge is"). Recorded 2026-08-19 because `SC-INV-013` immediately above is enforced by a live architecture test, so a reader had no way to tell that this neighbour is half aspirational.
+  - Merge and split are separate governed two-step corrections. `entities.split.preview` persists the bounded semantic inverse of one completed merge while assigning fresh monotonic concurrency tokens; `entities.split` may consume only that unexpired, digest- and version-bound preview and appends rather than erases identity history. Both use the `entity_identity_correction` purpose, require operator authority, the default-off Relationship Intelligence write and identity-correction gates, policy and audit persistence, and are never executed merely because a split proposal is accepted for review. Ordinary remote profiles omit them; remote publication additionally requires global remote writes and the exact server-resolved `remote.operator` durable capability set plus the normal capability and purpose grants. Repository implementation does not activate a runtime, profile, grant, flag, frontend, live data path, or final cross-plane redistribution. [`ops/runbooks/relationship-intelligence.md`](../../ops/runbooks/relationship-intelligence.md) is the current operating and commissioning boundary.
 
 
 ## 13. Context acceptance criteria

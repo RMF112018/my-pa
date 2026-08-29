@@ -1,4 +1,4 @@
-"""The eight `relationship_memory.` capabilities, as a caller actually meets them.
+"""The nine `relationship_memory.` capabilities, as a caller actually meets them.
 
 Beside `tests/contract/test_entity_capabilities.py`, which makes the same kind of
 claim about the plane that owns a memory's subject. The repository and the domain
@@ -160,7 +160,7 @@ LIMITS: Final = EffectiveLimits(
 )
 
 #: Every capability on the plane, spelled out rather than derived from the
-#: prefix. `test_the_eight_names_are_every_name_on_the_plane` is what keeps this
+#: prefix. `test_the_nine_names_are_every_name_on_the_plane` is what keeps this
 #: from drifting when the plane grows.
 MEMORY_CAPABILITIES: Final[tuple[Capability, ...]] = (
     Capability.RELATIONSHIP_MEMORY_CREATE,
@@ -1172,6 +1172,7 @@ def _a_promoted_assertion(engine: Engine, subject: str, statement: str) -> str:
                 memory_proposal_id=memory_proposal_id,
                 principal_id=PRINCIPAL,
                 subject_entity_id=subject,
+                origin_subject_entity_id=subject,
                 expected_subject_version=1,
                 proposed_kind=MemoryKind.COMMUNICATION_PREFERENCE.value,
                 proposed_statement=statement,

@@ -236,6 +236,10 @@ def test_public_proposal_schema_publishes_bounded_typed_evidence() -> None:
     assert evidence["maxItems"] == 8
     assert evidence["items"]["required"] == ["role"]
     assert len(evidence["items"]["oneOf"]) == 3
+    assert len(schema["oneOf"]) == len(EntityProposalKind)
+    assert {branch["properties"]["kind"]["const"] for branch in schema["oneOf"]} == {
+        kind.value for kind in EntityProposalKind
+    }
 
 
 def test_public_normalization_refuses_caller_controlled_proposed_by() -> None:

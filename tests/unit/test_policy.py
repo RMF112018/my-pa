@@ -322,6 +322,9 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.RELATIONSHIP_MEMORY_PROPOSE, Purpose.RELATIONSHIP_MEMORY_PROPOSAL),
         (Capability.ENTITIES_MERGE_PREVIEW, Purpose.ENTITY_IDENTITY_CORRECTION),
         (Capability.ENTITIES_MERGE, Purpose.ENTITY_IDENTITY_CORRECTION),
+        (Capability.ENTITIES_IDENTITY_HISTORY, Purpose.ENTITY_READ),
+        (Capability.ENTITIES_SPLIT_PREVIEW, Purpose.ENTITY_IDENTITY_CORRECTION),
+        (Capability.ENTITIES_SPLIT, Purpose.ENTITY_IDENTITY_CORRECTION),
         (Capability.RELATIONSHIP_MEMORY_GET, Purpose.RELATIONSHIP_MEMORY_READ),
         (Capability.RELATIONSHIP_MEMORY_LIST, Purpose.RELATIONSHIP_MEMORY_READ),
         (Capability.RELATIONSHIP_MEMORY_SEARCH, Purpose.RELATIONSHIP_MEMORY_READ),
@@ -372,10 +375,11 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # Phase B added both producer paths and the governed merge pair, with one
     # purpose per producer and one shared by preview/apply -- so it contributes
     # four pairs rather than the twelve a cross product would give.
-    # GSQS B0 adds its start/status capability-purpose pairs. Unioned: 101 capabilities,
-    # 34 purposes, 103 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 103
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 103 == 3331
+    # Final identity recovery adds one read and the operator-only split
+    # preview/apply pair. GSQS B0 adds its start/status pairs. Unioned: 104
+    # capabilities, 34 purposes, 106 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 106
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 106 == 3430
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

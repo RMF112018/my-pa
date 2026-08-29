@@ -3086,6 +3086,7 @@ class SqlEntityRepository(EntitiesRepository):
             .values(
                 status=EntityStatus.MERGED_REDIRECT.value,
                 superseded_by_entity_id=retained_entity_id,
+                version=entities.c.version + 1,
             )
         )
         if result.rowcount == 0:
@@ -3345,6 +3346,7 @@ class SqlEntityRepository(EntitiesRepository):
                     created_at=preview.created_at,
                     expires_at=preview.expires_at,
                     consumed_at=preview.consumed_at,
+                    source_identity_operation_id=preview.source_identity_operation_id,
                 )
             )
         )
@@ -3400,6 +3402,9 @@ class SqlEntityRepository(EntitiesRepository):
                     state=operation.state.value,
                     started_at=operation.started_at,
                     completed_at=operation.completed_at,
+                    source_identity_operation_id=operation.source_identity_operation_id,
+                    effect_count=operation.effect_count,
+                    effects_digest=operation.effects_digest,
                 )
             )
         )
@@ -3420,6 +3425,8 @@ class SqlEntityRepository(EntitiesRepository):
                 state=operation.state.value,
                 receipt_id=operation.receipt_id,
                 completed_at=operation.completed_at,
+                effect_count=operation.effect_count,
+                effects_digest=operation.effects_digest,
             )
         )
         if result.rowcount == 0:
@@ -3435,6 +3442,35 @@ class SqlEntityRepository(EntitiesRepository):
             select(entity_identity_operations).where(
                 _mine(entity_identity_operations, principal_id),
                 entity_identity_operations.c.idempotency_key == idempotency_key,
+            )
+        ).one_or_none()
+        return None if row is None else _row_to_identity_operation(row)
+
+    def identity_operation(
+        self, principal_id: str, identity_operation_id: str
+    ) -> IdentityOperation | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
+        row = self._connection.execute(
+            select(entity_identity_operations).where(
+                _mine(entity_identity_operations, principal_id),
+                entity_identity_operations.c.identity_operation_id == identity_operation_id,
+            )
+        ).one_or_none()
+        return None if row is None else _row_to_identity_operation(row)
+
+    def split_for_source_operation(
+        self, principal_id: str, source_identity_operation_id: str
+    ) -> IdentityOperation | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(source_identity_operation_id, IdKind.ENTITY_IDENTITY_OPERATION)
+        row = self._connection.execute(
+            select(entity_identity_operations).where(
+                _mine(entity_identity_operations, principal_id),
+                entity_identity_operations.c.operation_type == IdentityOperationType.SPLIT.value,
+                entity_identity_operations.c.state == IdentityOperationState.COMPLETED.value,
+                entity_identity_operations.c.source_identity_operation_id
+                == source_identity_operation_id,
             )
         ).one_or_none()
         return None if row is None else _row_to_identity_operation(row)
@@ -3484,6 +3520,66 @@ class SqlEntityRepository(EntitiesRepository):
             .order_by(entity_identity_effects.c.sequence)
         ).all()
         return [_row_to_identity_effect(row) for row in rows]
+
+    def identity_effect_matches_after_state(
+        self, principal_id: str, effect: IdentityEffect
+    ) -> bool:
+        """Compare every column the merge writer changed, without reading content fields."""
+        return self._identity_effect_state(principal_id, effect) == dict(effect.after_state)
+
+    def restore_identity_effect(self, principal_id: str, effect: IdentityEffect) -> None:
+        """Restore exact pre-merge columns only while the post-merge state still matches."""
+        subject = _identity_effect_subject(effect.family)
+        before = _identity_effect_values(effect.family, effect.before_state)
+        after = _identity_effect_values(effect.family, effect.after_state)
+        if "version" in before:
+            current_version = after.get("version")
+            if not isinstance(current_version, int):
+                raise ValueError("a versioned identity effect records its resulting version")
+            before["version"] = current_version + 1
+        conditions = [
+            _mine(subject.table, principal_id),
+            subject.table.c[subject.id_column] == effect.record_id,
+            *(
+                subject.table.c[name].is_(None) if value is None else subject.table.c[name] == value
+                for name, value in after.items()
+            ),
+        ]
+        result = self._connection.execute(update(subject.table).where(*conditions).values(**before))
+        if result.rowcount != 1:
+            raise UnknownScopeError("an identity split effect no longer matches its source merge")
+
+    def _identity_effect_state(
+        self, principal_id: str, effect: IdentityEffect
+    ) -> dict[str, object] | None:
+        if effect.family is IdentityEffectFamily.REVIEW_CASE:
+            row = self._connection.execute(
+                select(entity_proposals.c.state).where(
+                    _mine(entity_proposals, principal_id),
+                    entity_proposals.c.review_case_id == effect.record_id,
+                )
+            ).one_or_none()
+            snapshot = self.entity_proposal_review_snapshot(principal_id, effect.record_id)
+            if row is None or snapshot is None:
+                return None
+            version, disposition, escalated = snapshot
+            return {
+                "state": str(row.state),
+                "review_version": version,
+                "latest_disposition": disposition,
+                "escalated": escalated,
+            }
+        subject = _identity_effect_subject(effect.family)
+        names = tuple(_identity_effect_values(effect.family, effect.after_state))
+        row = self._connection.execute(
+            select(*(subject.table.c[name] for name in names)).where(
+                _mine(subject.table, principal_id),
+                subject.table.c[subject.id_column] == effect.record_id,
+            )
+        ).one_or_none()
+        if row is None:
+            return None
+        return {name: _identity_effect_json_value(name, getattr(row, name)) for name in names}
 
 
 #: The three directions `relationships` admits, as predicates. A mapping rather
@@ -3609,6 +3705,87 @@ _CHILD_SUBJECTS: Final[dict[IdentityEffectFamily, _ChildSubject]] = {
         version_column="resolution_version",
     ),
 }
+
+_IDENTITY_EFFECT_SUBJECTS: Final[dict[IdentityEffectFamily, _ChildSubject]] = {
+    IdentityEffectFamily.ENTITY: _ChildSubject(
+        table=entities,
+        id_column="entity_id",
+        id_kind=IdKind.ENTITY,
+        entity_columns=(),
+        version_column="version",
+    ),
+    **_CHILD_SUBJECTS,
+    IdentityEffectFamily.PROPOSAL: _ChildSubject(
+        table=entity_proposals,
+        id_column="proposal_id",
+        id_kind=IdKind.ENTITY_PROPOSAL,
+        entity_columns=(),
+        version_column="version",
+    ),
+}
+
+
+def _identity_effect_subject(family: IdentityEffectFamily) -> _ChildSubject:
+    subject = _IDENTITY_EFFECT_SUBJECTS.get(family)
+    if subject is None:
+        raise ValueError("an identity effect names a family restored by another repository")
+    return subject
+
+
+def _identity_effect_json_value(name: str, value: object) -> object:
+    if name.endswith("_at") and value is not None:
+        return ensure_utc(value).isoformat().replace("+00:00", "Z")  # type: ignore[arg-type]
+    return value
+
+
+def _identity_effect_db_value(name: str, value: object) -> object:
+    if name.endswith("_at") and isinstance(value, str):
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    return value
+
+
+def _identity_effect_values(
+    family: IdentityEffectFamily, state: Mapping[str, object]
+) -> dict[str, object]:
+    admitted = {
+        IdentityEffectFamily.ENTITY: {"status", "superseded_by_entity_id", "version"},
+        IdentityEffectFamily.ALIAS: {
+            "entity_id",
+            "state",
+            "version",
+            "superseded_by_alias_id",
+            "updated_at",
+        },
+        IdentityEffectFamily.IDENTIFIER: {
+            "entity_id",
+            "state",
+            "version",
+            "superseded_by_identifier_id",
+            "updated_at",
+        },
+        IdentityEffectFamily.ASSIGNMENT: {
+            "entity_id",
+            "scope_entity_id",
+            "state",
+            "version",
+            "superseded_by_assignment_id",
+            "updated_at",
+        },
+        IdentityEffectFamily.RELATIONSHIP: {
+            "from_entity_id",
+            "to_entity_id",
+            "scope_entity_id",
+            "state",
+            "version",
+            "superseded_by_relationship_id",
+            "updated_at",
+        },
+        IdentityEffectFamily.OBSERVATION: {"entity_id", "resolution_version"},
+        IdentityEffectFamily.PROPOSAL: {"state", "invalidated_reason", "decided_by", "decided_at"},
+    }.get(family)
+    if admitted is None or set(state) != admitted:
+        raise ValueError("an identity effect state does not match its record family")
+    return {name: _identity_effect_db_value(name, value) for name, value in state.items()}
 
 
 def _reparentable(family: IdentityEffectFamily) -> _ChildSubject:
@@ -4113,6 +4290,7 @@ def _row_to_identity_preview(row: Row[Any]) -> IdentityPreview:
         created_at=row.created_at,
         expires_at=row.expires_at,
         consumed_at=row.consumed_at,
+        source_identity_operation_id=_text_or_none(row.source_identity_operation_id),
     )
 
 
@@ -4136,6 +4314,9 @@ def _row_to_identity_operation(row: Row[Any]) -> IdentityOperation:
         state=IdentityOperationState(str(row.state)),
         started_at=row.started_at,
         completed_at=row.completed_at,
+        source_identity_operation_id=_text_or_none(row.source_identity_operation_id),
+        effect_count=None if row.effect_count is None else int(row.effect_count),
+        effects_digest=_text_or_none(row.effects_digest),
     )
 
 

@@ -126,6 +126,7 @@ from my_pa.domain.relationship.memory import (
     RelationshipMemoryProposal,
     classification_floor_for,
     memory_proposal_dedupe_digest,
+    proposal_context_links_for_storage,
     statement_digest,
 )
 from my_pa.domain.relationship.normalization import normalize_name
@@ -331,6 +332,7 @@ def _open_proposal(
             memory_proposal_id=memory_proposal_id,
             principal_id=principal_id,
             subject_entity_id=subject_entity_id,
+            origin_subject_entity_id=subject_entity_id,
             expected_subject_version=expected_subject_version,
             proposed_kind=kind.value,
             proposed_statement=statement,
@@ -344,7 +346,15 @@ def _open_proposal(
                 context_links=context_links,
             ),
             structured_value=structured_value,
-            context_links=list(context_links),
+            context_links=list(
+                proposal_context_links_for_storage(
+                    context_links,
+                    tuple(
+                        link["target_id"] if link["target_type"] == "entity" else None
+                        for link in context_links
+                    ),
+                )
+            ),
             state=MemoryProposalState.NEEDS_REVIEW.value,
             method=method.value,
             method_version="synthetic-rule-v1",
@@ -944,7 +954,7 @@ def test_typed_correction_promotes_exact_content_context_and_evidence_without_mu
 
     assert proposal.proposed_statement == PROPOSED_NOTE
     assert proposal.structured_value == original_structured
-    assert proposal.context_links == list(original_context)
+    assert proposal.context_links == [{**original_context[0], "origin_subject_entity_id": DANA}]
     assert version.statement_text == corrected_statement
     assert version.structured_value == {
         "schema": "relationship_memory.communication_preference.v1",
@@ -2159,7 +2169,7 @@ def test_a_build_without_the_memory_plane_composed_never_reaches_a_memory_case(
 
     What the case would have carried is named rather than left implicit: a
     `subject_entity_id` and a `proposed_kind` about a person, in front of a
-    reviewer of a product whose eight `relationship_memory.` capability names
+    reviewer of a product whose nine `relationship_memory.` capability names
     `available_capabilities` withholds.
     """
     with two_principals.begin() as connection:
@@ -2393,7 +2403,12 @@ def test_proposal_context_lock_serializes_against_a_merge_of_that_entity(
         ).scalar_one()
     assert context_entity is not None
     assert context_entity.status is EntityStatus.ACTIVE
-    assert stored_context == list(proposal.context_links)
+    assert stored_context == list(
+        proposal_context_links_for_storage(
+            proposal.context_links,
+            proposal.context_link_origins,
+        )
+    )
 
 
 def test_corrected_context_lock_serializes_against_a_merge_of_that_entity(
@@ -2586,8 +2601,20 @@ def test_proposal_context_round_trips_and_changes_database_dedupe_identity(
     }
     assert {row.dedupe_sha256 for row in rows} == {first.dedupe_sha256, second.dedupe_sha256}
     assert {tuple(tuple(sorted(link.items())) for link in row.context_links) for row in rows} == {
-        tuple(tuple(sorted(link.items())) for link in first.context_links),
-        tuple(tuple(sorted(link.items())) for link in second.context_links),
+        tuple(
+            tuple(sorted(link.items()))
+            for link in proposal_context_links_for_storage(
+                first.context_links,
+                first.context_link_origins,
+            )
+        ),
+        tuple(
+            tuple(sorted(link.items()))
+            for link in proposal_context_links_for_storage(
+                second.context_links,
+                second.context_link_origins,
+            )
+        ),
     }
 
 
@@ -2629,13 +2656,19 @@ class _InsertOnlyProposals:
                 memory_proposal_id=proposal.memory_proposal_id,
                 principal_id=proposal.principal_id,
                 subject_entity_id=proposal.subject_entity_id,
+                origin_subject_entity_id=proposal.origin_subject_entity_id,
                 expected_subject_version=proposal.expected_subject_version,
                 proposed_kind=proposal.proposed_kind.value,
                 proposed_statement=proposal.proposed_statement,
                 proposed_statement_sha256=proposal.proposed_statement_sha256,
                 dedupe_sha256=proposal.dedupe_sha256,
                 structured_value=proposal.structured_value,
-                context_links=list(proposal.context_links),
+                context_links=list(
+                    proposal_context_links_for_storage(
+                        proposal.context_links,
+                        proposal.context_link_origins,
+                    )
+                ),
                 state=proposal.state.value,
                 method=proposal.method.value,
                 method_version=proposal.method_version,

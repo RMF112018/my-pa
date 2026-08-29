@@ -264,8 +264,8 @@ def test_the_scan_reaches_the_whole_relationship_surface() -> None:
     vocabularies = relationship_vocabularies()
     declared = declared_allow_list()
 
-    assert len(columns) == 44, f"{len(columns)} relationship tables reached, not forty-four"
-    assert len(models) == 51, f"{len(models)} relationship models reached, not fifty-one"
+    assert len(columns) == 47, f"{len(columns)} relationship tables reached, not forty-seven"
+    assert len(models) == 60, f"{len(models)} relationship models reached, not sixty"
     assert vocabularies, "no closed relationship vocabulary was reached"
     assert set(declared) == set(ALLOW_LIST_CONSTANTS), (
         f"{sorted(declared)} allow-list constants were read from "

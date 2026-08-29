@@ -33,7 +33,7 @@ from __future__ import annotations
 import pytest
 from sqlalchemy import Engine, func, select
 from sqlalchemy.exc import IntegrityError
-from tests.pipeline.conftest import RICH_NOTE, drain, save
+from tests.pipeline.conftest import PRINCIPAL_ID, RICH_NOTE, drain, save
 
 from my_pa.domain.capture.proposal import (
     Proposal,
@@ -48,6 +48,7 @@ from my_pa.domain.capture.version import digest_of
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.jobs.capture_pipeline import METHOD_VERSION, SCHEMA_VERSION
+from my_pa.infrastructure.persistence.principal_scope import capture_context
 from my_pa.infrastructure.persistence.proposals import (
     invalidate_proposal,
     presentable_proposals,
@@ -63,6 +64,8 @@ from my_pa.infrastructure.persistence.tables import (
 )
 
 pytestmark = pytest.mark.database
+
+CONTEXT = capture_context(PRINCIPAL_ID)
 
 
 def test_every_proposal_the_pipeline_persists_cites_a_span_that_re_derives(
@@ -93,7 +96,7 @@ def test_every_proposal_the_pipeline_persists_cites_a_span_that_re_derives(
                 ).scalar_one()
             )
             assert cited >= 1, f"{proposal_id} cites no span"
-            assert span_faults(connection, proposal_id) == (), (
+            assert span_faults(connection, proposal_id, context=CONTEXT) == (), (
                 f"{proposal_id} cites a span that does not re-derive from the version "
                 "it names. The digest is recomputed from `capture_versions.content` "
                 "rather than compared against a stored quote, so this is a real "
@@ -207,12 +210,12 @@ def test_a_span_whose_quoted_hash_does_not_re_derive_quarantines_its_proposal(
             faulty[reason] = proposal.proposal_id
 
     with engine.connect() as connection:
-        assert span_faults(connection, good.proposal_id) == (), (
+        assert span_faults(connection, good.proposal_id, context=CONTEXT) == (), (
             "the correct span was reported as a fault, so every assertion below is "
             "about a validator that refuses everything"
         )
         for reason, proposal_id in faulty.items():
-            found = span_faults(connection, proposal_id)
+            found = span_faults(connection, proposal_id, context=CONTEXT)
             assert len(found) == 1, f"{reason.value} produced {found}"
             assert found[0].reason is reason, (
                 f"the fault was reported as {found[0].reason.value} rather than "

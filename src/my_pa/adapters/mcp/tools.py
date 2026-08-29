@@ -275,7 +275,8 @@ def _tools() -> tuple[Tool, ...]:
                 open_world_hint=False,
             ),
         )
-        for capability in _COMMANDS
+        for capability in Capability
+        if capability in _COMMANDS
     )
 
 

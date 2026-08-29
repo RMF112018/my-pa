@@ -154,6 +154,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityIdentityHistory,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -185,6 +186,7 @@ from my_pa.application.commands import (
     ObserveEntityMention,
     PrepareContext,
     PreviewEntityMerge,
+    PreviewEntitySplit,
     ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
@@ -220,6 +222,7 @@ from my_pa.application.commands import (
     SearchKnowledge,
     SearchRelationshipMemories,
     SearchTasks,
+    SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
@@ -246,16 +249,26 @@ from my_pa.application.entity_directed import EntityDirectedService
 from my_pa.application.entity_governance import (
     EntityGovernanceService,
     EntityProposalReviewService,
+    IdentityCorrectionHandoffState,
     ObserveCommand,
     QuarantinedObservationError,
     ResolutionNotPermittedError,
     ResolveMentionCommand,
     ReviewAuthorityError,
+    ReviewedPayloadSource,
     UnknownEntityError,
     UnknownObservationError,
 )
 from my_pa.application.entity_governance import (
     ProposedEvidence as EntityProposedEvidence,
+)
+from my_pa.application.entity_reenrichment import (
+    TRIGGERS_BY_MUTATION_CAPABILITY,
+    ProductionReenrichmentCaller,
+    ReenrichmentWorkRepository,
+    register_mutation_reenrichment,
+    register_producer_version_observation,
+    register_source_version_observation,
 )
 from my_pa.application.entity_resolution import (
     ACTIVE_ASSIGNMENT_STATUS,
@@ -298,6 +311,13 @@ from my_pa.application.identity_correction import (
     IdentityCorrectionService,
     MergeCommand,
     MergePreviewCommand,
+    SplitCommand,
+    SplitPreviewCommand,
+)
+from my_pa.application.identity_history import (
+    IdentityHistoryCursorError,
+    IdentityHistoryQuery,
+    IdentityHistoryService,
 )
 from my_pa.application.intelligence import (
     begin_cycle,
@@ -437,6 +457,7 @@ from my_pa.domain.relationship.entity import (
     StaleDirectedVersionError,
 )
 from my_pa.domain.relationship.governance import (
+    IDENTITY_CORRECTION_PROPOSAL_KINDS,
     ActorClass,
     EntityMutationConflictError,
     EntityObservation,
@@ -465,7 +486,12 @@ from my_pa.domain.relationship.memory import (
     StaleMemoryVersionError,
 )
 from my_pa.domain.relationship.normalization import NormalizationError
-from my_pa.domain.relationship.proposal_payload import ProposalPayloadError
+from my_pa.domain.relationship.proposal_payload import EntityProposalPayload, ProposalPayloadError
+from my_pa.domain.relationship.reenrichment import (
+    ReenrichmentSubject,
+    ReenrichmentSubjectKind,
+    ReenrichmentTrigger,
+)
 from my_pa.domain.relationship.resolution import EntityResolution
 from my_pa.domain.search.query import (
     DEFAULT_SNIPPET_WORDS,
@@ -530,6 +556,10 @@ class _Result:
 
     payload: dict[str, Any]
     disclosure: Disclosure
+    # Internal mutation evidence for durable re-enrichment registration. This
+    # never enters the response envelope. Absence means this invocation did not
+    # create a new authoritative mutation (including replay and no-op success).
+    reenrichment_cause_id: str | None = None
 
 
 class _CommitRejectedConflictError(Exception):
@@ -2212,6 +2242,14 @@ def _merge_idempotency_key(principal_id: str, preview_id: str) -> str:
     return f"idk_{digest[:32]}"
 
 
+def _split_idempotency_key(principal_id: str, preview_id: str) -> str:
+    """The server-owned replay identity for one governed split preview."""
+    digest = hashlib.sha256(
+        f"{Capability.ENTITIES_SPLIT.value}|{principal_id}|{preview_id}".encode()
+    ).hexdigest()
+    return f"idk_{digest[:32]}"
+
+
 def _relationship_write_digest(command: Command) -> str:
     """Digest only material command fields without persisting their values."""
     return hashlib.sha256(
@@ -2258,6 +2296,49 @@ def _complete_relationship_write(
     )
 
 
+def _register_reenrichment_result(
+    repository: ReenrichmentWorkRepository,
+    *,
+    result: _Result,
+    principal_id: str,
+    capability: str,
+    policy_version: str,
+    at: datetime,
+) -> None:
+    """Register only a handler-attested new mutation, never payload inference."""
+    if result.reenrichment_cause_id is None:
+        return
+    register_mutation_reenrichment(
+        repository,
+        principal_id=principal_id,
+        capability=capability,
+        cause_record_id=result.reenrichment_cause_id,
+        policy_version=policy_version,
+        at=at,
+    )
+
+
+# These handlers register a more precise subject binding directly. The generic
+# handler-attested path remains authoritative for every other mapped mutation;
+# skipping this closed overlap prevents duplicate Principal-wide work for the
+# same mutation while preserving the remote branch's additional callers.
+_DIRECT_REENRICHMENT_CAPABILITIES = frozenset(
+    {
+        "capture.revise",
+        "entities.aliases.add",
+        "entities.assignments.create",
+        "entities.assignments.end",
+        "entities.assignments.revise",
+        "entities.merge",
+        "entities.relationships.create",
+        "entities.relationships.end",
+        "entities.relationships.revise",
+        "entities.split",
+        "review.decide",
+    }
+)
+
+
 class ApplicationService:
     """Every capability this build can execute, behind one entry point."""
 
@@ -2275,6 +2356,7 @@ class ApplicationService:
         relationship_intelligence_writes_enabled: bool = False,
         relationship_memory_enabled: bool = False,
         relationship_identity_correction_enabled: bool = False,
+        relationship_reenrichment_enabled: bool = False,
         producer_origins: ProducerOriginRegistry | None = None,
         gsqs_b0_ports: WorkflowPorts | None = None,
     ) -> None:
@@ -2314,6 +2396,10 @@ class ApplicationService:
         # that has not said the operation is composed gets a process that does
         # not serve it.
         self._relationship_identity_correction_enabled = relationship_identity_correction_enabled
+        # Registration is an internal consequence of already-authorized writes,
+        # never a separately published capability. Default closed keeps legacy
+        # and non-RI compositions from reaching the additive queue.
+        self._relationship_reenrichment_enabled = relationship_reenrichment_enabled
         self._gsqs_b0_ports = gsqs_b0_ports
         #: Explicit production composition of the optional proposal plane. The
         #: default gate is disabled; an enabled gate cannot be constructed
@@ -2359,7 +2445,7 @@ class ApplicationService:
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
         something the composition root did not supply — the six `documents.`
-        names in a process with no managed root, and the thirty-one `entities.` names
+        names in a process with no managed root, and the thirty-four `entities.` names
         in one that has not enabled the relationship plane. It is one answer with
         two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
@@ -2388,14 +2474,14 @@ class ApplicationService:
         # producer identity; per-Principal resolution still fails closed.
         if not self._producer_origins.has_registrations:
             served -= _PRODUCER_CAPABILITIES
-        # The governed merge, narrowed separately again. Its own switch requires
-        # the write switch, which requires the plane switch, and `Settings._check`
-        # refuses a process configured otherwise -- so the three subtractions
-        # above have already removed these names whenever a lower gate is off,
-        # and this line is what a build with every lower gate on still has to
-        # pass. Written as its own condition rather than folded into the write
-        # subtraction because the two answer different questions and a build can
-        # be in either state.
+        # Governed identity correction, narrowed separately again. Its own switch
+        # requires the write switch, which requires the plane switch, and
+        # `Settings._check` refuses a process configured otherwise -- so the three
+        # subtractions above have already removed these names whenever a lower
+        # gate is off, and this line is what a build with every lower gate on still
+        # has to pass. Written as its own condition rather than folded into the
+        # write subtraction because the two answer different questions and a
+        # build can be in either state.
         if not self._relationship_identity_correction_enabled:
             served -= _IDENTITY_CORRECTION_CAPABILITIES
         return served
@@ -2565,9 +2651,23 @@ class ApplicationService:
                 )
                 if authorization.allowed:
                     try:
-                        return _HANDLERS[command.capability](
+                        result = _HANDLERS[command.capability](
                             self, unit_of_work, authorization, command
                         )
+                        if (
+                            self._relationship_reenrichment_enabled
+                            and command.capability.value in TRIGGERS_BY_MUTATION_CAPABILITY
+                            and command.capability.value not in _DIRECT_REENRICHMENT_CAPABILITIES
+                        ):
+                            _register_reenrichment_result(
+                                unit_of_work.reenrichment,
+                                result=result,
+                                principal_id=authorization.principal.principal_id,
+                                capability=command.capability.value,
+                                policy_version=POLICY_VERSION,
+                                at=authorization.at,
+                            )
+                        return result
                     except _CommitRejectedConflictError as conflict:
                         # The handler raises this marker only after verifying a
                         # REJECTED receipt whose before/after/current versions
@@ -2788,6 +2888,18 @@ class ApplicationService:
         with _translated():
             observed = provider.metadata(command.source_object_id)
             content = provider.fetch(command.source_object_id, max_bytes=max_bytes)
+            if observed.version_id != content.version_id:
+                raise VersionChangedError
+
+        if self._relationship_reenrichment_enabled:
+            register_source_version_observation(
+                unit_of_work.reenrichment,
+                principal_id=authorization.principal.principal_id,
+                source_object_id=observed.source_object_id,
+                source_version_id=observed.version_id,
+                policy_version=authorization.decision.policy_version,
+                at=authorization.at,
+            )
 
         if command.representation is Representation.RAW_BYTES:
             payload: dict[str, Any] = {
@@ -3570,16 +3682,24 @@ class ApplicationService:
                 )
             if replayed.result_family != "review_decision":
                 raise InternalError()
+            replay_payload: dict[str, object] = {
+                "review_case_id": replayed.result_secondary_id,
+                "decision_id": replayed.result_id,
+                "review_version": replayed.result_version,
+                "disposition": replayed.result_disposition,
+                "proposal_state": replayed.result_state,
+                "assertion_id": replayed.result_assertion_id,
+                "receipt_id": replayed.receipt_id,
+            }
+            handoff = self._replayed_identity_handoff(
+                unit_of_work,
+                authorization.principal.principal_id,
+                replayed.result_id,
+            )
+            if handoff is not None:
+                replay_payload["identity_correction_handoff"] = handoff
             return _Result(
-                payload={
-                    "review_case_id": replayed.result_secondary_id,
-                    "decision_id": replayed.result_id,
-                    "review_version": replayed.result_version,
-                    "disposition": replayed.result_disposition,
-                    "proposal_state": replayed.result_state,
-                    "assertion_id": replayed.result_assertion_id,
-                    "receipt_id": replayed.receipt_id,
-                },
+                payload=replay_payload,
                 disclosure=unenrolled_disclosure(
                     authorization.at,
                     trust_basis=("review_policy", "reviewed_promotion"),
@@ -3657,20 +3777,44 @@ class ApplicationService:
                 ),
             )
             return result
+        response_payload: dict[str, object] = {
+            "review_case_id": decision.review_case_id,
+            "decision_id": decision.decision_id,
+            "review_version": decision.sequence,
+            "disposition": decision.disposition.value,
+            "proposal_state": decision.proposal_state.value,
+            "assertion_id": decision.assertion_id,
+            "receipt_id": decision.receipt_id,
+        }
+        identity_handoff = getattr(decision, "identity_correction_handoff", None)
+        if identity_handoff is not None:
+            response_payload["identity_correction_handoff"] = {
+                "state": identity_handoff.state.value,
+                "proposal_id": identity_handoff.proposal_id,
+                "proposal_kind": identity_handoff.proposal_kind.value,
+                "effective_payload_source": identity_handoff.effective_payload_source.value,
+                "effective_payload": identity_handoff.effective_payload.as_mapping(),
+            }
+        self._register_reenrichment(
+            unit_of_work,
+            authorization,
+            ReenrichmentTrigger.CONTRADICTION_RESOLUTION,
+            decision.decision_id,
+            (
+                ReenrichmentSubject(
+                    ReenrichmentSubjectKind.REVIEW_DECISION,
+                    decision.decision_id,
+                    str(decision.sequence),
+                ),
+            ),
+        )
         result = _Result(
-            payload={
-                "review_case_id": decision.review_case_id,
-                "decision_id": decision.decision_id,
-                "review_version": decision.sequence,
-                "disposition": decision.disposition.value,
-                "proposal_state": decision.proposal_state.value,
-                "assertion_id": decision.assertion_id,
-                "receipt_id": decision.receipt_id,
-            },
+            payload=response_payload,
             disclosure=unenrolled_disclosure(
                 authorization.at,
                 trust_basis=("review_policy", "reviewed_promotion"),
             ),
+            reenrichment_cause_id=decision.decision_id,
         )
         _complete_relationship_write(
             unit_of_work,
@@ -3690,6 +3834,36 @@ class ApplicationService:
             ),
         )
         return result
+
+    def _replayed_identity_handoff(
+        self, unit_of_work: UnitOfWork, principal_id: str, decision_id: str
+    ) -> dict[str, object] | None:
+        """Reconstruct the original safe handoff from canonical persisted rows."""
+        try:
+            decision = unit_of_work.reviews.entity_proposal_decision(principal_id, decision_id)
+        except NotImplementedError:
+            return None
+        if decision is None:
+            return None
+        proposal = unit_of_work.entities.proposal(principal_id, decision.proposal_id)
+        if proposal is None or proposal.kind not in IDENTITY_CORRECTION_PROPOSAL_KINDS:
+            return None
+        corrected = decision.corrected_payload
+        effective = (
+            proposal.payload
+            if corrected is None
+            else EntityProposalPayload.of(proposal.kind, corrected.as_mapping())
+        )
+        source = (
+            ReviewedPayloadSource.PROPOSED if corrected is None else ReviewedPayloadSource.CORRECTED
+        )
+        return {
+            "state": IdentityCorrectionHandoffState.OPERATOR_PREVIEW_REQUIRED.value,
+            "proposal_id": proposal.proposal_id,
+            "proposal_kind": proposal.kind.value,
+            "effective_payload_source": source.value,
+            "effective_payload": effective.as_mapping(),
+        }
 
     def _entity_review(
         self,
@@ -4365,7 +4539,7 @@ class ApplicationService:
         the request.
 
         **This is the floor, and it was missing.** `available_capabilities`
-        withholds the thirty-one `entities.` names, and two readers consult it —
+        withholds the thirty-four `entities.` names, and two readers consult it —
         `capabilities.get` and the MCP tool list. The HTTP transport is not one
         of them: `/v1/{capability}` routes by path segment and `_run` dispatches
         straight from `_HANDLERS`, so every one of the six executed and
@@ -4408,13 +4582,15 @@ class ApplicationService:
 
     # ---- the Relationship Memory plane -------------------------------------
     #
-    # Eight handlers over one service, and the shape every plane here uses:
+    # Nine handlers over two services, and the shape every plane here uses:
     # resolve the gate, build the use-case command with the Principal the
-    # authorization already resolved, hand both to `RelationshipMemoryService`.
-    # No memory rule is restated in this file. Which authority a direct write
-    # carries, which classification floor a kind implies, whether a subject may
-    # be written to, and how a replay is decided all stay in the service, the
-    # repository and the domain, so a second copy here cannot disagree with them.
+    # authorization already resolved, and hand both to `RelationshipMemoryService`
+    # for canonical memory operations or `RelationshipMemoryProposalService` for
+    # the candidate producer. No memory rule is restated in this file. Which
+    # authority a direct write carries, which classification floor a kind implies,
+    # whether a subject may be written to, and how a replay is decided all stay in
+    # the services, the repository and the domain, so a second copy here cannot
+    # disagree with them.
     #
     # `principal_id=authorization.principal.principal_id` is the only thing these
     # handlers say about identity, and the transport-facing commands have no
@@ -4831,7 +5007,7 @@ class ApplicationService:
         **The memory repository is passed only when this build composed the
         plane, and the two switches are read directly rather than through
         `_relationship_memory_plane`.** That helper raises `UnsupportedError`,
-        which is the right answer for the eight `relationship_memory.` handlers
+        which is the right answer for the nine `relationship_memory.` handlers
         and the wrong one here: `entities.context` is an entity capability, it is
         served by builds that never turned the memory plane on, and refusing it
         for a collection it can honestly decline to speak about would withdraw a
@@ -5133,6 +5309,7 @@ class ApplicationService:
                 "audit_id": authorization.audit_id,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+            reenrichment_cause_id=(decided.decision_id if decided.created else None),
         )
 
     def _entities_relationships(
@@ -5489,6 +5666,26 @@ class ApplicationService:
                 audit_id=authorization.audit_id,
                 at=authorization.at,
             )
+        receipt = admission.receipt
+        if admission.created and receipt.child_id is not None and receipt.child_version is not None:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.NEW_ALIAS,
+                receipt.event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.ENTITY,
+                        receipt.entity_id,
+                        str(receipt.entity_version),
+                    ),
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.ALIAS,
+                        receipt.child_id,
+                        str(receipt.child_version),
+                    ),
+                ),
+            )
         return self._entity_receipt(authorization, admission)
 
     def _entities_aliases_retire(
@@ -5553,6 +5750,27 @@ class ApplicationService:
         self._entity_writes()
         return unit_of_work.entities
 
+    def _register_reenrichment(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        trigger: ReenrichmentTrigger,
+        cause: str,
+        subjects: tuple[ReenrichmentSubject, ...],
+    ) -> None:
+        try:
+            repository = unit_of_work.reenrichment
+        except NotImplementedError:
+            # Compatibility for older isolated test doubles. Production's
+            # SqlAlchemyUnitOfWork always composes the durable repository.
+            return
+        caller = ProductionReenrichmentCaller(
+            repository,
+            principal_id=authorization.principal.principal_id,
+            policy_version=authorization.decision.policy_version,
+        )
+        caller.register(trigger, cause, subjects, at=authorization.at)
+
     def _entity_receipt(
         self, authorization: Authorization, admission: EntityMutationAdmission
     ) -> _Result:
@@ -5589,6 +5807,7 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(
                 authorization.at, trust_basis=_ENTITY_AUTHORING_TRUST_BASIS
             ),
+            reenrichment_cause_id=(receipt.event_id if admission.created else None),
         )
 
     # ---- the directed-relationship family (WP-RI-A-03) ---------------------
@@ -5676,6 +5895,20 @@ class ApplicationService:
                 audit_id=authorization.audit_id,
                 at=authorization.at,
             )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.ASSIGNMENT,
+                        receipt.record_id,
+                        str(receipt.version),
+                    ),
+                ),
+            )
         return self._directed_receipt(authorization, receipt)
 
     def _entities_assignments_revise(
@@ -5693,6 +5926,18 @@ class ApplicationService:
                 principal_id=authorization.principal.principal_id,
                 audit_id=authorization.audit_id,
                 at=authorization.at,
+            )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.ASSIGNMENT, receipt.record_id, str(receipt.version)
+                    ),
+                ),
             )
         return self._directed_receipt(authorization, receipt)
 
@@ -5712,6 +5957,18 @@ class ApplicationService:
                 audit_id=authorization.audit_id,
                 at=authorization.at,
             )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.ASSIGNMENT, receipt.record_id, str(receipt.version)
+                    ),
+                ),
+            )
         return self._directed_receipt(authorization, receipt)
 
     def _entities_relationships_create(
@@ -5729,6 +5986,20 @@ class ApplicationService:
                 principal_id=authorization.principal.principal_id,
                 audit_id=authorization.audit_id,
                 at=authorization.at,
+            )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.RELATIONSHIP,
+                        receipt.record_id,
+                        str(receipt.version),
+                    ),
+                ),
             )
         return self._directed_receipt(authorization, receipt)
 
@@ -5748,6 +6019,20 @@ class ApplicationService:
                 audit_id=authorization.audit_id,
                 at=authorization.at,
             )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.RELATIONSHIP,
+                        receipt.record_id,
+                        str(receipt.version),
+                    ),
+                ),
+            )
         return self._directed_receipt(authorization, receipt)
 
     def _entities_relationships_end(
@@ -5765,6 +6050,20 @@ class ApplicationService:
                 principal_id=authorization.principal.principal_id,
                 audit_id=authorization.audit_id,
                 at=authorization.at,
+            )
+        if not receipt.replayed:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+                receipt.mutation_event_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.RELATIONSHIP,
+                        receipt.record_id,
+                        str(receipt.version),
+                    ),
+                ),
             )
         return self._directed_receipt(authorization, receipt)
 
@@ -5805,6 +6104,7 @@ class ApplicationService:
             disclosure=unenrolled_disclosure(
                 authorization.at, trust_basis=_ENTITY_AUTHORING_TRUST_BASIS
             ),
+            reenrichment_cause_id=(receipt.mutation_event_id if not receipt.replayed else None),
         )
 
     def _tasks_read(
@@ -6945,6 +7245,7 @@ class ApplicationService:
                 "current": current,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=("context_policy",)),
+            reenrichment_cause_id=(admission.event.event_id if admission.created else None),
         )
 
     def _goodnotes_work(
@@ -7142,6 +7443,25 @@ class ApplicationService:
             raise InternalError()
 
         receipt = admission.receipt
+        if capture_id is not None and admission.created:
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.ACCEPTED_QUICK_CAPTURE_CORRECTION,
+                receipt.receipt_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.CAPTURE,
+                        receipt.capture_id,
+                        str(receipt.version_number),
+                    ),
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.CAPTURE_VERSION,
+                        receipt.version_id,
+                        str(receipt.version_number),
+                    ),
+                ),
+            )
         return _Result(
             payload=CaptureReceiptView(
                 receipt_id=receipt.receipt_id,
@@ -7154,6 +7474,7 @@ class ApplicationService:
                 created=admission.created,
             ).to_canonical_dict(),
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_CAPTURE_TRUST_BASIS),
+            reenrichment_cause_id=(receipt.receipt_id if admission.created else None),
         )
 
     # ---- shared helpers ----------------------------------------------------
@@ -7771,19 +8092,19 @@ class ApplicationService:
         )
         return _Result(payload=payload, disclosure=unenrolled_disclosure(authorization.at))
 
-    # ---- WP-RI-B: the producers, and the governed merge ---------------------
+    # ---- WP-RI-B: producers and governed identity correction ----------------
     #
-    # Four handlers, and every rule they enforce lives somewhere else. Which
+    # Six handlers, and every rule they enforce lives somewhere else. Which
     # payload fields a proposal kind admits, what a dedupe digest is over, what a
-    # candidate memory's classification floor is, what a merge blocks on and what
-    # its effect ledger records are all `EntityGovernanceService`',
+    # candidate memory's classification floor is, what identity correction blocks
+    # on and what its effect ledger records are all `EntityGovernanceService`',
     # `RelationshipMemoryProposalService`'s and `IdentityCorrectionService`'s, so
     # a second copy here could not disagree with them.
     #
     # What this file supplies is the four things a caller may not: the Principal,
     # the clock, the correlation and audit references the authorization already
     # resolved, and -- for the two producer paths -- the proposal method. None of
-    # the four commands has a field for any of them.
+    # the six commands has a field for any of them.
 
     #: Producer provenance is injected by composition and keyed by the exact
     #: authenticated Principal. Commands carry no origin fields. An unregistered
@@ -7847,13 +8168,13 @@ class ApplicationService:
         return authorization.principal.is_operator
 
     def _identity_correction_plane(self) -> None:
-        """Refuse when this build has not enabled the governed merge.
+        """Refuse when this build has not enabled governed identity correction.
 
         The same floor `_entity_writes` is, one switch narrower, and it exists for
-        the same reason: `available_capabilities` withholds the governed merge and
-        two readers consult it -- `capabilities.get` and the MCP tool list -- while
-        the HTTP transport consults neither, routing by path segment straight into
-        `_HANDLERS`.
+        the same reason: `available_capabilities` withholds governed merge and
+        split, and two readers consult it -- `capabilities.get` and the MCP tool
+        list -- while the HTTP transport consults neither, routing by path segment
+        straight into `_HANDLERS`.
 
         `_entity_writes()` first, so a build that turned this on without the
         gates below it refuses on the lowest one that is off rather than on this
@@ -7863,9 +8184,9 @@ class ApplicationService:
         settings already enforce.
 
         `unsupported` and not `denied`: a process without the switch has no
-        governed merge, which is a fact about the build. Who may call it is the
-        separate question `_OPERATOR_ONLY` answers, and a caller without operator
-        authority is denied by policy before reaching here.
+        governed identity correction, which is a fact about the build. Who may
+        call it is the separate question `_OPERATOR_ONLY` answers, and a caller
+        without operator authority is denied by policy before reaching here.
         """
         self._entity_writes()
         if not self._relationship_identity_correction_enabled:
@@ -7986,6 +8307,19 @@ class ApplicationService:
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
         )
+        if self._relationship_reenrichment_enabled and admission.created:
+            register_producer_version_observation(
+                unit_of_work.reenrichment,
+                principal_id=authorization.principal.principal_id,
+                proposal_id=admission.proposal_id,
+                proposal_version=admission.state.value,
+                method=method.value,
+                method_version=method_version,
+                model_id=model_id,
+                model_version=model_version,
+                policy_version=authorization.decision.policy_version,
+                at=authorization.at,
+            )
         _complete_relationship_write(
             unit_of_work,
             authorization,
@@ -8252,6 +8586,22 @@ class ApplicationService:
             has_operator_authority=self._operator_authority(authorization),
         )
         operation = receipt.operation
+        if not receipt.replayed:
+            if operation.effects_digest is None:  # pragma: no cover - completed operation invariant
+                raise InternalError()
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.CORRECTED_IDENTITY,
+                operation.identity_operation_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.IDENTITY_OPERATION,
+                        operation.identity_operation_id,
+                        operation.effects_digest,
+                    ),
+                ),
+            )
         return _Result(
             payload={
                 "identity_operation_id": operation.identity_operation_id,
@@ -8279,6 +8629,189 @@ class ApplicationService:
                 "audit_id": authorization.audit_id,
             },
             disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+            reenrichment_cause_id=(
+                operation.identity_operation_id if not receipt.replayed else None
+            ),
+        )
+
+    def _entities_identity_history(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: GetEntityIdentityHistory,
+    ) -> _Result:
+        """`entities.identity_history`: one bounded authoritative ledger page."""
+        self._entity_plane()
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            entity = unit_of_work.entities.get(principal_id, command.entity_id)
+        if entity is None:
+            raise NotFoundError(SafeDetail.TARGET_ID)
+        repository = cast("IdentityHistoryQuery", unit_of_work.identity_history)
+        try:
+            page = IdentityHistoryService().history(
+                repository,
+                principal_id=principal_id,
+                entity_id=command.entity_id,
+                page_size=command.page_size,
+                after=command.after,
+            )
+        except IdentityHistoryCursorError:
+            raise InvalidRequestError(SafeDetail.CURSOR) from None
+        return _Result(
+            payload={
+                "entity_id": page.entity_id,
+                "entries": [
+                    {
+                        "history_id": entry.history_id,
+                        "occurred_at": format_rfc3339(entry.occurred_at),
+                        "source": entry.source.value,
+                        "operation": entry.operation.value,
+                        "involved_entity_ids": list(entry.involved_entity_ids),
+                        "changes": [
+                            {
+                                "family": change.family,
+                                "record_id": change.record_id,
+                                "effect_kind": change.effect_kind,
+                                "before_state": change.before_state,
+                                "after_state": change.after_state,
+                            }
+                            for change in entry.changes
+                        ],
+                        "actor_class": entry.actor_class,
+                        "actor_id": entry.actor_id,
+                        "authority": entry.authority,
+                        "correlation_id": entry.correlation_id,
+                        "audit_id": entry.audit_id,
+                        "reason": entry.reason,
+                    }
+                    for entry in page.entries
+                ],
+                "is_truncated": page.is_truncated,
+                "next_cursor": page.next_cursor,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
+    def _entities_split_preview(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: PreviewEntitySplit,
+    ) -> _Result:
+        """`entities.split.preview`: persist the exact inverse plan for one merge."""
+        self._identity_correction_plane()
+        report = IdentityCorrectionService(
+            unit_of_work.entities, unit_of_work.relationship_memory
+        ).split_preview(
+            SplitPreviewCommand(
+                principal_id=authorization.principal.principal_id,
+                source_identity_operation_id=command.source_identity_operation_id,
+                reason=command.reason,
+                evidence_refs=command.evidence_refs,
+            ),
+            at=authorization.at,
+            requested_by=authorization.principal.principal_id,
+            actor_class=ActorClass.USER,
+            has_operator_authority=self._operator_authority(authorization),
+        )
+        preview = report.preview
+        return _Result(
+            payload={
+                "preview_id": preview.preview_id,
+                "preview_token": preview.preview_digest,
+                "plan_digest": preview.plan_digest,
+                "source_identity_operation_id": report.source_operation.identity_operation_id,
+                "expires_at": format_rfc3339(preview.expires_at),
+                "projected_effects": [
+                    {
+                        "family": draft.family.value,
+                        "record_id": draft.record_id,
+                        "kind": draft.kind.value,
+                    }
+                    for draft in report.projected_effects
+                ],
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+        )
+
+    def _entities_split(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: SplitEntity,
+    ) -> _Result:
+        """`entities.split`: consume one exact preview and append its inverse."""
+        self._identity_correction_plane()
+        principal_id = authorization.principal.principal_id
+        receipt = IdentityCorrectionService(
+            unit_of_work.entities, unit_of_work.relationship_memory
+        ).split_apply(
+            SplitCommand(
+                principal_id=principal_id,
+                preview_id=command.preview_id,
+                preview_digest=command.preview_digest,
+                idempotency_key=_split_idempotency_key(principal_id, command.preview_id),
+                reason=command.reason,
+                evidence_refs=command.evidence_refs,
+            ),
+            at=authorization.at,
+            correlation_id=authorization.correlation_id,
+            audit_id=authorization.audit_id,
+            performed_by=principal_id,
+            actor_class=ActorClass.USER,
+            has_operator_authority=self._operator_authority(authorization),
+        )
+        operation = receipt.operation
+        if not receipt.replayed:
+            if operation.effects_digest is None:  # pragma: no cover - completed operation invariant
+                raise InternalError()
+            self._register_reenrichment(
+                unit_of_work,
+                authorization,
+                ReenrichmentTrigger.CORRECTED_IDENTITY,
+                operation.identity_operation_id,
+                (
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.IDENTITY_OPERATION,
+                        operation.identity_operation_id,
+                        operation.effects_digest,
+                    ),
+                ),
+            )
+        return _Result(
+            payload={
+                "identity_operation_id": operation.identity_operation_id,
+                "state": operation.state.value,
+                "source_identity_operation_id": operation.source_identity_operation_id,
+                "survivor_entity_id": operation.survivor_entity_id,
+                "restored_entity_ids": list(operation.merged_entity_ids),
+                "preview_id": operation.preview_id,
+                "completed_at": (
+                    None
+                    if operation.completed_at is None
+                    else format_rfc3339(operation.completed_at)
+                ),
+                "replayed": receipt.replayed,
+                "effects": [
+                    {
+                        "effect_id": effect.effect_id,
+                        "sequence": effect.sequence,
+                        "family": effect.family.value,
+                        "record_id": effect.record_id,
+                        "kind": effect.kind.value,
+                    }
+                    for effect in receipt.effects
+                ],
+                "receipt_id": operation.receipt_id,
+                "audit_id": authorization.audit_id,
+            },
+            disclosure=unenrolled_disclosure(authorization.at, trust_basis=_ENTITY_TRUST_BASIS),
+            reenrichment_cause_id=(
+                operation.identity_operation_id if not receipt.replayed else None
+            ),
         )
 
 
@@ -8387,6 +8920,9 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_PROPOSALS_CREATE: ApplicationService._entities_proposals_create,
         Capability.ENTITIES_MERGE_PREVIEW: ApplicationService._entities_merge_preview,
         Capability.ENTITIES_MERGE: ApplicationService._entities_merge,
+        Capability.ENTITIES_IDENTITY_HISTORY: ApplicationService._entities_identity_history,
+        Capability.ENTITIES_SPLIT_PREVIEW: ApplicationService._entities_split_preview,
+        Capability.ENTITIES_SPLIT: ApplicationService._entities_split,
         Capability.RELATIONSHIP_MEMORY_CREATE: ApplicationService._relationship_memory_create,
         Capability.RELATIONSHIP_MEMORY_GET: ApplicationService._relationship_memory_get,
         Capability.RELATIONSHIP_MEMORY_LIST: ApplicationService._relationship_memory_list,
@@ -8439,6 +8975,9 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_IDENTITY_HISTORY,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 
@@ -8474,31 +9013,35 @@ _ENTITY_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_RELATIONSHIPS_END,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
-        # Phase B's three `entities.` writes. The producer path is here because
-        # it inserts a proposal row, and the two identity-correction capabilities
-        # because the preview inserts a control row and the merge rewrites
-        # canonical ones -- so a build with the plane on and writes off serves
-        # none of the three, which is what `test_entity_write_gate` derives from
-        # the purpose map and compares against this set.
+        # Phase B added the proposal write and merge preview/apply; final identity
+        # recovery added split preview/apply. The producer inserts a proposal row,
+        # both previews insert control rows, and merge/split rewrite canonical rows
+        # -- so a build with the plane on and writes off serves none of the five,
+        # which `test_entity_write_gate` derives from the purpose map and compares
+        # against this set.
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 
-#: The governed merge, withheld from a process that has not set
+#: Governed identity correction, withheld from a process that has not set
 #: `MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`. A subset of
 #: `_ENTITY_WRITE_CAPABILITIES` and therefore of `_ENTITY_CAPABILITIES`: this is
 #: a third narrowing of an already-narrowed plane, not a family of its own.
 #:
-#: Two rather than one. The preview is here beside the apply because the operator
-#: boundary is about reading the exact identities of two people as much as about
-#: collapsing them, and a build that served the inspection while withholding the
-#: act would gate the less sensitive half.
+#: Four rather than two. Merge and split each publish their preview beside apply:
+#: the operator boundary covers inspecting the exact identities and inverse plan
+#: as well as performing either transition, so a build cannot expose an inspection
+#: while withholding only its corresponding act.
 _IDENTITY_CORRECTION_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
     {
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 
@@ -8525,7 +9068,8 @@ _RELATIONSHIP_MEMORY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.RELATIONSHIP_MEMORY_ARCHIVE,
         Capability.RELATIONSHIP_MEMORY_RESTORE,
         # The producer path is composed on exactly the same conjunction as the
-        # eight, and on no further switch. It writes, so the question was whether
+        # other eight, and on no further switch. It writes, so the question was
+        # whether
         # to gate it behind `relationship_intelligence_writes_enabled` as well;
         # the answer is no, because `relationship_memory.create` -- which writes
         # an *accepted* memory -- is not gated on it either, and gating the

@@ -1,242 +1,430 @@
-"""Redo the work an accepted change invalidated, boundedly and idempotently.
-
-Specification section 27.4 lists nine re-enrichment triggers -- a corrected
-identity, a new alias, a role change, a source version change, and so on. Two of
-them are reachable today, and this module does those two:
-
-* **an identity was merged** — every observation that pointed at the merged-away
-  entity now points at a redirect, and section 15.3 asks a merge to "trigger
-  bounded re-enrichment where appropriate". Re-pointing them at the survivor is
-  what makes the merge finished rather than merely recorded (`RI-AC-059`).
-* **an alias was recorded** — a name the system could not place before may now
-  resolve, so the unresolved mentions are re-offered to the resolver.
-
-The other seven need observations from sources this product does not yet read.
-Listing them here rather than implying completeness, because a re-enrichment
-pass that silently covered two of nine would look like a pass that covered all
-of them.
-
-**Bounded, and the bound is disclosed.** Section 27.4 asks re-enrichment to
-"reuse stable extraction where possible rather than repeating expensive
-processing"; a pass that walked every observation a Principal has would be the
-opposite. `ReenrichmentOutcome.more_remains` says whether work is left over,
-so a caller loops deliberately instead of assuming one pass finished. Named for
-what a caller does with it: the earlier `reached_the_bound` read as a property
-of the pass, and a caller could reasonably have taken `False` to mean "stopped
-early, nothing more to do" *or* "never hit the cap" -- which are the same fact
-here but were not obviously so at the call site.
-
-**Idempotent, per section 27.2.** Re-pointing an observation already pointing at
-the survivor writes the same value; re-offering a mention that still does not
-resolve links nothing. Running the same pass twice produces the same rows, which
-is what makes it safe to retry after a failure that may or may not have
-committed.
-
-**It never resolves an ambiguity.** A mention is linked only when resolution
-answers `RESOLVED_EXACT`. `AMBIGUOUS`, `CONFLICTED_IDENTIFIER` and
-`HISTORICAL_MATCH` all leave it unresolved, because a background pass with
-nobody watching is the last place a doubtful identity join should be made.
-"""
+"""Application orchestration for durable Relationship Intelligence re-enrichment."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from dataclasses import dataclass
-from enum import StrEnum
-from types import MappingProxyType
-from typing import Final
+import hashlib
+import json
+from collections.abc import Callable, Mapping, Sequence
+from datetime import datetime
 
-from my_pa.application.entity_resolution import EntityResolutionService, ResolutionRequest
-from my_pa.contracts.ports import EntitiesRepository
-from my_pa.domain.common.identifiers import IdKind, validate_identifier
-from my_pa.domain.relationship.entity import EntityType
-from my_pa.domain.relationship.governance import ObservationKind
-from my_pa.domain.relationship.resolution import ResolutionOutcome
-
-__all__ = [
-    "KIND_IMPLIES_ENTITY_TYPE",
-    "REENRICHMENT_BOUND",
-    "EntityReenrichmentService",
-    "ReenrichmentOutcome",
-    "ReenrichmentTrigger",
-]
-
-#: The most records one pass touches. Small on purpose: a caller that needs more
-#: loops and can stop, where a caller handed an unbounded pass cannot.
-REENRICHMENT_BOUND: int = 100
-
-#: The entity type an observation of each kind can only be about, where the kind
-#: settles it.
-#:
-#: A contact row, a message participant and a calendar attendee are all records
-#: *of a person*; nothing in this product produces one about a project. Passing
-#: the constraint into resolution is not an optimisation -- without it, a
-#: `message_participant` observation carrying the text "Harbour Tower" links to
-#: the *project* of that name, and a background pass with nobody watching has
-#: made a person-to-project join that no operator ever saw.
-#:
-#: `DOCUMENT_MENTION` and `USER_STATEMENT` are deliberately absent: a document
-#: or a sentence can name a person, an organization or a project with equal
-#: ease, and inventing a constraint there would be this module guessing. They
-#: resolve unconstrained, which means they resolve less often -- the trade this
-#: plane makes everywhere.
-#:
-#: The mapping has a cost worth naming: a shared mailbox or a room resource is a
-#: `MESSAGE_PARTICIPANT` or a `CALENDAR_ATTENDEE` that is *not* a person, and
-#: this pass will now never link one. That is a mention left on the queue for a
-#: human, which is the direction this module errs in on purpose.
-#:
-#: A read-only mapping, so a caller cannot widen the constraint at runtime --
-#: which would be a person-to-project join arranged from outside this module.
-KIND_IMPLIES_ENTITY_TYPE: Final[Mapping[ObservationKind, EntityType]] = MappingProxyType(
-    {
-        ObservationKind.CONTACT_RECORD: EntityType.PERSON,
-        ObservationKind.MESSAGE_PARTICIPANT: EntityType.PERSON,
-        ObservationKind.CALENDAR_ATTENDEE: EntityType.PERSON,
-    }
+from my_pa.contracts.ports import ReenrichmentWorkRepository
+from my_pa.domain.common.time import ensure_utc
+from my_pa.domain.relationship.reenrichment import (
+    DEFAULT_MAX_REENRICHMENT_ATTEMPTS,
+    MAX_REENRICHMENT_SUBJECTS,
+    MAX_REENRICHMENT_VERSIONS,
+    BindingCurrency,
+    BindingVersion,
+    CurrentReenrichmentBindings,
+    ReenrichmentBinding,
+    ReenrichmentLimitation,
+    ReenrichmentState,
+    ReenrichmentSubject,
+    ReenrichmentSubjectKind,
+    ReenrichmentTrigger,
+    ReenrichmentWork,
+    StaleBindingReason,
+    assess_currency,
 )
 
+__all__ = [
+    "DEFAULT_MAX_REENRICHMENT_ATTEMPTS",
+    "MAX_REENRICHMENT_SUBJECTS",
+    "MAX_REENRICHMENT_VERSIONS",
+    "TRIGGERS_BY_MUTATION_CAPABILITY",
+    "BindingCurrency",
+    "BindingVersion",
+    "CurrentReenrichmentBindings",
+    "EntityReenrichmentService",
+    "ProductionReenrichmentCaller",
+    "ReenrichmentApplication",
+    "ReenrichmentBinding",
+    "ReenrichmentLimitation",
+    "ReenrichmentState",
+    "ReenrichmentSubject",
+    "ReenrichmentSubjectKind",
+    "ReenrichmentTrigger",
+    "ReenrichmentWork",
+    "ReenrichmentWorkRepository",
+    "StaleBindingReason",
+    "assess_currency",
+    "register_mutation_reenrichment",
+    "register_producer_version_observation",
+    "register_source_version_observation",
+]
 
-class ReenrichmentTrigger(StrEnum):
-    """Why a re-enrichment pass ran.
+REENRICHMENT_PRODUCER_VERSION = "relationship-intelligence-v0.2"
+SOURCE_PIPELINE_VERSION = "sources.fetch.v1"
 
-    A closed set naming only the triggers this module implements. Section 27.4
-    lists seven more; each arrives with the observation source that makes it
-    detectable, and adding one here without the work behind it would be a
-    trigger that never fires.
+
+type ReenrichmentApplication = Callable[[ReenrichmentBinding, str], None]
+
+
+# Generic handler-attested mutation callers only. Capabilities whose handlers
+# register a more precise subject binding directly are deliberately absent, so
+# one mutation cannot also create Principal-wide generic work. Together with
+# those direct callers and the source/producer observers, all nine v0.2 section
+# 27.4 triggers remain closed and tested.
+TRIGGERS_BY_MUTATION_CAPABILITY: Mapping[str, tuple[ReenrichmentTrigger, ...]] = {
+    "entities.aliases.supersede": (ReenrichmentTrigger.NEW_ALIAS,),
+    "entities.update": (ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,),
+    "entities.unresolved_mentions.resolve": (ReenrichmentTrigger.CONTRADICTION_RESOLUTION,),
+    "context.feedback": (ReenrichmentTrigger.POLICY_CHANGE,),
+}
+
+
+def register_source_version_observation(
+    repository: ReenrichmentWorkRepository,
+    *,
+    principal_id: str,
+    source_object_id: str,
+    source_version_id: str,
+    policy_version: str,
+    at: datetime,
+) -> ReenrichmentWork | None:
+    """Register an exact source-version advance after a verified fetch."""
+    moment = ensure_utc(at)
+    watermark_key = f"source_{hashlib.sha256(source_object_id.encode()).hexdigest()[:40]}"
+    observation = repository.observe_version(
+        principal_id,
+        namespace="input",
+        key=watermark_key,
+        version=source_version_id,
+        at=moment,
+    )
+    if not observation.changed:
+        return None
+    repository.observe_version(
+        principal_id,
+        namespace="producer",
+        key="source_pipeline",
+        version=SOURCE_PIPELINE_VERSION,
+        at=moment,
+    )
+    repository.observe_version(
+        principal_id,
+        namespace="policy",
+        key="current",
+        version=policy_version,
+        at=moment,
+    )
+    return repository.register(
+        ReenrichmentBinding(
+            principal_id=principal_id,
+            trigger=ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
+            cause_record_id=source_version_id,
+            subjects=(
+                ReenrichmentSubject(
+                    ReenrichmentSubjectKind.SOURCE_OBJECT,
+                    source_object_id,
+                    source_version_id,
+                ),
+                ReenrichmentSubject(
+                    ReenrichmentSubjectKind.SOURCE_VERSION,
+                    source_version_id,
+                    source_version_id,
+                ),
+            ),
+            input_versions=(BindingVersion(watermark_key, source_version_id),),
+            producer_versions=(BindingVersion("source_pipeline", SOURCE_PIPELINE_VERSION),),
+            policy_version=policy_version,
+        ),
+        at=moment,
+    )
+
+
+def register_producer_version_observation(
+    repository: ReenrichmentWorkRepository,
+    *,
+    principal_id: str,
+    proposal_id: str,
+    proposal_version: str,
+    method: str,
+    method_version: str,
+    model_id: str | None,
+    model_version: str | None,
+    policy_version: str,
+    at: datetime,
+) -> ReenrichmentWork | None:
+    """Register an exact authenticated proposal-producer advance."""
+    moment = ensure_utc(at)
+    observed = {
+        "method": method,
+        "method_version": method_version,
+        "model_id": model_id,
+        "model_version": model_version,
+    }
+    digest = hashlib.sha256(
+        json.dumps(observed, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+    observation = repository.observe_version(
+        principal_id,
+        namespace="producer",
+        key="entity_proposal",
+        version=digest,
+        at=moment,
+    )
+    if not observation.changed:
+        return None
+    repository.observe_version(
+        principal_id,
+        namespace="policy",
+        key="current",
+        version=policy_version,
+        at=moment,
+    )
+    return repository.register(
+        ReenrichmentBinding(
+            principal_id=principal_id,
+            trigger=ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
+            cause_record_id=proposal_id,
+            subjects=(
+                ReenrichmentSubject(
+                    ReenrichmentSubjectKind.PROPOSAL,
+                    proposal_id,
+                    proposal_version,
+                ),
+            ),
+            input_versions=(),
+            producer_versions=(BindingVersion("entity_proposal", digest),),
+            policy_version=policy_version,
+        ),
+        at=moment,
+    )
+
+
+def register_mutation_reenrichment(
+    repository: ReenrichmentWorkRepository,
+    *,
+    principal_id: str,
+    capability: str,
+    cause_record_id: str,
+    policy_version: str,
+    at: datetime,
+) -> tuple[ReenrichmentWork, ...]:
+    """Register every invalidation implied by one committed mutation.
+
+    The Principal is the deliberately minimal affected subject. More specific
+    affected records remain inputs to the downstream derivation; this hook does
+    not reimplement or infer the authoritative mutation's result.
     """
+    moment = ensure_utc(at)
+    triggers = TRIGGERS_BY_MUTATION_CAPABILITY.get(capability, ())
+    if not triggers:
+        return ()
+    repository.observe_version(
+        principal_id,
+        namespace="producer",
+        key="relationship_intelligence",
+        version=REENRICHMENT_PRODUCER_VERSION,
+        at=moment,
+    )
+    repository.observe_version(
+        principal_id,
+        namespace="policy",
+        key="current",
+        version=policy_version,
+        at=moment,
+    )
+    return tuple(
+        repository.register(
+            ReenrichmentBinding(
+                principal_id=principal_id,
+                trigger=trigger,
+                cause_record_id=cause_record_id,
+                subjects=(
+                    ReenrichmentSubject(
+                        ReenrichmentSubjectKind.PRINCIPAL,
+                        principal_id,
+                        "1",
+                    ),
+                ),
+                input_versions=(),
+                producer_versions=(
+                    BindingVersion(
+                        "relationship_intelligence",
+                        REENRICHMENT_PRODUCER_VERSION,
+                    ),
+                ),
+                policy_version=policy_version,
+            ),
+            at=moment,
+        )
+        for trigger in triggers
+    )
 
-    IDENTITY_MERGED = "identity_merged"
-    ALIAS_RECORDED = "alias_recorded"
 
+class ProductionReenrichmentCaller:
+    """The nine production event callers, sharing one exact binding builder."""
 
-@dataclass(frozen=True, slots=True)
-class ReenrichmentOutcome:
-    """What one pass did, including what it declined to do.
+    def __init__(
+        self,
+        repository: ReenrichmentWorkRepository,
+        *,
+        principal_id: str,
+        policy_version: str,
+        producer_version: str = REENRICHMENT_PRODUCER_VERSION,
+    ) -> None:
+        self._repository = repository
+        self._principal_id = principal_id
+        self._policy_version = policy_version
+        self._producer_version = producer_version
 
-    `mentions_left_unresolved` is reported rather than inferred from the
-    difference, because "considered and not linked" is the interesting number:
-    it is the count of references the system looked at again and still would not
-    guess about.
-    """
+    def corrected_identity(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.CORRECTED_IDENTITY, cause, subjects, at=at)
 
-    trigger: ReenrichmentTrigger
-    observations_repointed: int = 0
-    mentions_linked: int = 0
-    mentions_left_unresolved: int = 0
-    more_remains: bool = False
+    def new_alias(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.NEW_ALIAS, cause, subjects, at=at)
 
-    def __post_init__(self) -> None:
-        if not isinstance(self.trigger, ReenrichmentTrigger):
-            raise ValueError("a re-enrichment outcome names a closed trigger")
-        for count in (
-            self.observations_repointed,
-            self.mentions_linked,
-            self.mentions_left_unresolved,
-        ):
-            if count < 0:
-                raise ValueError("a re-enrichment outcome counts what it did")
+    def project_mapping_change(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.PROJECT_MAPPING_CHANGE, cause, subjects, at=at)
 
-    @property
-    def changed_anything(self) -> bool:
-        return bool(self.observations_repointed or self.mentions_linked)
+    def role_or_organization_change(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(
+            ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE, cause, subjects, at=at
+        )
+
+    def source_version_change(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.SOURCE_VERSION_CHANGE, cause, subjects, at=at)
+
+    def model_or_rule_version_change(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(
+            ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE, cause, subjects, at=at
+        )
+
+    def accepted_quick_capture_correction(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(
+            ReenrichmentTrigger.ACCEPTED_QUICK_CAPTURE_CORRECTION, cause, subjects, at=at
+        )
+
+    def contradiction_resolution(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.CONTRADICTION_RESOLUTION, cause, subjects, at=at)
+
+    def policy_change(
+        self, cause: str, subjects: Sequence[ReenrichmentSubject], *, at: datetime
+    ) -> ReenrichmentWork:
+        return self._register(ReenrichmentTrigger.POLICY_CHANGE, cause, subjects, at=at)
+
+    def register(
+        self,
+        trigger: ReenrichmentTrigger,
+        cause: str,
+        subjects: Sequence[ReenrichmentSubject],
+        *,
+        at: datetime,
+    ) -> ReenrichmentWork:
+        """Register one closed trigger without dynamic attribute dispatch."""
+        return self._register(trigger, cause, subjects, at=at)
+
+    def observe_process_versions(
+        self, principal_id: str, *, cause: str, at: datetime
+    ) -> tuple[ReenrichmentWork, ...]:
+        """Register startup work only when the server policy advanced."""
+        moment = ensure_utc(at)
+        subject = (ReenrichmentSubject(ReenrichmentSubjectKind.PRINCIPAL, principal_id, "1"),)
+        policy = self._repository.observe_version(
+            principal_id,
+            namespace="policy",
+            key="current",
+            version=self._policy_version,
+            at=moment,
+        )
+        registered: list[ReenrichmentWork] = []
+        if policy.changed:
+            registered.append(self.policy_change(cause, subject, at=moment))
+        return tuple(registered)
+
+    def _register(
+        self,
+        trigger: ReenrichmentTrigger,
+        cause: str,
+        subjects: Sequence[ReenrichmentSubject],
+        *,
+        at: datetime,
+    ) -> ReenrichmentWork:
+        moment = ensure_utc(at)
+        principal_id = self._principal_id
+        self._repository.observe_version(
+            principal_id,
+            namespace="producer",
+            key="relationship_intelligence",
+            version=self._producer_version,
+            at=moment,
+        )
+        self._repository.observe_version(
+            principal_id,
+            namespace="policy",
+            key="current",
+            version=self._policy_version,
+            at=moment,
+        )
+        return self._repository.register(
+            ReenrichmentBinding(
+                principal_id=principal_id,
+                trigger=trigger,
+                cause_record_id=cause,
+                subjects=tuple(subjects),
+                input_versions=(),
+                producer_versions=(
+                    BindingVersion("relationship_intelligence", self._producer_version),
+                ),
+                policy_version=self._policy_version,
+            ),
+            at=moment,
+        )
 
 
 class EntityReenrichmentService:
-    """Re-does the bounded work an accepted change invalidated."""
+    """Register work and gate one claimed attempt on exact current versions."""
 
-    def __init__(self, entities: EntitiesRepository) -> None:
-        self._entities = entities
-        self._resolving = EntityResolutionService(entities)
+    def __init__(self, repository: ReenrichmentWorkRepository) -> None:
+        self._repository = repository
 
-    def after_merge(
-        self, principal_id: str, merged_entity_id: str, retained_entity_id: str
-    ) -> ReenrichmentOutcome:
-        """Re-point the merged-away entity's observations at the survivor.
+    def register(self, binding: ReenrichmentBinding, *, at: datetime) -> ReenrichmentWork:
+        return self._repository.register(binding, at=ensure_utc(at))
 
-        The observations are *moved*, not copied: they were always observations
-        of one person, and the merge is the decision that said which person. The
-        merged-away entity remains, still holding its identifiers and aliases as
-        lineage — what changes is which entity the evidence hangs off.
+    def apply_claimed(
+        self,
+        work: ReenrichmentWork,
+        *,
+        owner: str,
+        current: CurrentReenrichmentBindings,
+        apply: ReenrichmentApplication,
+        at: datetime,
+    ) -> BindingCurrency:
+        """Apply under the repository's transaction and exclusive work lock.
 
-        **A recorded merge is a precondition, not an assumption.** This method's
-        entire authority to re-point someone's evidence at a different person
-        comes from a merge decision an operator made (section 8.4). Called with
-        two identifiers no decision connects, it would perform exactly the
-        false join `RI-RISK-001` names — silently, in the background, with no
-        proposal, no record, and no actor. So it reads the lineage first and
-        refuses when nothing is there.
+        The callback receives the binding digest as its mandatory idempotency
+        identity. The repository revalidates lease and currency while holding
+        the work/Principal locks and completes in the same transaction, so a
+        reclaim cannot overlap or preserve a partial derived mutation.
         """
-        validate_identifier(principal_id, IdKind.PRINCIPAL)
-        validate_identifier(merged_entity_id, IdKind.ENTITY)
-        validate_identifier(retained_entity_id, IdKind.ENTITY)
-        if merged_entity_id == retained_entity_id:
-            raise ValueError("a merge re-enrichment names two distinct entities")
-        recorded = any(
-            record.merged_entity_id == merged_entity_id
-            and record.retained_entity_id == retained_entity_id
-            for record in self._entities.merges(principal_id, merged_entity_id)
-        )
-        if not recorded:
-            raise ValueError("a merge re-enrichment follows a recorded merge")
-
-        # One past the bound, so `more_remains` is answerable without a second
-        # query and without fetching rows this pass will not touch. Slicing an
-        # unbounded read afterwards would have paid for every stranded
-        # observation to move a hundred of them.
-        stranded = self._entities.observations(
-            principal_id, merged_entity_id, limit=REENRICHMENT_BOUND + 1
-        )
-        bounded = stranded[:REENRICHMENT_BOUND]
-        for observation in bounded:
-            self._entities.link_observation(
-                principal_id, observation.observation_id, retained_entity_id
-            )
-        return ReenrichmentOutcome(
-            trigger=ReenrichmentTrigger.IDENTITY_MERGED,
-            observations_repointed=len(bounded),
-            more_remains=len(bounded) < len(stranded),
-        )
-
-    def after_alias(self, principal_id: str) -> ReenrichmentOutcome:
-        """Re-offer every unresolved mention to the resolver.
-
-        Links only what resolves exactly. A mention the resolver will not place
-        stays where it is and is counted, because a queue that shrank without
-        anything being decided would be the failure this whole plane is built to
-        avoid.
-
-        Each mention carries its `kind` into the request as an `entity_type`
-        constraint where the kind settles it (`KIND_IMPLIES_ENTITY_TYPE`). The
-        pass used to ask only "who is called this", which let a calendar
-        attendee link to a project sharing the name.
-        """
-        validate_identifier(principal_id, IdKind.PRINCIPAL)
-        pending = self._entities.observations(
-            principal_id, unresolved_only=True, limit=REENRICHMENT_BOUND + 1
-        )
-        bounded = pending[:REENRICHMENT_BOUND]
-
-        linked = 0
-        for observation in bounded:
-            answer = self._resolving.resolve(
-                principal_id,
-                ResolutionRequest(
-                    raw_reference=observation.normalized_value,
-                    entity_type=KIND_IMPLIES_ENTITY_TYPE.get(observation.kind),
-                ),
-            )
-            if answer.outcome is not ResolutionOutcome.RESOLVED_EXACT:
-                continue
-            resolved = answer.resolved_entity_id
-            if resolved is None:  # pragma: no cover - the type forbids it
-                continue
-            self._entities.link_observation(principal_id, observation.observation_id, resolved)
-            linked += 1
-
-        return ReenrichmentOutcome(
-            trigger=ReenrichmentTrigger.ALIAS_RECORDED,
-            mentions_linked=linked,
-            mentions_left_unresolved=len(bounded) - linked,
-            more_remains=len(bounded) < len(pending),
+        if work.state is not ReenrichmentState.RUNNING or work.lease_owner != owner:
+            raise ValueError("re-enrichment application requires this worker's live claim")
+        moment = ensure_utc(at)
+        if work.lease_expires_at is None or work.lease_expires_at <= moment:
+            raise ValueError("re-enrichment application requires this worker's live claim")
+        return self._repository.apply_claimed(
+            work.binding.principal_id,
+            work.work_id,
+            owner=owner,
+            current=current,
+            apply=apply,
+            at=moment,
         )

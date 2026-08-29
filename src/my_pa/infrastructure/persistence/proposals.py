@@ -54,6 +54,7 @@ from my_pa.domain.capture.span import SourceSpan
 from my_pa.domain.capture.version import digest_of
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.source.registry import issue_identifier
+from my_pa.infrastructure.persistence.principal_scope import PrincipalContext, principal_scoped
 from my_pa.infrastructure.persistence.tables import (
     capture_classifications,
     capture_entity_mentions,
@@ -159,7 +160,9 @@ class SpanFault:
     reason: ProposalQuarantineReason
 
 
-def version_content(connection: Connection, version_id: str) -> str | None:
+def version_content(
+    connection: Connection, version_id: str, *, context: PrincipalContext
+) -> str | None:
     """The stored text of one capture version, or `None`.
 
     The one read in this module that returns capture content, and it exists so
@@ -168,7 +171,11 @@ def version_content(connection: Connection, version_id: str) -> str | None:
     """
     validate_identifier(version_id, IdKind.CAPTURE_VERSION)
     row = connection.execute(
-        select(capture_versions.c.content).where(capture_versions.c.version_id == version_id)
+        principal_scoped(
+            select(capture_versions.c.content).where(capture_versions.c.version_id == version_id),
+            capture_versions,
+            context,
+        )
     ).one_or_none()
     return None if row is None else str(row[0])
 
@@ -391,7 +398,9 @@ def record_entity_mention(connection: Connection, mention: CaptureEntityMention)
     return mention.mention_id
 
 
-def span_faults(connection: Connection, proposal_id: str) -> tuple[SpanFault, ...]:
+def span_faults(
+    connection: Connection, proposal_id: str, *, context: PrincipalContext
+) -> tuple[SpanFault, ...]:
     """Every cited span of `proposal_id` that does not hold, and why.
 
     Re-derives each span's digest from `capture_versions.content` rather than
@@ -407,24 +416,33 @@ def span_faults(connection: Connection, proposal_id: str) -> tuple[SpanFault, ..
     """
     validate_identifier(proposal_id, IdKind.PROPOSAL)
     rows = connection.execute(
-        select(
-            capture_spans.c.span_id,
-            capture_spans.c.version_id,
-            capture_spans.c.start_offset,
-            capture_spans.c.end_offset,
-            capture_spans.c.quoted_text_sha256,
-            capture_proposals.c.version_id.label("proposal_version_id"),
-        )
-        .select_from(
-            capture_proposals.join(
-                capture_proposal_spans,
-                capture_proposal_spans.c.proposal_id == capture_proposals.c.proposal_id,
-            ).join(
-                capture_spans,
-                capture_spans.c.span_id == capture_proposal_spans.c.span_id,
+        principal_scoped(
+            select(
+                capture_spans.c.span_id,
+                capture_spans.c.version_id,
+                capture_spans.c.start_offset,
+                capture_spans.c.end_offset,
+                capture_spans.c.quoted_text_sha256,
+                capture_proposals.c.version_id.label("proposal_version_id"),
             )
+            .select_from(
+                capture_proposals.join(
+                    capture_proposal_spans,
+                    capture_proposal_spans.c.proposal_id == capture_proposals.c.proposal_id,
+                )
+                .join(
+                    capture_spans,
+                    capture_spans.c.span_id == capture_proposal_spans.c.span_id,
+                )
+                .join(
+                    capture_versions,
+                    capture_versions.c.version_id == capture_proposals.c.version_id,
+                )
+            )
+            .where(capture_proposals.c.proposal_id == proposal_id),
+            capture_versions,
+            context,
         )
-        .where(capture_proposals.c.proposal_id == proposal_id)
     ).all()
 
     faults: list[SpanFault] = []
@@ -436,7 +454,7 @@ def span_faults(connection: Connection, proposal_id: str) -> tuple[SpanFault, ..
             continue
         version_id = str(row.version_id)
         if version_id not in contents:
-            contents[version_id] = version_content(connection, version_id)
+            contents[version_id] = version_content(connection, version_id, context=context)
         content = contents[version_id]
         if content is None or int(row.end_offset) > len(content):
             faults.append(SpanFault(span_id, ProposalQuarantineReason.SPAN_OUTSIDE_VERSION_TEXT))

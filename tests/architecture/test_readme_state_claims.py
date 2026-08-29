@@ -307,6 +307,9 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     99: "Ninety-nine",
     100: "One hundred",
     101: "One hundred one",
+    102: "One hundred two",
+    103: "One hundred three",
+    104: "One hundred and four",
 }
 
 
@@ -431,18 +434,18 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
     # composed by default. The combined surface therefore exposes fifty-five
     # and withholds the same forty-six feature-gated names.
-    assert default == 55 and total == 101 and withheld == 46
+    assert default == 55 and total == 104 and withheld == 49
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred one capabilities" in system_context
+    assert "one hundred and four capabilities" in system_context
     assert "exposes fifty-five of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred one capabilities" in module_boundaries
+    assert "one hundred and four capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

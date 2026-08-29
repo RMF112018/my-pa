@@ -81,6 +81,7 @@ from my_pa.application.commands import (
     GetCorpusCoverage,
     GetEntity,
     GetEntityContext,
+    GetEntityIdentityHistory,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -111,6 +112,7 @@ from my_pa.application.commands import (
     ObserveEntityMention,
     PrepareContext,
     PreviewEntityMerge,
+    PreviewEntitySplit,
     ProposeRelationshipMemory,
     ReadCapture,
     ReadCommitment,
@@ -142,6 +144,7 @@ from my_pa.application.commands import (
     SearchKnowledge,
     SearchRelationshipMemories,
     SearchTasks,
+    SplitEntity,
     StartGsqsB0,
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
@@ -348,6 +351,7 @@ def _requested_scope(
             | ResolveEntity()
             | GetEntityContext()
             | GetEntityRelationships()
+            | GetEntityIdentityHistory()
             | ListUnresolvedMentions()
             # The authoring half (`WP-RI-A-02`) makes the same measurement, and
             # a write makes it more plainly than a read: it creates or corrects
@@ -420,6 +424,8 @@ def _requested_scope(
             | ProposeRelationshipMemory()
             | PreviewEntityMerge()
             | MergeEntities()
+            | PreviewEntitySplit()
+            | SplitEntity()
         ):
             return frozenset()
         case CreateCapture():

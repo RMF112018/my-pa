@@ -1,608 +1,797 @@
-"""Re-enrichment: bounded, idempotent, and never a guess.
-
-The interesting assertions here are the ones about what a pass *declines* to do.
-Re-enrichment runs with nobody watching, which makes it the worst possible place
-for a doubtful identity join — so a mention that resolves ambiguously must come
-out of a pass exactly as it went in.
-"""
+"""Durable RI re-enrichment bindings and pre-application currency gate."""
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+import hashlib
+from collections.abc import Callable
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime, timedelta
 
 import pytest
 
-from my_pa.application.entity_governance import EntityGovernanceService
 from my_pa.application.entity_reenrichment import (
-    REENRICHMENT_BOUND,
+    MAX_REENRICHMENT_VERSIONS,
+    TRIGGERS_BY_MUTATION_CAPABILITY,
+    BindingCurrency,
+    BindingVersion,
+    CurrentReenrichmentBindings,
     EntityReenrichmentService,
-    ReenrichmentOutcome,
+    ProductionReenrichmentCaller,
+    ReenrichmentBinding,
+    ReenrichmentLimitation,
+    ReenrichmentState,
+    ReenrichmentSubject,
+    ReenrichmentSubjectKind,
     ReenrichmentTrigger,
+    ReenrichmentWork,
+    StaleBindingReason,
+    assess_currency,
+    register_mutation_reenrichment,
+    register_producer_version_observation,
+    register_source_version_observation,
 )
-from my_pa.application.entity_resolution import ResolutionRequest
-from my_pa.domain.relationship.entity import (
-    AliasType,
-    Entity,
-    EntityAlias,
-    EntityStatus,
-    EntityType,
-)
-from my_pa.domain.relationship.governance import (
-    EntityMergeRecord,
-    EntityObservation,
-    EntityProposal,
-    EntityProposalKind,
-    EntityProposalMethod,
-    EntityProposalState,
-    ObservationKind,
-)
-from my_pa.domain.relationship.normalization import normalize_name
-from my_pa.domain.relationship.proposal_payload import (
-    EntityProposalPayload,
-    dedupe_digest,
-)
-from my_pa.domain.relationship.resolution import EntityResolution
-from tests.conftest import World
-from tests.conftest import _Entities as FakeEntities
+from my_pa.application.service import _register_reenrichment_result, _Result
+from my_pa.contracts.ports import ReenrichmentVersionObservation
 
 PRINCIPAL = "prn_aaaa0001aaaa0001aaaa0001"
-ALICE = "ent_aaaa0001aaaa0001"
-ALICE_TWO = "ent_bbbb0002bbbb0002"
-BOB = "ent_cccc0003cccc0003"
+OTHER_PRINCIPAL = "prn_bbbb0002bbbb0002bbbb0002"
+ENTITY = "ent_aaaa0001aaaa0001"
+ALIAS = "eals_aaaa0001aaaa0001"
+SOURCE_OBJECT = "obj_aaaa0001aaaa0001"
+SOURCE_VERSION = "ver_aaaa0001aaaa0001"
+PROPOSAL = "eprp_aaaa0001aaaa0001"
+WHEN = datetime(2026, 8, 28, 12, tzinfo=UTC)
 
-SOURCE = "src_aaaa0001aaaa0001"
-OBJECT = "obj_aaaa0001aaaa0001"
-VERSION = "ver_aaaa0001aaaa0001"
-WHEN = datetime(2026, 8, 18, 12, tzinfo=UTC)
+_DIRECT_SPECIALIZED_TRIGGERS = frozenset(
+    {
+        ReenrichmentTrigger.CORRECTED_IDENTITY,
+        ReenrichmentTrigger.NEW_ALIAS,
+        ReenrichmentTrigger.PROJECT_MAPPING_CHANGE,
+        ReenrichmentTrigger.ROLE_OR_ORGANIZATION_CHANGE,
+        ReenrichmentTrigger.ACCEPTED_QUICK_CAPTURE_CORRECTION,
+        ReenrichmentTrigger.CONTRADICTION_RESOLUTION,
+    }
+)
+_VERSION_OBSERVER_TRIGGERS = frozenset(
+    {
+        ReenrichmentTrigger.SOURCE_VERSION_CHANGE,
+        ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE,
+    }
+)
 
 
-def _entities(world: World) -> FakeEntities:
-    """The entity plane over this `World`.
-
-    One fake since `WP-RI-B-05` moved the proposal-plane methods into
-    `tests/conftest.py`. They lived in a subclass beside it while that file was
-    frozen for the worker that needed them, which meant a second fake of one
-    repository and a `World` field stapled on from outside.
-    """
-    return FakeEntities(world)
+@dataclass(frozen=True)
+class _Observation:
+    changed: bool
 
 
-@pytest.fixture
-def enriching(world: World) -> EntityReenrichmentService:
-    return EntityReenrichmentService(_entities(world))
+def _binding(**changes: object) -> ReenrichmentBinding:
+    values: dict[str, object] = {
+        "principal_id": PRINCIPAL,
+        "trigger": ReenrichmentTrigger.NEW_ALIAS,
+        "cause_record_id": "emut_aaaa0001aaaa0001",
+        "subjects": (
+            ReenrichmentSubject(ReenrichmentSubjectKind.ENTITY, ENTITY, "7"),
+            ReenrichmentSubject(ReenrichmentSubjectKind.ALIAS, ALIAS, "1"),
+        ),
+        "input_versions": (BindingVersion("resolution_rules", "rules-v2"),),
+        "producer_versions": (BindingVersion("deterministic_resolver", "resolver-v3"),),
+        "policy_version": "policy-v1",
+    }
+    values.update(changes)
+    return ReenrichmentBinding(**values)  # type: ignore[arg-type]
 
 
-def _entity(entity_id: str, name: str = "Alice Chen") -> Entity:
-    return Entity(
-        entity_id=entity_id,
-        principal_id=PRINCIPAL,
-        entity_type=EntityType.PERSON,
-        canonical_name=normalize_name(name),
-        display_name=name,
-        status=EntityStatus.ACTIVE,
-        created_at=WHEN,
+class _Current:
+    def __init__(self, binding: ReenrichmentBinding) -> None:
+        self.subjects = {(item.kind, item.subject_id): item.version for item in binding.subjects}
+        self.inputs = {item.key: item.version for item in binding.input_versions}
+        self.producers = {item.key: item.version for item in binding.producer_versions}
+        self.policy = binding.policy_version
+
+    def subject_version(
+        self, principal_id: str, kind: ReenrichmentSubjectKind, subject_id: str
+    ) -> str | None:
+        return None if principal_id != PRINCIPAL else self.subjects.get((kind, subject_id))
+
+    def input_version(self, principal_id: str, key: str) -> str | None:
+        return None if principal_id != PRINCIPAL else self.inputs.get(key)
+
+    def producer_version(self, principal_id: str, key: str) -> str | None:
+        return None if principal_id != PRINCIPAL else self.producers.get(key)
+
+    def policy_version(self, principal_id: str) -> str | None:
+        return None if principal_id != PRINCIPAL else self.policy
+
+
+class _Repository:
+    def __init__(self) -> None:
+        self.registered: dict[str, ReenrichmentWork] = {}
+        self.by_id: dict[str, ReenrichmentWork] = {}
+        self.stale: list[tuple[str, tuple[StaleBindingReason, ...]]] = []
+        self.completed: list[str] = []
+        self.live_claim = True
+        self.versions: dict[tuple[str, str], str] = {}
+
+    def register(self, binding: ReenrichmentBinding, *, at: datetime) -> ReenrichmentWork:
+        prior = self.registered.get(binding.binding_sha256)
+        if prior is not None:
+            return prior
+        work = ReenrichmentWork(
+            work_id=f"erwk_{len(self.registered) + 1:08d}",
+            binding=binding,
+            state=ReenrichmentState.QUEUED,
+            attempt_count=0,
+            max_attempts=3,
+            created_at=at,
+            updated_at=at,
+        )
+        self.registered[binding.binding_sha256] = work
+        self.by_id[work.work_id] = work
+        return work
+
+    def apply_claimed(
+        self,
+        principal_id: str,
+        work_id: str,
+        *,
+        owner: str,
+        current: CurrentReenrichmentBindings,
+        apply: Callable[[ReenrichmentBinding, str], None],
+        at: datetime,
+    ) -> BindingCurrency:
+        assert principal_id == PRINCIPAL and owner == "worker_01" and at == WHEN
+        work = self.by_id.get(work_id, _claimed(_binding()))
+        if not self.live_claim:
+            raise ValueError("re-enrichment application requires this worker's live claim")
+        currency = assess_currency(work.binding, current)
+        if not currency.is_current:
+            self.stale.append((work_id, currency.reasons))
+            return currency
+        apply(work.binding, work.binding.binding_sha256)
+        self.completed.append(work_id)
+        return currency
+
+    def observe_version(
+        self,
+        principal_id: str,
+        *,
+        namespace: str,
+        key: str,
+        version: str,
+        at: datetime,
+    ) -> ReenrichmentVersionObservation:
+        del principal_id, at
+        previous = self.versions.get((namespace, key))
+        self.versions[(namespace, key)] = version
+
+        return _Observation(previous is not None and previous != version)
+
+
+class _SqlEquivalentCurrent:
+    """The application-visible semantics of SqlCurrentReenrichmentBindings."""
+
+    def __init__(
+        self,
+        repository: _Repository,
+        *,
+        subjects: dict[tuple[ReenrichmentSubjectKind, str], str] | None = None,
+    ) -> None:
+        self.repository = repository
+        self.subjects = subjects or {}
+
+    def subject_version(
+        self, principal_id: str, kind: ReenrichmentSubjectKind, subject_id: str
+    ) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        if kind is ReenrichmentSubjectKind.PRINCIPAL:
+            return "1" if subject_id == principal_id else None
+        return self.subjects.get((kind, subject_id))
+
+    def input_version(self, principal_id: str, key: str) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        return self.repository.versions.get(("input", key))
+
+    def producer_version(self, principal_id: str, key: str) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        return self.repository.versions.get(("producer", key))
+
+    def policy_version(self, principal_id: str) -> str | None:
+        if principal_id != PRINCIPAL:
+            return None
+        return self.repository.versions.get(("policy", "current"))
+
+
+def _as_claimed(repository: _Repository, work: ReenrichmentWork) -> ReenrichmentWork:
+    claimed = replace(
+        work,
+        state=ReenrichmentState.RUNNING,
+        attempt_count=1,
         updated_at=WHEN,
-        version=1,
+        lease_owner="worker_01",
+        lease_expires_at=WHEN + timedelta(minutes=1),
+    )
+    repository.by_id[work.work_id] = claimed
+    return claimed
+
+
+def _claimed(binding: ReenrichmentBinding) -> ReenrichmentWork:
+    return ReenrichmentWork(
+        work_id="erwk_aaaa0001aaaa0001",
+        binding=binding,
+        state=ReenrichmentState.RUNNING,
+        attempt_count=1,
+        max_attempts=3,
+        created_at=WHEN - timedelta(minutes=1),
+        updated_at=WHEN - timedelta(seconds=1),
+        lease_owner="worker_01",
+        lease_expires_at=WHEN + timedelta(minutes=1),
     )
 
 
-def _observation(
-    observation_id: str, entity_id: str | None = None, name: str = "Alice Chen"
-) -> EntityObservation:
-    return EntityObservation(
-        observation_id=observation_id,
-        principal_id=PRINCIPAL,
-        kind=ObservationKind.MESSAGE_PARTICIPANT,
-        observed_value=name,
-        normalized_value=normalize_name(name),
-        source_id=SOURCE,
-        source_object_id=OBJECT,
-        source_version_id=VERSION,
-        observed_at=WHEN,
-        recorded_at=WHEN,
-        entity_id=entity_id,
+def test_the_trigger_vocabulary_is_exactly_the_nine_governing_triggers() -> None:
+    assert {item.value for item in ReenrichmentTrigger} == {
+        "corrected_identity",
+        "new_alias",
+        "project_mapping_change",
+        "role_or_organization_change",
+        "source_version_change",
+        "model_or_rule_version_change",
+        "accepted_quick_capture_correction",
+        "contradiction_resolution",
+        "policy_change",
+    }
+
+
+def test_binding_digest_is_order_independent_and_version_sensitive() -> None:
+    binding = _binding()
+    reordered = _binding(
+        subjects=tuple(reversed(binding.subjects)),
+        input_versions=tuple(reversed(binding.input_versions)),
     )
+    changed = replace(binding, input_versions=(BindingVersion("resolution_rules", "rules-v3"),))
+    assert reordered.binding_sha256 == binding.binding_sha256
+    assert changed.binding_sha256 != binding.binding_sha256
 
 
-def _alias(alias_id: str, entity_id: str, name: str) -> EntityAlias:
-    return EntityAlias(
-        alias_id=alias_id,
-        entity_id=entity_id,
-        alias_type=AliasType.NICKNAME,
-        normalized_value=normalize_name(name),
-        display_value=name,
-        principal_id=PRINCIPAL,
-    )
-
-
-def _record_merge(entities, merged: str = ALICE_TWO, retained: str = ALICE) -> None:  # noqa: ANN001
-    """Write the lineage row `after_merge` requires before it will move anything.
-
-    Called by every pass below, because `after_merge`'s authority to re-point
-    someone's evidence comes from an operator's merge decision and from nothing
-    else. A test that skipped this would be exercising the method in a state the
-    product cannot reach.
-    """
-    # The proposal the record cites, staged first. `record_merge` partition-checks
-    # `proposal_id` against `entity_proposals` in SQL, and the in-memory double
-    # now does the same — so a merge record citing a proposal nobody wrote is a
-    # state the product cannot reach, and this helper must not build one.
-    payload = EntityProposalPayload.of(
-        EntityProposalKind.MERGE_ENTITIES,
-        {"retained_entity_id": retained, "merged_entity_id": merged},
-    )
-    entities.record_proposal(
-        PRINCIPAL,
-        EntityProposal(
-            proposal_id="eprp_aaaa0001aaaa0001",
-            principal_id=PRINCIPAL,
-            kind=EntityProposalKind.MERGE_ENTITIES,
-            state=EntityProposalState.PROPOSED,
-            payload=payload,
-            observation_ids=(),
-            proposed_by="resolver",
-            proposed_at=WHEN,
-            method=EntityProposalMethod.DETERMINISTIC,
-            method_version="1",
-            dedupe_sha256=dedupe_digest(payload),
+@pytest.mark.parametrize(
+    "subjects",
+    [
+        (
+            ReenrichmentSubject(ReenrichmentSubjectKind.ENTITY, ENTITY, "7"),
+            ReenrichmentSubject(ReenrichmentSubjectKind.ENTITY, ENTITY, "8"),
         ),
-    )
-    entities.record_merge(
-        PRINCIPAL,
-        EntityMergeRecord(
-            merge_id="emrg_aaaa0001aaaa0001",
-            principal_id=PRINCIPAL,
-            retained_entity_id=retained,
-            merged_entity_id=merged,
-            proposal_id="eprp_aaaa0001aaaa0001",
-            decided_by="operator",
-            reason="the same person, recorded twice",
-            decided_at=WHEN,
+        (
+            ReenrichmentSubject(ReenrichmentSubjectKind.ENTITY, ENTITY, "7"),
+            ReenrichmentSubject(ReenrichmentSubjectKind.ENTITY, ENTITY, "7"),
         ),
-    )
-
-
-# --- after a merge ----------------------------------------------------------
-
-
-def test_a_merge_repoints_the_stranded_observations(
-    world: World, enriching: EntityReenrichmentService
+    ],
+)
+def test_duplicate_subject_identity_is_rejected(
+    subjects: tuple[ReenrichmentSubject, ReenrichmentSubject],
 ) -> None:
-    """What makes a merge finished rather than merely recorded."""
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE))
-    entities.create(PRINCIPAL, _entity(ALICE_TWO))
-    for index in range(3):
-        entities.record_observation(
-            PRINCIPAL, _observation(f"eobs_{index:04d}aaaa0001aaaa", ALICE_TWO)
-        )
-    _record_merge(entities)
-    outcome = enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
-
-    assert outcome.trigger is ReenrichmentTrigger.IDENTITY_MERGED
-    assert outcome.observations_repointed == 3
-    assert outcome.changed_anything is True
-    assert entities.observations(PRINCIPAL, ALICE_TWO) == []
-    assert len(entities.observations(PRINCIPAL, ALICE)) == 3
+    with pytest.raises(ValueError, match="subject identity once"):
+        _binding(subjects=subjects)
 
 
-def test_repointing_twice_changes_nothing_the_second_time(
-    world: World, enriching: EntityReenrichmentService
+@pytest.mark.parametrize(
+    "versions",
+    [
+        (BindingVersion("resolver", "v1"), BindingVersion("resolver", "v2")),
+        (BindingVersion("resolver", "v1"), BindingVersion("resolver", "v1")),
+    ],
+)
+def test_duplicate_version_key_is_rejected(
+    versions: tuple[BindingVersion, BindingVersion],
 ) -> None:
-    """Section 27.2: a retry must not duplicate."""
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE))
-    entities.create(PRINCIPAL, _entity(ALICE_TWO))
-    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", ALICE_TWO))
-    _record_merge(entities)
-
-    enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
-    second = enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
-
-    assert second.observations_repointed == 0
-    assert len(entities.observations(PRINCIPAL, ALICE)) == 1
+    with pytest.raises(ValueError, match="version key once"):
+        _binding(input_versions=versions)
 
 
-def test_a_merge_does_not_touch_another_entitys_observations(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    entities = _entities(world)
-    for entity_id in (ALICE, ALICE_TWO, BOB):
-        entities.create(PRINCIPAL, _entity(entity_id))
-    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", BOB))
-    _record_merge(entities)
-    enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
-    assert len(entities.observations(PRINCIPAL, BOB)) == 1
-
-
-def test_a_merge_re_enrichment_names_two_distinct_entities(
-    enriching: EntityReenrichmentService,
-) -> None:
-    with pytest.raises(ValueError, match="two distinct entities"):
-        enriching.after_merge(PRINCIPAL, ALICE, ALICE)
-
-
-def test_a_merge_pass_is_bounded_and_says_so(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    """More work than one pass carries is reported, not silently dropped."""
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE))
-    entities.create(PRINCIPAL, _entity(ALICE_TWO))
-    for index in range(REENRICHMENT_BOUND + 5):
-        entities.record_observation(
-            PRINCIPAL, _observation(f"eobs_{index:05d}aaaa0001aaa", ALICE_TWO)
-        )
-    _record_merge(entities)
-    outcome = enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
-    assert outcome.observations_repointed == REENRICHMENT_BOUND
-    assert outcome.more_remains is True
-    assert len(entities.observations(PRINCIPAL, ALICE_TWO)) == 5
-
-
-def test_looping_a_bounded_pass_finishes_the_work(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    """The bound is a pacing device, not a ceiling on what can be done."""
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE))
-    entities.create(PRINCIPAL, _entity(ALICE_TWO))
-    for index in range(REENRICHMENT_BOUND + 5):
-        entities.record_observation(
-            PRINCIPAL, _observation(f"eobs_{index:05d}aaaa0001aaa", ALICE_TWO)
-        )
-    _record_merge(entities)
-    while enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE).more_remains:
-        pass
-    assert entities.observations(PRINCIPAL, ALICE_TWO) == []
-
-
-# --- after an alias ---------------------------------------------------------
-
-
-def test_a_new_alias_links_a_mention_it_now_resolves(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
-    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Ali"))
-    assert len(entities.observations(PRINCIPAL, unresolved_only=True)) == 1
-
-    entities.record_alias(PRINCIPAL, _alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
-    outcome = enriching.after_alias(PRINCIPAL)
-
-    assert outcome.trigger is ReenrichmentTrigger.ALIAS_RECORDED
-    assert outcome.mentions_linked == 1
-    assert entities.observations(PRINCIPAL, unresolved_only=True) == []
-    assert entities.observations(PRINCIPAL, ALICE)[0].entity_id == ALICE
-
-
-def test_an_ambiguous_mention_is_left_exactly_where_it_was(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    """The refusal that matters most here.
-
-    Two people answer to the alias. A background pass with nobody watching is
-    the last place to pick one, so the mention comes out of the pass exactly as
-    it went in — and is counted, so the pass is honest about having looked.
-    """
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
-    entities.create(PRINCIPAL, _entity(ALICE_TWO, "Alicia Chen"))
-    entities.record_alias(PRINCIPAL, _alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
-    entities.record_alias(PRINCIPAL, _alias("eals_bbbb0002bbbb0002", ALICE_TWO, "Ali"))
-    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Ali"))
-
-    outcome = enriching.after_alias(PRINCIPAL)
-
-    assert outcome.mentions_linked == 0
-    assert outcome.mentions_left_unresolved == 1
-    assert outcome.changed_anything is False
-    assert len(entities.observations(PRINCIPAL, unresolved_only=True)) == 1
-
-
-def test_a_bare_name_match_does_not_link_a_mention(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    """One entity carries the name and no alias. Still not enough.
-
-    The same rule the resolver applies interactively, applied to the background
-    pass — where it matters more, because nobody is reading the answer.
-    """
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
-    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Alice Chen"))
-    outcome = enriching.after_alias(PRINCIPAL)
-    assert outcome.mentions_linked == 0
-    assert outcome.mentions_left_unresolved == 1
-
-
-def test_a_mention_matching_nothing_stays_unresolved(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
-    entities.record_observation(
-        PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Nobody Whatsoever")
-    )
-    outcome = enriching.after_alias(PRINCIPAL)
-    assert outcome.mentions_linked == 0
-    assert outcome.mentions_left_unresolved == 1
-
-
-def test_running_the_alias_pass_twice_links_nothing_new(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
-    entities.record_alias(PRINCIPAL, _alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
-    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Ali"))
-
-    first = enriching.after_alias(PRINCIPAL)
-    second = enriching.after_alias(PRINCIPAL)
-
-    assert first.mentions_linked == 1
-    assert second.mentions_linked == 0
-    assert len(entities.observations(PRINCIPAL, ALICE)) == 1
-
-
-def test_a_pass_over_an_empty_queue_reports_nothing_and_changes_nothing(
-    enriching: EntityReenrichmentService,
-) -> None:
-    outcome = enriching.after_alias(PRINCIPAL)
-    assert outcome == ReenrichmentOutcome(trigger=ReenrichmentTrigger.ALIAS_RECORDED)
-    assert outcome.changed_anything is False
-
-
-# --- the outcome record itself ----------------------------------------------
-
-
-def test_an_outcome_cannot_report_a_negative_count() -> None:
-    with pytest.raises(ValueError, match="counts what it did"):
-        ReenrichmentOutcome(trigger=ReenrichmentTrigger.ALIAS_RECORDED, mentions_linked=-1)
-
-
-def test_an_outcome_names_a_closed_trigger() -> None:
-    with pytest.raises(ValueError, match="closed trigger"):
-        ReenrichmentOutcome(trigger="identity_merged")  # type: ignore[arg-type]
-
-
-# --- the merge and its re-enrichment, together ------------------------------
-
-
-def test_an_accepted_merge_followed_by_re_enrichment_moves_the_evidence(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    """The three acts of section 15.3, in the order a caller performs them.
-
-    A reviewer accepts the identity-correction proposal; an operator performs
-    the merge; re-enrichment carries the consequence. They are three because
-    each needs a different authority — a reviewer, then the operator, then
-    nobody — and folding any two together is how one of those authorities stops
-    being asked for. `WP-RI-B-05` separated the first two, which had been one
-    call: accepting the proposal *was* the merge, so the operator gate was a
-    parameter rather than a capability.
-    """
-    entities = _entities(world)
-    governing = EntityGovernanceService(entities)
-    entities.create(PRINCIPAL, _entity(ALICE))
-    entities.create(PRINCIPAL, _entity(ALICE_TWO))
-    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", ALICE_TWO))
-    proposed = governing.propose(
-        PRINCIPAL,
-        kind=EntityProposalKind.MERGE_ENTITIES,
-        payload={"retained_entity_id": ALICE, "merged_entity_id": ALICE_TWO},
-        observation_ids=(),
-        proposed_by="resolver",
-        method=EntityProposalMethod.DETERMINISTIC,
-        method_version="1",
+def test_an_identical_registration_dedupes_and_a_changed_version_does_not() -> None:
+    repository = _Repository()
+    service = EntityReenrichmentService(repository)
+    first = service.register(_binding(), at=WHEN)
+    replay = service.register(_binding(), at=WHEN)
+    changed = service.register(
+        _binding(policy_version="policy-v2", cause_record_id="audit_bbbb0002bbbb0002"),
         at=WHEN,
     )
-    governing.accept(
-        PRINCIPAL,
-        proposed.proposal_id,
-        decided_by="the operator",
-        decided_at=WHEN,
-        reason="confirmed",
-        has_operator_authority=True,
+    assert replay.work_id == first.work_id
+    assert changed.work_id != first.work_id
+    assert len(repository.registered) == 2
+
+
+@pytest.mark.parametrize(
+    ("change", "reason"),
+    [
+        ("subject", StaleBindingReason.SUBJECT_VERSION_CHANGED),
+        ("input", StaleBindingReason.INPUT_VERSION_CHANGED),
+        ("producer", StaleBindingReason.PRODUCER_VERSION_CHANGED),
+        ("policy", StaleBindingReason.POLICY_VERSION_CHANGED),
+    ],
+)
+def test_every_version_class_can_make_work_stale(change: str, reason: StaleBindingReason) -> None:
+    binding = _binding()
+    current = _Current(binding)
+    if change == "subject":
+        current.subjects[(ReenrichmentSubjectKind.ENTITY, ENTITY)] = "8"
+    elif change == "input":
+        current.inputs["resolution_rules"] = "rules-v3"
+    elif change == "producer":
+        current.producers["deterministic_resolver"] = "resolver-v4"
+    else:
+        current.policy = "policy-v2"
+    assert reason in assess_currency(binding, current).reasons
+
+
+def test_stale_work_is_recorded_and_the_applier_is_never_called() -> None:
+    binding = _binding()
+    current = _Current(binding)
+    current.policy = "policy-v2"
+    repository = _Repository()
+    applied: list[ReenrichmentBinding] = []
+    currency = EntityReenrichmentService(repository).apply_claimed(
+        _claimed(binding),
+        owner="worker_01",
+        current=current,
+        apply=lambda held, _key: applied.append(held),
+        at=WHEN,
     )
-    # Acceptance established reviewed intent and changed no identity, so the
-    # merge is performed here: the redirect and the lineage row that
-    # `entities.merge` writes under `entity_identity_correction`.
-    entities.redirect_entity(PRINCIPAL, ALICE_TWO, ALICE)
-    entities.record_merge(
-        PRINCIPAL,
-        EntityMergeRecord(
-            merge_id="emrg_aaaa0001aaaa0001",
+    assert currency.reasons == (StaleBindingReason.POLICY_VERSION_CHANGED,)
+    assert applied == []
+    assert repository.stale == [
+        ("erwk_aaaa0001aaaa0001", (StaleBindingReason.POLICY_VERSION_CHANGED,))
+    ]
+    assert repository.completed == []
+
+
+def test_current_work_applies_once_then_completes() -> None:
+    binding = _binding()
+    repository = _Repository()
+    applied: list[str] = []
+    currency = EntityReenrichmentService(repository).apply_claimed(
+        _claimed(binding),
+        owner="worker_01",
+        current=_Current(binding),
+        apply=lambda held, key: applied.append(key),
+        at=WHEN,
+    )
+    assert currency.is_current
+    assert applied == [binding.binding_sha256]
+    assert repository.completed == ["erwk_aaaa0001aaaa0001"]
+
+
+def test_expired_claim_never_invokes_the_applier() -> None:
+    binding = _binding()
+    repository = _Repository()
+    repository.live_claim = False
+    applied: list[ReenrichmentBinding] = []
+    expired = replace(_claimed(binding), lease_expires_at=WHEN)
+
+    with pytest.raises(ValueError, match="live claim"):
+        EntityReenrichmentService(repository).apply_claimed(
+            expired,
+            owner="worker_01",
+            current=_Current(binding),
+            apply=lambda held, _key: applied.append(held),
+            at=WHEN,
+        )
+
+    assert applied == []
+    assert repository.stale == []
+    assert repository.completed == []
+
+
+def test_cross_principal_subject_binding_is_refused() -> None:
+    with pytest.raises(ValueError, match="own Principal"):
+        _binding(
+            subjects=(
+                ReenrichmentSubject(
+                    ReenrichmentSubjectKind.PRINCIPAL, OTHER_PRINCIPAL, "policy-v1"
+                ),
+            )
+        )
+
+
+def test_work_discloses_only_closed_safe_limitations() -> None:
+    limitations = _claimed(_binding()).limitations
+    assert limitations == tuple(ReenrichmentLimitation)
+    assert all(
+        "identity" not in item.value
+        or item is ReenrichmentLimitation.NO_AUTONOMOUS_IDENTITY_MUTATION
+        for item in limitations
+    )
+
+
+def test_the_old_merge_mutation_authority_no_longer_exists() -> None:
+    assert not hasattr(EntityReenrichmentService, "after_merge")
+
+
+def test_every_governing_trigger_has_a_reachable_mutation_registration() -> None:
+    reached = {
+        trigger for triggers in TRIGGERS_BY_MUTATION_CAPABILITY.values() for trigger in triggers
+    }
+    assert (
+        reached | _DIRECT_SPECIALIZED_TRIGGERS
+        == set(ReenrichmentTrigger) - _VERSION_OBSERVER_TRIGGERS
+    )
+    assert all(capability.count(".") >= 1 for capability in TRIGGERS_BY_MUTATION_CAPABILITY)
+
+
+def test_every_mapped_mutation_can_register_its_trigger_work() -> None:
+    repository = _Repository()
+    produced: set[ReenrichmentTrigger] = set()
+    for ordinal, capability in enumerate(TRIGGERS_BY_MUTATION_CAPABILITY, start=1):
+        work = register_mutation_reenrichment(
+            repository,
             principal_id=PRINCIPAL,
-            retained_entity_id=ALICE,
-            merged_entity_id=ALICE_TWO,
-            proposal_id=proposed.proposal_id,
-            decided_by="the operator",
-            reason="confirmed",
-            decided_at=WHEN,
+            capability=capability,
+            cause_record_id=f"audit_{ordinal:016x}",
+            policy_version="ri-v0.2",
+            at=WHEN,
+        )
+        produced.update(item.binding.trigger for item in work)
+    assert produced == {
+        trigger for triggers in TRIGGERS_BY_MUTATION_CAPABILITY.values() for trigger in triggers
+    }
+
+
+def test_source_observer_registers_only_an_exact_version_advance() -> None:
+    repository = _Repository()
+    assert (
+        register_source_version_observation(
+            repository,
+            principal_id=PRINCIPAL,
+            source_object_id=SOURCE_OBJECT,
+            source_version_id=SOURCE_VERSION,
+            policy_version="policy-v1",
+            at=WHEN,
+        )
+        is None
+    )
+    assert (
+        register_source_version_observation(
+            repository,
+            principal_id=PRINCIPAL,
+            source_object_id=SOURCE_OBJECT,
+            source_version_id=SOURCE_VERSION,
+            policy_version="policy-v2",
+            at=WHEN,
+        )
+        is None
+    )
+    changed_version = "ver_bbbb0002bbbb0002"
+    work = register_source_version_observation(
+        repository,
+        principal_id=PRINCIPAL,
+        source_object_id=SOURCE_OBJECT,
+        source_version_id=changed_version,
+        policy_version="policy-v2",
+        at=WHEN,
+    )
+    assert work is not None
+    assert work.binding.trigger is ReenrichmentTrigger.SOURCE_VERSION_CHANGE
+    assert work.binding.subjects == (
+        ReenrichmentSubject(ReenrichmentSubjectKind.SOURCE_OBJECT, SOURCE_OBJECT, changed_version),
+        ReenrichmentSubject(
+            ReenrichmentSubjectKind.SOURCE_VERSION, changed_version, changed_version
         ),
     )
-    outcome = enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
-
-    assert outcome.observations_repointed == 1
-    assert len(entities.observations(PRINCIPAL, ALICE)) == 1
-    merged = entities.get(PRINCIPAL, ALICE_TWO)
-    assert merged is not None
-    assert merged.status is EntityStatus.MERGED_REDIRECT
+    watermark_key = f"source_{hashlib.sha256(SOURCE_OBJECT.encode()).hexdigest()[:40]}"
+    assert work.binding.input_versions == (BindingVersion(watermark_key, changed_version),)
+    assert work.binding.producer_versions == (
+        BindingVersion("source_pipeline", "sources.fetch.v1"),
+    )
 
 
-# --- the guards -------------------------------------------------------------
+def test_producer_observer_excludes_policy_and_registers_exact_advance() -> None:
+    repository = _Repository()
+    arguments = {
+        "principal_id": PRINCIPAL,
+        "proposal_id": PROPOSAL,
+        "proposal_version": "proposed",
+        "method": "rules",
+        "method_version": "pipeline-v1",
+        "model_id": None,
+        "model_version": None,
+        "at": WHEN,
+    }
+    assert (
+        register_producer_version_observation(repository, policy_version="policy-v1", **arguments)
+        is None
+    )
+    assert (
+        register_producer_version_observation(repository, policy_version="policy-v2", **arguments)
+        is None
+    )
+    work = register_producer_version_observation(
+        repository,
+        policy_version="policy-v2",
+        **{**arguments, "method_version": "pipeline-v2"},
+    )
+    assert work is not None
+    assert work.binding.trigger is ReenrichmentTrigger.MODEL_OR_RULE_VERSION_CHANGE
+    assert work.binding.subjects == (
+        ReenrichmentSubject(ReenrichmentSubjectKind.PROPOSAL, PROPOSAL, "proposed"),
+    )
+    assert len(work.binding.producer_versions) == 1
+    assert work.binding.producer_versions[0].key == "entity_proposal"
 
 
-def test_a_merge_pass_refuses_a_pair_no_decision_connects(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    """The pass's whole authority is the merge record; without one it declines.
-
-    Before this refusal, `after_merge` would move every observation off one
-    entity onto another purely because a caller named the two together — the
-    exact false join `RI-RISK-001` describes, performed in the background with
-    no proposal, no operator and no lineage row to find it by afterwards.
-    """
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE))
-    entities.create(PRINCIPAL, _entity(BOB, "Bob Nguyen"))
-    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", BOB))
-
-    with pytest.raises(ValueError, match="recorded merge"):
-        enriching.after_merge(PRINCIPAL, BOB, ALICE)
-    assert len(entities.observations(PRINCIPAL, BOB)) == 1
-
-
-def test_a_merge_pass_refuses_a_recorded_merge_run_backwards(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    """Direction is part of the decision, not an argument order the caller picks.
-
-    A record saying "ALICE_TWO was merged into ALICE" does not authorise moving
-    ALICE's evidence onto ALICE_TWO. Asserted separately because a membership
-    test that ignored direction would pass every test above.
-    """
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE))
-    entities.create(PRINCIPAL, _entity(ALICE_TWO))
-    _record_merge(entities)
-
-    with pytest.raises(ValueError, match="recorded merge"):
-        enriching.after_merge(PRINCIPAL, ALICE, ALICE_TWO)
-
-
-def test_a_merge_pass_refuses_another_principals_lineage(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    """`merges` is partitioned, so the lookup finds nothing and the pass stops."""
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE))
-    entities.create(PRINCIPAL, _entity(ALICE_TWO))
-    _record_merge(entities)
-
-    other = "prn_ffff0009ffff0009ffff0009"
-    with pytest.raises(ValueError, match="recorded merge"):
-        enriching.after_merge(other, ALICE_TWO, ALICE)
-
-
-def test_an_alias_pass_will_not_link_a_person_mention_to_a_project(
-    world: World, enriching: EntityReenrichmentService
-) -> None:
-    """The constraint the kind implies, asserted where it would otherwise bind.
-
-    A calendar attendee and a project can carry the same text. Without the
-    `entity_type` the kind implies, the pass answers `RESOLVED_EXACT` on the
-    project and links a person's mention to it — unwatched, and afterwards
-    indistinguishable from a link someone meant.
-    """
-    entities = _entities(world)
-    tower = Entity(
-        entity_id=BOB,
+def test_generic_mutation_binding_is_current_and_reaches_the_apply_callback() -> None:
+    repository = _Repository()
+    (work,) = register_mutation_reenrichment(
+        repository,
         principal_id=PRINCIPAL,
-        entity_type=EntityType.PROJECT,
-        canonical_name=normalize_name("Harbour Tower"),
-        display_name="Harbour Tower",
-        status=EntityStatus.ACTIVE,
-        created_at=WHEN,
-        updated_at=WHEN,
-        version=1,
+        capability="entities.update",
+        cause_record_id="emut_aaaa0001aaaa0001",
+        policy_version="policy-v1",
+        at=WHEN,
     )
-    entities.create(PRINCIPAL, tower)
-    entities.record_alias(PRINCIPAL, _alias("eals_bbbb0002bbbb0002", BOB, "Harbour Tower"))
-    entities.record_observation(
-        PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Harbour Tower")
+    current = _SqlEquivalentCurrent(repository)
+    assert assess_currency(work.binding, current).is_current
+    applied: list[str] = []
+    currency = EntityReenrichmentService(repository).apply_claimed(
+        _as_claimed(repository, work),
+        owner="worker_01",
+        current=current,
+        apply=lambda _binding, key: applied.append(key),
+        at=WHEN,
+    )
+    assert currency.is_current
+    assert applied == [work.binding.binding_sha256]
+
+
+def test_generic_mutation_binding_stales_when_policy_or_producer_advances() -> None:
+    repository = _Repository()
+    (work,) = register_mutation_reenrichment(
+        repository,
+        principal_id=PRINCIPAL,
+        capability="entities.update",
+        cause_record_id="emut_aaaa0001aaaa0001",
+        policy_version="policy-v1",
+        at=WHEN,
+    )
+    repository.versions[("producer", "relationship_intelligence")] = "v-next"
+    repository.versions[("policy", "current")] = "policy-v2"
+    reasons = assess_currency(work.binding, _SqlEquivalentCurrent(repository)).reasons
+    assert reasons == (
+        StaleBindingReason.POLICY_VERSION_CHANGED,
+        StaleBindingReason.PRODUCER_VERSION_CHANGED,
     )
 
-    outcome = enriching.after_alias(PRINCIPAL)
 
-    assert outcome.mentions_linked == 0
-    assert outcome.mentions_left_unresolved == 1
-    assert len(entities.observations(PRINCIPAL, unresolved_only=True)) == 1
+def test_source_binding_is_current_then_a_new_source_version_makes_it_stale() -> None:
+    repository = _Repository()
+    register_source_version_observation(
+        repository,
+        principal_id=PRINCIPAL,
+        source_object_id=SOURCE_OBJECT,
+        source_version_id=SOURCE_VERSION,
+        policy_version="policy-v1",
+        at=WHEN,
+    )
+    second = "ver_bbbb0002bbbb0002"
+    work = register_source_version_observation(
+        repository,
+        principal_id=PRINCIPAL,
+        source_object_id=SOURCE_OBJECT,
+        source_version_id=second,
+        policy_version="policy-v1",
+        at=WHEN,
+    )
+    assert work is not None
+    subjects = {
+        (ReenrichmentSubjectKind.SOURCE_OBJECT, SOURCE_OBJECT): second,
+        (ReenrichmentSubjectKind.SOURCE_VERSION, second): second,
+    }
+    current = _SqlEquivalentCurrent(repository, subjects=subjects)
+    applied: list[str] = []
+    currency = EntityReenrichmentService(repository).apply_claimed(
+        _as_claimed(repository, work),
+        owner="worker_01",
+        current=current,
+        apply=lambda _binding, key: applied.append(key),
+        at=WHEN,
+    )
+    assert currency.is_current
+    assert applied == [work.binding.binding_sha256]
+    third = "ver_cccc0003cccc0003"
+    register_source_version_observation(
+        repository,
+        principal_id=PRINCIPAL,
+        source_object_id=SOURCE_OBJECT,
+        source_version_id=third,
+        policy_version="policy-v1",
+        at=WHEN,
+    )
+    subjects[(ReenrichmentSubjectKind.SOURCE_OBJECT, SOURCE_OBJECT)] = third
+    reasons = assess_currency(
+        work.binding, _SqlEquivalentCurrent(repository, subjects=subjects)
+    ).reasons
+    assert reasons == (
+        StaleBindingReason.INPUT_VERSION_CHANGED,
+        StaleBindingReason.SUBJECT_VERSION_CHANGED,
+    )
 
 
-def test_an_alias_pass_still_links_a_person_mention_to_a_person(
-    world: World, enriching: EntityReenrichmentService
+def test_producer_binding_is_current_then_a_producer_advance_makes_it_stale() -> None:
+    repository = _Repository()
+    common = {
+        "principal_id": PRINCIPAL,
+        "proposal_id": PROPOSAL,
+        "proposal_version": "proposed",
+        "method": "rules",
+        "model_id": None,
+        "model_version": None,
+        "policy_version": "policy-v1",
+        "at": WHEN,
+    }
+    register_producer_version_observation(repository, method_version="v1", **common)
+    work = register_producer_version_observation(repository, method_version="v2", **common)
+    assert work is not None
+    current = _SqlEquivalentCurrent(
+        repository,
+        subjects={(ReenrichmentSubjectKind.PROPOSAL, PROPOSAL): "proposed"},
+    )
+    applied: list[str] = []
+    currency = EntityReenrichmentService(repository).apply_claimed(
+        _as_claimed(repository, work),
+        owner="worker_01",
+        current=current,
+        apply=lambda _binding, key: applied.append(key),
+        at=WHEN,
+    )
+    assert currency.is_current
+    assert applied == [work.binding.binding_sha256]
+    current.subjects[(ReenrichmentSubjectKind.PROPOSAL, PROPOSAL)] = "accepted"
+    assert assess_currency(work.binding, current).reasons == (
+        StaleBindingReason.SUBJECT_VERSION_CHANGED,
+    )
+    current.subjects[(ReenrichmentSubjectKind.PROPOSAL, PROPOSAL)] = "proposed"
+    register_producer_version_observation(repository, method_version="v3", **common)
+    assert assess_currency(work.binding, current).reasons == (
+        StaleBindingReason.PRODUCER_VERSION_CHANGED,
+    )
+
+
+def test_all_nine_triggers_are_covered_by_truthful_mutations_and_exact_observers() -> None:
+    mutation_triggers = {
+        trigger for triggers in TRIGGERS_BY_MUTATION_CAPABILITY.values() for trigger in triggers
+    }
+    assert mutation_triggers | _DIRECT_SPECIALIZED_TRIGGERS | _VERSION_OBSERVER_TRIGGERS == set(
+        ReenrichmentTrigger
+    )
+
+
+@pytest.mark.parametrize("capability", tuple(TRIGGERS_BY_MUTATION_CAPABILITY))
+def test_handler_attested_new_mutation_registers_once_and_replay_registers_zero(
+    capability: str,
 ) -> None:
-    """The constraint narrows the answer; it does not suppress it.
+    repository = _Repository()
+    created = _Result(
+        payload={},
+        disclosure=None,  # type: ignore[arg-type]
+        reenrichment_cause_id="emut_aaaa0001aaaa0001",
+    )
+    replay_or_noop = _Result(payload={}, disclosure=None)  # type: ignore[arg-type]
 
-    The pair with the test above: a guard that refused everything would satisfy
-    that one and be useless.
-    """
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE, "Alice Chen"))
-    entities.record_alias(PRINCIPAL, _alias("eals_bbbb0002bbbb0002", ALICE, "Ali"))
-    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001", name="Ali"))
+    _register_reenrichment_result(
+        repository,
+        result=created,
+        principal_id=PRINCIPAL,
+        capability=capability,
+        policy_version="ri-v0.2",
+        at=WHEN,
+    )
+    assert len(repository.registered) == 1
 
-    outcome = enriching.after_alias(PRINCIPAL)
-
-    assert outcome.mentions_linked == 1
-    assert entities.observations(PRINCIPAL, unresolved_only=True) == []
-
-
-def test_a_pass_asks_the_repository_for_a_bounded_read(world: World) -> None:
-    """The bound is on the query, not on a slice of everything.
-
-    `more_remains` was already asserted above, and it holds either way — an
-    in-memory double returns the same outcome whether the cap reached the query
-    or a slice was taken after every row had been fetched. Which one it is
-    decides whether "bounded" means anything for an entity with fifty thousand
-    stranded observations, so it is asserted at the call.
-    """
-    asked: list[int | None] = []
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE))
-    entities.create(PRINCIPAL, _entity(ALICE_TWO))
-    _record_merge(entities)
-
-    class _Recording:
-        def __getattr__(self, name: str) -> object:
-            return getattr(entities, name)
-
-        def observations(self, *args: object, **kwargs: object) -> object:
-            asked.append(kwargs.get("limit"))
-            return entities.observations(*args, **kwargs)  # type: ignore[arg-type]
-
-    enriching = EntityReenrichmentService(_Recording())  # type: ignore[arg-type]
-    enriching.after_merge(PRINCIPAL, ALICE_TWO, ALICE)
-    enriching.after_alias(PRINCIPAL)
-
-    assert asked == [REENRICHMENT_BOUND + 1, REENRICHMENT_BOUND + 1]
+    _register_reenrichment_result(
+        repository,
+        result=replay_or_noop,
+        principal_id=PRINCIPAL,
+        capability=capability,
+        policy_version="ri-v0.2",
+        at=WHEN,
+    )
+    assert len(repository.registered) == 1
 
 
-def test_an_alias_pass_asks_no_question_that_needs_a_clock(world: World) -> None:
-    """The background pass supplies no moment, so it must supply no scope either.
+def test_distinct_mutation_receipts_on_one_entity_register_distinct_work() -> None:
+    repository = _Repository()
+    for cause in ("emut_aaaa0001aaaa0001", "emut_bbbb0002bbbb0002"):
+        _register_reenrichment_result(
+            repository,
+            result=_Result(
+                payload={"entity_id": ENTITY},
+                disclosure=None,  # type: ignore[arg-type]
+                reenrichment_cause_id=cause,
+            ),
+            principal_id=PRINCIPAL,
+            capability="entities.update",
+            policy_version="ri-v0.2",
+            at=WHEN,
+        )
+    assert len(repository.registered) == 2
 
-    `_is_in_force` falls back to "nobody wrote an end date" when a request
-    carries neither `as_of` nor `at`, and that fallback errs toward *resolving*.
-    `entities.resolve` always passes `authorization.at`; this pass has no clock
-    to pass, and is safe only because it never names a scope -- so no contextual
-    signal is consulted and the currency rule is never reached from here.
 
-    Pinned because the condition is invisible at the call site: adding a
-    `scope_entity_id` to that request, with no moment beside it, would let a
-    background pass with nobody watching link a mention on the strength of a
-    role that has not started. That is the join `RI-RISK-001` names, made by the
-    one caller no operator sees.
-    """
-    asked: list[ResolutionRequest] = []
-    entities = _entities(world)
-    entities.create(PRINCIPAL, _entity(ALICE))
-    entities.record_observation(PRINCIPAL, _observation("eobs_aaaa0001aaaa0001"))
-    service = EntityReenrichmentService(entities)
-    resolving = service._resolving
-    real_resolve = resolving.resolve
+def test_review_invalidated_success_has_no_reenrichment_effect() -> None:
+    repository = _Repository()
+    _register_reenrichment_result(
+        repository,
+        result=_Result(
+            payload={"review_case_id": "rvw_aaaa0001aaaa0001", "result": "invalidated"},
+            disclosure=None,  # type: ignore[arg-type]
+        ),
+        principal_id=PRINCIPAL,
+        capability="review.decide",
+        policy_version="ri-v0.2",
+        at=WHEN,
+    )
+    assert repository.registered == {}
 
-    def _recording(principal_id: str, request: ResolutionRequest) -> EntityResolution:
-        asked.append(request)
-        return real_resolve(principal_id, request)
 
-    resolving.resolve = _recording  # type: ignore[method-assign]
-    service.after_alias(PRINCIPAL)
+@pytest.mark.parametrize("field", ["input_versions", "producer_versions"])
+def test_version_bindings_are_bounded_and_keys_are_unique(field: str) -> None:
+    too_many = tuple(
+        BindingVersion(f"version_{index}", "v1") for index in range(MAX_REENRICHMENT_VERSIONS + 1)
+    )
+    with pytest.raises(ValueError, match="bounded version sets"):
+        _binding(**{field: too_many})
+    with pytest.raises(ValueError, match="version key once"):
+        _binding(
+            **{
+                field: (
+                    BindingVersion("same", "v1"),
+                    BindingVersion("same", "v2"),
+                )
+            }
+        )
 
-    assert asked, "the pass resolved nothing, so this test would prove nothing"
-    for request in asked:
-        assert request.scope_entity_id is None
-        assert request.as_of is None
-        assert request.at is None
+
+@pytest.mark.parametrize(
+    ("method_name", "trigger"),
+    [(trigger.value, trigger) for trigger in ReenrichmentTrigger],
+)
+def test_every_governing_trigger_has_a_load_bearing_production_caller(
+    method_name: str, trigger: ReenrichmentTrigger
+) -> None:
+    repository = _Repository()
+    caller = ProductionReenrichmentCaller(
+        repository,
+        principal_id=PRINCIPAL,
+        policy_version="policy-v1",
+    )
+    method = getattr(caller, method_name)
+    work = method(
+        f"event_{trigger.value.replace('_', '')[:16]}00000000",
+        (ReenrichmentSubject(ReenrichmentSubjectKind.PRINCIPAL, PRINCIPAL, "1"),),
+        at=WHEN,
+    )
+    assert work.binding.trigger is trigger
+    assert len(repository.registered) == 1
+    assert repository.versions[("producer", "relationship_intelligence")]
+    assert repository.versions[("policy", "current")] == "policy-v1"
+
+
+def test_process_version_observation_registers_only_real_advances() -> None:
+    repository = _Repository()
+    first = ProductionReenrichmentCaller(
+        repository,
+        principal_id=PRINCIPAL,
+        policy_version="policy-v1",
+        producer_version="resolver-v1",
+    )
+    assert first.observe_process_versions(PRINCIPAL, cause="boot_aaaaaaaa", at=WHEN) == ()
+    changed = ProductionReenrichmentCaller(
+        repository,
+        principal_id=PRINCIPAL,
+        policy_version="policy-v2",
+        producer_version="resolver-v2",
+    )
+    work = changed.observe_process_versions(PRINCIPAL, cause="boot_bbbbbbbb", at=WHEN)
+    assert {item.binding.trigger for item in work} == {ReenrichmentTrigger.POLICY_CHANGE}

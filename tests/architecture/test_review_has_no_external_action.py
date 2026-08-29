@@ -28,6 +28,7 @@ THE_SURFACE: Final = frozenset({"cases", "decide"})
 THE_ENTITY_PLANES_STORAGE: Final = frozenset(
     {
         "entity_proposal_case",
+        "entity_proposal_decision",
         "entity_proposal_decisions",
         "record_entity_proposal_decision",
         "invalidate_entity_proposal",

@@ -824,11 +824,12 @@ def _stage_sensitivity_proposal(runtime: _Runtime, classification: Classificatio
         connection.execute(
             text(
                 "INSERT INTO knowledge.relationship_memory_proposals ("
-                "memory_proposal_id, principal_id, subject_entity_id, "
+                "memory_proposal_id, principal_id, subject_entity_id, origin_subject_entity_id, "
                 "expected_subject_version, proposed_kind, proposed_statement, "
                 "proposed_statement_sha256, dedupe_sha256, state, method, "
                 "method_version, classification, proposed_at) VALUES ("
-                ":proposal_id, :principal_id, :subject_entity_id, 1, 'sensitivity', "
+                ":proposal_id, :principal_id, :subject_entity_id, :origin_subject_entity_id, "
+                "1, 'sensitivity', "
                 ":statement, :digest, :dedupe, 'proposed', 'deterministic', 'v1', "
                 ":classification, now())"
             ),
@@ -836,6 +837,7 @@ def _stage_sensitivity_proposal(runtime: _Runtime, classification: Classificatio
                 "proposal_id": issue_identifier(IdKind.RELATIONSHIP_MEMORY_PROPOSAL),
                 "principal_id": PRINCIPAL,
                 "subject_entity_id": NOOR,
+                "origin_subject_entity_id": NOOR,
                 "statement": FLOOR_PROBE,
                 "digest": statement_digest(FLOOR_PROBE),
                 "dedupe": memory_proposal_dedupe_digest(

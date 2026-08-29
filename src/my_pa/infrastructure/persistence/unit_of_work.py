@@ -99,6 +99,7 @@ from my_pa.contracts.v1.status import SourceStatusState
 from my_pa.domain.capture.proposal import ProposalState
 from my_pa.domain.capture.reveal import Reveal
 from my_pa.domain.capture.review import (
+    CorrectionPatch,
     Disposition,
     EntityProposalReviewCase,
     EntityProposalReviewDecision,
@@ -137,6 +138,7 @@ from my_pa.infrastructure.persistence.enrollment import (
     record_scope,
 )
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
+from my_pa.infrastructure.persistence.entity_identity_history import SqlIdentityHistoryQuery
 from my_pa.infrastructure.persistence.entity_proposal_review import (
     decide_ledger_dispositions,
     entity_proposal_review_case,
@@ -145,6 +147,10 @@ from my_pa.infrastructure.persistence.entity_proposal_review import (
     name_entity_proposal_successor,
     record_entity_proposal_review_decision,
     supersede_entity_proposal,
+)
+from my_pa.infrastructure.persistence.entity_reenrichment import (
+    ReenrichmentTables,
+    SqlReenrichmentWorkRepository,
 )
 from my_pa.infrastructure.persistence.extraction import coverage_for
 from my_pa.infrastructure.persistence.goodnotes import (
@@ -197,6 +203,10 @@ from my_pa.infrastructure.persistence.tables import (
     JobState,
     capture_assertions,
     captures,
+    entity_proposal_review_decisions,
+    entity_reenrichment_subjects,
+    entity_reenrichment_version_watermarks,
+    entity_reenrichment_work,
 )
 from my_pa.infrastructure.persistence.task_management import SqlTaskManagementRepository
 from my_pa.infrastructure.persistence.worker_health import worker_plane_health
@@ -507,7 +517,7 @@ class _Reviews(ReviewRepository):
     **The Relationship Memory branch is composed, not unconditional.** The other
     two planes on this surface are always part of a build; Relationship Memory is
     a default-off plane behind two settings, and `ApplicationService` withholds
-    all eight of its capability names unless both are on. This class used to
+    all nine of its capability names unless both are on. This class used to
     reach the memory tables regardless, so a build that had never enabled the
     plane still ran its query on every `review.list` and still routed
     `review.decide` through its case test — and a memory case that surfaced there
@@ -565,10 +575,10 @@ class _Reviews(ReviewRepository):
 
         An *uncomposed* plane costs no query at all and contributes no case. That
         is a stronger statement than "it would have returned nothing anyway":
-        with no producer of proposals the memory query is empty today, but "empty
-        because nothing wrote a row" is a fact about the data and "absent because
-        the build does not have the plane" is a fact about the build, and only
-        the second survives the day a producer is admitted.
+        a build may hold no memory proposals, but "empty because no candidate was
+        proposed" is a fact about the data and "absent because the build does not
+        have the plane" is a fact about the build. The distinction remains
+        load-bearing now that `relationship_memory.propose` can populate the plane.
 
         **`entity_id` asks only the planes that could answer it.** A capture case
         is about a span of text and a GoodNotes case is about a region of a page;
@@ -704,6 +714,38 @@ class _Reviews(ReviewRepository):
             lambda: decide_ledger_dispositions(
                 self._connection, review_case_id=review_case_id, principal_id=principal_id
             )
+        )
+
+    def entity_proposal_decision(
+        self, principal_id: str, decision_id: str
+    ) -> EntityProposalReviewDecision | None:
+        row = _read(
+            lambda: (
+                self._connection.execute(
+                    select(entity_proposal_review_decisions).where(
+                        entity_proposal_review_decisions.c.principal_id == principal_id,
+                        entity_proposal_review_decisions.c.decision_id == decision_id,
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        )
+        if row is None:
+            return None
+        corrected = row["corrected_payload"]
+        return EntityProposalReviewDecision(
+            decision_id=str(row["decision_id"]),
+            proposal_id=str(row["proposal_id"]),
+            review_case_id=str(row["review_case_id"]),
+            principal_id=str(row["principal_id"]),
+            sequence=int(row["sequence"]),
+            disposition=Disposition(str(row["disposition"])),
+            reason=row["reason"],
+            corrected_payload=(None if corrected is None else CorrectionPatch.of(dict(corrected))),
+            correlation_id=str(row["correlation_id"]),
+            audit_id=str(row["audit_id"]),
+            decided_at=row["decided_at"],
         )
 
     def record_entity_proposal_decision(
@@ -1028,6 +1070,17 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
         )
 
     @property
+    def reenrichment(self) -> SqlReenrichmentWorkRepository:
+        return SqlReenrichmentWorkRepository(
+            self._open,
+            ReenrichmentTables(
+                entity_reenrichment_work,
+                entity_reenrichment_subjects,
+                entity_reenrichment_version_watermarks,
+            ),
+        )
+
+    @property
     def write_requests(self) -> WriteRequestRepository:
         return SqlWriteRequestRepository(self._open)
 
@@ -1093,6 +1146,11 @@ class SqlAlchemyUnitOfWork(UnitOfWork):
     def entities(self) -> EntitiesRepository:
         """The generalized entity rows, on this transaction's connection."""
         return SqlEntityRepository(self._open)
+
+    @property
+    def identity_history(self) -> SqlIdentityHistoryQuery:
+        """Authoritative identity history on this transaction's connection."""
+        return SqlIdentityHistoryQuery(self._open)
 
     @property
     def relationship_memory(self) -> RelationshipMemoryRepository:

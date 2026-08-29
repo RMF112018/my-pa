@@ -273,6 +273,10 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         "relationship_memory.revise",
         "relationship_memory.archive",
         "relationship_memory.restore",
+        # RI final completion. `8e1c4a7b2d90` admits governed history and split.
+        "entities.identity_history",
+        "entities.split.preview",
+        "entities.split",
         # Phase A's entity write and paged-read surface. `823e23b6cc63` is the
         # forward `ALTER` that admits every name below, and it is one revision
         # for three work packages on purpose: `capability_is_known` is a single
@@ -445,6 +449,9 @@ RELATIONSHIP_TRIGGERS: Final[frozenset[str]] = frozenset(
         "conversation_participants_remain_supported",
         "conversation_observations_remain_supported",
         "observation_link_keeps_participants_supported",
+        "relationship_memory_origin_stays_fixed",
+        "relationship_memory_proposal_origin_stays_fixed",
+        "relationship_memory_context_origin_stays_fixed",
     }
 )
 

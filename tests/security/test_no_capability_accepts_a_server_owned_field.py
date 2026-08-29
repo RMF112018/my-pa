@@ -3,12 +3,13 @@
 `compose_remote_arguments` refuses a caller-supplied envelope field before it
 resolves the capability, so the check is capability-independent by construction.
 The existing sweep in `tests/unit/test_remote_request.py` says so for a
-population it derives -- and then subtracts `KEYLESS_ENTITY_WRITES` from, which
-is where Phase B's `entities.proposals.create`, `entities.merge.preview` and
-`entities.merge` went. `relationship_memory.propose` was never in that
-population at all: it derives from the `entities.` prefix. So every capability
-this phase publishes is covered by the *schema* half of that module and by none
-of the *runtime refusal* half.
+population it derives -- and then subtracts the five keyless Entity proposal,
+merge, and split writes in `KEYLESS_ENTITY_WRITES` from. Phase B contributed
+`entities.proposals.create` and merge preview/apply; final recovery contributed
+split preview/apply. `relationship_memory.propose` was never in that population
+at all: it derives from the `entities.` prefix. So every capability this phase
+publishes is covered by the *schema* half of that module and by none of the
+*runtime refusal* half.
 
 A subtraction list is exactly the shape of hole this module exists to close.
 The population here is `Capability` itself with nothing removed, so a capability

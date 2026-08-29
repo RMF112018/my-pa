@@ -53,7 +53,7 @@ a promotion path could write.
 
 ## 3. Public capability surface
 
-Eight `relationship_memory.` names, and there is deliberately no ninth:
+Nine `relationship_memory.` names:
 
 | Capability | Purpose | Notes |
 |---|---|---|
@@ -65,6 +65,7 @@ Eight `relationship_memory.` names, and there is deliberately no ninth:
 | `relationship_memory.list` | `relationship_memory_read` | entity-scoped, bounded |
 | `relationship_memory.search` | `relationship_memory_read` | Principal-scoped, lexical |
 | `relationship_memory.history` | `relationship_memory_read` | immutable versions |
+| `relationship_memory.propose` | `relationship_memory_proposal` | records a candidate for governed review; never creates active memory |
 
 There is no `relationship_memory.delete`. Archive is reversible, history is
 retained, hard deletion is unresolved by ADR-003 and reserved to the operator,
@@ -123,8 +124,9 @@ Eight tables in schema `knowledge`, created by revision `f1c6b904a2d7`:
   `relationship_memory_review_decisions` — the proposal plane. A proposal never
   enters `relationship_memories`, which is what makes "a proposal cannot appear
   in an ordinary memory read" a property of the schema rather than a predicate
-  every query has to remember. **Nothing in this build writes those three
-  tables**; section 11 states what that means and why they exist anyway.
+  every query has to remember. `relationship_memory.propose` writes the first
+  two, and `review.decide` appends the decision and promotes an accepted proposal
+  in the same transaction.
 
 Two version counters, deliberately: `version` is the aggregate's
 optimistic-concurrency counter and advances on archive and restore, which write
@@ -139,12 +141,14 @@ is the only place it can be proven.
 
 ## 7. Identity and merges
 
-A write against an Entity in `merged_redirect` state is refused and the
-canonical target is returned. It is **not** followed: rebinding would turn a
-deliberate annotation about a historical identity into one about the current
-person, which is a different statement than the user made. Reads still answer,
-and `relationship_memory.get` carries `canonical_subject_entity_id` when the
-subject has been merged away. A merge erases no memory and no version.
+A direct write against an Entity already in `merged_redirect` state is refused
+and the canonical target is returned. Governed identity correction is the only
+redistribution path: merge reparents memory subjects, proposal subjects and
+proposal/canonical Entity context links to the survivor while retaining immutable
+origin bindings in both canonical rows and the effect ledger. Split consumes
+that ledger to restore the historical bindings. Neither direction erases a
+memory or a memory version, and the aggregate concurrency token advances on
+both merge and split rather than returning to an earlier value.
 
 ## 8. What this does not do
 
@@ -167,71 +171,39 @@ A build without the plane withholds all nine `relationship_memory.` names from `
 from the MCP tool list, and every handler refuses `unsupported` as a floor under
 that — the HTTP transport routes by path segment and consults neither list.
 
-Remote MCP additionally withholds the four writes until remote writes are
-enabled, because `relationship_memory_authoring` is a write purpose.
+Remote MCP additionally withholds the five write-capable names until remote
+writes are enabled, because both Relationship Memory authoring and proposal
+purposes are write purposes.
 
 ## 10. Deferred, and named rather than implied
 
 - retention and hard deletion (ADR-003 leaves it unresolved);
 - multi-user or delegated visibility;
 - reminder or attention rules over `important_date`;
-- memory redistribution after an identity split;
 - any widening of cloud eligibility;
 - the frontend experience, which `MYPA-RM-04` describes and which this
   implementation does not build.
 
-## 11. The promotion path has no producer
+## 11. Governed proposal and promotion path
 
-**Nothing in `src/`, `apps/` or `ops/` writes `relationship_memory_proposals` or
-`relationship_memory_proposal_evidence`.** Only test fixtures do. Everything the
-promotion path is made of is therefore implemented and tested but unreachable in
-any composed build, however the feature flags are set:
+`relationship_memory.propose` is the production producer. It validates a
+Principal-owned subject and evidence, resolves immutable rule/model provenance
+from the authenticated Principal's registration, and writes a candidate plus
+its evidence without writing active memory. Equivalent open candidates dedupe
+to the existing proposal, and the response deliberately excludes statement
+text.
 
-- three of the eight tables — `relationship_memory_proposals`,
-  `relationship_memory_proposal_evidence` and
-  `relationship_memory_review_decisions`;
-- the whole of `infrastructure/persistence/relationship_memory_review.py`,
-  including the authority rules a promotion applies and the evidence copy that
-  makes an accepted memory checkable;
-- three domain records — `RelationshipMemoryProposal`,
-  `MemoryProposalEvidence` and `RelationshipMemoryReviewCase`;
-- the widening of `ReviewRepository.cases` to a three-variant union, and the
-  `relationship_memory` branch of the review-case payload.
+The proposal's `review_case_id` puts it on the composed `review.list` surface.
+`review.decide` routes the case to
+`infrastructure/persistence/relationship_memory_review.py`; acceptance creates
+the canonical memory, version, context and evidence rows and appends the review
+decision atomically. The non-accepting dispositions — reject, defer,
+mark-unresolved, reprocess, escalate and invalidate — do not create active
+memory. Corrected acceptance follows the acceptance path. When the plane is not
+composed, neither listing nor decision routing probes its rows, preserving the
+same not-found behavior as an unknown case.
 
-`review.list` and `review.decide` consequently answer today exactly as they did
-before this branch, and for two independent reasons. In a build that composed
-the plane, the memory query returns nothing and the decide router's memory
-branch never matches, because no producer has written a proposal. In a build
-that did not compose it, the query is not issued and the branch is not consulted
-at all — the unit of work is constructed with the plane off, so `review.list`
-cannot disclose a subject or a proposed kind from a plane the operator never
-enabled. This is stated rather than implied because
-`AGENTS.md` section 2 requires it: code that runs in no composed build is code a
-reader would otherwise take for a working feature, and this specification is the
-executable-truth record.
-
-**What a producer would have to be.** Something that writes a row into
-`relationship_memory_proposals` with a subject Entity this Principal owns, a
-`proposed_kind`, the candidate statement and its digest, a `method` and
-`method_version` (and, for `local_model`, a `model_id` and `model_version`), a
-classification that meets the kind's floor, and a `review_case_id` — plus, for
-anything that claims a source, one `relationship_memory_proposal_evidence` row
-per record it rests on. The obvious candidate is a deterministic reader over
-Quick Capture text or over extracted knowledge, and it is out of scope: it needs
-its own capability, its own grant boundary, its own precision evidence and its
-own decision about which statements are worth proposing at all. None of that is
-in this objective.
-
-**Why it exists now rather than later.** The contract this plane implements
-requires that a model or rule can never create active memory — `RM-AC-005`,
-`RM-P-AC-008`, `RM-API-AC-012` — and "never" is a claim about the *only* route
-that exists, not about a route nobody has built yet. Deferring the promotion
-semantics would leave the authority vocabulary, the separate proposal table, the
-`review_promotion` actor class and the evidence-copy rule as prose, and the
-first producer admitted would be the change that both invented a route and
-decided its epistemics, under the pressure of shipping the producer. Building
-the destination first is what makes admitting a producer a bounded change: it
-writes proposal rows and nothing else, and every question about what a promoted
-statement may claim is already answered and already tested. That is also the
-form the refusal takes today — `MemoryAuthority` has no `model_inference`
-member, so there is no value a producer could write even if one existed.
+The epistemic boundary remains structural: a rule or local model can propose,
+but cannot create active memory directly. Promotion uses the closed accepted
+authority vocabulary and the `review_promotion` actor class, copies exact
+evidence, and records the review case that admitted the version.

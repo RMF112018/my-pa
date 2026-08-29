@@ -441,7 +441,7 @@ def test_compose_stamps_idempotency_for_task_create() -> None:
     assert replay["payload"]["idempotency_key"] == key
 
 
-# ---- the entity plane's eighteen writes ------------------------------------
+# ---- the entity plane's replay-safe writes ---------------------------------
 
 
 #: The `entities.` writes whose replay identity is **not** a caller-shaped key,
@@ -451,7 +451,7 @@ def test_compose_stamps_idempotency_for_task_create() -> None:
 #: its command, which is what makes membership of
 #: `_IDEMPOTENT_REMOTE_CAPABILITIES` meaningful for it: the set's mechanism is
 #: *inserting a derived key into the payload*, so a capability in it must have a
-#: field to insert one into. `WP-RI-B-05` and `WP-RI-B-06`'s three carry none, and
+#: field to insert one into. The governed producer/correction commands carry none, and
 #: that absence is their contract rather than an omission:
 #:
 #: * `entities.proposals.create` is arbitrated by the server-derived
@@ -466,14 +466,18 @@ def test_compose_stamps_idempotency_for_task_create() -> None:
 #:   transports;
 #: * `entities.merge.preview` mints a fresh preview on every call and has no
 #:   replay identity to key on at all.
+#: * split preview follows that same contract, while split apply is
+#:   replay-arbitrated by its consumed preview and persisted operation receipt.
 #:
-#: Named here rather than derived, so admitting a nineteenth write to this
+#: Named here rather than derived, so admitting another write to this
 #: exception is a decision made in this file and argued for.
 KEYLESS_ENTITY_WRITES: frozenset[Capability] = frozenset(
     {
         Capability.ENTITIES_PROPOSALS_CREATE,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 
@@ -520,7 +524,7 @@ def test_no_entity_read_is_stamped_with_an_idempotency_key() -> None:
         if capability.value.startswith("entities.")
         and not permitted_purposes(capability) & _WRITE_PURPOSES
     }
-    assert len(reads) == 10
+    assert len(reads) == 11
     assert not reads & _IDEMPOTENT_REMOTE_CAPABILITIES
 
 

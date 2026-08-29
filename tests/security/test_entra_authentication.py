@@ -30,6 +30,7 @@ from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 import jwt
 import pytest
@@ -44,8 +45,11 @@ import my_pa.bootstrap.gateway as gateway
 from my_pa.adapters.http import create_http_app
 from my_pa.bootstrap.gateway import build_gateway_runtime
 from my_pa.bootstrap.settings import ENV_PREFIX, AuthMode, Settings, SettingsError, load_settings
+from my_pa.domain.common.identifiers import IdKind, validate_identifier
+from my_pa.domain.identity.binding import capture_principal_id
 from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.user_account import CallerSuppliedPrincipalError
+from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.security.entra_token import (
     ALLOWED_ALGORITHMS,
@@ -259,6 +263,108 @@ def test_a_valid_token_authenticates_and_resolves_the_tokens_principal(
     finally:
         engine.dispose()
     assert len(registered) == 1, "one token, one registered account"
+
+
+def test_composed_entra_auth_persists_and_dedupes_policy_change_work(
+    authenticated_wire: Wire, keypair: rsa.RSAPrivateKey, disposable_database: str
+) -> None:
+    """The auth transaction durably observes policy before application dispatch."""
+    token = mint(keypair)
+    status, _, body = send(authenticated_wire, token)
+    assert status == 200, body
+
+    engine = create_database_engine(disposable_database)
+    try:
+        with engine.connect() as connection:
+            principal_id = capture_principal_id(
+                UUID(
+                    str(
+                        connection.execute(
+                            text("SELECT principal_id FROM identity.user_accounts")
+                        ).scalar_one()
+                    )
+                )
+            )
+            watermark = connection.execute(
+                text(
+                    "SELECT version FROM knowledge.entity_reenrichment_version_watermarks "
+                    "WHERE principal_id = :principal_id AND namespace = 'policy' "
+                    "AND binding_key = 'current'"
+                ),
+                {"principal_id": principal_id},
+            ).scalar_one()
+            initial_work = connection.execute(
+                text(
+                    "SELECT count(*) FROM knowledge.entity_reenrichment_work "
+                    "WHERE principal_id = :principal_id"
+                ),
+                {"principal_id": principal_id},
+            ).scalar_one()
+        assert watermark == POLICY_VERSION
+        assert initial_work == 0
+
+        assert send(authenticated_wire, token)[0] == 200
+        with engine.begin() as connection:
+            repeated_work = connection.execute(
+                text(
+                    "SELECT count(*) FROM knowledge.entity_reenrichment_work "
+                    "WHERE principal_id = :principal_id"
+                ),
+                {"principal_id": principal_id},
+            ).scalar_one()
+            assert repeated_work == 0
+            connection.execute(
+                text(
+                    "UPDATE knowledge.entity_reenrichment_version_watermarks "
+                    "SET version = 'policy-before-current' "
+                    "WHERE principal_id = :principal_id AND namespace = 'policy' "
+                    "AND binding_key = 'current'"
+                ),
+                {"principal_id": principal_id},
+            )
+
+        assert send(authenticated_wire, token)[0] == 200
+        with engine.connect() as connection:
+            work = connection.execute(
+                text(
+                    "SELECT trigger, cause_record_id, policy_version, state "
+                    "FROM knowledge.entity_reenrichment_work "
+                    "WHERE principal_id = :principal_id"
+                ),
+                {"principal_id": principal_id},
+            ).one()
+            subject = connection.execute(
+                text(
+                    "SELECT principal_id, subject_kind, subject_id, subject_version "
+                    "FROM knowledge.entity_reenrichment_subjects"
+                )
+            ).one()
+            advanced = connection.execute(
+                text(
+                    "SELECT version FROM knowledge.entity_reenrichment_version_watermarks "
+                    "WHERE principal_id = :principal_id AND namespace = 'policy' "
+                    "AND binding_key = 'current'"
+                ),
+                {"principal_id": principal_id},
+            ).scalar_one()
+        trigger, cause, policy_version, state = tuple(work)
+        assert (trigger, policy_version, state) == ("policy_change", POLICY_VERSION, "queued")
+        validate_identifier(str(cause), IdKind.OPERATION)
+        assert tuple(subject) == (principal_id, "principal", principal_id, "1")
+        assert advanced == POLICY_VERSION
+
+        assert send(authenticated_wire, token)[0] == 200
+        with engine.connect() as connection:
+            final_work = connection.execute(
+                text(
+                    "SELECT count(*) FROM knowledge.entity_reenrichment_work "
+                    "WHERE principal_id = :principal_id"
+                ),
+                {"principal_id": principal_id},
+            ).scalar_one()
+        assert final_work == 1
+    finally:
+        engine.dispose()
 
 
 def test_two_principals_resolve_to_two_identities_and_neither_reaches_the_other(

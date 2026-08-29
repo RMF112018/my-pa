@@ -372,6 +372,9 @@ _ORDINAL_UNITS = (
     "hundredth",
     "hundred-first",
     "hundred-second",
+    "hundred-third",
+    "hundred-fourth",
+    "hundred-fifth",
 )
 
 
@@ -881,9 +884,9 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "**fifty-five**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
-        "`documents.`, six `entities.` and eight `relationship_memory.` names it "
+        "`documents.`, thirty-four `entities.` and nine `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as ninety-seven",
+        "correctly as one hundred four",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
@@ -898,7 +901,7 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "
-        "seventy-six",
+        "one hundred four",
     ),
     # --- the Intelligence Artifact plane, newly swept --------------------------
     #

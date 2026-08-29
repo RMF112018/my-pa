@@ -202,11 +202,31 @@ _PHASE_B_PROPOSAL_CONSTRAINTS: Final = frozenset(
 
 def _freeze_out_phase_b_memory_columns(copy: Table) -> None:
     """Keep this historical copy at the schema its revision introduced."""
-    if copy.name == "relationship_memory_proposals":
+    if copy.name == "relationship_memories":
         for constraint in [
             candidate
             for candidate in copy.constraints
-            if candidate.name in _PHASE_B_PROPOSAL_CONSTRAINTS
+            if candidate.name == "origin_subject_entity_id_is_an_opaque_identifier"
+        ]:
+            copy.constraints.discard(constraint)
+        copy._columns.remove(copy.c.origin_subject_entity_id)
+    elif copy.name == "relationship_memory_context_links":
+        for constraint in [
+            candidate
+            for candidate in copy.constraints
+            if candidate.name == "an_entity_memory_context_link_retains_its_origin_subject"
+        ]:
+            copy.constraints.discard(constraint)
+        copy._columns.remove(copy.c.origin_subject_entity_id)
+    elif copy.name == "relationship_memory_proposals":
+        for constraint in [
+            candidate
+            for candidate in copy.constraints
+            if candidate.name
+            in {
+                *_PHASE_B_PROPOSAL_CONSTRAINTS,
+                "origin_subject_entity_id_is_an_opaque_identifier",
+            }
         ]:
             copy.constraints.discard(constraint)
         for index in [
@@ -216,6 +236,7 @@ def _freeze_out_phase_b_memory_columns(copy: Table) -> None:
         ]:
             copy.indexes.discard(index)
         for name in (
+            "origin_subject_entity_id",
             "expected_subject_version",
             "dedupe_sha256",
             "superseded_at",

@@ -235,7 +235,7 @@ def test_every_merged_away_entity_is_redirected_and_the_survivor_is_not() -> Non
     assert first.after_state == {
         "status": "merged_redirect",
         "superseded_by_entity_id": SURVIVOR,
-        "version": 1,
+        "version": 2,
     }
 
 

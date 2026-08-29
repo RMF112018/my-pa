@@ -120,13 +120,21 @@ def engine(disposable_database: str) -> Iterator[Engine]:
         engine.dispose()
 
 
-def _seed_consequential_proposal(connection: Connection, owner: str, ordinal: int) -> str:
+def _seed_consequential_proposal(
+    connection: Connection,
+    owner: str,
+    ordinal: int,
+    *,
+    span_digest: str | None = None,
+) -> str:
     """One capture, version, span and commitment proposal owned by ``owner``.
 
     A commitment always routes to review regardless of confidence, so the
     proposal this returns is guaranteed to open a case. The owner is stamped on
     the capture and its version exactly as `admit_capture` would stamp it, so
     the review plane derives the same partition the capture plane already holds.
+    A caller may supply a deliberately wrong span digest at creation time to
+    exercise validation without attempting to rewrite immutable lineage.
     """
     ids = {
         "capture_id": f"cap_{ordinal:032d}",
@@ -137,6 +145,7 @@ def _seed_consequential_proposal(connection: Connection, owner: str, ordinal: in
         "correlation_id": issue_identifier(IdKind.CORRELATION),
         "audit_id": issue_identifier(IdKind.AUDIT),
         "digest": digest_of("x"),
+        "span_digest": digest_of("x") if span_digest is None else span_digest,
     }
     connection.execute(
         text(
@@ -161,7 +170,7 @@ def _seed_consequential_proposal(connection: Connection, owner: str, ordinal: in
             f"INSERT INTO {SCHEMA}.capture_spans (span_id, version_id, start_offset, end_offset, "  # noqa: S608
             "offset_basis, line_start, column_start, line_end, column_end, quoted_text_sha256, "
             "span_role) VALUES (:span_id, :version_id, 0, 1, 'unicode_code_point_v1', 1, 1, 1, 2, "
-            ":digest, 'direct')"
+            ":span_digest, 'direct')"
         ),
         ids,
     )

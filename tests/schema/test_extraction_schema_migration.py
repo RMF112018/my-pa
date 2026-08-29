@@ -346,6 +346,13 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     "3d07af4dc513": frozenset(
         {"relationship_write_requests", "relationship_write_request_evidence"}
     ),
+    "8e1c4a7b2d90": frozenset(
+        {
+            "entity_reenrichment_work",
+            "entity_reenrichment_subjects",
+            "entity_reenrichment_version_watermarks",
+        }
+    ),
     # `a1f7d3c85e40` and `b64e29a0f7c1` create no table: the first widens two
     # frozen disposition CHECKs and the second widens the two `audit_events`
     # vocabularies. They are absent from this map rather than mapped to an empty

@@ -10,7 +10,7 @@ The first version named the eight `relationship_memory.*` capabilities and
 stopped, so `entities.context` — which puts every carried memory's `statement`
 verbatim on a card served under `entity_read` — was disclosed by nothing. The
 correction added `entities.context` and `review.decide` and then asserted that
-"the enumeration of capabilities outside the eight is complete at two". It is
+"the enumeration of capabilities outside the then-eight is complete at two". It is
 three: `review.list` reads `relationship_memory_proposals` and correlates two
 subqueries over `relationship_memory_review_decisions`, so a `capture_review`
 grant learns a `subject_entity_id`, a `proposed_kind` and — after promotion — an
@@ -58,7 +58,7 @@ Ten claims, separated because they fail for different reasons:
 3. **The capability set is derived by a reachability walk and matches the
    declaration.** Exact set equality over `Capability` members, so a capability
    that starts reaching a memory row either updates the declaration or reddens.
-4. **Every capability beyond the eight carries a written reason.** The eight are
+4. **Every capability beyond the nine carries a written reason.** The nine are
    derived off the enum's own `relationship_memory.` prefix; the residue is the
    part `RM-API-AC-002` has to disclose, and each entry says what it discloses
    and under which purpose.
@@ -79,7 +79,7 @@ Ten claims, separated because they fail for different reasons:
    `test_claimed_test_counts_match_collection.py` is the precedent, and its
    lesson is taken with it: the pattern that matches
    nothing passes everything, so the parse asserts it found claims, asserts both
-   verbs appear, and asserts every capability beyond the eight carries one.
+   verbs appear, and asserts every capability beyond the nine carries one.
 8. **The port crossings that reach memory are the two planes**, which is
    anti-vacuity for claim 9 and a statement worth making on its own.
 9. **The walk's demonstrated blind spots are closed or declared.** Seven of them,
@@ -276,6 +276,9 @@ SERVICE: Final = PACKAGE / "application" / "service.py"
 #: rows each capability reaches. Claim 7 is the whole reason this path is here: a
 #: number in that row has been wrong three times and checked by nothing.
 ACCEPTANCE: Final = ROOT / "evidence" / "acceptance" / "RELATIONSHIP-MEMORY-RM-AC-20260822.md"
+IDENTITY_ACCESS_DELTA: Final = (
+    ROOT / "evidence" / "acceptance" / "RI-FINAL-COMPLETION-RM-AC-DELTA-20260828.md"
+)
 
 #: The row whose digits are bound.
 ROW: Final = "RM-API-AC-002"
@@ -287,7 +290,7 @@ ROW: Final = "RM-API-AC-002"
 TABLE_PREFIX: Final = "relationship_memor"
 
 #: The prefix the plane's own capability values share, used to split the derived
-#: set into "the eight" and the residue that has to carry a reason. Matched
+#: set into "the nine" and the residue that has to carry a reason. Matched
 #: against `Capability` rather than against a hand-written list of the plane's
 #: members, so a further `relationship_memory.*` capability is counted as one of
 #: the plane's own rather than surfacing as an undocumented exception.
@@ -330,14 +333,16 @@ DECLARED: Final = frozenset(
         # own prefix that cannot reach `relationship_memories`.
         Capability.RELATIONSHIP_MEMORY_PROPOSE,
         # `WP-RI-B-06`: the governed merge reads the memory plane to decide
-        # whether it may proceed, and writes nothing on it. Both are beyond the
-        # plane's own prefix and both carry a reason below.
+        # whether it may proceed; apply writes the three opaque-binding tables.
+        # Both are beyond the plane's own prefix and carry reasons below.
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
     }
 )
 
-#: The five that are *not* `relationship_memory.*`, and what each one discloses
+#: The seven that are *not* `relationship_memory.*`, and what each one discloses
 #: under a purpose issued for something else. This is the part of
 #: `RM-API-AC-002` that is a disclosure rather than a design, so each entry says
 #: the purpose, the rows and the fields rather than only the name.
@@ -349,7 +354,23 @@ DECLARED: Final = frozenset(
 #: correction, one file further in than the row it was policing. An enumeration
 #: in a reason is written in the `N of the eight (…)` form on purpose: that form
 #: is what `_claims_in()` reads, and anything written another way is prose again.
-BEYOND_THE_EIGHT: Final = {
+BEYOND_THE_NINE: Final = {
+    Capability.ENTITIES_SPLIT_PREVIEW: (
+        "purpose `entity_identity_correction`. `entities.split.preview` reads three of the "
+        "eight (`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`) and writes none of the eight while proving every "
+        "opaque binding still matches the completed merge ledger. It reads no memory text, "
+        "classification, or evidence payload."
+    ),
+    Capability.ENTITIES_SPLIT: (
+        "purpose `entity_identity_correction`. `entities.split` reads three of the eight "
+        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`) and writes three of the eight "
+        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`) to restore only exact opaque before-state bindings "
+        "under after-state guards. It reads or writes no memory text, classification, or "
+        "evidence payload."
+    ),
     Capability.ENTITIES_CONTEXT: (
         "purpose `entity_read`. `entities.context` reads two of the eight "
         "(`relationship_memories`, `relationship_memory_versions`) through "
@@ -396,15 +417,11 @@ BEYOND_THE_EIGHT: Final = {
         "`entities.merge.preview` reads three of the eight "
         "(`relationship_memories`, `relationship_memory_context_links`, "
         "`relationship_memory_proposals`) and writes "
-        "none of the eight: `IdentityCorrectionService` asks the memory port "
-        "which affected input Entities are a canonical memory subject, a proposal "
-        "subject, or the Entity target of a current canonical version's context "
-        "link, because `WP-08` owns the Relationship Memory side of an identity "
-        "change and this phase refuses rather than guesses. The privacy-safe "
-        "answer is only the subset and count of affected input Entity identifiers: "
-        "`subject_entity_ids` returns the subset, and merge analysis derives its "
-        "aggregate count. Neither returns a memory identifier, per-Entity memory "
-        "count, or statement. "
+        "none of the eight: `IdentityCorrectionService` asks the memory port for "
+        "content-free effect drafts over canonical memory subjects, proposal "
+        "subjects, and Entity context-link targets. Preview records no canonical "
+        "memory write and exposes no memory identifier, statement, classification, "
+        "evidence payload, or per-Entity memory count. "
         "Bounded by the operator gate, by "
         "`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, and by the plane "
         "composition."
@@ -413,15 +430,11 @@ BEYOND_THE_EIGHT: Final = {
         "purpose `entity_identity_correction`, and it is operator-only. "
         "`entities.merge` reads three of the eight "
         "(`relationship_memories`, `relationship_memory_context_links`, "
-        "`relationship_memory_proposals`) and writes "
-        "none of the eight, for the reason the preview beside it reads them: apply "
-        "recomputes the same privacy-safe affected-input subset and refuses when "
-        "any participant is a canonical memory subject, a proposal subject, or "
-        "the Entity target of a current canonical version's context link. It "
-        "returns no memory identifier or per-Entity memory count. **A governed "
-        "merge writes no memory row at all**, which is this phase's boundary "
-        "rather than a gap in it -- `WP-08` owns Relationship Memory origin-subject "
-        "and context redistribution."
+        "`relationship_memory_proposals`) and writes three of the eight "
+        "(`relationship_memories`, `relationship_memory_context_links`, "
+        "`relationship_memory_proposals`). Apply revalidates and changes only opaque "
+        "subject/context bindings while retaining immutable origin subjects; it reads or "
+        "writes no memory text, classification, or evidence payload."
     ),
 }
 
@@ -527,11 +540,8 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
             }
         ),
     ),
-    # `WP-RI-B-06`. Both halves of the governed merge read the same three tables to
-    # decide whether they may proceed and write neither. The empty write set is
-    # the Phase B boundary: a merge naming a memory subject, proposal subject or
-    # current canonical Entity context target is refused, because `WP-08` owns
-    # the redistribution and this phase will not guess it.
+    # Governed merge preview reads the three opaque-binding tables without writing;
+    # merge apply reads and writes those same three tables, exactly as declared below.
     Capability.ENTITIES_MERGE_PREVIEW: (
         frozenset(
             {
@@ -542,7 +552,7 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
         ),
         frozenset(),
     ),
-    Capability.ENTITIES_MERGE: (
+    Capability.ENTITIES_SPLIT_PREVIEW: (
         frozenset(
             {
                 "relationship_memories",
@@ -551,6 +561,38 @@ DECLARED_TABLE_REACH: Final[dict[Capability, tuple[frozenset[str], frozenset[str
             }
         ),
         frozenset(),
+    ),
+    Capability.ENTITIES_SPLIT: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
+    ),
+    Capability.ENTITIES_MERGE: (
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
+        frozenset(
+            {
+                "relationship_memories",
+                "relationship_memory_context_links",
+                "relationship_memory_proposals",
+            }
+        ),
     ),
     Capability.RELATIONSHIP_MEMORY_GET: (
         frozenset(
@@ -653,7 +695,35 @@ UNCLASSIFIED_TABLE_MENTIONS: Final[dict[tuple[str, str, str], str]] = {
         "context_links.type)).lateral()",
     ): "the lateral JSONB row source is held in a local and joined into the `select` "
     "below it; this assignment only derives rows from the proposal table and cannot write it",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "_memory_identity_effect_read_subject",
+        "subjects = {IdentityEffectFamily.RELATIONSHIP_MEMORY: (relationship_memories, "
+        "'memory_id', {'subject_entity_id', 'origin_subject_entity_id', 'version'}), "
+        "IdentityEffectFamily.MEMORY_PROPOSAL: (relationship_memory_proposals, "
+        "'memory_proposal_id', {'subject_entity_id', 'origin_subject_entity_id', "
+        "'expected_subject_version', 'context_links'}), "
+        "IdentityEffectFamily.MEMORY_CONTEXT_LINK: (relationship_memory_context_links, "
+        "'context_link_id', {'target_id', 'origin_subject_entity_id'})}",
+    ): "the closed identity-effect family map selects one table for the guarded update or "
+    "after-state comparison issued by its caller; no content column is admitted",
+    (
+        "infrastructure/persistence/relationship_memory.py",
+        "_memory_identity_effect_write_subject",
+        "subjects = {IdentityEffectFamily.RELATIONSHIP_MEMORY: (relationship_memories, "
+        "'memory_id', {'subject_entity_id', 'origin_subject_entity_id', 'version'}), "
+        "IdentityEffectFamily.MEMORY_PROPOSAL: (relationship_memory_proposals, "
+        "'memory_proposal_id', {'subject_entity_id', 'origin_subject_entity_id', "
+        "'expected_subject_version', 'context_links'}), "
+        "IdentityEffectFamily.MEMORY_CONTEXT_LINK: (relationship_memory_context_links, "
+        "'context_link_id', {'target_id', 'origin_subject_entity_id'})}",
+    ): "the separately named closed map feeds only guarded merge/split updates; no content "
+    "column is admitted",
 }
+
+UNCLASSIFIED_WRITE_TABLE_MENTIONS: Final = frozenset(
+    key for key in UNCLASSIFIED_TABLE_MENTIONS if key[1] == "_memory_identity_effect_write_subject"
+)
 
 #: The enums whose members the walk splits a capability's writes by.
 #:
@@ -912,6 +982,14 @@ DYNAMIC_ATTRIBUTE_LOOKUPS: Final[dict[tuple[str, str], str]] = {
         "alias's, and this reads one already-fetched `Row` back under those labels. The "
         "receiver is a row, the lookup issues no statement, and the entity plane reaches "
         "no memory table at all."
+    ),
+    ("my_pa.infrastructure.persistence.entity", "getattr(row, name)"): (
+        "the closed identity-effect subject declaration supplies column names from an exact "
+        "allowlist; this reads one already-fetched row to compare the stored after-state"
+    ),
+    ("my_pa.infrastructure.persistence.relationship_memory", "getattr(row, name)"): (
+        "the three-family memory identity-effect map supplies only opaque binding columns; "
+        "this reads one already-fetched row to compare the stored after-state"
     ),
 }
 
@@ -1554,30 +1632,30 @@ def test_every_capability_that_reaches_a_memory_row_is_declared() -> None:
         f"{sorted(capability.value for capability in derived ^ DECLARED)} reaches a "
         "relationship-memory table without being declared, or is declared and no "
         "longer reaches one. If the code moved, update `DECLARED`, "
-        "`BEYOND_THE_EIGHT`, `DECLARED_TABLE_REACH` and `RM-API-AC-002` together — "
+        "`BEYOND_THE_NINE`, `DECLARED_TABLE_REACH` and `RM-API-AC-002` together — "
         "the acceptance row cites this test by name. If the code did not move, this "
         "is not a finding about the code; it is this walk failing, and the repair is "
         "in the walk"
     )
 
 
-def test_every_capability_beyond_the_eight_says_what_it_discloses() -> None:
+def test_every_capability_beyond_the_nine_says_what_it_discloses() -> None:
     """The residue is the disclosure, so the residue is what carries a reason.
 
-    The eight are derived off the enum's own prefix rather than subtracted from
-    a list here, so a ninth `relationship_memory.*` capability joins the plane
-    without landing in `BEYOND_THE_EIGHT` and being described as an exception.
+    The nine are derived off the enum's own prefix rather than subtracted from
+    a list here, so a tenth `relationship_memory.*` capability joins the plane
+    without landing in `BEYOND_THE_NINE` and being described as an exception.
     """
-    eight = frozenset(
+    nine = frozenset(
         capability for capability in Capability if capability.value.startswith(CAPABILITY_PREFIX)
     )
-    residue = reaching_capabilities() - eight
-    assert residue == frozenset(BEYOND_THE_EIGHT), (
-        f"{sorted(capability.value for capability in residue ^ frozenset(BEYOND_THE_EIGHT))} "
-        "reaches a memory row from outside the eight with no written reason, or "
+    residue = reaching_capabilities() - nine
+    assert residue == frozenset(BEYOND_THE_NINE), (
+        f"{sorted(capability.value for capability in residue ^ frozenset(BEYOND_THE_NINE))} "
+        "reaches a memory row from outside the nine with no written reason, or "
         "carries a reason and no longer reaches one"
     )
-    for capability, reason in BEYOND_THE_EIGHT.items():
+    for capability, reason in BEYOND_THE_NINE.items():
         purposes = permitted_purposes(capability)
         assert any(f"`{purpose.value}`" in reason for purpose in purposes), (
             f"{capability.value}'s reason names no purpose it actually holds "
@@ -1711,13 +1789,14 @@ def _direct_table_reach() -> dict[Node, TableReach]:
             elif operation == "write":
                 writes |= tables
             else:
-                # Conservative: an unreadable shape is a read, never a silent
-                # absence. It is registered as well, because a *write* misread as
-                # a read is the failure this direction cannot catch on its own.
-                reads |= tables
-                unclassified.add(
-                    (_relative(path), function.name, _enclosing_statement(child, parents))
-                )
+                # Conservative unless the exact registered declaration is the
+                # closed write-only identity-effect table map.
+                key = (_relative(path), function.name, _enclosing_statement(child, parents))
+                if key in UNCLASSIFIED_WRITE_TABLE_MENTIONS:
+                    writes |= tables
+                else:
+                    reads |= tables
+                unclassified.add(key)
         found[node] = (frozenset(reads), frozenset(writes), frozenset(unclassified))
     return found
 
@@ -2521,7 +2600,7 @@ def _acceptance_row() -> tuple[str, int]:
 def _documents() -> list[tuple[str, str, str]]:
     """`(label, text, default subject)` for everything parsed for a table set.
 
-    Two sources, because `BEYOND_THE_EIGHT`'s reason strings were the second
+    Two sources, because `BEYOND_THE_NINE`'s reason strings were the second
     place this repository restated a derived enumeration in unchecked prose — and
     the `review.decide` reason restated the exact false quantifier that blocked
     the correction the row was making. A guard that polices a document and not
@@ -2530,11 +2609,20 @@ def _documents() -> list[tuple[str, str, str]]:
     row defaults to nothing, so an unattributed claim there fails by name.
     """
     row, line = _acceptance_row()
+    # The original row is immutable historical evidence. Its two Phase-B merge
+    # clauses are superseded by the additive final-completion delta.
+    row = re.sub(
+        r"`entities\.merge\.preview` reads three of the eight .*?"
+        r"`entities\.merge` reads three of the eight .*?writes none of the eight\.",
+        "",
+        row,
+    )
+    row = f"{row} {IDENTITY_ACCESS_DELTA.read_text(encoding='utf-8')}"
     return [
-        (f"{ACCEPTANCE.name}:{line}", row, ""),
+        (f"{ACCEPTANCE.name}:{line}+{IDENTITY_ACCESS_DELTA.name}", row, ""),
         *(
-            (f"BEYOND_THE_EIGHT[{capability.value}]", reason, capability.value)
-            for capability, reason in BEYOND_THE_EIGHT.items()
+            (f"BEYOND_THE_NINE[{capability.value}]", reason, capability.value)
+            for capability, reason in BEYOND_THE_NINE.items()
         ),
     ]
 
@@ -2606,7 +2694,7 @@ def test_the_acceptance_row_states_a_table_set_for_every_capability_it_discloses
     below a guard over an empty list, which is the exact failure the precedent
     module records twice. So: claims exist, both verbs appear, and — the part
     that is derived rather than a floor — every capability in
-    `BEYOND_THE_EIGHT` carries both, in the row *and* in its own reason string.
+    `BEYOND_THE_NINE` carries both, in the row *and* in its own reason string.
     Those three are what the row exists to disclose, and they are the three whose
     prose has been wrong.
     """
@@ -2625,16 +2713,16 @@ def test_the_acceptance_row_states_a_table_set_for_every_capability_it_discloses
     row_claims = _claims_in(*_documents()[0])
     stated = {(capability, verb) for _l, capability, verb, _n, _t, _q in row_claims}
     required = {
-        (capability.value, verb) for capability in BEYOND_THE_EIGHT for verb in ("reads", "writes")
+        (capability.value, verb) for capability in BEYOND_THE_NINE for verb in ("reads", "writes")
     }
     assert required <= stated, (
         f"{sorted(required - stated)} is a capability `RM-API-AC-002` has to disclose "
-        f"and {ACCEPTANCE.name}:{line} states no table set for it. The three outside the "
-        "eight are the disclosure; leaving one's reach in unparsed prose is how it was "
+        f"and {ACCEPTANCE.name}:{line} states no table set for it. The seven outside the "
+        "nine are the disclosure; leaving one's reach in unparsed prose is how it was "
         "wrong three times"
     )
-    for capability, reason in BEYOND_THE_EIGHT.items():
-        label = f"BEYOND_THE_EIGHT[{capability.value}]"
+    for capability, reason in BEYOND_THE_NINE.items():
+        label = f"BEYOND_THE_NINE[{capability.value}]"
         own = {
             verb
             for _l, subject, verb, _n, _t, _q in _claims_in(label, reason, capability.value)
@@ -2658,7 +2746,7 @@ def test_the_acceptance_row_states_a_write_set_for_every_branch() -> None:
 
     **The population it is satisfied by is the acceptance row alone**, which
     `RM-API-AC-002` says of it and this test did not do. It read
-    `_all_branch_claims()`, which spans the row *and* `BEYOND_THE_EIGHT`'s reason
+    `_all_branch_claims()`, which spans the row *and* `BEYOND_THE_NINE`'s reason
     strings, and the `review.decide` reason states the `reject` and
     `mark_unresolved` branches itself — so deleting the `mark_unresolved`
     sentence from the row, or spelling its count in digits, or writing `of the 8`,
@@ -2694,7 +2782,7 @@ def test_the_acceptance_row_states_a_write_set_for_every_branch() -> None:
         f"siblings' and {label} states nothing for it. The union is a "
         "bound; a sentence about one disposition is a claim about one branch, and this "
         "row has already shipped one of those that was false. A reason string in "
-        "`BEYOND_THE_EIGHT` stating the same branch does not satisfy this: the row is "
+        "`BEYOND_THE_NINE` stating the same branch does not satisfy this: the row is "
         "what `RM-API-AC-002` is cited for"
     )
 
@@ -2819,11 +2907,11 @@ def test_no_reason_names_a_memory_table_outside_the_reach_it_describes() -> None
     reason cannot name `relationship_memory_submissions` in a sentence about
     `review.decide` and have the count beside it still add up.
     """
-    for capability, reason in BEYOND_THE_EIGHT.items():
+    for capability, reason in BEYOND_THE_NINE.items():
         reads, writes = capability_table_reach().get(capability, (frozenset(), frozenset()))
         named = frozenset(_BACKTICKED_TABLE.findall(reason)) & memory_tables()
         assert named <= reads | writes, (
-            f"BEYOND_THE_EIGHT[{capability.value}] names "
+            f"BEYOND_THE_NINE[{capability.value}] names "
             f"{sorted(named - (reads | writes))}, which the walk says it never reaches"
         )
 

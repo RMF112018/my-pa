@@ -621,6 +621,7 @@ EXPECTED_MODEL_FIELDS = {
             "memory_proposal_id",
             "principal_id",
             "subject_entity_id",
+            "origin_subject_entity_id",
             "expected_subject_version",
             "proposed_kind",
             "proposed_statement",
@@ -633,6 +634,7 @@ EXPECTED_MODEL_FIELDS = {
             "proposed_at",
             "structured_value",
             "context_links",
+            "context_link_origins",
             "model_id",
             "model_version",
             "review_case_id",
@@ -714,6 +716,7 @@ EXPECTED_MODEL_FIELDS = {
             "created_at",
             "expires_at",
             "consumed_at",
+            "source_identity_operation_id",
         }
     ),
     "my_pa.domain.relationship.identity_correction.IdentityOperation": frozenset(
@@ -736,6 +739,9 @@ EXPECTED_MODEL_FIELDS = {
             "reason",
             "receipt_id",
             "completed_at",
+            "source_identity_operation_id",
+            "effect_count",
+            "effects_digest",
         }
     ),
     "my_pa.domain.relationship.identity_correction.IdentityEffectDraft": frozenset(
@@ -763,6 +769,63 @@ EXPECTED_MODEL_FIELDS = {
             "recorded_at",
         }
     ),
+    "my_pa.domain.relationship.identity_history.IdentityHistoryChange": frozenset(
+        {"family", "record_id", "effect_kind", "before_state", "after_state"}
+    ),
+    "my_pa.domain.relationship.identity_history.IdentityHistoryEntry": frozenset(
+        {
+            "history_id",
+            "occurred_at",
+            "source",
+            "operation",
+            "involved_entity_ids",
+            "changes",
+            "actor_class",
+            "actor_id",
+            "authority",
+            "correlation_id",
+            "audit_id",
+            "reason",
+        }
+    ),
+    "my_pa.domain.relationship.identity_history.IdentityHistoryPosition": frozenset(
+        {"occurred_at", "source_order", "history_id"}
+    ),
+    "my_pa.domain.relationship.identity_history.IdentityHistoryPage": frozenset(
+        {"entity_id", "entries", "is_truncated", "next_cursor"}
+    ),
+    "my_pa.domain.relationship.reenrichment.ReenrichmentSubject": frozenset(
+        {"kind", "subject_id", "version"}
+    ),
+    "my_pa.domain.relationship.reenrichment.BindingVersion": frozenset({"key", "version"}),
+    "my_pa.domain.relationship.reenrichment.ReenrichmentBinding": frozenset(
+        {
+            "principal_id",
+            "trigger",
+            "cause_record_id",
+            "subjects",
+            "input_versions",
+            "producer_versions",
+            "policy_version",
+        }
+    ),
+    "my_pa.domain.relationship.reenrichment.ReenrichmentWork": frozenset(
+        {
+            "work_id",
+            "binding",
+            "state",
+            "attempt_count",
+            "max_attempts",
+            "created_at",
+            "updated_at",
+            "lease_owner",
+            "lease_expires_at",
+            "completed_at",
+            "stale_reasons",
+            "last_error_code",
+        }
+    ),
+    "my_pa.domain.relationship.reenrichment.BindingCurrency": frozenset({"reasons"}),
 }
 
 EXPECTED_TABLE_COLUMNS = {
@@ -1126,6 +1189,7 @@ EXPECTED_TABLE_COLUMNS = {
             "created_at",
             "updated_at",
             "archived_at",
+            "origin_subject_entity_id",
         }
     ),
     "relationship_memory_context_links": frozenset(
@@ -1138,6 +1202,7 @@ EXPECTED_TABLE_COLUMNS = {
             "role",
             "authority",
             "created_at",
+            "origin_subject_entity_id",
         }
     ),
     "relationship_memory_evidence_links": frozenset(
@@ -1189,6 +1254,7 @@ EXPECTED_TABLE_COLUMNS = {
             "invalidated_reason",
             "superseded_at",
             "superseded_by_memory_proposal_id",
+            "origin_subject_entity_id",
         }
     ),
     "relationship_memory_review_decisions": frozenset(
@@ -1303,6 +1369,7 @@ EXPECTED_TABLE_COLUMNS = {
             "created_at",
             "expires_at",
             "consumed_at",
+            "source_identity_operation_id",
         }
     ),
     "entity_identity_operations": frozenset(
@@ -1325,6 +1392,9 @@ EXPECTED_TABLE_COLUMNS = {
             "state",
             "started_at",
             "completed_at",
+            "source_identity_operation_id",
+            "effect_count",
+            "effects_digest",
         }
     ),
     "entity_identity_effects": frozenset(
@@ -1342,6 +1412,42 @@ EXPECTED_TABLE_COLUMNS = {
             "after_sha256",
             "recorded_at",
         }
+    ),
+    "entity_reenrichment_work": frozenset(
+        {
+            "work_id",
+            "principal_id",
+            "trigger",
+            "cause_record_id",
+            "binding_sha256",
+            "input_versions",
+            "producer_versions",
+            "policy_version",
+            "state",
+            "attempt_count",
+            "max_attempts",
+            "lease_owner",
+            "lease_expires_at",
+            "next_attempt_at",
+            "stale_reasons",
+            "last_error_code",
+            "created_at",
+            "updated_at",
+            "completed_at",
+        }
+    ),
+    "entity_reenrichment_subjects": frozenset(
+        {
+            "work_id",
+            "principal_id",
+            "sequence",
+            "subject_kind",
+            "subject_id",
+            "subject_version",
+        }
+    ),
+    "entity_reenrichment_version_watermarks": frozenset(
+        {"principal_id", "namespace", "binding_key", "version", "updated_at"}
     ),
 }
 
@@ -1376,11 +1482,11 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 51
-    # Forty-four after Phase B added the request-replay and replay-evidence
-    # ledgers. The figure makes the allow-list closed in both directions, so it
-    # moves with the declaration and never ahead of it.
-    assert len(actual_table_columns) == 44
+    assert len(actual_model_fields) == 60
+    # Forty-seven after RI final completion added the three durable
+    # re-enrichment tables. The figure makes the allow-list closed in both
+    # directions, so it moves with the declaration and never ahead of it.
+    assert len(actual_table_columns) == 47
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

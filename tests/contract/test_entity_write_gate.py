@@ -24,8 +24,8 @@ these names is in a public enum.
 **Three states, and all three are asserted**, because a gate that refused in
 every state would satisfy a one-sided test:
 
-* plane off — all thirty-one `entities.` names refuse, reads included;
-* plane on, writes off — the ten reads answer and the twenty-one writes refuse;
+* plane off — all thirty-four `entities.` names refuse, reads included;
+* plane on, writes off — the eleven reads answer and the twenty-three writes refuse;
 * plane on, writes on — all thirty-one are served.
 
 The write population is derived from the purpose map rather than listed here, so
@@ -86,7 +86,7 @@ ENTITY_READS: Final[frozenset[Capability]] = _ENTITY_CAPABILITIES - ENTITY_WRITE
 def _service(*, plane: bool, writes: bool, identity: bool = True) -> ApplicationService:
     """One build per state, through the shared builder so only the flags differ.
 
-    `identity` defaults to *on* so that the two governed-merge names are inside
+    `identity` defaults to *on* so that the four governed identity-correction names are inside
     every assertion below rather than withheld by a third gate this file is not
     about. `test_the_identity_correction_gate_is_a_third_narrowing` is where that
     gate is the subject.
@@ -120,9 +120,9 @@ def test_the_write_set_the_service_subtracts_is_the_set_with_a_write_purpose() -
     here instead.
     """
     assert ENTITY_WRITES == _ENTITY_WRITE_CAPABILITIES
-    # Twenty-one since Phase B: the eighteen Phase A writes, the producer path,
-    # and the governed merge's two halves.
-    assert len(ENTITY_WRITES) == 21
+    # Twenty-three after final identity recovery: the prior twenty-one plus the
+    # governed split's preview/apply pair.
+    assert len(ENTITY_WRITES) == 23
     assert ENTITY_WRITES < _ENTITY_CAPABILITIES
     assert not ENTITY_READS & ENTITY_WRITES
 
@@ -174,13 +174,13 @@ def test_the_identity_correction_gate_is_a_third_narrowing_of_the_same_plane() -
     """`MY_PA_RELATIONSHIP_IDENTITY_CORRECTION_ENABLED`, on its own axis.
 
     The plane switch withholds the whole `entities.` family; the write switch
-    withholds its write half; this one withholds the governed merge out of that
-    half. Asserted
+    withholds its write half; this one withholds governed merge and split out of
+    that half. Asserted
     as a strict subset relation rather than as three memberships, because the
     failure this prevents is a gate that turned into the gate beside it -- a
     build with writes on and identity correction off must serve every other
-    write, and a build with identity correction off must serve no merge whatever
-    the other two switches say.
+    write, and a build with identity correction off must serve no merge or split
+    capability whatever the other two switches say.
     """
     from my_pa.application.service import _IDENTITY_CORRECTION_CAPABILITIES
 

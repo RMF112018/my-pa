@@ -1,6 +1,9 @@
 """Frozen Relationship Intelligence profiles are bounded and dormant."""
 
-from my_pa.bootstrap.relationship_intelligence_profiles import RELATIONSHIP_GRANT_PROFILES
+from my_pa.bootstrap.relationship_intelligence_profiles import (
+    RELATIONSHIP_GRANT_PROFILES,
+    RELATIONSHIP_ROLE_PROFILES,
+)
 from my_pa.domain.identity.operation import Capability
 
 
@@ -25,6 +28,7 @@ def test_each_role_has_exactly_its_governed_capability_ceiling() -> None:
             Capability.ENTITIES_RELATIONSHIPS,
             Capability.ENTITIES_OBSERVATIONS_LIST,
             Capability.ENTITIES_UNRESOLVED_MENTIONS,
+            Capability.ENTITIES_IDENTITY_HISTORY,
         }
     )
     routine_entity_authoring = frozenset(
@@ -87,6 +91,8 @@ def test_each_role_has_exactly_its_governed_capability_ceiling() -> None:
             Capability.REVIEW_DECIDE,
             Capability.ENTITIES_MERGE_PREVIEW,
             Capability.ENTITIES_MERGE,
+            Capability.ENTITIES_SPLIT_PREVIEW,
+            Capability.ENTITIES_SPLIT,
         },
     }
     for profile in RELATIONSHIP_GRANT_PROFILES.values():
@@ -118,7 +124,12 @@ def test_authority_separation_is_load_bearing_in_each_profile() -> None:
 
 
 def test_only_operator_profiles_can_reach_identity_mutation() -> None:
-    identity = {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
+    identity = {
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
+    }
     for key, profile in RELATIONSHIP_GRANT_PROFILES.items():
         if key.endswith(".operator"):
             assert identity <= profile.capabilities
@@ -126,3 +137,19 @@ def test_only_operator_profiles_can_reach_identity_mutation() -> None:
         else:
             assert not identity & profile.capabilities
             assert identity <= profile.denied
+
+
+def test_canonical_role_names_are_transport_independent_and_compatible() -> None:
+    assert set(RELATIONSHIP_ROLE_PROFILES) == {
+        "relationship_standard",
+        "relationship_producer",
+        "relationship_reviewer",
+        "relationship_operator",
+    }
+    for role in ("standard", "producer", "reviewer", "operator"):
+        assert RELATIONSHIP_ROLE_PROFILES[f"relationship_{role}"] == (
+            RELATIONSHIP_GRANT_PROFILES[f"local.{role}"].capabilities
+        )
+        assert RELATIONSHIP_GRANT_PROFILES[f"local.{role}"].capabilities == (
+            RELATIONSHIP_GRANT_PROFILES[f"remote.{role}"].capabilities
+        )

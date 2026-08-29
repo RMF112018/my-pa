@@ -31,8 +31,9 @@ arriving silently.
   than one of the directed-write subsets.
 * `knowledge_id` is admitted only by that proposal producer. No canonical
   directed write can cite it directly.
-* The governed identity-correction pair also cites observations, but through its
-  operator-only preview/execution shape rather than a directed-write command.
+* The four governed identity-correction capabilities also cite observations,
+  through their operator-only merge/split preview/execution shapes rather than a
+  directed-write command.
 
 **`entities.unresolved_mentions.resolve` cites nothing a caller names.** Its
 evidence links are minted server-side — a rejected pairing is recorded as
@@ -224,15 +225,20 @@ def _with_proposal_evidence(kind: str, reference: str) -> CreateEntityProposal:
     )
 
 
-#: `WP-RI-B-06`'s two, which cite observations and are not in the producer or
-#: directed-write classifications above.
+#: The four governed identity-correction capabilities, which cite observations
+#: and are not in the producer or directed-write classifications above.
 #:
-#: A separate classification because the governed merge cites observations
-#: through an operator-only preview/execution shape. Folding it into
+#: A separate classification because governed merge and split cite observations
+#: through operator-only preview/execution shapes. Folding them into
 #: `OBSERVATION_CITERS` would put it through a directed-write constructor sweep
 #: that cannot build it and would prove nothing about its actual contract.
 IDENTITY_CITERS: Final[frozenset[Capability]] = frozenset(
-    {Capability.ENTITIES_MERGE_PREVIEW, Capability.ENTITIES_MERGE}
+    {
+        Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
+    }
 )
 
 

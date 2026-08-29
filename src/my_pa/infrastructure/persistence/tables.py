@@ -8115,6 +8115,7 @@ relationship_memories = Table(
     Column("memory_id", Text, primary_key=True),
     Column("principal_id", Text, nullable=False),
     Column("subject_entity_id", Text, nullable=False),
+    Column("origin_subject_entity_id", Text, nullable=False),
     Column("memory_kind", Text, nullable=False),
     Column("lifecycle_state", Text, nullable=False, server_default=text("'active'")),
     Column(
@@ -8146,6 +8147,7 @@ relationship_memories = Table(
     _is_identifier("memory_id", IdKind.RELATIONSHIP_MEMORY),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("subject_entity_id", IdKind.ENTITY),
+    _is_identifier("origin_subject_entity_id", IdKind.ENTITY),
     _is_identifier("current_version_id", IdKind.RELATIONSHIP_MEMORY_VERSION),
     _one_of("memory_kind", MemoryKind, name="a_memory_kind_is_known"),
     _one_of("lifecycle_state", MemoryLifecycle, name="a_memory_lifecycle_state_is_known"),
@@ -8407,12 +8409,17 @@ relationship_memory_context_links = Table(
     Column("principal_id", Text, nullable=False),
     Column("target_type", Text, nullable=False),
     Column("target_id", Text, nullable=False),
+    Column("origin_subject_entity_id", Text),
     Column("role", Text, nullable=False),
     Column("authority", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     _is_identifier("context_link_id", IdKind.RELATIONSHIP_MEMORY_CONTEXT_LINK),
     _is_identifier("memory_version_id", IdKind.RELATIONSHIP_MEMORY_VERSION),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "(target_type = 'entity') = (origin_subject_entity_id IS NOT NULL)",
+        name="an_entity_memory_context_link_retains_its_origin_subject",
+    ),
     _one_of(
         "target_type",
         MemoryContextLinkTargetType,
@@ -8487,6 +8494,7 @@ relationship_memory_proposals = Table(
     Column("memory_proposal_id", Text, primary_key=True),
     Column("principal_id", Text, nullable=False),
     Column("subject_entity_id", Text, nullable=False),
+    Column("origin_subject_entity_id", Text, nullable=False),
     Column("expected_subject_version", Integer, nullable=False),
     Column("proposed_kind", Text, nullable=False),
     Column("proposed_statement", Text, nullable=False),
@@ -8510,6 +8518,7 @@ relationship_memory_proposals = Table(
     _is_identifier("memory_proposal_id", IdKind.RELATIONSHIP_MEMORY_PROPOSAL),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("subject_entity_id", IdKind.ENTITY),
+    _is_identifier("origin_subject_entity_id", IdKind.ENTITY),
     CheckConstraint(
         "expected_subject_version >= 1",
         name="a_memory_proposal_expected_subject_version_is_positive",
@@ -8819,6 +8828,7 @@ entity_identity_previews = Table(
     Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("expires_at", DateTime(timezone=True), nullable=False),
     Column("consumed_at", DateTime(timezone=True)),
+    Column("source_identity_operation_id", Text),
     _is_identifier("preview_id", IdKind.ENTITY_IDENTITY_PREVIEW),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("survivor_entity_id", IdKind.ENTITY),
@@ -8856,6 +8866,10 @@ entity_identity_previews = Table(
     CheckConstraint(
         "consumed_at IS NULL OR consumed_at >= created_at",
         name="a_preview_is_not_consumed_before_it_was_created",
+    ),
+    CheckConstraint(
+        "(operation_type = 'split') = (source_identity_operation_id IS NOT NULL)",
+        name="a_split_preview_names_exactly_one_source_operation",
     ),
     # The target of the operation table's composite reference, and the reason it
     # can be composite at all. Declared for the reason
@@ -8922,6 +8936,9 @@ entity_identity_operations = Table(
     Column("state", Text, nullable=False),
     Column("started_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
     Column("completed_at", DateTime(timezone=True)),
+    Column("source_identity_operation_id", Text),
+    Column("effect_count", Integer),
+    Column("effects_digest", Text),
     _is_identifier("identity_operation_id", IdKind.ENTITY_IDENTITY_OPERATION),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
     _is_identifier("survivor_entity_id", IdKind.ENTITY),
@@ -8974,6 +8991,26 @@ entity_identity_operations = Table(
         "completed_at IS NULL OR completed_at >= started_at",
         name="an_identity_operation_does_not_end_before_it_started",
     ),
+    CheckConstraint(
+        "(operation_type = 'split') = (source_identity_operation_id IS NOT NULL)",
+        name="a_split_operation_names_exactly_one_source_merge",
+    ),
+    CheckConstraint(
+        "(effect_count IS NULL) = (effects_digest IS NULL)",
+        name="an_identity_operation_settles_count_and_digest_together",
+    ),
+    CheckConstraint(
+        "effect_count IS NULL OR effect_count >= 1",
+        name="an_identity_operation_settles_at_least_one_effect",
+    ),
+    CheckConstraint(
+        "effects_digest IS NULL OR effects_digest ~ '^[0-9a-f]{64}$'",
+        name="an_identity_operation_effect_digest_is_sha256",
+    ),
+    CheckConstraint(
+        "state <> 'completed' OR (effect_count IS NOT NULL AND effects_digest IS NOT NULL)",
+        name="a_completed_identity_operation_has_settled_effects",
+    ),
     UniqueConstraint(
         "principal_id",
         "idempotency_key",
@@ -9002,8 +9039,25 @@ entity_identity_operations = Table(
         ondelete="CASCADE",
         name="an_identity_operation_retains_an_entity_of_its_principal",
     ),
+    ForeignKeyConstraint(
+        ["source_identity_operation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_identity_operations.identity_operation_id",
+            f"{SCHEMA}.entity_identity_operations.principal_id",
+        ],
+        deferrable=True,
+        initially="DEFERRED",
+        name="a_split_names_a_source_operation_of_its_principal",
+    ),
     Index("entity_identity_operations_by_principal", "principal_id"),
     Index("entity_identity_operations_by_preview", "preview_id"),
+    Index(
+        "one_completed_split_per_source_merge",
+        "principal_id",
+        "source_identity_operation_id",
+        unique=True,
+        postgresql_where=text("operation_type = 'split' AND state = 'completed'"),
+    ),
 )
 
 #: WP-RI-06: the append-only ledger a split has to invert a merge from.
@@ -9114,4 +9168,123 @@ entity_identity_effects = Table(
     ),
     Index("entity_identity_effects_by_principal", "principal_id"),
     Index("entity_identity_effects_by_operation", "identity_operation_id", "sequence"),
+)
+
+#: RI-FC-WP-03: durable, Principal-scoped re-enrichment work. This is a
+#: distinct queue because its binding and stale-input contract are not capture
+#: processing semantics.
+entity_reenrichment_work = Table(
+    "entity_reenrichment_work",
+    METADATA,
+    Column("work_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("trigger", Text, nullable=False),
+    Column("cause_record_id", Text, nullable=False),
+    Column("binding_sha256", Text, nullable=False),
+    Column("input_versions", JSONB, nullable=False),
+    Column("producer_versions", JSONB, nullable=False),
+    Column("policy_version", Text, nullable=False),
+    Column("state", Text, nullable=False),
+    Column("attempt_count", Integer, nullable=False, server_default=text("0")),
+    Column("max_attempts", Integer, nullable=False, server_default=text("3")),
+    Column("lease_owner", Text),
+    Column("lease_expires_at", DateTime(timezone=True)),
+    Column("next_attempt_at", DateTime(timezone=True), nullable=False),
+    Column("stale_reasons", ARRAY(Text)),
+    Column("last_error_code", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("completed_at", DateTime(timezone=True)),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("work_id ~ '^erwk_[0-9a-f]{24}$'", name="a_reenrichment_work_id_is_opaque"),
+    CheckConstraint("binding_sha256 ~ '^[0-9a-f]{64}$'", name="a_reenrichment_binding_is_sha256"),
+    CheckConstraint(
+        "jsonb_typeof(input_versions) = 'array' "
+        "AND jsonb_array_length(input_versions) BETWEEN 0 AND 100",
+        name="reenrichment_input_versions_are_bounded",
+    ),
+    CheckConstraint(
+        "jsonb_typeof(producer_versions) = 'array' "
+        "AND jsonb_array_length(producer_versions) BETWEEN 0 AND 100",
+        name="reenrichment_producer_versions_are_bounded",
+    ),
+    CheckConstraint(
+        "trigger IN ('corrected_identity','new_alias','project_mapping_change',"
+        "'role_or_organization_change','source_version_change',"
+        "'model_or_rule_version_change',"
+        "'accepted_quick_capture_correction','contradiction_resolution','policy_change')",
+        name="a_reenrichment_trigger_is_known",
+    ),
+    CheckConstraint(
+        "state IN ('queued','running','succeeded','stale','failed')",
+        name="a_reenrichment_state_is_known",
+    ),
+    CheckConstraint(
+        "attempt_count BETWEEN 0 AND max_attempts AND max_attempts BETWEEN 1 AND 10",
+        name="reenrichment_attempts_are_bounded",
+    ),
+    CheckConstraint(
+        "(state = 'running') = (lease_owner IS NOT NULL AND lease_expires_at IS NOT NULL)",
+        name="running_reenrichment_has_a_complete_lease",
+    ),
+    CheckConstraint(
+        "(state IN ('succeeded','stale','failed')) = (completed_at IS NOT NULL)",
+        name="terminal_reenrichment_records_completion",
+    ),
+    CheckConstraint(
+        "(state = 'stale') = (coalesce(cardinality(stale_reasons), 0) > 0)",
+        name="stale_reenrichment_states_why",
+    ),
+    UniqueConstraint("principal_id", "binding_sha256", name="one_entity_reenrichment_binding"),
+    UniqueConstraint(
+        "work_id", "principal_id", name="reenrichment_work_is_identified_within_principal"
+    ),
+    Index("entity_reenrichment_ready", "state", "next_attempt_at", "created_at"),
+)
+
+entity_reenrichment_subjects = Table(
+    "entity_reenrichment_subjects",
+    METADATA,
+    Column("work_id", Text, nullable=False),
+    Column("principal_id", Text, nullable=False),
+    Column("sequence", Integer, nullable=False),
+    Column("subject_kind", Text, nullable=False),
+    Column("subject_id", Text, nullable=False),
+    Column("subject_version", Text, nullable=False),
+    PrimaryKeyConstraint("work_id", "sequence", name="one_reenrichment_subject_position"),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint("sequence BETWEEN 1 AND 100", name="reenrichment_subjects_are_bounded"),
+    CheckConstraint(
+        "subject_kind IN ('principal','entity','alias','assignment','relationship',"
+        "'source_object','source_version','capture','capture_version','proposal',"
+        "'review_decision','identity_operation')",
+        name="a_reenrichment_subject_kind_is_known",
+    ),
+    ForeignKeyConstraint(
+        ["work_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_reenrichment_work.work_id",
+            f"{SCHEMA}.entity_reenrichment_work.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="a_reenrichment_subject_belongs_to_its_principal_work",
+    ),
+)
+
+entity_reenrichment_version_watermarks = Table(
+    "entity_reenrichment_version_watermarks",
+    METADATA,
+    Column("principal_id", Text, nullable=False),
+    Column("namespace", Text, nullable=False),
+    Column("binding_key", Text, nullable=False),
+    Column("version", Text, nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    PrimaryKeyConstraint(
+        "principal_id", "namespace", "binding_key", name="one_reenrichment_version_watermark"
+    ),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "namespace ~ '^[a-z][a-z0-9_]{0,63}$' AND binding_key ~ '^[a-z][a-z0-9_]{0,63}$'",
+        name="reenrichment_watermark_names_are_safe_tokens",
+    ),
 )

@@ -36,13 +36,18 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
+from my_pa.contracts.ports import UnknownScopeError
+from my_pa.domain.relationship.entity import EntityStatus
 from my_pa.domain.relationship.identity_correction import (
     IDENTITY_PREVIEW_LIFETIME,
+    IdentityEffect,
     IdentityEffectFamily,
     IdentityEffectKind,
     state_digest,
 )
+from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 
 pytestmark = pytest.mark.database
 
@@ -112,18 +117,21 @@ def migrated_engine(disposable_database: str) -> Iterator[Engine]:
                 (MERGED, PRINCIPAL_A),
                 (FOREIGN, PRINCIPAL_B),
             ):
+                display_name = f"Synthetic {entity_id}"
                 connection.execute(
                     text(
                         f"INSERT INTO {SCHEMA}.entities "  # noqa: S608
                         "(entity_id, principal_id, entity_type, canonical_name, display_name, "
                         " status, created_at, updated_at, version) "
-                        "VALUES (:entity_id, :principal_id, 'person', :name, :name, "
+                        "VALUES (:entity_id, :principal_id, 'person', :canonical_name, "
+                        ":display_name, "
                         " 'active', :when, :when, 1)"
                     ),
                     {
                         "entity_id": entity_id,
                         "principal_id": principal_id,
-                        "name": f"synthetic {entity_id}",
+                        "canonical_name": normalize_name(display_name),
+                        "display_name": display_name,
                         "when": WHEN,
                     },
                 )
@@ -147,6 +155,7 @@ def _insert_preview(engine: Engine, **overrides: object) -> None:
         "actor_class": "user",
         "created_at": WHEN,
         "expires_at": WHEN + IDENTITY_PREVIEW_LIFETIME,
+        "source_identity_operation_id": None,
     }
     values.update(overrides)
     with engine.begin() as connection:
@@ -155,11 +164,12 @@ def _insert_preview(engine: Engine, **overrides: object) -> None:
                 f"INSERT INTO {SCHEMA}.entity_identity_previews "  # noqa: S608
                 "(preview_id, principal_id, operation_type, survivor_entity_id, "
                 " expected_survivor_version, merged_away, preview_digest, conflict_digest, "
-                " plan_digest, "
+                " plan_digest, source_identity_operation_id, "
                 " created_by, actor_class, created_at, expires_at) "
                 "VALUES (:preview_id, :principal_id, :operation_type, :survivor_entity_id, "
                 " :expected_survivor_version, CAST(:merged_away AS jsonb), :preview_digest, "
-                " :conflict_digest, :plan_digest, :created_by, :actor_class, :created_at, "
+                " :conflict_digest, :plan_digest, :source_identity_operation_id, "
+                " :created_by, :actor_class, :created_at, "
                 " :expires_at)"
             ),
             values,
@@ -185,8 +195,15 @@ def _insert_operation(engine: Engine, **overrides: object) -> None:
         "state": "completed",
         "started_at": WHEN,
         "completed_at": WHEN + timedelta(seconds=2),
+        "effect_count": 1,
+        "effects_digest": DIGEST,
+        "source_identity_operation_id": None,
     }
     values.update(overrides)
+    if values["state"] == "in_progress":
+        values.setdefault("completed_at", None)
+        values["effect_count"] = None
+        values["effects_digest"] = None
     with engine.begin() as connection:
         connection.execute(
             text(
@@ -194,12 +211,14 @@ def _insert_operation(engine: Engine, **overrides: object) -> None:
                 "(identity_operation_id, principal_id, operation_type, survivor_entity_id, "
                 " merged_entity_ids, preview_id, preview_digest, idempotency_key, "
                 " request_digest, performed_by, actor_class, correlation_id, audit_id, receipt_id, "
-                " state, started_at, completed_at) "
+                " state, started_at, completed_at, effect_count, effects_digest, "
+                " source_identity_operation_id) "
                 "VALUES (:identity_operation_id, :principal_id, :operation_type, "
                 " :survivor_entity_id, CAST(:merged_entity_ids AS jsonb), :preview_id, "
                 " :preview_digest, :idempotency_key, :request_digest, :performed_by, "
                 " :actor_class, :correlation_id, :audit_id, :receipt_id, :state, "
-                " :started_at, :completed_at)"
+                " :started_at, :completed_at, :effect_count, :effects_digest, "
+                " :source_identity_operation_id)"
             ),
             values,
         )
@@ -347,30 +366,173 @@ def test_an_operation_is_updated_from_in_progress_to_completed(migrated_engine: 
         connection.execute(
             text(
                 f"UPDATE {SCHEMA}.entity_identity_operations "  # noqa: S608
-                "SET state = 'completed', completed_at = :when "
+                "SET state = 'completed', completed_at = :when, "
+                "effect_count = 1, effects_digest = :effects_digest "
                 "WHERE identity_operation_id = :identity_operation_id"
             ),
-            {"when": WHEN + timedelta(seconds=1), "identity_operation_id": OPERATION},
+            {
+                "when": WHEN + timedelta(seconds=1),
+                "effects_digest": DIGEST,
+                "identity_operation_id": OPERATION,
+            },
         )
     with migrated_engine.connect() as connection:
-        assert (
-            connection.execute(
-                text(
-                    f"SELECT state FROM {SCHEMA}.entity_identity_operations "  # noqa: S608
-                    "WHERE identity_operation_id = :identity_operation_id"
-                ),
-                {"identity_operation_id": OPERATION},
-            ).scalar_one()
-            == "completed"
+        settled = connection.execute(
+            text(
+                f"SELECT state, effect_count, effects_digest "  # noqa: S608
+                f"FROM {SCHEMA}.entity_identity_operations "
+                "WHERE identity_operation_id = :identity_operation_id"
+            ),
+            {"identity_operation_id": OPERATION},
+        ).one()
+        assert settled == (
+            "completed",
+            1,
+            DIGEST,
         )
 
 
 def test_the_server_refuses_an_unknown_operation_type(migrated_engine: Engine) -> None:
-    """`split` is not admitted at this revision; `WP-07` widens the CHECK."""
+    """The final-completion revision admits merge and split, and nothing else."""
     _insert_preview(migrated_engine)
     with pytest.raises(IntegrityError) as refused:
-        _insert_operation(migrated_engine, operation_type="split")
+        _insert_operation(migrated_engine, operation_type="rename")
     assert "an_identity_operation_type_is_known" in str(refused.value)
+
+
+def test_the_server_admits_one_split_bound_to_one_completed_merge(
+    migrated_engine: Engine,
+) -> None:
+    _insert_preview(migrated_engine)
+    _insert_operation(migrated_engine)
+    _insert_effect(migrated_engine)
+    split_preview = "eipv_bbbb0002bbbb02"
+    split_operation = "eiop_bbbb0002bbbb02"
+    _insert_preview(
+        migrated_engine,
+        preview_id=split_preview,
+        operation_type="split",
+        source_identity_operation_id=OPERATION,
+    )
+    _insert_operation(
+        migrated_engine,
+        identity_operation_id=split_operation,
+        operation_type="split",
+        preview_id=split_preview,
+        idempotency_key="split-0001",
+        receipt_id="rcpt_bbbb0002bbbb02",
+        source_identity_operation_id=OPERATION,
+    )
+    with migrated_engine.connect() as connection:
+        stored = connection.execute(
+            text(
+                f"SELECT source_identity_operation_id "  # noqa: S608
+                f"FROM {SCHEMA}.entity_identity_operations "
+                "WHERE identity_operation_id = :operation_id"
+            ),
+            {"operation_id": split_operation},
+        ).scalar_one()
+    assert stored == OPERATION
+
+
+def test_completed_split_lookup_ignores_failed_and_in_progress_attempts(
+    migrated_engine: Engine,
+) -> None:
+    """RI-FC-WP-07: only a completed inverse prevents another split attempt."""
+    _insert_preview(migrated_engine)
+    _insert_operation(migrated_engine)
+    _insert_effect(migrated_engine)
+    for suffix, state in (("bbbb0002bbbb02", "failed"), ("cccc0003cccc03", "in_progress")):
+        preview_id = f"eipv_{suffix}"
+        _insert_preview(
+            migrated_engine,
+            preview_id=preview_id,
+            operation_type="split",
+            source_identity_operation_id=OPERATION,
+        )
+        _insert_operation(
+            migrated_engine,
+            identity_operation_id=f"eiop_{suffix}",
+            operation_type="split",
+            preview_id=preview_id,
+            idempotency_key=f"split-{state}",
+            receipt_id=f"rcpt_{suffix}",
+            state=state,
+            completed_at=None if state == "in_progress" else WHEN + timedelta(seconds=3),
+            source_identity_operation_id=OPERATION,
+        )
+    with migrated_engine.connect() as connection:
+        repository = SqlEntityRepository(connection)
+        assert repository.split_for_source_operation(PRINCIPAL_A, OPERATION) is None
+    completed_preview = "eipv_dddd0004dddd04"
+    completed_operation = "eiop_dddd0004dddd04"
+    _insert_preview(
+        migrated_engine,
+        preview_id=completed_preview,
+        operation_type="split",
+        source_identity_operation_id=OPERATION,
+    )
+    _insert_operation(
+        migrated_engine,
+        identity_operation_id=completed_operation,
+        operation_type="split",
+        preview_id=completed_preview,
+        idempotency_key="split-completed",
+        receipt_id="rcpt_dddd0004dddd04",
+        source_identity_operation_id=OPERATION,
+    )
+    with migrated_engine.connect() as connection:
+        found = SqlEntityRepository(connection).split_for_source_operation(PRINCIPAL_A, OPERATION)
+    assert found is not None
+    assert found.identity_operation_id == completed_operation
+
+
+def test_entity_split_restores_semantics_with_a_monotonic_token(
+    migrated_engine: Engine,
+) -> None:
+    """RI-FC-WP-07: a pre-merge version cannot become current again after split."""
+    before = {"status": "active", "superseded_by_entity_id": None, "version": 1}
+    after = {
+        "status": "merged_redirect",
+        "superseded_by_entity_id": SURVIVOR,
+        "version": 2,
+    }
+    effect = IdentityEffect(
+        effect_id="eief_bbbb0002bbbb02",
+        identity_operation_id=OPERATION,
+        principal_id=PRINCIPAL_A,
+        sequence=1,
+        family=IdentityEffectFamily.ENTITY,
+        record_id=MERGED,
+        kind=IdentityEffectKind.ENTITY_REDIRECTED,
+        before_state=before,
+        after_state=after,
+        before_sha256=state_digest(before),
+        after_sha256=state_digest(after),
+        recorded_at=WHEN,
+    )
+    with migrated_engine.begin() as connection:
+        connection.execute(
+            text(
+                f"UPDATE {SCHEMA}.entities SET status = 'merged_redirect', "  # noqa: S608
+                "superseded_by_entity_id = :survivor, version = 2 WHERE entity_id = :merged"
+            ),
+            {"survivor": SURVIVOR, "merged": MERGED},
+        )
+        repository = SqlEntityRepository(connection)
+        repository.restore_identity_effect(PRINCIPAL_A, effect)
+        restored = repository.get(PRINCIPAL_A, MERGED)
+        assert restored is not None
+        assert restored.status is EntityStatus.ACTIVE
+        assert restored.superseded_by_entity_id is None
+        assert restored.version == 3
+        with pytest.raises(UnknownScopeError):
+            repository.redirect_entity(
+                PRINCIPAL_A,
+                MERGED,
+                SURVIVOR,
+                expected_version=1,
+            )
 
 
 # --- the append-only effect ledger -------------------------------------------

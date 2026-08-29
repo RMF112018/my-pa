@@ -397,7 +397,7 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
-    # The relationship-intelligence entity plane. Thirty-one `entities.` names
+    # The relationship-intelligence entity plane. Thirty-four `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
     # WP-RI-A-02's twelve, WP-RI-A-03's seven and WP-RI-A-04's three.
@@ -594,15 +594,17 @@ class Capability(StrEnum):
     #: the widening `sources.enroll` is here for, arriving on the knowledge
     #: plane for the first time.
     #:
-    #: There is deliberately no `entities.identity_history`. The frozen MCP
-    #: contract assigns it to WP-02 and Phase B does not implement later-WP
-    #: surface, so a governed merge can be performed and its lineage cannot be
-    #: read back over MCP. That is a carried gap and it is recorded here rather
-    #: than closed quietly: `EntityGovernanceService.merge_lineage` exists in the
-    #: application layer with no capability publishing it.
     ENTITIES_PROPOSALS_CREATE = "entities.proposals.create"
     ENTITIES_MERGE_PREVIEW = "entities.merge.preview"
     ENTITIES_MERGE = "entities.merge"
+    # Final identity-recovery surface. History is a Principal-scoped read over
+    # the authoritative mutation and identity-operation ledgers. Split uses the
+    # same two-gate preview/apply shape as merge: the preview persists an exact,
+    # expiring plan and the apply consumes it atomically. Both split operations
+    # are operator-only identity correction; history grants no authority.
+    ENTITIES_IDENTITY_HISTORY = "entities.identity_history"
+    ENTITIES_SPLIT_PREVIEW = "entities.split.preview"
+    ENTITIES_SPLIT = "entities.split"
 
     # The Relationship Memory plane: durable, entity-bound knowledge the user
     # meant to keep. **A family of its own rather than an `entities.update`**,
@@ -613,8 +615,9 @@ class Capability(StrEnum):
     # notes about the person. The noun is what makes the sensitive class legible
     # where grants are decided.
     #
-    # Eight, and the ninth is deliberately absent: there is no
-    # `relationship_memory.delete`. Archive is reversible and history is
+    # Eight original read/write capabilities, followed below by the ninth,
+    # producer-only capability. Separately, there is no
+    # `relationship_memory.delete`: archive is reversible and history is
     # retained, hard deletion is unresolved by ADR-003 and reserved to the
     # operator, and a capability name for it would be the first half of building
     # one.
@@ -724,6 +727,8 @@ _OPERATOR_ONLY: frozenset[AuthorizedCapability] = frozenset(
         Capability.SOURCES_ENROLL,
         Capability.ENTITIES_MERGE_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT_PREVIEW,
+        Capability.ENTITIES_SPLIT,
         NativeSourceCapability.CONFIGURE,
         NativeSourceCapability.PREFLIGHT,
         NativeSourceCapability.SYNC,
@@ -982,12 +987,15 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         # grant: a client granted this purpose can invoke exactly one capability
         # with it, and that capability writes a request.
         Capability.ENTITIES_PROPOSALS_CREATE: frozenset({Purpose.ENTITY_PROPOSAL}),
-        # Both identity-correction capabilities take the same purpose and only
-        # that purpose. The coupling is deliberate; `purpose.py` argues it, and
-        # `_WRITE_CAPABILITIES` below records the persistence behaviour that
-        # makes the preview a write.
+        # All four merge/split preview/apply capabilities take the same purpose
+        # and only that purpose. The coupling is deliberate; `purpose.py` argues
+        # it, and `_WRITE_CAPABILITIES` below records the persistence behaviour
+        # that makes both previews writes.
         Capability.ENTITIES_MERGE_PREVIEW: frozenset({Purpose.ENTITY_IDENTITY_CORRECTION}),
         Capability.ENTITIES_MERGE: frozenset({Purpose.ENTITY_IDENTITY_CORRECTION}),
+        Capability.ENTITIES_IDENTITY_HISTORY: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_SPLIT_PREVIEW: frozenset({Purpose.ENTITY_IDENTITY_CORRECTION}),
+        Capability.ENTITIES_SPLIT: frozenset({Purpose.ENTITY_IDENTITY_CORRECTION}),
         # The Relationship Memory pair, and neither is a reuse. `D-91`'s test
         # asks whether reuse would widen the grant, and here it plainly would in
         # both directions: `entity_read` is the identity plane — aliases,
@@ -1110,7 +1118,9 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # `tasks.bulk_preview` is the established precedent and is here for the
         # same reason.
         Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_MERGE,
+        Capability.ENTITIES_SPLIT,
     }
 )
 
@@ -1149,6 +1159,7 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # tests, which assert `entities`, `entity_aliases` and their neighbours
         # are untouched after one.
         Capability.ENTITIES_MERGE_PREVIEW,
+        Capability.ENTITIES_SPLIT_PREVIEW,
         # `entities.merge` is deliberately absent: it redirects entities,
         # reparents and coalesces children, supersedes self-edges and invalidates
         # dependent proposals. It is the destructive half of this plane.

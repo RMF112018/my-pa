@@ -1418,6 +1418,18 @@ class _Reviews(ReviewRepository):
             )
         )
 
+    def entity_proposal_decision(
+        self, principal_id: str, decision_id: str
+    ) -> EntityProposalReviewDecision | None:
+        return next(
+            (
+                decision
+                for decision in self._world.entity_review_decisions
+                if decision.principal_id == principal_id and decision.decision_id == decision_id
+            ),
+            None,
+        )
+
     def record_entity_proposal_decision(
         self, principal_id: str, decision: EntityProposalReviewDecision
     ) -> None:
@@ -6162,6 +6174,24 @@ class FakeUnitOfWork(UnitOfWork):
         return _Entities(self._world)
 
     @property
+    def identity_history(self) -> object:
+        """An empty authoritative projection for FAST worlds with no identity ledger."""
+
+        class _EmptyIdentityHistory:
+            @staticmethod
+            def entries(
+                principal_id: str,
+                entity_id: str,
+                *,
+                limit: int,
+                after: object | None = None,
+            ) -> tuple[tuple[object, int], ...]:
+                del principal_id, entity_id, limit, after
+                return ()
+
+        return _EmptyIdentityHistory()
+
+    @property
     def relationship_memory_proposals(self) -> RelationshipMemoryProposalRepository:
         """The producer's one insert over this `World` (`WP-RI-B-05`).
 
@@ -6374,7 +6404,7 @@ def build_service(
         # names its own service refuses.
         task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
         commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
-        # Enabled by the same default reasoning: the thirty-one `entities.` names are
+        # Enabled by the same default reasoning: the thirty-four `entities.` names are
         # withheld from a build that has not turned the plane on, and a suite
         # that quantifies over `Capability` would be quantifying over names its
         # own service refuses. A test about the *withheld* build passes `False`
@@ -6383,7 +6413,7 @@ def build_service(
         relationship_intelligence_enabled=relationship_intelligence_enabled,
         # Enabled by the same default reasoning, and conjoined with the plane
         # switch for the reason the memory one below is: `ApplicationService`
-        # refuses the plane's twenty-one writes unless *both* are on, and a
+        # refuses the plane's twenty-three writes unless *both* are on, and a
         # test that turns the plane off should not have to say so twice. A test
         # about the *read-only* build passes `False` explicitly and says so --
         # `tests/contract/test_entity_write_gate.py` is the one that does.

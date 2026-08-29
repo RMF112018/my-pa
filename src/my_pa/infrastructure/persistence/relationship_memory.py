@@ -72,6 +72,12 @@ from my_pa.contracts.ports import (
 from my_pa.domain.common.classification import Classification
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.relationship.entity import EntityStatus, EntityType
+from my_pa.domain.relationship.identity_correction import (
+    IdentityEffect,
+    IdentityEffectDraft,
+    IdentityEffectFamily,
+    IdentityEffectKind,
+)
 from my_pa.domain.relationship.memory import (
     ContextLinkAuthority,
     ContextLinkRole,
@@ -407,6 +413,9 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
                             "memory_version_id": request.memory_version_id,
                             "target_type": link["target_type"],
                             "target_id": link["target_id"],
+                            "origin_subject_entity_id": (
+                                link["target_id"] if link["target_type"] == "entity" else None
+                            ),
                             "role": link["role"],
                             "authority": ContextLinkAuthority.USER_CONFIRMED.value,
                             "created_at": request.server_received_at,
@@ -478,6 +487,7 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
                     {
                         "memory_id": memory_id,
                         "subject_entity_id": subject_entity_id,
+                        "origin_subject_entity_id": subject_entity_id,
                         "memory_kind": memory_kind.value,
                         "lifecycle_state": MemoryLifecycle.ACTIVE.value,
                         "current_version_id": request.memory_version_id,
@@ -991,13 +1001,11 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
     ) -> frozenset[str]:
         """Which input entities this plane currently binds into canonical memory state.
 
-        Four binding classes are blockers: canonical memory subjects, proposal
+        Four binding classes are reported: canonical memory subjects, proposal
         subjects, Entity targets linked from a memory's current canonical version,
-        and Entity context targets on an open proposal. A candidate memory about
-        an identity, an open candidate scoped to it, or a current canonical context
-        link to it is as unrecoverable through a governed merge as an accepted
-        memory: `WP-RI-08` owns the subject and context redistribution rules, and
-        `WP-RI-06`'s effect ledger has no family that could record any rewrite.
+        and Entity context targets on an open proposal. Governed merge planning
+        now uses `plan_identity_merge` to record their mutable bindings as
+        content-blind effects while retaining immutable subject/context origins.
 
         **Classification is not read, and that is the point.** Every other read
         on this plane filters or counts restricted rows; this one asks a question
@@ -1061,6 +1069,237 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
             )
         ).all()
         return frozenset(str(row[0]) for row in subjects)
+
+    def identity_effect_matches_after_state(
+        self, principal_id: str, effect: IdentityEffect
+    ) -> bool:
+        table, id_column, admitted = _memory_identity_effect_read_subject(effect.family)
+        if set(effect.after_state) != admitted:
+            return False
+        row = self._connection.execute(
+            select(*(table.c[name] for name in sorted(admitted))).where(
+                _mine(table, principal_id), table.c[id_column] == effect.record_id
+            )
+        ).one_or_none()
+        return row is not None and {name: getattr(row, name) for name in admitted} == dict(
+            effect.after_state
+        )
+
+    def plan_identity_merge(
+        self,
+        principal_id: str,
+        merged_entity_ids: frozenset[str],
+        survivor_entity_id: str,
+        survivor_entity_version: int,
+    ) -> tuple[IdentityEffectDraft, ...]:
+        """Plan opaque subject/context moves; never select statement or classification."""
+        named = sorted(merged_entity_ids)
+        drafts: list[IdentityEffectDraft] = []
+        memory_rows = self._connection.execute(
+            select(
+                relationship_memories.c.memory_id,
+                relationship_memories.c.subject_entity_id,
+                relationship_memories.c.origin_subject_entity_id,
+                relationship_memories.c.version,
+            ).where(
+                _mine(relationship_memories, principal_id),
+                relationship_memories.c.subject_entity_id.in_(named),
+            )
+        ).all()
+        for row in memory_rows:
+            before = {
+                "subject_entity_id": str(row.subject_entity_id),
+                "origin_subject_entity_id": str(row.origin_subject_entity_id),
+                "version": int(row.version),
+            }
+            drafts.append(
+                IdentityEffectDraft(
+                    family=IdentityEffectFamily.RELATIONSHIP_MEMORY,
+                    record_id=str(row.memory_id),
+                    kind=IdentityEffectKind.OWNER_REPARENTED,
+                    before_state=before,
+                    after_state={
+                        **before,
+                        "subject_entity_id": survivor_entity_id,
+                        "version": int(row.version) + 1,
+                    },
+                )
+            )
+        proposal_rows = self._connection.execute(
+            select(
+                relationship_memory_proposals.c.memory_proposal_id,
+                relationship_memory_proposals.c.subject_entity_id,
+                relationship_memory_proposals.c.origin_subject_entity_id,
+                relationship_memory_proposals.c.expected_subject_version,
+                relationship_memory_proposals.c.context_links,
+            ).where(_mine(relationship_memory_proposals, principal_id))
+        ).all()
+        for row in proposal_rows:
+            before_links = list(row.context_links or [])
+            after_links = [
+                {
+                    **link,
+                    "origin_subject_entity_id": link.get("origin_subject_entity_id")
+                    or link["target_id"],
+                    "target_id": survivor_entity_id,
+                }
+                if link.get("target_type") == ContextLinkTargetType.ENTITY.value
+                and link.get("target_id") in merged_entity_ids
+                else dict(link)
+                for link in before_links
+            ]
+            subject = str(row.subject_entity_id)
+            if subject not in merged_entity_ids and before_links == after_links:
+                continue
+            before = {
+                "subject_entity_id": subject,
+                "origin_subject_entity_id": str(row.origin_subject_entity_id),
+                "expected_subject_version": int(row.expected_subject_version),
+                "context_links": before_links,
+            }
+            drafts.append(
+                IdentityEffectDraft(
+                    family=IdentityEffectFamily.MEMORY_PROPOSAL,
+                    record_id=str(row.memory_proposal_id),
+                    kind=IdentityEffectKind.OWNER_REPARENTED,
+                    before_state=before,
+                    after_state={
+                        **before,
+                        "subject_entity_id": (
+                            survivor_entity_id if subject in merged_entity_ids else subject
+                        ),
+                        "expected_subject_version": (
+                            survivor_entity_version
+                            if subject in merged_entity_ids
+                            else int(row.expected_subject_version)
+                        ),
+                        "context_links": after_links,
+                    },
+                )
+            )
+        link_rows = self._connection.execute(
+            select(
+                relationship_memory_context_links.c.context_link_id,
+                relationship_memory_context_links.c.target_id,
+                relationship_memory_context_links.c.origin_subject_entity_id,
+            ).where(
+                _mine(relationship_memory_context_links, principal_id),
+                relationship_memory_context_links.c.target_type
+                == ContextLinkTargetType.ENTITY.value,
+                relationship_memory_context_links.c.target_id.in_(named),
+            )
+        ).all()
+        for row in link_rows:
+            before = {
+                "target_id": str(row.target_id),
+                "origin_subject_entity_id": str(row.origin_subject_entity_id),
+            }
+            drafts.append(
+                IdentityEffectDraft(
+                    family=IdentityEffectFamily.MEMORY_CONTEXT_LINK,
+                    record_id=str(row.context_link_id),
+                    kind=IdentityEffectKind.OWNER_REPARENTED,
+                    before_state=before,
+                    after_state={**before, "target_id": survivor_entity_id},
+                )
+            )
+        return tuple(drafts)
+
+    def apply_identity_effect(self, principal_id: str, effect: IdentityEffectDraft) -> None:
+        table, id_column, admitted = _memory_identity_effect_write_subject(effect.family)
+        if set(effect.before_state) != admitted or set(effect.after_state) != admitted:
+            raise ValueError("a memory identity effect contains only binding state")
+        conditions = [_mine(table, principal_id), table.c[id_column] == effect.record_id]
+        for name, value in effect.before_state.items():
+            conditions.append(table.c[name].is_(None) if value is None else table.c[name] == value)
+        result = self._connection.execute(
+            update(table).where(*conditions).values(**dict(effect.after_state))
+        )
+        if result.rowcount != 1:
+            raise UnknownScopeError("a memory binding changed after merge preview")
+
+    def restore_identity_effect(
+        self,
+        principal_id: str,
+        effect: IdentityEffect,
+        *,
+        restored_state: Mapping[str, object],
+    ) -> None:
+        """Restore only opaque bindings; narrative and classification never enter the ledger."""
+        table, id_column, admitted = _memory_identity_effect_write_subject(effect.family)
+        if set(effect.before_state) != admitted or set(effect.after_state) != admitted:
+            raise ValueError("a memory identity effect contains only binding state")
+        conditions = [_mine(table, principal_id), table.c[id_column] == effect.record_id]
+        for name, value in effect.after_state.items():
+            conditions.append(table.c[name].is_(None) if value is None else table.c[name] == value)
+        restored = dict(restored_state)
+        if set(restored) != admitted:
+            raise ValueError("a restored memory identity effect contains only binding state")
+        result = self._connection.execute(update(table).where(*conditions).values(**restored))
+        if result.rowcount != 1:
+            raise UnknownScopeError("a memory binding no longer matches its source merge")
+
+
+def _memory_identity_effect_read_subject(family: IdentityEffectFamily) -> tuple[Any, str, set[str]]:
+    """Map the three opaque RM binding families; no content column is admitted."""
+    subjects = {
+        IdentityEffectFamily.RELATIONSHIP_MEMORY: (
+            relationship_memories,
+            "memory_id",
+            {"subject_entity_id", "origin_subject_entity_id", "version"},
+        ),
+        IdentityEffectFamily.MEMORY_PROPOSAL: (
+            relationship_memory_proposals,
+            "memory_proposal_id",
+            {
+                "subject_entity_id",
+                "origin_subject_entity_id",
+                "expected_subject_version",
+                "context_links",
+            },
+        ),
+        IdentityEffectFamily.MEMORY_CONTEXT_LINK: (
+            relationship_memory_context_links,
+            "context_link_id",
+            {"target_id", "origin_subject_entity_id"},
+        ),
+    }
+    subject = subjects.get(family)
+    if subject is None:
+        raise ValueError("a memory identity effect names a memory binding family")
+    return subject
+
+
+def _memory_identity_effect_write_subject(
+    family: IdentityEffectFamily,
+) -> tuple[Any, str, set[str]]:
+    """The same closed bindings, named separately so the access audit sees writes."""
+    subjects = {
+        IdentityEffectFamily.RELATIONSHIP_MEMORY: (
+            relationship_memories,
+            "memory_id",
+            {"subject_entity_id", "origin_subject_entity_id", "version"},
+        ),
+        IdentityEffectFamily.MEMORY_PROPOSAL: (
+            relationship_memory_proposals,
+            "memory_proposal_id",
+            {
+                "subject_entity_id",
+                "origin_subject_entity_id",
+                "expected_subject_version",
+                "context_links",
+            },
+        ),
+        IdentityEffectFamily.MEMORY_CONTEXT_LINK: (
+            relationship_memory_context_links,
+            "context_link_id",
+            {"target_id", "origin_subject_entity_id"},
+        ),
+    }
+    subject = subjects.get(family)
+    if subject is None:
+        raise ValueError("a memory identity effect names a memory binding family")
+    return subject
 
 
 class _VersionRow:

@@ -1261,14 +1261,51 @@ class SqlRelationshipMemoryRepository(RelationshipMemoryRepository):
         validate_identifier(entity_id, IdKind.ENTITY)
         if limit < 1:
             raise ValueError("post-merge discovery asks for at least one row")
-        table, id_column, predicates = _memory_creation_discovery_subject(family, entity_id)
-        identifier = table.c[id_column]
-        conditions = [_mine(table, principal_id), *predicates]
-        if known_record_ids:
-            conditions.append(identifier.notin_(sorted(known_record_ids)))
-        rows = self._connection.execute(
-            select(identifier).where(*conditions).order_by(identifier).limit(limit)
-        ).scalars()
+        if family is IdentityEffectFamily.RELATIONSHIP_MEMORY:
+            statement = select(relationship_memories.c.memory_id).where(
+                _mine(relationship_memories, principal_id),
+                relationship_memories.c.subject_entity_id == entity_id,
+            )
+            if known_record_ids:
+                statement = statement.where(
+                    relationship_memories.c.memory_id.notin_(sorted(known_record_ids))
+                )
+            statement = statement.order_by(relationship_memories.c.memory_id).limit(limit)
+        elif family is IdentityEffectFamily.MEMORY_PROPOSAL:
+            statement = select(relationship_memory_proposals.c.memory_proposal_id).where(
+                _mine(relationship_memory_proposals, principal_id),
+                relationship_memory_proposals.c.subject_entity_id == entity_id,
+            )
+            if known_record_ids:
+                statement = statement.where(
+                    relationship_memory_proposals.c.memory_proposal_id.notin_(
+                        sorted(known_record_ids)
+                    )
+                )
+            statement = statement.order_by(
+                relationship_memory_proposals.c.memory_proposal_id
+            ).limit(limit)
+        elif family is IdentityEffectFamily.MEMORY_CONTEXT_LINK:
+            statement = select(relationship_memory_context_links.c.context_link_id).where(
+                _mine(relationship_memory_context_links, principal_id),
+                relationship_memory_context_links.c.target_type
+                == ContextLinkTargetType.ENTITY.value,
+                relationship_memory_context_links.c.target_id == entity_id,
+            )
+            if known_record_ids:
+                statement = statement.where(
+                    relationship_memory_context_links.c.context_link_id.notin_(
+                        sorted(known_record_ids)
+                    )
+                )
+            statement = statement.order_by(
+                relationship_memory_context_links.c.context_link_id
+            ).limit(limit)
+        else:
+            raise ValueError(
+                "post-merge discovery on the memory plane names a family this repository owns"
+            )
+        rows = self._connection.execute(statement).scalars()
         return [str(value) for value in rows]
 
 
@@ -1332,40 +1369,6 @@ def _memory_identity_effect_write_subject(
     if subject is None:
         raise ValueError("a memory identity effect names a memory binding family")
     return subject
-
-
-def _memory_creation_discovery_subject(
-    family: IdentityEffectFamily, entity_id: str
-) -> tuple[Any, str, tuple[Any, ...]]:
-    """Which table, identifier column and binding predicate answer post-merge-created for `family`.
-
-    Two families bind by a direct `subject_entity_id` column; the third binds
-    through `target_type`/`target_id`, because a context link's target is
-    polymorphic and `entity` is one of four target types it may hold.
-    """
-    if family is IdentityEffectFamily.RELATIONSHIP_MEMORY:
-        return (
-            relationship_memories,
-            "memory_id",
-            (relationship_memories.c.subject_entity_id == entity_id,),
-        )
-    if family is IdentityEffectFamily.MEMORY_PROPOSAL:
-        return (
-            relationship_memory_proposals,
-            "memory_proposal_id",
-            (relationship_memory_proposals.c.subject_entity_id == entity_id,),
-        )
-    if family is IdentityEffectFamily.MEMORY_CONTEXT_LINK:
-        return (
-            relationship_memory_context_links,
-            "context_link_id",
-            (
-                relationship_memory_context_links.c.target_type
-                == ContextLinkTargetType.ENTITY.value,
-                relationship_memory_context_links.c.target_id == entity_id,
-            ),
-        )
-    raise ValueError("post-merge discovery on the memory plane names a family this repository owns")
 
 
 class _VersionRow:

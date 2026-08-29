@@ -380,23 +380,46 @@ that a client cannot see this capability is therefore a durable per-client grant
 question or a compact-facade publication question — not a code-level profile
 omission, and not something a change to these profiles would fix.
 
-**4. WP-01 is PARTIAL, and the boundary is a repository fact rather than a
-choice.** Split ambiguity discovery and disposition cover the five families whose
-rows name an entity in a column — `alias`, `identifier`, `assignment`,
-`relationship`, `observation` (`_ATTRIBUTABLE_FAMILIES`,
-`src/my_pa/application/identity_correction.py:3022`). For `proposal`,
-`relationship_memory`, `memory_proposal` and `memory_context_link` **no rebinding
-primitive exists**: `entity_proposals` carries `entity_columns=()`
+**4. WP-01 is PARTIAL, and the boundary is narrower than it was.** Corrected
+2026-08-29 (`7f5bda1`, closing the RI-P2-BLK-001 family-coverage gap this
+paragraph previously left open): split ambiguity discovery and disposition now
+cover all nine dispositionable record families, not only the five whose rows
+name an entity in a column. The gate is `not dispositions_for(effect.family)`
+(`src/my_pa/application/identity_correction.py:1876`), which raises an ambiguity
+for any family `dispositions_for` admits at least one disposition for, rather
+than the narrower `not in _ATTRIBUTABLE_FAMILIES` test it replaced. `alias`,
+`identifier`, `assignment`, `relationship` and `observation` keep the full set
+`dispositions_for` gives them (`_ATTRIBUTABLE_FAMILIES`,
+`src/my_pa/application/identity_correction.py:3069`, unchanged at five members —
+it now gates only `POST_MERGE_CREATED` discovery and `ASSIGN_TO_ENTITY`
+execution, not whether a family can raise an ambiguity at all). For `proposal`,
+`relationship_memory`, `memory_proposal` and `memory_context_link` **no
+rebinding primitive exists**: `entity_proposals` carries `entity_columns=()`
 (`src/my_pa/infrastructure/persistence/entity.py:3838`) and makes its references
 inside its payload, so there is nothing for an assignment to rewrite; and
 `RelationshipMemoryRepository` publishes no operator-directed rebinding — its two
-identity writers apply and restore a planned merge effect. An ambiguity is a
-question whose answers must all be performable, so these four raise none. A
-post-merge modification in any of them therefore keeps the **pre-existing**
-fail-closed `PREVIEW_STALE` refusal
-(`src/my_pa/application/identity_correction.py:1882`). That is unchanged
-behaviour, not new breakage, and it is why WP-01 is PARTIAL rather than
-IMPLEMENTED.
+identity writers apply and restore a planned merge effect. `LEAVE_UNRESOLVED`
+needs no such primitive — it is a settlement record, not a mutation — so it does
+not share `ASSIGN_TO_ENTITY`'s dependency on one:
+`_DISPOSITIONS_BY_FAMILY` narrows these four to `(LEAVE_UNRESOLVED,)` only
+(`src/my_pa/domain/relationship/identity_correction.py`), so a post-merge
+modification in any of them now raises a `POST_MERGE_MODIFIED` ambiguity the
+operator must explicitly settle, rather than the blanket, pre-existing
+fail-closed `PREVIEW_STALE` refusal this paragraph previously described.
+`ASSIGN_TO_ENTITY` for one of the four is refused before any write
+(`InvalidRequestError`, since it is outside `allowed_dispositions`), and an
+unanswered ambiguity still blocks apply — fail-closed is preserved, not
+loosened. Proven end-to-end (raise, apply-with-no-disposition-fails,
+`ASSIGN_TO_ENTITY`-refused, `LEAVE_UNRESOLVED`-succeeds) for
+`relationship_memory` in `tests/database/test_identity_split_ambiguity.py` and
+`tests/unit/test_identity_split_service.py`; `proposal`, `memory_proposal` and
+`memory_context_link` are proven at the domain-disposition level (the same
+`_DISPOSITIONS_BY_FAMILY`/`dispositions_for` assertions, plus the shared,
+family-agnostic gate and settlement-validation logic all four run through) but
+do not each have their own end-to-end database-level case — a narrower, stated
+limitation rather than an implicit one. WP-01 remains PARTIAL, now for the
+reason in item 5 below (`POST_MERGE_CREATED` discovery is not extended to these
+four families), not for the reason this paragraph gave before this correction.
 
 **5. WP-01 known limitation — post-merge-created discovery over-reports.** The
 five tables `_post_merge_created` walks carry **no creation timestamp**:

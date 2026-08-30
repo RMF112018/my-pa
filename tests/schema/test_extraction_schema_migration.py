@@ -376,6 +376,14 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "entity_organization_profiles",
         }
     ),
+    # `441b071bf37b` (RI-ENT-WP-03): the address and communication-method
+    # pair, additive on `7e114f822af2` and creating nothing else.
+    "441b071bf37b": frozenset(
+        {
+            "entity_addresses",
+            "entity_communication_methods",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

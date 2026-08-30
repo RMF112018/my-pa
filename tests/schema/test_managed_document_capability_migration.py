@@ -265,8 +265,10 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_managed_plane() ->
     # The revision count, so a chain that lost a file is not read as a chain that
     # never had one. Derived from the directory rather than restated. 79 since
     # `7e114f822af2` (RI-ENT-WP-02) added the entity_names/
-    # entity_organization_profiles migration on top of this chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 79
+    # entity_organization_profiles migration on top of this chain; 80 since
+    # `441b071bf37b` (RI-ENT-WP-03) added the entity_addresses/
+    # entity_communication_methods migration on top of that.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 80
 
 
 def test_the_widening_is_exactly_the_managed_plane() -> None:

@@ -43,8 +43,10 @@ def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PARENTS
     # 79 since `7e114f822af2` (RI-ENT-WP-02) added the entity_names/
-    # entity_organization_profiles migration on top of this chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 79
+    # entity_organization_profiles migration on top of this chain; 80 since
+    # `441b071bf37b` (RI-ENT-WP-03) added the entity_addresses/
+    # entity_communication_methods migration on top of that.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 80
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

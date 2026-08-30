@@ -162,6 +162,12 @@ def test_contract_prefixes_are_stable() -> None:
         # `entity_names`. `entity_organization_profiles` needs no prefix of
         # its own -- its primary key is `entity_id`, already `ent` above.
         "enam",
+        # `441b071bf37b` (RI-ENT-WP-03): one normalized address row, in
+        # `entity_addresses`.
+        "eadr",
+        # `441b071bf37b` (RI-ENT-WP-03): one contact-channel row, in
+        # `entity_communication_methods`.
+        "ecmm",
     }
 
 

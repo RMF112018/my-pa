@@ -270,6 +270,10 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # (RI-ENT-WP-02), stacked above this revision like the rest of this set.
         "entity_names",
         "entity_organization_profiles",
+        # `441b071bf37b`'s address and communication-method pair
+        # (RI-ENT-WP-03), stacked above this revision like the rest of this set.
+        "entity_addresses",
+        "entity_communication_methods",
     }
 )
 

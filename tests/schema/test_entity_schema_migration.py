@@ -312,6 +312,11 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         # not move when a later work package adds a table on top of it.
         "entity_names",
         "entity_organization_profiles",
+        # `441b071bf37b`'s address and communication-method pair (RI-ENT-WP-03),
+        # stacked above the plane for the same reason: they arrive above
+        # `7e114f822af2`, one link further from `ENTITY_REVISION`.
+        "entity_addresses",
+        "entity_communication_methods",
     }
 )
 

@@ -167,6 +167,11 @@ def test_the_revision_runs_empty_to_head_and_head_to_empty(disposable_database: 
 @pytest.mark.database
 def test_downgrading_one_step_removes_exactly_these_two_tables(migrated_engine: Engine) -> None:
     """Additive: everything below this revision is untouched by its downgrade."""
+    # `migrated_engine` upgrades to the chain's true head, which may now sit
+    # above `REVISION` -- `441b071bf37b` (RI-ENT-WP-03) does. Step down to
+    # `REVISION` itself first so the delta measured below is this revision's
+    # own tables, not every revision stacked on top of it as well.
+    command.downgrade(_config(), REVISION)
     before = _tables(migrated_engine)
     assert before >= NEW_TABLES
 

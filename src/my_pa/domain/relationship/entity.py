@@ -880,9 +880,7 @@ def normalize_address(
     parse of it into new structure.
     """
     fields = (line1, line2, city, region, postal_code, country)
-    parts = [
-        _clean_address_field(field) for field in fields if field is not None and field.strip()
-    ]
+    parts = [_clean_address_field(field) for field in fields if field is not None and field.strip()]
     if parts:
         return "|".join(parts)
     return _clean_address_field(raw_value)
@@ -972,9 +970,7 @@ class EntityCommunicationMethodState(StrEnum):
     SUPERSEDED = "superseded"
 
 
-def normalize_communication_value(
-    method_type_code: CommunicationMethodTypeCode, value: str
-) -> str:
+def normalize_communication_value(method_type_code: CommunicationMethodTypeCode, value: str) -> str:
     """The canonical form `value` takes for the *stated* `method_type_code`.
 
     Dispatches on the type the caller already committed to -- never the other
@@ -1013,16 +1009,12 @@ def normalize_communication_value(
     if method_type_code is CommunicationMethodTypeCode.EMAIL:
         local, separator, domain = stripped.rpartition("@")
         if not separator or not local or not domain or "@" in local:
-            raise ValueError(
-                "an email communication value has exactly one local part and domain"
-            )
+            raise ValueError("an email communication value has exactly one local part and domain")
         return f"{local.casefold()}@{domain.casefold()}"
     # DOMAIN, WEBSITE: a bare host or a URL-shaped value. Neither carries an
     # "@" (that would make it an email) and neither carries whitespace.
     if "@" in stripped or any(character.isspace() for character in stripped):
-        raise ValueError(
-            "a domain or website communication value is a bare host, not a mailbox"
-        )
+        raise ValueError("a domain or website communication value is a bare host, not a mailbox")
     return stripped.casefold()
 
 
@@ -1277,9 +1269,7 @@ class EntityCommunicationMethod:
         if not self.normalized_value.strip():
             raise ValueError("a communication method normalized value is not blank")
         if not is_normalized_communication_value(self.method_type_code, self.normalized_value):
-            raise ValueError(
-                "a communication method normalized value is stored already normalized"
-            )
+            raise ValueError("a communication method normalized value is stored already normalized")
         if not self.display_value.strip():
             raise ValueError("a communication method display value is not blank")
         if not isinstance(self.verification_status_code, CommunicationVerificationStatusCode):
@@ -1314,9 +1304,7 @@ class EntityCommunicationMethod:
             if self.superseded_by_communication_method_id == self.communication_method_id:
                 raise ValueError("a communication method cannot supersede itself")
             if self.state is not EntityCommunicationMethodState.SUPERSEDED:
-                raise ValueError(
-                    "a communication method names a successor only when superseded"
-                )
+                raise ValueError("a communication method names a successor only when superseded")
         if self.linked_external_identifier_id is not None:
             validate_identifier(self.linked_external_identifier_id, IdKind.EXTERNAL_IDENTIFIER)
             if self.method_type_code is not CommunicationMethodTypeCode.EMAIL:

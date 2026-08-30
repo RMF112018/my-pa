@@ -446,9 +446,7 @@ def test_a_communication_method_cannot_end_before_it_begins() -> None:
 def test_a_communication_method_is_retired_only_once_it_leaves_service() -> None:
     with pytest.raises(ValueError, match="retired only once it leaves service"):
         a_communication_method(retired_at=WHEN, state=EntityCommunicationMethodState.ACTIVE)
-    retired = a_communication_method(
-        retired_at=WHEN, state=EntityCommunicationMethodState.RETIRED
-    )
+    retired = a_communication_method(retired_at=WHEN, state=EntityCommunicationMethodState.RETIRED)
     assert retired.retired_at == WHEN
 
 

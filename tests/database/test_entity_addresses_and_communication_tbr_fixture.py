@@ -401,9 +401,7 @@ def test_one_organization_carries_multiple_addresses_and_channels(
         # Exactly one preferred regional_office -- the partial unique index
         # this fixture must respect, proven positively here (one true) rather
         # than merely by absence of an IntegrityError.
-        preferred_regional_offices = [
-            row for row in regional_offices.values() if row.is_preferred
-        ]
+        preferred_regional_offices = [row for row in regional_offices.values() if row.is_preferred]
         assert len(preferred_regional_offices) == 1
         assert preferred_regional_offices[0].entity_address_id == REGIONAL_OFFICE_DENVER
 

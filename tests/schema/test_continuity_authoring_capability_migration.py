@@ -45,8 +45,10 @@ def test_this_revision_is_in_the_chain() -> None:
     # 79 since `7e114f822af2` (RI-ENT-WP-02) added the entity_names/
     # entity_organization_profiles migration on top of this chain; 80 since
     # `441b071bf37b` (RI-ENT-WP-03) added the entity_addresses/
-    # entity_communication_methods migration on top of that.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 80
+    # entity_communication_methods migration on top of that; 81 since
+    # `f5b06925857e` (RI-ENT-WP-04) added the entity_project_participations/
+    # taxonomy migration on top of that.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 81
 
 
 def test_the_frozen_literals_are_this_revision_s_vocabulary() -> None:

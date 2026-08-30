@@ -274,6 +274,11 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # (RI-ENT-WP-03), stacked above this revision like the rest of this set.
         "entity_addresses",
         "entity_communication_methods",
+        # `f5b06925857e`'s project-participation table and its two taxonomies
+        # (RI-ENT-WP-04), stacked above this revision like the rest of this set.
+        "entity_project_participations",
+        "entity_role_types",
+        "entity_discipline_types",
     }
 )
 

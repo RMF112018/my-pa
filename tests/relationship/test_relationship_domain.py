@@ -391,6 +391,47 @@ EXPECTED_MODEL_FIELDS = {
             "linked_external_identifier_id",
         }
     ),
+    "my_pa.domain.relationship.entity.EntityRoleType": frozenset(
+        {
+            "role_code",
+            "label",
+            "category",
+            "status",
+        }
+    ),
+    "my_pa.domain.relationship.entity.EntityDisciplineType": frozenset(
+        {
+            "discipline_code",
+            "label",
+            "broader_family",
+            "status",
+        }
+    ),
+    "my_pa.domain.relationship.entity.EntityProjectParticipation": frozenset(
+        {
+            "participation_id",
+            "principal_id",
+            "project_entity_id",
+            "participant_entity_id",
+            "project_display_name",
+            "role_basis_code",
+            "stakeholder_side_code",
+            "stakeholder_class_code",
+            "relationship_status_code",
+            "role_code",
+            "role_text",
+            "discipline_code",
+            "discipline_text",
+            "scope_text",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_participation_id",
+        }
+    ),
     "my_pa.domain.relationship.entity.Assignment": frozenset(
         {
             "assignment_id",
@@ -1239,6 +1280,47 @@ EXPECTED_TABLE_COLUMNS = {
             "linked_external_identifier_id",
         }
     ),
+    "entity_role_types": frozenset(
+        {
+            "role_code",
+            "label",
+            "category",
+            "status",
+        }
+    ),
+    "entity_discipline_types": frozenset(
+        {
+            "discipline_code",
+            "label",
+            "broader_family",
+            "status",
+        }
+    ),
+    "entity_project_participations": frozenset(
+        {
+            "participation_id",
+            "principal_id",
+            "project_entity_id",
+            "participant_entity_id",
+            "project_display_name",
+            "role_code",
+            "role_text",
+            "discipline_code",
+            "discipline_text",
+            "scope_text",
+            "role_basis_code",
+            "stakeholder_side_code",
+            "stakeholder_class_code",
+            "relationship_status_code",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_participation_id",
+        }
+    ),
     "entity_assignments": frozenset(
         {
             "assignment_id",
@@ -1671,16 +1753,20 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
     # Sixty after `b727e870d45e`, sixty-two after `7e114f822af2` added
     # `EntityName` and `EntityOrganizationProfile` (RI-ENT-WP-02); sixty-four
     # after `441b071bf37b` added `EntityAddress` and
-    # `EntityCommunicationMethod` (RI-ENT-WP-03).
-    assert len(actual_model_fields) == 64
+    # `EntityCommunicationMethod` (RI-ENT-WP-03); sixty-seven after
+    # `f5b06925857e` added `EntityRoleType`, `EntityDisciplineType`, and
+    # `EntityProjectParticipation` (RI-ENT-WP-04).
+    assert len(actual_model_fields) == 67
     # Forty-nine after `b727e870d45e` added the identity-ambiguity pair to the
     # three durable re-enrichment tables RI final completion brought;
     # fifty-one after `7e114f822af2` added `entity_names` and
     # `entity_organization_profiles`; fifty-three after `441b071bf37b` added
-    # `entity_addresses` and `entity_communication_methods` (RI-ENT-WP-03).
-    # The figure makes the allow-list closed in both directions, so it moves
-    # with the declaration and never ahead of it.
-    assert len(actual_table_columns) == 53
+    # `entity_addresses` and `entity_communication_methods` (RI-ENT-WP-03);
+    # fifty-six after `f5b06925857e` added `entity_role_types`,
+    # `entity_discipline_types`, and `entity_project_participations`
+    # (RI-ENT-WP-04). The figure makes the allow-list closed in both
+    # directions, so it moves with the declaration and never ahead of it.
+    assert len(actual_table_columns) == 56
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

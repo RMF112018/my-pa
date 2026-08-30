@@ -168,6 +168,11 @@ def test_contract_prefixes_are_stable() -> None:
         # `441b071bf37b` (RI-ENT-WP-03): one contact-channel row, in
         # `entity_communication_methods`.
         "ecmm",
+        # `f5b06925857e` (RI-ENT-WP-04): one project-participation row, in
+        # `entity_project_participations`. `entity_role_types` and
+        # `entity_discipline_types` need no prefix of their own -- their
+        # primary keys are stable business codes, not generated ids.
+        "eppt",
     }
 
 

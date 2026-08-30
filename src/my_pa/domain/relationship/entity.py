@@ -78,11 +78,15 @@ __all__ = [
     "EntityAlias",
     "EntityCommunicationMethod",
     "EntityCommunicationMethodState",
+    "EntityDisciplineType",
     "EntityName",
     "EntityNameState",
     "EntityOrganizationProfile",
+    "EntityProjectParticipation",
+    "EntityProjectParticipationState",
     "EntityRelationship",
     "EntityRelationshipType",
+    "EntityRoleType",
     "EntityStatus",
     "EntityType",
     "ExternalIdentifier",
@@ -92,8 +96,13 @@ __all__ = [
     "MergedEndpointError",
     "NameTypeCode",
     "OrganizationKindCode",
+    "ParticipationStatusCode",
     "RelationshipState",
+    "RoleBasisCode",
+    "StakeholderClassCode",
+    "StakeholderSideCode",
     "StaleDirectedVersionError",
+    "TaxonomyEntryStatus",
     "descriptor_key",
     "is_normalized_communication_value",
     "normalize_address",
@@ -1311,6 +1320,388 @@ class EntityCommunicationMethod:
                 raise ValueError(
                     "a communication method links an external identifier only for email"
                 )
+
+
+class TaxonomyEntryStatus(StrEnum):
+    """Where one entry of a shared, extensible taxonomy stands.
+
+    Shared by `entity_role_types` and `entity_discipline_types` (RI-ENT-WP-04):
+    both are global, Principal-independent reference vocabularies -- a role
+    code or a discipline code means the same thing for every Principal, the
+    same way a currency code would -- so a status vocabulary that closes an
+    entry off *without deleting it* (and so without breaking a historical
+    `entity_project_participations` row that already cites it) belongs to the
+    taxonomy shape itself, not to either table individually. `DEPRECATED` is
+    not `retired`/`superseded`/`active` (`EntityAddressState` and its
+    siblings): those three describe one *record's* place in a
+    principal-scoped temporal history, and a taxonomy entry has neither a
+    principal nor a supersession chain -- it is either open to new writes or
+    it is not.
+    """
+
+    ACTIVE = "active"
+    DEPRECATED = "deprecated"
+
+
+@dataclass(frozen=True, slots=True)
+class EntityRoleType:
+    """One entry of the global, extensible project-role taxonomy (RI-ENT-WP-04).
+
+    **Not Principal-partitioned.** `entity_role_types` is a shared reference
+    vocabulary, like a lookup table, rather than a per-Principal record: the
+    audit's own generic AEC role codes (`OWNER`, `GENERAL_CONTRACTOR`,
+    `ARCHITECT_OF_RECORD`, and so on) mean the same thing for every Principal,
+    so there is no `principal_id` on this record and no per-Principal
+    override.
+
+    `category` is deliberately free text, not a closed `StrEnum`: the audit's
+    own groupings (ownership/design/construction/consulting/authority/
+    finance) are illustrative, not exhaustive, and this catalog is meant to
+    grow by a new row, not by a schema change, the same way `role_code`
+    itself does. Closing it would recreate exactly the frozen-vocabulary
+    problem `ENTITY-REL-001` already flags for `EntityRelationshipType`, one
+    representation family early.
+    """
+
+    role_code: str
+    label: str
+    category: str | None = None
+    status: TaxonomyEntryStatus = TaxonomyEntryStatus.ACTIVE
+
+    def __post_init__(self) -> None:
+        if not self.role_code.strip():
+            raise ValueError("a role type code is not blank")
+        if not self.label.strip():
+            raise ValueError("a role type label is not blank")
+        if self.category is not None and not self.category.strip():
+            raise ValueError("a role type category is not blank when present")
+        if not isinstance(self.status, TaxonomyEntryStatus):
+            raise ValueError("a role type has a closed status")
+
+
+@dataclass(frozen=True, slots=True)
+class EntityDisciplineType:
+    """One entry of the global, extensible discipline taxonomy (RI-ENT-WP-04).
+
+    Field-for-field the same shape as `EntityRoleType`, for a different axis:
+    `role_code` answers "what part does this participant play" and
+    `discipline_code` answers "what professional discipline are they" -- a
+    `CONSULTANT` role and a `STRUCTURAL_ENGINEERING` discipline are two
+    independent facts about the same participation, which is why
+    `EntityProjectParticipation` carries both codes rather than folding them
+    into one. See `EntityRoleType`'s docstring for why `broader_family` is
+    free text rather than a closed vocabulary, for the same reason.
+    """
+
+    discipline_code: str
+    label: str
+    broader_family: str | None = None
+    status: TaxonomyEntryStatus = TaxonomyEntryStatus.ACTIVE
+
+    def __post_init__(self) -> None:
+        if not self.discipline_code.strip():
+            raise ValueError("a discipline type code is not blank")
+        if not self.label.strip():
+            raise ValueError("a discipline type label is not blank")
+        if self.broader_family is not None and not self.broader_family.strip():
+            raise ValueError("a discipline type broader family is not blank when present")
+        if not isinstance(self.status, TaxonomyEntryStatus):
+            raise ValueError("a discipline type has a closed status")
+
+
+class RoleBasisCode(StrEnum):
+    """How a participation's role came to be recorded.
+
+    **RULING 3: never inferred from a name or string position.** No writer in
+    this codebase may choose a member of this enum by pattern-matching a
+    participant's display name, a document's layout, or the order fields
+    appear in a source -- the same prohibition RULING 3 already states for
+    `EntityAddress`'s structured fields and `EntityCommunicationMethod`'s
+    stated type, applied here to *why* a role was assigned rather than *what*
+    the role is. `UNRESOLVED` is the correct value when the basis is unknown;
+    it is never a placeholder a caller forgets to replace with a guess, and no
+    code path may promote it to a stronger member without a corroborating
+    source that justifies the change.
+    """
+
+    CONTRACTUAL = "contractual"
+    SOURCE_VERIFIED = "source_verified"
+    PROJECT_OBSERVED = "project_observed"
+    INFERRED = "inferred"
+    UNRESOLVED = "unresolved"
+
+
+class StakeholderSideCode(StrEnum):
+    """Which side of a project a participant sits on.
+
+    Eleven values, closed as of this revision because the migration's
+    `stakeholder_side_code` CHECK references them, on the same argument every
+    other closed vocabulary on this plane is closed. `ADJACENT_INTERFACE`
+    covers a party that touches the project without being a conventional
+    stakeholder in it (a utility easement holder, a neighboring parcel's
+    owner) -- a real project role none of the other ten values fit -- and
+    `OTHER` is left for what genuinely fits none of them, a stated choice
+    rather than a default nobody selected, the same way
+    `OrganizationKindCode.OTHER_OR_UNRESOLVED` is stated rather than implied.
+    """
+
+    OWNER = "owner"
+    DEVELOPER = "developer"
+    DESIGN = "design"
+    CONTRACTOR = "contractor"
+    CONSULTANT = "consultant"
+    AUTHORITY = "authority"
+    UTILITY = "utility"
+    VENDOR = "vendor"
+    SALES_MARKETING = "sales_marketing"
+    ADJACENT_INTERFACE = "adjacent_interface"
+    OTHER = "other"
+
+
+class StakeholderClassCode(StrEnum):
+    """How central a participant is to a project, independent of its side.
+
+    **Not a ranking of people, and named to say so.** The operating brief
+    forbids exactly that, guarded on this plane by
+    `tests/architecture/test_relationship_scoring_surface_is_denied`, whose
+    deny list refuses the token `tier` outright as "a graded band" -- which
+    is why this field is `stakeholder_class_code`/`StakeholderClassCode`
+    rather than the more obvious "stakeholder tier", even though "tier" is
+    the word a person would reach for first. The rename is cosmetic, not a
+    weakening: the deny rule is a blunt, deliberately non-semantic token
+    scan, and this dimension is what it would have caught regardless of
+    which word names it, so the honest fix is to name it something the guard
+    does not have to special-case. `stakeholder_side_code` says which side a
+    participant is on; this says how load-bearing their participation is to
+    the project's own narrative -- a discrete, named class a reviewer
+    assigns and can defend, not a computed score that orders one participant
+    above another. `UNRESOLVED` is the correct value before that judgement
+    has been made, on the same argument `RoleBasisCode.UNRESOLVED` makes: a
+    stated placeholder for "not yet determined" has to exist, or every
+    writer that does not yet know the class is forced to guess one to
+    satisfy a `NOT NULL` column.
+    """
+
+    CORE = "core"
+    ADJACENT = "adjacent"
+    TRANSACTIONAL = "transactional"
+    UNRESOLVED = "unresolved"
+
+
+class ParticipationStatusCode(StrEnum):
+    """The business status of a participation itself.
+
+    **This is not the record-lifecycle `state` column, and the two must not
+    be confused.** `state` (`EntityProjectParticipationState`) answers "is
+    this row the current, retired, or superseded version of this fact" -- the
+    same three-state shape every record family on this plane carries.
+    `relationship_status_code` answers a different question: "is the
+    participation *itself*, as a fact about the world, currently active, has
+    the project role ended, was it terminated, put on hold, or never
+    resolved" -- a business fact a source or a reviewer states, not a
+    housekeeping fact about which row is authoritative. A participation can
+    be `state = ACTIVE` (this is the current row) and
+    `relationship_status_code = COMPLETED` (the participant's work on the
+    project is over) at the same time, and that combination is the ordinary
+    case for a finished project, not a contradiction.
+
+    No vocabulary for this axis existed elsewhere in the codebase to reuse
+    (confirmed by grep before this enum was added); it is new and scoped to
+    this table only.
+    """
+
+    ACTIVE = "active"
+    COMPLETED = "completed"
+    TERMINATED = "terminated"
+    ON_HOLD = "on_hold"
+    UNRESOLVED = "unresolved"
+
+
+class EntityProjectParticipationState(StrEnum):
+    """Where one participation row stands.
+
+    The same three states `EntityAddressState`, `EntityNameState`, and
+    `EntityCommunicationMethodState` each declare, and deliberately its own
+    vocabulary rather than a shared one, for the reason each of theirs
+    already gives: `entity_project_participations` is widened independently
+    of any of the three sibling families, and one shared enum would make
+    widening any of them a silent widening of all four.
+    """
+
+    ACTIVE = "active"
+    RETIRED = "retired"
+    SUPERSEDED = "superseded"
+
+
+@dataclass(frozen=True, slots=True)
+class EntityProjectParticipation:
+    """One participant's recorded participation on one project (RI-ENT-WP-04).
+
+    Closes `ENTITY-PROJECT-001` ("incomplete project participation"): the
+    audit's Record Element Inventory names "project role / discipline / scope
+    / stakeholder side / stakeholder tier / role basis / participation state"
+    as a representation family with no owning table before this revision (see
+    the WP-01 ownership table). What the audit calls "stakeholder tier" is
+    `stakeholder_class_code` here; see `StakeholderClassCode`'s docstring for
+    why. `project_entity_id` is the project (an
+    `Entity` whose `entity_type` is expected to be `PROJECT`) and
+    `participant_entity_id` is who or what participates in it -- a person or
+    an organization entity, with no `entity_type` restriction on that side.
+
+    **Naming deviation, disclosed.** The audit's own text calls this
+    representation `project_entity_participations`. This class and its table
+    are named `entity_project_participations` instead, so the table falls
+    inside `tests/architecture/test_relationship_scoring_surface_is_denied`'s
+    `RELATIONSHIP_TABLE_PREFIXES` scan (`"relationship_"`, `"entities"`,
+    `"entity_"`) with zero change to that guard's scanning logic --
+    `project_entity_participations` would not start with any of those
+    prefixes and would silently fall outside the one deny rule that exists
+    specifically to catch a "participation confidence" / "role confidence" /
+    "scope confidence" field on exactly this kind of record. See the
+    migration's module docstring and the campaign document's ledger for the
+    full reasoning; this is a deliberate, disclosed deviation from the
+    audit's literal text, not a silent one.
+
+    **`project_display_name` is project-scoped fact, never global identity --
+    the single most important semantic boundary in this work package.** It is
+    the name this participant is known by *on this project*, which may differ
+    from `Entity.display_name` or `Entity.canonical_name` for the same
+    `participant_entity_id` (a subcontractor trading under a project-specific
+    joint-venture name, a person credited under a title rather than their own
+    name). **Nothing in this migration, this domain module, or any
+    application code reading or writing this class may ever copy
+    `project_display_name` into `Entity.display_name` or
+    `Entity.canonical_name`, or the reverse.** This class carries no field,
+    property, or method that reads from or writes to either of those two
+    global-identity columns, and it has no knowledge of them at all --
+    `tests/relationship/test_relationship_domain.py`'s closed field
+    allow-list is what proves that structurally: a future edit that adds such
+    a field or property reddens there the moment it is written, not after it
+    ships.
+
+    **Never a confidence field (RULING 1).** The audit's own proposed names
+    for this record -- "participation confidence", "role confidence", "scope
+    confidence" -- are not used anywhere here. `role_basis_code` and
+    `relationship_status_code` are the discrete, named vocabularies this
+    revision uses in their place, on the same argument
+    `LegalIdentityStatusCode` and `CommunicationVerificationStatusCode`
+    already make for their own dimensions; see `RoleBasisCode`'s docstring
+    for RULING 3's stronger claim on that one field specifically.
+
+    **`project_entity_id != participant_entity_id`.** A project cannot
+    meaningfully participate in itself, so the two are required to differ --
+    the same shape of rule `EntityRelationship.__post_init__` already applies
+    to `from_entity_id`/`to_entity_id`, restated here at both the dataclass
+    and the table CHECK.
+
+    **The active uniqueness key includes `role_code`, deliberately.** Two
+    simultaneously active participations of the same participant on the same
+    project are refused only when they also share the same `role_code`: one
+    entity legitimately holds two concurrently active roles on one project (a
+    firm that is both a project's `CONSULTANT` and its
+    `OWNER_REPRESENTATIVE`, say), and folding `role_code` out of the key would
+    make that ordinary case collide with itself. This mirrors, without
+    repeating, the reasoning `EntityAddress`'s docstring gives for keying its
+    own active uniqueness on `address_type_code`: the type/role axis is part
+    of what makes two rows the same fact or two different ones.
+
+    **`entities.entity_type == 'project'` for `project_entity_id` is a domain
+    invariant, not a CHECK constraint.** PostgreSQL cannot express a CHECK
+    that reads another table's row, so this revision's migration does not and
+    cannot enforce it in SQL, and does not infer it either -- the same
+    non-enforcement `EntityOrganizationProfile`'s docstring already states for
+    `entities.entity_type = 'organization'`. The writer/repository layer that
+    inserts a row here is responsible for verifying `project_entity_id` names
+    an entity whose `entity_type` is `PROJECT` before the insert.
+
+    **Merge/split.** Not yet wired into
+    `my_pa.application.identity_correction`, under the same RI-ENT-WP-06
+    deferral as `EntityName`, `EntityOrganizationProfile`, `EntityAddress`,
+    and `EntityCommunicationMethod` above, and for the same reason: no
+    command or MCP capability in this increment writes this table outside
+    test fixtures. A merge of a `project_entity_id` or a
+    `participant_entity_id` that carries participation rows today leaves them
+    bound to the merged-away `entity_id` until that wiring lands.
+    """
+
+    participation_id: str
+    principal_id: str
+    project_entity_id: str
+    participant_entity_id: str
+    project_display_name: str
+    role_basis_code: RoleBasisCode
+    stakeholder_side_code: StakeholderSideCode
+    stakeholder_class_code: StakeholderClassCode
+    relationship_status_code: ParticipationStatusCode
+    role_code: str | None = None
+    role_text: str | None = None
+    discipline_code: str | None = None
+    discipline_text: str | None = None
+    scope_text: str | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    state: EntityProjectParticipationState = EntityProjectParticipationState.ACTIVE
+    version: int = 1
+    updated_at: datetime | None = None
+    retired_at: datetime | None = None
+    superseded_by_participation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.participation_id, IdKind.ENTITY_PROJECT_PARTICIPATION)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.project_entity_id, IdKind.ENTITY)
+        validate_identifier(self.participant_entity_id, IdKind.ENTITY)
+        if self.project_entity_id == self.participant_entity_id:
+            raise ValueError("a project cannot participate in itself")
+        if not self.project_display_name.strip():
+            raise ValueError("a project participation display name is not blank")
+        for field_name, field_value in (
+            ("role_text", self.role_text),
+            ("discipline_text", self.discipline_text),
+            ("scope_text", self.scope_text),
+        ):
+            if field_value is not None and not field_value.strip():
+                raise ValueError(f"a project participation {field_name} is not blank when present")
+        if self.role_code is not None and not self.role_code.strip():
+            raise ValueError("a project participation role code is not blank when present")
+        if self.discipline_code is not None and not self.discipline_code.strip():
+            raise ValueError("a project participation discipline code is not blank when present")
+        if not isinstance(self.role_basis_code, RoleBasisCode):
+            raise ValueError("a project participation has a closed role basis")
+        if not isinstance(self.stakeholder_side_code, StakeholderSideCode):
+            raise ValueError("a project participation has a closed stakeholder side")
+        if not isinstance(self.stakeholder_class_code, StakeholderClassCode):
+            raise ValueError("a project participation has a closed stakeholder class")
+        if not isinstance(self.relationship_status_code, ParticipationStatusCode):
+            raise ValueError("a project participation has a closed relationship status")
+        if self.effective_from is not None:
+            ensure_utc(self.effective_from)
+        if self.effective_to is not None:
+            ensure_utc(self.effective_to)
+        if (
+            self.effective_from is not None
+            and self.effective_to is not None
+            and self.effective_to < self.effective_from
+        ):
+            raise ValueError("a project participation cannot end before it begins")
+        if not isinstance(self.state, EntityProjectParticipationState):
+            raise ValueError("a project participation has a closed state")
+        if self.version < 1:
+            raise ValueError("a project participation version is a positive integer")
+        if self.updated_at is not None:
+            ensure_utc(self.updated_at)
+        if self.retired_at is not None:
+            ensure_utc(self.retired_at)
+            if self.state is EntityProjectParticipationState.ACTIVE:
+                raise ValueError("a project participation is retired only once it leaves service")
+        if self.superseded_by_participation_id is not None:
+            validate_identifier(
+                self.superseded_by_participation_id, IdKind.ENTITY_PROJECT_PARTICIPATION
+            )
+            if self.superseded_by_participation_id == self.participation_id:
+                raise ValueError("a project participation cannot supersede itself")
+            if self.state is not EntityProjectParticipationState.SUPERSEDED:
+                raise ValueError("a project participation names a successor only when superseded")
 
 
 @dataclass(frozen=True, slots=True)

@@ -195,6 +195,7 @@ from my_pa.domain.relationship.entity import (
     EntityAddressState,
     EntityCommunicationMethodState,
     EntityNameState,
+    EntityProjectParticipationState,
     EntityRelationshipType,
     EntityStatus,
     ExternalIdentifierNamespace,
@@ -202,7 +203,12 @@ from my_pa.domain.relationship.entity import (
     LegalIdentityStatusCode,
     NameTypeCode,
     OrganizationKindCode,
+    ParticipationStatusCode,
     RelationshipState,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
+    TaxonomyEntryStatus,
 )
 from my_pa.domain.relationship.entity import (
     EntityType as RelationshipEntityType,
@@ -3607,6 +3613,239 @@ entity_communication_methods = Table(
         "method_type_code",
         unique=True,
         postgresql_where=text("state = 'active' AND is_preferred = true"),
+    ),
+)
+
+#: RI-ENT-WP-04: one entry of the global, extensible project-role taxonomy.
+#: Not Principal-partitioned -- see `EntityRoleType`'s docstring for why this
+#: is a shared reference vocabulary, like a lookup table, rather than a
+#: per-Principal record.
+entity_role_types = Table(
+    "entity_role_types",
+    METADATA,
+    Column("role_code", Text, primary_key=True),
+    Column("label", Text, nullable=False),
+    Column("category", Text),
+    Column("status", Text, nullable=False, server_default=text("'active'")),
+    CheckConstraint(
+        "length(trim(role_code)) > 0",
+        name="a_role_type_code_is_not_blank",
+    ),
+    CheckConstraint(
+        "length(trim(label)) > 0",
+        name="a_role_type_label_is_not_blank",
+    ),
+    CheckConstraint(
+        "category IS NULL OR length(trim(category)) > 0",
+        name="a_role_type_category_is_not_blank",
+    ),
+    _one_of("status", TaxonomyEntryStatus, name="a_role_type_status_is_known"),
+)
+
+#: RI-ENT-WP-04: one entry of the global, extensible discipline taxonomy.
+#: Field-for-field the same shape as `entity_role_types`, for the independent
+#: discipline axis -- see `EntityDisciplineType`'s docstring.
+entity_discipline_types = Table(
+    "entity_discipline_types",
+    METADATA,
+    Column("discipline_code", Text, primary_key=True),
+    Column("label", Text, nullable=False),
+    Column("broader_family", Text),
+    Column("status", Text, nullable=False, server_default=text("'active'")),
+    CheckConstraint(
+        "length(trim(discipline_code)) > 0",
+        name="a_discipline_type_code_is_not_blank",
+    ),
+    CheckConstraint(
+        "length(trim(label)) > 0",
+        name="a_discipline_type_label_is_not_blank",
+    ),
+    CheckConstraint(
+        "broader_family IS NULL OR length(trim(broader_family)) > 0",
+        name="a_discipline_type_broader_family_is_not_blank",
+    ),
+    _one_of("status", TaxonomyEntryStatus, name="a_discipline_type_status_is_known"),
+)
+
+#: RI-ENT-WP-04: one participant's recorded participation on one project.
+#: Closes `ENTITY-PROJECT-001`.  Named `entity_project_participations` rather
+#: than the audit's own `project_entity_participations`, a disclosed naming
+#: deviation -- see `EntityProjectParticipation`'s docstring and the
+#: migration's module docstring for the full reasoning (in short: this name
+#: keeps the table inside
+#: `tests.architecture.test_relationship_scoring_surface_is_denied`'s
+#: `RELATIONSHIP_TABLE_PREFIXES` scan with zero change to that guard).
+#: `project_display_name` is project-scoped fact, never written to
+#: `entities.display_name`/`entities.canonical_name` -- see the class
+#: docstring; this is the single most important semantic boundary in this
+#: work package.
+entity_project_participations = Table(
+    "entity_project_participations",
+    METADATA,
+    Column("participation_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column(
+        "project_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "participant_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    # The name this participant is known by ON THIS PROJECT -- project-scoped
+    # fact, never global identity. Nothing may ever write this value to
+    # entities.display_name or entities.canonical_name, and nothing may read
+    # either of those columns into this one. See the domain class docstring.
+    Column("project_display_name", Text, nullable=False),
+    Column(
+        "role_code",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_role_types.role_code"),
+    ),
+    Column("role_text", Text),
+    Column(
+        "discipline_code",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_discipline_types.discipline_code"),
+    ),
+    Column("discipline_text", Text),
+    Column("scope_text", Text),
+    Column("role_basis_code", Text, nullable=False),
+    Column("stakeholder_side_code", Text, nullable=False),
+    Column("stakeholder_class_code", Text, nullable=False),
+    Column("relationship_status_code", Text, nullable=False),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("updated_at", DateTime(timezone=True)),
+    Column("retired_at", DateTime(timezone=True)),
+    Column(
+        "superseded_by_participation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_project_participations.participation_id"),
+    ),
+    _is_identifier("participation_id", IdKind.ENTITY_PROJECT_PARTICIPATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    CheckConstraint(
+        "length(trim(project_display_name)) > 0",
+        name="a_project_participation_display_name_is_not_blank",
+    ),
+    CheckConstraint(
+        "role_text IS NULL OR length(trim(role_text)) > 0",
+        name="a_project_participation_role_text_is_not_blank",
+    ),
+    CheckConstraint(
+        "discipline_text IS NULL OR length(trim(discipline_text)) > 0",
+        name="a_project_participation_discipline_text_is_not_blank",
+    ),
+    CheckConstraint(
+        "scope_text IS NULL OR length(trim(scope_text)) > 0",
+        name="a_project_participation_scope_text_is_not_blank",
+    ),
+    _one_of(
+        "role_basis_code",
+        RoleBasisCode,
+        name="a_project_participation_role_basis_is_known",
+    ),
+    _one_of(
+        "stakeholder_side_code",
+        StakeholderSideCode,
+        name="a_project_participation_stakeholder_side_is_known",
+    ),
+    _one_of(
+        "stakeholder_class_code",
+        StakeholderClassCode,
+        name="a_project_participation_stakeholder_class_is_known",
+    ),
+    _one_of(
+        "relationship_status_code",
+        ParticipationStatusCode,
+        name="a_project_participation_status_is_known",
+    ),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="a_project_participation_ends_after_it_starts",
+    ),
+    _one_of(
+        "state",
+        EntityProjectParticipationState,
+        name="a_project_participation_state_is_known",
+    ),
+    CheckConstraint("version >= 1", name="a_project_participation_version_is_positive"),
+    CheckConstraint(
+        "retired_at IS NULL OR state <> 'active'",
+        name="a_project_participation_is_retired_only_once_it_leaves_service",
+    ),
+    CheckConstraint(
+        "superseded_by_participation_id IS NULL OR state = 'superseded'",
+        name="a_project_participation_names_a_successor_only_when_superseded",
+    ),
+    CheckConstraint(
+        "superseded_by_participation_id IS NULL "
+        "OR superseded_by_participation_id <> participation_id",
+        name="a_project_participation_does_not_supersede_itself",
+    ),
+    # A project cannot meaningfully participate in itself. The domain
+    # invariant that `project_entity_id` names an entity whose `entity_type`
+    # is 'project' is NOT expressible as a CHECK (it reads another table's
+    # row) and is enforced by the writer, per EntityProjectParticipation's
+    # docstring -- this CHECK only rules out the one case SQL can see.
+    CheckConstraint(
+        "project_entity_id <> participant_entity_id",
+        name="a_project_participation_project_is_not_the_participant",
+    ),
+    UniqueConstraint(
+        "participation_id",
+        "principal_id",
+        name="a_project_participation_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["project_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="a_project_participation_names_a_project_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["participant_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="a_project_participation_names_a_participant_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_participation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_project_participations.participation_id",
+            f"{SCHEMA}.entity_project_participations.principal_id",
+        ],
+        name="a_project_participation_is_superseded_within_its_principal",
+    ),
+    Index("entity_project_participations_by_principal", "principal_id"),
+    # The (project, current state) index: the shape almost every read of this
+    # table takes -- "this project's active participants" and similar.
+    Index(
+        "entity_project_participations_by_project_state",
+        "project_entity_id",
+        "state",
+    ),
+    # Per *project, participant, and role*, deliberately including role_code:
+    # one entity legitimately holds two concurrently active roles on the same
+    # project (e.g. both CONSULTANT and OWNER_REPRESENTATIVE), and role_code
+    # being part of this key is what permits that rather than a coincidence a
+    # future reader should "fix" by dropping it -- do not drop it. See
+    # EntityProjectParticipation's docstring for the full reasoning.
+    Index(
+        "an_active_project_participation_is_unique_per_project_and_role",
+        "principal_id",
+        "project_entity_id",
+        "participant_entity_id",
+        "role_code",
+        unique=True,
+        postgresql_where=text("state = 'active'"),
     ),
 )
 

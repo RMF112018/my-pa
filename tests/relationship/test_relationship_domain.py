@@ -345,6 +345,52 @@ EXPECTED_MODEL_FIELDS = {
             "updated_at",
         }
     ),
+    "my_pa.domain.relationship.entity.EntityAddress": frozenset(
+        {
+            "entity_address_id",
+            "entity_id",
+            "principal_id",
+            "address_type_code",
+            "raw_value",
+            "normalized_address_value",
+            "line1",
+            "line2",
+            "city",
+            "region",
+            "postal_code",
+            "country",
+            "label",
+            "is_preferred",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_entity_address_id",
+        }
+    ),
+    "my_pa.domain.relationship.entity.EntityCommunicationMethod": frozenset(
+        {
+            "communication_method_id",
+            "entity_id",
+            "principal_id",
+            "method_type_code",
+            "usage_context_code",
+            "normalized_value",
+            "display_value",
+            "verification_status_code",
+            "is_preferred",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_communication_method_id",
+            "linked_external_identifier_id",
+        }
+    ),
     "my_pa.domain.relationship.entity.Assignment": frozenset(
         {
             "assignment_id",
@@ -1147,6 +1193,52 @@ EXPECTED_TABLE_COLUMNS = {
             "updated_at",
         }
     ),
+    "entity_addresses": frozenset(
+        {
+            "entity_address_id",
+            "entity_id",
+            "principal_id",
+            "address_type_code",
+            "line1",
+            "line2",
+            "city",
+            "region",
+            "postal_code",
+            "country",
+            "raw_value",
+            "normalized_address_value",
+            "label",
+            "is_preferred",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_entity_address_id",
+        }
+    ),
+    "entity_communication_methods": frozenset(
+        {
+            "communication_method_id",
+            "entity_id",
+            "principal_id",
+            "method_type_code",
+            "usage_context_code",
+            "normalized_value",
+            "display_value",
+            "verification_status_code",
+            "is_preferred",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_communication_method_id",
+            "linked_external_identifier_id",
+        }
+    ),
     "entity_assignments": frozenset(
         {
             "assignment_id",
@@ -1577,14 +1669,18 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
     # Sixty after `b727e870d45e`, sixty-two after `7e114f822af2` added
-    # `EntityName` and `EntityOrganizationProfile` (RI-ENT-WP-02).
-    assert len(actual_model_fields) == 62
+    # `EntityName` and `EntityOrganizationProfile` (RI-ENT-WP-02); sixty-four
+    # after `441b071bf37b` added `EntityAddress` and
+    # `EntityCommunicationMethod` (RI-ENT-WP-03).
+    assert len(actual_model_fields) == 64
     # Forty-nine after `b727e870d45e` added the identity-ambiguity pair to the
     # three durable re-enrichment tables RI final completion brought;
     # fifty-one after `7e114f822af2` added `entity_names` and
-    # `entity_organization_profiles`. The figure makes the allow-list closed in
-    # both directions, so it moves with the declaration and never ahead of it.
-    assert len(actual_table_columns) == 51
+    # `entity_organization_profiles`; fifty-three after `441b071bf37b` added
+    # `entity_addresses` and `entity_communication_methods` (RI-ENT-WP-03).
+    # The figure makes the allow-list closed in both directions, so it moves
+    # with the declaration and never ahead of it.
+    assert len(actual_table_columns) == 53
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

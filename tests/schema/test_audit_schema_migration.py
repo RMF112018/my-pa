@@ -266,6 +266,10 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # revision like the rest of this set, and named for the same reason.
         "entity_identity_preview_ambiguities",
         "entity_identity_ambiguity_settlements",
+        # `7e114f822af2`'s typed-name and organization-profile pair
+        # (RI-ENT-WP-02), stacked above this revision like the rest of this set.
+        "entity_names",
+        "entity_organization_profiles",
     }
 )
 

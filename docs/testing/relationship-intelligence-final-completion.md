@@ -223,9 +223,12 @@ independent review:
    to one Alembic head, 77 revisions, 47 tables, 60 relationship dataclasses,
    104 application capabilities, and 55 default MCP tools. Superseded in part
    2026-08-29: the chain is now 78 revisions at single head `b727e870d45e`,
-   `b727e870d45e` being additive on `8e1c4a7b2d90`. The capability figure (104)
-   and the default MCP tool figure (55) are unchanged. The 2026-08-28 figures
-   are kept as the record of what was reconciled then.
+   `b727e870d45e` being additive on `8e1c4a7b2d90`. Superseded again 2026-08-30:
+   the chain is now 79 revisions at single head `7e114f822af2`, additive on
+   `b727e870d45e` and adding the `entity_names`/`entity_organization_profiles`
+   tables (RI-ENT-WP-02, outside this completion campaign). The capability
+   figure (104) and the default MCP tool figure (55) are unchanged. The
+   2026-08-28 figures are kept as the record of what was reconciled then.
 5. The entity privacy sweep derives all 34 entity capabilities and now collects
    96 cases; the remote profile distinguishes 11 reads from 23 writes.
 6. Split preview/apply joins the keyless write-replay map, preserving request

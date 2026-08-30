@@ -158,6 +158,10 @@ def test_contract_prefixes_are_stable() -> None:
         # `eipv` does -- the preview returns its ambiguities and `entities.merge`
         # is handed back the ambiguity ids the operator settled.
         "eiam",
+        # `7e114f822af2` (RI-ENT-WP-02): one typed name row of an entity, in
+        # `entity_names`. `entity_organization_profiles` needs no prefix of
+        # its own -- its primary key is `entity_id`, already `ent` above.
+        "enam",
     }
 
 

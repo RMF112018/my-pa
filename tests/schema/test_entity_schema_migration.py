@@ -306,6 +306,12 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         # parity groups below parameterize on the plane rather than on the chain.
         "entity_identity_preview_ambiguities",
         "entity_identity_ambiguity_settlements",
+        # `7e114f822af2`'s typed-name and organization-profile pair (RI-ENT-WP-02),
+        # stacked above the plane by the same argument: they arrive above
+        # `b727e870d45e`, and this suite's own revision (`ENTITY_REVISION`) does
+        # not move when a later work package adds a table on top of it.
+        "entity_names",
+        "entity_organization_profiles",
     }
 )
 

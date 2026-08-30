@@ -69,6 +69,9 @@ __all__ = [
     "DuplicateDirectedFactError",
     "Entity",
     "EntityAlias",
+    "EntityName",
+    "EntityNameState",
+    "EntityOrganizationProfile",
     "EntityRelationship",
     "EntityRelationshipType",
     "EntityStatus",
@@ -76,7 +79,10 @@ __all__ = [
     "ExternalIdentifier",
     "ExternalIdentifierNamespace",
     "IdentifierState",
+    "LegalIdentityStatusCode",
     "MergedEndpointError",
+    "NameTypeCode",
+    "OrganizationKindCode",
     "RelationshipState",
     "StaleDirectedVersionError",
     "descriptor_key",
@@ -134,6 +140,99 @@ class AliasType(StrEnum):
     ABBREVIATION = "abbreviation"
     FORMER_NAME = "former_name"
     DOCUMENT_REFERENCE = "document_reference"
+
+
+class NameTypeCode(StrEnum):
+    """The typed name forms `entity_names` (RI-ENT-WP-02) may record.
+
+    Closed because the migration's `name_type_code` CHECK references these
+    values, on the same argument `AliasType` is closed. `DISPLAY` and `ALIAS`
+    coexist with `Entity.display_name` and `entity_aliases` respectively —
+    this table does not replace either in this revision; RULING 3 keeps
+    `entities.canonical_name`/`display_name` meaning what they mean today; see
+    the module-level compatibility note.
+
+    The audit (`docs/campaign/...robust-entity-data-model...`, RI-ENT-WP-02)
+    is explicit that a **historical juristic entity is its own `entities`
+    row**, linked by a relationship, not a name row: `HISTORICAL_NAME` names
+    only a former name of the *same* juristic identity — a rename, not a
+    successor company. Confusing the two would let a merger or an acquisition
+    disappear into a name change.
+    """
+
+    DISPLAY = "display"
+    LEGAL = "legal"
+    OPERATING = "operating"
+    DBA = "dba"
+    BRAND = "brand"
+    ACRONYM = "acronym"
+    ALIAS = "alias"
+    HISTORICAL_NAME = "historical_name"
+    DOCUMENT_REFERENCE = "document_reference"
+
+
+class EntityNameState(StrEnum):
+    """Where one typed name row stands.
+
+    The same three states `AliasState` and `IdentifierState` declare, and
+    deliberately its own vocabulary rather than a shared one, for the reason
+    `AliasState`'s docstring already gives for not sharing with
+    `IdentifierState`: `entity_names` is widened independently of
+    `entity_aliases`, and one enum would make widening either a silent
+    widening of both.
+    """
+
+    ACTIVE = "active"
+    RETIRED = "retired"
+    SUPERSEDED = "superseded"
+
+
+class OrganizationKindCode(StrEnum):
+    """The organization subtypes `entity_organization_profiles` distinguishes.
+
+    Closed as of RI-ENT-WP-02. The audit's Record Element Inventory (row
+    "Government/utility/SPV/professional-practice/brand subtype") is explicit
+    that today's plane cannot tell a City government, a utility, a
+    single-purpose vehicle, a professional practice, or a brand/operating unit
+    apart from an ordinary company without abusing `entity_type`, which stays
+    at `EntityType.ORGANIZATION` for all of them. `OTHER_OR_UNRESOLVED` is not
+    a default: a writer states it, the same way `LegalIdentityStatusCode`
+    states `UNRESOLVED` rather than a caller omitting the column.
+    """
+
+    COMPANY = "company"
+    LLC_OR_SPV = "llc_or_spv"
+    PROFESSIONAL_PRACTICE = "professional_practice"
+    BRAND_OR_OPERATING_UNIT = "brand_or_operating_unit"
+    GOVERNMENT_AUTHORITY = "government_authority"
+    UTILITY = "utility"
+    NONPROFIT = "nonprofit"
+    PUBLIC_AGENCY = "public_agency"
+    OTHER_OR_UNRESOLVED = "other_or_unresolved"
+
+
+class LegalIdentityStatusCode(StrEnum):
+    """How well-supported an organization's legal identity is.
+
+    **Not a confidence score.** `tests/architecture/test_relationship_scoring_surface_is_denied`
+    denies `confidence|certainty|probability|likelihood|propensity` outright
+    on this surface as "a model likelihood" (Operating brief §22), and the
+    audit itself proposed `legal_identity_confidence` — a name this revision
+    does not use. This vocabulary is the evidence-anchored alternative the
+    audit's own R section admits is needed at this granularity: four discrete,
+    named states a reviewer can act on, not a number nobody calibrated.
+    `VERIFIED` and `BEST_SUPPORTED` are both affirmative and distinguish
+    *how* an identity was established (e.g. a registration lookup versus a
+    corroborated but unconfirmed source); `UNRESOLVED` and
+    `AWAITING_CONFIRMATION` are both non-affirmative and distinguish *why* —
+    no candidate identity exists to confirm, versus one exists and a
+    confirmation step has not run.
+    """
+
+    VERIFIED = "verified"
+    BEST_SUPPORTED = "best_supported"
+    UNRESOLVED = "unresolved"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
 
 
 class AssignmentType(StrEnum):
@@ -493,6 +592,199 @@ class EntityAlias:
                 raise ValueError("an alias cannot supersede itself")
             if self.state is not AliasState.SUPERSEDED:
                 raise ValueError("an alias names a successor only when superseded")
+
+
+@dataclass(frozen=True, slots=True)
+class EntityName:
+    """One typed name form of an entity (RI-ENT-WP-02).
+
+    The audit's typed-name successor to `EntityAlias`: where an alias records
+    the name *forms* a source produced without judging which is authoritative,
+    `EntityName.name_type_code` records what *kind* of name a form is —
+    display, legal, operating, DBA, brand, acronym, alias, historical, or a
+    document's literal reference. `entity_aliases` is preserved as-is
+    (RULING 3 / the module compatibility note): this is an additional record
+    family, not a migration of that one, and a later work package decides
+    whether to consolidate them.
+
+    `entities.canonical_name` and `entities.display_name` keep their existing
+    meaning. `EntityType.canonical_name` is a normalized match key and
+    `display_name` a human default — neither becomes a legal name because a
+    row exists here that says the entity's legal name is something else; a
+    `LEGAL` name row is *additional* structured evidence, read by callers who
+    need it, not a silent reinterpretation of two columns other code already
+    depends on.
+
+    **A historical juristic entity is its own `Entity` row, not a name row.**
+    `HISTORICAL_NAME` records a former name of the *same* legal person — GS4
+    Studios renaming its own signage is a name row; Garcia Stromberg Holdings,
+    LLC becoming a predecessor to GS4 Studios, LLC through an acquisition is
+    two `Entity` rows connected by a relationship, because collapsing the
+    second case into a name row would make a change of legal identity
+    invisible to anything that reads entity relationships rather than name
+    history.
+
+    **Merge/split.** This family is not yet wired into
+    `my_pa.application.identity_correction`'s `IdentityEffectFamily` /
+    ambiguity-discovery / reparenting machinery (RULING 2's second branch: a
+    documented, evidenced exclusion rather than a silent one). No command or
+    MCP capability in this increment writes `entity_names` outside test
+    fixtures, so no merge can yet encounter a populated row through ordinary
+    product use; a merge of an entity that *does* carry name rows today leaves
+    them bound to the merged-away `entity_id`, which stays resolvable through
+    `entities.superseded_by_entity_id` but not reachable by querying the
+    survivor's names directly. Wiring the reparenting, collision and ambiguity
+    logic `EntityAlias` already has is deferred to RI-ENT-WP-06, which the
+    audit's own work-package ordering already binds to "coordinate merge/split
+    effects" rather than to the WP-02 taxonomy work.
+
+    Field-for-field this mirrors `EntityAlias`; see that class's docstring for
+    the reasoning behind the per-(entity, type) active uniqueness, the
+    normalized/display split, and the RETIRED/SUPERSEDED distinction. The one
+    addition is `is_preferred`: an entity may hold several simultaneously
+    active names of one type (e.g. two active `BRAND` names during a
+    transition), and `is_preferred` marks which one a reader should default to
+    without inventing a ranking of the rest.
+    """
+
+    entity_name_id: str
+    entity_id: str
+    principal_id: str
+    name_type_code: NameTypeCode
+    display_value: str
+    normalized_value: str
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    state: EntityNameState = EntityNameState.ACTIVE
+    version: int = 1
+    updated_at: datetime | None = None
+    retired_at: datetime | None = None
+    superseded_by_entity_name_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.entity_name_id, IdKind.ENTITY_NAME)
+        validate_identifier(self.entity_id, IdKind.ENTITY)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not isinstance(self.name_type_code, NameTypeCode):
+            raise ValueError("an entity name has a closed name type")
+        if not self.normalized_value.strip():
+            raise ValueError("an entity name normalized value is not blank")
+        if not is_normalized_name(self.normalized_value):
+            raise ValueError("an entity name normalized value is stored already normalized")
+        if not self.display_value.strip():
+            raise ValueError("an entity name display value is not blank")
+        if not isinstance(self.is_preferred, bool):
+            raise ValueError("an entity name is_preferred is a boolean")
+        if self.effective_from is not None:
+            ensure_utc(self.effective_from)
+        if self.effective_to is not None:
+            ensure_utc(self.effective_to)
+        if (
+            self.effective_from is not None
+            and self.effective_to is not None
+            and self.effective_to < self.effective_from
+        ):
+            raise ValueError("an entity name cannot end before it begins")
+        if not isinstance(self.state, EntityNameState):
+            raise ValueError("an entity name has a closed state")
+        if self.version < 1:
+            raise ValueError("an entity name version is a positive integer")
+        if self.updated_at is not None:
+            ensure_utc(self.updated_at)
+        if self.retired_at is not None:
+            ensure_utc(self.retired_at)
+            if self.state is EntityNameState.ACTIVE:
+                raise ValueError("an entity name is retired only once it leaves service")
+        if self.superseded_by_entity_name_id is not None:
+            validate_identifier(self.superseded_by_entity_name_id, IdKind.ENTITY_NAME)
+            if self.superseded_by_entity_name_id == self.entity_name_id:
+                raise ValueError("an entity name cannot supersede itself")
+            if self.state is not EntityNameState.SUPERSEDED:
+                raise ValueError("an entity name names a successor only when superseded")
+
+
+@dataclass(frozen=True, slots=True)
+class EntityOrganizationProfile:
+    """The organization-specific profile of an entity (RI-ENT-WP-02).
+
+    Closes `ENTITY-SCHEMA-001`'s organization half: `entity_type` alone cannot
+    say whether an organization entity is an ordinary company, an SPV, a
+    professional practice, a government authority, a utility, or a brand
+    operating unit (audit Record Element Inventory, "Government/utility/SPV/
+    professional-practice/brand subtype"), and `legal_identity_status_code`
+    gives that same organization's legal identity a stated, evidence-anchored
+    status distinct from `Entity.status`'s lifecycle meaning — an active,
+    un-merged organization can still have an unresolved legal identity.
+
+    **One row per entity, not a history.** `entity_id` is both this record's
+    identity and its foreign key: an organization has one current
+    classification, not several simultaneous ones, which is what makes this a
+    profile rather than a temporal record family like `EntityName` or
+    `ExternalIdentifier`. A correction replaces the row in place, under its
+    own `version`; there is nothing here for `state`/`effective_from`/
+    `superseded_by_*` to mean, and adding them would carry columns with no
+    row that could ever populate them.
+
+    **Not a `confidence` field.** `legal_identity_status_code` is
+    `LegalIdentityStatusCode`, the closed vocabulary the module-level guard
+    (`test_relationship_scoring_surface_is_denied`) requires in place of the
+    numeric confidence the audit proposed; see that class's docstring.
+
+    **Merge/split.** Not yet wired into
+    `my_pa.application.identity_correction`, for the same reason and under the
+    same deferral (RI-ENT-WP-06) as `EntityName` above. A merge of two
+    organization entities that each carry a profile is exactly the case that
+    wiring must resolve — which profile the survivor keeps is a decision this
+    revision does not make, because nothing yet writes a second profile onto a
+    survivor to force the question. This class's own database constraint
+    (`entity_id` as primary key) at least guarantees the *shape* of that future
+    conflict is a duplicate-key collision the writer must resolve, not a
+    silent second row.
+
+    This profile applies to organization entities; nothing in this revision's
+    schema enforces `entities.entity_type = 'organization'` for a given row
+    (a cross-table invariant no `CHECK` expresses without a trigger this
+    increment does not add) — the writer that populates this table is
+    responsible for that invariant, the same way every other write-time
+    invariant on this plane is enforced by its writer rather than a trigger.
+    """
+
+    entity_id: str
+    principal_id: str
+    organization_kind_code: OrganizationKindCode
+    legal_identity_status_code: LegalIdentityStatusCode
+    jurisdiction_code: str | None = None
+    registration_identifier: str | None = None
+    version: int = 1
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.entity_id, IdKind.ENTITY)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not isinstance(self.organization_kind_code, OrganizationKindCode):
+            raise ValueError("an organization profile has a closed organization kind")
+        if not isinstance(self.legal_identity_status_code, LegalIdentityStatusCode):
+            raise ValueError("an organization profile has a closed legal identity status")
+        if self.jurisdiction_code is not None and not self.jurisdiction_code.strip():
+            raise ValueError("an organization profile jurisdiction code is not blank when present")
+        if self.registration_identifier is not None and not self.registration_identifier.strip():
+            raise ValueError(
+                "an organization profile registration identifier is not blank when present"
+            )
+        if self.version < 1:
+            raise ValueError("an organization profile version is a positive integer")
+        if self.created_at is not None:
+            ensure_utc(self.created_at)
+        if self.updated_at is not None:
+            ensure_utc(self.updated_at)
+        if (
+            self.created_at is not None
+            and self.updated_at is not None
+            and self.updated_at < self.created_at
+        ):
+            raise ValueError("an organization profile cannot be updated before it is created")
 
 
 @dataclass(frozen=True, slots=True)

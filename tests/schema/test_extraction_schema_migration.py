@@ -368,6 +368,14 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
     # frozen disposition CHECKs and the second widens the two `audit_events`
     # vocabularies. They are absent from this map rather than mapped to an empty
     # set, because this map's keys are the revisions that create something.
+    # `7e114f822af2` (RI-ENT-WP-02): the typed-name and organization-profile
+    # pair, additive on `b727e870d45e` and creating nothing else.
+    "7e114f822af2": frozenset(
+        {
+            "entity_names",
+            "entity_organization_profiles",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

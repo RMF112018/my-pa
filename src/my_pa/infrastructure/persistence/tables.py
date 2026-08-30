@@ -188,10 +188,14 @@ from my_pa.domain.relationship.entity import (
     AliasType,
     AssignmentState,
     AssignmentType,
+    EntityNameState,
     EntityRelationshipType,
     EntityStatus,
     ExternalIdentifierNamespace,
     IdentifierState,
+    LegalIdentityStatusCode,
+    NameTypeCode,
+    OrganizationKindCode,
     RelationshipState,
 )
 from my_pa.domain.relationship.entity import (
@@ -3110,6 +3114,175 @@ entity_aliases = Table(
         unique=True,
         postgresql_where=text("state = 'active'"),
     ),
+)
+
+#: RI-ENT-WP-02: one typed name form of an entity.  The audit's typed-name
+#: successor to `entity_aliases` -- `name_type_code` records what *kind* of
+#: name a form is (display/legal/operating/dba/brand/acronym/alias/
+#: historical_name/document_reference), where `entity_aliases.alias_type`
+#: records only the name *forms* a source produced.  `entity_aliases` is
+#: preserved as-is (RULING 3): this is an additional record family, not a
+#: migration of that one.  Field/constraint shape mirrors `entity_aliases`
+#: exactly except for `is_preferred`; see `EntityName`'s docstring for why
+#: that column exists and for the merge/split deferral to RI-ENT-WP-06.
+entity_names = Table(
+    "entity_names",
+    METADATA,
+    Column("entity_name_id", Text, primary_key=True),
+    Column(
+        "entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("name_type_code", Text, nullable=False),
+    Column("normalized_value", Text, nullable=False),
+    Column("display_value", Text, nullable=False),
+    Column("is_preferred", Boolean, nullable=False, server_default=text("false")),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("principal_id", Text, nullable=False),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("updated_at", DateTime(timezone=True)),
+    Column("retired_at", DateTime(timezone=True)),
+    Column(
+        "superseded_by_entity_name_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_names.entity_name_id"),
+    ),
+    _is_identifier("entity_name_id", IdKind.ENTITY_NAME),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("name_type_code", NameTypeCode, name="an_entity_name_type_is_known"),
+    _one_of("state", EntityNameState, name="an_entity_name_state_is_known"),
+    CheckConstraint("version >= 1", name="an_entity_name_version_is_positive"),
+    CheckConstraint(
+        "retired_at IS NULL OR state <> 'active'",
+        name="an_entity_name_is_retired_only_once_it_leaves_service",
+    ),
+    CheckConstraint(
+        "superseded_by_entity_name_id IS NULL OR state = 'superseded'",
+        name="an_entity_name_names_a_successor_only_when_superseded",
+    ),
+    CheckConstraint(
+        "superseded_by_entity_name_id IS NULL OR superseded_by_entity_name_id <> entity_name_id",
+        name="an_entity_name_does_not_supersede_itself",
+    ),
+    CheckConstraint(
+        "length(trim(normalized_value)) > 0",
+        name="an_entity_name_normalized_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "length(trim(display_value)) > 0",
+        name="an_entity_name_display_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="an_entity_name_ends_after_it_starts",
+    ),
+    UniqueConstraint(
+        "entity_name_id",
+        "principal_id",
+        name="an_entity_name_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="an_entity_name_names_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_entity_name_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_names.entity_name_id",
+            f"{SCHEMA}.entity_names.principal_id",
+        ],
+        name="an_entity_name_is_superseded_within_its_principal",
+    ),
+    Index("entity_names_by_principal", "principal_id"),
+    Index("entity_names_by_normalized_value", "normalized_value"),
+    # Per *entity and type*, the same argument `entity_aliases` makes: two
+    # different entities may share an active name, because two organizations
+    # legitimately do share a DBA-adjacent word. What is refused is one entity
+    # carrying the same name form twice, actively, under one type.
+    Index(
+        "an_active_entity_name_is_unique_per_entity_and_type",
+        "principal_id",
+        "entity_id",
+        "name_type_code",
+        "normalized_value",
+        unique=True,
+        postgresql_where=text("state = 'active'"),
+    ),
+    # At most one PREFERRED active name per (entity, type): an entity may hold
+    # several simultaneously active names of one type (e.g. two active BRAND
+    # names during a transition), and this is what stops two of them both
+    # claiming to be the default a reader should show.
+    Index(
+        "an_active_entity_name_has_one_preferred_per_type",
+        "principal_id",
+        "entity_id",
+        "name_type_code",
+        unique=True,
+        postgresql_where=text("state = 'active' AND is_preferred = true"),
+    ),
+)
+
+#: RI-ENT-WP-02: the organization-specific profile of an entity.  Closes
+#: ENTITY-SCHEMA-001's organization half -- `entity_type` alone cannot
+#: distinguish an ordinary company from an SPV, a professional practice, a
+#: government authority, a utility, or a brand/operating unit.  One row per
+#: entity (`entity_id` is both primary key and foreign key): an organization
+#: has one current classification, not a history of them, which is why this
+#: table carries no lifecycle/supersession columns the way `entity_names` and
+#: `entity_external_identifiers` do.  See `EntityOrganizationProfile`'s docstring
+#: for the `legal_identity_status_code` vocabulary (not a confidence field)
+#: and the merge/split deferral to RI-ENT-WP-06.
+entity_organization_profiles = Table(
+    "entity_organization_profiles",
+    METADATA,
+    Column("entity_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("organization_kind_code", Text, nullable=False),
+    Column(
+        "legal_identity_status_code",
+        Text,
+        nullable=False,
+        server_default=text("'unresolved'"),
+    ),
+    Column("jurisdiction_code", Text),
+    Column("registration_identifier", Text),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("entity_id", IdKind.ENTITY),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of(
+        "organization_kind_code",
+        OrganizationKindCode,
+        name="an_organization_kind_is_known",
+    ),
+    _one_of(
+        "legal_identity_status_code",
+        LegalIdentityStatusCode,
+        name="a_legal_identity_status_is_known",
+    ),
+    CheckConstraint("version >= 1", name="an_organization_profile_version_is_positive"),
+    CheckConstraint(
+        "jurisdiction_code IS NULL OR length(trim(jurisdiction_code)) > 0",
+        name="an_org_profile_jurisdiction_code_is_not_blank",
+    ),
+    CheckConstraint(
+        "registration_identifier IS NULL OR length(trim(registration_identifier)) > 0",
+        name="an_org_profile_registration_id_is_not_blank",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="an_organization_profile_extends_an_entity_of_its_principal",
+    ),
+    Index("entity_organization_profiles_by_principal", "principal_id"),
 )
 
 #: WP-RI-01: a typed assignment of an entity to a scope entity.  Employment,

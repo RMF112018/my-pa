@@ -65,6 +65,7 @@ Also indexed by identity only: the **Native Apple Personal Data Capture Bridge**
 
 ## Campaign
 
+- [`docs/campaign/ROBUST-ENTITY-DATA-MODEL-20260830.md`](campaign/ROBUST-ENTITY-DATA-MODEL-20260830.md) — campaign `MYPA-RI-ENT-20260830-001`: the 15 `RI-ENT-*` audit findings, the 13 ordered work packages, RI-ENT-WP-01's ownership decision for the audit's Record Element Inventory, RI-ENT-WP-02's typed-name and organization-profile delivery, the merge/split deferral disposition, the operator-authorization record, and the disclosed `AGENTS.md` section 3 recording gap.
 - [`docs/campaign/PILOT-BLOCKER-REMEDIATION-20260812.md`](campaign/PILOT-BLOCKER-REMEDIATION-20260812.md) — current candidate authority record: objective, authenticated `main` basis, selective lineage reconciliation, blocker-closure matrix, safety boundaries, validation record, and exact-head independent-review gate.
 - [`docs/campaign/CAMPAIGN-BRIEF.md`](campaign/CAMPAIGN-BRIEF.md) — historical/superseded 2026-08-09 recovery-lineage snapshot through WP-03. It is retained for traceability and is not authority for present campaign state, work selection, or repository lineage.
 - [`docs/campaign/WORK-PACKAGE-MAP.md`](campaign/WORK-PACKAGE-MAP.md) — historical: the superseded Moss v4.0 campaign's work-package sequencing (WP-00 through WP-09). Superseded by `MYPA-CANONICAL-APPLICATION-COMPLETION-PLAN-20260809-001`; see the banner at the top of the file.

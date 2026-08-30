@@ -270,9 +270,11 @@ that names it again is refused.
 ## Calling a tool
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
-**one hundred and four** current capabilities, and the schema has **seventy-nine**
-revisions at head `7e114f822af2` (corrected 2026-08-30 from seventy-eight at
-`b727e870d45e`, on which `7e114f822af2` is additive and adds the
+**one hundred and four** current capabilities, and the schema has **eighty**
+revisions at head `441b071bf37b` (corrected 2026-08-30 from seventy-nine at
+`7e114f822af2`, on which `441b071bf37b` is additive and adds the
+`entity_addresses`/`entity_communication_methods` tables, RI-ENT-WP-03;
+`7e114f822af2` is itself additive on `b727e870d45e`, on which it adds the
 `entity_names`/`entity_organization_profiles` tables, RI-ENT-WP-02; `b727e870d45e`
 was itself corrected 2026-08-29 from seventy-seven at `8e1c4a7b2d90`, which it is
 additive on); the

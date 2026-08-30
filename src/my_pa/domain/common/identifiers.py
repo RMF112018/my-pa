@@ -231,6 +231,17 @@ class IdKind(StrEnum):
     #: both used one prefix. `entity_organization_profiles` needs none: its
     #: primary key is `entity_id` itself, already `IdKind.ENTITY`.
     ENTITY_NAME = "enam"
+    #: RI-ENT-WP-03: one normalized address (`entity_addresses`) and one
+    #: contact channel (`entity_communication_methods`) of an entity. Each is
+    #: its own prefix on the same argument `ENTITY_NAME` makes against reusing
+    #: `ENTITY_ALIAS`: `entity_addresses.superseded_by_entity_address_id` and
+    #: `entity_communication_methods.superseded_by_communication_method_id`
+    #: each have to say which table they point back into, and a shared prefix
+    #: with any sibling surrogate id here would make that ambiguous. Neither
+    #: prefix collides with an existing member of this enum (checked before
+    #: use, per the campaign record).
+    ENTITY_ADDRESS = "eadr"
+    ENTITY_COMMUNICATION_METHOD = "ecmm"
     #: WP-RI-06: the evidence and governance records. `ENTITY_OBSERVATION` names
     #: one source-bound observation that may refer to an entity and does not
     #: become one (specification section 12.2). `ENTITY_PROPOSAL` names a

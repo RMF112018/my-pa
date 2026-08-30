@@ -283,8 +283,10 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_task_read_plane() 
     # added 1 revision (task-read plane), WP-TM-04 added 1 revision (task-write
     # plane), WP-TM-05 added 1 revision (commitment plane), so the count grew
     # from 40 to 43. 79 since `7e114f822af2` (RI-ENT-WP-02) added the
-    # entity_names/entity_organization_profiles migration on top of this chain.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 79
+    # entity_names/entity_organization_profiles migration on top of this chain;
+    # 80 since `441b071bf37b` (RI-ENT-WP-03) added the entity_addresses/
+    # entity_communication_methods migration on top of that.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 80
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

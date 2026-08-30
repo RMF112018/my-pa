@@ -101,8 +101,8 @@ Preserved from the source audit; status reflects this increment only.
 | ID | Severity | Finding | Status after this increment |
 |---|---|---|---|
 | `ENTITY-SCHEMA-001` | Critical | No typed legal/brand/DBA/operating-name semantics | **Closed by RI-ENT-WP-02** — `entity_names` (9 typed `name_type_code` values) and `entity_organization_profiles.organization_kind_code`/`legal_identity_status_code` |
-| `ENTITY-SCHEMA-002` | High | No normalized entity-address family | Not in scope (`RI-ENT-WP-03`) |
-| `ENTITY-SCHEMA-003` | High | No typed phones/domains/websites | Not in scope (`RI-ENT-WP-03`) |
+| `ENTITY-SCHEMA-002` | High | No normalized entity-address family | **Closed by RI-ENT-WP-03** — `entity_addresses` (9 typed `address_type_code` values, per-(entity, type) uniqueness on `normalized_address_value`) |
+| `ENTITY-SCHEMA-003` | High | No typed phones/domains/websites | **Closed by RI-ENT-WP-03** — `entity_communication_methods` (`method_type_code` email/phone/domain/website, `usage_context_code`, `verification_status_code`) |
 | `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | Not in scope (`RI-ENT-WP-06`); `EntityRelationshipType` untouched |
 | `ENTITY-PROJECT-001` | Critical | Incomplete project participation | Not in scope (`RI-ENT-WP-04`) |
 | `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | Partially addressed for organization legal identity only, via `legal_identity_status_code` (not a confidence field — see Ruling 1); full assertion/provenance binding is `RI-ENT-WP-07` |
@@ -122,7 +122,7 @@ Preserved from the source audit; status reflects this increment only.
 |---|---|---|
 | WP-01 | Architecture/contract freeze | **Delivered** — see below |
 | WP-02 | Taxonomy and typed-name model | **Delivered (partial)** — `entity_names`, `entity_organization_profiles`; role/discipline/relationship taxonomies deferred to WP-04/06 |
-| WP-03 | Address and communication record families | Deferred |
+| WP-03 | Address and communication record families | **Delivered** — see below |
 | WP-04 | Project participation model | Deferred |
 | WP-05 | Person affiliation integration | Deferred |
 | WP-06 | Corporate/entity relationship graph expansion | Deferred |
@@ -211,45 +211,176 @@ carries those dimensions. The guard itself was run against this increment's
 schema and domain additions and passed with zero denials; see "Test evidence"
 below.
 
+## RI-ENT-WP-03 — address and communication record families
+
+**Objective** (source audit): give the entity plane normalized addresses and
+typed contact channels, closing `ENTITY-SCHEMA-002` ("no normalized
+entity-address family") and `ENTITY-SCHEMA-003` ("no typed phones/domains/
+websites"). **Delivered this increment.**
+
+### `entity_addresses`
+
+Mirrors `entity_names`'s shape exactly: opaque primary key, composite
+`(entity_id, principal_id)` FK to `entities` with `ON DELETE CASCADE`, a
+`UNIQUE(entity_address_id, principal_id)` that makes the self-referencing
+`superseded_by_entity_address_id` FK principal-scoped, a three-state lifecycle
+(`EntityAddressState`: active/retired/superseded — its own vocabulary, for
+the reason `EntityNameState`'s docstring already gives against sharing one
+across unrelated record families), `version >= 1`, and blank-value CHECKs on
+every text field that must never be empty.
+
+`address_type_code` is a closed nine-value vocabulary (`project`,
+`legal_principal`, `headquarters`, `regional_office`, `office`, `business`,
+`mailing`, `city_hall`, `known_other`) taken directly from the audit's Record
+Element Inventory. `line1`/`line2`/`city`/`region`/`postal_code`/`country` are
+independently nullable and populated **only when the source stated that
+structure** (RULING 3): no writer may split `raw_value` to guess at them.
+`raw_value` (the verbatim source string) is the one field guaranteed to always
+be populated; `normalized_address_value` is a deterministic canonicalization
+of whichever structured fields are known — never a geocoding or inference
+step — computed by `normalize_address` and checked against the stored value
+in `EntityAddress.__post_init__` the same way `EntityName.normalized_value` is
+checked against `is_normalized_name`.
+
+**Uniqueness is per (entity, address type), not per entity.** The active
+unique index is `(principal_id, entity_id, address_type_code,
+normalized_address_value)`. This is deliberate: the same street address
+legitimately recurs for one entity under a *different* type (a seller's
+legal-principal address and a project address are often the identical
+building), and `address_type_code` being part of the key is what permits that
+without weakening the guard against a literal duplicate under one type. A
+second partial unique index caps at most one preferred active address per
+(entity, type). Two required plain indexes support reads: one on
+`normalized_address_value` alone (the "normalized geography" index) and one
+on `(entity_id, address_type_code, state)` (the "entity, type, current state"
+index).
+
+### `entity_communication_methods`
+
+The same `entity_names` shape again, for a contact channel. `method_type_code`
+is a closed four-value vocabulary (`email`, `phone`, `domain`, `website`) and
+`usage_context_code` an independent seven-value vocabulary (`corporate`,
+`project`, `project_sales`, `generic`, `personal`, `office`, `other`) — two
+axes kept apart because "what kind of channel" and "what the channel is used
+for" are different questions, and folding them into one column would make a
+project's own corporate line indistinguishable from its sales line.
+`normalized_value` is normalized per `method_type_code` (digits-only for
+`phone`; trimmed-and-case-folded for `email`/`domain`/`website`) by
+`normalize_communication_value`, which also validates the value is
+well-formed *for the stated type* — **the type itself is always stated by the
+caller and never inferred from the value's shape** (RULING 3): nothing in
+this family's domain or persistence layer sniffs a string with a regex to
+decide it "looks like" an email or a phone number.
+
+`verification_status_code` is a new, distinct closed vocabulary,
+`CommunicationVerificationStatusCode` (verified/best_supported/unresolved/
+awaiting_confirmation) — the same four members `LegalIdentityStatusCode`
+already has, deliberately *not* that same enum reused. The two describe
+unrelated dimensions (a contact channel's verification versus an
+organization's legal identity), and one shared vocabulary would couple this
+migration's future widening to `entity_organization_profiles`'s and vice
+versa. Not a confidence field either way: RULING 1's guard,
+`tests/architecture/test_relationship_scoring_surface_is_denied`, was run
+against this increment's schema and domain additions and passed with zero
+denials.
+
+**The email identity/channel boundary.** `ExternalIdentifierNamespace.EMAIL`
+and `entity_external_identifiers` already exist and are the sole authority
+for identity resolution — "which entity does this mailbox identify."
+`entity_communication_methods` with `method_type_code = 'email'` answers a
+different question — "is this a way to reach this entity" — which may or may
+not be the same mailbox identity resolution uses. `linked_external_identifier_id`
+is an **optional cross-reference** from a communication-method row to an
+external-identifier row, never a merge of the two concepts and never
+consulted to resolve "who is this." A composite FK
+`(linked_external_identifier_id, principal_id)` → `entity_external_identifiers
+(identifier_id, principal_id)` carries the reference, and a CHECK
+(`linked_external_identifier_id IS NULL OR method_type_code = 'email'`)
+confines it to email rows only — this is what stops a phone, domain, or
+website row from ever overloading the external-identifier namespace through
+this column, the manager's explicit prohibition.
+
+**Uniqueness is per (entity, method type), across usage contexts.** The
+active unique index is `(principal_id, entity_id, method_type_code,
+normalized_value)`, deliberately *without* `usage_context_code`: the same
+value tagged `corporate` and again tagged `generic` is one channel
+double-counted, not two, while a corporate number and a project's own number
+already differ in `normalized_value` and are both admitted. A second partial
+unique index caps at most one preferred active channel per (entity, type).
+Two required plain indexes mirror the address table's: one on
+`normalized_value` alone and one on `(entity_id, method_type_code, state)`.
+
+### Delivered artifacts
+
+- Migration `441b071bf37b` (`down_revision = 7e114f822af2`), purely additive:
+  two new tables, no altered column or constraint on any existing table.
+- `src/my_pa/domain/relationship/entity.py`: `AddressTypeCode`,
+  `EntityAddressState`, `EntityAddress`, `normalize_address`,
+  `CommunicationMethodTypeCode`, `CommunicationUsageContextCode`,
+  `CommunicationVerificationStatusCode`, `EntityCommunicationMethodState`,
+  `EntityCommunicationMethod`, `normalize_communication_value`,
+  `is_normalized_communication_value`.
+- `src/my_pa/infrastructure/persistence/tables.py`: `entity_addresses`,
+  `entity_communication_methods` (Core `Table` definitions for runtime
+  access; the migration itself is written out in raw DDL per `D-48`/`D-69`).
+- `src/my_pa/domain/common/identifiers.py`: `IdKind.ENTITY_ADDRESS = "eadr"`,
+  `IdKind.ENTITY_COMMUNICATION_METHOD = "ecmm"` — neither collides with any
+  prior member of `IdKind`, checked before use.
+
 ## Merge/split disposition (RULING 2)
 
-`entity_names` and `entity_organization_profiles` are Entity-bound record
-families and are therefore candidates for the merge/split ambiguity model
-that landed in `main@0e24018` (`src/my_pa/domain/relationship/identity_correction.py`'s
+`entity_names`, `entity_organization_profiles`, `entity_addresses`, and
+`entity_communication_methods` are all Entity-bound record families and are
+therefore candidates for the merge/split ambiguity model that landed in
+`main@0e24018` (`src/my_pa/domain/relationship/identity_correction.py`'s
 `IdentityEffectFamily`/`_DISPOSITIONS_BY_FAMILY`, and
 `src/my_pa/application/identity_correction.py`'s reparenting/collision/
 ambiguity-discovery machinery).
 
 **Decision: deferred, not wired in, and the reason is recorded here rather
-than left implicit.**
+than left implicit — for all four families, as of RI-ENT-WP-03.**
 
-1. **No live write path exists yet.** This increment ships no MCP capability
-   and no application command that writes `entity_names` or
-   `entity_organization_profiles` in ordinary product use — only test
-   fixtures write them directly through the persistence layer. A merge
-   executed today cannot encounter a populated row of either table through
-   any caller a real request could reach.
+1. **No live write path exists yet, for any of the four.** This increment
+   (like WP-02 before it) ships no MCP capability and no application command
+   that writes `entity_names`, `entity_organization_profiles`,
+   `entity_addresses`, or `entity_communication_methods` in ordinary product
+   use — only test fixtures write them directly through the persistence
+   layer. A merge executed today cannot encounter a populated row of any of
+   the four through any caller a real request could reach.
 2. **The execution machinery is genuinely bespoke per family**, not
    config-driven: `application/identity_correction.py` carries dedicated
    reparenting functions (`_reparented_alias`, `_reparented_identifier`) and
    dedicated collision-detection logic specific to each table's uniqueness
    rules, across roughly 3,300 carefully-reasoned lines. Extending it
-   correctly for two more families — including working out what a merge of
+   correctly for four more families — including working out what a merge of
    two organization entities that each carry a profile should do, since
    `entity_organization_profiles` is a 1:1 record a merge cannot simply
-   duplicate — is substantial, separable work, not a small addition to this
-   increment.
+   duplicate, and what a merge should do with two entities that each carry
+   an active preferred address or communication method of the same type — is
+   substantial, separable work, not a small addition to any one increment.
 3. **What a merge does today, absent wiring:** if a future write path
-   populates either table before this wiring lands, a merge that redirects
-   the owning entity does not reparent, discover ambiguity for, or invert
-   those rows. They remain bound to the merged-away `entity_id`, which stays
-   resolvable through `entities.superseded_by_entity_id` but is not reachable
-   by querying the survivor's names or profile directly. This is recorded as
-   a known limitation in both classes' docstrings
-   (`src/my_pa/domain/relationship/entity.py`) and here.
+   populates any of the four tables before this wiring lands, a merge that
+   redirects the owning entity does not reparent, discover ambiguity for, or
+   invert those rows. They remain bound to the merged-away `entity_id`, which
+   stays resolvable through `entities.superseded_by_entity_id` but is not
+   reachable by querying the survivor's names, profile, addresses, or
+   communication methods directly. This is recorded as a known limitation in
+   all four classes' docstrings (`src/my_pa/domain/relationship/entity.py`)
+   and here.
 4. **Deferred to `RI-ENT-WP-06`**, which the source audit's own dependency
    ordering already binds to "coordinate merge/split effects" — not to the
-   WP-02 taxonomy work this increment delivers.
+   taxonomy or record-family schema work WP-02 and WP-03 deliver.
+
+**Blocking dependency, stated plainly:** `WP-08` (repositories/domain
+services) and `WP-11` (MCP mutation contracts) **may not ship a write path
+for any of these four families** — `entity_names`,
+`entity_organization_profiles`, `entity_addresses`, or
+`entity_communication_methods` — **until the merge/split wiring in `WP-06`
+lands.** A write path that outpaces that wiring would let ordinary product
+use populate a row a merge cannot reparent, discover ambiguity for, or
+invert — silently reintroducing the exact hazard `SECURITY-001` and RULING 2
+exist to prevent. This is a hard ordering constraint on the work-package
+sequence, not a preference.
 
 This satisfies RULING 2's second branch: a documented, evidenced exclusion
 rather than a silent one.
@@ -277,6 +408,7 @@ restated here, so this document cannot drift ahead of what actually ran.
 - [`docs/specs/relationship-intelligence-v0.2.md`](../specs/relationship-intelligence-v0.2.md) — current governing requirements source; this campaign extends its entity model, does not supersede it.
 - [`docs/specs/relationship-memory-v0.1.md`](../specs/relationship-memory-v0.1.md) — the sibling record family this campaign's naming and lifecycle conventions follow.
 - [`docs/architecture/module-boundaries.md`](../architecture/module-boundaries.md) — the layering this campaign's domain/persistence split honors.
-- `src/my_pa/domain/relationship/entity.py` — `EntityName`, `EntityNameState`, `NameTypeCode`, `EntityOrganizationProfile`, `OrganizationKindCode`, `LegalIdentityStatusCode`.
-- `src/my_pa/infrastructure/persistence/tables.py` — `entity_names`, `entity_organization_profiles`.
-- `migrations/versions/20260830_7e114f822af2_add_entity_names_and_organization_.py`.
+- `src/my_pa/domain/relationship/entity.py` — `EntityName`, `EntityNameState`, `NameTypeCode`, `EntityOrganizationProfile`, `OrganizationKindCode`, `LegalIdentityStatusCode`, `EntityAddress`, `EntityAddressState`, `AddressTypeCode`, `EntityCommunicationMethod`, `EntityCommunicationMethodState`, `CommunicationMethodTypeCode`, `CommunicationUsageContextCode`, `CommunicationVerificationStatusCode`.
+- `src/my_pa/infrastructure/persistence/tables.py` — `entity_names`, `entity_organization_profiles`, `entity_addresses`, `entity_communication_methods`.
+- `migrations/versions/20260830_7e114f822af2_add_entity_names_and_organization_.py` (RI-ENT-WP-02).
+- `migrations/versions/20260830_441b071bf37b_add_entity_addresses_and_communication_.py` (RI-ENT-WP-03).

@@ -42,6 +42,7 @@ confidence to record makes the argument, adds the exemption, and tests it.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
@@ -59,16 +60,24 @@ __all__ = [
     "MAX_DIRECTED_EVIDENCE_REFS",
     "MAX_DIRECTED_REASON_CHARACTERS",
     "MAX_DIRECTED_TEXT_CHARACTERS",
+    "AddressTypeCode",
     "AliasState",
     "AliasType",
     "Assignment",
     "AssignmentState",
     "AssignmentType",
+    "CommunicationMethodTypeCode",
+    "CommunicationUsageContextCode",
+    "CommunicationVerificationStatusCode",
     "DirectedWriteError",
     "DirectedWriteOperation",
     "DuplicateDirectedFactError",
     "Entity",
+    "EntityAddress",
+    "EntityAddressState",
     "EntityAlias",
+    "EntityCommunicationMethod",
+    "EntityCommunicationMethodState",
     "EntityName",
     "EntityNameState",
     "EntityOrganizationProfile",
@@ -86,6 +95,9 @@ __all__ = [
     "RelationshipState",
     "StaleDirectedVersionError",
     "descriptor_key",
+    "is_normalized_communication_value",
+    "normalize_address",
+    "normalize_communication_value",
     "validate_directed_reason",
     "validate_directed_text",
 ]
@@ -785,6 +797,520 @@ class EntityOrganizationProfile:
             and self.updated_at < self.created_at
         ):
             raise ValueError("an organization profile cannot be updated before it is created")
+
+
+class AddressTypeCode(StrEnum):
+    """The kinds of address `entity_addresses` (RI-ENT-WP-03) may record.
+
+    Closed as of RI-ENT-WP-03, because the migration's `address_type_code`
+    CHECK references these values, on the same argument `NameTypeCode` is
+    closed. The nine values are the address *roles* the audit's Record
+    Element Inventory names for this family ("Project address / legal
+    principal address / HQ / regional or known office / city hall") -- not a
+    judgement about which is most authoritative for an entity, the same way
+    `NameTypeCode` does not rank `LEGAL` above `BRAND`. An entity may hold
+    several simultaneously active addresses of different types (a
+    headquarters and a project address are not competing facts), and may
+    hold more than one of the *same* type only when they are not identical
+    (see the uniqueness rule on the table).
+    """
+
+    PROJECT = "project"
+    LEGAL_PRINCIPAL = "legal_principal"
+    HEADQUARTERS = "headquarters"
+    REGIONAL_OFFICE = "regional_office"
+    OFFICE = "office"
+    BUSINESS = "business"
+    MAILING = "mailing"
+    CITY_HALL = "city_hall"
+    KNOWN_OTHER = "known_other"
+
+
+class EntityAddressState(StrEnum):
+    """Where one address row stands.
+
+    The same three states `EntityNameState` declares, and deliberately its
+    own vocabulary rather than a shared one, for the reason `EntityNameState`'s
+    own docstring already gives for not sharing a vocabulary across unrelated
+    record families: `entity_addresses` is widened independently of
+    `entity_names`, and one enum would make widening either a silent widening
+    of both.
+    """
+
+    ACTIVE = "active"
+    RETIRED = "retired"
+    SUPERSEDED = "superseded"
+
+
+#: Collapses runs of whitespace to a single space when canonicalizing an
+#: address field. Declared once so `normalize_address` applies exactly one
+#: rule rather than several call sites each writing their own.
+_ADDRESS_WHITESPACE: re.Pattern[str] = re.compile(r"\s+")
+
+
+def _clean_address_field(value: str) -> str:
+    """One address field or `raw_value`, trimmed, whitespace-collapsed, folded."""
+    return _ADDRESS_WHITESPACE.sub(" ", value.strip()).casefold()
+
+
+def normalize_address(
+    *,
+    line1: str | None,
+    line2: str | None,
+    city: str | None,
+    region: str | None,
+    postal_code: str | None,
+    country: str | None,
+    raw_value: str,
+) -> str:
+    """The canonical form of whichever address structure is actually known.
+
+    **This is canonicalization, not inference (RULING 3).** It never splits
+    `raw_value` to guess at `line1`/`city`/`region`/`postal_code`/`country`; it
+    only folds whichever of those a caller already populated -- because the
+    source stated that structure -- into a deterministic, comparable string.
+    Partial structure is fine and expected: a caller who knows `city` but not
+    `postal_code` passes `postal_code=None`, and the result is built from
+    exactly the fields that are present, in the fixed order
+    `line1, line2, city, region, postal_code, country`, each trimmed,
+    whitespace-collapsed, and case-folded, then joined with `|` so an empty
+    field cannot silently merge two adjacent ones. When no structured field is
+    known at all, the fallback is the same canonicalization applied to
+    `raw_value` itself -- still a fold of an already-known string, never a
+    parse of it into new structure.
+    """
+    fields = (line1, line2, city, region, postal_code, country)
+    parts = [_clean_address_field(field) for field in fields if field is not None and field.strip()]
+    if parts:
+        return "|".join(parts)
+    return _clean_address_field(raw_value)
+
+
+class CommunicationMethodTypeCode(StrEnum):
+    """The kinds of contact channel `entity_communication_methods` (RI-ENT-WP-03) may record.
+
+    **The type is stated by the source or caller; it is never inferred from
+    the shape of the value (RULING 3).** No code in this module or its
+    persistence layer sniffs a value with a regex to decide it "looks like" an
+    email or a phone number and picks a type for it -- a caller that wants to
+    record an email states `EMAIL`, and `normalize_communication_value` then
+    validates the value is well-formed *for* the type it was told, which is a
+    narrower thing than choosing the type from the string.
+    """
+
+    EMAIL = "email"
+    PHONE = "phone"
+    DOMAIN = "domain"
+    WEBSITE = "website"
+
+
+class CommunicationUsageContextCode(StrEnum):
+    """What role one contact channel plays, distinct from its type.
+
+    Closed as of RI-ENT-WP-03. `method_type_code` says *what kind* of channel
+    a row is (email/phone/domain/website); this says *what it is used for*
+    (a corporate switchboard number versus a specific project's sales line
+    versus a named person's office extension). The two are independent axes:
+    the uniqueness rule on the table is keyed on `(entity, method type,
+    normalized value)`, not on usage context, precisely so the same physical
+    channel is not double-counted merely because two rows disagree about
+    which context it serves -- see the table's uniqueness comment.
+    """
+
+    CORPORATE = "corporate"
+    PROJECT = "project"
+    PROJECT_SALES = "project_sales"
+    GENERIC = "generic"
+    PERSONAL = "personal"
+    OFFICE = "office"
+    OTHER = "other"
+
+
+class CommunicationVerificationStatusCode(StrEnum):
+    """How well-supported a contact channel's correctness is.
+
+    **Not a confidence score**, for the same reason and under the same guard
+    `LegalIdentityStatusCode` cites:
+    `tests/architecture/test_relationship_scoring_surface_is_denied` denies
+    `confidence|certainty|probability|likelihood|propensity` outright as "a
+    model likelihood".
+
+    **Deliberately its own vocabulary, not a reuse of `LegalIdentityStatusCode`,
+    even though the four members read the same.** They name states along two
+    different dimensions that happen to share a shape: `LegalIdentityStatusCode`
+    is about whether an *organization's legal identity* is established, and
+    this one is about whether a *contact channel actually reaches the right
+    party*. An organization can have a `VERIFIED` legal identity and an
+    `UNRESOLVED` phone number, or the reverse, and a single shared enum would
+    force one migration's widening (say, a legal-identity nuance
+    `entity_organization_profiles` needs) to also widen every
+    `entity_communication_methods` row's vocabulary whether or not that
+    dimension asked for it -- exactly the coupling `EntityNameState`'s
+    docstring already warns against for record families, applied here to a
+    status vocabulary instead of a lifecycle one.
+    """
+
+    VERIFIED = "verified"
+    BEST_SUPPORTED = "best_supported"
+    UNRESOLVED = "unresolved"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
+
+
+class EntityCommunicationMethodState(StrEnum):
+    """Where one communication-method row stands.
+
+    The same three states `EntityNameState` and `EntityAddressState` declare,
+    and its own vocabulary for the same reason both of theirs are: this family
+    is widened independently of either, and a shared enum would make widening
+    one a silent widening of all three.
+    """
+
+    ACTIVE = "active"
+    RETIRED = "retired"
+    SUPERSEDED = "superseded"
+
+
+def normalize_communication_value(method_type_code: CommunicationMethodTypeCode, value: str) -> str:
+    """The canonical form `value` takes for the *stated* `method_type_code`.
+
+    Dispatches on the type the caller already committed to -- never the other
+    way around. What this function checks is that `value` is well-formed *for*
+    that stated type: an `EMAIL` value with no `@` or a `PHONE` value with
+    almost no digits is not a channel of that type under any normalization,
+    and refusing it here is validation against a stated type, not detection of
+    an unstated one (RULING 3).
+
+    `PHONE` normalizes to digits-only -- a simple, deterministic canonical
+    form chosen over full E.164/libphonenumber-grade validation because
+    nothing in this increment needs to validate country codes or dialability,
+    only to compare two phone values for equality. `EMAIL`, `DOMAIN`, and
+    `WEBSITE` normalize to trimmed and case-folded, because DNS hostnames and
+    RFC 5321 mailbox domains are both case-insensitive by their own
+    specification -- the same argument
+    `normalization.CASE_FOLDED_NAMESPACES` already makes for
+    `ExternalIdentifierNamespace.EMAIL`. `EMAIL`'s local-part is folded here
+    (unlike `normalization._normalize_email`, which deliberately leaves it
+    alone) because a contact channel is a lower-precision fact than an
+    identity binding: the identity plane must not risk a false join between
+    two mailboxes a provider treats as distinct, while a duplicate contact
+    channel here is a nuisance a person can merge, not a wrong-person
+    contamination.
+    """
+    if not isinstance(method_type_code, CommunicationMethodTypeCode):
+        raise ValueError("a communication value is normalized within a closed method type")
+    stripped = value.strip()
+    if not stripped:
+        raise ValueError("a communication value normalizes to nothing matchable")
+    if method_type_code is CommunicationMethodTypeCode.PHONE:
+        digits = re.sub(r"[^0-9]", "", stripped)
+        if len(digits) < 7:
+            raise ValueError("a phone communication value carries too few digits to be one")
+        return digits
+    if method_type_code is CommunicationMethodTypeCode.EMAIL:
+        local, separator, domain = stripped.rpartition("@")
+        if not separator or not local or not domain or "@" in local:
+            raise ValueError("an email communication value has exactly one local part and domain")
+        return f"{local.casefold()}@{domain.casefold()}"
+    # DOMAIN, WEBSITE: a bare host or a URL-shaped value. Neither carries an
+    # "@" (that would make it an email) and neither carries whitespace.
+    if "@" in stripped or any(character.isspace() for character in stripped):
+        raise ValueError("a domain or website communication value is a bare host, not a mailbox")
+    return stripped.casefold()
+
+
+def is_normalized_communication_value(
+    method_type_code: CommunicationMethodTypeCode, value: str
+) -> bool:
+    """Whether `value` is already the form `normalize_communication_value` produces."""
+    try:
+        return normalize_communication_value(method_type_code, value) == value
+    except ValueError:
+        return False
+
+
+@dataclass(frozen=True, slots=True)
+class EntityAddress:
+    """One normalized address of an entity (RI-ENT-WP-03).
+
+    Closes `ENTITY-SCHEMA-002`: the audit's Record Element Inventory names
+    "Project address / legal principal address / HQ / regional or known
+    office / city hall" as a representation family with no owning table
+    before this revision (see the WP-01 ownership table,
+    `docs/campaign/ROBUST-ENTITY-DATA-MODEL-20260830.md`), and
+    `address_type_code` is exactly that closed set of address roles.
+
+    **Structured fields are populated only when the source stated that
+    structure (RULING 3).** `line1`/`line2`/`city`/`region`/`postal_code`/
+    `country` are independently nullable, and a writer must never derive them
+    by splitting `raw_value` on commas or newlines -- an inferred field is
+    indistinguishable from a stated one once it is stored, and a wrong guess
+    here is a wrong fact about where an entity is, not a formatting
+    convenience. `raw_value` is the one field guaranteed to always be
+    populated: the verbatim string a source actually gave, kept even when none
+    of the structured fields could be. `normalized_address_value` is computed
+    by `normalize_address` -- a canonicalization of whichever structure is
+    known (or of `raw_value` alone when none is), never a geocoding or
+    inference step, and never independently writable in a way that could
+    disagree with the fields it was computed from: this class's own
+    `__post_init__` recomputes it and refuses a mismatch, the same way
+    `EntityName.normalized_value` is checked against `is_normalized_name`
+    rather than trusted.
+
+    **Uniqueness is per (entity, address type), not per entity.** The same
+    normalized address may legitimately appear twice for one entity under two
+    *different* `address_type_code`s -- a seller's legal-principal address and
+    a project address can be, and often are, the identical street address --
+    and the active uniqueness index (`principal_id, entity_id,
+    address_type_code, normalized_address_value`) is keyed to permit exactly
+    that while still refusing the same (entity, type) pair recorded twice
+    actively. `is_preferred` marks, at most once per active (entity, type)
+    group, which address a reader should default to when more than one
+    simultaneously active address of that type exists.
+
+    **Merge/split.** This family is not yet wired into
+    `my_pa.application.identity_correction`'s `IdentityEffectFamily` /
+    ambiguity-discovery / reparenting machinery (RULING 2's second branch: a
+    documented, evidenced exclusion rather than a silent one). No command or
+    MCP capability in this increment writes `entity_addresses` outside test
+    fixtures, so no merge can yet encounter a populated row through ordinary
+    product use; a merge of an entity that *does* carry address rows today
+    leaves them bound to the merged-away `entity_id`, which stays resolvable
+    through `entities.superseded_by_entity_id` but not reachable by querying
+    the survivor's addresses directly. Wiring the reparenting, collision and
+    ambiguity logic is deferred to RI-ENT-WP-06, the same work package
+    `EntityName` and `EntityOrganizationProfile` defer to, and for the same
+    reason: the audit's own work-package ordering binds merge/split
+    coordination there, not to this increment's schema work. `WP-08`
+    (repositories/services) and `WP-11` (MCP mutation contracts) may not ship
+    a write path for this family until that wiring lands -- see the campaign
+    document's "Merge/split disposition" section.
+    """
+
+    entity_address_id: str
+    entity_id: str
+    principal_id: str
+    address_type_code: AddressTypeCode
+    raw_value: str
+    normalized_address_value: str
+    line1: str | None = None
+    line2: str | None = None
+    city: str | None = None
+    region: str | None = None
+    postal_code: str | None = None
+    country: str | None = None
+    label: str | None = None
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    state: EntityAddressState = EntityAddressState.ACTIVE
+    version: int = 1
+    updated_at: datetime | None = None
+    retired_at: datetime | None = None
+    superseded_by_entity_address_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.entity_address_id, IdKind.ENTITY_ADDRESS)
+        validate_identifier(self.entity_id, IdKind.ENTITY)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not isinstance(self.address_type_code, AddressTypeCode):
+            raise ValueError("an entity address has a closed address type")
+        if not self.raw_value.strip():
+            raise ValueError("an entity address raw value is not blank")
+        for field_name, field_value in (
+            ("line1", self.line1),
+            ("line2", self.line2),
+            ("city", self.city),
+            ("region", self.region),
+            ("postal_code", self.postal_code),
+            ("country", self.country),
+            ("label", self.label),
+        ):
+            if field_value is not None and not field_value.strip():
+                raise ValueError(f"an entity address {field_name} is not blank when present")
+        if not self.normalized_address_value.strip():
+            raise ValueError("an entity address normalized value is not blank")
+        expected_normalized_value = normalize_address(
+            line1=self.line1,
+            line2=self.line2,
+            city=self.city,
+            region=self.region,
+            postal_code=self.postal_code,
+            country=self.country,
+            raw_value=self.raw_value,
+        )
+        if self.normalized_address_value != expected_normalized_value:
+            raise ValueError("an entity address normalized value is stored already normalized")
+        if not isinstance(self.is_preferred, bool):
+            raise ValueError("an entity address is_preferred is a boolean")
+        if self.effective_from is not None:
+            ensure_utc(self.effective_from)
+        if self.effective_to is not None:
+            ensure_utc(self.effective_to)
+        if (
+            self.effective_from is not None
+            and self.effective_to is not None
+            and self.effective_to < self.effective_from
+        ):
+            raise ValueError("an entity address cannot end before it begins")
+        if not isinstance(self.state, EntityAddressState):
+            raise ValueError("an entity address has a closed state")
+        if self.version < 1:
+            raise ValueError("an entity address version is a positive integer")
+        if self.updated_at is not None:
+            ensure_utc(self.updated_at)
+        if self.retired_at is not None:
+            ensure_utc(self.retired_at)
+            if self.state is EntityAddressState.ACTIVE:
+                raise ValueError("an entity address is retired only once it leaves service")
+        if self.superseded_by_entity_address_id is not None:
+            validate_identifier(self.superseded_by_entity_address_id, IdKind.ENTITY_ADDRESS)
+            if self.superseded_by_entity_address_id == self.entity_address_id:
+                raise ValueError("an entity address cannot supersede itself")
+            if self.state is not EntityAddressState.SUPERSEDED:
+                raise ValueError("an entity address names a successor only when superseded")
+
+
+@dataclass(frozen=True, slots=True)
+class EntityCommunicationMethod:
+    """One contact channel of an entity (RI-ENT-WP-03).
+
+    Closes `ENTITY-SCHEMA-003`: the audit's Record Element Inventory names
+    "Phone / website / domain / email as a contact channel" as a
+    representation family with no owning table before this revision (see the
+    WP-01 ownership table). `method_type_code` is that closed set of channel
+    kinds, and `usage_context_code` is the independent axis of what the
+    channel is used for (corporate/project/project_sales/generic/personal/
+    office/other) -- see `CommunicationUsageContextCode`'s docstring for why
+    the two are kept apart rather than folded into one column.
+
+    **The type is stated, never inferred (RULING 3).** No validation here
+    "detects" that a value is an email because it contains `@`; a caller
+    states `method_type_code=EMAIL` and `normalize_communication_value` then
+    checks the value is well-formed *for* that stated type. See that
+    function's docstring for the normalization each type takes.
+
+    **`ExternalIdentifierNamespace.EMAIL` / `entity_external_identifiers`
+    remains the sole authority for identity resolution; this table is never
+    consulted to resolve "who is this."** The two families answer different
+    questions about a mailbox: `entity_external_identifiers` with
+    `namespace = EMAIL` asks "which entity does this mailbox identify",
+    and this table with `method_type_code = EMAIL` asks "is this a way to
+    reach this entity" -- a contact channel, not an identity claim, and it may
+    or may not be the same mailbox identity resolution already uses.
+    `linked_external_identifier_id` is how one row of this table *optionally*
+    declares "this contact channel is the same mailbox as external identifier
+    X" without merging the two concepts: it is a cross-reference a reader may
+    follow, never a replacement for, weakening of, or duplicate of the
+    identity binding. The database enforces that only an `EMAIL` row may ever
+    carry it (`linked_external_identifier_id IS NULL OR method_type_code =
+    'email'`), which is what stops the external-identifier namespace from
+    being overloaded with phone/domain/website values through this back door;
+    `__post_init__` enforces the same rule again here, in depth.
+
+    **Uniqueness is per (entity, method type), across usage contexts.** The
+    same normalized value under two different `usage_context_code`s is one
+    channel double-counted, not two channels -- a corporate phone number
+    someone also tags `generic` is still one phone number -- so the active
+    uniqueness index is keyed on `(principal_id, entity_id, method_type_code,
+    normalized_value)` without `usage_context_code`. Two genuinely different
+    channels (a corporate number and a project's own number) already differ in
+    `normalized_value`, so this permits the required multi-channel case
+    without weakening the guard against a literal duplicate.
+
+    **`verification_status_code` is not a confidence field.** It is
+    `CommunicationVerificationStatusCode`, deliberately a separate vocabulary
+    from `LegalIdentityStatusCode` even though the four members read the same;
+    see that class's docstring for why sharing one enum across the two
+    dimensions would be the wrong coupling.
+
+    **Merge/split.** Not yet wired into
+    `my_pa.application.identity_correction`, under the same deferral to
+    RI-ENT-WP-06 as `EntityName`, `EntityOrganizationProfile`, and
+    `EntityAddress` above, and for the same reason: no command or MCP
+    capability in this increment writes this table outside test fixtures, so
+    a merge today cannot encounter a populated row through ordinary product
+    use. A merge of an entity that does carry communication-method rows
+    leaves them bound to the merged-away `entity_id`, resolvable through
+    `entities.superseded_by_entity_id` but not reachable by querying the
+    survivor directly, until that wiring lands. `WP-08` and `WP-11` may not
+    ship a write path for this family until then either -- see the campaign
+    document's "Merge/split disposition" section, which after this increment
+    enumerates all four families this rule now binds.
+    """
+
+    communication_method_id: str
+    entity_id: str
+    principal_id: str
+    method_type_code: CommunicationMethodTypeCode
+    usage_context_code: CommunicationUsageContextCode
+    normalized_value: str
+    display_value: str
+    verification_status_code: CommunicationVerificationStatusCode = (
+        CommunicationVerificationStatusCode.UNRESOLVED
+    )
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    state: EntityCommunicationMethodState = EntityCommunicationMethodState.ACTIVE
+    version: int = 1
+    updated_at: datetime | None = None
+    retired_at: datetime | None = None
+    superseded_by_communication_method_id: str | None = None
+    linked_external_identifier_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.communication_method_id, IdKind.ENTITY_COMMUNICATION_METHOD)
+        validate_identifier(self.entity_id, IdKind.ENTITY)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not isinstance(self.method_type_code, CommunicationMethodTypeCode):
+            raise ValueError("a communication method has a closed method type")
+        if not isinstance(self.usage_context_code, CommunicationUsageContextCode):
+            raise ValueError("a communication method has a closed usage context")
+        if not self.normalized_value.strip():
+            raise ValueError("a communication method normalized value is not blank")
+        if not is_normalized_communication_value(self.method_type_code, self.normalized_value):
+            raise ValueError("a communication method normalized value is stored already normalized")
+        if not self.display_value.strip():
+            raise ValueError("a communication method display value is not blank")
+        if not isinstance(self.verification_status_code, CommunicationVerificationStatusCode):
+            raise ValueError("a communication method has a closed verification status")
+        if not isinstance(self.is_preferred, bool):
+            raise ValueError("a communication method is_preferred is a boolean")
+        if self.effective_from is not None:
+            ensure_utc(self.effective_from)
+        if self.effective_to is not None:
+            ensure_utc(self.effective_to)
+        if (
+            self.effective_from is not None
+            and self.effective_to is not None
+            and self.effective_to < self.effective_from
+        ):
+            raise ValueError("a communication method cannot end before it begins")
+        if not isinstance(self.state, EntityCommunicationMethodState):
+            raise ValueError("a communication method has a closed state")
+        if self.version < 1:
+            raise ValueError("a communication method version is a positive integer")
+        if self.updated_at is not None:
+            ensure_utc(self.updated_at)
+        if self.retired_at is not None:
+            ensure_utc(self.retired_at)
+            if self.state is EntityCommunicationMethodState.ACTIVE:
+                raise ValueError("a communication method is retired only once it leaves service")
+        if self.superseded_by_communication_method_id is not None:
+            validate_identifier(
+                self.superseded_by_communication_method_id,
+                IdKind.ENTITY_COMMUNICATION_METHOD,
+            )
+            if self.superseded_by_communication_method_id == self.communication_method_id:
+                raise ValueError("a communication method cannot supersede itself")
+            if self.state is not EntityCommunicationMethodState.SUPERSEDED:
+                raise ValueError("a communication method names a successor only when superseded")
+        if self.linked_external_identifier_id is not None:
+            validate_identifier(self.linked_external_identifier_id, IdKind.EXTERNAL_IDENTIFIER)
+            if self.method_type_code is not CommunicationMethodTypeCode.EMAIL:
+                raise ValueError(
+                    "a communication method links an external identifier only for email"
+                )
 
 
 @dataclass(frozen=True, slots=True)

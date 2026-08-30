@@ -184,10 +184,16 @@ from my_pa.domain.native_sources import (
 from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
 from my_pa.domain.relationship.entity import (
     ARCHIVABLE_STATUSES,
+    AddressTypeCode,
     AliasState,
     AliasType,
     AssignmentState,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
+    CommunicationVerificationStatusCode,
+    EntityAddressState,
+    EntityCommunicationMethodState,
     EntityNameState,
     EntityRelationshipType,
     EntityStatus,
@@ -3283,6 +3289,325 @@ entity_organization_profiles = Table(
         name="an_organization_profile_extends_an_entity_of_its_principal",
     ),
     Index("entity_organization_profiles_by_principal", "principal_id"),
+)
+
+#: RI-ENT-WP-03: one normalized address of an entity.  Closes
+#: ENTITY-SCHEMA-002.  Field/constraint shape mirrors `entity_names` exactly
+#: (composite FK, principal-scoped self-supersession, three-state lifecycle),
+#: plus the structured/optional address fields and `raw_value` --
+#: `normalized_address_value` pair described in `EntityAddress`'s docstring.
+#: See that docstring for the RULING 3 "no guessing structure" boundary and
+#: the merge/split deferral to RI-ENT-WP-06.
+entity_addresses = Table(
+    "entity_addresses",
+    METADATA,
+    Column("entity_address_id", Text, primary_key=True),
+    Column(
+        "entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("principal_id", Text, nullable=False),
+    Column("address_type_code", Text, nullable=False),
+    Column("line1", Text),
+    Column("line2", Text),
+    Column("city", Text),
+    Column("region", Text),
+    Column("postal_code", Text),
+    Column("country", Text),
+    Column("raw_value", Text, nullable=False),
+    Column("normalized_address_value", Text, nullable=False),
+    Column("label", Text),
+    Column("is_preferred", Boolean, nullable=False, server_default=text("false")),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("updated_at", DateTime(timezone=True)),
+    Column("retired_at", DateTime(timezone=True)),
+    Column(
+        "superseded_by_entity_address_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_addresses.entity_address_id"),
+    ),
+    _is_identifier("entity_address_id", IdKind.ENTITY_ADDRESS),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("address_type_code", AddressTypeCode, name="an_entity_address_type_is_known"),
+    _one_of("state", EntityAddressState, name="an_entity_address_state_is_known"),
+    CheckConstraint("version >= 1", name="an_entity_address_version_is_positive"),
+    CheckConstraint(
+        "retired_at IS NULL OR state <> 'active'",
+        name="an_entity_address_is_retired_only_once_it_leaves_service",
+    ),
+    CheckConstraint(
+        "superseded_by_entity_address_id IS NULL OR state = 'superseded'",
+        name="an_entity_address_names_a_successor_only_when_superseded",
+    ),
+    CheckConstraint(
+        "superseded_by_entity_address_id IS NULL "
+        "OR superseded_by_entity_address_id <> entity_address_id",
+        name="an_entity_address_does_not_supersede_itself",
+    ),
+    CheckConstraint(
+        "length(trim(raw_value)) > 0",
+        name="an_entity_address_raw_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "length(trim(normalized_address_value)) > 0",
+        name="an_entity_address_normalized_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "line1 IS NULL OR length(trim(line1)) > 0",
+        name="an_entity_address_line1_is_not_blank",
+    ),
+    CheckConstraint(
+        "line2 IS NULL OR length(trim(line2)) > 0",
+        name="an_entity_address_line2_is_not_blank",
+    ),
+    CheckConstraint(
+        "city IS NULL OR length(trim(city)) > 0",
+        name="an_entity_address_city_is_not_blank",
+    ),
+    CheckConstraint(
+        "region IS NULL OR length(trim(region)) > 0",
+        name="an_entity_address_region_is_not_blank",
+    ),
+    CheckConstraint(
+        "postal_code IS NULL OR length(trim(postal_code)) > 0",
+        name="an_entity_address_postal_code_is_not_blank",
+    ),
+    CheckConstraint(
+        "country IS NULL OR length(trim(country)) > 0",
+        name="an_entity_address_country_is_not_blank",
+    ),
+    CheckConstraint(
+        "label IS NULL OR length(trim(label)) > 0",
+        name="an_entity_address_label_is_not_blank",
+    ),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="an_entity_address_ends_after_it_starts",
+    ),
+    UniqueConstraint(
+        "entity_address_id",
+        "principal_id",
+        name="an_entity_address_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="an_entity_address_names_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_entity_address_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_addresses.entity_address_id",
+            f"{SCHEMA}.entity_addresses.principal_id",
+        ],
+        name="an_entity_address_is_superseded_within_its_principal",
+    ),
+    Index("entity_addresses_by_principal", "principal_id"),
+    # The "normalized geography" index: every reader that matches addresses by
+    # value, across entities and types, scans this rather than the table.
+    Index("entity_addresses_by_normalized_address_value", "normalized_address_value"),
+    # The (entity, type, current state) index: the shape almost every read of
+    # this table takes -- "this entity's active project addresses" and
+    # similar -- rather than a scan filtered after the fact.
+    Index(
+        "entity_addresses_by_entity_type_state",
+        "entity_id",
+        "address_type_code",
+        "state",
+    ),
+    # Per *entity and address type*, deliberately NOT per entity alone: the
+    # same normalized address may legitimately recur for one entity under a
+    # DIFFERENT address_type_code (a legal-principal address and a project
+    # address are often the identical street address), and `address_type_code`
+    # being part of this key is what permits that rather than a coincidence a
+    # future reader should "fix" by dropping it -- do not drop it.
+    Index(
+        "an_active_entity_address_is_unique_per_entity_and_type",
+        "principal_id",
+        "entity_id",
+        "address_type_code",
+        "normalized_address_value",
+        unique=True,
+        postgresql_where=text("state = 'active'"),
+    ),
+    # At most one PREFERRED active address per (entity, type), mirroring
+    # `entity_names`'s preferred-name index for the same reason: several
+    # simultaneously active addresses of one type may exist, and this is what
+    # stops two of them both claiming to be the default a reader should show.
+    Index(
+        "an_active_entity_address_has_one_preferred_per_type",
+        "principal_id",
+        "entity_id",
+        "address_type_code",
+        unique=True,
+        postgresql_where=text("state = 'active' AND is_preferred = true"),
+    ),
+)
+
+#: RI-ENT-WP-03: one contact channel of an entity.  Closes ENTITY-SCHEMA-003.
+#: Field/constraint shape mirrors `entity_names` exactly (composite FK,
+#: principal-scoped self-supersession, three-state lifecycle), plus the
+#: type/usage-context split and the `linked_external_identifier_id`
+#: identity/channel boundary described in `EntityCommunicationMethod`'s
+#: docstring -- read that docstring before touching this table's
+#: `linked_external_identifier_id` CHECK or foreign key.
+entity_communication_methods = Table(
+    "entity_communication_methods",
+    METADATA,
+    Column("communication_method_id", Text, primary_key=True),
+    Column(
+        "entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("principal_id", Text, nullable=False),
+    Column("method_type_code", Text, nullable=False),
+    Column("usage_context_code", Text, nullable=False),
+    Column("normalized_value", Text, nullable=False),
+    Column("display_value", Text, nullable=False),
+    Column(
+        "verification_status_code",
+        Text,
+        nullable=False,
+        server_default=text("'unresolved'"),
+    ),
+    Column("is_preferred", Boolean, nullable=False, server_default=text("false")),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("updated_at", DateTime(timezone=True)),
+    Column("retired_at", DateTime(timezone=True)),
+    Column(
+        "superseded_by_communication_method_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_communication_methods.communication_method_id"),
+    ),
+    Column(
+        "linked_external_identifier_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_external_identifiers.identifier_id"),
+    ),
+    _is_identifier("communication_method_id", IdKind.ENTITY_COMMUNICATION_METHOD),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of(
+        "method_type_code",
+        CommunicationMethodTypeCode,
+        name="a_communication_method_type_is_known",
+    ),
+    _one_of(
+        "usage_context_code",
+        CommunicationUsageContextCode,
+        name="a_communication_usage_context_is_known",
+    ),
+    _one_of(
+        "verification_status_code",
+        CommunicationVerificationStatusCode,
+        name="a_communication_verification_status_is_known",
+    ),
+    _one_of(
+        "state",
+        EntityCommunicationMethodState,
+        name="an_entity_communication_method_state_is_known",
+    ),
+    CheckConstraint("version >= 1", name="a_communication_method_version_is_positive"),
+    CheckConstraint(
+        "retired_at IS NULL OR state <> 'active'",
+        name="a_communication_method_is_retired_only_once_it_leaves_service",
+    ),
+    CheckConstraint(
+        "superseded_by_communication_method_id IS NULL OR state = 'superseded'",
+        name="a_communication_method_names_a_successor_only_when_superseded",
+    ),
+    CheckConstraint(
+        "superseded_by_communication_method_id IS NULL "
+        "OR superseded_by_communication_method_id <> communication_method_id",
+        name="a_communication_method_does_not_supersede_itself",
+    ),
+    CheckConstraint(
+        "length(trim(normalized_value)) > 0",
+        name="a_communication_method_normalized_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "length(trim(display_value)) > 0",
+        name="a_communication_method_display_value_is_not_blank",
+    ),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="a_communication_method_ends_after_it_starts",
+    ),
+    # The identity/channel boundary (see the class docstring): only an EMAIL
+    # row may ever cross-reference `entity_external_identifiers`. This is what
+    # stops phone/domain/website rows from overloading the external-identifier
+    # namespace through this column.
+    CheckConstraint(
+        "linked_external_identifier_id IS NULL OR method_type_code = 'email'",
+        name="a_communication_method_links_an_identifier_only_for_email",
+    ),
+    UniqueConstraint(
+        "communication_method_id",
+        "principal_id",
+        name="a_communication_method_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="a_communication_method_names_an_entity_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_communication_method_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_communication_methods.communication_method_id",
+            f"{SCHEMA}.entity_communication_methods.principal_id",
+        ],
+        name="a_communication_method_is_superseded_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["linked_external_identifier_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_external_identifiers.identifier_id",
+            f"{SCHEMA}.entity_external_identifiers.principal_id",
+        ],
+        name="a_communication_method_links_an_identifier_of_its_principal",
+    ),
+    Index("entity_communication_methods_by_principal", "principal_id"),
+    Index("entity_communication_methods_by_normalized_value", "normalized_value"),
+    Index(
+        "entity_communication_methods_by_entity_type_state",
+        "entity_id",
+        "method_type_code",
+        "state",
+    ),
+    # Per *entity and method type*, across usage contexts: the same value
+    # tagged with two different usage_context_codes is one channel
+    # double-counted, not two channels, so usage_context_code is deliberately
+    # NOT part of this key. Two genuinely different channels (a corporate
+    # number and a project's own number) already differ in normalized_value.
+    Index(
+        "an_active_communication_method_is_unique_per_entity_and_type",
+        "principal_id",
+        "entity_id",
+        "method_type_code",
+        "normalized_value",
+        unique=True,
+        postgresql_where=text("state = 'active'"),
+    ),
+    Index(
+        "an_active_communication_method_has_one_preferred_per_type",
+        "principal_id",
+        "entity_id",
+        "method_type_code",
+        unique=True,
+        postgresql_where=text("state = 'active' AND is_preferred = true"),
+    ),
 )
 
 #: WP-RI-01: a typed assignment of an entity to a scope entity.  Employment,

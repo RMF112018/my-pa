@@ -65,9 +65,9 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and five Python modules under `src/my_pa` and four hundred and ten test modules —
+Three hundred and five Python modules under `src/my_pa` and four hundred and thirteen test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
-published here have now gone stale twice: sixty-eight and forty were true at the
+published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
 true at WP-4B3 `main@6660dbb`, and each was carried through the packages that
 followed. Three hundred and four and four hundred and four were true at
@@ -77,7 +77,12 @@ the test-module figure was corrected again on 2026-08-30 to four hundred and
 ten, when RI-ENT-WP-02 added `tests/unit/test_entity_name_and_organization_profile_domain.py`,
 `tests/schema/test_entity_names_and_organization_profile_migration.py`, and
 `tests/database/test_entity_names_tbr_gs4_studios_fixture.py` without adding a
-source module. (The audit basis `main@e773e6f` was fifty-six and twenty-seven; the
+source module, and corrected again on 2026-08-30 to four hundred and
+thirteen, when RI-ENT-WP-03 added
+`tests/unit/test_entity_address_and_communication_method_domain.py`,
+`tests/schema/test_entity_addresses_and_communication_methods_migration.py`,
+and `tests/database/test_entity_addresses_and_communication_tbr_fixture.py`,
+likewise without adding a source module. (The audit basis `main@e773e6f` was fifty-six and twenty-seven; the
 pair recorded against it here was the revalidation's, one basis out.) **"Nothing checks them" was the
 diagnosis and it is now wrong**:
 `../../tests/architecture/test_spelled_counts_match_the_sets_they_name.py` runs

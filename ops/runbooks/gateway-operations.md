@@ -148,7 +148,7 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
 ```
 
 **Current-state correction (2026-08-28):** the candidate has **one hundred and four**
-capabilities and **seventy-eight** Alembic revisions at head `b727e870d45e`; the merged chain admits GSQS at `c4b0a1d9e827` before continuing Phase B at `c7a1f04b9e63`, and the corrective `b727e870d45e` is additive on `8e1c4a7b2d90`. Revision figure corrected 2026-08-29.
+capabilities and **seventy-nine** Alembic revisions at head `7e114f822af2`; the merged chain admits GSQS at `c4b0a1d9e827` before continuing Phase B at `c7a1f04b9e63`, and the corrective `b727e870d45e` is additive on `8e1c4a7b2d90`, with `7e114f822af2` additive on `b727e870d45e` and adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02). Revision figure corrected 2026-08-30.
 `capabilities.get` now also returns `worker_planes`; backlog without a live
 heartbeat is `worker_absent`/`worker_stale`, never silently healthy. The dated
 transcript below remains historical evidence for its stated head.

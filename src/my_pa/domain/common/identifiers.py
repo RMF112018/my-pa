@@ -222,6 +222,15 @@ class IdKind(StrEnum):
     ASSIGNMENT = "asn"
     ENTITY_RELATIONSHIP = "erel"
     ENTITY_ALIAS = "eals"
+    #: RI-ENT-WP-02: one typed name form of an entity (`entity_names`), the
+    #: audit's typed-name successor to `entity_aliases`. Its own prefix rather
+    #: than a reuse of `ENTITY_ALIAS`, on the same argument every sibling
+    #: surrogate ID here makes: a stored reference has to say which table it
+    #: names, and `entity_names.superseded_by_entity_name_id` in particular
+    #: would be ambiguous against an alias's own `superseded_by_alias_id` if
+    #: both used one prefix. `entity_organization_profiles` needs none: its
+    #: primary key is `entity_id` itself, already `IdKind.ENTITY`.
+    ENTITY_NAME = "enam"
     #: WP-RI-06: the evidence and governance records. `ENTITY_OBSERVATION` names
     #: one source-bound observation that may refer to an entity and does not
     #: become one (specification section 12.2). `ENTITY_PROPOSAL` names a

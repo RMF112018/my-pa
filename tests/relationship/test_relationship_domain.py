@@ -314,6 +314,37 @@ EXPECTED_MODEL_FIELDS = {
             "superseded_by_alias_id",
         }
     ),
+    "my_pa.domain.relationship.entity.EntityName": frozenset(
+        {
+            "entity_name_id",
+            "entity_id",
+            "principal_id",
+            "name_type_code",
+            "display_value",
+            "normalized_value",
+            "is_preferred",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_entity_name_id",
+        }
+    ),
+    "my_pa.domain.relationship.entity.EntityOrganizationProfile": frozenset(
+        {
+            "entity_id",
+            "principal_id",
+            "organization_kind_code",
+            "legal_identity_status_code",
+            "jurisdiction_code",
+            "registration_identifier",
+            "version",
+            "created_at",
+            "updated_at",
+        }
+    ),
     "my_pa.domain.relationship.entity.Assignment": frozenset(
         {
             "assignment_id",
@@ -1085,6 +1116,37 @@ EXPECTED_TABLE_COLUMNS = {
             "superseded_by_alias_id",
         }
     ),
+    "entity_names": frozenset(
+        {
+            "entity_name_id",
+            "entity_id",
+            "name_type_code",
+            "normalized_value",
+            "display_value",
+            "is_preferred",
+            "effective_from",
+            "effective_to",
+            "principal_id",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_entity_name_id",
+        }
+    ),
+    "entity_organization_profiles": frozenset(
+        {
+            "entity_id",
+            "principal_id",
+            "organization_kind_code",
+            "legal_identity_status_code",
+            "jurisdiction_code",
+            "registration_identifier",
+            "version",
+            "created_at",
+            "updated_at",
+        }
+    ),
     "entity_assignments": frozenset(
         {
             "assignment_id",
@@ -1514,12 +1576,15 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
         for table in METADATA.tables.values()
         if table.name.startswith(RELATIONSHIP_TABLE_PREFIXES)
     }
-    assert len(actual_model_fields) == 60
+    # Sixty after `b727e870d45e`, sixty-two after `7e114f822af2` added
+    # `EntityName` and `EntityOrganizationProfile` (RI-ENT-WP-02).
+    assert len(actual_model_fields) == 62
     # Forty-nine after `b727e870d45e` added the identity-ambiguity pair to the
-    # three durable re-enrichment tables RI final completion brought. The figure
-    # makes the allow-list closed in both directions, so it moves with the
-    # declaration and never ahead of it.
-    assert len(actual_table_columns) == 49
+    # three durable re-enrichment tables RI final completion brought;
+    # fifty-one after `7e114f822af2` added `entity_names` and
+    # `entity_organization_profiles`. The figure makes the allow-list closed in
+    # both directions, so it moves with the declaration and never ahead of it.
+    assert len(actual_table_columns) == 51
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

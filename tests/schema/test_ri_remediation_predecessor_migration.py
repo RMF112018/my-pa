@@ -901,14 +901,20 @@ def _migrated(disposable: BuildDatabase, *, merges: bool = True) -> Disposable:
 
 
 def test_the_chain_still_reaches_the_corrective_head_from_the_predecessor() -> None:
-    """One head, and the two revisions between it and the supported predecessor.
+    """The two revisions between the corrective head and the supported predecessor.
 
-    A worker adding a revision while this suite is being written would leave
-    every assertion below true of a head this module is not about. This is the
-    guard that says so out loud rather than passing quietly.
+    Deliberately not "`CORRECTIVE_HEAD` is the chain head", for the reason
+    `test_the_entity_revision_is_in_the_chain_on_the_goodnotes_revision` gives
+    for the same shape of claim: that property is true only until the next
+    revision is written, and asserting it makes every later work package edit
+    this file. `7e114f822af2` (RI-ENT-WP-02) is additive on `CORRECTIVE_HEAD`
+    and is now the actual head; what this test still guards is that
+    `CORRECTIVE_HEAD` remains reachable with its own lineage to the supported
+    predecessor unbroken, whatever now sits above it.
     """
     script = ScriptDirectory.from_config(_config())
-    assert list(script.get_heads()) == [CORRECTIVE_HEAD]
+    assert len(list(script.get_heads())) == 1
+    assert CORRECTIVE_HEAD in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(CORRECTIVE_HEAD).down_revision == IDENTITY_RECOVERY
     assert script.get_revision(IDENTITY_RECOVERY).down_revision == PREDECESSOR
 
@@ -1527,4 +1533,9 @@ def test_the_corrective_revision_round_trips_over_carried_data(disposable: Build
         stamped = list(
             connection.execute(text("SELECT version_num FROM alembic_version")).scalars()
         )
-    assert stamped == [CORRECTIVE_HEAD]
+    # Not `[CORRECTIVE_HEAD]`, for the reason
+    # `test_the_chain_still_reaches_the_corrective_head_from_the_predecessor`
+    # gives: `database.upgrade("head")` stamps the chain's actual current head,
+    # which a later work package may have moved past `CORRECTIVE_HEAD`.
+    script = ScriptDirectory.from_config(_config())
+    assert stamped == list(script.get_heads())

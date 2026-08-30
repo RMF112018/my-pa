@@ -95,7 +95,7 @@ Corrected 2026-08-19: this sentence read
 "exposes one hundred one capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns seventy-eight revisions at head `b727e870d45e` (corrected 2026-08-29 from seventy-seven at `8e1c4a7b2d90`, which `b727e870d45e` is additive on); its linear history places the GSQS admission
+Alembic owns seventy-nine revisions at head `7e114f822af2` (corrected 2026-08-30 from seventy-eight at `b727e870d45e`, on which `7e114f822af2` is additive and adds the `entity_names`/`entity_organization_profiles` tables, RI-ENT-WP-02); its linear history places the GSQS admission
 `c4b0a1d9e827` immediately before Phase B's `c7a1f04b9e63`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the

@@ -268,7 +268,7 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_managed_plane() ->
     # entity_organization_profiles migration on top of this chain; 80 since
     # `441b071bf37b` (RI-ENT-WP-03) added the entity_addresses/
     # entity_communication_methods migration on top of that.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 80
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 81
 
 
 def test_the_widening_is_exactly_the_managed_plane() -> None:

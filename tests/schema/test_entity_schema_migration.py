@@ -317,6 +317,12 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         # `7e114f822af2`, one link further from `ENTITY_REVISION`.
         "entity_addresses",
         "entity_communication_methods",
+        # `f5b06925857e`'s project-participation table and its two taxonomies
+        # (RI-ENT-WP-04), stacked above the plane for the same reason: they
+        # arrive above `441b071bf37b`, one link further still.
+        "entity_project_participations",
+        "entity_role_types",
+        "entity_discipline_types",
     }
 )
 

@@ -101,6 +101,17 @@ UNPARTITIONED_USER_OWNED: Final = {
     "extractions": "extraction outcomes under one enrollment; same chain.",
     "quarantine_records": "quarantined objects under one enrollment; same chain.",
     "coverage_limitations": "coverage gaps under one enrollment; same chain.",
+    # --- the RI-ENT-WP-04 project-role/discipline taxonomy plane ----------
+    "entity_role_types": (
+        "a global, shared reference vocabulary of project-role codes -- like a "
+        "lookup table, not user-owned data. Every row is seeded by the "
+        "`f5b06925857e` migration itself; no write path lets a Principal add, "
+        "change, or read one row as if it were their own."
+    ),
+    "entity_discipline_types": (
+        "the same global, shared reference vocabulary shape as "
+        "`entity_role_types`, for the independent discipline axis; same reason."
+    ),
 }
 
 NATIVE_PARTITIONED: Final = frozenset(

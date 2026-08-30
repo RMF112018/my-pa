@@ -60,7 +60,7 @@ DISPOSABLE_DATABASE: Final = "my_pa_phase_b_vocabulary_test"
 #: The current head and the Phase B vocabulary edge this suite removes. Written
 #: out rather than imported so current chain drift and historical identity are
 #: checked independently.
-HEAD_REVISION: Final = "441b071bf37b"
+HEAD_REVISION: Final = "f5b06925857e"
 #: What was head until `HEAD_REVISION` stacked on it. Named so the chain
 #: assertion below stays a statement about the order rather than about
 #: whichever revision happens to be last.
@@ -200,11 +200,12 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     script = ScriptDirectory.from_config(_config())
     heads = list(script.get_heads())
     assert heads == [HEAD_REVISION], f"expected exactly {HEAD_REVISION}, found {heads}"
-    # `441b071bf37b` (RI-ENT-WP-03) is additive on `7e114f822af2` (RI-ENT-WP-02),
-    # itself additive on `b727e870d45e`, which is additive on
-    # `IDENTITY_HISTORY_REVISION` -- one more link than this chain had before
-    # that revision landed.
-    assert script.get_revision(HEAD_REVISION).down_revision == "7e114f822af2"
+    # `f5b06925857e` (RI-ENT-WP-04) is additive on `441b071bf37b` (RI-ENT-WP-03),
+    # itself additive on `7e114f822af2` (RI-ENT-WP-02), itself additive on
+    # `b727e870d45e`, which is additive on `IDENTITY_HISTORY_REVISION` -- one
+    # more link than this chain had before that revision landed.
+    assert script.get_revision(HEAD_REVISION).down_revision == "441b071bf37b"
+    assert script.get_revision("441b071bf37b").down_revision == "7e114f822af2"
     assert script.get_revision("7e114f822af2").down_revision == "b727e870d45e"
     assert script.get_revision("b727e870d45e").down_revision == IDENTITY_HISTORY_REVISION
     assert script.get_revision(IDENTITY_HISTORY_REVISION).down_revision == PHASE_B_SCHEMA_REVISION

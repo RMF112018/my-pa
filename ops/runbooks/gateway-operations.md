@@ -148,7 +148,7 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
 ```
 
 **Current-state correction (2026-08-28):** the candidate has **one hundred and four**
-capabilities and **eighty** Alembic revisions at head `441b071bf37b`; the merged chain admits GSQS at `c4b0a1d9e827` before continuing Phase B at `c7a1f04b9e63`, and the corrective `b727e870d45e` is additive on `8e1c4a7b2d90`, with `7e114f822af2` additive on `b727e870d45e` and adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02), and `441b071bf37b` additive on `7e114f822af2` and adding the `entity_addresses`/`entity_communication_methods` tables (RI-ENT-WP-03). Revision figure corrected 2026-08-30.
+capabilities and **eighty-one** Alembic revisions at head `f5b06925857e`; the merged chain admits GSQS at `c4b0a1d9e827` before continuing Phase B at `c7a1f04b9e63`, and the corrective `b727e870d45e` is additive on `8e1c4a7b2d90`, with `7e114f822af2` additive on `b727e870d45e` and adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02), `441b071bf37b` additive on `7e114f822af2` and adding the `entity_addresses`/`entity_communication_methods` tables (RI-ENT-WP-03), and `f5b06925857e` additive on `441b071bf37b` and adding the `entity_project_participations`/`entity_role_types`/`entity_discipline_types` tables (RI-ENT-WP-04). Revision figure corrected 2026-08-30.
 `capabilities.get` now also returns `worker_planes`; backlog without a live
 heartbeat is `worker_absent`/`worker_stale`, never silently healthy. The dated
 transcript below remains historical evidence for its stated head.

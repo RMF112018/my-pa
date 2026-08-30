@@ -242,6 +242,11 @@ class IdKind(StrEnum):
     #: use, per the campaign record).
     ENTITY_ADDRESS = "eadr"
     ENTITY_COMMUNICATION_METHOD = "ecmm"
+    #: RI-ENT-WP-04: one project-participation row (`entity_project_participations`).
+    #: `entity_role_types` and `entity_discipline_types` need no surrogate prefix —
+    #: their primary keys are stable business codes (`role_code`/`discipline_code`),
+    #: not generated ids, the same way `entity_organization_profiles` needed none.
+    ENTITY_PROJECT_PARTICIPATION = "eppt"
     #: WP-RI-06: the evidence and governance records. `ENTITY_OBSERVATION` names
     #: one source-bound observation that may refer to an entity and does not
     #: become one (specification section 12.2). `ENTITY_PROPOSAL` names a

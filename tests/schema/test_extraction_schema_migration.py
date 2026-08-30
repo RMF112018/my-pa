@@ -384,6 +384,16 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "entity_communication_methods",
         }
     ),
+    # `f5b06925857e` (RI-ENT-WP-04): the project-participation table and its
+    # two global role/discipline taxonomies, additive on `441b071bf37b` and
+    # creating nothing else.
+    "f5b06925857e": frozenset(
+        {
+            "entity_project_participations",
+            "entity_role_types",
+            "entity_discipline_types",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

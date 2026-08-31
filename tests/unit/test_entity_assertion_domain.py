@@ -118,9 +118,7 @@ def test_an_assertion_names_exactly_one_target_and_two_targets_is_refused() -> N
         ("target_organization_profile_entity_id", ORGANIZATION_ENTITY_ID),
     ],
 )
-def test_an_assertion_admits_exactly_one_of_each_of_the_six_targets(
-    field: str, value: str
-) -> None:
+def test_an_assertion_admits_exactly_one_of_each_of_the_six_targets(field: str, value: str) -> None:
     assertion = an_assertion(**{"target_entity_name_id": None, field: value})
     assert getattr(assertion, field) == value
 

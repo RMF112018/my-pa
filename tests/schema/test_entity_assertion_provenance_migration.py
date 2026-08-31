@@ -180,9 +180,7 @@ def _insert_assertion(
                 "assertion_id": assertion_id,
                 "principal_id": principal_id,
                 "target_entity_name_id": target_entity_name_id,
-                "target_organization_profile_entity_id": (
-                    target_organization_profile_entity_id
-                ),
+                "target_organization_profile_entity_id": (target_organization_profile_entity_id),
                 "assertion_status": assertion_status,
                 "asserted_by": asserted_by,
                 "state": state,
@@ -411,9 +409,7 @@ def test_supersedes_itself_is_refused(migrated_engine: Engine) -> None:
 def test_retired_while_active_is_refused(migrated_engine: Engine) -> None:
     _seed_entity(migrated_engine, ORGANIZATION_A, PRINCIPAL_A)
     _seed_name(migrated_engine, "enam_aaaa0001aaaa0001", ORGANIZATION_A, PRINCIPAL_A)
-    with pytest.raises(
-        IntegrityError, match="an_assertion_is_retired_only_once_it_leaves_service"
-    ):
+    with pytest.raises(IntegrityError, match="an_assertion_is_retired_only_once_it_leaves_service"):
         _insert_assertion(
             migrated_engine,
             assertion_id="east_aaaa0001aaaa0001",

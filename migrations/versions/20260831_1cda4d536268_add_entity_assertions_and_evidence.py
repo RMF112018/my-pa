@@ -288,8 +288,7 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        f"CREATE INDEX entity_assertions_by_principal "
-        f"ON {SCHEMA}.entity_assertions (principal_id);"
+        f"CREATE INDEX entity_assertions_by_principal ON {SCHEMA}.entity_assertions (principal_id);"
     )
     op.execute(
         f"CREATE INDEX entity_assertions_by_supersedes "

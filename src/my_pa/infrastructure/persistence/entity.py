@@ -2562,9 +2562,7 @@ class SqlEntityRepository(EntitiesRepository):
         targets = {
             entity_assertions.c.target_entity_name_id: target_entity_name_id,
             entity_assertions.c.target_entity_address_id: target_entity_address_id,
-            entity_assertions.c.target_communication_method_id: (
-                target_communication_method_id
-            ),
+            entity_assertions.c.target_communication_method_id: (target_communication_method_id),
             entity_assertions.c.target_participation_id: target_participation_id,
             entity_assertions.c.target_affiliation_id: target_affiliation_id,
             entity_assertions.c.target_organization_profile_entity_id: (

@@ -15,6 +15,7 @@ from __future__ import annotations
 import base64
 import binascii
 import hashlib
+import hmac
 import json
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
@@ -27,6 +28,8 @@ MAX_PULL_BATCH_SIZE = 100
 MAX_PULL_RETRIES = 10
 MAX_CONTEXT_TOKEN_LENGTH = 128
 MAX_IDEMPOTENCY_KEY_LENGTH = 128
+MIN_CURSOR_SIGNING_KEY_BYTES = 32
+MAX_CURSOR_SIGNING_KEY_BYTES = 128
 
 ERROR_INVALID_REQUEST = "INVALID_REQUEST"
 ERROR_INVALID_CURSOR = "INVALID_CURSOR"
@@ -125,6 +128,7 @@ class PullWorkState:
 @dataclass(frozen=True, slots=True)
 class PullAssignment:
     assignment_id: str
+    client_id: str
     context_id: str
     work: GoodNotesPageWork
     attempt: int
@@ -186,6 +190,7 @@ class GoodNotesPullRepository(Protocol):
     def claim_batch(
         self,
         principal_id: str,
+        client_id: str,
         context_id: str,
         assignments: tuple[PullAssignment, ...],
         expected_attempts: tuple[int, ...],
@@ -194,11 +199,14 @@ class GoodNotesPullRepository(Protocol):
     ) -> tuple[PullAssignment, ...]:
         """Atomically increment exact expected attempts and store assignments."""
 
-    def assignment(self, principal_id: str, assignment_id: str) -> PullAssignment | None: ...
+    def assignment(
+        self, principal_id: str, client_id: str, assignment_id: str
+    ) -> PullAssignment | None: ...
 
     def complete_batch(
         self,
         principal_id: str,
+        client_id: str,
         context_id: str,
         admissions: tuple[PullCompletionAdmission, ...],
     ) -> tuple[PullCompletionReceipt, ...]:
@@ -214,6 +222,7 @@ class GoodNotesPullOrchestrator:
         repository: GoodNotesPullRepository,
         max_batch_size: int,
         max_attempts: int,
+        cursor_signing_key: bytes,
     ) -> None:
         raw_max_batch_size: object = max_batch_size
         if (
@@ -229,16 +238,29 @@ class GoodNotesPullOrchestrator:
             or not 1 <= max_attempts <= MAX_PULL_RETRIES
         ):
             raise GoodNotesPullError(ERROR_INVALID_REQUEST)
+        raw_cursor_signing_key: object = cursor_signing_key
+        if (
+            not isinstance(raw_cursor_signing_key, bytes)
+            or not MIN_CURSOR_SIGNING_KEY_BYTES
+            <= len(raw_cursor_signing_key)
+            <= MAX_CURSOR_SIGNING_KEY_BYTES
+        ):
+            raise GoodNotesPullError(ERROR_INVALID_REQUEST)
         self._repository = repository
         self._max_batch_size = max_batch_size
         self._max_attempts = max_attempts
+        self._cursor_signing_key = cursor_signing_key
 
     def discover(self, context: AuthenticatedPullContext, request: PullRequest) -> PullBatch:
         if request.batch_size > self._max_batch_size:
             raise GoodNotesPullError(ERROR_INVALID_REQUEST)
         states = self._validated_states(context)
         snapshot = _snapshot_digest(tuple(state.work for state in states))
-        after = _decode_cursor(request.cursor, context, snapshot) if request.cursor else None
+        after = (
+            _decode_cursor(request.cursor, context, snapshot, self._cursor_signing_key)
+            if request.cursor
+            else None
+        )
         start = _resume_index(states, after)
         chosen: list[tuple[PullWorkState, PullAssignment]] = []
         for state in states[start:]:
@@ -247,6 +269,7 @@ class GoodNotesPullOrchestrator:
             attempt = state.attempts + 1
             assignment = PullAssignment(
                 assignment_id=_assignment_id(context, state.work, attempt),
+                client_id=context.client_id,
                 context_id=context.context_id,
                 work=state.work,
                 attempt=attempt,
@@ -261,6 +284,7 @@ class GoodNotesPullOrchestrator:
         try:
             claimed = self._repository.claim_batch(
                 context.principal.principal_id,
+                context.client_id,
                 context.context_id,
                 assignments,
                 expected,
@@ -275,7 +299,11 @@ class GoodNotesPullOrchestrator:
             not state.completed and state.attempts < self._max_attempts
             for state in states[_resume_index(states, last_key) :]
         )
-        next_cursor = _encode_cursor(context, snapshot, last_key) if has_more else None
+        next_cursor = (
+            _encode_cursor(context, snapshot, last_key, self._cursor_signing_key)
+            if has_more
+            else None
+        )
         return PullBatch(assignments=assignments, next_cursor=next_cursor)
 
     def complete(
@@ -294,11 +322,16 @@ class GoodNotesPullOrchestrator:
         admissions: list[PullCompletionAdmission] = []
         for completion in values:
             assignment = self._repository.assignment(
-                context.principal.principal_id, completion.assignment_id
+                context.principal.principal_id,
+                context.client_id,
+                completion.assignment_id,
             )
             if assignment is None:
                 raise GoodNotesPullError(ERROR_STALE_ASSIGNMENT)
-            if assignment.context_id != context.context_id:
+            if (
+                assignment.client_id != context.client_id
+                or assignment.context_id != context.context_id
+            ):
                 raise GoodNotesPullError(ERROR_WRONG_CONTEXT)
             work = assignment.work
             if (
@@ -325,6 +358,7 @@ class GoodNotesPullOrchestrator:
         try:
             receipts = self._repository.complete_batch(
                 context.principal.principal_id,
+                context.client_id,
                 context.context_id,
                 tuple(admissions),
             )
@@ -425,12 +459,13 @@ def _encode_cursor(
     context: AuthenticatedPullContext,
     snapshot: str,
     after: tuple[str, str, str],
+    signing_key: bytes,
 ) -> str:
     payload = {"v": 1, "context": _context_binding(context), "snapshot": snapshot, "after": after}
     body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
     envelope = {
         "body": base64.urlsafe_b64encode(body).decode(),
-        "checksum": hashlib.sha256(body).hexdigest(),
+        "mac": hmac.new(signing_key, body, hashlib.sha256).hexdigest(),
     }
     return base64.urlsafe_b64encode(
         json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
@@ -441,11 +476,15 @@ def _decode_cursor(
     token: str,
     context: AuthenticatedPullContext,
     snapshot: str,
+    signing_key: bytes,
 ) -> tuple[str, str, str]:
     try:
         envelope = json.loads(base64.urlsafe_b64decode(token.encode()).decode())
         body = base64.urlsafe_b64decode(envelope["body"].encode())
-        if hashlib.sha256(body).hexdigest() != envelope["checksum"]:
+        supplied_mac = envelope["mac"]
+        if not isinstance(supplied_mac, str) or not hmac.compare_digest(
+            hmac.new(signing_key, body, hashlib.sha256).hexdigest(), supplied_mac
+        ):
             raise ValueError
         payload = json.loads(body.decode())
         if payload.get("v") != 1:

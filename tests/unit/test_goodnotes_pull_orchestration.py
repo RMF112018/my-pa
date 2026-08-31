@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import base64
 import dataclasses
 import hashlib
+import json
 from dataclasses import dataclass, field, replace
 
 import pytest
@@ -84,6 +86,7 @@ class _MemoryPullRepository:
     complete_calls: int = 0
     source_mutations: int = 0
     fail_claim: bool = False
+    assignment_clients: list[str] = field(default_factory=list)
 
     @classmethod
     def with_work(cls, *works: GoodNotesPageWork) -> _MemoryPullRepository:
@@ -97,6 +100,7 @@ class _MemoryPullRepository:
     def claim_batch(
         self,
         principal_id: str,
+        client_id: str,
         context_id: str,
         assignments: tuple[PullAssignment, ...],
         expected_attempts: tuple[int, ...],
@@ -116,6 +120,7 @@ class _MemoryPullRepository:
                 or state.attempts != expected
                 or state.completed
                 or expected >= max_attempts
+                or assignment.client_id != client_id
                 or assignment.context_id != context_id
                 or assignment.attempt != expected + 1
             ):
@@ -126,12 +131,16 @@ class _MemoryPullRepository:
             self.assignments[(principal_id, assignment.assignment_id)] = assignment
         return assignments
 
-    def assignment(self, principal_id: str, assignment_id: str) -> PullAssignment | None:
+    def assignment(
+        self, principal_id: str, client_id: str, assignment_id: str
+    ) -> PullAssignment | None:
+        self.assignment_clients.append(client_id)
         return self.assignments.get((principal_id, assignment_id))
 
     def complete_batch(
         self,
         principal_id: str,
+        client_id: str,
         context_id: str,
         admissions: tuple[PullCompletionAdmission, ...],
     ) -> tuple[PullCompletionReceipt, ...]:
@@ -141,7 +150,11 @@ class _MemoryPullRepository:
         for admission in admissions:
             completion = admission.completion
             assignment = self.assignments.get((principal_id, completion.assignment_id))
-            if assignment is None or assignment.context_id != context_id:
+            if (
+                assignment is None
+                or assignment.client_id != client_id
+                or assignment.context_id != context_id
+            ):
                 raise PullRepositoryConflictError
             prior_assignment = self.receipts.get((principal_id, completion.assignment_id))
             prior_key = self.keys.get((principal_id, completion.idempotency_key))
@@ -185,7 +198,12 @@ def _service(
         repository=repository,
         max_batch_size=max_batch_size,
         max_attempts=max_attempts,
+        cursor_signing_key=_cursor_signing_key(),
     )
+
+
+def _cursor_signing_key() -> bytes:
+    return hashlib.sha256(b"synthetic GoodNotes cursor signing material").digest()
 
 
 def test_request_cannot_carry_principal_or_authenticated_context() -> None:
@@ -249,6 +267,66 @@ def test_cursor_is_context_bound_malformed_and_stale_after_snapshot_change() -> 
     with pytest.raises(GoodNotesPullError) as stale:
         service.discover(context, PullRequest(batch_size=1, cursor=first.next_cursor))
     assert stale.value.code == ERROR_STALE_CURSOR
+
+
+def test_cursor_payload_cannot_be_forged_with_a_recomputed_public_hash() -> None:
+    works = (_work("a"), _work("b"), _work("c"))
+    repo = _MemoryPullRepository.with_work(*works)
+    service = _service(repo, max_batch_size=1)
+    context = _context()
+    first = service.discover(context, PullRequest(batch_size=1))
+    assert first.next_cursor is not None
+    claims_before_forgery = repo.claim_calls
+
+    envelope = json.loads(base64.urlsafe_b64decode(first.next_cursor.encode()).decode())
+    payload = json.loads(base64.urlsafe_b64decode(envelope["body"].encode()).decode())
+    payload["after"] = list(_key(max(works, key=_key)))
+    rewritten_body = json.dumps(payload, sort_keys=True, separators=(",", ":")).encode()
+    envelope["body"] = base64.urlsafe_b64encode(rewritten_body).decode()
+    envelope["mac"] = hashlib.sha256(rewritten_body).hexdigest()
+    forged = base64.urlsafe_b64encode(
+        json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
+    ).decode()
+
+    with pytest.raises(GoodNotesPullError) as rejected:
+        service.discover(context, PullRequest(batch_size=1, cursor=forged))
+    assert rejected.value.code == ERROR_INVALID_CURSOR
+    assert repo.claim_calls == claims_before_forgery
+
+    continued = service.discover(context, PullRequest(batch_size=1, cursor=first.next_cursor))
+    assert continued.assignments[0].work == sorted(works, key=_key)[1]
+
+
+@pytest.mark.parametrize("key", (b"short", b"x" * 129, "x" * 32))
+def test_cursor_signing_key_has_no_weak_default_and_is_bounded(key: object) -> None:
+    repo = _MemoryPullRepository.with_work(_work("key"))
+    with pytest.raises(GoodNotesPullError) as raised:
+        GoodNotesPullOrchestrator(
+            repository=repo,
+            max_batch_size=1,
+            max_attempts=1,
+            cursor_signing_key=key,  # type: ignore[arg-type]
+        )
+    assert raised.value.code == ERROR_INVALID_REQUEST
+
+
+def test_cursor_signing_key_is_required_and_not_exposed_by_service_repr() -> None:
+    repo = _MemoryPullRepository.with_work(_work("key-required"))
+    with pytest.raises(TypeError):
+        GoodNotesPullOrchestrator(  # type: ignore[call-arg]
+            repository=repo,
+            max_batch_size=1,
+            max_attempts=1,
+        )
+    signing_key = b"s" * 32
+    service = GoodNotesPullOrchestrator(
+        repository=repo,
+        max_batch_size=1,
+        max_attempts=1,
+        cursor_signing_key=signing_key,
+    )
+    assert signing_key.decode() not in repr(service)
+    assert signing_key.hex() not in repr(service)
 
 
 def test_retries_are_bounded_and_never_mutate_the_source() -> None:
@@ -332,6 +410,27 @@ def test_wrong_context_and_mismatched_work_reject_before_completion_write() -> N
         service.complete(context, (mismatched,))
     assert stale.value.code == ERROR_STALE_ASSIGNMENT
     assert repo.receipts == {}
+
+
+def test_second_client_in_same_context_cannot_complete_first_clients_assignment() -> None:
+    repo = _MemoryPullRepository.with_work(_work("client-bound"))
+    service = _service(repo, max_batch_size=1)
+    first_client = _context(client_id="chatllm-client-a")
+    assignment = service.discover(first_client, PullRequest(batch_size=1)).assignments[0]
+    completion = _completion(assignment)
+
+    with pytest.raises(GoodNotesPullError) as wrong:
+        service.complete(
+            _context(client_id="chatllm-client-b", context_id=first_client.context_id),
+            (completion,),
+        )
+    assert wrong.value.code == ERROR_WRONG_CONTEXT
+    assert repo.assignment_clients[-1] == "chatllm-client-b"
+    assert repo.complete_calls == 0
+    assert repo.receipts == {}
+
+    accepted = service.complete(first_client, (completion,))
+    assert accepted[0].assignment_id == assignment.assignment_id
 
 
 def test_malformed_multi_completion_rejects_atomically() -> None:

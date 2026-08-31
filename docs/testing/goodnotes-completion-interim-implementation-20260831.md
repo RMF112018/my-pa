@@ -23,7 +23,8 @@ evidence only and was not transplanted.
 | Item | Exact state | Treatment |
 | --- | --- | --- |
 | `origin/main` / merged PR #170 | merge commit `b0bddbd06a0c36d274b8bbb91d1651604e403d6d`; tree `658f175705c99a2681a7d297f9d0ee97931d61a4` | PR #170 is merged. Its source head was `beee2ca4f84ebba12555d391180e7d2f2accf6db`. |
-| Rebased GoodNotes integration before this ledger refresh | commit `3e97cb65f32a3f08f150859b842584939b6751d5`; tree `c09d3a482f7d353fe120e0cf145fd0a6b24ab0a3` | Rebase completed cleanly on the merged RI line. |
+| Rebased GoodNotes integration before this ledger corrective | commit `049bf7065cc66d7053b599b0a497e5a90b8c9357`; tree `d6b3eeefacc70331fd14541a7c645609d9784aa1` | Includes the bounded R10 plateau-limit corrective on the merged RI base. |
+| Active unmerged RI WP07 | commit `ae39ed2581c119e60d89136dd79c364617df7812`; tree `049285002f4e855a2a77cca7ab1f6090aef021b7` | Separately owned; changes RI campaign/MCV plans, relationship domain, and two RI database tests. It has zero path intersection with this ledger and was not rebased or incorporated. |
 | Alembic graph | sole head `9a3f6c1e8d24` | No successor RI migration owner exists. The rebased GoodNotes tranche has no migration-path intersection. |
 
 The current census is 308 Python modules under `src/my_pa`, 427 test modules,
@@ -44,7 +45,7 @@ are guarded in the MCV completion plan.
 | GN-WP-R7 | `INCOMPLETE_SHARED_CONTRACT_WIRING` | Runtime semantic checks exist, but the public proposal schema and validator must change atomically in shared paths. |
 | GN-WP-R8 | `INDEPENDENT_SLICE_INTEGRATED` | Corrections and delivery require current accepted evidence with exact Principal-bound provenance; rejected or superseded evidence is excluded and receipt replay is immutable. |
 | GN-WP-R9 | `APPLICATION_CORE_INTEGRATED; SHARED_WIRING_INCOMPLETE` | Authenticated HMAC-bound cursors, client/context-bound assignments, bounded retry, resume, and idempotent completion exist. Public authorization, persistence, gateway, MCP, and schedule wiring remain absent. |
-| GN-WP-R10 | `INDEPENDENT_SLICE_INTEGRATED` | The optimizer policy is production-inert and preserves immutable identities, one-change trials, hard gates, rollback, pause, and append-only in-memory history. |
+| GN-WP-R10 | `INDEPENDENT_SLICE_INTEGRATED_AND_CORRECTED` | The optimizer remains production-inert; `plateau_limit` now requires a genuine positive integer, so bool, float, NaN, infinity, and other non-integer runtime values fail closed without changing evaluator identity. |
 | GN-WP-R11 / GN-WP-R12 | `OPERATOR_DECISION_REQUIRED` | No decision, private-gold access, or implementation is claimed. |
 | OP-GN-01 | `OPERATOR_RUNTIME_ACTION_REQUIRED` | No production worker, dead-letter, deployment, or live-source action was performed. |
 
@@ -84,6 +85,26 @@ delivery-replay corrections were completed before the post-RI rebase.
 That historical review is not a verdict on the current rebased head. A fresh,
 independent exact-head review remains mandatory; no PASS, approval, merge
 decision, or risk acceptance is inferred here.
+
+A later fresh review was a `FAIL` bound only to commit
+`6b3871272a3abd2e824b29450602df8db4a71f75`, tree
+`26a7743a3f4af8657eb5df3635094e9844ce7c89`. It confirmed the historical R8/R9
+issues were fixed and reported one new MAJOR and one MINOR:
+
+- MAJOR: `OptimizerPolicy.plateau_limit` admitted NaN and other non-integer
+  runtime values, allowing plateau pause to be disabled.
+- MINOR: the RI implementation plan's FAST-status wording was stale.
+
+The MAJOR is corrected at current pre-ledger head
+`049bf7065cc66d7053b599b0a497e5a90b8c9357`: the guard now accepts only a true
+positive `int`. The complete optimizer module passed 35 tests; targeted Ruff,
+format, mypy, and `git diff --check` also passed. The MINOR remains explicitly
+pending because `docs/plans/relationship-intelligence-implementation-plan.md`
+is owned by active unmerged RI WP07. This GoodNotes ledger does not edit or
+incorporate that branch.
+
+Neither historical FAIL is a verdict on the head containing these corrections.
+A new independent exact-head review remains required.
 
 ## Remaining gates
 

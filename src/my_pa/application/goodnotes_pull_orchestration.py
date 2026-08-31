@@ -310,7 +310,7 @@ class GoodNotesPullOrchestrator:
                 state is None
                 or assignment.attempt < 1
                 or assignment.attempt > self._max_attempts
-                or state.attempts < assignment.attempt
+                or state.attempts != assignment.attempt
             ):
                 raise GoodNotesPullError(ERROR_STALE_ASSIGNMENT)
             admissions.append(

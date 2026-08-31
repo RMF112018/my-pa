@@ -253,6 +253,23 @@ def test_retries_are_bounded_and_never_mutate_the_source() -> None:
     assert repo.source_mutations == 0
 
 
+def test_only_the_current_retry_assignment_may_complete() -> None:
+    repo = _MemoryPullRepository.with_work(_work("stale-retry"))
+    service = _service(repo, max_batch_size=1, max_attempts=2)
+    context = _context()
+    first = service.discover(context, PullRequest(batch_size=1)).assignments[0]
+    second = service.discover(context, PullRequest(batch_size=1)).assignments[0]
+    assert (first.attempt, second.attempt) == (1, 2)
+    with pytest.raises(GoodNotesPullError) as stale:
+        service.complete(context, (_completion(first),))
+    assert stale.value.code == ERROR_STALE_ASSIGNMENT
+    assert repo.complete_calls == 0
+    assert repo.receipts == {}
+    accepted = service.complete(context, (_completion(second),))
+    assert accepted[0].assignment_id == second.assignment_id
+    assert accepted[0].replayed is False
+
+
 def test_atomic_claim_conflict_returns_no_partial_batch() -> None:
     repo = _MemoryPullRepository.with_work(_work("a"), _work("b"))
     repo.fail_claim = True

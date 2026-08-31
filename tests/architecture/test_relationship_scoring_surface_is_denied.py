@@ -271,15 +271,17 @@ def test_the_scan_reaches_the_whole_relationship_surface() -> None:
     # `f5b06925857e` added `entity_role_types`, `entity_discipline_types`,
     # and `entity_project_participations` (RI-ENT-WP-04); fifty-seven after
     # `17149a48fa30` added `entity_person_organization_affiliations`
-    # (RI-ENT-WP-05).
-    assert len(columns) == 57, f"{len(columns)} relationship tables reached, not fifty-seven"
+    # (RI-ENT-WP-05); fifty-eight after `8dc3619891bb` added
+    # `entity_relationship_types` (RI-ENT-WP-06a).
+    assert len(columns) == 58, f"{len(columns)} relationship tables reached, not fifty-eight"
     # Sixty through `b727e870d45e`; sixty-two after `EntityName` and
     # `EntityOrganizationProfile` (RI-ENT-WP-02); sixty-four after
     # `EntityAddress` and `EntityCommunicationMethod` (RI-ENT-WP-03);
     # sixty-seven after `EntityRoleType`, `EntityDisciplineType`, and
     # `EntityProjectParticipation` (RI-ENT-WP-04); sixty-eight after
-    # `PersonOrganizationAffiliation` (RI-ENT-WP-05).
-    assert len(models) == 68, f"{len(models)} relationship models reached, not sixty-eight"
+    # `PersonOrganizationAffiliation` (RI-ENT-WP-05); sixty-nine after
+    # `RelationshipTypeTaxonomyEntry` (RI-ENT-WP-06a).
+    assert len(models) == 69, f"{len(models)} relationship models reached, not sixty-nine"
     assert vocabularies, "no closed relationship vocabulary was reached"
     assert set(declared) == set(ALLOW_LIST_CONSTANTS), (
         f"{sorted(declared)} allow-list constants were read from "

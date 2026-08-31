@@ -449,6 +449,19 @@ EXPECTED_MODEL_FIELDS = {
             "superseded_by_affiliation_id",
         }
     ),
+    "my_pa.domain.relationship.entity.RelationshipTypeTaxonomyEntry": frozenset(
+        {
+            "relationship_type_code",
+            "label",
+            "directed",
+            "inverse_type_code",
+            "source_entity_type",
+            "target_entity_type",
+            "allows_project_scope",
+            "cardinality_rule",
+            "status",
+        }
+    ),
     "my_pa.domain.relationship.entity.Assignment": frozenset(
         {
             "assignment_id",
@@ -1355,6 +1368,19 @@ EXPECTED_TABLE_COLUMNS = {
             "superseded_by_affiliation_id",
         }
     ),
+    "entity_relationship_types": frozenset(
+        {
+            "relationship_type_code",
+            "label",
+            "directed",
+            "inverse_type_code",
+            "source_entity_type",
+            "target_entity_type",
+            "allows_project_scope",
+            "cardinality_rule",
+            "status",
+        }
+    ),
     "entity_assignments": frozenset(
         {
             "assignment_id",
@@ -1790,8 +1816,10 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
     # `EntityCommunicationMethod` (RI-ENT-WP-03); sixty-seven after
     # `f5b06925857e` added `EntityRoleType`, `EntityDisciplineType`, and
     # `EntityProjectParticipation` (RI-ENT-WP-04); sixty-eight after
-    # `17149a48fa30` added `PersonOrganizationAffiliation` (RI-ENT-WP-05).
-    assert len(actual_model_fields) == 68
+    # `17149a48fa30` added `PersonOrganizationAffiliation` (RI-ENT-WP-05);
+    # sixty-nine after `8dc3619891bb` added `RelationshipTypeTaxonomyEntry`
+    # (RI-ENT-WP-06a).
+    assert len(actual_model_fields) == 69
     # Forty-nine after `b727e870d45e` added the identity-ambiguity pair to the
     # three durable re-enrichment tables RI final completion brought;
     # fifty-one after `7e114f822af2` added `entity_names` and
@@ -1800,10 +1828,11 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
     # fifty-six after `f5b06925857e` added `entity_role_types`,
     # `entity_discipline_types`, and `entity_project_participations`
     # (RI-ENT-WP-04); fifty-seven after `17149a48fa30` added
-    # `entity_person_organization_affiliations` (RI-ENT-WP-05). The figure
-    # makes the allow-list closed in both directions, so it moves with the
-    # declaration and never ahead of it.
-    assert len(actual_table_columns) == 57
+    # `entity_person_organization_affiliations` (RI-ENT-WP-05); fifty-eight
+    # after `8dc3619891bb` added `entity_relationship_types` (RI-ENT-WP-06a).
+    # The figure makes the allow-list closed in both directions, so it moves
+    # with the declaration and never ahead of it.
+    assert len(actual_table_columns) == 58
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

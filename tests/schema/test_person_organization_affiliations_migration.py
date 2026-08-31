@@ -229,7 +229,17 @@ def test_the_revision_runs_empty_to_head_and_head_to_empty(disposable_database: 
 
 @pytest.mark.database
 def test_downgrading_one_step_removes_exactly_this_table(migrated_engine: Engine) -> None:
-    """Additive: everything below this revision is untouched by its downgrade."""
+    """Additive: everything below this revision is untouched by its downgrade.
+
+    Steps down to `REVISION` itself first, following the pattern
+    `test_entity_project_participations_migration.py` established for the
+    same reason: `migrated_engine` upgrades to the chain's true head, which
+    may now sit above `REVISION` -- `8dc3619891bb` (RI-ENT-WP-06a) does. This
+    test's subject is specifically *this* revision's own downgrade, one step
+    below it, not one step below whatever the chain's head happens to be
+    today.
+    """
+    command.downgrade(_config(), REVISION)
     before = _tables(migrated_engine)
     assert before >= NEW_TABLES
 

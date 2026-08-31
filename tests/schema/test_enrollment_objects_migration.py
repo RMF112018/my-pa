@@ -265,6 +265,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # `17149a48fa30`'s person-organization affiliation table
         # (RI-ENT-WP-05), stacked above this revision like the rest of this set.
         "entity_person_organization_affiliations",
+        # `8dc3619891bb`'s global relationship-type taxonomy table
+        # (RI-ENT-WP-06a), stacked above this revision like the rest of this set.
+        "entity_relationship_types",
     }
 )
 

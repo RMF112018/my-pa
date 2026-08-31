@@ -327,6 +327,13 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         # (RI-ENT-WP-05), stacked above the plane for the same reason: it
         # arrives above `f5b06925857e`, one link further still.
         "entity_person_organization_affiliations",
+        # `8dc3619891bb`'s global relationship-type taxonomy table
+        # (RI-ENT-WP-06a), stacked above the plane for the same reason: it
+        # arrives above `17149a48fa30`, one link further still. The same
+        # revision also swaps `entity_relationships.relationship_type`'s
+        # CHECK for a foreign key into this table, which does not change
+        # what tables this downgrade removes.
+        "entity_relationship_types",
     }
 )
 

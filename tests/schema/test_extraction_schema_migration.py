@@ -401,6 +401,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "entity_person_organization_affiliations",
         }
     ),
+    # `8dc3619891bb` (RI-ENT-WP-06a): the global relationship-type taxonomy,
+    # additive on `17149a48fa30` and creating nothing else. Closes
+    # `ENTITY-REL-001`; the same revision also swaps
+    # `entity_relationships.relationship_type`'s CHECK for a foreign key into
+    # this table, which alters an existing column's constraint but creates no
+    # additional `knowledge` table.
+    "8dc3619891bb": frozenset(
+        {
+            "entity_relationship_types",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

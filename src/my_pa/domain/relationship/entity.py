@@ -101,6 +101,7 @@ __all__ = [
     "PersonOrganizationAffiliation",
     "PersonOrganizationAffiliationState",
     "RelationshipState",
+    "RelationshipTypeTaxonomyEntry",
     "RoleBasisCode",
     "StakeholderClassCode",
     "StakeholderSideCode",
@@ -272,9 +273,45 @@ class AssignmentType(StrEnum):
 class EntityRelationshipType(StrEnum):
     """The kinds of directed relationship between two entities.
 
-    Frozen as of this revision; widening is a visible schema change rather than
-    a silent one, because the migration's `relationship_type` CHECK constraint
-    references these values.
+    Frozen at these fifteen codes as of `9def3c2e63bb`; widening this enum
+    would be a visible schema change rather than a silent one, on the same
+    argument that was true then.
+
+    **As of `8dc3619891bb` (RI-ENT-WP-06a), this enum is no longer the sole
+    source of truth for `entity_relationships.relationship_type`.** That
+    revision closes `ENTITY-REL-001` ("closed relationship vocabulary") by
+    adding the table-backed, genuinely extensible `entity_relationship_types`
+    taxonomy (`RelationshipTypeTaxonomyEntry`, below), seeded with these same
+    fifteen codes plus twenty new ones, and re-points the database column at
+    that table by foreign key instead of by CHECK. **This enum is
+    deliberately NOT widened to match.** It stays exactly these fifteen
+    codes: the closed set of well-known constants the existing, already-
+    shipped application write path (`application/commands.py`'s directed-
+    write validation, `contracts/ports.py`, `infrastructure/persistence/
+    entity.py`, the HTTP/MCP transport and capability surfaces) validates a
+    caller's `relationship_type` against via `isinstance`. A caller cannot
+    yet create an `entity_relationships` row through that typed command path
+    using one of the twenty new codes -- disclosed here, in
+    `8dc3619891bb`'s own module docstring, and in the campaign document, not
+    left implicit. `entity_relationship_types` is now the authoritative,
+    extensible, DB-level source of truth listing all thirty-five codes;
+    widening the application-level write path to accept the twenty new ones
+    is deliberately left to a future, disclosed revision, the same way this
+    campaign already defers write-path wiring for six other record families
+    (see "Merge/split disposition" in the campaign document).
+
+    **The typed read path has the matching gap, stated rather than hidden.**
+    `infrastructure.persistence.entity._row_to_relationship` constructs this
+    enum from the stored column (`EntityRelationshipType(str(row.
+    relationship_type))`), so a row written with one of the twenty new codes
+    by anything outside the typed command path -- a raw `INSERT`, a future
+    migration, an operator fixture -- raises `ValueError` the first time the
+    typed repository tries to read it back, rather than being read as a
+    string. Nothing in ordinary product use can create such a row today (the
+    write path this enum's own isinstance check guards is the only one
+    wired up), so this is a real but currently unreachable gap, named here
+    so the revision that widens the write path also has to decide the read
+    path in the same change rather than discover the gap later.
     """
 
     WORKS_FOR = "works_for"
@@ -1410,6 +1447,117 @@ class EntityDisciplineType:
             raise ValueError("a discipline type broader family is not blank when present")
         if not isinstance(self.status, TaxonomyEntryStatus):
             raise ValueError("a discipline type has a closed status")
+
+
+@dataclass(frozen=True, slots=True)
+class RelationshipTypeTaxonomyEntry:
+    """One entry of the global, extensible relationship-type taxonomy
+    (RI-ENT-WP-06a, `entity_relationship_types`).
+
+    Closes `ENTITY-REL-001` ("closed relationship vocabulary (15 of 22
+    required codes)"): the audit's Record Element Inventory recommends this
+    table replace the frozen `EntityRelationshipType` CHECK precisely because
+    a CHECK requires a migration every time the vocabulary needs one more
+    code. Field-for-field the same taxonomy shape `EntityRoleType`/
+    `EntityDisciplineType` already established for RI-ENT-WP-04 (`status`
+    reuses the same `TaxonomyEntryStatus`), widened with the additional
+    columns a relationship type carries that a role or discipline code does
+    not: whether the edge is directed, its declared inverse (if any), the
+    entity types it connects, and whether it is ordinarily exercised in a
+    project's scope. See the `8dc3619891bb` migration's module docstring for
+    the full reasoning behind every column's seeded values, per code -- this
+    docstring states the shape and its invariants, not the per-code data.
+
+    **Not Principal-partitioned**, on the same argument `EntityRoleType`'s
+    docstring gives: a relationship-type code means the same thing for every
+    Principal, so there is no `principal_id` here and no per-Principal
+    override.
+
+    **`directed` is `true` for every seeded row.** `EntityRelationshipType`'s
+    own docstring already describes "the kinds of DIRECTED relationship
+    between two entities" -- there is no undirected code in this taxonomy,
+    seeded or future, and nothing here invents one.
+
+    **`inverse_type_code`, when set, names another row in this same table --
+    never invented, only wired for a pair that is self-evident from the code
+    names alone (RULING 2).** `parent_of`/`subsidiary_of` and `manages`/
+    `managed_by` are the only two pairs this revision wires; every other code
+    -- including ones English reads as naturally mutual
+    (`design_coordinates_with`, `sequence_interfaces_with`) or ones the audit
+    itself names an inverse for that is not part of this revision's required
+    vocabulary (`technical_reviewer_of`'s audit-suggested `reviewed_by`) --
+    is left `NULL` rather than guessed. A row is never its own inverse
+    (enforced by both this dataclass and the table's own CHECK).
+
+    **`source_entity_type`/`target_entity_type` are descriptive taxonomy
+    metadata, not an enforced constraint on any `entity_relationships` row.**
+    Restricted to `EntityType.PERSON`/`EntityType.ORGANIZATION` when set,
+    matching the migration's CHECK exactly; `None` on either side means the
+    audit's text does not state that side narrowly enough to commit a value,
+    which is most of the thirty-five codes, not a gap unique to this
+    revision's twenty new ones. PostgreSQL cannot check that
+    `entity_relationships.from_entity_id`/`to_entity_id` actually name
+    entities of a particular `entity_type` without reading another table's
+    row, the same non-enforcement every sibling record family on this plane
+    already accepts for its own entity-type expectations.
+
+    **`allows_project_scope`** states whether a relationship of this type is
+    ordinarily exercised within one project's scope
+    (`entity_relationships.scope_entity_id`, unchanged by this revision) --
+    not whether it *must* be scoped, and not itself a scope value.
+
+    **`cardinality_rule` is free text, deliberately left `NULL` for every
+    code this revision seeds.** The audit explicitly warns against assuming
+    a DB-singleton "at most one active parent" rule for `parent_of`; leaving
+    this column empty for every code is what avoids asserting a cardinality
+    rule nothing has approved yet, not an oversight. A future revision
+    populates it deliberately, per code, once a concrete rule is approved.
+
+    **Never a confidence field (RULING 1).** No field here ranks, scores, or
+    grades one relationship type against another; `directed`,
+    `allows_project_scope`, `status`, and `cardinality_rule` are unordered
+    facts about the taxonomy entry, not a gradient, on the same argument
+    `EntityRoleType`/`AffiliationTypeCode` already make for their own fields.
+    """
+
+    relationship_type_code: str
+    label: str
+    directed: bool
+    inverse_type_code: str | None = None
+    source_entity_type: EntityType | None = None
+    target_entity_type: EntityType | None = None
+    allows_project_scope: bool = False
+    cardinality_rule: str | None = None
+    status: TaxonomyEntryStatus = TaxonomyEntryStatus.ACTIVE
+
+    def __post_init__(self) -> None:
+        if not self.relationship_type_code.strip():
+            raise ValueError("a relationship type code is not blank")
+        if not self.label.strip():
+            raise ValueError("a relationship type label is not blank")
+        if not isinstance(self.directed, bool):
+            raise ValueError("a relationship type directed flag is a boolean")
+        if self.inverse_type_code is not None:
+            if not self.inverse_type_code.strip():
+                raise ValueError("a relationship type inverse code is not blank when present")
+            if self.inverse_type_code == self.relationship_type_code:
+                raise ValueError("a relationship type does not invert itself")
+        if self.source_entity_type is not None and self.source_entity_type not in (
+            EntityType.PERSON,
+            EntityType.ORGANIZATION,
+        ):
+            raise ValueError("a relationship type source entity type is person or organization")
+        if self.target_entity_type is not None and self.target_entity_type not in (
+            EntityType.PERSON,
+            EntityType.ORGANIZATION,
+        ):
+            raise ValueError("a relationship type target entity type is person or organization")
+        if not isinstance(self.allows_project_scope, bool):
+            raise ValueError("a relationship type allows_project_scope flag is a boolean")
+        if self.cardinality_rule is not None and not self.cardinality_rule.strip():
+            raise ValueError("a relationship type cardinality rule is not blank when present")
+        if not isinstance(self.status, TaxonomyEntryStatus):
+            raise ValueError("a relationship type has a closed status")
 
 
 class RoleBasisCode(StrEnum):

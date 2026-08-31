@@ -112,6 +112,15 @@ UNPARTITIONED_USER_OWNED: Final = {
         "the same global, shared reference vocabulary shape as "
         "`entity_role_types`, for the independent discipline axis; same reason."
     ),
+    # --- the RI-ENT-WP-06a relationship-type taxonomy plane ----------------
+    "entity_relationship_types": (
+        "a global, shared reference vocabulary of relationship-type codes -- "
+        "like a lookup table, not user-owned data, the same shape as "
+        "`entity_role_types`/`entity_discipline_types` and for the same "
+        "reason. Every row is seeded by the `8dc3619891bb` migration itself; "
+        "no write path lets a Principal add, change, or read one row as if "
+        "it were their own."
+    ),
 }
 
 NATIVE_PARTITIONED: Final = frozenset(

@@ -82,16 +82,25 @@ implements only:
   (`knowledge.entity_project_participations`, `knowledge.entity_role_types`,
   `knowledge.entity_discipline_types`);
 - **(F) RI-ENT-WP-05** — person affiliation integration
-  (`knowledge.entity_person_organization_affiliations`).
+  (`knowledge.entity_person_organization_affiliations`);
+- **(G) RI-ENT-WP-06a** — relationship taxonomy expansion
+  (`knowledge.entity_relationship_types`), a first slice of RI-ENT-WP-06 --
+  see "RI-ENT-WP-06a" below for exactly what is and is not in this slice.
 
-RI-ENT-WP-06 through RI-ENT-WP-13 (relationship-graph expansion, assertion/
-provenance binding, repository/service layer beyond WP-02/WP-04/WP-05,
-resolution/search vNext, MCP rich-read and mutation contracts, legacy
-migration/backfill, and the full TBR completeness fixture) are **explicitly
-out of scope for this increment** and remain future work, ordered as the
-source audit orders them (section P). Nothing in this increment implements
-them, and nothing in this increment's schema, domain code, or tests assumes
-they exist.
+The remainder of RI-ENT-WP-06 (merge/split coordination for the six
+Entity-bound record families WP-02/WP-04/WP-05 delivered) and RI-ENT-WP-07
+through RI-ENT-WP-13 (assertion/provenance binding, repository/service layer
+beyond WP-02/WP-04/WP-05, resolution/search vNext, MCP rich-read and mutation
+contracts, legacy migration/backfill, and the full TBR completeness fixture)
+are **explicitly out of scope for this increment** and remain future work,
+ordered as the source audit orders them (section P). Nothing in this
+increment implements them, and nothing in this increment's schema, domain
+code, or tests assumes they exist. **The merge/split half of RI-ENT-WP-06 is
+a separate, later, independent pull request (PR2) from the relationship-
+taxonomy slice this document's "RI-ENT-WP-06a" section covers (PR1); PR2 does
+not touch `entity_relationship_types` or `EntityRelationshipType`, and this
+document's existing "Merge/split disposition" ledger below is unmodified by
+PR1 and remains PR2's scope exactly as recorded.**
 
 **Still prohibited and not covered by this or any future increment of this
 campaign without separate, explicit operator authorization:** production
@@ -110,7 +119,7 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-SCHEMA-001` | Critical | No typed legal/brand/DBA/operating-name semantics | **Closed by RI-ENT-WP-02** — `entity_names` (9 typed `name_type_code` values) and `entity_organization_profiles.organization_kind_code`/`legal_identity_status_code` |
 | `ENTITY-SCHEMA-002` | High | No normalized entity-address family | **Closed by RI-ENT-WP-03** — `entity_addresses` (9 typed `address_type_code` values, per-(entity, type) uniqueness on `normalized_address_value`) |
 | `ENTITY-SCHEMA-003` | High | No typed phones/domains/websites | **Closed by RI-ENT-WP-03** — `entity_communication_methods` (`method_type_code` email/phone/domain/website, `usage_context_code`, `verification_status_code`) |
-| `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | Not in scope (`RI-ENT-WP-06`); `EntityRelationshipType` untouched |
+| `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | **Closed by RI-ENT-WP-06a** — `entity_relationship_types` (global, table-backed taxonomy seeded with the fifteen existing codes plus twenty new ones; `entity_relationships.relationship_type` now a foreign key into it). `EntityRelationshipType` itself stays at fifteen codes, disclosed and deliberate — see `EntityRelationshipType`'s docstring |
 | `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. No MCP capability or write path exists yet (`RI-ENT-WP-10`/`WP-11`) — see "Merge/split disposition" below |
 | `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | Partially addressed for organization legal identity only, via `legal_identity_status_code` (not a confidence field — see Ruling 1); full assertion/provenance binding is `RI-ENT-WP-07` |
 | `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `state = 'active' AND effective_to IS NULL` denoting "current") |
@@ -132,7 +141,7 @@ Preserved from the source audit; status reflects this increment only.
 | WP-03 | Address and communication record families | **Delivered** — see below |
 | WP-04 | Project participation model | **Delivered** — see below |
 | WP-05 | Person affiliation integration | **Delivered** — see below |
-| WP-06 | Corporate/entity relationship graph expansion | Deferred |
+| WP-06 | Corporate/entity relationship graph expansion | **Delivered (partial, RI-ENT-WP-06a)** — `entity_relationship_types` taxonomy and the twenty new codes; merge/split coordination for the six WP-02/04/05 record families remains deferred to a separate PR2 |
 | WP-07 | Assertion/confidence/provenance binding | Deferred (see Ruling 1 — no scalar confidence will be added under this name) |
 | WP-08 | Repository/domain services and validation | Deferred |
 | WP-09 | Entity resolution/search vNext | Deferred |
@@ -173,11 +182,11 @@ sharing a representation share an owner by construction.
 | Typed legal/operating/DBA/brand/acronym/alias/historical/document-reference name | `entity_names` | **WP-02** | **Delivered** |
 | Organization subtype (SPV/government/utility/professional-practice/brand/company/nonprofit/public-agency) | `entity_organization_profiles.organization_kind_code` | **WP-02** | **Delivered** |
 | Organization legal-identity status (verified/best-supported/unresolved/awaiting-confirmation) | `entity_organization_profiles.legal_identity_status_code` | **WP-02** | **Delivered** |
-| Historical juristic entity (a *different* legal person than its successor) | A separate `entities` row, linked by relationship — never a name row | WP-06 (relationship taxonomy must admit the lineage edge) for the *edge*; the *entity* row itself needs no new table | Architecture rule recorded now; no lineage edge type exists yet (`EntityRelationshipType` untouched) |
+| Historical juristic entity (a *different* legal person than its successor) | A separate `entities` row, linked by relationship — never a name row | WP-06a (relationship taxonomy must admit the lineage edge) for the *edge*; the *entity* row itself needs no new table | **Delivered** — `historical_identity_of`/`acquired_by` now exist in `entity_relationship_types`; the *entity* row pattern was already delivered by WP-02 (see `tests/database/test_entity_names_tbr_gs4_studios_fixture.py`, which still uses `AFFILIATED_WITH` as its documented placeholder edge pending the write path that would let it use the new codes through `EntityRelationshipType`) |
 | Project address / legal principal address / HQ / regional or known office / city hall | `entity_addresses` | WP-03 | Deferred |
 | Phone / website / domain / email as a contact channel | `entity_communication_methods` | WP-03 | Deferred |
 | Key/known contact, with title, at a project or organization | Person entity + `entity_person_organization_affiliations` + project participation | WP-05, WP-04 | **Delivered** — the project-participation half (`entity_project_participations`) was delivered by WP-04; the affiliation/title half (`entity_person_organization_affiliations.job_title`) is delivered by WP-05 |
-| Relationship / parent / practice / acquisition lineage / technical-review / seller-developer-SPV / utility-authority edge | Extensible `entity_relationships` taxonomy (successor to the frozen 15-member `EntityRelationshipType`) | WP-06 | Deferred; `EntityRelationshipType` untouched this increment |
+| Relationship / parent / practice / acquisition lineage / technical-review / seller-developer-SPV / utility-authority edge | `entity_relationship_types` taxonomy (table-backed successor to the CHECK that froze `EntityRelationshipType` at fifteen codes) | WP-06a | **Delivered** — thirty-five codes seeded (the fifteen existing plus twenty new); `entity_relationships.relationship_type` is now a foreign key into this table. `EntityRelationshipType` itself stays at fifteen codes, deliberately not widened — see its own docstring |
 | Project role / discipline / scope / stakeholder side / stakeholder tier / role basis / participation state | `entity_project_participations` — named `entity_project_participations` rather than the audit's own `project_entity_participations`; see "Naming deviations" under RI-ENT-WP-04 below | WP-04 | **Delivered** |
 | "Confidence" (register label) at any dimension (role/scope/participation/legal-identity) | **Not a scalar confidence field anywhere** — discrete `assertion_status`/`role_basis_code`/`legal_identity_status_code`-family vocabularies, one per dimension, bound to the fact/edge/participation that carries it | WP-02 delivers `legal_identity_status_code`; the rest is WP-07 | Partial — RULING 1 governs all of it, see below |
 | Evidence / source type-URI / observation and verification timestamps / assertion author / conflicting evidence / supersession / source-driven correction | Existing `entity_fact_evidence_links`, `entity_observations`, `entity_mutation_events`, `entity_resolution_decisions`, extended to bind the new record families | WP-07 | Deferred; the ledgers exist and are unmodified, but do not yet bind `entity_names`/`entity_organization_profiles` rows |
@@ -592,6 +601,105 @@ nonetheless literally `affiliation_id`, matching the audit's own field name.
   `IdKind.PERSON_ORGANIZATION_AFFILIATION = "poaf"` — does not collide with
   any prior member of `IdKind`, checked before use.
 
+## RI-ENT-WP-06a — relationship taxonomy expansion
+
+**Objective** (source audit, decision R.3): replace the frozen
+`EntityRelationshipType` CHECK with a table-backed, extensible relationship-
+type taxonomy, closing `ENTITY-REL-001` ("closed relationship vocabulary (15
+of 22 required codes)"). **Delivered this increment, as PR1 of a two-PR
+increment; PR2 (merge/split coordination for the six WP-02/04/05 record
+families this document's "Merge/split disposition" section already ledgers)
+is separate, later, independent work this PR does not touch.**
+
+### `entity_relationship_types`
+
+Global, Principal-independent reference vocabulary — the same shape
+`entity_role_types`/`entity_discipline_types` already established for
+RI-ENT-WP-04, reusing the same `TaxonomyEntryStatus`
+(`active`/`deprecated`). Seeded with the fifteen pre-existing
+`EntityRelationshipType` codes plus twenty new ones the audit's Record
+Element Inventory names: `brand_of`, `operates_as`, `dba_of`,
+`historical_identity_of`, `parent_of`, `subsidiary_of`, `acquired_by`,
+`practice_of`, `contracting_entity_for`, `managed_by`,
+`owner_representative_for`, `project_controls_advisor_to`,
+`technical_reviewer_of`, `peer_reviewer_of`, `design_coordinates_with`,
+`utility_provider_for`, `permitting_authority_for`, `seller_developer_for`,
+`sales_marketing_agent_for`, `sequence_interfaces_with`.
+
+`directed` is `true` for all thirty-five (every code in this vocabulary is a
+directed edge, seeded and future). `inverse_type_code` is wired for exactly
+two pairs self-evident from the code names alone — `parent_of`/
+`subsidiary_of` and `manages`/`managed_by` — and left `NULL` everywhere else,
+including where the audit's own text names an inverse
+(`technical_reviewer_of`'s `reviewed_by`) that is not part of this revision's
+required vocabulary (RULING 2: never invent an unauthorized semantic
+pairing). `source_entity_type`/`target_entity_type` are nullable, CHECK-
+constrained to `person`/`organization`, and populated only for the nine
+codes the audit frames unambiguously as organization-to-organization
+corporate-identity edges plus two organization-only-source codes
+(`utility_provider_for`, `permitting_authority_for`); every other code,
+including all fifteen pre-existing ones, is `NULL`/`NULL` rather than
+guessed. `allows_project_scope` is `true` for the fifteen new codes the
+audit frames as ordinarily exercised within a project's scope (via
+`entity_relationships.scope_entity_id`, unchanged) and `false` for the five
+pure corporate-lineage codes and all fifteen pre-existing ones.
+`cardinality_rule` is left `NULL` for every seeded row — the audit
+explicitly warns against assuming a DB-singleton "one active parent" rule
+for `parent_of`, which is exactly what an empty column avoids asserting.
+
+### The constraint swap
+
+`9def3c2e63bb`'s `an_entity_relationship_type_is_known` CHECK is dropped and
+replaced by a validated (not `NOT VALID`) foreign key,
+`an_entity_relationship_type_is_seeded`, from
+`entity_relationships.relationship_type` to
+`entity_relationship_types.relationship_type_code`. Because the fifteen
+pre-existing codes are seeded *before* this swap, the validated `ALTER
+TABLE` is itself the proof that every existing `entity_relationships` row
+survives: Postgres refuses the `ALTER` outright if any row's value is not
+among the seeded codes. `tests/schema/test_entity_relationship_types_migration.py`
+proves this against a real server, explicitly for all fifteen pre-existing
+codes (one assertion per code) and for each of the twenty new ones.
+
+### `EntityRelationshipType` is not widened, disclosed
+
+`EntityRelationshipType` (the application-facing `StrEnum`) stays at
+fifteen codes. It is deeply threaded through the already-shipped
+`entity_relationships` write path (`application/commands.py`'s directed-
+write validation, `contracts/ports.py`, `infrastructure/persistence/
+entity.py`, the HTTP/MCP transport and capability surfaces) in a way none
+of the six WP-02/04/05 record families are, so widening it would be a
+second, much larger surface change this single-purpose PR does not make.
+`entity_relationship_types` is now the authoritative, extensible, DB-level
+source of truth for all thirty-five codes; a caller cannot yet write an
+`entity_relationships` row through the existing typed command path using
+one of the twenty new codes. This is disclosed here, in
+`EntityRelationshipType`'s own docstring, and in the `8dc3619891bb`
+migration's module docstring — not left implicit — and follows the same
+disclosed-deferral pattern this campaign already uses for the six WP-02/04/05
+families' merge/split wiring.
+
+### Delivered artifacts
+
+- Migration `8dc3619891bb` (`down_revision = 17149a48fa30`): one new table
+  (`entity_relationship_types`, seeded with thirty-five rows), and one
+  altered constraint on `entity_relationships.relationship_type` (CHECK
+  replaced by foreign key). No other existing table, column, or constraint
+  is altered.
+- `src/my_pa/domain/relationship/entity.py`: `RelationshipTypeTaxonomyEntry`;
+  `EntityRelationshipType`'s docstring updated to disclose the table-backed
+  companion and why the enum itself is not widened.
+- `src/my_pa/infrastructure/persistence/tables.py`: `entity_relationship_types`
+  (Core `Table` definition for runtime access; the migration itself is
+  written out in raw DDL per `D-48`/`D-69`); `entity_relationships`'s
+  declaration rewritten to match (the old `_one_of(relationship_type,
+  EntityRelationshipType, ...)` CHECK replaced by the matching
+  `ForeignKeyConstraint`).
+- No new `IdKind` member: `entity_relationship_types.relationship_type_code`
+  is a stable business code, not a generated id, the same way
+  `entity_role_types.role_code`/`entity_discipline_types.discipline_code`
+  need none.
+
 ## Merge/split disposition (RULING 2)
 
 `entity_names`, `entity_organization_profiles`, `entity_addresses`,
@@ -721,6 +829,8 @@ against its own disposable database, never the configured one):
 - `.venv/bin/python -m pytest tests/unit/test_person_organization_affiliation_domain.py -q`
 - `.venv/bin/python -m pytest tests/schema/test_person_organization_affiliations_migration.py -q`
 - `.venv/bin/python -m pytest tests/database/test_person_organization_affiliations_tbr_fixture.py -q`
+- `.venv/bin/python -m pytest tests/unit/test_relationship_type_taxonomy_domain.py -q`
+- `.venv/bin/python -m pytest tests/schema/test_entity_relationship_types_migration.py -q`
 - `.venv/bin/python -m pytest tests/relationship/test_relationship_domain.py -q`
 - `.venv/bin/python -m pytest tests/architecture/test_relationship_scoring_surface_is_denied.py -q`
 - `.venv/bin/python -m pytest tests/architecture/ -q`
@@ -735,9 +845,10 @@ restated here, so this document cannot drift ahead of what actually ran.
 - [`docs/specs/relationship-intelligence-v0.2.md`](../specs/relationship-intelligence-v0.2.md) — current governing requirements source; this campaign extends its entity model, does not supersede it.
 - [`docs/specs/relationship-memory-v0.1.md`](../specs/relationship-memory-v0.1.md) — the sibling record family this campaign's naming and lifecycle conventions follow.
 - [`docs/architecture/module-boundaries.md`](../architecture/module-boundaries.md) — the layering this campaign's domain/persistence split honors.
-- `src/my_pa/domain/relationship/entity.py` — `EntityName`, `EntityNameState`, `NameTypeCode`, `EntityOrganizationProfile`, `OrganizationKindCode`, `LegalIdentityStatusCode`, `EntityAddress`, `EntityAddressState`, `AddressTypeCode`, `EntityCommunicationMethod`, `EntityCommunicationMethodState`, `CommunicationMethodTypeCode`, `CommunicationUsageContextCode`, `CommunicationVerificationStatusCode`, `EntityProjectParticipation`, `EntityProjectParticipationState`, `RoleBasisCode`, `StakeholderSideCode`, `StakeholderClassCode`, `ParticipationStatusCode`, `PersonOrganizationAffiliation`, `PersonOrganizationAffiliationState`, `AffiliationTypeCode`.
-- `src/my_pa/infrastructure/persistence/tables.py` — `entity_names`, `entity_organization_profiles`, `entity_addresses`, `entity_communication_methods`, `entity_project_participations`, `entity_role_types`, `entity_discipline_types`, `entity_person_organization_affiliations`.
+- `src/my_pa/domain/relationship/entity.py` — `EntityName`, `EntityNameState`, `NameTypeCode`, `EntityOrganizationProfile`, `OrganizationKindCode`, `LegalIdentityStatusCode`, `EntityAddress`, `EntityAddressState`, `AddressTypeCode`, `EntityCommunicationMethod`, `EntityCommunicationMethodState`, `CommunicationMethodTypeCode`, `CommunicationUsageContextCode`, `CommunicationVerificationStatusCode`, `EntityProjectParticipation`, `EntityProjectParticipationState`, `RoleBasisCode`, `StakeholderSideCode`, `StakeholderClassCode`, `ParticipationStatusCode`, `PersonOrganizationAffiliation`, `PersonOrganizationAffiliationState`, `AffiliationTypeCode`, `RelationshipTypeTaxonomyEntry`, `EntityRelationshipType`.
+- `src/my_pa/infrastructure/persistence/tables.py` — `entity_names`, `entity_organization_profiles`, `entity_addresses`, `entity_communication_methods`, `entity_project_participations`, `entity_role_types`, `entity_discipline_types`, `entity_person_organization_affiliations`, `entity_relationship_types`, `entity_relationships`.
 - `migrations/versions/20260830_7e114f822af2_add_entity_names_and_organization_.py` (RI-ENT-WP-02).
 - `migrations/versions/20260830_441b071bf37b_add_entity_addresses_and_communication_.py` (RI-ENT-WP-03).
 - `migrations/versions/20260830_f5b06925857e_add_entity_project_participations_and_.py` (RI-ENT-WP-04).
 - `migrations/versions/20260830_17149a48fa30_add_entity_person_organization_affiliat.py` (RI-ENT-WP-05).
+- `migrations/versions/20260831_8dc3619891bb_add_entity_relationship_types.py` (RI-ENT-WP-06a).

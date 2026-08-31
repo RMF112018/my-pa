@@ -197,7 +197,6 @@ from my_pa.domain.relationship.entity import (
     EntityCommunicationMethodState,
     EntityNameState,
     EntityProjectParticipationState,
-    EntityRelationshipType,
     EntityStatus,
     ExternalIdentifierNamespace,
     IdentifierState,
@@ -4087,6 +4086,58 @@ entity_assignments = Table(
     ),
 )
 
+#: RI-ENT-WP-06a: the global, extensible relationship-type taxonomy that
+#: replaces the frozen `an_entity_relationship_type_is_known` CHECK
+#: (`9def3c2e63bb`) as of `8dc3619891bb`. Closes `ENTITY-REL-001`. Not
+#: Principal-partitioned, the same global-taxonomy shape as
+#: `entity_role_types`/`entity_discipline_types` -- see
+#: `RelationshipTypeTaxonomyEntry`'s docstring and the `8dc3619891bb`
+#: migration's module docstring for the full reasoning behind every column,
+#: including why `source_entity_type`/`target_entity_type`/`cardinality_rule`
+#: are left `NULL` for most seeded rows rather than guessed.
+entity_relationship_types = Table(
+    "entity_relationship_types",
+    METADATA,
+    Column("relationship_type_code", Text, primary_key=True),
+    Column("label", Text, nullable=False),
+    Column("directed", Boolean, nullable=False),
+    Column(
+        "inverse_type_code",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_relationship_types.relationship_type_code"),
+    ),
+    Column("source_entity_type", Text),
+    Column("target_entity_type", Text),
+    Column("allows_project_scope", Boolean, nullable=False, server_default=text("false")),
+    Column("cardinality_rule", Text),
+    Column("status", Text, nullable=False, server_default=text("'active'")),
+    CheckConstraint(
+        "length(trim(relationship_type_code)) > 0",
+        name="a_relationship_type_code_is_not_blank",
+    ),
+    CheckConstraint(
+        "length(trim(label)) > 0",
+        name="a_relationship_type_label_is_not_blank",
+    ),
+    CheckConstraint(
+        "cardinality_rule IS NULL OR length(trim(cardinality_rule)) > 0",
+        name="a_relationship_type_cardinality_rule_is_not_blank",
+    ),
+    CheckConstraint(
+        "source_entity_type IS NULL OR source_entity_type IN ('organization', 'person')",
+        name="a_relationship_type_source_entity_type_is_known",
+    ),
+    CheckConstraint(
+        "target_entity_type IS NULL OR target_entity_type IN ('organization', 'person')",
+        name="a_relationship_type_target_entity_type_is_known",
+    ),
+    _one_of("status", TaxonomyEntryStatus, name="a_relationship_type_status_is_known"),
+    CheckConstraint(
+        "inverse_type_code IS NULL OR inverse_type_code <> relationship_type_code",
+        name="a_relationship_type_does_not_invert_itself",
+    ),
+)
+
 #: WP-RI-01: a directed, typed relationship between two entities, optionally
 #: scoped by a third.  `from_entity_id` and `to_entity_id` are required and
 #: distinct, and the CHECK says so here as well as in the domain: PostgreSQL is
@@ -4095,6 +4146,11 @@ entity_assignments = Table(
 #: constraint refuses only `from = to`; the same *pair* may still appear in both
 #: directions, and under different relationship types, which is what a directed
 #: model is for.
+#: As of `8dc3619891bb` (RI-ENT-WP-06a), `relationship_type` is a foreign key
+#: into the table-backed `entity_relationship_types` taxonomy above rather
+#: than a CHECK against `EntityRelationshipType` -- see that migration's
+#: module docstring and `EntityRelationshipType`'s own docstring for why the
+#: enum itself is not widened to match.
 entity_relationships = Table(
     "entity_relationships",
     METADATA,
@@ -4131,10 +4187,10 @@ entity_relationships = Table(
     ),
     _is_identifier("relationship_id", IdKind.ENTITY_RELATIONSHIP),
     _is_identifier("principal_id", IdKind.PRINCIPAL),
-    _one_of(
-        "relationship_type",
-        EntityRelationshipType,
-        name="an_entity_relationship_type_is_known",
+    ForeignKeyConstraint(
+        ["relationship_type"],
+        [f"{SCHEMA}.entity_relationship_types.relationship_type_code"],
+        name="an_entity_relationship_type_is_seeded",
     ),
     _one_of("state", RelationshipState, name="an_entity_relationship_state_is_known"),
     CheckConstraint(

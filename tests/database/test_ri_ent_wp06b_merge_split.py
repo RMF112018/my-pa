@@ -582,6 +582,70 @@ def test_an_address_reparents_and_a_current_one_the_survivor_holds_coalesces(
     assert row.superseded_by_entity_address_id == "eadr_ssss0001ssss01"
 
 
+def test_an_address_reparents_and_split_inverts(staged: Engine) -> None:
+    """`entity_addresses`'s own split-inversion proof, on
+    `test_a_communication_method_reparents_and_split_inverts`'s identical
+    shape: a merge reparents an unconflicted address row onto the survivor,
+    then a split inverts it back to its original entity. Unlike the
+    coalescing test above (two *colliding* rows), this one is the plain,
+    unconflicted reparenting case -- the shape every dedicated split-
+    inversion sibling test in this file (names, communication methods) also
+    proves, and which `entity_addresses` had relied on only the generic
+    `_CHILD_SUBJECTS` restore mechanism for, with no dedicated test of its
+    own, until this test.
+    """
+    with staged.begin() as connection:
+        _insert_address(connection, "eadr_aaaa0001aaaa01", MERGED_ONE, "42 Synthetic Way")
+    with staged.begin() as connection:
+        report = _previewed(connection)
+    assert _group(report, MergeFamily.ADDRESS) == (FamilyDisposition.TRANSFORMED, 1)
+    with staged.begin() as connection:
+        merge = _applied(connection, report)
+    with staged.connect() as connection:
+        reparented = connection.execute(
+            select(entity_addresses).where(
+                entity_addresses.c.entity_address_id == "eadr_aaaa0001aaaa01"
+            )
+        ).one()
+    assert reparented.entity_id == SURVIVOR
+    with staged.begin() as connection:
+        split_preview = _service(connection).split_preview(
+            SplitPreviewCommand(
+                principal_id=PRINCIPAL_A,
+                source_identity_operation_id=merge.operation.identity_operation_id,
+                reason="reverse the synthetic identity correction",
+            ),
+            at=WHEN + timedelta(seconds=1),
+            requested_by=OPERATOR,
+            actor_class=ActorClass.USER,
+            has_operator_authority=True,
+        )
+    assert split_preview.ambiguities == ()
+    with staged.begin() as connection:
+        _service(connection).split_apply(
+            SplitCommand(
+                principal_id=PRINCIPAL_A,
+                preview_id=split_preview.preview.preview_id,
+                preview_digest=split_preview.preview.preview_digest,
+                idempotency_key="split-address",
+                reason="reverse the synthetic identity correction",
+            ),
+            at=WHEN + timedelta(seconds=2),
+            correlation_id=CORRELATION,
+            audit_id=AUDIT,
+            performed_by=OPERATOR,
+            actor_class=ActorClass.USER,
+            has_operator_authority=True,
+        )
+    with staged.connect() as connection:
+        row = connection.execute(
+            select(entity_addresses).where(
+                entity_addresses.c.entity_address_id == "eadr_aaaa0001aaaa01"
+            )
+        ).one()
+    assert row.entity_id == MERGED_ONE
+
+
 def test_a_communication_method_reparents_and_split_inverts(staged: Engine) -> None:
     with staged.begin() as connection:
         _insert_communication_method(connection, "ecmm_aaaa0001aaaa01", MERGED_ONE)
@@ -766,6 +830,57 @@ def test_an_affiliation_reparents_both_columns_independently(staged: Engine) -> 
         ).one()
     assert row.person_entity_id == SURVIVOR
     assert row.organization_entity_id == OUTSIDER
+
+
+def test_both_affiliation_columns_reparent_when_both_entities_are_merged(staged: Engine) -> None:
+    """The affiliation family's degenerate self-edge, proven against real
+    PostgreSQL rather than only at the planning level.
+
+    `tests/unit/test_identity_correction_planning.py::
+    test_both_person_and_organization_merging_onto_one_survivor_is_the_
+    degenerate_self_edge` proves this shape against an in-memory model; this
+    is its database-level equivalent, on
+    `test_both_participation_columns_reparent_when_both_entities_are_merged`'s
+    identical shape (the participation family's own two-same-kind-reference
+    self-edge, backed by a real `tests/database/` test) -- both this test and
+    that one are one multi-entity merge where both of a row's entity
+    references become the same survivor at once. Here, `MERGED_ONE` (the
+    affiliation's `person_entity_id`) and `MERGED_TWO` (its
+    `organization_entity_id`) are both merged-away entities in the same
+    operation, so both columns would substitute to `SURVIVOR` -- which
+    `a_person_affiliation_organization_is_not_the_person` (the CHECK a person
+    cannot be its own organization) refuses for any state, so
+    `plan_person_organization_affiliations` marks the row
+    `SELF_EDGE_SUPERSEDED` instead of reparenting it, leaving its original
+    (pre-merge) `person_entity_id`/`organization_entity_id` values in place
+    rather than writing either as `SURVIVOR` -- the same "supersede, never
+    write a value the CHECK would refuse" resolution the participation
+    family's own self-edge case uses.
+    """
+    with staged.begin() as connection:
+        _insert_affiliation(connection, "poaf_aaaa0001aaaa01", MERGED_ONE, MERGED_TWO)
+    with staged.begin() as connection:
+        report = _previewed(connection, _preview_command(merged=((MERGED_ONE, 1), (MERGED_TWO, 1))))
+    assert _group(report, MergeFamily.PERSON_ORGANIZATION_AFFILIATION) == (
+        FamilyDisposition.TRANSFORMED,
+        1,
+    )
+    with staged.begin() as connection:
+        _applied(connection, report)
+    with staged.connect() as connection:
+        row = connection.execute(
+            select(entity_person_organization_affiliations).where(
+                entity_person_organization_affiliations.c.affiliation_id == "poaf_aaaa0001aaaa01"
+            )
+        ).one()
+    # Both references collapsed onto the one survivor -- a self-affiliation,
+    # so the row was superseded rather than reparented, and its original
+    # entity references are left exactly as recorded (never overwritten with
+    # SURVIVOR on either side, which the CHECK would refuse).
+    assert row.state == "superseded"
+    assert row.superseded_by_affiliation_id is None
+    assert row.person_entity_id == MERGED_ONE
+    assert row.organization_entity_id == MERGED_TWO
 
 
 def test_an_open_affiliation_colliding_with_the_survivors_own_coalesces(staged: Engine) -> None:

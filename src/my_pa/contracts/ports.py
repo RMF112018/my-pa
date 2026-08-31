@@ -107,7 +107,12 @@ from my_pa.domain.relationship.entity import (
     AssignmentType,
     DirectedWriteOperation,
     Entity,
+    EntityAddress,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityName,
+    EntityOrganizationProfile,
+    EntityProjectParticipation,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
@@ -115,6 +120,7 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    PersonOrganizationAffiliation,
 )
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
 from my_pa.domain.relationship.governance import (
@@ -1296,6 +1302,82 @@ class EntitiesRepository(ABC):
         reports `MORE_ALIASES_THAN_THIS_CARD_CARRIES` from the overflow.
         """
 
+    # --- RI-ENT-WP-06b: the six Entity-bound record families -----------------
+    #
+    # Read accessors for `EntityName`/`EntityOrganizationProfile`/
+    # `EntityAddress`/`EntityCommunicationMethod`/`EntityProjectParticipation`/
+    # `PersonOrganizationAffiliation`, added so
+    # `IdentityCorrectionService._analyse` can read the survivor's and every
+    # merged-away entity's rows of each family on `aliases`'/
+    # `external_identifiers`' own terms. `names`/`addresses`/
+    # `communication_methods` share `aliases`' single-entity-column shape;
+    # `organization_profile` is singular, on `EntityOrganizationProfile`'s own
+    # one-row-per-entity shape; the last four read a family with two
+    # independent entity-reference columns and therefore come in pairs, on
+    # `assignments`/`assignments_scoped_by`'s own precedent for a family whose
+    # rows name an entity in more than one place.
+
+    @abstractmethod
+    def names(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityName]:
+        """Name forms recorded for an entity in this Principal's partition, on `aliases`' terms."""
+
+    @abstractmethod
+    def organization_profile(
+        self, principal_id: str, entity_id: str
+    ) -> EntityOrganizationProfile | None:
+        """This entity's organization profile, or `None`.
+
+        Singular, not a list: `entity_id` is this table's primary key as well
+        as its foreign key to `entities`, so an entity carries at most one row
+        here by construction -- see `EntityOrganizationProfile`'s docstring.
+        """
+
+    @abstractmethod
+    def addresses(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityAddress]:
+        """Addresses recorded for an entity in this Principal's partition, on `aliases`' terms."""
+
+    @abstractmethod
+    def communication_methods(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityCommunicationMethod]:
+        """Communication methods recorded for an entity, on `aliases`' terms."""
+
+    @abstractmethod
+    def project_participations_as_project(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityProjectParticipation]:
+        """Participations naming `entity_id` as `project_entity_id`.
+
+        Separate from `project_participations_as_participant` on
+        `assignments`/`assignments_scoped_by`'s precedent: the two columns are
+        not interchangeable roles the way `EntityRelationship.from_entity_id`/
+        `to_entity_id` are two ends of the same kind of thing, so one method
+        answering "any" would have to invent a `direction` vocabulary this
+        family's own domain class does not name.
+        """
+
+    @abstractmethod
+    def project_participations_as_participant(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityProjectParticipation]:
+        """Participations naming `entity_id` as `participant_entity_id`."""
+
+    @abstractmethod
+    def person_organization_affiliations_as_person(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[PersonOrganizationAffiliation]:
+        """Affiliations naming `entity_id` as `person_entity_id`."""
+
+    @abstractmethod
+    def person_organization_affiliations_as_organization(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[PersonOrganizationAffiliation]:
+        """Affiliations naming `entity_id` as `organization_entity_id`."""
+
     @abstractmethod
     def entities_by_identifier(
         self,
@@ -2229,6 +2311,7 @@ class EntitiesRepository(ABC):
         to_entity_id: str,
         expected_version: int,
         at: datetime,
+        after_state: Mapping[str, object] | None = None,
     ) -> None:
         """Rewrite every reference this row makes to a merged-away entity.
 
@@ -2257,10 +2340,22 @@ class EntitiesRepository(ABC):
         the surviving identity is a consequence of a merge rather than a new
         decision about what the mention referred to.
 
-        Admits `ALIAS`, `IDENTIFIER`, `ASSIGNMENT`, `RELATIONSHIP` and
-        `OBSERVATION`. `ENTITY` is refused: an entity's own identity is changed
-        by `redirect_entity`, and the other three families of
-        `IdentityEffectFamily` name records this method does not own.
+        Admits `ALIAS`, `IDENTIFIER`, `ASSIGNMENT`, `RELATIONSHIP`,
+        `OBSERVATION`, `NAME`, `ORGANIZATION_PROFILE`, `ADDRESS`,
+        `COMMUNICATION_METHOD`, `PROJECT_PARTICIPATION` and
+        `PERSON_ORGANIZATION_AFFILIATION`. `ENTITY` is refused: an entity's
+        own identity is changed by `redirect_entity`, and the remaining
+        families of `IdentityEffectFamily` name records this method does not
+        own.
+
+        `after_state` is required only for the families whose reparenting also
+        writes a non-entity-reference column -- `NAME`/`ADDRESS`/
+        `COMMUNICATION_METHOD`'s `is_preferred`, demoted to `false` when the
+        survivor already holds an active preferred row of the same type
+        (`application.identity_correction.plan_names` and its two siblings
+        decide this before any write; this method performs exactly the value
+        they decided, in the same guarded `UPDATE` as the entity substitution,
+        never a second write). Every other family ignores it.
         """
         raise NotImplementedError
 

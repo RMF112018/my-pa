@@ -217,7 +217,12 @@ from my_pa.domain.relationship.entity import (
     DirectedWriteError,
     DuplicateDirectedFactError,
     Entity,
+    EntityAddress,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityName,
+    EntityOrganizationProfile,
+    EntityProjectParticipation,
     EntityRelationship,
     EntityStatus,
     EntityType,
@@ -225,6 +230,7 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifierNamespace,
     IdentifierState,
     MergedEndpointError,
+    PersonOrganizationAffiliation,
     RelationshipState,
     StaleDirectedVersionError,
     descriptor_key,
@@ -543,6 +549,20 @@ class World:
     entities: list[Entity] = field(default_factory=list)
     entity_identifiers: list[ExternalIdentifier] = field(default_factory=list)
     entity_aliases: list[EntityAlias] = field(default_factory=list)
+    #: RI-ENT-WP-06b's six Entity-bound families. No fixture in this in-memory
+    #: `World` populates them (only `tests/database`'s SQL-backed fixtures
+    #: write these families directly, per the campaign document's "no live
+    #: write path exists yet" note) -- they exist here only so `_Entities`
+    #: satisfies `EntitiesRepository`'s accessor methods for these families,
+    #: which every merge preview now calls unconditionally.
+    entity_names: list[EntityName] = field(default_factory=list)
+    entity_organization_profiles: list[EntityOrganizationProfile] = field(default_factory=list)
+    entity_addresses: list[EntityAddress] = field(default_factory=list)
+    entity_communication_methods: list[EntityCommunicationMethod] = field(default_factory=list)
+    entity_project_participations: list[EntityProjectParticipation] = field(default_factory=list)
+    entity_person_organization_affiliations: list[PersonOrganizationAffiliation] = field(
+        default_factory=list
+    )
     entity_observations: list[EntityObservation] = field(default_factory=list)
     entity_proposals: list[EntityProposal] = field(default_factory=list)
     #: The exact records each proposal rests on. A real field since `WP-RI-B-05`
@@ -3246,6 +3266,124 @@ class _Entities(EntitiesRepository):
                 if alias.principal_id == principal_id and alias.entity_id == entity_id
             ),
             key=lambda alias: alias.alias_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def names(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityName]:
+        self._world.fail("entities.names")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                name
+                for name in self._world.entity_names
+                if name.principal_id == principal_id and name.entity_id == entity_id
+            ),
+            key=lambda name: name.entity_name_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def organization_profile(
+        self, principal_id: str, entity_id: str
+    ) -> EntityOrganizationProfile | None:
+        self._world.fail("entities.organization_profile")
+        return next(
+            (
+                profile
+                for profile in self._world.entity_organization_profiles
+                if profile.principal_id == principal_id and profile.entity_id == entity_id
+            ),
+            None,
+        )
+
+    def addresses(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityAddress]:
+        self._world.fail("entities.addresses")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                address
+                for address in self._world.entity_addresses
+                if address.principal_id == principal_id and address.entity_id == entity_id
+            ),
+            key=lambda address: address.entity_address_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def communication_methods(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityCommunicationMethod]:
+        self._world.fail("entities.communication_methods")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                method
+                for method in self._world.entity_communication_methods
+                if method.principal_id == principal_id and method.entity_id == entity_id
+            ),
+            key=lambda method: method.communication_method_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def project_participations_as_project(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityProjectParticipation]:
+        self._world.fail("entities.project_participations_as_project")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                row
+                for row in self._world.entity_project_participations
+                if row.principal_id == principal_id and row.project_entity_id == entity_id
+            ),
+            key=lambda row: row.participation_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def project_participations_as_participant(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityProjectParticipation]:
+        self._world.fail("entities.project_participations_as_participant")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                row
+                for row in self._world.entity_project_participations
+                if row.principal_id == principal_id and row.participant_entity_id == entity_id
+            ),
+            key=lambda row: row.participation_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def person_organization_affiliations_as_person(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[PersonOrganizationAffiliation]:
+        self._world.fail("entities.person_organization_affiliations_as_person")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                row
+                for row in self._world.entity_person_organization_affiliations
+                if row.principal_id == principal_id and row.person_entity_id == entity_id
+            ),
+            key=lambda row: row.affiliation_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def person_organization_affiliations_as_organization(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[PersonOrganizationAffiliation]:
+        self._world.fail("entities.person_organization_affiliations_as_organization")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                row
+                for row in self._world.entity_person_organization_affiliations
+                if row.principal_id == principal_id and row.organization_entity_id == entity_id
+            ),
+            key=lambda row: row.affiliation_id,
         )
         return found if limit is None else found[:limit]
 

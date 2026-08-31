@@ -49,6 +49,7 @@ from my_pa.domain.relationship.entity import (
     Assignment,
     Entity,
     EntityAlias,
+    EntityOrganizationProfile,
     EntityRelationship,
     EntityType,
     ExternalIdentifier,
@@ -254,6 +255,47 @@ class _CorpusRepository(EntitiesRepository):
             for alias in CORPUS_ALIASES
             if alias.principal_id == principal_id and alias.entity_id == entity_id
         ]
+
+    # RI-ENT-WP-06b's six Entity-bound families: resolution never reads any
+    # of them, and the corpus carries no fixture data for them, so every
+    # accessor below follows this class's own established pattern for a
+    # family it does not need -- raise, on the same terms as `observations`.
+
+    def names(self, principal_id: str, entity_id: str, *, limit: int | None = None) -> list:
+        raise NotImplementedError("resolution reads no name form")
+
+    def organization_profile(
+        self, principal_id: str, entity_id: str
+    ) -> EntityOrganizationProfile | None:
+        raise NotImplementedError("resolution reads no organization profile")
+
+    def addresses(self, principal_id: str, entity_id: str, *, limit: int | None = None) -> list:
+        raise NotImplementedError("resolution reads no address")
+
+    def communication_methods(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list:
+        raise NotImplementedError("resolution reads no communication method")
+
+    def project_participations_as_project(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list:
+        raise NotImplementedError("resolution reads no project participation")
+
+    def project_participations_as_participant(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list:
+        raise NotImplementedError("resolution reads no project participation")
+
+    def person_organization_affiliations_as_person(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list:
+        raise NotImplementedError("resolution reads no person affiliation")
+
+    def person_organization_affiliations_as_organization(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list:
+        raise NotImplementedError("resolution reads no person affiliation")
 
     def assignments(
         self, principal_id: str, entity_id: str, active_only: bool = True

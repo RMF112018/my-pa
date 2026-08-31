@@ -129,7 +129,7 @@ Preserved from the source audit; status reflects this increment only.
 | `MCP-CONTRACT-002` | High | No record-family mutation capabilities for the new families | Not in scope (`RI-ENT-WP-11`); RULING 5 (no mass-assignment endpoint) remains binding when it is |
 | `COMPAT-001` | High | Additive-vs-breaking policy needed for generated strict schemas | Addressed procedurally in RI-ENT-WP-01 (below); no generated schema exists yet to apply it to |
 | `MIGRATION-001` | Critical | Legacy `relationship_people`/`relationship_organizations` coexist; must not infer legal identity from names | Honored: migration `7e114f822af2` is purely additive, backfills nothing, infers nothing |
-| `SECURITY-001` | High | New families must preserve Principal partitioning, composite keys, append-only ledgers, operator-only merge/split | Partitioning and composite keys: proven by `tests/schema/test_entity_names_and_organization_profile_migration.py`. `entity_project_participations` is Principal-partitioned the same way; `entity_role_types`/`entity_discipline_types` are deliberately **not** Principal-partitioned (global reference vocabularies — see `tests/architecture/test_user_owned_tables_are_partitioned.py`'s `UNPARTITIONED_USER_OWNED` entry for both). Merge/split: **explicitly deferred**, not silently — see "Merge/split disposition" below |
+| `SECURITY-001` | High | New families must preserve Principal partitioning, composite keys, append-only ledgers, operator-only merge/split | Partitioning and composite keys: proven by `tests/schema/test_entity_names_and_organization_profile_migration.py`. `entity_project_participations` is Principal-partitioned the same way; `entity_role_types`/`entity_discipline_types` are deliberately **not** Principal-partitioned (global reference vocabularies — see `tests/architecture/test_user_owned_tables_are_partitioned.py`'s `UNPARTITIONED_USER_OWNED` entry for both). Merge/split: **fully wired as of RI-ENT-WP-06b** for all six Entity-bound families (deferred, not silently, through RI-ENT-WP-05) — see "Merge/split disposition" below |
 | `TEST-001` | High | No TBR completeness fixture exists | Not in scope (`RI-ENT-WP-13`); this increment adds a synthetic single-case fixture (GS4 Studios) proving the pattern, not the full register |
 
 ## The 13 work packages (source audit ordering, section P)
@@ -191,7 +191,7 @@ sharing a representation share an owner by construction.
 | "Confidence" (register label) at any dimension (role/scope/participation/legal-identity) | **Not a scalar confidence field anywhere** — discrete `assertion_status`/`role_basis_code`/`legal_identity_status_code`-family vocabularies, one per dimension, bound to the fact/edge/participation that carries it | WP-02 delivers `legal_identity_status_code`; the rest is WP-07 | Partial — RULING 1 governs all of it, see below |
 | Evidence / source type-URI / observation and verification timestamps / assertion author / conflicting evidence / supersession / source-driven correction | Existing `entity_fact_evidence_links`, `entity_observations`, `entity_mutation_events`, `entity_resolution_decisions`, extended to bind the new record families | WP-07 | Deferred; the ledgers exist and are unmodified, but do not yet bind `entity_names`/`entity_organization_profiles` rows |
 | Import readiness (READY/FLAG/HOLD/DO NOT IMPORT), canonicalization state distinct from lifecycle | A new, separate state record or nullable FK on `entities` (`canonicalization_state_code`) — explicitly **not** an overload of `entities.status` | Design decision recorded now (`ENTITY-STATE-001`); table not created this increment | Deferred |
-| Duplicate/reconciliation state, merge/split ledgers | Existing `entity_merge_records`, `entity_identity_effects`/`entity_identity_previews`/`entity_identity_operations`, `entity_identity_preview_ambiguities`, `entity_identity_ambiguity_settlements` | Existing (RI remediation campaign, PR #164) | Unchanged; `entity_names`/`entity_organization_profiles` are **not yet wired in** — see "Merge/split disposition" |
+| Duplicate/reconciliation state, merge/split ledgers | Existing `entity_merge_records`, `entity_identity_effects`/`entity_identity_previews`/`entity_identity_operations`, `entity_identity_preview_ambiguities`, `entity_identity_ambiguity_settlements` | Existing (RI remediation campaign, PR #164) | Unchanged; `entity_names`/`entity_organization_profiles` and the other four Entity-bound families are **fully wired in as of RI-ENT-WP-06b** — see "Merge/split disposition" |
 | "One organization with aliases/historical legal [names]" (register's own instruction to the reader) | Not a field at all — a mapping/architecture rule | This document (WP-01) | Delivered as this table |
 | Independent consultant, no organization FK required | Existing nullable `scope_entity_id`/nullable organization pattern already proven by `Assignment` | WP-04/WP-05 reuse the existing pattern | **Delivered** — `entity_person_organization_affiliations.organization_entity_id` is nullable, closing the audit's "Mike Fichera" case without a placeholder organization entity (WP-05) |
 
@@ -721,101 +721,235 @@ ambiguity for, or invert, because neither table names an entity. This is a
 reasoned exclusion, not an oversight, and is recorded here so a future reader
 does not have to re-derive it.
 
-**Decision: deferred, not wired in, and the reason is recorded here rather
-than left implicit — for all six Entity-bound families, as of
-RI-ENT-WP-05.**
+**Historical decision, as of RI-ENT-WP-05: deferred, not wired in, for all six
+Entity-bound families.** The five numbered points and the "Blocking
+dependency" paragraph that originally followed this line are superseded by
+the RI-ENT-WP-06b update immediately below, which records the wiring's actual
+landing rather than its deferral. The five points are kept here in
+condensed form (the full reasoning behind each is in `git log` on this file
+at the RI-ENT-WP-05 commit) as the record of what was true through
+RI-ENT-WP-05 and why the deferral was reasoned rather than an oversight — a
+future reader comparing revisions should be able to see the decision change,
+not just its current state.
 
-1. **No live write path exists yet, for any of the six.** This increment
-   (like WP-02, WP-03, and WP-04 before it) ships no MCP capability and no
-   application command that writes `entity_names`,
-   `entity_organization_profiles`, `entity_addresses`,
-   `entity_communication_methods`, `entity_project_participations`, or
-   `entity_person_organization_affiliations` in ordinary product use — only
-   test fixtures write them directly through the persistence layer. A merge
-   executed today cannot encounter a populated row of any of the six through
-   any caller a real request could reach.
-2. **The execution machinery is genuinely bespoke per family**, not
-   config-driven: `application/identity_correction.py` carries dedicated
-   reparenting functions (`_reparented_alias`, `_reparented_identifier`) and
-   dedicated collision-detection logic specific to each table's uniqueness
-   rules, across roughly 3,300 carefully-reasoned lines. Extending it
-   correctly for six more families — including working out what a merge of
-   two organization entities that each carry a profile should do, since
-   `entity_organization_profiles` is a 1:1 record a merge cannot simply
-   duplicate, what a merge should do with two entities that each carry an
-   active preferred address or communication method of the same type, and —
-   `entity_project_participations`'s own new wrinkle — what a merge of a
-   **project** entity should do to every participation row that names it as
-   `project_entity_id`, which is a different reparenting question than a
-   merge of a **participant** entity reparenting rows that name it as
-   `participant_entity_id` (the two columns are the same table's two
-   independent entity references, and a merge could in principle touch
-   either, or both, in the same operation) — is substantial, separable work,
-   not a small addition to any one increment.
-3. **`entity_person_organization_affiliations` restates the same two-reference
-   wrinkle a sixth time, and is more sensitive than any of its five
-   predecessors because the two references name different *kinds* of entity.**
-   `person_entity_id` and `organization_entity_id` are the table's two
-   independent entity references, exactly as `project_entity_id` and
-   `participant_entity_id` are `entity_project_participations`'s, and a merge
-   could in principle reparent either one, or both, in the same operation —
-   stated explicitly rather than merely implied, per this campaign's own
-   instruction to name what happens on each side separately:
-   - **When `person_entity_id` is merged away:** the affiliation row is not
-     reparented to the surviving person entity. It remains bound to the
-     merged-away `entity_id`, which stays resolvable through
-     `entities.superseded_by_entity_id` but is not reachable by querying the
-     survivor's affiliation history directly — the survivor's job title and
-     organization ties recorded under its own `entity_id`, if any, are
-     unaffected and undisturbed, but the merged-away person's affiliation
-     history does not follow the redirect.
-   - **When `organization_entity_id` is merged away:** the affiliation row's
-     nullable organization reference is likewise not reparented to the
-     surviving organization entity. The affiliated person's row keeps
-     pointing at the merged-away organization's `entity_id`, resolvable
-     through the same redirect but not surfaced when a caller looks up the
-     survivor organization's affiliated people. A merge of an organization
-     that is the *survivor* side of the merge is unaffected in the other
-     direction: nothing here moves an affiliation row from the merged-away
-     organization onto the survivor, which is exactly the reparenting
-     decision WP-06's wiring has to make, and it is not made by this
-     increment either implicitly or by omission.
-   - **Both may happen in the same operation** when a single merge redirects
-     both the person side of one affiliation row and the organization side of
-     another (or, in the degenerate case, both sides of the same row) — the
-     same "either, or both" caveat item 2 already states for
-     `entity_project_participations`'s two references, restated here because
-     this family binds two entities of *different* types rather than two of
-     the same type, which is a new wrinkle WP-06's design has to account for
-     separately from the symmetric project/participant case.
-4. **What a merge does today, absent wiring:** if a future write path
-   populates any of the six tables before this wiring lands, a merge that
-   redirects the owning entity does not reparent, discover ambiguity for, or
-   invert those rows. They remain bound to the merged-away `entity_id`, which
-   stays resolvable through `entities.superseded_by_entity_id` but is not
-   reachable by querying the survivor's names, profile, addresses,
-   communication methods, project participations, or affiliations directly.
-   This is recorded as a known limitation in all six classes' docstrings
-   (`src/my_pa/domain/relationship/entity.py`) and here.
-5. **Deferred to `RI-ENT-WP-06`**, which the source audit's own dependency
-   ordering already binds to "coordinate merge/split effects" — not to the
-   taxonomy or record-family schema work WP-02, WP-03, WP-04, and WP-05
-   deliver.
+1. No live write path existed yet, for any of the six.
+2. The execution machinery is genuinely bespoke per family, not
+   config-driven.
+3. `entity_person_organization_affiliations` restated the two-reference
+   wrinkle a sixth time, with two entity references naming *different kinds*
+   of entity.
+4. What a merge did, absent wiring: a row stayed bound to the merged-away
+   `entity_id`, resolvable through `entities.superseded_by_entity_id` but not
+   reachable by querying the survivor's own records.
+5. Deferred to `RI-ENT-WP-06`.
 
-**Blocking dependency, stated plainly:** `WP-08` (repositories/domain
-services) and `WP-11` (MCP mutation contracts) **may not ship a write path
-for any of these six families** — `entity_names`,
-`entity_organization_profiles`, `entity_addresses`,
-`entity_communication_methods`, `entity_project_participations`, or
-`entity_person_organization_affiliations` —
-**until the merge/split wiring in `WP-06` lands.** A write path that
-outpaces that wiring would let ordinary product use populate a row a merge
-cannot reparent, discover ambiguity for, or invert — silently reintroducing
-the exact hazard `SECURITY-001` and RULING 2 exist to prevent. This is a
-hard ordering constraint on the work-package sequence, not a preference.
+## RI-ENT-WP-06b update: the wiring has landed
 
-This satisfies RULING 2's second branch: a documented, evidenced exclusion
-rather than a silent one.
+**All six families now have full merge/split participation.** `RI-ENT-WP-06b`
+extended `IdentityEffectFamily` with six new members — `NAME`,
+`ORGANIZATION_PROFILE`, `ADDRESS`, `COMMUNICATION_METHOD`,
+`PROJECT_PARTICIPATION`, `PERSON_ORGANIZATION_AFFILIATION` — and
+`MergeFamily` (the merge preview report's own, separate vocabulary; see that
+class's docstring) with the same six, so a merge preview a human operator
+reads now names what happens to every one of them rather than staying silent
+about six families it can transform. `_DISPOSITIONS_BY_FAMILY` gives all six
+`(ASSIGN_TO_ENTITY, LEAVE_UNRESOLVED)` — the same two dispositions `ALIAS`
+and `IDENTIFIER` get — on the reasoning that none of the six admits a
+`PRESERVE_SHARED` reading: each is a record of one exclusive fact about one
+entity (or, for the two dual-reference families, one exclusive fact about one
+*pair* of entities), not evidence of what a source said the way an
+observation is, and RI v0.2 section 15.4's "preserve shared and ambiguous
+evidence" is textually about evidence.
+
+**What full participation means concretely, per family:**
+
+- **`entity_names`, `entity_addresses`, `entity_communication_methods`**
+  (`plan_names`/`plan_addresses`/`plan_communication_methods`,
+  `src/my_pa/application/identity_correction.py`) mirror `plan_aliases`
+  exactly on the value-key collision dimension (same `(type, normalized
+  value)` key, same reparent/coalesce/`AMBIGUOUS_DISPOSITION`-conflict
+  shape). Each of the three also carries a *second*, independent collision
+  the value key cannot see: `an_active_..._has_one_preferred_per_type`, a
+  partial unique index admitting at most one active preferred row per
+  `(entity, type)`. **Resolution: demotion, not a second operator
+  question.** A reparenting row whose `is_preferred` would collide with the
+  survivor's own active preferred row of that type has its `is_preferred`
+  cleared to `false` before the write, deterministically — not offered as a
+  second `ConflictChoice`, because the `choices`/`dispositions` mappings this
+  plane's commands carry name one answer per record, not one per collision
+  axis a record happens to sit on. Nothing is lost: the row is still active
+  and correctly bound to the survivor, and a person can re-mark it preferred
+  afterward. This demotion is a real column write alongside the entity
+  reparenting, which needed a small, generic extension to the shared write
+  path: `_ChildSubject.content_columns`
+  (`src/my_pa/infrastructure/persistence/entity.py`) names non-entity-reference
+  columns a reparenting also writes, sourced from the effect's own
+  `after_state`, empty for every other family. `reparent_entity_reference`
+  gained an optional `after_state` parameter to carry it. A coalesced row's
+  `is_preferred` is left unchanged (it already falls outside both partial
+  indexes once superseded).
+
+- **`entity_organization_profiles`** (`plan_organization_profiles`) is the one
+  family that is not alias-shaped: `entity_id` is both the table's primary
+  key and its foreign key to `entities` (see
+  `EntityOrganizationProfile`'s own docstring), so an organization entity
+  carries at most one profile row by construction, with no `state` or
+  `superseded_by_*` column for a losing row to retire into. **When only one
+  side of a merge carries a profile, that is an unambiguous reparenting** —
+  literally a primary-key rewrite, which the generic `reparent_entity_reference`
+  substitution already performs correctly for a family whose sole
+  `entity_columns` entry doubles as its `id_column`. **When more than one
+  profile exists across the whole operation** (the survivor already has one
+  and a merged-away entity also does, or — the degenerate case — two or more
+  merged-away entities each carry one competing for the same empty primary
+  key) **the merge blocks outright**, via a fourth `IdentityConflictKind`
+  member, `SINGLETON_RECORD_CONFLICT` (`domain/relationship/identity_correction.py`),
+  on the same textual reasoning the existing `IDENTIFIER` conflict already
+  blocks rather than asks: "the schema admits either [reparenting or
+  coalescing]" is what makes an `ALIAS` conflict an operator's choice, and it
+  is false here. No profile's data is ever silently dropped; the merge is
+  refused until the ambiguity is resolved by other means (which this
+  increment does not itself provide, matching how `ACTIVE_IDENTIFIER_CONFLICT`
+  is refused rather than resolved).
+
+  Wiring this family surfaced a genuine, narrower architectural fact worth
+  recording precisely: because `entity_id` is simultaneously the row's stable
+  identity and the entity reference a merge substitutes, the merge *ledger's*
+  `record_id` for an `OWNER_REPARENTED` effect necessarily names the row's
+  identity *before* the effect (the value the write has to find the row by,
+  while it is still there) — but every later reader asking "does this row
+  still look like the ledger says" or "is this row already accounted for" has
+  to look for it at the identity the effect *produced*. A new domain-level
+  function, `current_record_id` (`domain/relationship/identity_correction.py`),
+  is the one place that fact is stated and is used by both the split-side
+  read-back checks (`identity_effect_matches_after_state`,
+  `restore_identity_effect`) and post-merge-created discovery
+  (`_post_merge_created`'s `known` set) — one function, imported by both,
+  rather than two independent places that could disagree about it. No other
+  family needs it: every other one keeps a surrogate row identifier
+  (`alias_id`, `entity_name_id`, `participation_id`, and so on) disjoint from
+  the entity references it carries.
+
+- **`entity_project_participations`** (`plan_project_participations`) has two
+  independent entity references of the *same kind* — `project_entity_id` and
+  `participant_entity_id` — mirroring `plan_relationships`'s from/to shape.
+  Both substitute independently in one statement (the generic
+  `reparent_entity_reference` already handles this, exactly as it does
+  `RELATIONSHIP`'s three endpoints); a row whose project and participant both
+  become the survivor in the same multi-entity merge is `SELF_EDGE_SUPERSEDED`
+  rather than reparented, because `a_project_participation_project_is_not_the_participant`
+  forbids the row any other form. Active-uniqueness collision is per
+  `(project, participant, role)`, deduplicating only active rows exactly as
+  `ASSIGNMENT`/`RELATIONSHIP` already do — with one wrinkle specific to this
+  index: `an_active_project_participation_is_unique_per_project_and_role` has
+  no `COALESCE` over `role_code`, so two concurrently active rows that both
+  leave `role_code` unset never collide (ordinary PostgreSQL `NULL <> NULL`
+  semantics), and the planner never adds a `NULL`-role row to its collision
+  index either. A database test proves both columns reparenting
+  independently in one multi-entity merge (the project and one of its
+  participants both merged away at once).
+
+- **`entity_person_organization_affiliations`** (`plan_person_organization_affiliations`)
+  has two entity references of *different* kinds — `person_entity_id` and the
+  nullable `organization_entity_id` — both substituting independently, on the
+  same terms as the participation family, including the degenerate case of
+  both changing on one row at once (a database test proves it). A row that
+  becomes self-affiliated after substitution is `SELF_EDGE_SUPERSEDED`, per
+  `a_person_affiliation_organization_is_not_the_person`. The family's one
+  collision is `an_open_ended_affiliation_is_unique_per_person` — at most one
+  row per person may be simultaneously `state = 'active'` and `effective_to
+  IS NULL` — which, unlike `ALIAS`'s value-key collision, has no "current
+  versus former" asymmetry for an operator to decide between: a closed
+  affiliation is outside the partial index and never collides at all, so the
+  collision this family can have is always exactly the shape `plan_aliases`
+  resolves by auto-coalescing (both sides "current"), never
+  `AMBIGUOUS_DISPOSITION`. The incoming (merged-away) row is coalesced into
+  the survivor's pre-existing open affiliation, which is left untouched; the
+  merged-away entity's own row is preserved as history, superseded rather
+  than discarded.
+
+**No new relationship-type taxonomy work, no touch to `EntityRelationshipType`
+or `entity.py`'s relationship enum** — that is the concurrent, independent
+`ri-ent/wp06-relationship-taxonomy` branch's scope, not this one's.
+
+**One migration was required, and it is genuinely additive.** RULING 2 does
+not forbid a migration when one is genuinely needed; investigation found one
+is: `entity_identity_effects.record_family`,
+`entity_identity_preview_ambiguities.record_family`, and
+`entity_identity_ambiguity_settlements.record_family` each carry a `CHECK
+(record_family IN (...))` closing the ledger's own family vocabulary at the
+twelve values `8e1c4a7b2d90` last widened it to — fewer than
+`IdentityEffectFamily`'s eighteen current members. Migration `9a3f6c1e8d24`
+was originally authored with `down_revision = 17149a48fa30`, the head this
+branch was authored against before the concurrent
+`ri-ent/wp06-relationship-taxonomy` branch's own migration (`8dc3619891bb`)
+landed; rather than a separate merge revision, `9a3f6c1e8d24` was re-pointed
+to chain directly off `8dc3619891bb` (`down_revision = 8dc3619891bb`) and
+this branch rebased onto that branch's tip, per the orchestrating session's
+sequencing decision recorded when both PRs were found to need a migration off
+the same parent. `DROP CONSTRAINT`/`ADD CONSTRAINT`s all three under their
+existing names with the six new values
+appended, on `8e1c4a7b2d90`'s own precedent for widening this exact
+vocabulary the first time. Purely additive: every row written before this
+revision is a strict subset of what the widened list admits, so
+`downgrade()` is safe wherever no row already names one of the six new
+families (true of every disposable test database this increment's own tests
+create, since each is dropped at the end of its own test). No other schema
+change was needed — none of the six tables themselves gained a column;
+`is_preferred` demotion and `SINGLETON_RECORD_CONFLICT` blocking both work
+against columns and constraints RI-ENT-WP-02 through WP-05 already shipped.
+
+**Test evidence for the six families' full participation** (all against real
+PostgreSQL, `tests/database/test_ri_ent_wp06b_merge_split.py`, 16 tests, plus
+`tests/schema/test_widen_identity_family_vocabulary_migration.py`'s 2-test
+upgrade/downgrade round trip for the widened `CHECK` constraints; unit
+planning coverage in `tests/unit/test_identity_correction_planning.py`, 30
+new tests, plus 4 more in `tests/unit/test_identity_correction.py` covering
+`current_record_id` and the new dispositions/conflict-kind vocabulary):
+unambiguous reparenting for all six; the preferred-per-type demotion for
+names, addresses, and communication methods; the
+`SINGLETON_RECORD_CONFLICT` block for a profile on both sides of a merge;
+both-columns-independent reparenting and role-based deduplication for project
+participations; both-columns-independent reparenting and open-affiliation
+coalescing for person-organization affiliations; split inversion proven for
+names, communication methods, organization profiles, project participations,
+and person-organization affiliations; `POST_MERGE_CREATED` ambiguity
+discovery proven for names and person-organization affiliations (exercising
+`_ATTRIBUTABLE_FAMILIES`'s generic `records_bound_to_entity_outside` walk for
+two representative families — the same generic mechanism serves the other
+four); and cross-Principal partition isolation for the new read accessors.
+Exact commands and pass counts are in the PR description for
+`ri-ent/wp06-merge-split-wiring`; the existing merge/split suites
+(`tests/database/test_identity_correction_merge.py`, 86 tests;
+`tests/database/test_identity_split_ambiguity.py`, 11 tests) and the full
+unit suite (`tests/unit/`, 6,903 passed) ran green, measured directly by a
+full synchronous run against the final combined tree (`8dc3619891bb` then
+`9a3f6c1e8d24`) rather than carried forward from either branch's own,
+now-stale pre-combination count -- `ruff check`, `ruff format --check`, and
+`mypy` (432 files) are clean over every file this increment touches. The full
+`tests/database/` tier (734 passed), `tests/schema/` tier (763 passed), and
+`tests/architecture/` tier (4,725 collected, 4,723 passed, 2 known-
+environmental-only failures -- see the FAST/Architecture tier rows in
+`relationship-intelligence-implementation-plan.md`) were likewise re-measured
+serially against the final combined tree, not assumed from either branch's
+standalone report.
+
+**Blocking dependency, updated status: LIFTED.** The RI-ENT-WP-05-era rule —
+`WP-08` and `WP-11` may not ship a write path for any of the six families
+until this wiring lands — no longer applies to any of the six.
+`entity_names`, `entity_organization_profiles`, `entity_addresses`,
+`entity_communication_methods`, `entity_project_participations`, and
+`entity_person_organization_affiliations` all now have merge reparenting,
+split inversion, post-merge-created ambiguity discovery, and a
+`_DISPOSITIONS_BY_FAMILY` policy. `WP-08` and `WP-11` may proceed to ship
+write paths for all six without reintroducing the class of defect
+(`RI-P2-BLK-001`) this rule existed to prevent.
+
+This satisfies RULING 2's first branch for all six families: full
+participation rather than a documented exclusion. (`entity_role_types` and
+`entity_discipline_types` remain the campaign's one standing *exclusion*,
+under RULING 2's second branch, for the reason stated above this update: no
+`entity_id` column of any kind, so there is no row for a merge to touch.)
 
 ## Test evidence
 

@@ -101,11 +101,22 @@ from my_pa.domain.relationship.entity import (
     Assignment,
     AssignmentState,
     Entity,
+    EntityAddress,
+    EntityAddressState,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityCommunicationMethodState,
+    EntityName,
+    EntityNameState,
+    EntityOrganizationProfile,
+    EntityProjectParticipation,
+    EntityProjectParticipationState,
     EntityRelationship,
     EntityStatus,
     ExternalIdentifier,
     IdentifierState,
+    PersonOrganizationAffiliation,
+    PersonOrganizationAffiliationState,
     RelationshipState,
 )
 from my_pa.domain.relationship.governance import (
@@ -131,6 +142,7 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityPreview,
     ambiguity_digest_for,
     conflict_digest_for,
+    current_record_id,
     dispositions_for,
     effects_digest_for,
     plan_digest_for,
@@ -162,9 +174,10 @@ __all__ = [
 class MergeFamily(StrEnum):
     """Every record family a merge preview answers for.
 
-    **Sixteen members for section 20's fifteen lines, and the count is the
-    point.** The contract lists survivor entity, merged-away entities, aliases,
-    identifiers, assignments, directed relationships, observations,
+    **Sixteen members for section 20's fifteen lines when this enum was first
+    closed, and the count was the point -- it still is, the number has just
+    changed.** The contract lists survivor entity, merged-away entities,
+    aliases, identifiers, assignments, directed relationships, observations,
     unresolved/resolution decisions, Entity proposals, Review cases,
     Relationship Memory references, linked Tasks and Commitments, source links,
     context/index/cache state and re-enrichment consequences; Tasks and
@@ -172,12 +185,25 @@ class MergeFamily(StrEnum):
     separate bindings, and answering them together would let one of them hide
     behind the other's answer.
 
-    Deliberately **not** `IdentityEffectFamily`, whose twelve members are a
-    vocabulary about the *ledger*: it names the families a merge can record an
-    effect on, so a family this phase cannot transform has no member there and
-    could not be named. This enum is the vocabulary of the *report*, and its
-    whole job is to be able to name a family in order to say the merge does
-    nothing to it, or cannot.
+    **RI-ENT-WP-06b widens this to twenty-two, for six record families section
+    20's own text could not have named**: `NAME`, `ORGANIZATION_PROFILE`,
+    `ADDRESS`, `COMMUNICATION_METHOD`, `PROJECT_PARTICIPATION`, and
+    `PERSON_ORGANIZATION_AFFILIATION` did not exist when the operator prompt
+    was written -- RI-ENT-WP-02 through WP-05 added them afterwards. The
+    literal count stops being the useful way to state the invariant the moment
+    the record catalog can grow past the contract text that first enumerated
+    it; what stays invariant, and is the actual rule this class exists to
+    hold to, is the paragraph above it: **"a family is answered, never
+    skipped."** Every current Entity-bound record family gets a named member
+    here, whatever number that makes this enum today, and a future family
+    widens it again rather than hiding behind an existing one.
+
+    Deliberately **not** `IdentityEffectFamily`, whose vocabulary is about the
+    *ledger*: it names the families a merge can record an effect on, so a
+    family this phase cannot transform has no member there and could not be
+    named. This enum is the vocabulary of the *report*, and its whole job is
+    to be able to name a family in order to say the merge does nothing to it,
+    or cannot.
     """
 
     SURVIVOR_ENTITY = "survivor_entity"
@@ -186,6 +212,12 @@ class MergeFamily(StrEnum):
     IDENTIFIER = "identifier"
     ASSIGNMENT = "assignment"
     RELATIONSHIP = "relationship"
+    NAME = "name"
+    ORGANIZATION_PROFILE = "organization_profile"
+    ADDRESS = "address"
+    COMMUNICATION_METHOD = "communication_method"
+    PROJECT_PARTICIPATION = "project_participation"
+    PERSON_ORGANIZATION_AFFILIATION = "person_organization_affiliation"
     OBSERVATION = "observation"
     RESOLUTION_DECISION = "resolution_decision"
     ENTITY_PROPOSAL = "entity_proposal"
@@ -567,6 +599,17 @@ def _materialize_effect_states(
         IdentityEffectFamily.IDENTIFIER,
         IdentityEffectFamily.ASSIGNMENT,
         IdentityEffectFamily.RELATIONSHIP,
+        # RI-ENT-WP-06b's six: every one of them writes through the same
+        # generic `reparent_entity_reference`/`supersede_child_record` paths,
+        # which stamp `updated_at` at write time exactly as they already do
+        # for the four families above -- see `_ChildSubject`/`_CHILD_SUBJECTS`
+        # in `infrastructure.persistence.entity`.
+        IdentityEffectFamily.NAME,
+        IdentityEffectFamily.ORGANIZATION_PROFILE,
+        IdentityEffectFamily.ADDRESS,
+        IdentityEffectFamily.COMMUNICATION_METHOD,
+        IdentityEffectFamily.PROJECT_PARTICIPATION,
+        IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION,
     }
     for change in changes:
         after = dict(change.after_state)
@@ -907,6 +950,576 @@ def _identifier_state(
     }
 
 
+# --- RI-ENT-WP-06b: names, addresses, communication methods ----------------
+#
+# `EntityName`, `EntityAddress` and `EntityCommunicationMethod` are, field for
+# field, `EntityAlias`'s own shape (RULING 3 in each of their own migrations
+# says so explicitly): a typed value, a three-state lifecycle, a self-
+# referencing successor column, and an active-uniqueness index keyed on
+# (entity, type, normalized value). `plan_names`/`plan_addresses`/
+# `plan_communication_methods` therefore mirror `plan_aliases` on that same
+# key, with one addition none of `ALIAS`/`IDENTIFIER` carries: `is_preferred`,
+# governed by a *second*, independent partial unique index --
+# `an_active_..._has_one_preferred_per_type` -- that the value-key collision
+# check above cannot see, because two rows colliding on *that* index usually
+# hold two different normalized values.
+#
+# **The preferred-per-type collision is resolved by demotion, not by a second
+# operator choice.** A row that reparents cleanly on the value-key dimension
+# (no conflict, or a conflict the operator resolved with `REPARENT`) can still
+# turn out to be `is_preferred = true` for a type the survivor already has an
+# active preferred row of -- a *different* collision than the one the value key
+# already settled, and the `choices` mapping this module's callers build names
+# one `ConflictChoice` per record, not one per collision axis a record happens
+# to sit on. Asking the operator a second question about the same record,
+# through a mapping shaped to carry only one answer, is not a shape this
+# revision widens `MergeCommand.choices` to carry. So the policy is
+# deterministic instead: **the incoming row's own `is_preferred` is cleared to
+# `false` before it is written**, exactly as if a person recorded the name form
+# without ever marking it the default. Nothing about the record is lost -- the
+# row is still active and now correctly bound to the survivor, and a person can
+# freely re-mark it preferred afterwards -- and the write can never violate the
+# partial unique index it would otherwise collide with, because the row it
+# writes never claims what the index protects. A row that instead *coalesces*
+# leaves service (`state = 'superseded'`), which already places it outside
+# both partial indexes regardless of `is_preferred`, so coalescing needs no
+# demotion of its own -- `is_preferred` is carried through unchanged on a
+# coalesced row, on the same "only entity_id/state/version/successor/
+# updated_at change" minimalism `_coalesced_alias` already practises.
+
+
+def _typed_child_key(type_code: str, normalized_value: str) -> tuple[str, str]:
+    """The value one entity is known by, for the three typed-child families.
+
+    The exact shape `_alias_key`/`_identifier_key` already key on, restated as
+    a free function because `EntityName`/`EntityAddress`/
+    `EntityCommunicationMethod` do not share a common base class to hang a
+    method off.
+    """
+    return (type_code, normalized_value)
+
+
+def plan_names(
+    *,
+    survivor_entity_id: str,
+    survivor_names: Sequence[EntityName],
+    merged_names: Sequence[EntityName],
+    choices: Mapping[str, ConflictChoice],
+) -> tuple[tuple[_RowChange, ...], tuple[IdentityConflict, ...]]:
+    """Reparent or coalesce every name form the merged-away entities held.
+
+    `plan_aliases`'s running-index construction and ambiguous-conflict shape,
+    over `EntityName`'s own key
+    (`an_active_entity_name_is_unique_per_entity_and_type`). See the module
+    section docstring above this function for how the second,
+    `is_preferred`-governed collision is resolved.
+    """
+    held: dict[tuple[str, str], list[EntityName]] = {}
+    preferred_by_type: dict[str, str] = {}
+    for name in survivor_names:
+        key = _typed_child_key(name.name_type_code.value, name.normalized_value)
+        held.setdefault(key, []).append(name)
+        if name.is_preferred and name.state is EntityNameState.ACTIVE:
+            preferred_by_type[name.name_type_code.value] = name.entity_name_id
+    changes: list[_RowChange] = []
+    conflicts: list[IdentityConflict] = []
+    for name in sorted(merged_names, key=lambda row: row.entity_name_id):
+        key = _typed_child_key(name.name_type_code.value, name.normalized_value)
+        counterparts = held.get(key)
+        if counterparts is None:
+            changes.append(_reparented_name(name, survivor_entity_id, preferred_by_type))
+            held[key] = [name]
+            continue
+        counterpart = _counterpart_name(counterparts)
+        if name.state is not EntityNameState.ACTIVE or counterpart.state is EntityNameState.ACTIVE:
+            changes.append(_coalesced_name(name, counterpart.entity_name_id))
+            continue
+        conflicts.append(
+            IdentityConflict(
+                kind=IdentityConflictKind.AMBIGUOUS_DISPOSITION,
+                family=IdentityEffectFamily.NAME,
+                record_id=name.entity_name_id,
+            )
+        )
+        chosen = choices.get(name.entity_name_id)
+        if chosen is ConflictChoice.REPARENT:
+            changes.append(_reparented_name(name, survivor_entity_id, preferred_by_type))
+            counterparts.append(name)
+        elif chosen is ConflictChoice.COALESCE:
+            changes.append(_coalesced_name(name, counterpart.entity_name_id))
+    return tuple(changes), tuple(conflicts)
+
+
+def _counterpart_name(rows: Sequence[EntityName]) -> EntityName:
+    """`_counterpart_alias`, over `EntityName`'s own state vocabulary."""
+    active = [row for row in rows if row.state is EntityNameState.ACTIVE]
+    return min(active or list(rows), key=lambda row: row.entity_name_id)
+
+
+def _reparented_name(
+    name: EntityName, survivor_entity_id: str, preferred_by_type: dict[str, str]
+) -> _RowChange:
+    """Reparent one name form, demoting `is_preferred` if the survivor already has one.
+
+    `preferred_by_type` is mutated in place to record the winner, so a second
+    merged-away entity's own preferred row of the same type collides with
+    *this* one and not with whatever the survivor held when the plan began --
+    `plan_aliases`'s "the index is built as the plan is made" argument,
+    restated for the second index this family carries.
+    """
+    demote = name.is_preferred and preferred_by_type.get(name.name_type_code.value) not in (
+        None,
+        name.entity_name_id,
+    )
+    is_preferred = False if demote else name.is_preferred
+    if is_preferred:
+        preferred_by_type[name.name_type_code.value] = name.entity_name_id
+    return _RowChange(
+        family=IdentityEffectFamily.NAME,
+        record_id=name.entity_name_id,
+        kind=IdentityEffectKind.OWNER_REPARENTED,
+        before_state=_name_state(
+            entity_id=name.entity_id,
+            is_preferred=name.is_preferred,
+            state=name.state.value,
+            version=name.version,
+            successor=name.superseded_by_entity_name_id,
+            updated_at=name.updated_at,
+        ),
+        after_state=_name_state(
+            entity_id=survivor_entity_id,
+            is_preferred=is_preferred,
+            state=name.state.value,
+            version=name.version + 1,
+            successor=name.superseded_by_entity_name_id,
+            updated_at=name.updated_at,
+        ),
+        expected_version=name.version,
+    )
+
+
+def _coalesced_name(name: EntityName, counterpart_id: str) -> _RowChange:
+    return _RowChange(
+        family=IdentityEffectFamily.NAME,
+        record_id=name.entity_name_id,
+        kind=IdentityEffectKind.ROW_COALESCED,
+        before_state=_name_state(
+            entity_id=name.entity_id,
+            is_preferred=name.is_preferred,
+            state=name.state.value,
+            version=name.version,
+            successor=name.superseded_by_entity_name_id,
+            updated_at=name.updated_at,
+        ),
+        after_state=_name_state(
+            entity_id=name.entity_id,
+            is_preferred=name.is_preferred,
+            state=EntityNameState.SUPERSEDED.value,
+            version=name.version + 1,
+            successor=counterpart_id,
+            updated_at=name.updated_at,
+        ),
+        expected_version=name.version,
+        coalesced_into=counterpart_id,
+    )
+
+
+def _name_state(
+    *,
+    entity_id: str,
+    is_preferred: bool,
+    state: str,
+    version: int,
+    successor: str | None,
+    updated_at: datetime | None,
+) -> dict[str, object]:
+    """One name row as the ledger records it. No display or normalized value."""
+    return {
+        "entity_id": entity_id,
+        "is_preferred": is_preferred,
+        "state": state,
+        "version": version,
+        "superseded_by_entity_name_id": successor,
+        "updated_at": _effect_timestamp(updated_at),
+    }
+
+
+def plan_addresses(
+    *,
+    survivor_entity_id: str,
+    survivor_addresses: Sequence[EntityAddress],
+    merged_addresses: Sequence[EntityAddress],
+    choices: Mapping[str, ConflictChoice],
+) -> tuple[tuple[_RowChange, ...], tuple[IdentityConflict, ...]]:
+    """`plan_names`, over `EntityAddress`'s own key and preferred-per-type index."""
+    held: dict[tuple[str, str], list[EntityAddress]] = {}
+    preferred_by_type: dict[str, str] = {}
+    for address in survivor_addresses:
+        held.setdefault(
+            _typed_child_key(address.address_type_code.value, address.normalized_address_value), []
+        ).append(address)
+        if address.is_preferred and address.state is EntityAddressState.ACTIVE:
+            preferred_by_type[address.address_type_code.value] = address.entity_address_id
+    changes: list[_RowChange] = []
+    conflicts: list[IdentityConflict] = []
+    for address in sorted(merged_addresses, key=lambda row: row.entity_address_id):
+        key = _typed_child_key(address.address_type_code.value, address.normalized_address_value)
+        counterparts = held.get(key)
+        if counterparts is None:
+            changes.append(_reparented_address(address, survivor_entity_id, preferred_by_type))
+            held[key] = [address]
+            continue
+        counterpart = _counterpart_address(counterparts)
+        if (
+            address.state is not EntityAddressState.ACTIVE
+            or counterpart.state is EntityAddressState.ACTIVE
+        ):
+            changes.append(_coalesced_address(address, counterpart.entity_address_id))
+            continue
+        conflicts.append(
+            IdentityConflict(
+                kind=IdentityConflictKind.AMBIGUOUS_DISPOSITION,
+                family=IdentityEffectFamily.ADDRESS,
+                record_id=address.entity_address_id,
+            )
+        )
+        chosen = choices.get(address.entity_address_id)
+        if chosen is ConflictChoice.REPARENT:
+            changes.append(_reparented_address(address, survivor_entity_id, preferred_by_type))
+            counterparts.append(address)
+        elif chosen is ConflictChoice.COALESCE:
+            changes.append(_coalesced_address(address, counterpart.entity_address_id))
+    return tuple(changes), tuple(conflicts)
+
+
+def _counterpart_address(rows: Sequence[EntityAddress]) -> EntityAddress:
+    active = [row for row in rows if row.state is EntityAddressState.ACTIVE]
+    return min(active or list(rows), key=lambda row: row.entity_address_id)
+
+
+def _reparented_address(
+    address: EntityAddress, survivor_entity_id: str, preferred_by_type: dict[str, str]
+) -> _RowChange:
+    demote = address.is_preferred and preferred_by_type.get(
+        address.address_type_code.value
+    ) not in (None, address.entity_address_id)
+    is_preferred = False if demote else address.is_preferred
+    if is_preferred:
+        preferred_by_type[address.address_type_code.value] = address.entity_address_id
+    return _RowChange(
+        family=IdentityEffectFamily.ADDRESS,
+        record_id=address.entity_address_id,
+        kind=IdentityEffectKind.OWNER_REPARENTED,
+        before_state=_address_state(
+            entity_id=address.entity_id,
+            is_preferred=address.is_preferred,
+            state=address.state.value,
+            version=address.version,
+            successor=address.superseded_by_entity_address_id,
+            updated_at=address.updated_at,
+        ),
+        after_state=_address_state(
+            entity_id=survivor_entity_id,
+            is_preferred=is_preferred,
+            state=address.state.value,
+            version=address.version + 1,
+            successor=address.superseded_by_entity_address_id,
+            updated_at=address.updated_at,
+        ),
+        expected_version=address.version,
+    )
+
+
+def _coalesced_address(address: EntityAddress, counterpart_id: str) -> _RowChange:
+    return _RowChange(
+        family=IdentityEffectFamily.ADDRESS,
+        record_id=address.entity_address_id,
+        kind=IdentityEffectKind.ROW_COALESCED,
+        before_state=_address_state(
+            entity_id=address.entity_id,
+            is_preferred=address.is_preferred,
+            state=address.state.value,
+            version=address.version,
+            successor=address.superseded_by_entity_address_id,
+            updated_at=address.updated_at,
+        ),
+        after_state=_address_state(
+            entity_id=address.entity_id,
+            is_preferred=address.is_preferred,
+            state=EntityAddressState.SUPERSEDED.value,
+            version=address.version + 1,
+            successor=counterpart_id,
+            updated_at=address.updated_at,
+        ),
+        expected_version=address.version,
+        coalesced_into=counterpart_id,
+    )
+
+
+def _address_state(
+    *,
+    entity_id: str,
+    is_preferred: bool,
+    state: str,
+    version: int,
+    successor: str | None,
+    updated_at: datetime | None,
+) -> dict[str, object]:
+    return {
+        "entity_id": entity_id,
+        "is_preferred": is_preferred,
+        "state": state,
+        "version": version,
+        "superseded_by_entity_address_id": successor,
+        "updated_at": _effect_timestamp(updated_at),
+    }
+
+
+def plan_communication_methods(
+    *,
+    survivor_entity_id: str,
+    survivor_communication_methods: Sequence[EntityCommunicationMethod],
+    merged_communication_methods: Sequence[EntityCommunicationMethod],
+    choices: Mapping[str, ConflictChoice],
+) -> tuple[tuple[_RowChange, ...], tuple[IdentityConflict, ...]]:
+    """`plan_names`, over `EntityCommunicationMethod`'s own key and preferred-per-type index."""
+    held: dict[tuple[str, str], list[EntityCommunicationMethod]] = {}
+    preferred_by_type: dict[str, str] = {}
+    for method in survivor_communication_methods:
+        held.setdefault(
+            _typed_child_key(method.method_type_code.value, method.normalized_value), []
+        ).append(method)
+        if method.is_preferred and method.state is EntityCommunicationMethodState.ACTIVE:
+            preferred_by_type[method.method_type_code.value] = method.communication_method_id
+    changes: list[_RowChange] = []
+    conflicts: list[IdentityConflict] = []
+    for method in sorted(merged_communication_methods, key=lambda row: row.communication_method_id):
+        key = _typed_child_key(method.method_type_code.value, method.normalized_value)
+        counterparts = held.get(key)
+        if counterparts is None:
+            changes.append(
+                _reparented_communication_method(method, survivor_entity_id, preferred_by_type)
+            )
+            held[key] = [method]
+            continue
+        counterpart = _counterpart_communication_method(counterparts)
+        if (
+            method.state is not EntityCommunicationMethodState.ACTIVE
+            or counterpart.state is EntityCommunicationMethodState.ACTIVE
+        ):
+            changes.append(
+                _coalesced_communication_method(method, counterpart.communication_method_id)
+            )
+            continue
+        conflicts.append(
+            IdentityConflict(
+                kind=IdentityConflictKind.AMBIGUOUS_DISPOSITION,
+                family=IdentityEffectFamily.COMMUNICATION_METHOD,
+                record_id=method.communication_method_id,
+            )
+        )
+        chosen = choices.get(method.communication_method_id)
+        if chosen is ConflictChoice.REPARENT:
+            changes.append(
+                _reparented_communication_method(method, survivor_entity_id, preferred_by_type)
+            )
+            counterparts.append(method)
+        elif chosen is ConflictChoice.COALESCE:
+            changes.append(
+                _coalesced_communication_method(method, counterpart.communication_method_id)
+            )
+    return tuple(changes), tuple(conflicts)
+
+
+def _counterpart_communication_method(
+    rows: Sequence[EntityCommunicationMethod],
+) -> EntityCommunicationMethod:
+    active = [row for row in rows if row.state is EntityCommunicationMethodState.ACTIVE]
+    return min(active or list(rows), key=lambda row: row.communication_method_id)
+
+
+def _reparented_communication_method(
+    method: EntityCommunicationMethod, survivor_entity_id: str, preferred_by_type: dict[str, str]
+) -> _RowChange:
+    demote = method.is_preferred and preferred_by_type.get(method.method_type_code.value) not in (
+        None,
+        method.communication_method_id,
+    )
+    is_preferred = False if demote else method.is_preferred
+    if is_preferred:
+        preferred_by_type[method.method_type_code.value] = method.communication_method_id
+    return _RowChange(
+        family=IdentityEffectFamily.COMMUNICATION_METHOD,
+        record_id=method.communication_method_id,
+        kind=IdentityEffectKind.OWNER_REPARENTED,
+        before_state=_communication_method_state(
+            entity_id=method.entity_id,
+            is_preferred=method.is_preferred,
+            state=method.state.value,
+            version=method.version,
+            successor=method.superseded_by_communication_method_id,
+            updated_at=method.updated_at,
+        ),
+        after_state=_communication_method_state(
+            entity_id=survivor_entity_id,
+            is_preferred=is_preferred,
+            state=method.state.value,
+            version=method.version + 1,
+            successor=method.superseded_by_communication_method_id,
+            updated_at=method.updated_at,
+        ),
+        expected_version=method.version,
+    )
+
+
+def _coalesced_communication_method(
+    method: EntityCommunicationMethod, counterpart_id: str
+) -> _RowChange:
+    return _RowChange(
+        family=IdentityEffectFamily.COMMUNICATION_METHOD,
+        record_id=method.communication_method_id,
+        kind=IdentityEffectKind.ROW_COALESCED,
+        before_state=_communication_method_state(
+            entity_id=method.entity_id,
+            is_preferred=method.is_preferred,
+            state=method.state.value,
+            version=method.version,
+            successor=method.superseded_by_communication_method_id,
+            updated_at=method.updated_at,
+        ),
+        after_state=_communication_method_state(
+            entity_id=method.entity_id,
+            is_preferred=method.is_preferred,
+            state=EntityCommunicationMethodState.SUPERSEDED.value,
+            version=method.version + 1,
+            successor=counterpart_id,
+            updated_at=method.updated_at,
+        ),
+        expected_version=method.version,
+        coalesced_into=counterpart_id,
+    )
+
+
+def _communication_method_state(
+    *,
+    entity_id: str,
+    is_preferred: bool,
+    state: str,
+    version: int,
+    successor: str | None,
+    updated_at: datetime | None,
+) -> dict[str, object]:
+    return {
+        "entity_id": entity_id,
+        "is_preferred": is_preferred,
+        "state": state,
+        "version": version,
+        "superseded_by_communication_method_id": successor,
+        "updated_at": _effect_timestamp(updated_at),
+    }
+
+
+# --- RI-ENT-WP-06b: the organization profile's PK-is-FK singleton ----------
+
+
+def plan_organization_profiles(
+    *,
+    survivor_entity_id: str,
+    survivor_profile: EntityOrganizationProfile | None,
+    merged_profiles: Sequence[EntityOrganizationProfile],
+) -> tuple[tuple[_RowChange, ...], tuple[IdentityConflict, ...]]:
+    """Move at most one organization profile onto the survivor, or block.
+
+    **`entity_id` is this table's primary key as well as its foreign key.** An
+    organization entity carries at most one profile row, by construction, not
+    by convention -- see `EntityOrganizationProfile`'s own docstring. That
+    changes what "reparenting" means here: there is no surrogate row
+    identifier to move while `entity_id` stays put, the way `alias_id` stays
+    fixed while `EntityAlias.entity_id` moves. The row's identity *is* the
+    entity it names, so reparenting a profile is rewriting its primary key
+    from the merged-away entity's `entity_id` to the survivor's -- which
+    `reparent_entity_reference`'s generic substitution already performs
+    correctly for a family whose sole `entity_columns` entry doubles as its
+    `id_column` (see `_CHILD_SUBJECTS` in
+    `infrastructure.persistence.entity`), provided no row already occupies
+    that primary key.
+
+    **When only one side carries a profile, that reparenting is unambiguous**
+    and is planned exactly like an unambiguous alias reparenting -- except the
+    write it describes moves a primary key rather than a foreign key, which is
+    why this returns `OWNER_REPARENTED` rather than inventing a new effect
+    kind: `IdentityEffectKind.OWNER_REPARENTED`'s own contract ("a child row
+    moved from a merged-away entity to the survivor... the inverse is to give
+    it back") is exactly what un-reparenting a profile means too, and a split
+    that already knows how to invert `OWNER_REPARENTED` inverts this for free.
+
+    **When both sides carry a profile, this blocks rather than choosing.**
+    Unlike `ALIAS`'s active/former conflict, this is not a question with two
+    defensible answers the schema admits either of: there is no `state` and no
+    `superseded_by_*` column here for a losing profile to retire into (see
+    `EntityOrganizationProfile`'s docstring -- "there is nothing here for
+    `state`/`effective_from`/`superseded_by_*` to mean"), so `COALESCE` has no
+    row to fold into and `REPARENT` is a primary-key collision the database
+    itself would refuse. `IdentityConflictKind.SINGLETON_RECORD_CONFLICT`
+    blocks the merge outright, on the same textual reasoning this module's own
+    docstring already gives for why a conflicting active `IDENTIFIER` blocks
+    rather than asks: "the schema admits either" is what makes an
+    `ALIAS` conflict an operator's choice, and it is false here.
+    """
+    if not merged_profiles:
+        return (), ()
+    # Only one row may ever occupy the survivor's `entity_id` primary key. That
+    # is true whether the survivor already holds it (one occupant plus one or
+    # more challengers) or does not (two or more merged-away entities in one
+    # multi-entity merge each carrying a profile, competing for the same empty
+    # slot) -- either way, more than one candidate for one primary key is the
+    # question this function refuses to answer automatically.
+    total_candidates = len(merged_profiles) + (1 if survivor_profile is not None else 0)
+    if total_candidates == 1:
+        # Exactly one profile exists across the whole operation and it is not
+        # the survivor's own, so the primary key it would take is free.
+        (profile,) = merged_profiles
+        return (_reparented_organization_profile(profile, survivor_entity_id),), ()
+    return (), tuple(
+        IdentityConflict(
+            kind=IdentityConflictKind.SINGLETON_RECORD_CONFLICT,
+            family=IdentityEffectFamily.ORGANIZATION_PROFILE,
+            record_id=profile.entity_id,
+        )
+        for profile in sorted(merged_profiles, key=lambda row: row.entity_id)
+    )
+
+
+def _reparented_organization_profile(
+    profile: EntityOrganizationProfile, survivor_entity_id: str
+) -> _RowChange:
+    return _RowChange(
+        family=IdentityEffectFamily.ORGANIZATION_PROFILE,
+        record_id=profile.entity_id,
+        kind=IdentityEffectKind.OWNER_REPARENTED,
+        before_state=_organization_profile_state(
+            entity_id=profile.entity_id, version=profile.version, updated_at=profile.updated_at
+        ),
+        after_state=_organization_profile_state(
+            entity_id=survivor_entity_id,
+            version=profile.version + 1,
+            updated_at=profile.updated_at,
+        ),
+        expected_version=profile.version,
+    )
+
+
+def _organization_profile_state(
+    *, entity_id: str, version: int, updated_at: datetime | None
+) -> dict[str, object]:
+    """One organization profile row as the ledger records it. No classification fields."""
+    return {
+        "entity_id": entity_id,
+        "version": version,
+        "updated_at": _effect_timestamp(updated_at),
+    }
+
+
 def plan_assignments(
     *,
     survivor_entity_id: str,
@@ -1220,6 +1833,368 @@ def _relationship_state(
         "state": state,
         "version": version,
         "superseded_by_relationship_id": successor,
+        "updated_at": _effect_timestamp(updated_at),
+    }
+
+
+# --- RI-ENT-WP-06b: the two dual-entity-reference families ------------------
+#
+# `entity_project_participations` (`project_entity_id`, `participant_entity_id`)
+# and `entity_person_organization_affiliations` (`person_entity_id`,
+# `organization_entity_id`) each bind two independent entity references on one
+# row, exactly as `EntityRelationship` binds `from_entity_id`/`to_entity_id`
+# (plus `scope_entity_id`, which neither of these two families has). Both
+# planners below are `plan_relationships`' shape restated over each family's
+# own pair and its own active-uniqueness rule -- substitute both references in
+# one pass, supersede-with-no-successor a row that would become a self-
+# referencing loop its own CHECK constraint refuses, and deduplicate only the
+# rows the family's own partial unique index says cannot both be current.
+
+
+def plan_project_participations(
+    *,
+    survivor_entity_id: str,
+    merged_entity_ids: frozenset[str],
+    affected: Sequence[EntityProjectParticipation],
+    existing_active: Sequence[EntityProjectParticipation],
+) -> tuple[_RowChange, ...]:
+    """Reparent every participation the identity change touches on either side.
+
+    **`project_entity_id` and `participant_entity_id` are substituted
+    independently, and either, or both, may change on one row** -- the same
+    project merged away and one of its participants merged away in the same
+    multi-entity operation redirects both columns of the row naming their
+    pairing at once, which is exactly why both are computed before either is
+    compared.
+
+    **A row that becomes a self-participation is superseded, not reparented**,
+    on `plan_relationships`' argument for a self-edge: `entity_project_
+    participations` carries `project_entity_id <> participant_entity_id` as a
+    CHECK over every row whatever its state, so a row whose project and
+    participant both became the survivor has no reparented form.
+
+    **Active uniqueness is per (project, participant, role), and a `NULL`
+    `role_code` never collides with another `NULL`.**
+    `an_active_project_participation_is_unique_per_project_and_role` is a plain
+    column index with no `COALESCE` over `role_code` (unlike
+    `an_active_assignment_is_recorded_once`'s folded descriptive columns), so
+    ordinary PostgreSQL `NULL <> NULL` semantics apply: two concurrently active
+    rows for the same project and participant that both leave `role_code`
+    unset do not violate the index and are not treated as colliding here
+    either -- a row whose `role_code` is `None` is never added to, or looked up
+    in, the collision index below.
+    """
+    held: dict[tuple[str, str, str], str] = {
+        _participation_key(
+            row,
+            project_entity_id=row.project_entity_id,
+            participant_entity_id=row.participant_entity_id,
+        ): row.participation_id
+        for row in existing_active
+        if row.role_code is not None
+    }
+    changes: list[_RowChange] = []
+    for row in sorted(affected, key=lambda item: item.participation_id):
+        project_entity_id = _substituted(
+            row.project_entity_id, merged_entity_ids, survivor_entity_id
+        )
+        participant_entity_id = _substituted(
+            row.participant_entity_id, merged_entity_ids, survivor_entity_id
+        )
+        if (project_entity_id, participant_entity_id) == (
+            row.project_entity_id,
+            row.participant_entity_id,
+        ):
+            continue
+        if project_entity_id == participant_entity_id:
+            if row.state is EntityProjectParticipationState.SUPERSEDED:
+                continue
+            changes.append(
+                _RowChange(
+                    family=IdentityEffectFamily.PROJECT_PARTICIPATION,
+                    record_id=row.participation_id,
+                    kind=IdentityEffectKind.SELF_EDGE_SUPERSEDED,
+                    before_state=_participation_state(
+                        project_entity_id=row.project_entity_id,
+                        participant_entity_id=row.participant_entity_id,
+                        state=row.state.value,
+                        version=row.version,
+                        successor=row.superseded_by_participation_id,
+                        updated_at=row.updated_at,
+                    ),
+                    after_state=_participation_state(
+                        project_entity_id=row.project_entity_id,
+                        participant_entity_id=row.participant_entity_id,
+                        state=EntityProjectParticipationState.SUPERSEDED.value,
+                        version=row.version + 1,
+                        successor=None,
+                        updated_at=row.updated_at,
+                    ),
+                    expected_version=row.version,
+                )
+            )
+            continue
+        if row.state is EntityProjectParticipationState.ACTIVE and row.role_code is not None:
+            key = _participation_key(
+                row,
+                project_entity_id=project_entity_id,
+                participant_entity_id=participant_entity_id,
+            )
+            counterpart = held.get(key)
+            if counterpart is not None:
+                changes.append(_coalesced_participation(row, counterpart))
+                continue
+            held[key] = row.participation_id
+        changes.append(
+            _RowChange(
+                family=IdentityEffectFamily.PROJECT_PARTICIPATION,
+                record_id=row.participation_id,
+                kind=IdentityEffectKind.OWNER_REPARENTED,
+                before_state=_participation_state(
+                    project_entity_id=row.project_entity_id,
+                    participant_entity_id=row.participant_entity_id,
+                    state=row.state.value,
+                    version=row.version,
+                    successor=row.superseded_by_participation_id,
+                    updated_at=row.updated_at,
+                ),
+                after_state=_participation_state(
+                    project_entity_id=project_entity_id,
+                    participant_entity_id=participant_entity_id,
+                    state=row.state.value,
+                    version=row.version + 1,
+                    successor=row.superseded_by_participation_id,
+                    updated_at=row.updated_at,
+                ),
+                expected_version=row.version,
+            )
+        )
+    return tuple(changes)
+
+
+def _participation_key(
+    row: EntityProjectParticipation, *, project_entity_id: str, participant_entity_id: str
+) -> tuple[str, str, str]:
+    """`an_active_project_participation_is_unique_per_project_and_role`, restated.
+
+    `role_code` is asserted non-`None` by every caller before this is invoked
+    -- see the module section docstring above `plan_project_participations` for
+    why a `None` role never collides.
+    """
+    role_code = row.role_code
+    if role_code is None:  # pragma: no cover - callers filter this out first
+        raise ValueError("a participation collision key requires a role code")
+    return (project_entity_id, participant_entity_id, role_code)
+
+
+def _coalesced_participation(row: EntityProjectParticipation, counterpart_id: str) -> _RowChange:
+    return _RowChange(
+        family=IdentityEffectFamily.PROJECT_PARTICIPATION,
+        record_id=row.participation_id,
+        kind=IdentityEffectKind.ROW_COALESCED,
+        before_state=_participation_state(
+            project_entity_id=row.project_entity_id,
+            participant_entity_id=row.participant_entity_id,
+            state=row.state.value,
+            version=row.version,
+            successor=row.superseded_by_participation_id,
+            updated_at=row.updated_at,
+        ),
+        after_state=_participation_state(
+            project_entity_id=row.project_entity_id,
+            participant_entity_id=row.participant_entity_id,
+            state=EntityProjectParticipationState.SUPERSEDED.value,
+            version=row.version + 1,
+            successor=counterpart_id,
+            updated_at=row.updated_at,
+        ),
+        expected_version=row.version,
+        coalesced_into=counterpart_id,
+    )
+
+
+def _participation_state(
+    *,
+    project_entity_id: str,
+    participant_entity_id: str,
+    state: str,
+    version: int,
+    successor: str | None,
+    updated_at: datetime | None,
+) -> dict[str, object]:
+    """One project participation row as the ledger records it. No role/scope text."""
+    return {
+        "project_entity_id": project_entity_id,
+        "participant_entity_id": participant_entity_id,
+        "state": state,
+        "version": version,
+        "superseded_by_participation_id": successor,
+        "updated_at": _effect_timestamp(updated_at),
+    }
+
+
+def plan_person_organization_affiliations(
+    *,
+    survivor_entity_id: str,
+    merged_entity_ids: frozenset[str],
+    affected: Sequence[PersonOrganizationAffiliation],
+    existing_active_open: Sequence[PersonOrganizationAffiliation],
+) -> tuple[_RowChange, ...]:
+    """Reparent every affiliation the identity change touches on either side.
+
+    **`person_entity_id` and `organization_entity_id` (nullable) are
+    substituted independently, and either, or both, may change on one row** --
+    including the degenerate case of both ends of the *same* row changing at
+    once, on `plan_project_participations`' argument for its own two
+    references.
+
+    **A row that becomes self-affiliated is superseded, not reparented**, on
+    `plan_relationships`'s self-edge argument:
+    `a_person_affiliation_organization_is_not_the_person` is a CHECK over every
+    row whatever its state, so a row whose person and organization both became
+    the survivor has no reparented form. This can only happen on the
+    organization side reaching the same identity the person side already
+    names, since `organization_entity_id` is the only nullable one of the two.
+
+    **The one collision this family has is "current", not "identical".**
+    `an_open_ended_affiliation_is_unique_per_person` permits at most one row
+    per person that is simultaneously `state = 'active'` and `effective_to IS
+    NULL` -- there is no descriptive key the way `EntityAlias`/`EntityName`
+    have one, and the column that decides a collision
+    (`organization_entity_id`, `job_title`, `affiliation_type_code`) plays no
+    part in it. A merged-away entity's own open affiliation reparenting onto a
+    survivor that already has one is therefore always exactly the shape
+    `plan_aliases` resolves by auto-coalescing rather than by asking: the
+    index can only ever be violated by two rows that are *both currently
+    active* (a closed affiliation, `effective_to` non-null, is outside the
+    partial index and never collides at all, so there is no "current versus
+    former" asymmetry here for an operator to decide between -- unlike
+    `ALIAS`, this family never reaches `AMBIGUOUS_DISPOSITION`). The incoming
+    (merged-away) row is coalesced into the survivor's pre-existing open
+    affiliation, which is left exactly as it stood; the merged-away entity's
+    own row is preserved as history, superseded rather than discarded, on
+    section 10.11's rule.
+    """
+    open_person_ids: dict[str, str] = {
+        row.person_entity_id: row.affiliation_id for row in existing_active_open
+    }
+    changes: list[_RowChange] = []
+    for row in sorted(affected, key=lambda item: item.affiliation_id):
+        person_entity_id = _substituted(row.person_entity_id, merged_entity_ids, survivor_entity_id)
+        organization_entity_id = _substituted_scope(
+            row.organization_entity_id, merged_entity_ids, survivor_entity_id
+        )
+        if (person_entity_id, organization_entity_id) == (
+            row.person_entity_id,
+            row.organization_entity_id,
+        ):
+            continue
+        if organization_entity_id is not None and organization_entity_id == person_entity_id:
+            if row.state is PersonOrganizationAffiliationState.SUPERSEDED:
+                continue
+            changes.append(
+                _RowChange(
+                    family=IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION,
+                    record_id=row.affiliation_id,
+                    kind=IdentityEffectKind.SELF_EDGE_SUPERSEDED,
+                    before_state=_affiliation_state(
+                        person_entity_id=row.person_entity_id,
+                        organization_entity_id=row.organization_entity_id,
+                        state=row.state.value,
+                        version=row.version,
+                        successor=row.superseded_by_affiliation_id,
+                        updated_at=row.updated_at,
+                    ),
+                    after_state=_affiliation_state(
+                        person_entity_id=row.person_entity_id,
+                        organization_entity_id=row.organization_entity_id,
+                        state=PersonOrganizationAffiliationState.SUPERSEDED.value,
+                        version=row.version + 1,
+                        successor=None,
+                        updated_at=row.updated_at,
+                    ),
+                    expected_version=row.version,
+                )
+            )
+            continue
+        is_open = (
+            row.state is PersonOrganizationAffiliationState.ACTIVE and row.effective_to is None
+        )
+        if person_entity_id != row.person_entity_id and is_open:
+            counterpart = open_person_ids.get(person_entity_id)
+            if counterpart is not None:
+                changes.append(_coalesced_affiliation(row, counterpart))
+                continue
+            open_person_ids[person_entity_id] = row.affiliation_id
+        changes.append(
+            _RowChange(
+                family=IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION,
+                record_id=row.affiliation_id,
+                kind=IdentityEffectKind.OWNER_REPARENTED,
+                before_state=_affiliation_state(
+                    person_entity_id=row.person_entity_id,
+                    organization_entity_id=row.organization_entity_id,
+                    state=row.state.value,
+                    version=row.version,
+                    successor=row.superseded_by_affiliation_id,
+                    updated_at=row.updated_at,
+                ),
+                after_state=_affiliation_state(
+                    person_entity_id=person_entity_id,
+                    organization_entity_id=organization_entity_id,
+                    state=row.state.value,
+                    version=row.version + 1,
+                    successor=row.superseded_by_affiliation_id,
+                    updated_at=row.updated_at,
+                ),
+                expected_version=row.version,
+            )
+        )
+    return tuple(changes)
+
+
+def _coalesced_affiliation(row: PersonOrganizationAffiliation, counterpart_id: str) -> _RowChange:
+    return _RowChange(
+        family=IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION,
+        record_id=row.affiliation_id,
+        kind=IdentityEffectKind.ROW_COALESCED,
+        before_state=_affiliation_state(
+            person_entity_id=row.person_entity_id,
+            organization_entity_id=row.organization_entity_id,
+            state=row.state.value,
+            version=row.version,
+            successor=row.superseded_by_affiliation_id,
+            updated_at=row.updated_at,
+        ),
+        after_state=_affiliation_state(
+            person_entity_id=row.person_entity_id,
+            organization_entity_id=row.organization_entity_id,
+            state=PersonOrganizationAffiliationState.SUPERSEDED.value,
+            version=row.version + 1,
+            successor=counterpart_id,
+            updated_at=row.updated_at,
+        ),
+        expected_version=row.version,
+        coalesced_into=counterpart_id,
+    )
+
+
+def _affiliation_state(
+    *,
+    person_entity_id: str,
+    organization_entity_id: str | None,
+    state: str,
+    version: int,
+    successor: str | None,
+    updated_at: datetime | None,
+) -> dict[str, object]:
+    """One person-organization affiliation row as the ledger records it."""
+    return {
+        "person_entity_id": person_entity_id,
+        "organization_entity_id": organization_entity_id,
+        "state": state,
+        "version": version,
+        "superseded_by_affiliation_id": successor,
         "updated_at": _effect_timestamp(updated_at),
     }
 
@@ -1900,7 +2875,16 @@ class IdentityCorrectionService:
             ambiguities.append(
                 _SplitAmbiguity(
                     family=effect.family,
-                    record_id=effect.record_id,
+                    # `current_record_id`, not `effect.record_id` directly:
+                    # `ORGANIZATION_PROFILE`'s own primary key is the entity
+                    # reference the effect substituted, so `record_id` alone
+                    # names where the row *was*, and every reader of this
+                    # ambiguity -- including `_bound_records`'s own lookup
+                    # when an operator later resolves it -- has to be given
+                    # the identity the row is actually found at now. Every
+                    # other family's `current_record_id` is `record_id`
+                    # unchanged.
+                    record_id=current_record_id(effect),
                     reason=AmbiguityReason.POST_MERGE_MODIFIED,
                     allowed_dispositions=dispositions_for(effect.family),
                     allowed_target_entity_ids=participants,
@@ -1985,7 +2969,15 @@ class IdentityCorrectionService:
         """
         found: list[_SplitAmbiguity] = []
         for family in _ATTRIBUTABLE_FAMILIES:
-            known = frozenset(effect.record_id for effect in effects if effect.family is family)
+            # `current_record_id`, not `effect.record_id`: a row this walk
+            # would otherwise mistake for newly created, because
+            # `ORGANIZATION_PROFILE`'s own ledger `record_id` names the row's
+            # identity before the merge substituted it, not the identity
+            # `records_bound_to_entity_outside` finds it bound to now. See
+            # `current_record_id`'s own docstring.
+            known = frozenset(
+                current_record_id(effect) for effect in effects if effect.family is family
+            )
             for record_id in self._entities.records_bound_to_entity_outside(
                 principal_id,
                 family,
@@ -2323,6 +3315,7 @@ class IdentityCorrectionService:
                         to_entity_id=survivor_entity_id,
                         expected_version=_guarded_version(change),
                         at=at,
+                        after_state=change.after_state,
                     )
             else:
                 self._entities.supersede_child_record(
@@ -2449,6 +3442,126 @@ class IdentityCorrectionService:
         )
         changes.extend(relationship_changes)
         groups.append(_group(MergeFamily.RELATIONSHIP, len(edges), bool(relationship_changes)))
+
+        merged_names = [
+            name
+            for entity in merged
+            for name in self._entities.names(principal_id, entity.entity_id)
+        ]
+        name_changes, name_conflicts = plan_names(
+            survivor_entity_id=survivor.entity_id,
+            survivor_names=self._entities.names(principal_id, survivor.entity_id),
+            merged_names=merged_names,
+            choices=choices,
+        )
+        changes.extend(name_changes)
+        conflicts.extend(name_conflicts)
+        groups.append(
+            _group(MergeFamily.NAME, len(merged_names), bool(name_changes or name_conflicts))
+        )
+
+        merged_addresses = [
+            address
+            for entity in merged
+            for address in self._entities.addresses(principal_id, entity.entity_id)
+        ]
+        address_changes, address_conflicts = plan_addresses(
+            survivor_entity_id=survivor.entity_id,
+            survivor_addresses=self._entities.addresses(principal_id, survivor.entity_id),
+            merged_addresses=merged_addresses,
+            choices=choices,
+        )
+        changes.extend(address_changes)
+        conflicts.extend(address_conflicts)
+        groups.append(
+            _group(
+                MergeFamily.ADDRESS,
+                len(merged_addresses),
+                bool(address_changes or address_conflicts),
+            )
+        )
+
+        merged_communication_methods = [
+            method
+            for entity in merged
+            for method in self._entities.communication_methods(principal_id, entity.entity_id)
+        ]
+        communication_method_changes, communication_method_conflicts = plan_communication_methods(
+            survivor_entity_id=survivor.entity_id,
+            survivor_communication_methods=self._entities.communication_methods(
+                principal_id, survivor.entity_id
+            ),
+            merged_communication_methods=merged_communication_methods,
+            choices=choices,
+        )
+        changes.extend(communication_method_changes)
+        conflicts.extend(communication_method_conflicts)
+        groups.append(
+            _group(
+                MergeFamily.COMMUNICATION_METHOD,
+                len(merged_communication_methods),
+                bool(communication_method_changes or communication_method_conflicts),
+            )
+        )
+
+        merged_profiles = [
+            profile
+            for entity in merged
+            if (profile := self._entities.organization_profile(principal_id, entity.entity_id))
+            is not None
+        ]
+        profile_changes, profile_conflicts = plan_organization_profiles(
+            survivor_entity_id=survivor.entity_id,
+            survivor_profile=self._entities.organization_profile(principal_id, survivor.entity_id),
+            merged_profiles=merged_profiles,
+        )
+        changes.extend(profile_changes)
+        conflicts.extend(profile_conflicts)
+        groups.append(
+            MergeAffectedGroup(
+                MergeFamily.ORGANIZATION_PROFILE,
+                FamilyDisposition.BLOCKED
+                if profile_conflicts
+                else _disposition(bool(profile_changes)),
+                len(merged_profiles),
+            )
+        )
+
+        participations = self._affected_project_participations(principal_id, merged_entity_ids)
+        participation_changes = plan_project_participations(
+            survivor_entity_id=survivor.entity_id,
+            merged_entity_ids=merged_entity_ids,
+            affected=participations,
+            existing_active=self._existing_project_participations(
+                principal_id, survivor, merged_entity_ids, participations
+            ),
+        )
+        changes.extend(participation_changes)
+        groups.append(
+            _group(
+                MergeFamily.PROJECT_PARTICIPATION,
+                len(participations),
+                bool(participation_changes),
+            )
+        )
+
+        affiliations = self._affected_person_organization_affiliations(
+            principal_id, merged_entity_ids
+        )
+        affiliation_changes = plan_person_organization_affiliations(
+            survivor_entity_id=survivor.entity_id,
+            merged_entity_ids=merged_entity_ids,
+            affected=affiliations,
+            existing_active_open=self._existing_open_affiliation(principal_id, survivor.entity_id),
+        )
+        changes.extend(affiliation_changes)
+        groups.append(
+            _group(
+                MergeFamily.PERSON_ORGANIZATION_AFFILIATION,
+                len(affiliations),
+                bool(affiliation_changes),
+            )
+        )
 
         observations = [
             observation
@@ -2642,6 +3755,82 @@ class IdentityCorrectionService:
             for endpoint in sorted(endpoints)
             for edge in self._entities.relationships(principal_id, endpoint)
             if edge.relationship_id not in replanned and edge.state is RelationshipState.ACTIVE
+        ]
+
+    def _affected_project_participations(
+        self, principal_id: str, merged_entity_ids: frozenset[str]
+    ) -> list[EntityProjectParticipation]:
+        """Every participation naming a merged-away entity as project or participant."""
+        found: dict[str, EntityProjectParticipation] = {}
+        for entity_id in sorted(merged_entity_ids):
+            for row in self._entities.project_participations_as_project(principal_id, entity_id):
+                found[row.participation_id] = row
+            for row in self._entities.project_participations_as_participant(
+                principal_id, entity_id
+            ):
+                found[row.participation_id] = row
+        return [found[key] for key in sorted(found)]
+
+    def _existing_project_participations(
+        self,
+        principal_id: str,
+        survivor: Entity,
+        merged_entity_ids: frozenset[str],
+        affected: Sequence[EntityProjectParticipation],
+    ) -> list[EntityProjectParticipation]:
+        """`_existing_relationships`' rule, over a participation's project/participant pair."""
+        endpoints = {survivor.entity_id} | {
+            entity_id
+            for row in affected
+            for entity_id in (row.project_entity_id, row.participant_entity_id)
+            if entity_id not in merged_entity_ids
+        }
+        replanned = {row.participation_id for row in affected}
+        return [
+            row
+            for endpoint in sorted(endpoints)
+            for row in (
+                *self._entities.project_participations_as_project(principal_id, endpoint),
+                *self._entities.project_participations_as_participant(principal_id, endpoint),
+            )
+            if row.participation_id not in replanned
+            and row.state is EntityProjectParticipationState.ACTIVE
+        ]
+
+    def _affected_person_organization_affiliations(
+        self, principal_id: str, merged_entity_ids: frozenset[str]
+    ) -> list[PersonOrganizationAffiliation]:
+        """Every affiliation naming a merged-away entity as person or organization."""
+        found: dict[str, PersonOrganizationAffiliation] = {}
+        for entity_id in sorted(merged_entity_ids):
+            for row in self._entities.person_organization_affiliations_as_person(
+                principal_id, entity_id
+            ):
+                found[row.affiliation_id] = row
+            for row in self._entities.person_organization_affiliations_as_organization(
+                principal_id, entity_id
+            ):
+                found[row.affiliation_id] = row
+        return [found[key] for key in sorted(found)]
+
+    def _existing_open_affiliation(
+        self, principal_id: str, survivor_entity_id: str
+    ) -> list[PersonOrganizationAffiliation]:
+        """The survivor's own currently open affiliation, if it has one.
+
+        Unlike `_existing_relationships`/`_existing_project_participations`, no
+        third entity's rows are ever a candidate counterpart:
+        `plan_person_organization_affiliations` only ever reparents a row's
+        `person_entity_id` onto the survivor, never onto any other entity, so
+        the sole row an incoming open affiliation could collide with is the
+        survivor's own.
+        """
+        return [
+            row
+            for row in self._entities.person_organization_affiliations_as_person(
+                principal_id, survivor_entity_id
+            )
+            if row.state is PersonOrganizationAffiliationState.ACTIVE and row.effective_to is None
         ]
 
     # --- request checks -----------------------------------------------------
@@ -2921,7 +4110,68 @@ class IdentityCorrectionService:
                 )
                 for observation in self._entities.observations(principal_id, entity_id, limit=limit)
             }
-        raise ConflictError(  # pragma: no cover - _ATTRIBUTABLE_FAMILIES admits five
+        if family is IdentityEffectFamily.NAME:
+            return {
+                name.entity_name_id: _BoundRecord(name.version, frozenset({name.entity_id}))
+                for name in self._entities.names(principal_id, entity_id, limit=limit)
+            }
+        if family is IdentityEffectFamily.ORGANIZATION_PROFILE:
+            profile = self._entities.organization_profile(principal_id, entity_id)
+            if profile is None:
+                return {}
+            return {
+                profile.entity_id: _BoundRecord(profile.version, frozenset({profile.entity_id}))
+            }
+        if family is IdentityEffectFamily.ADDRESS:
+            return {
+                address.entity_address_id: _BoundRecord(
+                    address.version, frozenset({address.entity_id})
+                )
+                for address in self._entities.addresses(principal_id, entity_id, limit=limit)
+            }
+        if family is IdentityEffectFamily.COMMUNICATION_METHOD:
+            return {
+                method.communication_method_id: _BoundRecord(
+                    method.version, frozenset({method.entity_id})
+                )
+                for method in self._entities.communication_methods(
+                    principal_id, entity_id, limit=limit
+                )
+            }
+        if family is IdentityEffectFamily.PROJECT_PARTICIPATION:
+            return {
+                row.participation_id: _BoundRecord(
+                    row.version, frozenset({row.project_entity_id, row.participant_entity_id})
+                )
+                for row in (
+                    *self._entities.project_participations_as_project(
+                        principal_id, entity_id, limit=limit
+                    ),
+                    *self._entities.project_participations_as_participant(
+                        principal_id, entity_id, limit=limit
+                    ),
+                )
+            }
+        if family is IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION:
+            return {
+                row.affiliation_id: _BoundRecord(
+                    row.version,
+                    frozenset(
+                        name
+                        for name in (row.person_entity_id, row.organization_entity_id)
+                        if name is not None
+                    ),
+                )
+                for row in (
+                    *self._entities.person_organization_affiliations_as_person(
+                        principal_id, entity_id, limit=limit
+                    ),
+                    *self._entities.person_organization_affiliations_as_organization(
+                        principal_id, entity_id, limit=limit
+                    ),
+                )
+            }
+        raise ConflictError(  # pragma: no cover - _ATTRIBUTABLE_FAMILIES admits every branch above
             SafeDetail.IDENTITY_CORRECTION_CONFLICT
         )
 
@@ -3143,6 +4393,18 @@ _ATTRIBUTABLE_FAMILIES: Final[tuple[IdentityEffectFamily, ...]] = (
     IdentityEffectFamily.ASSIGNMENT,
     IdentityEffectFamily.RELATIONSHIP,
     IdentityEffectFamily.OBSERVATION,
+    # RI-ENT-WP-06b's six: each has real per-row entity-plane storage
+    # (`_CHILD_SUBJECTS` in `infrastructure.persistence.entity`), so a row
+    # bound to the survivor that no effect in this merge's ledger mentions is
+    # exactly as discoverable for these as it is for the five above --
+    # `records_bound_to_entity_outside` is generic over `family` already and
+    # needs no family-specific change to answer for them.
+    IdentityEffectFamily.NAME,
+    IdentityEffectFamily.ORGANIZATION_PROFILE,
+    IdentityEffectFamily.ADDRESS,
+    IdentityEffectFamily.COMMUNICATION_METHOD,
+    IdentityEffectFamily.PROJECT_PARTICIPATION,
+    IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION,
 )
 
 

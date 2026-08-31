@@ -685,19 +685,16 @@ class EntityName:
     invisible to anything that reads entity relationships rather than name
     history.
 
-    **Merge/split.** This family is not yet wired into
-    `my_pa.application.identity_correction`'s `IdentityEffectFamily` /
-    ambiguity-discovery / reparenting machinery (RULING 2's second branch: a
-    documented, evidenced exclusion rather than a silent one). No command or
-    MCP capability in this increment writes `entity_names` outside test
-    fixtures, so no merge can yet encounter a populated row through ordinary
-    product use; a merge of an entity that *does* carry name rows today leaves
-    them bound to the merged-away `entity_id`, which stays resolvable through
-    `entities.superseded_by_entity_id` but not reachable by querying the
-    survivor's names directly. Wiring the reparenting, collision and ambiguity
-    logic `EntityAlias` already has is deferred to RI-ENT-WP-06, which the
-    audit's own work-package ordering already binds to "coordinate merge/split
-    effects" rather than to the WP-02 taxonomy work.
+    **Merge/split.** Fully wired as of RI-ENT-WP-06b:
+    `my_pa.application.identity_correction`'s `IdentityEffectFamily.NAME`,
+    `plan_names`, and the shared reparenting/ambiguity-discovery machinery
+    reparent this family's rows on merge, invert on split, and discover a row
+    created against the survivor after a merge as `POST_MERGE_CREATED`
+    ambiguity, on the same terms `EntityAlias` already had. See
+    `docs/campaign/ROBUST-ENTITY-DATA-MODEL-20260830.md`'s "Merge/split
+    disposition (RULING 2)" section for the full design, including how the
+    `an_active_entity_name_has_one_preferred_per_type` collision -- a second
+    index `EntityAlias` does not carry -- is resolved.
 
     Field-for-field this mirrors `EntityAlias`; see that class's docstring for
     the reasoning behind the per-(entity, type) active uniqueness, the
@@ -792,16 +789,20 @@ class EntityOrganizationProfile:
     (`test_relationship_scoring_surface_is_denied`) requires in place of the
     numeric confidence the audit proposed; see that class's docstring.
 
-    **Merge/split.** Not yet wired into
-    `my_pa.application.identity_correction`, for the same reason and under the
-    same deferral (RI-ENT-WP-06) as `EntityName` above. A merge of two
-    organization entities that each carry a profile is exactly the case that
-    wiring must resolve — which profile the survivor keeps is a decision this
-    revision does not make, because nothing yet writes a second profile onto a
-    survivor to force the question. This class's own database constraint
-    (`entity_id` as primary key) at least guarantees the *shape* of that future
-    conflict is a duplicate-key collision the writer must resolve, not a
-    silent second row.
+    **Merge/split.** Fully wired as of RI-ENT-WP-06b, resolving the exact
+    question this docstring used to leave open. `IdentityEffectFamily.
+    ORGANIZATION_PROFILE` and `plan_organization_profiles`
+    (`my_pa.application.identity_correction`) reparent an unambiguous
+    profile by rewriting its primary key -- the generic
+    `reparent_entity_reference` substitution already performs that correctly
+    for a family whose sole entity reference doubles as its own primary key
+    -- and **block the merge outright** (`IdentityConflictKind.
+    SINGLETON_RECORD_CONFLICT`) when more than one profile exists across the
+    operation, because this table's own shape (no `state`, no
+    `superseded_by_*`) gives a losing profile nowhere to retire to. No
+    profile is ever silently dropped or picked automatically. See
+    `docs/campaign/ROBUST-ENTITY-DATA-MODEL-20260830.md`'s "Merge/split
+    disposition (RULING 2)" section for the full design.
 
     This profile applies to organization entities; nothing in this revision's
     schema enforces `entities.entity_type = 'organization'` for a given row
@@ -1116,23 +1117,14 @@ class EntityAddress:
     group, which address a reader should default to when more than one
     simultaneously active address of that type exists.
 
-    **Merge/split.** This family is not yet wired into
-    `my_pa.application.identity_correction`'s `IdentityEffectFamily` /
-    ambiguity-discovery / reparenting machinery (RULING 2's second branch: a
-    documented, evidenced exclusion rather than a silent one). No command or
-    MCP capability in this increment writes `entity_addresses` outside test
-    fixtures, so no merge can yet encounter a populated row through ordinary
-    product use; a merge of an entity that *does* carry address rows today
-    leaves them bound to the merged-away `entity_id`, which stays resolvable
-    through `entities.superseded_by_entity_id` but not reachable by querying
-    the survivor's addresses directly. Wiring the reparenting, collision and
-    ambiguity logic is deferred to RI-ENT-WP-06, the same work package
-    `EntityName` and `EntityOrganizationProfile` defer to, and for the same
-    reason: the audit's own work-package ordering binds merge/split
-    coordination there, not to this increment's schema work. `WP-08`
-    (repositories/services) and `WP-11` (MCP mutation contracts) may not ship
-    a write path for this family until that wiring lands -- see the campaign
-    document's "Merge/split disposition" section.
+    **Merge/split.** Fully wired as of RI-ENT-WP-06b, on `EntityName`'s own
+    terms: `IdentityEffectFamily.ADDRESS`, `plan_addresses`, and the shared
+    reparenting/ambiguity-discovery machinery reparent, invert, and discover
+    this family's rows, including the `an_active_entity_address_has_one_
+    preferred_per_type` collision resolved by demotion. `WP-08` and `WP-11`
+    are no longer blocked from shipping a write path for this family -- see
+    the campaign document's "Merge/split disposition" section for the full
+    design and the updated blocking-dependency status.
     """
 
     entity_address_id: str
@@ -1272,19 +1264,14 @@ class EntityCommunicationMethod:
     see that class's docstring for why sharing one enum across the two
     dimensions would be the wrong coupling.
 
-    **Merge/split.** Not yet wired into
-    `my_pa.application.identity_correction`, under the same deferral to
-    RI-ENT-WP-06 as `EntityName`, `EntityOrganizationProfile`, and
-    `EntityAddress` above, and for the same reason: no command or MCP
-    capability in this increment writes this table outside test fixtures, so
-    a merge today cannot encounter a populated row through ordinary product
-    use. A merge of an entity that does carry communication-method rows
-    leaves them bound to the merged-away `entity_id`, resolvable through
-    `entities.superseded_by_entity_id` but not reachable by querying the
-    survivor directly, until that wiring lands. `WP-08` and `WP-11` may not
-    ship a write path for this family until then either -- see the campaign
-    document's "Merge/split disposition" section, which after this increment
-    enumerates all four families this rule now binds.
+    **Merge/split.** Fully wired as of RI-ENT-WP-06b, on `EntityName`'s own
+    terms: `IdentityEffectFamily.COMMUNICATION_METHOD`,
+    `plan_communication_methods`, and the shared reparenting/ambiguity-
+    discovery machinery reparent, invert, and discover this family's rows,
+    including the `an_active_communication_method_has_one_preferred_per_type`
+    collision resolved by demotion. See the campaign document's "Merge/split
+    disposition" section for the full design and the updated
+    blocking-dependency status.
     """
 
     communication_method_id: str
@@ -1765,14 +1752,18 @@ class EntityProjectParticipation:
     inserts a row here is responsible for verifying `project_entity_id` names
     an entity whose `entity_type` is `PROJECT` before the insert.
 
-    **Merge/split.** Not yet wired into
-    `my_pa.application.identity_correction`, under the same RI-ENT-WP-06
-    deferral as `EntityName`, `EntityOrganizationProfile`, `EntityAddress`,
-    and `EntityCommunicationMethod` above, and for the same reason: no
-    command or MCP capability in this increment writes this table outside
-    test fixtures. A merge of a `project_entity_id` or a
-    `participant_entity_id` that carries participation rows today leaves them
-    bound to the merged-away `entity_id` until that wiring lands.
+    **Merge/split.** Fully wired as of RI-ENT-WP-06b.
+    `IdentityEffectFamily.PROJECT_PARTICIPATION` and
+    `plan_project_participations` (`my_pa.application.identity_correction`)
+    substitute `project_entity_id` and `participant_entity_id`
+    independently in one statement, on `plan_relationships`' shape for its
+    own multiple entity references; either, or both, may change in one
+    multi-entity merge. A row whose project and participant both become the
+    survivor is superseded rather than reparented, since
+    `a_project_participation_project_is_not_the_participant` forbids the row
+    any other form. See the campaign document's "Merge/split disposition"
+    section for the full design, including the `role_code`-is-`NULL`
+    collision wrinkle.
     """
 
     participation_id: str
@@ -2012,18 +2003,18 @@ class PersonOrganizationAffiliation:
     time), so it follows the temporal-family shape rather than the profile
     shape.
 
-    **Merge/split.** Not yet wired into
-    `my_pa.application.identity_correction`, under the same RI-ENT-WP-06
-    deferral as `EntityName`, `EntityOrganizationProfile`, `EntityAddress`,
-    `EntityCommunicationMethod`, and `EntityProjectParticipation` above, and for
-    the same reason: no command or MCP capability in this increment writes this
-    table outside test fixtures. **This family is more exposed than any of its
-    five predecessors**, because it binds *two* independent entity references
-    -- `person_entity_id` and, when populated, `organization_entity_id` -- and a
-    merge could in principle reparent either one, or both, in the same
-    operation; see the campaign document's "Merge/split disposition" section,
-    extended by this revision to a sixth family, for what happens to a row
-    today when each side is merged away.
+    **Merge/split.** Fully wired as of RI-ENT-WP-06b.
+    `IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION` and
+    `plan_person_organization_affiliations`
+    (`my_pa.application.identity_correction`) substitute `person_entity_id`
+    and the nullable `organization_entity_id` independently in one
+    statement, including the degenerate case of both changing on one row at
+    once. A row that becomes self-affiliated after substitution is
+    superseded, per `a_person_affiliation_organization_is_not_the_person`.
+    `an_open_ended_affiliation_is_unique_per_person`'s collision -- unlike
+    `EntityAlias`'s -- has no "current versus former" asymmetry, so it always
+    auto-coalesces rather than asking an operator. See the campaign
+    document's "Merge/split disposition" section for the full design.
     """
 
     affiliation_id: str

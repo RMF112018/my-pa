@@ -309,6 +309,15 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # violation naming a constraint. The ninth `row` read is
     # `_row_to_proposal_evidence_link` stamping the column back onto the record
     # it builds from a row a `_mine`-scoped statement returned.
+    #
+    # RI-ENT-WP-06b adds six more `row` reads, one per new row mapper
+    # (`_row_to_name`, `_row_to_organization_profile`, `_row_to_address`,
+    # `_row_to_communication_method`, `_row_to_project_participation`,
+    # `_row_to_affiliation`) for the six Entity-bound record families the
+    # merge/split wiring now reads. Each is the same pattern every other `row`
+    # read in this file already is: a column stamped back onto the domain
+    # record from a row a `_mine`-scoped `SELECT` returned, never a value a
+    # caller supplied.
     "infrastructure/persistence/entity.py": (
         ("alias", "principal_id"),
         ("assignment", "principal_id"),
@@ -355,6 +364,12 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),

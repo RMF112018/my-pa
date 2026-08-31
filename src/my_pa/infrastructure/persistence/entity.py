@@ -135,16 +135,30 @@ from my_pa.domain.relationship.authoring import (
     UnsettledBindingError,
 )
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
+    AffiliationTypeCode,
     AliasState,
     AliasType,
     Assignment,
     AssignmentState,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
+    CommunicationVerificationStatusCode,
     DirectedWriteError,
     DirectedWriteOperation,
     DuplicateDirectedFactError,
     Entity,
+    EntityAddress,
+    EntityAddressState,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityCommunicationMethodState,
+    EntityName,
+    EntityNameState,
+    EntityOrganizationProfile,
+    EntityProjectParticipation,
+    EntityProjectParticipationState,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
@@ -152,8 +166,17 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    LegalIdentityStatusCode,
     MergedEndpointError,
+    NameTypeCode,
+    OrganizationKindCode,
+    ParticipationStatusCode,
+    PersonOrganizationAffiliation,
+    PersonOrganizationAffiliationState,
     RelationshipState,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
     StaleDirectedVersionError,
     descriptor_key,
 )
@@ -189,6 +212,7 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityOperationState,
     IdentityOperationType,
     IdentityPreview,
+    current_record_id,
 )
 from my_pa.domain.relationship.normalization import (
     is_normalized_identifier,
@@ -219,8 +243,10 @@ from my_pa.infrastructure.persistence.tables import (
     captures,
     enrollments,
     entities,
+    entity_addresses,
     entity_aliases,
     entity_assignments,
+    entity_communication_methods,
     entity_external_identifiers,
     entity_fact_evidence_links,
     entity_identity_ambiguity_settlements,
@@ -230,7 +256,11 @@ from my_pa.infrastructure.persistence.tables import (
     entity_identity_previews,
     entity_merge_records,
     entity_mutation_events,
+    entity_names,
     entity_observations,
+    entity_organization_profiles,
+    entity_person_organization_affiliations,
+    entity_project_participations,
     entity_proposal_evidence_links,
     entity_proposal_review_decisions,
     entity_proposals,
@@ -569,6 +599,134 @@ class SqlEntityRepository(EntitiesRepository):
         )
         rows = self._connection.execute(_limited(statement, limit)).all()
         return [_row_to_alias(row) for row in rows]
+
+    # --- RI-ENT-WP-06b: the six Entity-bound record families -----------------
+
+    def names(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityName]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        statement = (
+            select(entity_names)
+            .where(_mine(entity_names, principal_id), entity_names.c.entity_id == entity_id)
+            .order_by(entity_names.c.entity_name_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_name(row) for row in rows]
+
+    def organization_profile(
+        self, principal_id: str, entity_id: str
+    ) -> EntityOrganizationProfile | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        row = self._connection.execute(
+            select(entity_organization_profiles).where(
+                _mine(entity_organization_profiles, principal_id),
+                entity_organization_profiles.c.entity_id == entity_id,
+            )
+        ).one_or_none()
+        return None if row is None else _row_to_organization_profile(row)
+
+    def addresses(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityAddress]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        statement = (
+            select(entity_addresses)
+            .where(_mine(entity_addresses, principal_id), entity_addresses.c.entity_id == entity_id)
+            .order_by(entity_addresses.c.entity_address_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_address(row) for row in rows]
+
+    def communication_methods(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityCommunicationMethod]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        statement = (
+            select(entity_communication_methods)
+            .where(
+                _mine(entity_communication_methods, principal_id),
+                entity_communication_methods.c.entity_id == entity_id,
+            )
+            .order_by(entity_communication_methods.c.communication_method_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_communication_method(row) for row in rows]
+
+    def project_participations_as_project(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityProjectParticipation]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        statement = (
+            select(entity_project_participations)
+            .where(
+                _mine(entity_project_participations, principal_id),
+                entity_project_participations.c.project_entity_id == entity_id,
+            )
+            .order_by(entity_project_participations.c.participation_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_project_participation(row) for row in rows]
+
+    def project_participations_as_participant(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[EntityProjectParticipation]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        statement = (
+            select(entity_project_participations)
+            .where(
+                _mine(entity_project_participations, principal_id),
+                entity_project_participations.c.participant_entity_id == entity_id,
+            )
+            .order_by(entity_project_participations.c.participation_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_project_participation(row) for row in rows]
+
+    def person_organization_affiliations_as_person(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[PersonOrganizationAffiliation]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        statement = (
+            select(entity_person_organization_affiliations)
+            .where(
+                _mine(entity_person_organization_affiliations, principal_id),
+                entity_person_organization_affiliations.c.person_entity_id == entity_id,
+            )
+            .order_by(entity_person_organization_affiliations.c.affiliation_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_affiliation(row) for row in rows]
+
+    def person_organization_affiliations_as_organization(
+        self, principal_id: str, entity_id: str, *, limit: int | None = None
+    ) -> list[PersonOrganizationAffiliation]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        statement = (
+            select(entity_person_organization_affiliations)
+            .where(
+                _mine(entity_person_organization_affiliations, principal_id),
+                entity_person_organization_affiliations.c.organization_entity_id == entity_id,
+            )
+            .order_by(entity_person_organization_affiliations.c.affiliation_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_affiliation(row) for row in rows]
 
     def entities_by_identifier(
         self,
@@ -3195,6 +3353,7 @@ class SqlEntityRepository(EntitiesRepository):
         to_entity_id: str,
         expected_version: int,
         at: datetime,
+        after_state: Mapping[str, object] | None = None,
     ) -> None:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         subject = _reparentable(family)
@@ -3217,6 +3376,27 @@ class SqlEntityRepository(EntitiesRepository):
         if subject.version_column == "version":
             substituted["version"] = subject.table.c.version + 1
             substituted["updated_at"] = at
+        if subject.content_columns and after_state is not None:
+            # A handful of families' rows carry a non-entity-reference column
+            # whose new value a reparenting also decides -- `NAME`/`ADDRESS`/
+            # `COMMUNICATION_METHOD`'s `is_preferred` demotion when the
+            # survivor already holds an active preferred row of the same type.
+            # See `_ChildSubject.content_columns`'s own docstring.
+            #
+            # `after_state is None` is not an error: `_perform`'s merge-apply
+            # path always supplies it (`plan_names` and its two siblings
+            # compute the value), but the split-side `ASSIGN_TO_ENTITY`
+            # settlement path (`_resolved_assignments`) reassigns a row with no
+            # planned `_RowChange` behind it at all -- there is no analysis to
+            # have decided a demotion. That path leaves `is_preferred`
+            # untouched and reparents by entity substitution alone, on the
+            # same terms `ALIAS`'s own reassignment already does: if that
+            # collides with the family's own active-uniqueness index, the
+            # index refuses the write, exactly as it would for an alias.
+            for column in subject.content_columns:
+                if column not in after_state:
+                    raise ValueError("a reparenting after state names every content column")
+                substituted[column] = after_state[column]
         result = self._connection.execute(
             update(subject.table)
             .where(
@@ -3543,7 +3723,7 @@ class SqlEntityRepository(EntitiesRepository):
             before["version"] = current_version + 1
         conditions = [
             _mine(subject.table, principal_id),
-            subject.table.c[subject.id_column] == effect.record_id,
+            subject.table.c[subject.id_column] == current_record_id(effect),
             *(
                 subject.table.c[name].is_(None) if value is None else subject.table.c[name] == value
                 for name, value in after.items()
@@ -3690,7 +3870,7 @@ class SqlEntityRepository(EntitiesRepository):
         row = self._connection.execute(
             select(*(subject.table.c[name] for name in names)).where(
                 _mine(subject.table, principal_id),
-                subject.table.c[subject.id_column] == effect.record_id,
+                subject.table.c[subject.id_column] == current_record_id(effect),
             )
         ).one_or_none()
         if row is None:
@@ -3775,6 +3955,23 @@ class _ChildSubject:
     version_column: str
     #: The column naming what replaced this row, where the family has one.
     successor_column: str | None = None
+    #: Non-entity-reference columns whose *new* value a reparenting also has to
+    #: write, sourced from the effect's own `after_state` rather than derived
+    #: from `from_entity_ids`/`to_entity_id` the way the entity columns are.
+    #:
+    #: Empty for every family but `NAME`/`ADDRESS`/`COMMUNICATION_METHOD`,
+    #: whose `is_preferred` can change as a *consequence* of reparenting --
+    #: `application.identity_correction.plan_names` (and its two siblings)
+    #: demotes an incoming row's `is_preferred` to `false` when the survivor
+    #: already holds an active preferred row of the same type, because the
+    #: partial unique index `an_active_..._has_one_preferred_per_type` would
+    #: otherwise refuse the write. That demotion is a real column change this
+    #: statement has to perform in the same guarded `UPDATE` as the entity
+    #: substitution -- not a second effect, and not a second write, both of
+    #: which section 22's one-effect-per-record rule and section 21's
+    #: atomicity already refuse. See `reparent_entity_reference`'s own
+    #: docstring for how `after_state` reaches this statement.
+    content_columns: tuple[str, ...] = ()
 
 
 #: The five families whose rows a merge reparents, and the four of those whose
@@ -3819,6 +4016,72 @@ _CHILD_SUBJECTS: Final[dict[IdentityEffectFamily, _ChildSubject]] = {
         id_kind=IdKind.ENTITY_OBSERVATION,
         entity_columns=("entity_id",),
         version_column="resolution_version",
+    ),
+    # RI-ENT-WP-06b's six. `NAME`/`ADDRESS`/`COMMUNICATION_METHOD` mirror
+    # `ALIAS`'s shape exactly (a single `entity_id` column, a three-state
+    # lifecycle, a self-referencing successor). `PROJECT_PARTICIPATION` and
+    # `PERSON_ORGANIZATION_AFFILIATION` mirror `RELATIONSHIP`'s two-or-more-
+    # entity-column shape, minus a `scope_entity_id` neither carries.
+    # `ORGANIZATION_PROFILE` is the one member whose `id_column` and sole
+    # `entity_columns` entry are the *same* column -- `entity_id` is both this
+    # table's primary key and its foreign key to `entities` (see
+    # `EntityOrganizationProfile`'s docstring) -- which is what lets the
+    # generic substitution in `reparent_entity_reference` rewrite a profile's
+    # primary key exactly as it rewrites any other family's foreign key, and
+    # why it carries no `successor_column`: there is no `state`/`superseded_
+    # by_*` column here for `supersede_child_record` to write, which is also
+    # why `application.identity_correction.plan_organization_profiles` never
+    # calls it -- a dual-profile conflict blocks outright instead (see that
+    # function's docstring).
+    IdentityEffectFamily.NAME: _ChildSubject(
+        table=entity_names,
+        id_column="entity_name_id",
+        id_kind=IdKind.ENTITY_NAME,
+        entity_columns=("entity_id",),
+        version_column="version",
+        successor_column="superseded_by_entity_name_id",
+        content_columns=("is_preferred",),
+    ),
+    IdentityEffectFamily.ADDRESS: _ChildSubject(
+        table=entity_addresses,
+        id_column="entity_address_id",
+        id_kind=IdKind.ENTITY_ADDRESS,
+        entity_columns=("entity_id",),
+        version_column="version",
+        successor_column="superseded_by_entity_address_id",
+        content_columns=("is_preferred",),
+    ),
+    IdentityEffectFamily.COMMUNICATION_METHOD: _ChildSubject(
+        table=entity_communication_methods,
+        id_column="communication_method_id",
+        id_kind=IdKind.ENTITY_COMMUNICATION_METHOD,
+        entity_columns=("entity_id",),
+        version_column="version",
+        successor_column="superseded_by_communication_method_id",
+        content_columns=("is_preferred",),
+    ),
+    IdentityEffectFamily.ORGANIZATION_PROFILE: _ChildSubject(
+        table=entity_organization_profiles,
+        id_column="entity_id",
+        id_kind=IdKind.ENTITY,
+        entity_columns=("entity_id",),
+        version_column="version",
+    ),
+    IdentityEffectFamily.PROJECT_PARTICIPATION: _ChildSubject(
+        table=entity_project_participations,
+        id_column="participation_id",
+        id_kind=IdKind.ENTITY_PROJECT_PARTICIPATION,
+        entity_columns=("project_entity_id", "participant_entity_id"),
+        version_column="version",
+        successor_column="superseded_by_participation_id",
+    ),
+    IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION: _ChildSubject(
+        table=entity_person_organization_affiliations,
+        id_column="affiliation_id",
+        id_kind=IdKind.PERSON_ORGANIZATION_AFFILIATION,
+        entity_columns=("person_entity_id", "organization_entity_id"),
+        version_column="version",
+        successor_column="superseded_by_affiliation_id",
     ),
 }
 
@@ -3898,6 +4161,47 @@ def _identity_effect_values(
         },
         IdentityEffectFamily.OBSERVATION: {"entity_id", "resolution_version"},
         IdentityEffectFamily.PROPOSAL: {"state", "invalidated_reason", "decided_by", "decided_at"},
+        IdentityEffectFamily.NAME: {
+            "entity_id",
+            "is_preferred",
+            "state",
+            "version",
+            "superseded_by_entity_name_id",
+            "updated_at",
+        },
+        IdentityEffectFamily.ADDRESS: {
+            "entity_id",
+            "is_preferred",
+            "state",
+            "version",
+            "superseded_by_entity_address_id",
+            "updated_at",
+        },
+        IdentityEffectFamily.COMMUNICATION_METHOD: {
+            "entity_id",
+            "is_preferred",
+            "state",
+            "version",
+            "superseded_by_communication_method_id",
+            "updated_at",
+        },
+        IdentityEffectFamily.ORGANIZATION_PROFILE: {"entity_id", "version", "updated_at"},
+        IdentityEffectFamily.PROJECT_PARTICIPATION: {
+            "project_entity_id",
+            "participant_entity_id",
+            "state",
+            "version",
+            "superseded_by_participation_id",
+            "updated_at",
+        },
+        IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION: {
+            "person_entity_id",
+            "organization_entity_id",
+            "state",
+            "version",
+            "superseded_by_affiliation_id",
+            "updated_at",
+        },
     }.get(family)
     if admitted is None or set(state) != admitted:
         raise ValueError("an identity effect state does not match its record family")
@@ -4162,6 +4466,141 @@ def _row_to_alias(row: Any) -> EntityAlias:  # noqa: ANN401 - a Row or a labelle
         updated_at=row.updated_at,
         retired_at=row.retired_at,
         superseded_by_alias_id=_text_or_none(row.superseded_by_alias_id),
+    )
+
+
+def _row_to_name(row: Any) -> EntityName:  # noqa: ANN401 - a Row or a labelled view
+    """One stored name form, on `_row_to_alias`'s terms."""
+    return EntityName(
+        entity_name_id=str(row.entity_name_id),
+        entity_id=str(row.entity_id),
+        principal_id=str(row.principal_id),
+        name_type_code=NameTypeCode(str(row.name_type_code)),
+        display_value=str(row.display_value),
+        normalized_value=str(row.normalized_value),
+        is_preferred=bool(row.is_preferred),
+        effective_from=row.effective_from,
+        effective_to=row.effective_to,
+        state=EntityNameState(str(row.state)),
+        version=int(row.version),
+        updated_at=row.updated_at,
+        retired_at=row.retired_at,
+        superseded_by_entity_name_id=_text_or_none(row.superseded_by_entity_name_id),
+    )
+
+
+def _row_to_organization_profile(row: Any) -> EntityOrganizationProfile:  # noqa: ANN401
+    """One stored organization profile. `entity_id` is both key and reference."""
+    return EntityOrganizationProfile(
+        entity_id=str(row.entity_id),
+        principal_id=str(row.principal_id),
+        organization_kind_code=OrganizationKindCode(str(row.organization_kind_code)),
+        legal_identity_status_code=LegalIdentityStatusCode(str(row.legal_identity_status_code)),
+        jurisdiction_code=_text_or_none(row.jurisdiction_code),
+        registration_identifier=_text_or_none(row.registration_identifier),
+        version=int(row.version),
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+    )
+
+
+def _row_to_address(row: Any) -> EntityAddress:  # noqa: ANN401 - a Row or a labelled view
+    """One stored address, on `_row_to_alias`'s terms."""
+    return EntityAddress(
+        entity_address_id=str(row.entity_address_id),
+        entity_id=str(row.entity_id),
+        principal_id=str(row.principal_id),
+        address_type_code=AddressTypeCode(str(row.address_type_code)),
+        raw_value=str(row.raw_value),
+        normalized_address_value=str(row.normalized_address_value),
+        line1=_text_or_none(row.line1),
+        line2=_text_or_none(row.line2),
+        city=_text_or_none(row.city),
+        region=_text_or_none(row.region),
+        postal_code=_text_or_none(row.postal_code),
+        country=_text_or_none(row.country),
+        label=_text_or_none(row.label),
+        is_preferred=bool(row.is_preferred),
+        effective_from=row.effective_from,
+        effective_to=row.effective_to,
+        state=EntityAddressState(str(row.state)),
+        version=int(row.version),
+        updated_at=row.updated_at,
+        retired_at=row.retired_at,
+        superseded_by_entity_address_id=_text_or_none(row.superseded_by_entity_address_id),
+    )
+
+
+def _row_to_communication_method(row: Any) -> EntityCommunicationMethod:  # noqa: ANN401
+    """One stored communication method, on `_row_to_alias`'s terms."""
+    return EntityCommunicationMethod(
+        communication_method_id=str(row.communication_method_id),
+        entity_id=str(row.entity_id),
+        principal_id=str(row.principal_id),
+        method_type_code=CommunicationMethodTypeCode(str(row.method_type_code)),
+        usage_context_code=CommunicationUsageContextCode(str(row.usage_context_code)),
+        normalized_value=str(row.normalized_value),
+        display_value=str(row.display_value),
+        verification_status_code=CommunicationVerificationStatusCode(
+            str(row.verification_status_code)
+        ),
+        is_preferred=bool(row.is_preferred),
+        effective_from=row.effective_from,
+        effective_to=row.effective_to,
+        state=EntityCommunicationMethodState(str(row.state)),
+        version=int(row.version),
+        updated_at=row.updated_at,
+        retired_at=row.retired_at,
+        superseded_by_communication_method_id=_text_or_none(
+            row.superseded_by_communication_method_id
+        ),
+        linked_external_identifier_id=_text_or_none(row.linked_external_identifier_id),
+    )
+
+
+def _row_to_project_participation(row: Any) -> EntityProjectParticipation:  # noqa: ANN401
+    """One stored project participation, over both entity references."""
+    return EntityProjectParticipation(
+        participation_id=str(row.participation_id),
+        principal_id=str(row.principal_id),
+        project_entity_id=str(row.project_entity_id),
+        participant_entity_id=str(row.participant_entity_id),
+        project_display_name=str(row.project_display_name),
+        role_basis_code=RoleBasisCode(str(row.role_basis_code)),
+        stakeholder_side_code=StakeholderSideCode(str(row.stakeholder_side_code)),
+        stakeholder_class_code=StakeholderClassCode(str(row.stakeholder_class_code)),
+        relationship_status_code=ParticipationStatusCode(str(row.relationship_status_code)),
+        role_code=_text_or_none(row.role_code),
+        role_text=_text_or_none(row.role_text),
+        discipline_code=_text_or_none(row.discipline_code),
+        discipline_text=_text_or_none(row.discipline_text),
+        scope_text=_text_or_none(row.scope_text),
+        effective_from=row.effective_from,
+        effective_to=row.effective_to,
+        state=EntityProjectParticipationState(str(row.state)),
+        version=int(row.version),
+        updated_at=row.updated_at,
+        retired_at=row.retired_at,
+        superseded_by_participation_id=_text_or_none(row.superseded_by_participation_id),
+    )
+
+
+def _row_to_affiliation(row: Any) -> PersonOrganizationAffiliation:  # noqa: ANN401
+    """One stored person-organization affiliation, over both entity references."""
+    return PersonOrganizationAffiliation(
+        affiliation_id=str(row.affiliation_id),
+        principal_id=str(row.principal_id),
+        person_entity_id=str(row.person_entity_id),
+        affiliation_type_code=AffiliationTypeCode(str(row.affiliation_type_code)),
+        organization_entity_id=_text_or_none(row.organization_entity_id),
+        job_title=_text_or_none(row.job_title),
+        effective_from=row.effective_from,
+        effective_to=row.effective_to,
+        state=PersonOrganizationAffiliationState(str(row.state)),
+        version=int(row.version),
+        updated_at=row.updated_at,
+        retired_at=row.retired_at,
+        superseded_by_affiliation_id=_text_or_none(row.superseded_by_affiliation_id),
     )
 
 

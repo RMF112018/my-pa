@@ -232,12 +232,19 @@ def _insert_relationship(
 
 
 def test_the_revision_is_in_the_chain_on_the_prior_head() -> None:
-    """One head, and this revision revises the campaign's prior head exactly."""
+    """One head, and this revision revises the campaign's prior head exactly.
+
+    `REVISION` is no longer necessarily the chain's head: RI-ENT-WP-06b
+    (`9a3f6c1e8d24`) stacked on top of it. This test's own name only ever
+    promised "in the chain on the prior head", not "is the head" -- that is
+    what the single-head and down-revision assertions below check; whether
+    `REVISION` is currently the head is a separate, narrower fact this test
+    does not own.
+    """
     script = ScriptDirectory.from_config(_config())
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION
-    assert script.get_heads() == [REVISION]
 
 
 def test_the_revision_declares_the_tables_it_creates() -> None:

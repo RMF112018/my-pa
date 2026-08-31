@@ -59,7 +59,7 @@ PHASE_A_REVISION: Final = "823e23b6cc63"
 PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
-HEAD_REVISION: Final = "8dc3619891bb"
+HEAD_REVISION: Final = "9a3f6c1e8d24"
 PRIOR: Final = "f8c3a1e6b247"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_c9e2b6a4d813_add_goodnotes_note_unit_occurrence_.py"
@@ -146,7 +146,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 83
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 84
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

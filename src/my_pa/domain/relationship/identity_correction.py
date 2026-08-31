@@ -74,6 +74,7 @@ __all__ = [
     "ambiguity_digest_for",
     "blocks_merge",
     "conflict_digest_for",
+    "current_record_id",
     "dispositions_for",
     "effects_digest_for",
     "plan_digest_for",
@@ -188,6 +189,30 @@ class IdentityConflictKind(StrEnum):
     ACTIVE_IDENTIFIER_CONFLICT = "active_identifier_conflict"
     UNSUPPORTED_FAMILY = "unsupported_family"
     AMBIGUOUS_DISPOSITION = "ambiguous_disposition"
+    #: RI-ENT-WP-06b's addition, for the one hazard none of the other three
+    #: kinds names. `entity_organization_profiles.entity_id` is *both* the
+    #: table's primary key and its foreign key to `entities` -- an
+    #: organization entity has at most one profile row, by construction, and
+    #: not merely by convention. When the survivor and a merged-away entity
+    #: each hold one, reparenting the merged-away row is a primary-key
+    #: collision the database itself would refuse, and coalescing it has no
+    #: mechanism to fold into: unlike `ALIAS`/`IDENTIFIER`/`ASSIGNMENT`/
+    #: `RELATIONSHIP`, this table carries no `state` and no
+    #: `superseded_by_*` column for a losing row to retire into (see
+    #: `EntityOrganizationProfile`'s docstring -- "there is nothing here for
+    #: `state`/`effective_from`/`superseded_by_*` to mean"). So unlike
+    #: `ALIAS`'s active/former conflict, this is not a question with two
+    #: defensible answers for an operator to choose between: the schema
+    #: admits neither reading, which is exactly the reasoning
+    #: `application.identity_correction`'s module docstring already gives for
+    #: why an `IDENTIFIER` conflict blocks outright rather than asking. This
+    #: kind is deliberately not named after that family, because the same
+    #: shape of hazard -- a record family whose row identity is unique per
+    #: entity by construction, with no successor column to retire a losing
+    #: row into -- could recur for a future one-row-per-entity family, and a
+    #: name scoped to organization profiles specifically would have to be
+    #: widened rather than reused the day it does.
+    SINGLETON_RECORD_CONFLICT = "singleton_record_conflict"
 
 
 #: Which conflict kinds refuse a merge outright, as against those the operator
@@ -197,6 +222,7 @@ _BLOCKS_BY_KIND: dict[IdentityConflictKind, bool] = {
     IdentityConflictKind.ACTIVE_IDENTIFIER_CONFLICT: True,
     IdentityConflictKind.UNSUPPORTED_FAMILY: True,
     IdentityConflictKind.AMBIGUOUS_DISPOSITION: False,
+    IdentityConflictKind.SINGLETON_RECORD_CONFLICT: True,
 }
 
 
@@ -224,6 +250,23 @@ class IdentityEffectFamily(StrEnum):
     infrastructure supports invalidation". It is recorded here because a split
     has to re-mark exactly the packages a merge marked, and no other record says
     which those were.
+
+    **RI-ENT-WP-06b adds six members** for the Entity-bound record families
+    RI-ENT-WP-02 through RI-ENT-WP-05 introduced after this vocabulary was
+    first closed: `NAME`, `ORGANIZATION_PROFILE`, `ADDRESS`,
+    `COMMUNICATION_METHOD`, `PROJECT_PARTICIPATION`, and
+    `PERSON_ORGANIZATION_AFFILIATION`. Each of those five migrations' own
+    domain-class docstrings (`EntityName`, `EntityOrganizationProfile`,
+    `EntityAddress`, `EntityCommunicationMethod`,
+    `EntityProjectParticipation`, `PersonOrganizationAffiliation` in
+    `my_pa.domain.relationship.entity`) named this exact wiring as deferred
+    to RI-ENT-WP-06; this is that wiring landing. `ENTITY_ROLE_TYPE` and
+    `ENTITY_DISCIPLINE_TYPE` are deliberately **not** members here: both
+    tables are global, Principal-independent lookup vocabularies with no
+    `entity_id` column of any kind, so a merge has no row in either to
+    reparent, discover ambiguity for, or invert -- see the campaign
+    document's "Merge/split disposition" section for the full, evidenced
+    statement of that exclusion.
     """
 
     ENTITY = "entity"
@@ -231,6 +274,12 @@ class IdentityEffectFamily(StrEnum):
     ALIAS = "alias"
     ASSIGNMENT = "assignment"
     RELATIONSHIP = "relationship"
+    NAME = "name"
+    ORGANIZATION_PROFILE = "organization_profile"
+    ADDRESS = "address"
+    COMMUNICATION_METHOD = "communication_method"
+    PROJECT_PARTICIPATION = "project_participation"
+    PERSON_ORGANIZATION_AFFILIATION = "person_organization_affiliation"
     OBSERVATION = "observation"
     PROPOSAL = "proposal"
     REVIEW_CASE = "review_case"
@@ -349,6 +398,22 @@ class AmbiguityDisposition(StrEnum):
 #: claiming the disposition ahead of the writer (as this mapping used to) would
 #: admit a choice this revision cannot execute.
 #:
+#: **RI-ENT-WP-06b's six additions are all default-deny for `PRESERVE_SHARED`,
+#: on the same "default deny" reasoning `ALIAS`/`ASSIGNMENT`/`RELATIONSHIP`
+#: already state above, restated because none of the six is `OBSERVATION`.**
+#: A name, an address, a communication method, an organization profile, a
+#: project participation, or a person-organization affiliation is each a
+#: record of one exclusive fact about one entity (or, for the two dual-
+#: reference families, one exclusive fact about one *pair* of entities) --
+#: none of them is evidence of what a source said the way an observation is,
+#: and RI v0.2 section 15.4 line 1186's "preserve shared and ambiguous
+#: evidence" is textually about evidence, not about facts. No docstring among
+#: `EntityName`, `EntityOrganizationProfile`, `EntityAddress`,
+#: `EntityCommunicationMethod`, `EntityProjectParticipation`, or
+#: `PersonOrganizationAffiliation` (`my_pa.domain.relationship.entity`)
+#: describes a non-exclusive reading for any row, so all six get exactly
+#: `IDENTIFIER`'s and `ALIAS`'s two dispositions and nothing more.
+#:
 #: `ENTITY` never appears because an entity's own redirect is provable from the
 #: ledger or the split is refused; `REVIEW_CASE` is ledger-only and writes no
 #: row; `DERIVED_CONTEXT` is recomputed rather than attributed. A family absent
@@ -369,6 +434,30 @@ _DISPOSITIONS_BY_FAMILY: Final[dict[IdentityEffectFamily, tuple[AmbiguityDisposi
         AmbiguityDisposition.LEAVE_UNRESOLVED,
     ),
     IdentityEffectFamily.RELATIONSHIP: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.NAME: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.ORGANIZATION_PROFILE: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.ADDRESS: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.COMMUNICATION_METHOD: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.PROJECT_PARTICIPATION: (
+        AmbiguityDisposition.ASSIGN_TO_ENTITY,
+        AmbiguityDisposition.LEAVE_UNRESOLVED,
+    ),
+    IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION: (
         AmbiguityDisposition.ASSIGN_TO_ENTITY,
         AmbiguityDisposition.LEAVE_UNRESOLVED,
     ),
@@ -1100,3 +1189,49 @@ def sequence_inverse_effects(
         )
         for sequence, effect in enumerate(source, start=1)
     )
+
+
+#: Families whose ledger `record_id` no longer names the row the effect
+#: describes once the effect has been applied, because the row's own stable
+#: identity *is* one of the entity references a merge substitutes.
+#:
+#: `ORGANIZATION_PROFILE` is the sole member. `entity_organization_profiles.
+#: entity_id` is both the table's primary key and the reference
+#: `reparent_entity_reference` substitutes (see `EntityOrganizationProfile`'s
+#: docstring on why the table has no surrogate row identifier), so an
+#: `OWNER_REPARENTED` effect's `record_id` necessarily names the row's
+#: identity *before* the effect -- the value a write has to find the row by
+#: while it is still there -- and the row is found somewhere else by the time
+#: any reader asks about it afterward. Every other family keeps a surrogate
+#: id (`alias_id`, `entity_name_id`, `participation_id`, and so on) disjoint
+#: from the entity references it carries, so `record_id` never moves under a
+#: reader and this set stays a singleton unless a future family repeats
+#: `EntityOrganizationProfile`'s PK-is-FK shape.
+_RECORD_ID_FOLLOWS_ENTITY_SUBSTITUTION: Final = frozenset(
+    {IdentityEffectFamily.ORGANIZATION_PROFILE}
+)
+
+
+def current_record_id(effect: IdentityEffect) -> str:
+    """Where `effect`'s row is found now, which is not always `effect.record_id`.
+
+    Every reader asking "does this row still look the way the ledger says" or
+    "is this row already accounted for" needs the row's *current* identity,
+    not the identity the effect recorded it under before the effect ran. For
+    every family but `ORGANIZATION_PROFILE` those are the same value and this
+    returns `effect.record_id` unchanged; for `ORGANIZATION_PROFILE` the
+    current identity is `effect.after_state["entity_id"]` -- the row's own
+    primary key, which the effect itself rewrote.
+
+    Used by both directions of the same problem: `infrastructure.persistence.
+    entity`'s split-verification reads (`identity_effect_matches_after_state`,
+    `restore_identity_effect`) and `application.identity_correction`'s
+    post-merge-created discovery (`_post_merge_created`'s `known` set) would
+    otherwise each independently misidentify a correctly-reparented
+    organization profile as either unprovable or newly created. One function,
+    imported by both, so the two halves of that discovery cannot silently
+    disagree about which families need it.
+    """
+    if effect.family in _RECORD_ID_FOLLOWS_ENTITY_SUBSTITUTION:
+        return str(effect.after_state["entity_id"])
+    return effect.record_id

@@ -43,6 +43,7 @@ from my_pa.domain.relationship.governance import ActorClass, EntityProposal
 from my_pa.domain.relationship.identity_correction import (
     IDENTITY_PREVIEW_LIFETIME,
     MAX_MERGED_AWAY_ENTITIES,
+    AmbiguityDisposition,
     IdentityConflict,
     IdentityConflictKind,
     IdentityEffect,
@@ -55,6 +56,8 @@ from my_pa.domain.relationship.identity_correction import (
     IdentityPreview,
     blocks_merge,
     conflict_digest_for,
+    current_record_id,
+    dispositions_for,
     effects_digest_for,
     plan_digest_for,
     preview_digest_for,
@@ -357,10 +360,20 @@ def test_a_conflict_appearing_between_preview_and_apply_moves_the_conflict_diges
 
 
 def test_the_two_blocking_conflict_kinds_are_the_two_the_contract_names() -> None:
+    """The frozen contract's two, plus RI-ENT-WP-06b's `SINGLETON_RECORD_CONFLICT`.
+
+    `SINGLETON_RECORD_CONFLICT` blocks for the same reason
+    `ACTIVE_IDENTIFIER_CONFLICT` does -- the schema admits neither an
+    automatic reparenting nor an automatic coalescing -- see
+    `IdentityConflictKind`'s own docstring for the full argument
+    (`entity_organization_profiles.entity_id` as both primary key and
+    foreign key, with no `state`/`superseded_by_*` column for a losing row).
+    """
     blocking = {kind for kind in IdentityConflictKind if blocks_merge(kind)}
     assert blocking == {
         IdentityConflictKind.ACTIVE_IDENTIFIER_CONFLICT,
         IdentityConflictKind.UNSUPPORTED_FAMILY,
+        IdentityConflictKind.SINGLETON_RECORD_CONFLICT,
     }
     assert not blocks_merge(IdentityConflictKind.AMBIGUOUS_DISPOSITION)
 
@@ -965,6 +978,85 @@ def test_an_effect_refuses_a_state_that_says_nothing() -> None:
 def test_an_effect_names_an_opaque_record_id_of_any_family() -> None:
     with pytest.raises(InvalidIdentifierError):
         a_draft("/etc/passwd")
+
+
+# --- RI-ENT-WP-06b: the six new families -------------------------------------
+
+
+def test_the_six_new_families_admit_assign_to_entity_and_leave_unresolved_only() -> None:
+    """None of the six ever admits `PRESERVE_SHARED` -- each is a record of one
+    exclusive fact, not evidence of what a source said the way `OBSERVATION` is."""
+    for family in (
+        IdentityEffectFamily.NAME,
+        IdentityEffectFamily.ORGANIZATION_PROFILE,
+        IdentityEffectFamily.ADDRESS,
+        IdentityEffectFamily.COMMUNICATION_METHOD,
+        IdentityEffectFamily.PROJECT_PARTICIPATION,
+        IdentityEffectFamily.PERSON_ORGANIZATION_AFFILIATION,
+    ):
+        assert dispositions_for(family) == (
+            AmbiguityDisposition.ASSIGN_TO_ENTITY,
+            AmbiguityDisposition.LEAVE_UNRESOLVED,
+        )
+
+
+def test_singleton_record_conflict_blocks_alongside_active_identifier_conflict() -> None:
+    assert blocks_merge(IdentityConflictKind.SINGLETON_RECORD_CONFLICT)
+
+
+def _effect(
+    family: IdentityEffectFamily,
+    record_id: str,
+    before_state: dict[str, object],
+    after_state: dict[str, object],
+) -> IdentityEffect:
+    return IdentityEffect(
+        effect_id=EFFECT,
+        identity_operation_id=OPERATION,
+        principal_id=PRINCIPAL,
+        sequence=1,
+        family=family,
+        record_id=record_id,
+        kind=IdentityEffectKind.OWNER_REPARENTED,
+        before_state=before_state,
+        after_state=after_state,
+        before_sha256=state_digest(before_state),
+        after_sha256=state_digest(after_state),
+        recorded_at=WHEN,
+    )
+
+
+def test_current_record_id_is_the_ledger_record_id_for_every_family_but_one() -> None:
+    before = {
+        "entity_id": MERGED,
+        "state": "active",
+        "version": 1,
+        "superseded_by_alias_id": None,
+        "updated_at": None,
+    }
+    after = {
+        "entity_id": SURVIVOR,
+        "state": "active",
+        "version": 2,
+        "superseded_by_alias_id": None,
+        "updated_at": None,
+    }
+    effect = _effect(IdentityEffectFamily.ALIAS, "eals_aaaa0001aaaa01", before, after)
+    assert current_record_id(effect) == "eals_aaaa0001aaaa01"
+
+
+def test_current_record_id_follows_the_organization_profiles_own_primary_key() -> None:
+    """The one family whose `id_column` is also the entity reference a merge
+    substitutes: the ledger `record_id` names the row's identity *before* the
+    effect, and `current_record_id` has to answer with where it is *now*."""
+    effect = _effect(
+        IdentityEffectFamily.ORGANIZATION_PROFILE,
+        MERGED,
+        {"entity_id": MERGED, "version": 1, "updated_at": None},
+        {"entity_id": SURVIVOR, "version": 2, "updated_at": None},
+    )
+    assert effect.record_id == MERGED
+    assert current_record_id(effect) == SURVIVOR
 
 
 # --- deterministic ordering --------------------------------------------------

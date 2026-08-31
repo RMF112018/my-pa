@@ -60,18 +60,20 @@ DISPOSABLE_DATABASE: Final = "my_pa_phase_b_vocabulary_test"
 #: The current head and the Phase B vocabulary edge this suite removes. Written
 #: out rather than imported so current chain drift and historical identity are
 #: checked independently.
-HEAD_REVISION: Final = "8dc3619891bb"
-#: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-06a). Named so
-#: the chain assertion below stays a statement about the order rather than
-#: about whichever revision happens to be last.
-PREVIOUS_HEAD_REVISION: Final = "17149a48fa30"
-#: What was head until `PREVIOUS_HEAD_REVISION` stacked on it (RI-ENT-WP-04).
-#: Named so the chain assertion below stays a statement about the order
-#: rather than about whichever revision happens to be last.
-BEFORE_PREVIOUS_HEAD_REVISION: Final = "f5b06925857e"
-#: What was head until `BEFORE_PREVIOUS_HEAD_REVISION` stacked on it. Named so
-#: the chain assertion below stays a statement about the order rather than
-#: about whichever revision happens to be last.
+HEAD_REVISION: Final = "9a3f6c1e8d24"
+#: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-06b, widening
+#: the identity-effect family CHECKs). Named so the chain assertion below
+#: stays a statement about the order rather than about whichever revision
+#: happens to be last.
+SECOND_TO_HEAD_REVISION: Final = "8dc3619891bb"
+#: What was head until `SECOND_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-06a,
+#: the entity_relationship_types taxonomy table).
+THIRD_TO_HEAD_REVISION: Final = "17149a48fa30"
+#: What was head until `THIRD_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-05).
+FOURTH_TO_HEAD_REVISION: Final = "f5b06925857e"
+#: What was head until `FOURTH_TO_HEAD_REVISION` stacked on it. Named so the
+#: chain assertion below stays a statement about the order rather than about
+#: whichever revision happens to be last.
 IDENTITY_HISTORY_REVISION: Final = "8e1c4a7b2d90"
 PHASE_B_SCHEMA_REVISION: Final = "3d07af4dc513"
 PHASE_B_REVISION: Final = "b64e29a0f7c1"
@@ -208,17 +210,17 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     script = ScriptDirectory.from_config(_config())
     heads = list(script.get_heads())
     assert heads == [HEAD_REVISION], f"expected exactly {HEAD_REVISION}, found {heads}"
-    # `8dc3619891bb` (RI-ENT-WP-06a) is additive on `17149a48fa30`
-    # (RI-ENT-WP-05), itself additive on `f5b06925857e` (RI-ENT-WP-04),
-    # itself additive on `441b071bf37b` (RI-ENT-WP-03), itself additive on
-    # `7e114f822af2` (RI-ENT-WP-02), itself additive on `b727e870d45e`, which
-    # is additive on `IDENTITY_HISTORY_REVISION` -- one more link than this
-    # chain had before that revision landed.
-    assert script.get_revision(HEAD_REVISION).down_revision == PREVIOUS_HEAD_REVISION
-    assert (
-        script.get_revision(PREVIOUS_HEAD_REVISION).down_revision == BEFORE_PREVIOUS_HEAD_REVISION
-    )
-    assert script.get_revision(BEFORE_PREVIOUS_HEAD_REVISION).down_revision == "441b071bf37b"
+    # `9a3f6c1e8d24` (RI-ENT-WP-06b) is additive on `8dc3619891bb`
+    # (RI-ENT-WP-06a), itself additive on `17149a48fa30` (RI-ENT-WP-05),
+    # itself additive on `f5b06925857e` (RI-ENT-WP-04), itself additive on
+    # `441b071bf37b` (RI-ENT-WP-03), itself additive on `7e114f822af2`
+    # (RI-ENT-WP-02), itself additive on `b727e870d45e`, which is additive on
+    # `IDENTITY_HISTORY_REVISION` -- one more link than this chain had before
+    # that revision landed.
+    assert script.get_revision(HEAD_REVISION).down_revision == SECOND_TO_HEAD_REVISION
+    assert script.get_revision(SECOND_TO_HEAD_REVISION).down_revision == THIRD_TO_HEAD_REVISION
+    assert script.get_revision(THIRD_TO_HEAD_REVISION).down_revision == FOURTH_TO_HEAD_REVISION
+    assert script.get_revision(FOURTH_TO_HEAD_REVISION).down_revision == "441b071bf37b"
     assert script.get_revision("441b071bf37b").down_revision == "7e114f822af2"
     assert script.get_revision("7e114f822af2").down_revision == "b727e870d45e"
     assert script.get_revision("b727e870d45e").down_revision == IDENTITY_HISTORY_REVISION

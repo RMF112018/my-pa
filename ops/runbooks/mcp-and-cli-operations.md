@@ -271,10 +271,14 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and four** current capabilities, and the schema has
-**eighty-three** revisions at head `8dc3619891bb` (corrected 2026-08-31 from
-eighty-two at `17149a48fa30`, on which `8dc3619891bb` is additive and adds the
-`entity_relationship_types` table, re-pointing `entity_relationships.relationship_type`
-at it by foreign key, RI-ENT-WP-06a; `17149a48fa30` is itself additive and adds the
+**eighty-four** revisions at head `9a3f6c1e8d24` (corrected 2026-08-31 from
+eighty-three at `8dc3619891bb`, on which `9a3f6c1e8d24` is additive and widens
+the `entity_identity_effects`/`entity_identity_preview_ambiguities`/
+`entity_identity_ambiguity_settlements` `record_family` CHECKs to admit six
+new Entity-bound families, RI-ENT-WP-06b; `8dc3619891bb` is itself additive on
+`17149a48fa30` and adds the `entity_relationship_types` table, re-pointing
+`entity_relationships.relationship_type` at it by foreign key, RI-ENT-WP-06a;
+`17149a48fa30` is itself additive on `f5b06925857e` and adds the
 `entity_person_organization_affiliations` table, RI-ENT-WP-05; `f5b06925857e`
 is itself additive and adds the
 `entity_project_participations`/`entity_role_types`/`entity_discipline_types`

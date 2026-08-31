@@ -30,6 +30,7 @@ from my_pa.application.goodnotes_pull_orchestration import (
     stamp_authenticated_pull_context,
 )
 from my_pa.domain.goodnotes.models import GoodNotesPageWork, issue_stable_id
+from my_pa.domain.identity.principal import Principal, PrincipalKind
 
 A = "prn_aaaaaaaaaaaaaaaaaaaaaaaa"
 B = "prn_bbbbbbbbbbbbbbbbbbbbbbbb"
@@ -52,7 +53,11 @@ def _context(
     *, principal_id: str = A, client_id: str = "chatllm-client", context_id: str = "auth-1"
 ) -> AuthenticatedPullContext:
     return stamp_authenticated_pull_context(
-        principal_id=principal_id,
+        principal=Principal(
+            principal_id=principal_id,
+            kind=PrincipalKind.GATEWAY,
+            authenticated=True,
+        ),
         client_id=client_id,
         context_id=context_id,
     )
@@ -189,7 +194,12 @@ def test_request_cannot_carry_principal_or_authenticated_context() -> None:
     with pytest.raises(TypeError):
         PullRequest(batch_size=1, principal_id=A)  # type: ignore[call-arg]
     with pytest.raises(GoodNotesPullError) as raised:
-        AuthenticatedPullContext(A, "client", "context", _seal=object())
+        AuthenticatedPullContext(
+            Principal(A, PrincipalKind.GATEWAY, authenticated=True),
+            "client",
+            "context",
+            _seal=object(),
+        )
     assert raised.value.code == ERROR_WRONG_CONTEXT
 
 

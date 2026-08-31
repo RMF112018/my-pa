@@ -17,11 +17,11 @@ import binascii
 import hashlib
 import json
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Protocol
 
-from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.goodnotes.models import GoodNotesPageWork
+from my_pa.domain.identity.principal import Principal
 
 MAX_PULL_BATCH_SIZE = 100
 MAX_PULL_RETRIES = 10
@@ -51,13 +51,13 @@ class GoodNotesPullError(ValueError):
 class AuthenticatedPullContext:
     """Identity stamped by authenticated server composition, never request data."""
 
-    principal_id: str
+    principal: Principal
     client_id: str
     context_id: str
 
     def __init__(
         self,
-        principal_id: str,
+        principal: Principal,
         client_id: str,
         context_id: str,
         *,
@@ -65,21 +65,22 @@ class AuthenticatedPullContext:
     ) -> None:
         if _seal is not _CONTEXT_SEAL:
             raise GoodNotesPullError(ERROR_WRONG_CONTEXT)
-        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if not principal.authenticated or not principal.may_hold_authority:
+            raise GoodNotesPullError(ERROR_WRONG_CONTEXT)
         _bounded_token(client_id, maximum=MAX_CONTEXT_TOKEN_LENGTH)
         _bounded_token(context_id, maximum=MAX_CONTEXT_TOKEN_LENGTH)
-        object.__setattr__(self, "principal_id", principal_id)
+        object.__setattr__(self, "principal", principal)
         object.__setattr__(self, "client_id", client_id)
         object.__setattr__(self, "context_id", context_id)
 
 
 def stamp_authenticated_pull_context(
-    *, principal_id: str, client_id: str, context_id: str
+    *, principal: Principal, client_id: str, context_id: str
 ) -> AuthenticatedPullContext:
     """Create context from authenticated server facts at the future wiring seam."""
 
     return AuthenticatedPullContext(
-        principal_id,
+        principal,
         client_id,
         context_id,
         _seal=_CONTEXT_SEAL,
@@ -259,7 +260,7 @@ class GoodNotesPullOrchestrator:
         expected = tuple(item[0].attempts for item in chosen)
         try:
             claimed = self._repository.claim_batch(
-                context.principal_id,
+                context.principal.principal_id,
                 context.context_id,
                 assignments,
                 expected,
@@ -292,14 +293,16 @@ class GoodNotesPullOrchestrator:
         states = {_work_key(item.work): item for item in self._validated_states(context)}
         admissions: list[PullCompletionAdmission] = []
         for completion in values:
-            assignment = self._repository.assignment(context.principal_id, completion.assignment_id)
+            assignment = self._repository.assignment(
+                context.principal.principal_id, completion.assignment_id
+            )
             if assignment is None:
                 raise GoodNotesPullError(ERROR_STALE_ASSIGNMENT)
             if assignment.context_id != context.context_id:
                 raise GoodNotesPullError(ERROR_WRONG_CONTEXT)
             work = assignment.work
             if (
-                work.principal_id != context.principal_id
+                not _work_is_bound_to_principal(work, context.principal.principal_id)
                 or completion.run_id != work.run_id
                 or completion.page_version_id != work.page_version_id
                 or completion.content_sha256 != work.content_sha256
@@ -321,7 +324,7 @@ class GoodNotesPullOrchestrator:
             )
         try:
             receipts = self._repository.complete_batch(
-                context.principal_id,
+                context.principal.principal_id,
                 context.context_id,
                 tuple(admissions),
             )
@@ -334,11 +337,16 @@ class GoodNotesPullOrchestrator:
         return receipts
 
     def _validated_states(self, context: AuthenticatedPullContext) -> tuple[PullWorkState, ...]:
-        states = tuple(sorted(self._repository.work_states(context.principal_id), key=_state_key))
+        states = tuple(
+            sorted(self._repository.work_states(context.principal.principal_id), key=_state_key)
+        )
         keys = tuple(_work_key(item.work) for item in states)
         if len(set(keys)) != len(keys):
             raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
-        if any(item.work.principal_id != context.principal_id for item in states):
+        if any(
+            not _work_is_bound_to_principal(state.work, context.principal.principal_id)
+            for state in states
+        ):
             raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
         return states
 
@@ -363,6 +371,11 @@ def _work_key(work: GoodNotesPageWork) -> tuple[str, str, str]:
     return (work.run_id, work.page_version_id, work.content_sha256)
 
 
+def _work_is_bound_to_principal(work: GoodNotesPageWork, principal_id: str) -> bool:
+    """Compare immutable work with the resolved-Principal normalization."""
+    return work == replace(work, principal_id=principal_id)
+
+
 def _state_key(state: PullWorkState) -> tuple[str, str, str]:
     return _work_key(state.work)
 
@@ -374,14 +387,20 @@ def _snapshot_digest(works: tuple[GoodNotesPageWork, ...]) -> str:
 
 def _assignment_id(context: AuthenticatedPullContext, work: GoodNotesPageWork, attempt: int) -> str:
     return _digest(
-        [context.principal_id, context.client_id, context.context_id, *_work_key(work), attempt]
+        [
+            context.principal.principal_id,
+            context.client_id,
+            context.context_id,
+            *_work_key(work),
+            attempt,
+        ]
     )
 
 
 def _completion_fingerprint(context: AuthenticatedPullContext, completion: PullCompletion) -> str:
     return _digest(
         [
-            context.principal_id,
+            context.principal.principal_id,
             context.client_id,
             context.context_id,
             completion.assignment_id,
@@ -399,7 +418,7 @@ def _digest(value: object) -> str:
 
 
 def _context_binding(context: AuthenticatedPullContext) -> str:
-    return _digest([context.principal_id, context.client_id, context.context_id])
+    return _digest([context.principal.principal_id, context.client_id, context.context_id])
 
 
 def _encode_cursor(

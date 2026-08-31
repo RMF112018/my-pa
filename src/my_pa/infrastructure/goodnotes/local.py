@@ -28,8 +28,15 @@ from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Final
 
-from my_pa.application.goodnotes import GoodNotesSourceLiveness, GoodNotesSourceLivenessReceipt
-from my_pa.domain.goodnotes.models import RegionBox, SourcePage, TranscribedRegion
+from my_pa.domain.goodnotes.liveness import (
+    GoodNotesSourceLiveness,
+    GoodNotesSourceLivenessReceipt,
+)
+from my_pa.domain.goodnotes.models import (
+    RegionBox,
+    SourcePage,
+    TranscribedRegion,
+)
 
 _MANIFEST_SCHEMA: Final = "my-pa.goodnotes-local-source.v1"
 _MAX_MANIFEST_BYTES: Final = 1_048_576

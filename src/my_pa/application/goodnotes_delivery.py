@@ -13,7 +13,7 @@ from __future__ import annotations
 import hashlib
 import re
 from collections.abc import Callable, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from typing import Protocol
 
@@ -436,6 +436,8 @@ class GoodNotesNewOnlyDelivery:
         digest = summary_digest(body)
         existing = repository.delivery_receipt_by_key(principal_id, run_id, destination, digest)
         if existing is not None:
+            if not _record_is_bound_to_principal(existing, principal_id):
+                raise ValueError("the GoodNotes delivery receipt trace does not match")
             stored_associations = repository.entity_associations_for_run(principal_id, run_id)
             return GoodNotesDeliveryResult(
                 receipt=GoodNotesDeliveryReceipt(
@@ -477,10 +479,10 @@ def _require_delivery_trace(
     revision: GoodNotesNoteRevision,
 ) -> None:
     if (
-        change.principal_id != principal_id
+        not _record_is_bound_to_principal(change, principal_id)
         or change.run_id != run_id
-        or occurrence.principal_id != principal_id
-        or revision.principal_id != principal_id
+        or not _record_is_bound_to_principal(occurrence, principal_id)
+        or not _record_is_bound_to_principal(revision, principal_id)
         or change.occurrence_id != occurrence.occurrence_id
         or change.note_id != occurrence.note_id
         or revision.occurrence_id != occurrence.occurrence_id
@@ -506,6 +508,19 @@ def _require_delivery_trace(
         and revision.snapshot_id != occurrence.snapshot_id
     ):
         raise ValueError("the GoodNotes delivery snapshot trace does not match")
+
+
+def _record_is_bound_to_principal(
+    record: (
+        GoodNotesDeliveryReceipt
+        | GoodNotesNoteOccurrence
+        | GoodNotesNoteRevision
+        | GoodNotesRunNoteChange
+    ),
+    principal_id: str,
+) -> bool:
+    """Compare one immutable record with the resolved-Principal normalization."""
+    return record == replace(record, principal_id=principal_id)
 
 
 class GoodNotesDeliveryAttemptLedger:

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import hashlib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime
 from typing import Protocol
 
@@ -154,8 +154,8 @@ def _require_correction_trace(
     revision: GoodNotesNoteRevision,
 ) -> None:
     if (
-        occurrence.principal_id != principal_id
-        or revision.principal_id != principal_id
+        not _record_is_bound_to_principal(occurrence, principal_id)
+        or not _record_is_bound_to_principal(revision, principal_id)
         or revision.note_id != occurrence.note_id
         or revision.occurrence_id != occurrence.occurrence_id
     ):
@@ -172,6 +172,14 @@ def _require_correction_trace(
         and revision.snapshot_id != occurrence.snapshot_id
     ):
         raise ValueError("the GoodNotes correction snapshot trace does not match")
+
+
+def _record_is_bound_to_principal(
+    record: GoodNotesNoteOccurrence | GoodNotesNoteRevision,
+    principal_id: str,
+) -> bool:
+    """Compare one immutable record with the resolved-Principal normalization."""
+    return record == replace(record, principal_id=principal_id)
 
 
 def _optional_link(

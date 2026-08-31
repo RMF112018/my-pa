@@ -799,20 +799,26 @@ class PostgresGoodNotesRepository:
             "page version",
         )
         render_fields = (
-            "logical_page_id",
-            "exact_render_sha256",
-            "normalized_render_sha256",
-            "perceptual_hash",
-            "render_width",
-            "render_height",
-            "renderer_name",
-            "renderer_version",
-            "render_profile_version",
+            ("logical_page_id", stored.logical_page_id, version.logical_page_id),
+            ("exact_render_sha256", stored.exact_render_sha256, version.exact_render_sha256),
+            (
+                "normalized_render_sha256",
+                stored.normalized_render_sha256,
+                version.normalized_render_sha256,
+            ),
+            ("perceptual_hash", stored.perceptual_hash, version.perceptual_hash),
+            ("render_width", stored.render_width, version.render_width),
+            ("render_height", stored.render_height, version.render_height),
+            ("renderer_name", stored.renderer_name, version.renderer_name),
+            ("renderer_version", stored.renderer_version, version.renderer_version),
+            (
+                "render_profile_version",
+                stored.render_profile_version,
+                version.render_profile_version,
+            ),
         )
         backfill: dict[str, object] = {}
-        for name in render_fields:
-            held = getattr(stored, name)
-            supplied = getattr(version, name)
+        for name, held, supplied in render_fields:
             if held is not None and held != supplied:
                 raise ValueError(
                     "the stable GoodNotes page version identity collided with other content"

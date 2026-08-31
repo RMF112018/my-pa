@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import replace
+from typing import cast
 
 import pytest
 
@@ -168,6 +169,26 @@ def test_hard_gate_failure_cannot_be_compensated_by_a_perfect_score() -> None:
     assert paused_rejection.state.paused is True
 
 
+@pytest.mark.parametrize("unknown", ["unknown_gate", object()])
+def test_hard_gate_report_rejects_unknown_member_added_to_complete_set(unknown: object) -> None:
+    supplied = cast(frozenset[HardGate], frozenset({*ALL_HARD_GATES, unknown}))
+    with pytest.raises(ValueError, match="unknown gate"):
+        HardGateReport(supplied)
+
+
+def test_hard_gate_report_rejects_string_lookalikes() -> None:
+    lookalikes = cast(frozenset[HardGate], frozenset(item.value for item in ALL_HARD_GATES))
+    with pytest.raises(ValueError, match="unknown gate"):
+        HardGateReport(lookalikes)
+
+    mixed = cast(
+        frozenset[HardGate],
+        frozenset({*(ALL_HARD_GATES - {HardGate.IDENTITY}), HardGate.IDENTITY.value}),
+    )
+    with pytest.raises(ValueError, match="unknown gate"):
+        HardGateReport(mixed)
+
+
 def test_improvement_accepts_and_regression_recovers_incumbent() -> None:
     incumbent = _config()
     candidate = apply_change(
@@ -227,6 +248,33 @@ def test_plateau_pauses_deterministically() -> None:
     assert first.disposition is TrialDisposition.KEEP_INCUMBENT
     assert second.disposition is TrialDisposition.PAUSED
     assert second.state.paused is True
+
+
+def test_already_paused_state_evaluates_no_trial_or_measurement_binding() -> None:
+    incumbent = _config()
+    candidate = apply_change(
+        incumbent,
+        configuration_id="semantic-v2",
+        version="2",
+        change=admit_single_change({"prompt_text": "candidate"}),
+    )
+    unconsumed = TrialMeasurement(
+        configuration_sha256="c" * 64,
+        benchmark_digest="d" * 64,
+        evaluator_digest="e" * 64,
+        score=1.0,
+        hard_gates=HardGateReport(ALL_HARD_GATES),
+    )
+    decision = decide_trial(
+        state=OptimizerState(incumbent, incumbent_score=0.8, paused=True),
+        candidate=candidate,
+        measurement=unconsumed,
+        benchmark=BENCHMARK,
+        evaluator=EVALUATOR,
+        policy=POLICY,
+    )
+    assert decision.disposition is TrialDisposition.PAUSED
+    assert decision.selected_sha256 == incumbent.content_sha256
 
 
 def test_measurement_identity_mismatch_is_rejected() -> None:

@@ -285,6 +285,10 @@ ALL_HARD_GATES = frozenset(HardGate)
 class HardGateReport:
     passed: frozenset[HardGate]
 
+    def __post_init__(self) -> None:
+        if any(not isinstance(item, HardGate) for item in self.passed):
+            raise ValueError("hard-gate report contains an unknown gate")
+
     @property
     def failures(self) -> tuple[HardGate, ...]:
         return tuple(sorted(ALL_HARD_GATES - self.passed, key=str))
@@ -361,7 +365,12 @@ def decide_trial(
     evaluator: EvaluatorIdentity,
     policy: OptimizerPolicy,
 ) -> TrialDecision:
-    """Select configuration identity only; never activates or persists it."""
+    """Select configuration identity only; never activates or persists it.
+
+    A paused state is a stop condition, not a trial result. No candidate is
+    evaluated in that state, so measurement bindings are intentionally not
+    consumed until a separately governed caller resumes optimization.
+    """
     if state.paused:
         return TrialDecision(
             disposition=TrialDisposition.PAUSED,

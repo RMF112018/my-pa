@@ -3860,8 +3860,8 @@ entity_project_participations = Table(
 #: docstring for the full reasoning.  `organization_entity_id` is nullable and
 #: never backed by a placeholder/sentinel organization entity -- see the class
 #: docstring for the independent-consultant case this makes representable.
-#: "Current" is `effective_to IS NULL`, made unambiguous per person by the
-#: partial unique index below.
+#: "Current" is `state = 'active' AND effective_to IS NULL`, made unambiguous
+#: per person by the partial unique index below.
 entity_person_organization_affiliations = Table(
     "entity_person_organization_affiliations",
     METADATA,

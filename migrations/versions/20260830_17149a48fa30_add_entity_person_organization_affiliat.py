@@ -48,7 +48,7 @@ organization entity merely to give this column something non-null to satisfy
 a foreign key; a `NULL` here, paired with `affiliation_type_code =
 'independent_consultant'`, states the absence directly. See
 `PersonOrganizationAffiliation`'s docstring for the full reasoning, and
-`tests/database/test_person_organization_affiliations_independent_consultant_fixture.py`
+`tests/database/test_person_organization_affiliations_tbr_fixture.py`
 for the server-level proof that no such placeholder entity is ever created as
 a side effect.
 
@@ -61,8 +61,8 @@ profiles` and `entity_project_participations` already accept for their own
 entity references. The writer/repository layer that inserts a row here is
 responsible for both invariants.
 
-**"Current" is `effective_to IS NULL`, made unambiguous per person by a
-partial unique index.** A person may accumulate many affiliation rows over a
+**"Current" is `state = 'active' AND effective_to IS NULL`, made unambiguous
+per person by a partial unique index.** A person may accumulate many affiliation rows over a
 career, and at most one of them may be the person's present, ongoing tie at
 any one moment -- a specific product decision this revision makes explicit
 rather than leaving implicit, following the open-ended-range convention

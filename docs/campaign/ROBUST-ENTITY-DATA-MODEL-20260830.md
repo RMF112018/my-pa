@@ -113,7 +113,7 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | Not in scope (`RI-ENT-WP-06`); `EntityRelationshipType` untouched |
 | `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. No MCP capability or write path exists yet (`RI-ENT-WP-10`/`WP-11`) — see "Merge/split disposition" below |
 | `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | Partially addressed for organization legal identity only, via `legal_identity_status_code` (not a confidence field — see Ruling 1); full assertion/provenance binding is `RI-ENT-WP-07` |
-| `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `effective_to IS NULL` denoting "current") |
+| `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `state = 'active' AND effective_to IS NULL` denoting "current") |
 | `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Unblocked, not closed** — `entity_names` now exists as the structural prerequisite; resolution/search changes are `RI-ENT-WP-09` |
 | `ENTITY-STATE-001` | High | No canonicalization/review state distinct from lifecycle | Design decision recorded in RI-ENT-WP-01 below (`canonicalization_state_code`, separate 1:1 record, deferred); not implemented this increment |
 | `MCP-CONTRACT-001` | Critical | No rich structured profile read | Not in scope (`RI-ENT-WP-10`) |
@@ -536,7 +536,7 @@ merely to satisfy a foreign key — RULING 3's "never infer, never guess"
 extended here to "never fabricate to satisfy a foreign key" — and a `NULL`
 here, paired with `affiliation_type_code = 'independent_consultant'`, states
 the absence directly.
-`tests/database/test_person_organization_affiliations_independent_consultant_fixture.py`
+`tests/database/test_person_organization_affiliations_tbr_fixture.py`
 proves this at the server: it asserts the exact organization-entity count in
 the fixture's Principal scope, so no placeholder organization is ever created
 as a side effect.
@@ -550,8 +550,8 @@ watchpoint carried from the WP-04 review: none of the seven members reads as
 ranking another, and nothing in this package's code sorts, compares, or
 weights a member of it (RULING 1).
 
-**"Current" is `effective_to IS NULL`, made unambiguous per person by a
-partial unique index — a specific product decision, stated explicitly rather
+**"Current" is `state = 'active' AND effective_to IS NULL`, made unambiguous
+per person by a partial unique index — a specific product decision, stated explicitly rather
 than left implicit.** A person may accumulate many affiliation rows over a
 career, and this revision makes the open-ended date range the single source
 of truth for "this is the person's present tie," following the convention
@@ -720,7 +720,7 @@ against its own disposable database, never the configured one):
 - `.venv/bin/python -m pytest tests/schema/test_entity_names_and_organization_profile_migration.py -q`
 - `.venv/bin/python -m pytest tests/unit/test_person_organization_affiliation_domain.py -q`
 - `.venv/bin/python -m pytest tests/schema/test_person_organization_affiliations_migration.py -q`
-- `.venv/bin/python -m pytest tests/database/test_person_organization_affiliations_independent_consultant_fixture.py -q`
+- `.venv/bin/python -m pytest tests/database/test_person_organization_affiliations_tbr_fixture.py -q`
 - `.venv/bin/python -m pytest tests/relationship/test_relationship_domain.py -q`
 - `.venv/bin/python -m pytest tests/architecture/test_relationship_scoring_surface_is_denied.py -q`
 - `.venv/bin/python -m pytest tests/architecture/ -q`

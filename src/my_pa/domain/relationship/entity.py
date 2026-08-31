@@ -1754,7 +1754,7 @@ class PersonOrganizationAffiliationState(StrEnum):
     retired, or superseded version of this fact" -- the record-lifecycle
     question every family on this plane asks. Whether the affiliation *itself*
     is the person's present, ongoing tie to the organization is a different
-    question, answered by `effective_to IS NULL` (see
+    question, answered by `state = ACTIVE AND effective_to IS NULL` (see
     `PersonOrganizationAffiliation`'s docstring, "Current, defined one way").
     A row can be `state = ACTIVE` (this is the authoritative record of a past
     affiliation) with a non-null `effective_to` (that affiliation ended in
@@ -1829,14 +1829,15 @@ class PersonOrganizationAffiliation:
     **Current, defined one way.** A person may accumulate many affiliation rows
     over a career -- past employers, past consulting engagements -- and at any
     moment at most one of them is the person's *present* tie. This revision
-    makes `effective_to IS NULL` the single source of truth for "current",
+    makes `state = ACTIVE AND effective_to IS NULL` the single source of truth
+    for "current",
     following the open-ended-range convention `entity_assignments`
     (`Assignment.effective_to`) already uses for the same question on that
     family, rather than inventing a second, independently-settable `is_current`
     boolean that could disagree with the date range. **This is a specific
     product decision, stated here because it is not an obvious given: a person
     may hold many past affiliations, but at most one open-ended (`effective_to
-    IS NULL`) affiliation per `(person_entity_id, principal_id)` at a time.**
+    IS NULL`), active affiliation per `(person_entity_id, principal_id)` at a time.**
     The partial unique index `an_open_ended_affiliation_is_unique_per_person`
     enforces this at the database, the same shape `entity_names`'s
     "one preferred name per type" index enforces a different at-most-one rule;

@@ -17,7 +17,7 @@ first attempt rather than a replay of one that never happened.
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Final
@@ -105,7 +105,18 @@ class _FailsPartWayThroughTheRows(SqlEntityRepository):
         to_entity_id: str,
         expected_version: int,
         at: datetime,
+        after_state: Mapping[str, object] | None = None,
     ) -> None:
+        # RI-ENT-WP-06b widened the real reparent_entity_reference with an
+        # after_state keyword (the non-entity-reference columns a reparenting
+        # also writes, e.g. is_preferred demotion for names/addresses/
+        # communication methods). This fake accepts and ignores its value --
+        # the transaction-rollback behaviour this test proves does not depend
+        # on what after_state carries, only on the fact that a failure here,
+        # after the entity redirect has already been written, leaves nothing
+        # behind. A stale signature without this parameter would raise
+        # TypeError the moment a real caller passed it, which is exactly the
+        # regression this comment exists to prevent recurring silently.
         raise InjectedFailureError("a child row could not be reparented")
 
 

@@ -321,7 +321,12 @@ class OptimizerPolicy:
     def __post_init__(self) -> None:
         if isinstance(self.minimum_improvement, bool) or not 0 <= self.minimum_improvement <= 1:
             raise ValueError("minimum improvement must be between zero and one")
-        if isinstance(self.plateau_limit, bool) or self.plateau_limit < 1:
+        raw_plateau_limit: object = self.plateau_limit
+        if (
+            isinstance(raw_plateau_limit, bool)
+            or not isinstance(raw_plateau_limit, int)
+            or raw_plateau_limit < 1
+        ):
             raise ValueError("plateau limit must be positive")
 
 

@@ -61,6 +61,22 @@ def _measurement(
     )
 
 
+@pytest.mark.parametrize(
+    "plateau_limit",
+    [True, False, 1.0, 1.5, float("nan"), float("inf"), "1", None],
+)
+def test_plateau_limit_rejects_non_integer_runtime_values(plateau_limit: object) -> None:
+    with pytest.raises(ValueError, match="plateau limit must be positive"):
+        OptimizerPolicy(
+            minimum_improvement=0.02,
+            plateau_limit=cast(int, plateau_limit),
+        )
+
+
+def test_plateau_limit_accepts_the_positive_integer_boundary() -> None:
+    assert OptimizerPolicy(minimum_improvement=0.02, plateau_limit=1).plateau_limit == 1
+
+
 def test_configuration_benchmark_and_evaluator_are_digest_bound() -> None:
     first = _config()
     assert first == _config()

@@ -284,6 +284,7 @@ def test_upgrading_from_the_previous_head_with_seeded_data_preserves_it(
 # --- constraint names match tables.py's declarations -------------------------
 
 
+@pytest.mark.database
 def test_the_assertions_table_constraint_names_match_the_declaration(
     migrated_engine: Engine,
 ) -> None:
@@ -300,6 +301,7 @@ def test_the_assertions_table_constraint_names_match_the_declaration(
     assert declared <= live, declared - live
 
 
+@pytest.mark.database
 def test_the_assertion_evidence_table_constraint_names_match_the_declaration(
     migrated_engine: Engine,
 ) -> None:

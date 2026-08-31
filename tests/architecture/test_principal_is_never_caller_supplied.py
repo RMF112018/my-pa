@@ -318,8 +318,20 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # read in this file already is: a column stamped back onto the domain
     # record from a row a `_mine`-scoped `SELECT` returned, never a value a
     # caller supplied.
+    #
+    # RI-ENT-WP-07 adds one `assertion` read, one `evidence` read, and two
+    # more `row` reads. `record_assertion` refuses an `EntityAssertion` whose
+    # `principal_id` is not the acting Principal's before the statement that
+    # would otherwise report it as a foreign-key violation naming a
+    # constraint -- the same `if X.principal_id != principal_id: raise`
+    # `record_fact_evidence_link` already performs for `link`, made for
+    # `assertion`. `record_assertion_evidence` performs the identical check
+    # for `evidence` (an `EntityAssertionEvidence`). The two `row` reads are
+    # `_row_to_assertion` and `_row_to_assertion_evidence`, the same pattern
+    # every other `row` read in this file already is.
     "infrastructure/persistence/entity.py": (
         ("alias", "principal_id"),
+        ("assertion", "principal_id"),
         ("assignment", "principal_id"),
         ("decision", "principal_id"),
         ("effect", "principal_id"),
@@ -328,6 +340,7 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("entity", "principal_id"),
         ("entity", "principal_id"),
         ("event", "principal_id"),
+        ("evidence", "principal_id"),
         ("identifier", "principal_id"),
         ("link", "principal_id"),
         ("link", "principal_id"),
@@ -364,6 +377,8 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("request", "principal_id"),
         ("request", "principal_id"),
         ("request", "principal_id"),
+        ("row", "principal_id"),
+        ("row", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),
         ("row", "principal_id"),

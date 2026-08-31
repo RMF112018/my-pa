@@ -2559,24 +2559,30 @@ class SqlEntityRepository(EntitiesRepository):
         caller to compose correctly.
         """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
-        targets = {
-            entity_assertions.c.target_entity_name_id: target_entity_name_id,
-            entity_assertions.c.target_entity_address_id: target_entity_address_id,
-            entity_assertions.c.target_communication_method_id: (target_communication_method_id),
-            entity_assertions.c.target_participation_id: target_participation_id,
-            entity_assertions.c.target_affiliation_id: target_affiliation_id,
-            entity_assertions.c.target_organization_profile_entity_id: (
-                target_organization_profile_entity_id
-            ),
+        # Named by column, not by table column object: naming the table here
+        # (`entity_assertions.c.target_...`) would put a second, unguarded
+        # statement in front of the one `_mine`-scoped `select` below, which
+        # `tests/architecture/test_principal_partition_is_reached_through_the_guard`
+        # rightly refuses -- every statement that names a partitioned table
+        # has to carry its own `_mine`/`_bound`. Kept as plain strings until
+        # the single guarded statement below is the only place `entity_assertions`
+        # is named at all.
+        provided = {
+            "target_entity_name_id": target_entity_name_id,
+            "target_entity_address_id": target_entity_address_id,
+            "target_communication_method_id": target_communication_method_id,
+            "target_participation_id": target_participation_id,
+            "target_affiliation_id": target_affiliation_id,
+            "target_organization_profile_entity_id": target_organization_profile_entity_id,
         }
-        named = {column: value for column, value in targets.items() if value is not None}
+        named = {field: value for field, value in provided.items() if value is not None}
         if len(named) != 1:
             raise ValueError("a targeted assertion read names exactly one subject")
         _require_row_limit(limit)
-        ((column, value),) = named.items()
+        ((field, value),) = named.items()
         statement = (
             select(entity_assertions)
-            .where(_mine(entity_assertions, principal_id), column == value)
+            .where(_mine(entity_assertions, principal_id), entity_assertions.c[field] == value)
             .order_by(entity_assertions.c.assertion_id)
         )
         rows = self._connection.execute(_limited(statement, limit)).all()

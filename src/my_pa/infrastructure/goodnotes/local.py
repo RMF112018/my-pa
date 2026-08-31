@@ -263,6 +263,7 @@ class LocalGoodNotesObserver:
         checked_at: datetime,
         maximum_staleness: timedelta,
         previous: GoodNotesSourceLivenessReceipt | None = None,
+        acknowledged_reappearance_sha256: str | None = None,
         page_count: int | None = None,
     ) -> GoodNotesSourceLivenessReceipt:
         """Observe one explicit path without turning absence or reappearance into success."""
@@ -278,9 +279,22 @@ class LocalGoodNotesObserver:
                 raise GoodNotesLocalSourceError("the prior GoodNotes liveness binding changed")
             if checked_at < previous.checked_at:
                 raise GoodNotesLocalSourceError("the GoodNotes liveness clock moved backwards")
+        if acknowledged_reappearance_sha256 is not None:
+            if previous is None or previous.state is not GoodNotesSourceLiveness.REAPPEARED:
+                raise GoodNotesLocalSourceError(
+                    "a GoodNotes reappearance acknowledgment requires a prior reappearance"
+                )
+            if acknowledged_reappearance_sha256 != previous.current_sha256:
+                raise GoodNotesLocalSourceError(
+                    "the GoodNotes reappearance acknowledgment digest changed"
+                )
         prior_sha256 = None
         if previous is not None:
-            prior_sha256 = previous.current_sha256 or previous.prior_sha256
+            prior_sha256 = (
+                previous.prior_sha256
+                if previous.state is GoodNotesSourceLiveness.REAPPEARED
+                else previous.current_sha256 or previous.prior_sha256
+            )
         try:
             observation = self.settle(relative_path, page_count=page_count)
         except GoodNotesSourceMissingError:
@@ -301,10 +315,16 @@ class LocalGoodNotesObserver:
                 current_sha256=None,
                 prior_sha256=prior_sha256,
             )
-        reappeared = previous is not None and previous.state in {
+        reappearance_pending = previous is not None and previous.state in {
             GoodNotesSourceLiveness.MISSING,
             GoodNotesSourceLiveness.STALE,
+            GoodNotesSourceLiveness.REAPPEARED,
         }
+        acknowledged_unchanged = (
+            acknowledged_reappearance_sha256 is not None
+            and observation.sha256 == acknowledged_reappearance_sha256
+        )
+        reappeared = reappearance_pending and not acknowledged_unchanged
         state = (
             GoodNotesSourceLiveness.REAPPEARED if reappeared else GoodNotesSourceLiveness.AVAILABLE
         )

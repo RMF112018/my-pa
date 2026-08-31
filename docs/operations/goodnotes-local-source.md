@@ -71,9 +71,11 @@ the caller-supplied last-seen interval is `STALE`. The first successful
 observation after either state is `REAPPEARED`, carrying
 whether its bytes changed from the last known digest. Only `AVAILABLE` is
 eligible by that receipt alone; missing, stale, and reappeared observations do
-not silently become ingestion success or reuse prior identity. The caller owns
-the staleness interval, so repository code does not freeze an unsupported
-operational polling choice.
+not silently become ingestion success or reuse prior identity. `REAPPEARED`
+persists until a caller explicitly acknowledges the exact reappeared SHA-256;
+the acknowledgment clears the state only if a new settled read still has those
+exact bytes. The caller owns the staleness interval, so repository code does
+not freeze an unsupported operational polling choice.
 
 Live GoodNotes root admission, OCR engine selection/licensing, background
 watcher activation, personal-data eligibility, and production database use

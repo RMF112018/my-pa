@@ -314,7 +314,15 @@ class _Entities:
         to_entity_id: str,
         expected_version: int,
         at: datetime,
+        after_state: Mapping[str, object] | None = None,
     ) -> None:
+        # RI-ENT-WP-06b widened the real reparent_entity_reference with an
+        # after_state keyword (non-entity-reference columns a reparenting also
+        # writes, e.g. is_preferred demotion). This fake accepts and ignores its
+        # value -- nothing this file asserts on `self.reparented` depends on it,
+        # and a stale signature without this parameter would raise TypeError the
+        # moment a real caller passed it (the same regression fixed in
+        # tests/recovery/test_identity_correction_recovery.py's sibling fake).
         assert principal_id == PRINCIPAL and from_entity_ids == frozenset({SURVIVOR}) and at
         self.reparented.append((family, record_id, to_entity_id, expected_version))
 

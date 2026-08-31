@@ -32,22 +32,41 @@ from my_pa.application.identity_correction import (
     _ledger_order,
     _materialize_effect_states,
     _request_digest,
+    plan_addresses,
     plan_aliases,
     plan_assignments,
+    plan_communication_methods,
     plan_entities,
     plan_identifiers,
+    plan_names,
     plan_observations,
+    plan_organization_profiles,
+    plan_person_organization_affiliations,
+    plan_project_participations,
     plan_proposals,
     plan_relationships,
 )
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
+    AffiliationTypeCode,
     AliasState,
     AliasType,
     Assignment,
     AssignmentState,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     Entity,
+    EntityAddress,
+    EntityAddressState,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityCommunicationMethodState,
+    EntityName,
+    EntityNameState,
+    EntityOrganizationProfile,
+    EntityProjectParticipation,
+    EntityProjectParticipationState,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
@@ -55,7 +74,18 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    LegalIdentityStatusCode,
+    NameTypeCode,
+    OrganizationKindCode,
+    ParticipationStatusCode,
+    PersonOrganizationAffiliation,
+    PersonOrganizationAffiliationState,
     RelationshipState,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
+    normalize_address,
+    normalize_communication_value,
 )
 from my_pa.domain.relationship.governance import (
     EntityObservation,
@@ -173,6 +203,135 @@ def _edge(
         principal_id=PRINCIPAL,
         scope_entity_id=scope_entity_id,
         state=state,
+    )
+
+
+def _name(
+    entity_name_id: str,
+    entity_id: str,
+    value: str = "Alice Synthetic",
+    *,
+    name_type_code: NameTypeCode = NameTypeCode.DISPLAY,
+    is_preferred: bool = False,
+    state: EntityNameState = EntityNameState.ACTIVE,
+) -> EntityName:
+    return EntityName(
+        entity_name_id=entity_name_id,
+        entity_id=entity_id,
+        principal_id=PRINCIPAL,
+        name_type_code=name_type_code,
+        display_value=value,
+        normalized_value=normalize_name(value),
+        is_preferred=is_preferred,
+        state=state,
+    )
+
+
+def _profile(
+    entity_id: str,
+    *,
+    organization_kind_code: OrganizationKindCode = OrganizationKindCode.COMPANY,
+) -> EntityOrganizationProfile:
+    return EntityOrganizationProfile(
+        entity_id=entity_id,
+        principal_id=PRINCIPAL,
+        organization_kind_code=organization_kind_code,
+        legal_identity_status_code=LegalIdentityStatusCode.UNRESOLVED,
+    )
+
+
+def _address(
+    entity_address_id: str,
+    entity_id: str,
+    raw_value: str = "123 Main St",
+    *,
+    address_type_code: AddressTypeCode = AddressTypeCode.OFFICE,
+    is_preferred: bool = False,
+    state: EntityAddressState = EntityAddressState.ACTIVE,
+) -> EntityAddress:
+    normalized = normalize_address(
+        line1=None,
+        line2=None,
+        city=None,
+        region=None,
+        postal_code=None,
+        country=None,
+        raw_value=raw_value,
+    )
+    return EntityAddress(
+        entity_address_id=entity_address_id,
+        entity_id=entity_id,
+        principal_id=PRINCIPAL,
+        address_type_code=address_type_code,
+        raw_value=raw_value,
+        normalized_address_value=normalized,
+        is_preferred=is_preferred,
+        state=state,
+    )
+
+
+def _communication_method(
+    communication_method_id: str,
+    entity_id: str,
+    value: str = "alice@example.invalid",
+    *,
+    method_type_code: CommunicationMethodTypeCode = CommunicationMethodTypeCode.EMAIL,
+    is_preferred: bool = False,
+    state: EntityCommunicationMethodState = EntityCommunicationMethodState.ACTIVE,
+) -> EntityCommunicationMethod:
+    normalized = normalize_communication_value(method_type_code, value)
+    return EntityCommunicationMethod(
+        communication_method_id=communication_method_id,
+        entity_id=entity_id,
+        principal_id=PRINCIPAL,
+        method_type_code=method_type_code,
+        usage_context_code=CommunicationUsageContextCode.GENERIC,
+        normalized_value=normalized,
+        display_value=value,
+        is_preferred=is_preferred,
+        state=state,
+    )
+
+
+def _participation(
+    participation_id: str,
+    project_entity_id: str,
+    participant_entity_id: str,
+    *,
+    role_code: str | None = "CONSULTANT",
+    state: EntityProjectParticipationState = EntityProjectParticipationState.ACTIVE,
+) -> EntityProjectParticipation:
+    return EntityProjectParticipation(
+        participation_id=participation_id,
+        principal_id=PRINCIPAL,
+        project_entity_id=project_entity_id,
+        participant_entity_id=participant_entity_id,
+        project_display_name="Synthetic Participant",
+        role_basis_code=RoleBasisCode.CONTRACTUAL,
+        stakeholder_side_code=StakeholderSideCode.CONSULTANT,
+        stakeholder_class_code=StakeholderClassCode.CORE,
+        relationship_status_code=ParticipationStatusCode.ACTIVE,
+        role_code=role_code,
+        state=state,
+    )
+
+
+def _affiliation(
+    affiliation_id: str,
+    person_entity_id: str,
+    organization_entity_id: str | None,
+    *,
+    state: PersonOrganizationAffiliationState = PersonOrganizationAffiliationState.ACTIVE,
+    effective_to: datetime | None = None,
+) -> PersonOrganizationAffiliation:
+    return PersonOrganizationAffiliation(
+        affiliation_id=affiliation_id,
+        principal_id=PRINCIPAL,
+        person_entity_id=person_entity_id,
+        organization_entity_id=organization_entity_id,
+        affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+        state=state,
+        effective_to=effective_to,
     )
 
 
@@ -580,6 +739,424 @@ def test_the_opposite_direction_of_one_pair_is_not_a_duplicate() -> None:
         existing_active=[_edge("erel_ssss0001ssss01", SURVIVOR, OUTSIDER)],
     )
     assert changes[0].kind is IdentityEffectKind.OWNER_REPARENTED
+
+
+# --- RI-ENT-WP-06b: names ----------------------------------------------------
+
+
+def test_a_name_the_survivor_does_not_hold_is_reparented() -> None:
+    changes, conflicts = plan_names(
+        survivor_entity_id=SURVIVOR,
+        survivor_names=[],
+        merged_names=[_name("enam_aaaa0001aaaa01", MERGED_ONE)],
+        choices={},
+    )
+    assert conflicts == ()
+    assert [change.kind for change in changes] == [IdentityEffectKind.OWNER_REPARENTED]
+    assert changes[0].after_state["entity_id"] == SURVIVOR
+
+
+def test_a_current_name_the_survivor_already_holds_currently_coalesces() -> None:
+    changes, conflicts = plan_names(
+        survivor_entity_id=SURVIVOR,
+        survivor_names=[_name("enam_ssss0001ssss01", SURVIVOR)],
+        merged_names=[_name("enam_aaaa0001aaaa01", MERGED_ONE)],
+        choices={},
+    )
+    assert conflicts == ()
+    assert changes[0].kind is IdentityEffectKind.ROW_COALESCED
+    assert changes[0].coalesced_into == "enam_ssss0001ssss01"
+
+
+def test_a_current_name_the_survivor_holds_only_as_a_former_one_needs_a_choice() -> None:
+    changes, conflicts = plan_names(
+        survivor_entity_id=SURVIVOR,
+        survivor_names=[_name("enam_ssss0001ssss01", SURVIVOR, state=EntityNameState.RETIRED)],
+        merged_names=[_name("enam_aaaa0001aaaa01", MERGED_ONE)],
+        choices={},
+    )
+    assert [conflict.kind for conflict in conflicts] == [IdentityConflictKind.AMBIGUOUS_DISPOSITION]
+    assert conflicts[0].family is IdentityEffectFamily.NAME
+    assert changes == ()
+
+
+def test_a_preferred_name_colliding_with_the_survivors_preferred_one_is_demoted() -> None:
+    """The value differs, so this never reaches the value-key collision dimension --
+    the second, `is_preferred`-governed index is the one it collides on."""
+    changes, conflicts = plan_names(
+        survivor_entity_id=SURVIVOR,
+        survivor_names=[
+            _name("enam_ssss0001ssss01", SURVIVOR, "Alice Preferred", is_preferred=True)
+        ],
+        merged_names=[
+            _name("enam_aaaa0001aaaa01", MERGED_ONE, "Ali Also Preferred", is_preferred=True)
+        ],
+        choices={},
+    )
+    assert conflicts == ()
+    assert changes[0].kind is IdentityEffectKind.OWNER_REPARENTED
+    assert changes[0].after_state["entity_id"] == SURVIVOR
+    assert changes[0].after_state["is_preferred"] is False
+
+
+def test_a_preferred_name_with_no_existing_preferred_of_that_type_stays_preferred() -> None:
+    changes, conflicts = plan_names(
+        survivor_entity_id=SURVIVOR,
+        survivor_names=[],
+        merged_names=[_name("enam_aaaa0001aaaa01", MERGED_ONE, is_preferred=True)],
+        choices={},
+    )
+    assert conflicts == ()
+    assert changes[0].after_state["is_preferred"] is True
+
+
+def test_two_merged_preferred_names_of_one_type_only_one_stays_preferred() -> None:
+    """The index is built as the plan is made: the second collides with the first."""
+    changes, conflicts = plan_names(
+        survivor_entity_id=SURVIVOR,
+        survivor_names=[],
+        merged_names=[
+            _name("enam_aaaa0001aaaa01", MERGED_ONE, "Alice One", is_preferred=True),
+            _name("enam_bbbb0002bbbb02", MERGED_TWO, "Alice Two", is_preferred=True),
+        ],
+        choices={},
+    )
+    assert conflicts == ()
+    preferred_flags = sorted(change.after_state["is_preferred"] for change in changes)
+    assert preferred_flags == [False, True]
+
+
+def test_a_different_name_type_of_the_same_spelling_is_a_different_name_form() -> None:
+    changes, conflicts = plan_names(
+        survivor_entity_id=SURVIVOR,
+        survivor_names=[_name("enam_ssss0001ssss01", SURVIVOR, name_type_code=NameTypeCode.LEGAL)],
+        merged_names=[_name("enam_aaaa0001aaaa01", MERGED_ONE, name_type_code=NameTypeCode.BRAND)],
+        choices={},
+    )
+    assert conflicts == ()
+    assert changes[0].kind is IdentityEffectKind.OWNER_REPARENTED
+
+
+# --- RI-ENT-WP-06b: organization profiles ------------------------------------
+
+
+def test_an_organization_profile_the_survivor_does_not_hold_is_reparented() -> None:
+    changes, conflicts = plan_organization_profiles(
+        survivor_entity_id=SURVIVOR,
+        survivor_profile=None,
+        merged_profiles=[_profile(MERGED_ONE)],
+    )
+    assert conflicts == ()
+    assert [change.kind for change in changes] == [IdentityEffectKind.OWNER_REPARENTED]
+    assert changes[0].after_state["entity_id"] == SURVIVOR
+    assert changes[0].record_id == MERGED_ONE
+
+
+def test_no_merged_profile_produces_no_change() -> None:
+    changes, conflicts = plan_organization_profiles(
+        survivor_entity_id=SURVIVOR, survivor_profile=_profile(SURVIVOR), merged_profiles=[]
+    )
+    assert changes == () and conflicts == ()
+
+
+def test_a_profile_on_both_sides_blocks_as_a_singleton_conflict() -> None:
+    changes, conflicts = plan_organization_profiles(
+        survivor_entity_id=SURVIVOR,
+        survivor_profile=_profile(SURVIVOR),
+        merged_profiles=[_profile(MERGED_ONE)],
+    )
+    assert changes == ()
+    assert [conflict.kind for conflict in conflicts] == [
+        IdentityConflictKind.SINGLETON_RECORD_CONFLICT
+    ]
+    assert conflicts[0].blocks
+    assert conflicts[0].family is IdentityEffectFamily.ORGANIZATION_PROFILE
+    assert conflicts[0].record_id == MERGED_ONE
+
+
+def test_two_merged_profiles_competing_for_an_empty_survivor_slot_also_block() -> None:
+    """Even with no survivor profile, two challengers cannot both take one primary key."""
+    changes, conflicts = plan_organization_profiles(
+        survivor_entity_id=SURVIVOR,
+        survivor_profile=None,
+        merged_profiles=[_profile(MERGED_ONE), _profile(MERGED_TWO)],
+    )
+    assert changes == ()
+    assert len(conflicts) == 2
+    assert all(
+        conflict.kind is IdentityConflictKind.SINGLETON_RECORD_CONFLICT for conflict in conflicts
+    )
+
+
+# --- RI-ENT-WP-06b: addresses -------------------------------------------------
+
+
+def test_an_entity_address_the_survivor_does_not_hold_is_reparented() -> None:
+    changes, conflicts = plan_addresses(
+        survivor_entity_id=SURVIVOR,
+        survivor_addresses=[],
+        merged_addresses=[_address("eadr_aaaa0001aaaa01", MERGED_ONE)],
+        choices={},
+    )
+    assert conflicts == ()
+    assert changes[0].after_state["entity_id"] == SURVIVOR
+
+
+def test_a_current_address_the_survivor_already_holds_currently_coalesces() -> None:
+    changes, conflicts = plan_addresses(
+        survivor_entity_id=SURVIVOR,
+        survivor_addresses=[_address("eadr_ssss0001ssss01", SURVIVOR)],
+        merged_addresses=[_address("eadr_aaaa0001aaaa01", MERGED_ONE)],
+        choices={},
+    )
+    assert conflicts == ()
+    assert changes[0].kind is IdentityEffectKind.ROW_COALESCED
+
+
+def test_a_preferred_address_colliding_with_the_survivors_own_preferred_is_demoted() -> None:
+    changes, conflicts = plan_addresses(
+        survivor_entity_id=SURVIVOR,
+        survivor_addresses=[
+            _address("eadr_ssss0001ssss01", SURVIVOR, "1 Survivor Ave", is_preferred=True)
+        ],
+        merged_addresses=[
+            _address("eadr_aaaa0001aaaa01", MERGED_ONE, "2 Merged Blvd", is_preferred=True)
+        ],
+        choices={},
+    )
+    assert conflicts == ()
+    assert changes[0].after_state["is_preferred"] is False
+
+
+# --- RI-ENT-WP-06b: communication methods ------------------------------------
+
+
+def test_a_communication_method_the_survivor_does_not_hold_is_reparented() -> None:
+    changes, conflicts = plan_communication_methods(
+        survivor_entity_id=SURVIVOR,
+        survivor_communication_methods=[],
+        merged_communication_methods=[_communication_method("ecmm_aaaa0001aaaa01", MERGED_ONE)],
+        choices={},
+    )
+    assert conflicts == ()
+    assert changes[0].after_state["entity_id"] == SURVIVOR
+
+
+def test_a_current_communication_method_the_survivor_already_holds_coalesces() -> None:
+    changes, conflicts = plan_communication_methods(
+        survivor_entity_id=SURVIVOR,
+        survivor_communication_methods=[_communication_method("ecmm_ssss0001ssss01", SURVIVOR)],
+        merged_communication_methods=[_communication_method("ecmm_aaaa0001aaaa01", MERGED_ONE)],
+        choices={},
+    )
+    assert conflicts == ()
+    assert changes[0].kind is IdentityEffectKind.ROW_COALESCED
+
+
+def test_a_preferred_communication_method_colliding_with_the_survivors_own_is_demoted() -> None:
+    changes, conflicts = plan_communication_methods(
+        survivor_entity_id=SURVIVOR,
+        survivor_communication_methods=[
+            _communication_method(
+                "ecmm_ssss0001ssss01", SURVIVOR, "survivor@example.invalid", is_preferred=True
+            )
+        ],
+        merged_communication_methods=[
+            _communication_method(
+                "ecmm_aaaa0001aaaa01", MERGED_ONE, "merged@example.invalid", is_preferred=True
+            )
+        ],
+        choices={},
+    )
+    assert conflicts == ()
+    assert changes[0].after_state["is_preferred"] is False
+
+
+# --- RI-ENT-WP-06b: project participations -----------------------------------
+
+
+def test_a_participation_of_a_merged_project_is_reparented() -> None:
+    changes = plan_project_participations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_participation("eppt_aaaa0001aaaa01", MERGED_ONE, OUTSIDER)],
+        existing_active=[],
+    )
+    assert [change.kind for change in changes] == [IdentityEffectKind.OWNER_REPARENTED]
+    assert changes[0].after_state["project_entity_id"] == SURVIVOR
+    assert changes[0].after_state["participant_entity_id"] == OUTSIDER
+
+
+def test_a_participation_of_a_merged_participant_is_reparented() -> None:
+    changes = plan_project_participations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_participation("eppt_aaaa0001aaaa01", OUTSIDER, MERGED_ONE)],
+        existing_active=[],
+    )
+    assert changes[0].after_state["project_entity_id"] == OUTSIDER
+    assert changes[0].after_state["participant_entity_id"] == SURVIVOR
+
+
+def test_a_participation_where_project_and_participant_both_become_survivor_is_superseded() -> None:
+    changes = plan_project_participations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_participation("eppt_aaaa0001aaaa01", MERGED_ONE, MERGED_TWO)],
+        existing_active=[],
+    )
+    assert [change.kind for change in changes] == [IdentityEffectKind.SELF_EDGE_SUPERSEDED]
+    assert changes[0].coalesced_into is None
+    assert changes[0].after_state["superseded_by_participation_id"] is None
+
+
+def test_a_current_participation_the_survivor_already_holds_deduplicates() -> None:
+    changes = plan_project_participations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[
+            _participation("eppt_aaaa0001aaaa01", MERGED_ONE, OUTSIDER, role_code="CONSULTANT")
+        ],
+        existing_active=[
+            _participation("eppt_ssss0001ssss01", SURVIVOR, OUTSIDER, role_code="CONSULTANT")
+        ],
+    )
+    assert changes[0].kind is IdentityEffectKind.ROW_COALESCED
+    assert changes[0].coalesced_into == "eppt_ssss0001ssss01"
+
+
+def test_a_null_role_code_participation_never_collides() -> None:
+    """`an_active_project_participation_is_unique_per_project_and_role` has no
+    `COALESCE` over `role_code`, so two `NULL`-role rows never violate it."""
+    changes = plan_project_participations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_participation("eppt_aaaa0001aaaa01", MERGED_ONE, OUTSIDER, role_code=None)],
+        existing_active=[_participation("eppt_ssss0001ssss01", SURVIVOR, OUTSIDER, role_code=None)],
+    )
+    assert [change.kind for change in changes] == [IdentityEffectKind.OWNER_REPARENTED]
+
+
+def test_both_project_and_participant_columns_reparent_independently_in_one_merge() -> None:
+    """A multi-entity merge where the project and one of its participants are
+    both merged-away entities at once -- both columns of the one row move."""
+    project_and_participant_merged = frozenset({MERGED_ONE, MERGED_TWO})
+    changes = plan_project_participations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=project_and_participant_merged,
+        affected=[_participation("eppt_aaaa0001aaaa01", MERGED_ONE, MERGED_TWO)],
+        existing_active=[],
+    )
+    # Both columns reach the survivor at once, making this a self-participation
+    # rather than an ordinary reparenting -- superseded, not owner-reparented.
+    assert [change.kind for change in changes] == [IdentityEffectKind.SELF_EDGE_SUPERSEDED]
+
+
+def test_an_unaffected_participation_is_left_alone() -> None:
+    changes = plan_project_participations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_participation("eppt_aaaa0001aaaa01", OUTSIDER, SURVIVOR)],
+        existing_active=[],
+    )
+    assert changes == ()
+
+
+# --- RI-ENT-WP-06b: person-organization affiliations -------------------------
+
+
+def test_an_affiliation_of_a_merged_person_is_reparented() -> None:
+    changes = plan_person_organization_affiliations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_affiliation("poaf_aaaa0001aaaa01", MERGED_ONE, OUTSIDER)],
+        existing_active_open=[],
+    )
+    assert [change.kind for change in changes] == [IdentityEffectKind.OWNER_REPARENTED]
+    assert changes[0].after_state["person_entity_id"] == SURVIVOR
+    assert changes[0].after_state["organization_entity_id"] == OUTSIDER
+
+
+def test_an_affiliation_of_a_merged_organization_is_reparented() -> None:
+    changes = plan_person_organization_affiliations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_affiliation("poaf_aaaa0001aaaa01", OUTSIDER, MERGED_ONE)],
+        existing_active_open=[],
+    )
+    assert changes[0].after_state["person_entity_id"] == OUTSIDER
+    assert changes[0].after_state["organization_entity_id"] == SURVIVOR
+
+
+def test_an_independent_consultants_affiliation_has_no_organization_to_substitute() -> None:
+    changes = plan_person_organization_affiliations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_affiliation("poaf_aaaa0001aaaa01", MERGED_ONE, None)],
+        existing_active_open=[],
+    )
+    assert changes[0].after_state["organization_entity_id"] is None
+
+
+def test_a_self_affiliation_after_substitution_is_superseded() -> None:
+    changes = plan_person_organization_affiliations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_affiliation("poaf_aaaa0001aaaa01", SURVIVOR, MERGED_ONE)],
+        existing_active_open=[],
+    )
+    assert [change.kind for change in changes] == [IdentityEffectKind.SELF_EDGE_SUPERSEDED]
+    assert changes[0].after_state["superseded_by_affiliation_id"] is None
+
+
+def test_an_open_affiliation_colliding_with_the_survivors_own_open_affiliation_coalesces() -> None:
+    changes = plan_person_organization_affiliations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_affiliation("poaf_aaaa0001aaaa01", MERGED_ONE, OUTSIDER)],
+        existing_active_open=[_affiliation("poaf_ssss0001ssss01", SURVIVOR, OUTSIDER)],
+    )
+    assert changes[0].kind is IdentityEffectKind.ROW_COALESCED
+    assert changes[0].coalesced_into == "poaf_ssss0001ssss01"
+    # Nothing is deleted: the merged-away person's own row stays parented to
+    # its own (now-redirected) entity_id, marked superseded with lineage.
+    assert changes[0].after_state["person_entity_id"] == MERGED_ONE
+
+
+def test_a_closed_affiliation_never_collides_with_the_survivors_open_one() -> None:
+    closed = _affiliation(
+        "poaf_aaaa0001aaaa01",
+        MERGED_ONE,
+        OUTSIDER,
+        state=PersonOrganizationAffiliationState.RETIRED,
+        effective_to=WHEN,
+    )
+    changes = plan_person_organization_affiliations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[closed],
+        existing_active_open=[_affiliation("poaf_ssss0001ssss01", SURVIVOR, OUTSIDER)],
+    )
+    assert [change.kind for change in changes] == [IdentityEffectKind.OWNER_REPARENTED]
+
+
+def test_both_person_and_organization_merging_onto_one_survivor_is_the_degenerate_self_edge() -> (
+    None
+):
+    """The degenerate case the campaign document names explicitly: both entity
+    references of one row are merged away in the same operation. Since a merge
+    has exactly one survivor, both substitutions land on the same identity --
+    so "both sides change" and "the row becomes self-affiliated" are the same
+    event here, not two different outcomes to distinguish."""
+    changes = plan_person_organization_affiliations(
+        survivor_entity_id=SURVIVOR,
+        merged_entity_ids=MERGED,
+        affected=[_affiliation("poaf_aaaa0001aaaa01", MERGED_ONE, MERGED_TWO)],
+        existing_active_open=[],
+    )
+    assert [change.kind for change in changes] == [IdentityEffectKind.SELF_EDGE_SUPERSEDED]
+    assert changes[0].before_state["person_entity_id"] == MERGED_ONE
+    assert changes[0].before_state["organization_entity_id"] == MERGED_TWO
 
 
 # --- observations -----------------------------------------------------------

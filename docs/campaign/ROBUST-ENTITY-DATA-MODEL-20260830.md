@@ -853,7 +853,14 @@ evidence" is textually about evidence.
   has two entity references of *different* kinds — `person_entity_id` and the
   nullable `organization_entity_id` — both substituting independently, on the
   same terms as the participation family, including the degenerate case of
-  both changing on one row at once (a database test proves it). A row that
+  both changing on one row at once (a unit-level planning test proves it,
+  `test_both_person_and_organization_merging_onto_one_survivor_is_the_
+  degenerate_self_edge` in `tests/unit/test_identity_correction_planning.py`
+  — unlike the participation family's equivalent claim above, which is
+  backed by a real `tests/database/` integration test, this one is proven at
+  the planning-function level against an in-memory model rather than against
+  a live PostgreSQL database; corrected here for precision, found during
+  this increment's independent review). A row that
   becomes self-affiliated after substitution is `SELF_EDGE_SUPERSEDED`, per
   `a_person_affiliation_organization_is_not_the_person`. The family's one
   collision is `an_open_ended_affiliation_is_unique_per_person` — at most one

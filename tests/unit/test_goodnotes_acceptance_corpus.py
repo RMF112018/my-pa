@@ -534,7 +534,7 @@ def test_r_historical_new_only_summary_stays_bound_to_run_revision() -> None:
         stored_run=_run(),
         changes=(change,),
         occurrences={change.occurrence_id: _occurrence("corpus-r", page)},
-        revisions={bound.revision_id: bound, later.revision_id: later},
+        revisions={bound.revision_id: bound},
     )
     first = GoodNotesNewOnlyDelivery().deliver(
         DELIVERY_A, RUN, DESTINATION, repository=repo, clock=lambda: DELIVERY_WHEN
@@ -542,6 +542,7 @@ def test_r_historical_new_only_summary_stays_bound_to_run_revision() -> None:
     assert first.receipt.body is not None
     assert "synthetic original" in first.receipt.body
     assert "synthetic corrected" not in first.receipt.body
+    repo.revisions[later.revision_id] = later
     second = GoodNotesNewOnlyDelivery().deliver(
         DELIVERY_A, RUN, DESTINATION, repository=repo, clock=lambda: DELIVERY_LATER
     )

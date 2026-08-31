@@ -194,6 +194,30 @@ def summary_digest(body: str | None) -> str:
     return hashlib.sha256((body or "").encode()).hexdigest()
 
 
+def existing_delivery_receipt(
+    principal_id: str,
+    run_id: str,
+    destination: str,
+    *,
+    repository: GoodNotesDeliveryRepository,
+) -> GoodNotesDeliveryReceipt | None:
+    """Return the immutable receipt for one run/destination, or fail on collision."""
+    matches: list[GoodNotesDeliveryReceipt] = []
+    for receipt in repository.delivery_receipts_for_run(principal_id, run_id):
+        if not _record_is_bound_to_principal(receipt, principal_id) or receipt.run_id != run_id:
+            raise ValueError("the GoodNotes delivery receipt trace does not match")
+        if receipt.destination == destination:
+            matches.append(receipt)
+    if len(matches) > 1:
+        raise ValueError("the GoodNotes delivery receipt identity collided")
+    if not matches:
+        return None
+    receipt = matches[0]
+    if summary_digest(receipt.body) != receipt.summary_hash:
+        raise ValueError("the GoodNotes delivery receipt digest does not match")
+    return receipt
+
+
 def new_only_preview_digest(
     principal_id: str,
     run_id: str,
@@ -354,6 +378,14 @@ class GoodNotesNewOnlyDelivery:
         run = repository.run(principal_id, run_id)
         if run is None:
             raise ValueError("the request names no stored GoodNotes ingestion run")
+        existing = existing_delivery_receipt(
+            principal_id,
+            run_id,
+            destination,
+            repository=repository,
+        )
+        if existing is not None:
+            return _replayed_delivery(existing, principal_id, run_id, repository)
         changes = repository.run_note_changes(principal_id, run_id)
         new_changes = tuple(
             item for item in changes if item.change_state is GoodNotesNoteChangeState.NEW
@@ -436,23 +468,14 @@ class GoodNotesNewOnlyDelivery:
         digest = summary_digest(body)
         existing = repository.delivery_receipt_by_key(principal_id, run_id, destination, digest)
         if existing is not None:
-            if not _record_is_bound_to_principal(existing, principal_id):
+            if (
+                not _record_is_bound_to_principal(existing, principal_id)
+                or existing.run_id != run_id
+                or existing.destination != destination
+                or summary_digest(existing.body) != existing.summary_hash
+            ):
                 raise ValueError("the GoodNotes delivery receipt trace does not match")
-            stored_associations = repository.entity_associations_for_run(principal_id, run_id)
-            return GoodNotesDeliveryResult(
-                receipt=GoodNotesDeliveryReceipt(
-                    receipt_id=existing.receipt_id,
-                    principal_id=existing.principal_id,
-                    run_id=existing.run_id,
-                    destination=existing.destination,
-                    summary_hash=existing.summary_hash,
-                    suppressed=existing.suppressed,
-                    created_at=existing.created_at,
-                    body=existing.body,
-                    replayed=True,
-                ),
-                associations=stored_associations,
-            )
+            return _replayed_delivery(existing, principal_id, run_id, repository)
         if superseded_revisions:
             raise ValueError("the GoodNotes delivery evidence revision is superseded")
         written = tuple(repository.store_entity_association(item) for item in associations)
@@ -469,6 +492,28 @@ class GoodNotesNewOnlyDelivery:
             )
         )
         return GoodNotesDeliveryResult(receipt=receipt, associations=written)
+
+
+def _replayed_delivery(
+    existing: GoodNotesDeliveryReceipt,
+    principal_id: str,
+    run_id: str,
+    repository: GoodNotesDeliveryRepository,
+) -> GoodNotesDeliveryResult:
+    return GoodNotesDeliveryResult(
+        receipt=GoodNotesDeliveryReceipt(
+            receipt_id=existing.receipt_id,
+            principal_id=existing.principal_id,
+            run_id=existing.run_id,
+            destination=existing.destination,
+            summary_hash=existing.summary_hash,
+            suppressed=existing.suppressed,
+            created_at=existing.created_at,
+            body=existing.body,
+            replayed=True,
+        ),
+        associations=repository.entity_associations_for_run(principal_id, run_id),
+    )
 
 
 def _require_delivery_trace(

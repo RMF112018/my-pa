@@ -28,6 +28,7 @@ from my_pa.bootstrap.goodnotes_rollout import rollout_report
 from my_pa.bootstrap.settings import GoodNotesRolloutStage, Settings
 from my_pa.domain.goodnotes.models import (
     GoodNotesDeliveryAttemptState,
+    GoodNotesIdentityStatus,
     GoodNotesIngestionStatus,
     GoodNotesPipelineStage,
     GoodNotesRunStage,
@@ -675,6 +676,43 @@ def test_t3_t4_t7_t8_t9_preview_then_canary_replays_receipt() -> None:
     )
     assert report_after == report_before
     assert report_after["current_stage"] == "observe-only"
+
+
+def test_completed_preview_survives_later_correction_and_occurrence_retirement() -> None:
+    pdf = vector_pdf((COVER,))
+    store = MemoryDurableNoteStore()
+    request = _request(pdf, "preview-historical-receipt")
+    first = _run(store, pdf, request.request_id, PREVIEW)
+    _propose(store, first.run.run_id)
+    previewed = _run_at(store, request, PREVIEW)
+    receipt_id = previewed.preview_receipt_id
+    ended_at = previewed.run.ended_at
+    assert receipt_id is not None
+
+    occurrence_key, occurrence = next(iter(store._occurrences.items()))
+    store._occurrences[occurrence_key] = replace(
+        occurrence,
+        identity_status=GoodNotesIdentityStatus.RETIRED,
+    )
+    bound = store.latest_revision_for_occurrence(A, occurrence.occurrence_id)
+    assert bound is not None
+    store.store_revision(
+        replace(
+            bound,
+            revision_id=issue_stable_id("gnrev", "post-preview-correction"),
+            transcription="synthetic corrected later",
+            created_at=WHEN + timedelta(seconds=1),
+            supersedes_revision_id=bound.revision_id,
+        )
+    )
+
+    recovered = _run_at(store, request, CANARY)
+    assert recovered.preview_receipt_id == receipt_id
+    assert recovered.run.status is GoodNotesIngestionStatus.SUCCEEDED
+    assert recovered.run.ended_at == ended_at
+    receipts = store.delivery_receipts_for_run(A, recovered.run.run_id)
+    assert len(receipts) == 1
+    assert receipts[0].receipt_id == receipt_id
 
 
 def test_t5_t6_canary_failure_after_prepared_preserves_terminal_state() -> None:

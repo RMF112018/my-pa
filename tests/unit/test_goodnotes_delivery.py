@@ -785,6 +785,18 @@ def test_historical_run_uses_the_bound_revision_not_a_later_correction() -> None
     assert second.receipt.replayed is True
     assert second.receipt.summary_hash == first.receipt.summary_hash
     assert second.receipt.body == first.receipt.body
+    repo.occurrences[change.occurrence_id] = replace(
+        repo.occurrences[change.occurrence_id],
+        identity_status=GoodNotesIdentityStatus.RETIRED,
+    )
+    third = GoodNotesNewOnlyDelivery().deliver(
+        A, RUN, DESTINATION, repository=repo, clock=lambda: LATER
+    )
+    assert third.receipt.replayed is True
+    assert third.receipt.receipt_id == first.receipt.receipt_id
+    assert third.receipt.summary_hash == first.receipt.summary_hash
+    assert third.receipt.body == first.receipt.body
+    assert len(repo.receipts) == 1
 
 
 def test_first_delivery_rejects_a_superseded_revision_without_writing() -> None:

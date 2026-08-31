@@ -18,7 +18,7 @@ from my_pa.application.goodnotes_delivery import (
     GoodNotesDeliveryAttemptLedger,
     GoodNotesDeliveryRepository,
     GoodNotesNewOnlyDelivery,
-    new_only_preview_digest,
+    existing_delivery_receipt,
 )
 from my_pa.application.goodnotes_lineage import (
     GoodNotesLineageRepository,
@@ -768,8 +768,19 @@ def _assert_later_stage_consistency(
             if change.note_id is not None and store.note(run.principal_id, change.note_id) is None:
                 raise _consistency_error()
     if GoodNotesPipelineStage.PREVIEW in completed:
-        digest = new_only_preview_digest(run.principal_id, run.run_id, repository=store)
-        receipt = store.delivery_receipt_by_key(run.principal_id, run.run_id, destination, digest)
+        receipt = existing_delivery_receipt(
+            run.principal_id,
+            run.run_id,
+            destination,
+            repository=store,
+        )
+        if receipt is not None:
+            receipt = store.delivery_receipt_by_key(
+                run.principal_id,
+                run.run_id,
+                destination,
+                receipt.summary_hash,
+            )
         if receipt is None:
             raise _consistency_error()
         if run.status is GoodNotesIngestionStatus.FAILED:
@@ -809,6 +820,17 @@ def _is_terminal_preview(
         return False
     if run.status is GoodNotesIngestionStatus.FAILED:
         return False
-    digest = new_only_preview_digest(run.principal_id, run.run_id, repository=store)
-    receipt = store.delivery_receipt_by_key(run.principal_id, run.run_id, destination, digest)
+    receipt = existing_delivery_receipt(
+        run.principal_id,
+        run.run_id,
+        destination,
+        repository=store,
+    )
+    if receipt is not None:
+        receipt = store.delivery_receipt_by_key(
+            run.principal_id,
+            run.run_id,
+            destination,
+            receipt.summary_hash,
+        )
     return receipt is not None

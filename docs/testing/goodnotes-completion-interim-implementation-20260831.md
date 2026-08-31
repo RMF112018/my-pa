@@ -15,10 +15,13 @@ That artifact, rather than the smaller dispatch wrapper, is the plan identity.
 
 The authorized tranche was repository-only GoodNotes implementation and
 synthetic verification, with path-exclusive workers and serialization around
-Relationship Intelligence (RI). It did not authorize merge, deployment, a live
-schedule, production or personal data, credentials, source mutation, R11, R12,
-B0 execution, or private-gold access. Candidate PR #160 was evidence only and
-was never a transplant or integration source.
+Relationship Intelligence (RI). No merge is performed or claimed by this
+interim tranche; merge eligibility remains gated by exact-head independent
+review, applicable tests, current-main reconciliation, and resolved
+scope/serialization boundaries. The tranche did not authorize deployment, a
+live schedule, production or personal data, credentials, source mutation, R11,
+R12, B0 execution, or private-gold access. Candidate PR #160 was evidence only
+and was never a transplant or integration source.
 
 ## Repository register and RI preservation
 
@@ -68,6 +71,9 @@ active RI line.
 
 At interim head `72679f4ddc06fcc18be205a0c442a1a4bb43b576`:
 
+- Orchestrator same-head validation: full GoodNotes unit suite
+  `510 passed in 18.41s`; Ruff check and format passed; targeted mypy over the
+  eight changed source files passed; `git diff --check` passed.
 - Focused integrated unit tranche:
   `111 passed in 1.02s` across GoodNotes source, acceptance corpus,
   corrections, delivery, pull orchestration, and semantic optimizer tests.

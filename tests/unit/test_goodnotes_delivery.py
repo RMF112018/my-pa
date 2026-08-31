@@ -244,7 +244,7 @@ class _FakeDeliveryRepository:
     stored_run: GoodNotesIngestionRun | None
     changes: tuple[GoodNotesRunNoteChange, ...]
     occurrences: dict[str, GoodNotesNoteOccurrence]
-    revisions: dict[str, object]
+    revisions: dict[str, GoodNotesNoteRevision]
     proposals: tuple[tuple[str, str, str, str, dict[str, object]], ...] = ()
     directory: tuple[GoodNotesEntityDirectoryRecord, ...] = ()
     receipts: list[GoodNotesDeliveryReceipt] = field(default_factory=list)
@@ -270,10 +270,24 @@ class _FakeDeliveryRepository:
             return None
         return self.occurrences.get(occurrence_id)
 
-    def revision(self, principal_id: str, revision_id: str) -> object:
+    def revision(self, principal_id: str, revision_id: str) -> GoodNotesNoteRevision | None:
         if principal_id != self.principal_id:
             return None
         return self.revisions.get(revision_id)
+
+    def latest_revision_for_occurrence(
+        self, principal_id: str, occurrence_id: str
+    ) -> GoodNotesNoteRevision | None:
+        if principal_id != self.principal_id:
+            return None
+        matches = tuple(
+            item
+            for item in self.revisions.values()
+            if item.principal_id == principal_id and item.occurrence_id == occurrence_id
+        )
+        if not matches:
+            return None
+        return max(matches, key=lambda item: (item.created_at, item.revision_id))
 
     def semantic_proposals_for_run(
         self, principal_id: str, run_id: str
@@ -756,7 +770,7 @@ def test_historical_run_uses_the_bound_revision_not_a_later_correction() -> None
         stored_run=_run(),
         changes=(change,),
         occurrences={change.occurrence_id: _occurrence("bound", page)},
-        revisions={bound.revision_id: bound, later.revision_id: later},
+        revisions={bound.revision_id: bound},
     )
     first = GoodNotesNewOnlyDelivery().deliver(
         A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN
@@ -764,12 +778,86 @@ def test_historical_run_uses_the_bound_revision_not_a_later_correction() -> None
     assert first.receipt.body is not None
     assert "synthetic original" in first.receipt.body
     assert "synthetic corrected" not in first.receipt.body
+    repo.revisions[later.revision_id] = later
     second = GoodNotesNewOnlyDelivery().deliver(
         A, RUN, DESTINATION, repository=repo, clock=lambda: LATER
     )
     assert second.receipt.replayed is True
     assert second.receipt.summary_hash == first.receipt.summary_hash
     assert second.receipt.body == first.receipt.body
+
+
+def test_first_delivery_rejects_a_superseded_revision_without_writing() -> None:
+    page = issue_stable_id("gnver", "superseded")
+    bound = _meeting_revision("superseded", "synthetic original")
+    later = replace(
+        bound,
+        revision_id=issue_stable_id("gnrev", "superseded-later"),
+        transcription="synthetic corrected",
+        created_at=LATER,
+        supersedes_revision_id=bound.revision_id,
+    )
+    change = _change("superseded", GoodNotesNoteChangeState.NEW, revision_id=bound.revision_id)
+    repo = _FakeDeliveryRepository(
+        principal_id=A,
+        stored_run=_run(),
+        changes=(change,),
+        occurrences={change.occurrence_id: _occurrence("superseded", page)},
+        revisions={bound.revision_id: bound, later.revision_id: later},
+    )
+    with pytest.raises(ValueError, match="revision is superseded"):
+        GoodNotesNewOnlyDelivery().deliver(
+            A, RUN, DESTINATION, repository=repo, clock=lambda: LATER
+        )
+    assert repo.receipts == []
+    assert repo.associations == []
+
+
+@pytest.mark.parametrize(
+    "identity_status",
+    (GoodNotesIdentityStatus.AMBIGUOUS, GoodNotesIdentityStatus.RETIRED),
+)
+def test_delivery_rejects_non_active_occurrence_without_writing(
+    identity_status: GoodNotesIdentityStatus,
+) -> None:
+    page = issue_stable_id("gnver", "inactive")
+    revision = _meeting_revision("inactive", "synthetic note")
+    change = _change("inactive", GoodNotesNoteChangeState.NEW, revision_id=revision.revision_id)
+    occurrence = replace(_occurrence("inactive", page), identity_status=identity_status)
+    repo = _FakeDeliveryRepository(
+        principal_id=A,
+        stored_run=_run(),
+        changes=(change,),
+        occurrences={change.occurrence_id: occurrence},
+        revisions={revision.revision_id: revision},
+    )
+    with pytest.raises(ValueError, match="occurrence is not active"):
+        GoodNotesNewOnlyDelivery().deliver(A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN)
+    assert repo.receipts == []
+    assert repo.associations == []
+
+
+def test_delivery_rejects_mismatched_or_missing_trace_without_writing() -> None:
+    page = issue_stable_id("gnver", "trace")
+    revision = _meeting_revision("trace", "synthetic note")
+    change = _change("trace", GoodNotesNoteChangeState.NEW, revision_id=revision.revision_id)
+    occurrence = _occurrence("trace", page)
+    mismatched = replace(revision, note_id=issue_stable_id("gnnt", "other-note"))
+    repo = _FakeDeliveryRepository(
+        principal_id=A,
+        stored_run=_run(),
+        changes=(change,),
+        occurrences={change.occurrence_id: occurrence},
+        revisions={mismatched.revision_id: mismatched},
+    )
+    with pytest.raises(ValueError, match="evidence trace does not match"):
+        GoodNotesNewOnlyDelivery().deliver(A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN)
+    repo.revisions[revision.revision_id] = revision
+    repo.occurrences[change.occurrence_id] = replace(occurrence, page_version_id=None)
+    with pytest.raises(ValueError, match="no page-version trace"):
+        GoodNotesNewOnlyDelivery().deliver(A, RUN, DESTINATION, repository=repo, clock=lambda: WHEN)
+    assert repo.receipts == []
+    assert repo.associations == []
 
 
 def test_null_revision_id_does_not_reconstruct_from_latest() -> None:

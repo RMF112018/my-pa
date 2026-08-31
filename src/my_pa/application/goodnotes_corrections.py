@@ -16,6 +16,7 @@ from typing import Protocol
 from my_pa.domain.common.identifiers import IdKind, validate_identifier
 from my_pa.domain.common.time import utc_now
 from my_pa.domain.goodnotes.models import (
+    GoodNotesIdentityStatus,
     GoodNotesNoteClass,
     GoodNotesNoteLink,
     GoodNotesNoteLinkKind,
@@ -75,11 +76,14 @@ class GoodNotesCorrectionService:
         occurrence = repository.occurrence(principal_id, occurrence_id)
         if occurrence is None:
             raise ValueError("the request names no stored GoodNotes note occurrence")
+        if occurrence.identity_status is not GoodNotesIdentityStatus.ACTIVE:
+            raise ValueError("the GoodNotes note occurrence is not eligible for correction")
         if not occurrence.geometry_key:
             raise ValueError("a GoodNotes correction is missing required geometry")
         latest = repository.latest_revision_for_occurrence(principal_id, occurrence_id)
         if latest is None:
             raise ValueError("the request names no stored GoodNotes note revision")
+        _require_correction_trace(principal_id, occurrence, latest)
         resolved_class = latest.primary_class if primary_class is None else primary_class
         already_applied = (
             latest.analyzer_name == OPERATOR_CORRECTION_ANALYZER
@@ -110,6 +114,8 @@ class GoodNotesCorrectionService:
                     occurrence_id=occurrence.occurrence_id,
                     supersedes_revision_id=latest.revision_id,
                     primary_class=resolved_class,
+                    page_version_id=latest.page_version_id or occurrence.page_version_id,
+                    snapshot_id=latest.snapshot_id or occurrence.snapshot_id,
                 )
             )
             prior = latest
@@ -122,6 +128,7 @@ class GoodNotesCorrectionService:
                 raise ValueError("the request names no stored GoodNotes note revision")
             prior = loaded
             replayed = True
+        _require_correction_trace(principal_id, occurrence, stored)
         link = _optional_link(
             principal_id=principal_id,
             note_id=occurrence.note_id,
@@ -139,6 +146,32 @@ class GoodNotesCorrectionService:
             link=stored_link,
             replayed=replayed,
         )
+
+
+def _require_correction_trace(
+    principal_id: str,
+    occurrence: GoodNotesNoteOccurrence,
+    revision: GoodNotesNoteRevision,
+) -> None:
+    if (
+        occurrence.principal_id != principal_id
+        or revision.principal_id != principal_id
+        or revision.note_id != occurrence.note_id
+        or revision.occurrence_id != occurrence.occurrence_id
+    ):
+        raise ValueError("the GoodNotes correction trace does not match its occurrence")
+    if (
+        revision.page_version_id is not None
+        and occurrence.page_version_id is not None
+        and revision.page_version_id != occurrence.page_version_id
+    ):
+        raise ValueError("the GoodNotes correction page-version trace does not match")
+    if (
+        revision.snapshot_id is not None
+        and occurrence.snapshot_id is not None
+        and revision.snapshot_id != occurrence.snapshot_id
+    ):
+        raise ValueError("the GoodNotes correction snapshot trace does not match")
 
 
 def _optional_link(

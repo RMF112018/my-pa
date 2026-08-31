@@ -28,6 +28,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesEntityDirectoryRecord,
     GoodNotesEntityKind,
     GoodNotesEntityResolution,
+    GoodNotesIdentityStatus,
     GoodNotesIngestionRun,
     GoodNotesNoteChangeState,
     GoodNotesNoteClass,
@@ -80,6 +81,10 @@ class GoodNotesDeliveryRepository(Protocol):
     ) -> GoodNotesNoteOccurrence | None: ...
 
     def revision(self, principal_id: str, revision_id: str) -> GoodNotesNoteRevision | None: ...
+
+    def latest_revision_for_occurrence(
+        self, principal_id: str, occurrence_id: str
+    ) -> GoodNotesNoteRevision | None: ...
 
     def semantic_proposals_for_run(
         self, principal_id: str, run_id: str
@@ -213,6 +218,10 @@ def new_only_preview_digest(
         revision = repository.revision(principal_id, change.revision_id)
         if revision is None:
             raise ValueError("the request names no stored GoodNotes note revision")
+        _require_delivery_trace(principal_id, run_id, change, occurrence, revision)
+        latest = repository.latest_revision_for_occurrence(principal_id, change.occurrence_id)
+        if latest is None or latest.revision_id != revision.revision_id:
+            raise ValueError("the GoodNotes delivery evidence revision is superseded")
         matched = _matching_note_unit(occurrence, proposals)
         schema_version = "" if matched is None else matched[0]
         segment: Mapping[str, object] = {} if matched is None else matched[1]
@@ -354,6 +363,7 @@ class GoodNotesNewOnlyDelivery:
         now = clock()
         summary_notes: list[NewOnlySummaryNote] = []
         associations: list[GoodNotesEntityAssociation] = []
+        superseded_revisions: list[str] = []
         for change in new_changes:
             if change.occurrence_id is None or change.note_id is None:
                 raise ValueError("the request names no stored GoodNotes ingestion run")
@@ -365,6 +375,12 @@ class GoodNotesNewOnlyDelivery:
             revision = repository.revision(principal_id, change.revision_id)
             if revision is None:
                 raise ValueError("the request names no stored GoodNotes note revision")
+            _require_delivery_trace(principal_id, run_id, change, occurrence, revision)
+            latest = repository.latest_revision_for_occurrence(principal_id, change.occurrence_id)
+            if latest is None:
+                raise ValueError("the request names no stored GoodNotes note revision")
+            if latest.revision_id != revision.revision_id:
+                superseded_revisions.append(revision.revision_id)
             matched = _matching_note_unit(occurrence, proposals)
             schema_version = "" if matched is None else matched[0]
             segment: Mapping[str, object] = {} if matched is None else matched[1]
@@ -435,6 +451,8 @@ class GoodNotesNewOnlyDelivery:
                 ),
                 associations=stored_associations,
             )
+        if superseded_revisions:
+            raise ValueError("the GoodNotes delivery evidence revision is superseded")
         written = tuple(repository.store_entity_association(item) for item in associations)
         receipt = repository.store_delivery_receipt(
             GoodNotesDeliveryReceipt(
@@ -449,6 +467,45 @@ class GoodNotesNewOnlyDelivery:
             )
         )
         return GoodNotesDeliveryResult(receipt=receipt, associations=written)
+
+
+def _require_delivery_trace(
+    principal_id: str,
+    run_id: str,
+    change: GoodNotesRunNoteChange,
+    occurrence: GoodNotesNoteOccurrence,
+    revision: GoodNotesNoteRevision,
+) -> None:
+    if (
+        change.principal_id != principal_id
+        or change.run_id != run_id
+        or occurrence.principal_id != principal_id
+        or revision.principal_id != principal_id
+        or change.occurrence_id != occurrence.occurrence_id
+        or change.note_id != occurrence.note_id
+        or revision.occurrence_id != occurrence.occurrence_id
+        or revision.note_id != occurrence.note_id
+    ):
+        raise ValueError("the GoodNotes delivery evidence trace does not match")
+    if occurrence.identity_status is not GoodNotesIdentityStatus.ACTIVE:
+        raise ValueError("the GoodNotes delivery evidence occurrence is not active")
+    if occurrence.page_version_id is None:
+        raise ValueError("the GoodNotes delivery evidence has no page-version trace")
+    if change.page_version_id is not None and change.page_version_id != occurrence.page_version_id:
+        raise ValueError("the GoodNotes delivery change page-version trace does not match")
+    if change.geometry_key is not None and change.geometry_key != occurrence.geometry_key:
+        raise ValueError("the GoodNotes delivery geometry trace does not match")
+    if (
+        revision.page_version_id is not None
+        and revision.page_version_id != occurrence.page_version_id
+    ):
+        raise ValueError("the GoodNotes delivery revision page-version trace does not match")
+    if (
+        revision.snapshot_id is not None
+        and occurrence.snapshot_id is not None
+        and revision.snapshot_id != occurrence.snapshot_id
+    ):
+        raise ValueError("the GoodNotes delivery snapshot trace does not match")
 
 
 class GoodNotesDeliveryAttemptLedger:

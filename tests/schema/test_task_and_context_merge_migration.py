@@ -47,8 +47,10 @@ def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     # `441b071bf37b` (RI-ENT-WP-03) added the entity_addresses/
     # entity_communication_methods migration on top of that; 81 since
     # `f5b06925857e` (RI-ENT-WP-04) added the entity_project_participations/
-    # taxonomy migration on top of that.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 81
+    # taxonomy migration on top of that; 82 since `17149a48fa30`
+    # (RI-ENT-WP-05) added the entity_person_organization_affiliations
+    # migration on top of that.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 82
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

@@ -247,6 +247,15 @@ class IdKind(StrEnum):
     #: their primary keys are stable business codes (`role_code`/`discipline_code`),
     #: not generated ids, the same way `entity_organization_profiles` needed none.
     ENTITY_PROJECT_PARTICIPATION = "eppt"
+    #: RI-ENT-WP-05: one temporal person-organization affiliation row
+    #: (`entity_person_organization_affiliations`). Its own prefix rather than a
+    #: reuse of `AFFILIATION` (`aff`, the WP-9 substrate's own per/org affiliation
+    #: record): a stored reference -- in particular this table's own
+    #: `superseded_by_affiliation_id` -- has to say which of the two tables it
+    #: names, and a shared prefix would make that ambiguous, the same argument
+    #: `ENTITY_NAME` makes against reusing `ENTITY_ALIAS`. Checked against every
+    #: prior member of this enum before use: `poaf` collides with none.
+    PERSON_ORGANIZATION_AFFILIATION = "poaf"
     #: WP-RI-06: the evidence and governance records. `ENTITY_OBSERVATION` names
     #: one source-bound observation that may refer to an entity and does not
     #: become one (specification section 12.2). `ENTITY_PROPOSAL` names a

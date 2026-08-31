@@ -173,6 +173,9 @@ def test_contract_prefixes_are_stable() -> None:
         # `entity_discipline_types` need no prefix of their own -- their
         # primary keys are stable business codes, not generated ids.
         "eppt",
+        # `17149a48fa30` (RI-ENT-WP-05): one person-organization affiliation
+        # row, in `entity_person_organization_affiliations`.
+        "poaf",
     }
 
 

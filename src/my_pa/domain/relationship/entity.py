@@ -61,6 +61,7 @@ __all__ = [
     "MAX_DIRECTED_REASON_CHARACTERS",
     "MAX_DIRECTED_TEXT_CHARACTERS",
     "AddressTypeCode",
+    "AffiliationTypeCode",
     "AliasState",
     "AliasType",
     "Assignment",
@@ -97,6 +98,8 @@ __all__ = [
     "NameTypeCode",
     "OrganizationKindCode",
     "ParticipationStatusCode",
+    "PersonOrganizationAffiliation",
+    "PersonOrganizationAffiliationState",
     "RelationshipState",
     "RoleBasisCode",
     "StakeholderClassCode",
@@ -1702,6 +1705,232 @@ class EntityProjectParticipation:
                 raise ValueError("a project participation cannot supersede itself")
             if self.state is not EntityProjectParticipationState.SUPERSEDED:
                 raise ValueError("a project participation names a successor only when superseded")
+
+
+class AffiliationTypeCode(StrEnum):
+    """What kind of affiliation binds a person to an organization (RI-ENT-WP-05).
+
+    Closed as of this revision, because the migration's `affiliation_type_code`
+    CHECK references these values, on the same argument every other closed
+    vocabulary on this plane is closed. **Purely categorical, deliberately not a
+    gradient** (the watchpoint `StakeholderClassCode`'s docstring already states
+    for its own field, restated here because this vocabulary is new rather than
+    renamed): each member answers *what kind* of tie a person has to an
+    organization, never *how important* that tie is, and none of the seven is
+    read as standing above or below another -- there is no code path anywhere in
+    this package that sorts, compares, or weights a member of this enum, which
+    is what keeps it on the right side of `tests/architecture/
+    test_relationship_scoring_surface_is_denied`'s RULING 1 guard.
+
+    `INDEPENDENT_CONSULTANT` is the member that represents the audit's "Mike
+    Fichera" case: a person who does project work with no employer at all.
+    Paired with `organization_entity_id IS NULL` (see
+    `PersonOrganizationAffiliation`'s docstring), this is how that case is
+    represented -- never by fabricating a placeholder organization entity to
+    satisfy a foreign key that RULING 3 and this table's own schema refuse to
+    require.
+    """
+
+    EMPLOYMENT = "employment"
+    PRINCIPAL_OWNERSHIP = "principal_ownership"
+    INDEPENDENT_CONSULTANT = "independent_consultant"
+    CONTRACTOR = "contractor"
+    BOARD_MEMBER = "board_member"
+    ADVISOR = "advisor"
+    OTHER = "other"
+
+
+class PersonOrganizationAffiliationState(StrEnum):
+    """Where one affiliation row stands.
+
+    The same three states `EntityNameState`, `EntityAddressState`,
+    `EntityCommunicationMethodState`, and `EntityProjectParticipationState` each
+    declare, and deliberately its own vocabulary rather than a shared one, for
+    the reason every one of theirs already gives: `entity_person_organization_affiliations`
+    is widened independently of any sibling family, and one shared enum would
+    make widening any of them a silent widening of all five.
+
+    **This is not "current".** `state` answers "is this row the current,
+    retired, or superseded version of this fact" -- the record-lifecycle
+    question every family on this plane asks. Whether the affiliation *itself*
+    is the person's present, ongoing tie to the organization is a different
+    question, answered by `effective_to IS NULL` (see
+    `PersonOrganizationAffiliation`'s docstring, "Current, defined one way").
+    A row can be `state = ACTIVE` (this is the authoritative record of a past
+    affiliation) with a non-null `effective_to` (that affiliation ended in
+    2019) at the same time, and that combination is the ordinary case for a
+    person's affiliation history, not a contradiction -- the same shape of
+    distinction `ParticipationStatusCode`'s docstring draws against
+    `EntityProjectParticipationState`.
+    """
+
+    ACTIVE = "active"
+    RETIRED = "retired"
+    SUPERSEDED = "superseded"
+
+
+@dataclass(frozen=True, slots=True)
+class PersonOrganizationAffiliation:
+    """One person's recorded affiliation with an organization, or with none
+    (RI-ENT-WP-05).
+
+    Closes `ENTITY-PERSON-001` ("incomplete person affiliations"): the audit's
+    Record Element Inventory names "Person job title" and "Person↔organization
+    affiliation" as representation families with no owning table before this
+    revision (see the WP-01 ownership table,
+    `docs/campaign/ROBUST-ENTITY-DATA-MODEL-20260830.md`), and its own text
+    recommends `knowledge.person_organization_affiliations` field-for-field —
+    `affiliation_id`, `person_entity_id`, `organization_entity_id` (nullable),
+    `principal_id`, `job_title`, `affiliation_type`, and a temporal
+    effective-date/state pair.
+
+    **Naming deviation, disclosed.** This class's table is
+    `entity_person_organization_affiliations`, not the audit's own
+    `person_organization_affiliations`. The reason is the one WP-04 already
+    disclosed and this revision repeats rather than rediscovers:
+    `tests/architecture/test_relationship_scoring_surface_is_denied`'s
+    `RELATIONSHIP_TABLE_PREFIXES` scans only tables whose name starts with
+    `relationship_`, `entities`, or `entity_`. `person_organization_affiliations`
+    would not start with any of those and would silently fall outside the one
+    deny rule that exists specifically to catch a smuggled scoring field —
+    exactly the hazard the prefix exists to prevent, and this family is the
+    *most* exposed one yet to bind two independent entity references at once.
+    Renaming to `entity_person_organization_affiliations` -- still an accurate,
+    conventional name matching every sibling family's `entity_<something>`
+    shape -- brings it inside the scan with zero change to the guard's
+    scanning logic, which this revision does not touch.
+
+    **`organization_entity_id` is nullable, and that nullability is the central
+    requirement of this work package.** The audit's own "Mike Fichera" case is
+    an independent consultant who does project work with no employer at all --
+    a real, common AEC-industry fact, not a data-quality gap. Representing it
+    must never involve fabricating a placeholder or sentinel organization
+    entity merely to give this column something non-null to point at (RULING
+    3's "never infer, never guess" extended here to "never fabricate to satisfy
+    a foreign key"); a `NULL` here, paired with `affiliation_type_code =
+    INDEPENDENT_CONSULTANT`, states the absence directly. A person's direct
+    project participation in this case is carried by `entity_project_
+    participations` (RI-ENT-WP-04) against `participant_entity_id` naming the
+    person directly -- this affiliation record and that participation record
+    are independent facts about the same person, and neither requires the
+    other to exist.
+
+    **`entities.entity_type` expectations are domain invariants, not CHECK
+    constraints**, on the same non-enforcement basis `EntityOrganizationProfile`
+    and `EntityProjectParticipation` already state for their own entity
+    references: PostgreSQL cannot express a CHECK that reads another table's
+    row. `person_entity_id` is expected to name an entity whose `entity_type`
+    is `PERSON`; `organization_entity_id`, when non-null, is expected to name
+    one whose `entity_type` is `ORGANIZATION`. The writer/repository layer that
+    inserts a row here is responsible for both, exactly as it already is for
+    `project_entity_id`/`participant_entity_id` and for
+    `entity_organization_profiles.entity_id`.
+
+    **Current, defined one way.** A person may accumulate many affiliation rows
+    over a career -- past employers, past consulting engagements -- and at any
+    moment at most one of them is the person's *present* tie. This revision
+    makes `effective_to IS NULL` the single source of truth for "current",
+    following the open-ended-range convention `entity_assignments`
+    (`Assignment.effective_to`) already uses for the same question on that
+    family, rather than inventing a second, independently-settable `is_current`
+    boolean that could disagree with the date range. **This is a specific
+    product decision, stated here because it is not an obvious given: a person
+    may hold many past affiliations, but at most one open-ended (`effective_to
+    IS NULL`) affiliation per `(person_entity_id, principal_id)` at a time.**
+    The partial unique index `an_open_ended_affiliation_is_unique_per_person`
+    enforces this at the database, the same shape `entity_names`'s
+    "one preferred name per type" index enforces a different at-most-one rule;
+    a second, already-closed (non-null `effective_to`) affiliation for the same
+    person is unaffected and freely coexists as history.
+
+    **Never a confidence field (RULING 1).** `affiliation_type_code` is a
+    purely categorical vocabulary (`AffiliationTypeCode`) with no member that
+    ranks, scores, or grades a person's tie to an organization; see that
+    class's docstring for why the type itself carries no gradient and the
+    watchpoint it exists to satisfy. No "assertion"/"confidence"/"evidence"
+    dimension is added to this record: the audit's own Record Element Inventory
+    rows for this family carry no such column this revision's scope covers
+    (`docs/campaign/...`, RI-ENT-WP-07 owns assertion/provenance binding for
+    every family on this plane, this one included, and has not landed).
+
+    **No `created_at`, matching this plane's temporal record-family shape.**
+    `EntityName`, `EntityAddress`, `EntityCommunicationMethod`, and
+    `EntityProjectParticipation` -- every multi-row-per-entity temporal record
+    family on this plane -- carry `updated_at`/`retired_at` (both nullable) and
+    no separate `created_at`; only `EntityOrganizationProfile`, a one-row-per-
+    entity *profile* rather than a history, carries both timestamps NOT NULL.
+    This family is a history (a person may hold many affiliation rows over
+    time), so it follows the temporal-family shape rather than the profile
+    shape.
+
+    **Merge/split.** Not yet wired into
+    `my_pa.application.identity_correction`, under the same RI-ENT-WP-06
+    deferral as `EntityName`, `EntityOrganizationProfile`, `EntityAddress`,
+    `EntityCommunicationMethod`, and `EntityProjectParticipation` above, and for
+    the same reason: no command or MCP capability in this increment writes this
+    table outside test fixtures. **This family is more exposed than any of its
+    five predecessors**, because it binds *two* independent entity references
+    -- `person_entity_id` and, when populated, `organization_entity_id` -- and a
+    merge could in principle reparent either one, or both, in the same
+    operation; see the campaign document's "Merge/split disposition" section,
+    extended by this revision to a sixth family, for what happens to a row
+    today when each side is merged away.
+    """
+
+    affiliation_id: str
+    principal_id: str
+    person_entity_id: str
+    affiliation_type_code: AffiliationTypeCode
+    organization_entity_id: str | None = None
+    job_title: str | None = None
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+    state: PersonOrganizationAffiliationState = PersonOrganizationAffiliationState.ACTIVE
+    version: int = 1
+    updated_at: datetime | None = None
+    retired_at: datetime | None = None
+    superseded_by_affiliation_id: str | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.affiliation_id, IdKind.PERSON_ORGANIZATION_AFFILIATION)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.person_entity_id, IdKind.ENTITY)
+        if self.organization_entity_id is not None:
+            validate_identifier(self.organization_entity_id, IdKind.ENTITY)
+            if self.organization_entity_id == self.person_entity_id:
+                raise ValueError("a person affiliation organization is not the person")
+        if not isinstance(self.affiliation_type_code, AffiliationTypeCode):
+            raise ValueError("a person affiliation has a closed affiliation type")
+        if self.job_title is not None and not self.job_title.strip():
+            raise ValueError("a person affiliation job title is not blank when present")
+        if self.effective_from is not None:
+            ensure_utc(self.effective_from)
+        if self.effective_to is not None:
+            ensure_utc(self.effective_to)
+        if (
+            self.effective_from is not None
+            and self.effective_to is not None
+            and self.effective_to < self.effective_from
+        ):
+            raise ValueError("a person affiliation cannot end before it begins")
+        if not isinstance(self.state, PersonOrganizationAffiliationState):
+            raise ValueError("a person affiliation has a closed state")
+        if self.version < 1:
+            raise ValueError("a person affiliation version is a positive integer")
+        if self.updated_at is not None:
+            ensure_utc(self.updated_at)
+        if self.retired_at is not None:
+            ensure_utc(self.retired_at)
+            if self.state is PersonOrganizationAffiliationState.ACTIVE:
+                raise ValueError("a person affiliation is retired only once it leaves service")
+        if self.superseded_by_affiliation_id is not None:
+            validate_identifier(
+                self.superseded_by_affiliation_id, IdKind.PERSON_ORGANIZATION_AFFILIATION
+            )
+            if self.superseded_by_affiliation_id == self.affiliation_id:
+                raise ValueError("a person affiliation cannot supersede itself")
+            if self.state is not PersonOrganizationAffiliationState.SUPERSEDED:
+                raise ValueError("a person affiliation names a successor only when superseded")
 
 
 @dataclass(frozen=True, slots=True)

@@ -80,16 +80,18 @@ implements only:
   (`knowledge.entity_addresses`, `knowledge.entity_communication_methods`);
 - **(E) RI-ENT-WP-04** — project participation model
   (`knowledge.entity_project_participations`, `knowledge.entity_role_types`,
-  `knowledge.entity_discipline_types`).
+  `knowledge.entity_discipline_types`);
+- **(F) RI-ENT-WP-05** — person affiliation integration
+  (`knowledge.entity_person_organization_affiliations`).
 
-RI-ENT-WP-05 through RI-ENT-WP-13 (person affiliation, relationship-graph
-expansion, assertion/provenance binding, repository/service layer beyond
-WP-02/WP-04, resolution/search vNext, MCP rich-read and mutation contracts,
-legacy migration/backfill, and the full TBR completeness fixture) are
-**explicitly out of scope for this increment** and remain future work,
-ordered as the source audit orders them (section P). Nothing in this
-increment implements them, and nothing in this increment's schema, domain
-code, or tests assumes they exist.
+RI-ENT-WP-06 through RI-ENT-WP-13 (relationship-graph expansion, assertion/
+provenance binding, repository/service layer beyond WP-02/WP-04/WP-05,
+resolution/search vNext, MCP rich-read and mutation contracts, legacy
+migration/backfill, and the full TBR completeness fixture) are **explicitly
+out of scope for this increment** and remain future work, ordered as the
+source audit orders them (section P). Nothing in this increment implements
+them, and nothing in this increment's schema, domain code, or tests assumes
+they exist.
 
 **Still prohibited and not covered by this or any future increment of this
 campaign without separate, explicit operator authorization:** production
@@ -111,7 +113,7 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | Not in scope (`RI-ENT-WP-06`); `EntityRelationshipType` untouched |
 | `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. No MCP capability or write path exists yet (`RI-ENT-WP-10`/`WP-11`) — see "Merge/split disposition" below |
 | `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | Partially addressed for organization legal identity only, via `legal_identity_status_code` (not a confidence field — see Ruling 1); full assertion/provenance binding is `RI-ENT-WP-07` |
-| `ENTITY-PERSON-001` | High | Incomplete person affiliations | Not in scope (`RI-ENT-WP-05`) |
+| `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `effective_to IS NULL` denoting "current") |
 | `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Unblocked, not closed** — `entity_names` now exists as the structural prerequisite; resolution/search changes are `RI-ENT-WP-09` |
 | `ENTITY-STATE-001` | High | No canonicalization/review state distinct from lifecycle | Design decision recorded in RI-ENT-WP-01 below (`canonicalization_state_code`, separate 1:1 record, deferred); not implemented this increment |
 | `MCP-CONTRACT-001` | Critical | No rich structured profile read | Not in scope (`RI-ENT-WP-10`) |
@@ -129,7 +131,7 @@ Preserved from the source audit; status reflects this increment only.
 | WP-02 | Taxonomy and typed-name model | **Delivered (partial)** — `entity_names`, `entity_organization_profiles`; role/discipline/relationship taxonomies deferred to WP-04/06 |
 | WP-03 | Address and communication record families | **Delivered** — see below |
 | WP-04 | Project participation model | **Delivered** — see below |
-| WP-05 | Person affiliation integration | Deferred |
+| WP-05 | Person affiliation integration | **Delivered** — see below |
 | WP-06 | Corporate/entity relationship graph expansion | Deferred |
 | WP-07 | Assertion/confidence/provenance binding | Deferred (see Ruling 1 — no scalar confidence will be added under this name) |
 | WP-08 | Repository/domain services and validation | Deferred |
@@ -174,7 +176,7 @@ sharing a representation share an owner by construction.
 | Historical juristic entity (a *different* legal person than its successor) | A separate `entities` row, linked by relationship — never a name row | WP-06 (relationship taxonomy must admit the lineage edge) for the *edge*; the *entity* row itself needs no new table | Architecture rule recorded now; no lineage edge type exists yet (`EntityRelationshipType` untouched) |
 | Project address / legal principal address / HQ / regional or known office / city hall | `entity_addresses` | WP-03 | Deferred |
 | Phone / website / domain / email as a contact channel | `entity_communication_methods` | WP-03 | Deferred |
-| Key/known contact, with title, at a project or organization | Person entity + `person_organization_affiliations` + project participation | WP-05, WP-04 | Partial — the project-participation half (`entity_project_participations`) is delivered by WP-04; `person_organization_affiliations` remains deferred to WP-05 |
+| Key/known contact, with title, at a project or organization | Person entity + `entity_person_organization_affiliations` + project participation | WP-05, WP-04 | **Delivered** — the project-participation half (`entity_project_participations`) was delivered by WP-04; the affiliation/title half (`entity_person_organization_affiliations.job_title`) is delivered by WP-05 |
 | Relationship / parent / practice / acquisition lineage / technical-review / seller-developer-SPV / utility-authority edge | Extensible `entity_relationships` taxonomy (successor to the frozen 15-member `EntityRelationshipType`) | WP-06 | Deferred; `EntityRelationshipType` untouched this increment |
 | Project role / discipline / scope / stakeholder side / stakeholder tier / role basis / participation state | `entity_project_participations` — named `entity_project_participations` rather than the audit's own `project_entity_participations`; see "Naming deviations" under RI-ENT-WP-04 below | WP-04 | **Delivered** |
 | "Confidence" (register label) at any dimension (role/scope/participation/legal-identity) | **Not a scalar confidence field anywhere** — discrete `assertion_status`/`role_basis_code`/`legal_identity_status_code`-family vocabularies, one per dimension, bound to the fact/edge/participation that carries it | WP-02 delivers `legal_identity_status_code`; the rest is WP-07 | Partial — RULING 1 governs all of it, see below |
@@ -182,7 +184,7 @@ sharing a representation share an owner by construction.
 | Import readiness (READY/FLAG/HOLD/DO NOT IMPORT), canonicalization state distinct from lifecycle | A new, separate state record or nullable FK on `entities` (`canonicalization_state_code`) — explicitly **not** an overload of `entities.status` | Design decision recorded now (`ENTITY-STATE-001`); table not created this increment | Deferred |
 | Duplicate/reconciliation state, merge/split ledgers | Existing `entity_merge_records`, `entity_identity_effects`/`entity_identity_previews`/`entity_identity_operations`, `entity_identity_preview_ambiguities`, `entity_identity_ambiguity_settlements` | Existing (RI remediation campaign, PR #164) | Unchanged; `entity_names`/`entity_organization_profiles` are **not yet wired in** — see "Merge/split disposition" |
 | "One organization with aliases/historical legal [names]" (register's own instruction to the reader) | Not a field at all — a mapping/architecture rule | This document (WP-01) | Delivered as this table |
-| Independent consultant, no organization FK required | Existing nullable `scope_entity_id`/nullable organization pattern already proven by `Assignment` | WP-04/WP-05 reuse the existing pattern | Deferred (pattern only) |
+| Independent consultant, no organization FK required | Existing nullable `scope_entity_id`/nullable organization pattern already proven by `Assignment` | WP-04/WP-05 reuse the existing pattern | **Delivered** — `entity_person_organization_affiliations.organization_entity_id` is nullable, closing the audit's "Mike Fichera" case without a placeholder organization entity (WP-05) |
 
 Every one of the audit's 96 rows falls into exactly one family above by its
 own "Proposed representation" text, and every family has exactly one owner
@@ -496,13 +498,108 @@ increment.
   stable business codes, the same way `entity_organization_profiles` needed
   none.
 
+## RI-ENT-WP-05 — person affiliation integration
+
+**Objective** (source audit): give the entity plane a normalized, temporal
+record of a person's affiliation with an organization — or with none — closing
+`ENTITY-PERSON-001` ("incomplete person affiliations": the generalized entity
+plane could not carry a job title, an affiliation kind, or a person's
+organization-less independent-consultant status). **Delivered this
+increment.** `entity_assignments` itself is untouched — not widened, not
+backfilled, not repurposed — for the same reason `entity_project_participations`
+left it alone (RI-ENT-WP-04): a dedicated table is warranted precisely because
+the generic assignment record cannot carry these dimensions.
+
+### `entity_person_organization_affiliations`
+
+Mirrors `entity_project_participations`'s shape (opaque primary key,
+principal-scoped self-referencing supersession, three-state lifecycle
+`PersonOrganizationAffiliationState` — its own vocabulary, for the reason
+every sibling family's state enum already gives against sharing one), with
+two entity references instead of one: `person_entity_id` (expected
+`entity_type = 'person'`) and `organization_entity_id` (expected
+`entity_type = 'organization'` **when non-null**). Both type expectations are
+domain invariants the writer enforces, not CHECKs — PostgreSQL cannot express
+a CHECK that reads another table's row, the same non-enforcement already
+accepted for `entity_organization_profiles`'s `entity_type = 'organization'`
+expectation and `entity_project_participations`'s `project_entity_id`/
+`participant_entity_id` expectations. A CHECK
+(`organization_entity_id IS NULL OR organization_entity_id <> person_entity_id`)
+refuses the one case SQL can see directly: a person cannot be its own
+organization.
+
+**`organization_entity_id` is NULLABLE, and that is the central requirement of
+this work package.** The audit's own "Mike Fichera" case is an independent
+consultant who does project work with no employer at all. Representing that
+must never involve fabricating a placeholder or sentinel organization entity
+merely to satisfy a foreign key — RULING 3's "never infer, never guess"
+extended here to "never fabricate to satisfy a foreign key" — and a `NULL`
+here, paired with `affiliation_type_code = 'independent_consultant'`, states
+the absence directly.
+`tests/database/test_person_organization_affiliations_independent_consultant_fixture.py`
+proves this at the server: it asserts the exact organization-entity count in
+the fixture's Principal scope, so no placeholder organization is ever created
+as a side effect.
+
+`job_title` is independently nullable free text (the audit's "Person job
+title" element), with the usual blank-when-present CHECK. `affiliation_type_code`
+(`AffiliationTypeCode`: `employment`/`principal_ownership`/
+`independent_consultant`/`contractor`/`board_member`/`advisor`/`other`) is a
+new, purely categorical closed vocabulary — never a gradient, per the
+watchpoint carried from the WP-04 review: none of the seven members reads as
+ranking another, and nothing in this package's code sorts, compares, or
+weights a member of it (RULING 1).
+
+**"Current" is `effective_to IS NULL`, made unambiguous per person by a
+partial unique index — a specific product decision, stated explicitly rather
+than left implicit.** A person may accumulate many affiliation rows over a
+career, and this revision makes the open-ended date range the single source
+of truth for "this is the person's present tie," following the convention
+`entity_assignments` (`Assignment.effective_to`) already uses for the same
+question, rather than inventing a second, independently-settable `is_current`
+boolean that could disagree with the date range. The partial unique index
+`an_open_ended_affiliation_is_unique_per_person` — on `(principal_id,
+person_entity_id)` where `state = 'active' AND effective_to IS NULL` — is what
+makes this hold at the database: a person may hold many past (already-closed)
+affiliations, but at most one open-ended one at a time.
+
+### Naming deviation, disclosed
+
+The audit's own text names this table `person_organization_affiliations`.
+This revision creates it as `entity_person_organization_affiliations`
+instead, for the same reason and by the same argument RI-ENT-WP-04's own
+naming deviation gives: `tests/architecture/test_relationship_scoring_surface_is_denied`'s
+`RELATIONSHIP_TABLE_PREFIXES` scan (`"relationship_"`, `"entities"`,
+`"entity_"`) would not reach a table named `person_organization_affiliations`,
+and this family is the *most* exposed one yet to carry a smuggled scoring
+field, since it is where the audit's own text discusses a person's job title
+and organizational standing. `entity_person_organization_affiliations` is
+inside the scan with zero change to the guard's scanning logic, and matches
+every sibling family's `entity_<something>` naming. The primary-key column is
+nonetheless literally `affiliation_id`, matching the audit's own field name.
+
+### Delivered artifacts
+
+- Migration `17149a48fa30` (`down_revision = f5b06925857e`), purely additive:
+  one new table, no altered column or constraint on any existing table.
+- `src/my_pa/domain/relationship/entity.py`: `AffiliationTypeCode`,
+  `PersonOrganizationAffiliationState`, `PersonOrganizationAffiliation`.
+- `src/my_pa/infrastructure/persistence/tables.py`:
+  `entity_person_organization_affiliations` (Core `Table` definition for
+  runtime access; the migration itself is written out in raw DDL per
+  `D-48`/`D-69`).
+- `src/my_pa/domain/common/identifiers.py`:
+  `IdKind.PERSON_ORGANIZATION_AFFILIATION = "poaf"` — does not collide with
+  any prior member of `IdKind`, checked before use.
+
 ## Merge/split disposition (RULING 2)
 
 `entity_names`, `entity_organization_profiles`, `entity_addresses`,
-`entity_communication_methods`, and, as of this increment,
-`entity_project_participations` are all Entity-bound record families and are
-therefore candidates for the merge/split ambiguity model that landed in
-`main@0e24018` (`src/my_pa/domain/relationship/identity_correction.py`'s
+`entity_communication_methods`, `entity_project_participations`, and, as of
+this increment, `entity_person_organization_affiliations` are all
+Entity-bound record families and are therefore candidates for the merge/split
+ambiguity model that landed in `main@0e24018`
+(`src/my_pa/domain/relationship/identity_correction.py`'s
 `IdentityEffectFamily`/`_DISPOSITIONS_BY_FAMILY`, and
 `src/my_pa/application/identity_correction.py`'s reparenting/collision/
 ambiguity-discovery machinery).
@@ -517,23 +614,24 @@ reasoned exclusion, not an oversight, and is recorded here so a future reader
 does not have to re-derive it.
 
 **Decision: deferred, not wired in, and the reason is recorded here rather
-than left implicit — for all five Entity-bound families, as of
-RI-ENT-WP-04.**
+than left implicit — for all six Entity-bound families, as of
+RI-ENT-WP-05.**
 
-1. **No live write path exists yet, for any of the five.** This increment
-   (like WP-02 and WP-03 before it) ships no MCP capability and no
+1. **No live write path exists yet, for any of the six.** This increment
+   (like WP-02, WP-03, and WP-04 before it) ships no MCP capability and no
    application command that writes `entity_names`,
    `entity_organization_profiles`, `entity_addresses`,
-   `entity_communication_methods`, or `entity_project_participations` in
-   ordinary product use — only test fixtures write them directly through the
-   persistence layer. A merge executed today cannot encounter a populated row
-   of any of the five through any caller a real request could reach.
+   `entity_communication_methods`, `entity_project_participations`, or
+   `entity_person_organization_affiliations` in ordinary product use — only
+   test fixtures write them directly through the persistence layer. A merge
+   executed today cannot encounter a populated row of any of the six through
+   any caller a real request could reach.
 2. **The execution machinery is genuinely bespoke per family**, not
    config-driven: `application/identity_correction.py` carries dedicated
    reparenting functions (`_reparented_alias`, `_reparented_identifier`) and
    dedicated collision-detection logic specific to each table's uniqueness
    rules, across roughly 3,300 carefully-reasoned lines. Extending it
-   correctly for five more families — including working out what a merge of
+   correctly for six more families — including working out what a merge of
    two organization entities that each carry a profile should do, since
    `entity_organization_profiles` is a 1:1 record a merge cannot simply
    duplicate, what a merge should do with two entities that each carry an
@@ -546,24 +644,62 @@ RI-ENT-WP-04.**
    independent entity references, and a merge could in principle touch
    either, or both, in the same operation) — is substantial, separable work,
    not a small addition to any one increment.
-3. **What a merge does today, absent wiring:** if a future write path
-   populates any of the five tables before this wiring lands, a merge that
+3. **`entity_person_organization_affiliations` restates the same two-reference
+   wrinkle a sixth time, and is more sensitive than any of its five
+   predecessors because the two references name different *kinds* of entity.**
+   `person_entity_id` and `organization_entity_id` are the table's two
+   independent entity references, exactly as `project_entity_id` and
+   `participant_entity_id` are `entity_project_participations`'s, and a merge
+   could in principle reparent either one, or both, in the same operation —
+   stated explicitly rather than merely implied, per this campaign's own
+   instruction to name what happens on each side separately:
+   - **When `person_entity_id` is merged away:** the affiliation row is not
+     reparented to the surviving person entity. It remains bound to the
+     merged-away `entity_id`, which stays resolvable through
+     `entities.superseded_by_entity_id` but is not reachable by querying the
+     survivor's affiliation history directly — the survivor's job title and
+     organization ties recorded under its own `entity_id`, if any, are
+     unaffected and undisturbed, but the merged-away person's affiliation
+     history does not follow the redirect.
+   - **When `organization_entity_id` is merged away:** the affiliation row's
+     nullable organization reference is likewise not reparented to the
+     surviving organization entity. The affiliated person's row keeps
+     pointing at the merged-away organization's `entity_id`, resolvable
+     through the same redirect but not surfaced when a caller looks up the
+     survivor organization's affiliated people. A merge of an organization
+     that is the *survivor* side of the merge is unaffected in the other
+     direction: nothing here moves an affiliation row from the merged-away
+     organization onto the survivor, which is exactly the reparenting
+     decision WP-06's wiring has to make, and it is not made by this
+     increment either implicitly or by omission.
+   - **Both may happen in the same operation** when a single merge redirects
+     both the person side of one affiliation row and the organization side of
+     another (or, in the degenerate case, both sides of the same row) — the
+     same "either, or both" caveat item 2 already states for
+     `entity_project_participations`'s two references, restated here because
+     this family binds two entities of *different* types rather than two of
+     the same type, which is a new wrinkle WP-06's design has to account for
+     separately from the symmetric project/participant case.
+4. **What a merge does today, absent wiring:** if a future write path
+   populates any of the six tables before this wiring lands, a merge that
    redirects the owning entity does not reparent, discover ambiguity for, or
    invert those rows. They remain bound to the merged-away `entity_id`, which
    stays resolvable through `entities.superseded_by_entity_id` but is not
    reachable by querying the survivor's names, profile, addresses,
-   communication methods, or project participations directly. This is
-   recorded as a known limitation in all five classes' docstrings
+   communication methods, project participations, or affiliations directly.
+   This is recorded as a known limitation in all six classes' docstrings
    (`src/my_pa/domain/relationship/entity.py`) and here.
-4. **Deferred to `RI-ENT-WP-06`**, which the source audit's own dependency
+5. **Deferred to `RI-ENT-WP-06`**, which the source audit's own dependency
    ordering already binds to "coordinate merge/split effects" — not to the
-   taxonomy or record-family schema work WP-02, WP-03, and WP-04 deliver.
+   taxonomy or record-family schema work WP-02, WP-03, WP-04, and WP-05
+   deliver.
 
 **Blocking dependency, stated plainly:** `WP-08` (repositories/domain
 services) and `WP-11` (MCP mutation contracts) **may not ship a write path
-for any of these five families** — `entity_names`,
+for any of these six families** — `entity_names`,
 `entity_organization_profiles`, `entity_addresses`,
-`entity_communication_methods`, or `entity_project_participations` —
+`entity_communication_methods`, `entity_project_participations`, or
+`entity_person_organization_affiliations` —
 **until the merge/split wiring in `WP-06` lands.** A write path that
 outpaces that wiring would let ordinary product use populate a row a merge
 cannot reparent, discover ambiguity for, or invert — silently reintroducing
@@ -582,6 +718,9 @@ against its own disposable database, never the configured one):
 
 - `.venv/bin/python -m pytest tests/unit/test_entity_name_and_organization_profile_domain.py -q`
 - `.venv/bin/python -m pytest tests/schema/test_entity_names_and_organization_profile_migration.py -q`
+- `.venv/bin/python -m pytest tests/unit/test_person_organization_affiliation_domain.py -q`
+- `.venv/bin/python -m pytest tests/schema/test_person_organization_affiliations_migration.py -q`
+- `.venv/bin/python -m pytest tests/database/test_person_organization_affiliations_independent_consultant_fixture.py -q`
 - `.venv/bin/python -m pytest tests/relationship/test_relationship_domain.py -q`
 - `.venv/bin/python -m pytest tests/architecture/test_relationship_scoring_surface_is_denied.py -q`
 - `.venv/bin/python -m pytest tests/architecture/ -q`
@@ -596,7 +735,9 @@ restated here, so this document cannot drift ahead of what actually ran.
 - [`docs/specs/relationship-intelligence-v0.2.md`](../specs/relationship-intelligence-v0.2.md) — current governing requirements source; this campaign extends its entity model, does not supersede it.
 - [`docs/specs/relationship-memory-v0.1.md`](../specs/relationship-memory-v0.1.md) — the sibling record family this campaign's naming and lifecycle conventions follow.
 - [`docs/architecture/module-boundaries.md`](../architecture/module-boundaries.md) — the layering this campaign's domain/persistence split honors.
-- `src/my_pa/domain/relationship/entity.py` — `EntityName`, `EntityNameState`, `NameTypeCode`, `EntityOrganizationProfile`, `OrganizationKindCode`, `LegalIdentityStatusCode`, `EntityAddress`, `EntityAddressState`, `AddressTypeCode`, `EntityCommunicationMethod`, `EntityCommunicationMethodState`, `CommunicationMethodTypeCode`, `CommunicationUsageContextCode`, `CommunicationVerificationStatusCode`.
-- `src/my_pa/infrastructure/persistence/tables.py` — `entity_names`, `entity_organization_profiles`, `entity_addresses`, `entity_communication_methods`.
+- `src/my_pa/domain/relationship/entity.py` — `EntityName`, `EntityNameState`, `NameTypeCode`, `EntityOrganizationProfile`, `OrganizationKindCode`, `LegalIdentityStatusCode`, `EntityAddress`, `EntityAddressState`, `AddressTypeCode`, `EntityCommunicationMethod`, `EntityCommunicationMethodState`, `CommunicationMethodTypeCode`, `CommunicationUsageContextCode`, `CommunicationVerificationStatusCode`, `EntityProjectParticipation`, `EntityProjectParticipationState`, `RoleBasisCode`, `StakeholderSideCode`, `StakeholderClassCode`, `ParticipationStatusCode`, `PersonOrganizationAffiliation`, `PersonOrganizationAffiliationState`, `AffiliationTypeCode`.
+- `src/my_pa/infrastructure/persistence/tables.py` — `entity_names`, `entity_organization_profiles`, `entity_addresses`, `entity_communication_methods`, `entity_project_participations`, `entity_role_types`, `entity_discipline_types`, `entity_person_organization_affiliations`.
 - `migrations/versions/20260830_7e114f822af2_add_entity_names_and_organization_.py` (RI-ENT-WP-02).
 - `migrations/versions/20260830_441b071bf37b_add_entity_addresses_and_communication_.py` (RI-ENT-WP-03).
+- `migrations/versions/20260830_f5b06925857e_add_entity_project_participations_and_.py` (RI-ENT-WP-04).
+- `migrations/versions/20260830_17149a48fa30_add_entity_person_organization_affiliat.py` (RI-ENT-WP-05).

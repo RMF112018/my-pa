@@ -251,28 +251,43 @@ def test_the_revision_runs_empty_to_head_and_head_to_empty(disposable_database: 
 
 
 @pytest.mark.database
-def test_downgrading_one_step_removes_exactly_these_three_tables(migrated_engine: Engine) -> None:
-    """Additive: everything below this revision is untouched by its downgrade."""
-    before = _tables(migrated_engine)
-    assert before >= NEW_TABLES
+def test_downgrading_one_step_removes_exactly_these_three_tables(
+    disposable_database: str,
+) -> None:
+    """Additive: everything below this revision is untouched by its downgrade.
 
-    command.downgrade(_config(), PREVIOUS_REVISION)
-    after = _tables(migrated_engine)
+    Upgrades to `REVISION` itself rather than to `"head"` (unlike this
+    module's shared `migrated_engine` fixture): RI-ENT-WP-05 stacked
+    `17149a48fa30` on top of this revision, so `"head"` no longer names this
+    revision's own position in the chain, and this test's subject is
+    specifically *this* revision's own downgrade -- one step below it, not
+    one step below whatever the chain's head happens to be today.
+    """
+    engine = create_database_engine(disposable_database)
+    try:
+        command.upgrade(_config(), REVISION)
+        before = _tables(engine)
+        assert before >= NEW_TABLES
 
-    assert before - after == {
-        "entity_project_participations",
-        "entity_discipline_types",
-        "entity_role_types",
-    }
-    # The rest of the entity plane, including WP-02's and WP-03's tables,
-    # survives the downgrade of this revision alone.
-    assert {
-        "entities",
-        "entity_names",
-        "entity_organization_profiles",
-        "entity_addresses",
-        "entity_communication_methods",
-    } <= after
+        command.downgrade(_config(), PREVIOUS_REVISION)
+        after = _tables(engine)
+
+        assert before - after == {
+            "entity_project_participations",
+            "entity_discipline_types",
+            "entity_role_types",
+        }
+        # The rest of the entity plane, including WP-02's and WP-03's tables,
+        # survives the downgrade of this revision alone.
+        assert {
+            "entities",
+            "entity_names",
+            "entity_organization_profiles",
+            "entity_addresses",
+            "entity_communication_methods",
+        } <= after
+    finally:
+        engine.dispose()
 
 
 @pytest.mark.database

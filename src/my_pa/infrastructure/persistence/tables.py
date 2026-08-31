@@ -185,6 +185,7 @@ from my_pa.domain.policy.decision import POLICY_VERSION_PATTERN, DenialReason
 from my_pa.domain.relationship.entity import (
     ARCHIVABLE_STATUSES,
     AddressTypeCode,
+    AffiliationTypeCode,
     AliasState,
     AliasType,
     AssignmentState,
@@ -204,6 +205,7 @@ from my_pa.domain.relationship.entity import (
     NameTypeCode,
     OrganizationKindCode,
     ParticipationStatusCode,
+    PersonOrganizationAffiliationState,
     RelationshipState,
     RoleBasisCode,
     StakeholderClassCode,
@@ -3846,6 +3848,138 @@ entity_project_participations = Table(
         "role_code",
         unique=True,
         postgresql_where=text("state = 'active'"),
+    ),
+)
+
+#: RI-ENT-WP-05: one person's recorded affiliation with an organization, or
+#: with none.  Closes `ENTITY-PERSON-001`.  Named
+#: `entity_person_organization_affiliations` rather than the audit's own
+#: `person_organization_affiliations`, a disclosed naming deviation on the same
+#: basis `entity_project_participations` already gives -- see
+#: `PersonOrganizationAffiliation`'s docstring and the migration's module
+#: docstring for the full reasoning.  `organization_entity_id` is nullable and
+#: never backed by a placeholder/sentinel organization entity -- see the class
+#: docstring for the independent-consultant case this makes representable.
+#: "Current" is `effective_to IS NULL`, made unambiguous per person by the
+#: partial unique index below.
+entity_person_organization_affiliations = Table(
+    "entity_person_organization_affiliations",
+    METADATA,
+    Column("affiliation_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column(
+        "person_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column(
+        "organization_entity_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entities.entity_id", ondelete="CASCADE"),
+    ),
+    Column("job_title", Text),
+    Column("affiliation_type_code", Text, nullable=False),
+    Column("effective_from", DateTime(timezone=True)),
+    Column("effective_to", DateTime(timezone=True)),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("updated_at", DateTime(timezone=True)),
+    Column("retired_at", DateTime(timezone=True)),
+    Column(
+        "superseded_by_affiliation_id",
+        Text,
+        ForeignKey(f"{SCHEMA}.entity_person_organization_affiliations.affiliation_id"),
+    ),
+    _is_identifier("affiliation_id", IdKind.PERSON_ORGANIZATION_AFFILIATION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of(
+        "affiliation_type_code",
+        AffiliationTypeCode,
+        name="a_person_affiliation_type_is_known",
+    ),
+    _one_of(
+        "state",
+        PersonOrganizationAffiliationState,
+        name="a_person_affiliation_state_is_known",
+    ),
+    CheckConstraint(
+        "job_title IS NULL OR length(trim(job_title)) > 0",
+        name="a_person_affiliation_job_title_is_not_blank",
+    ),
+    CheckConstraint(
+        "effective_to IS NULL OR effective_from IS NULL OR effective_to >= effective_from",
+        name="a_person_affiliation_ends_after_it_starts",
+    ),
+    CheckConstraint("version >= 1", name="a_person_affiliation_version_is_positive"),
+    CheckConstraint(
+        "retired_at IS NULL OR state <> 'active'",
+        name="a_person_affiliation_is_retired_only_once_it_leaves_service",
+    ),
+    CheckConstraint(
+        "superseded_by_affiliation_id IS NULL OR state = 'superseded'",
+        name="a_person_affiliation_names_a_successor_only_when_superseded",
+    ),
+    CheckConstraint(
+        "superseded_by_affiliation_id IS NULL OR superseded_by_affiliation_id <> affiliation_id",
+        name="a_person_affiliation_does_not_supersede_itself",
+    ),
+    # The one case SQL can see directly: a person cannot be affiliated with
+    # itself as its own organization. The domain invariant that
+    # person_entity_id/organization_entity_id name entities of entity_type
+    # 'person'/'organization' respectively is NOT expressible as a CHECK (it
+    # reads another table's row) and is enforced by the writer -- see
+    # PersonOrganizationAffiliation's docstring.
+    CheckConstraint(
+        "organization_entity_id IS NULL OR organization_entity_id <> person_entity_id",
+        name="a_person_affiliation_organization_is_not_the_person",
+    ),
+    UniqueConstraint(
+        "affiliation_id",
+        "principal_id",
+        name="a_person_affiliation_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["person_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="a_person_affiliation_names_a_person_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["organization_entity_id", "principal_id"],
+        [f"{SCHEMA}.entities.entity_id", f"{SCHEMA}.entities.principal_id"],
+        ondelete="CASCADE",
+        name="a_person_affiliation_names_an_organization_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["superseded_by_affiliation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_person_organization_affiliations.affiliation_id",
+            f"{SCHEMA}.entity_person_organization_affiliations.principal_id",
+        ],
+        name="a_person_affiliation_is_superseded_within_its_principal",
+    ),
+    Index("entity_person_organization_affiliations_by_principal", "principal_id"),
+    # The (person, current state) index: the shape almost every read of this
+    # table takes -- "this person's affiliation history" and similar.
+    Index(
+        "entity_person_organization_affiliations_by_person_state",
+        "person_entity_id",
+        "state",
+    ),
+    # At most one OPEN-ENDED (effective_to IS NULL) active affiliation per
+    # person: a person may accumulate many past affiliations, but at most one
+    # of them may be the person's present, ongoing tie at any moment -- this is
+    # a specific product decision (see the class docstring, "Current, defined
+    # one way"), not an obvious given, and this is what makes it unambiguous at
+    # the database. A second, already-closed (non-null effective_to)
+    # affiliation for the same person is unaffected by this index.
+    Index(
+        "an_open_ended_affiliation_is_unique_per_person",
+        "principal_id",
+        "person_entity_id",
+        unique=True,
+        postgresql_where=text("state = 'active' AND effective_to IS NULL"),
     ),
 )
 

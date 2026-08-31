@@ -95,7 +95,7 @@ Corrected 2026-08-19: this sentence read
 "exposes one hundred one capabilities" under a heading claiming authenticated
 current repository state, which is the fully-composed figure rather than the
 default one.
-Alembic owns eighty-one revisions at head `f5b06925857e` (corrected 2026-08-30 from eighty at `441b071bf37b`, on which `f5b06925857e` is additive and adds the `entity_project_participations`/`entity_role_types`/`entity_discipline_types` tables, RI-ENT-WP-04; `441b071bf37b` is itself additive on `7e114f822af2` and adds the `entity_addresses`/`entity_communication_methods` tables, RI-ENT-WP-03; `7e114f822af2` is itself additive on `b727e870d45e` and adds the `entity_names`/`entity_organization_profiles` tables, RI-ENT-WP-02); its linear history places the GSQS admission
+Alembic owns eighty-two revisions at head `17149a48fa30` (corrected 2026-08-30 from eighty-one at `f5b06925857e`, on which `17149a48fa30` is additive and adds the `entity_person_organization_affiliations` table, RI-ENT-WP-05; `f5b06925857e` is itself additive on `441b071bf37b` and adds the `entity_project_participations`/`entity_role_types`/`entity_discipline_types` tables, RI-ENT-WP-04; `441b071bf37b` is itself additive on `7e114f822af2` and adds the `entity_addresses`/`entity_communication_methods` tables, RI-ENT-WP-03; `7e114f822af2` is itself additive on `b727e870d45e` and adds the `entity_names`/`entity_organization_profiles` tables, RI-ENT-WP-02); its linear history places the GSQS admission
 `c4b0a1d9e827` immediately before Phase B's `c7a1f04b9e63`, including the merge of
 the retained native-baseline and managed-document histories. `context.prepare`
 returns `retrieval_mode=lexical_structured` (`lexical_structured.v1`); the

@@ -119,7 +119,7 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-SCHEMA-001` | Critical | No typed legal/brand/DBA/operating-name semantics | **Closed by RI-ENT-WP-02** — `entity_names` (9 typed `name_type_code` values) and `entity_organization_profiles.organization_kind_code`/`legal_identity_status_code` |
 | `ENTITY-SCHEMA-002` | High | No normalized entity-address family | **Closed by RI-ENT-WP-03** — `entity_addresses` (9 typed `address_type_code` values, per-(entity, type) uniqueness on `normalized_address_value`) |
 | `ENTITY-SCHEMA-003` | High | No typed phones/domains/websites | **Closed by RI-ENT-WP-03** — `entity_communication_methods` (`method_type_code` email/phone/domain/website, `usage_context_code`, `verification_status_code`) |
-| `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | **Closed by RI-ENT-WP-06a** — `entity_relationship_types` (global, table-backed taxonomy seeded with the fifteen existing codes plus twenty new ones; `entity_relationships.relationship_type` now a foreign key into it). `EntityRelationshipType` itself stays at fifteen codes, disclosed and deliberate — see `EntityRelationshipType`'s docstring |
+| `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | **Closed by RI-ENT-WP-06a** — `entity_relationship_types` (global, table-backed taxonomy seeded with the fifteen existing codes plus twenty new ones; `entity_relationships.relationship_type` now a foreign key into it). `EntityRelationshipType` itself was originally left at fifteen codes, disclosed and deliberate; **as of the WP-08 blocker-clearing pass below, it is widened to thirty-four of the thirty-five** (`design_coordinates_with` deliberately withheld — see below) — see `EntityRelationshipType`'s docstring and "WP-08 blocker cleared: `EntityRelationshipType` widened to 34 of 35 codes" below |
 | `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. No MCP capability or write path exists yet (`RI-ENT-WP-10`/`WP-11`) — see "Merge/split disposition" below |
 | `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | Partially addressed for organization legal identity only, via `legal_identity_status_code` (not a confidence field — see Ruling 1); full assertion/provenance binding is `RI-ENT-WP-07` |
 | `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `state = 'active' AND effective_to IS NULL` denoting "current") |
@@ -186,7 +186,7 @@ sharing a representation share an owner by construction.
 | Project address / legal principal address / HQ / regional or known office / city hall | `entity_addresses` | WP-03 | Deferred |
 | Phone / website / domain / email as a contact channel | `entity_communication_methods` | WP-03 | Deferred |
 | Key/known contact, with title, at a project or organization | Person entity + `entity_person_organization_affiliations` + project participation | WP-05, WP-04 | **Delivered** — the project-participation half (`entity_project_participations`) was delivered by WP-04; the affiliation/title half (`entity_person_organization_affiliations.job_title`) is delivered by WP-05 |
-| Relationship / parent / practice / acquisition lineage / technical-review / seller-developer-SPV / utility-authority edge | `entity_relationship_types` taxonomy (table-backed successor to the CHECK that froze `EntityRelationshipType` at fifteen codes) | WP-06a | **Delivered** — thirty-five codes seeded (the fifteen existing plus twenty new); `entity_relationships.relationship_type` is now a foreign key into this table. `EntityRelationshipType` itself stays at fifteen codes, deliberately not widened — see its own docstring |
+| Relationship / parent / practice / acquisition lineage / technical-review / seller-developer-SPV / utility-authority edge | `entity_relationship_types` taxonomy (table-backed successor to the CHECK that froze `EntityRelationshipType` at fifteen codes) | WP-06a | **Delivered** — thirty-five codes seeded (the fifteen existing plus twenty new); `entity_relationships.relationship_type` is now a foreign key into this table. `EntityRelationshipType` itself was originally left at fifteen codes, deliberately not widened; **now widened to thirty-four of the thirty-five** as of the WP-08 blocker-clearing pass (`design_coordinates_with` deliberately withheld) — see its own docstring and "WP-08 blocker cleared" below |
 | Project role / discipline / scope / stakeholder side / stakeholder tier / role basis / participation state | `entity_project_participations` — named `entity_project_participations` rather than the audit's own `project_entity_participations`; see "Naming deviations" under RI-ENT-WP-04 below | WP-04 | **Delivered** |
 | "Confidence" (register label) at any dimension (role/scope/participation/legal-identity) | **Not a scalar confidence field anywhere** — discrete `assertion_status`/`role_basis_code`/`legal_identity_status_code`-family vocabularies, one per dimension, bound to the fact/edge/participation that carries it | WP-02 delivers `legal_identity_status_code`; the rest is WP-07 | Partial — RULING 1 governs all of it, see below |
 | Evidence / source type-URI / observation and verification timestamps / assertion author / conflicting evidence / supersession / source-driven correction | Existing `entity_fact_evidence_links`, `entity_observations`, `entity_mutation_events`, `entity_resolution_decisions`, extended to bind the new record families | WP-07 | Deferred; the ledgers exist and are unmodified, but do not yet bind `entity_names`/`entity_organization_profiles` rows |
@@ -661,23 +661,27 @@ among the seeded codes. `tests/schema/test_entity_relationship_types_migration.p
 proves this against a real server, explicitly for all fifteen pre-existing
 codes (one assertion per code) and for each of the twenty new ones.
 
-### `EntityRelationshipType` is not widened, disclosed
+### `EntityRelationshipType` is not widened, disclosed (historical, as of RI-ENT-WP-06a — superseded below)
 
-`EntityRelationshipType` (the application-facing `StrEnum`) stays at
+**This section records what was true through RI-ENT-WP-06a and why the
+deferral was reasoned, not an oversight; it is superseded by "WP-08 blocker
+cleared: `EntityRelationshipType` widened to 35 codes" further down this
+document, which records what actually changed.** As of RI-ENT-WP-06a,
+`EntityRelationshipType` (the application-facing `StrEnum`) stayed at
 fifteen codes. It is deeply threaded through the already-shipped
 `entity_relationships` write path (`application/commands.py`'s directed-
 write validation, `contracts/ports.py`, `infrastructure/persistence/
 entity.py`, the HTTP/MCP transport and capability surfaces) in a way none
-of the six WP-02/04/05 record families are, so widening it would be a
-second, much larger surface change this single-purpose PR does not make.
-`entity_relationship_types` is now the authoritative, extensible, DB-level
-source of truth for all thirty-five codes; a caller cannot yet write an
-`entity_relationships` row through the existing typed command path using
-one of the twenty new codes. This is disclosed here, in
-`EntityRelationshipType`'s own docstring, and in the `8dc3619891bb`
-migration's module docstring — not left implicit — and follows the same
-disclosed-deferral pattern this campaign already uses for the six WP-02/04/05
-families' merge/split wiring.
+of the six WP-02/04/05 record families are, so widening it would have been a
+second, much larger surface change that single-purpose PR did not make.
+`entity_relationship_types` was, at that point, the authoritative,
+extensible, DB-level source of truth for all thirty-five codes while a
+caller could not yet write an `entity_relationships` row through the
+existing typed command path using one of the twenty new codes. This was
+disclosed at the time, in `EntityRelationshipType`'s own docstring, and in
+the `8dc3619891bb` migration's module docstring — not left implicit — and
+followed the same disclosed-deferral pattern this campaign already uses for
+the six WP-02/04/05 families' merge/split wiring.
 
 ### Delivered artifacts
 
@@ -936,9 +940,12 @@ now-stale pre-combination count -- `ruff check`, `ruff format --check`, and
 `mypy` (432 files) are clean over every file this increment touches. The full
 `tests/database/` tier (734 passed), `tests/schema/` tier (763 passed), and
 `tests/architecture/` tier (4,725 collected, 4,723 passed, 2 known-
-environmental-only failures -- see the FAST/Architecture tier rows in
-`relationship-intelligence-implementation-plan.md`) were likewise re-measured
-serially against the final combined tree, not assumed from either branch's
+environmental-only failures at the time this passage was written -- see the
+FAST/Architecture tier rows in `relationship-intelligence-implementation-plan.md`,
+and, for that specific claim mechanically re-verified rather than restated,
+"Architecture tier re-verified: the `.claude`-path-component cause, confirmed"
+below) were likewise re-measured serially against the final combined tree, not
+assumed from either branch's
 standalone report.
 
 **Blocking dependency, updated status: LIFTED for the merge/split hazard.** The
@@ -955,39 +962,213 @@ hazard alone** — see the second, separate blocking dependency below, which
 this increment did not close and which binds a different, narrower surface.
 
 **Second blocking dependency, new as of this increment's independent review,
-STILL STANDING: `EntityRelationshipType` is not widened.**
+STILL STANDING as of RI-ENT-WP-06b — LIFTED by the WP-08 blocker-clearing
+pass recorded in "WP-08 blocker cleared" immediately below.**
 `entity_relationship_types` (RI-ENT-WP-06a) now holds 35 codes, but the
 Python domain enum `EntityRelationshipType`
-(`src/my_pa/domain/relationship/entity.py`) is still the original 15
+(`src/my_pa/domain/relationship/entity.py`) was still the original 15
 members, by RI-ENT-WP-06a's own deliberate, disclosed design choice (see its
 migration's docstring and the "`EntityRelationshipType` is not widened,
 disclosed" section above). The consequence, verified directly against the
 actual code by this increment's own investigation: `infrastructure/
-persistence/entity.py`'s `_row_to_relationship` calls
+persistence/entity.py`'s `_row_to_relationship` called
 `EntityRelationshipType(str(row.relationship_type))` — a `StrEnum`
-constructor — to build every `EntityRelationship` it reads back. That call
-**raises `ValueError`** for any of the 20 new codes, because they are not
-members of the enum. This is unreachable today only because nothing writes a
-new code to `entity_relationships.relationship_type` yet — the same "safe
-only because nothing writes it" argument this document has made for the six
-merge/split-deferred families throughout. **No work package, including
-`WP-08` and `WP-11`, may ship a write path that can emit one of the 20 new
-relationship-type codes until `EntityRelationshipType` is widened to admit
-all 35 codes and `_row_to_relationship` (and any other typed read path over
-`entity_relationships`) is updated to handle all 35 without raising.** This
-was deliberately NOT closed by RI-ENT-WP-06b (this increment): RI-ENT-WP-06b's
-scope is the six deferred Entity-bound families' merge/split wiring, which
-does not touch `EntityRelationshipType` or `entity_relationships` at all
-(confirmed: no file under this increment's diff touches either). Widening
-`EntityRelationshipType` and its read path is separable, narrower work,
-deliberately deferred to a future work package rather than folded into either
-RI-ENT-WP-06a or RI-ENT-WP-06b's already-reviewed scope.
+constructor — to build every `EntityRelationship` it read back. That call
+**raised `ValueError`** for any of the 20 new codes, because they were not
+members of the enum. This was unreachable at the time only because nothing
+wrote a new code to `entity_relationships.relationship_type` yet — the same
+"safe only because nothing writes it" argument this document has made for
+the six merge/split-deferred families throughout. **The rule this section
+originally stated — no work package, including `WP-08` and `WP-11`, may ship
+a write path that can emit one of the 20 new relationship-type codes until
+`EntityRelationshipType` is widened to admit all 35 codes and
+`_row_to_relationship` (and any other typed read path over
+`entity_relationships`) is updated to handle all 35 without raising — is the
+rule "WP-08 blocker cleared" below satisfies.** This was deliberately NOT
+closed by RI-ENT-WP-06b (that increment): RI-ENT-WP-06b's scope was the six
+deferred Entity-bound families' merge/split wiring, which did not touch
+`EntityRelationshipType` or `entity_relationships` at all. Widening
+`EntityRelationshipType` and its read path was separable, narrower work,
+deferred at that point to a future work package rather than folded into
+either RI-ENT-WP-06a or RI-ENT-WP-06b's already-reviewed scope — that future
+work is what "WP-08 blocker cleared" below records.
 
 This satisfies RULING 2's first branch for all six families: full
 participation rather than a documented exclusion. (`entity_role_types` and
 `entity_discipline_types` remain the campaign's one standing *exclusion*,
 under RULING 2's second branch, for the reason stated above this update: no
 `entity_id` column of any kind, so there is no row for a merge to touch.)
+
+## WP-08 blocker cleared: `EntityRelationshipType` widened to 34 of 35 codes
+
+**Status: the second blocking dependency above is LIFTED for nineteen of the
+twenty new codes; one code, `design_coordinates_with`, is a disclosed,
+narrower exception this pass found and did not have the authority to
+resolve unilaterally.** As a prerequisite pass ahead of `WP-08`'s own
+write-path work, `EntityRelationshipType` (`src/my_pa/domain/relationship/
+entity.py`) was widened from the original fifteen members. All twenty new
+codes were added and the full test suite was run, including
+`tests/architecture/`, per this program's own process rules — which is what
+caught the exception below before it could ship silently. The enum's
+docstring is rewritten to state the actual, 34-of-35 result plainly, cite
+`8dc3619891bb` and this update, and remove the now-false claims that the
+enum is frozen at fifteen and that `_row_to_relationship` raises for all
+twenty new codes (it now raises for exactly one).
+
+**The one exception, found by running the full test suite rather than
+assumed clean: `design_coordinates_with` trips the no-confidence guard.**
+Adding `DESIGN_COORDINATES_WITH = "design_coordinates_with"` as a member was
+tried, and `tests/architecture/test_relationship_scoring_surface_is_denied.py`
+— the guard this program is explicitly forbidden from touching, weakening,
+or reasoning around — turned red:
+`test_no_closed_relationship_vocabulary_admits_a_score_or_a_protected_trait`
+and `test_every_live_name_on_the_relationship_surface_passes_the_rule` both
+failed, because that guard's `latitude|longitude|geolocation|coordinates|
+whereabouts|tracking` → "location tracking" denial pattern token-matches the
+substring "coordinates" in `design_coordinates_with`'s name and value,
+mechanically, with no awareness that the taxonomy entry means
+design-discipline coordination between two project participants (an
+architect and a structural engineer coordinating design, say), not
+geolocation. This is a genuine false positive at the semantic level and a
+genuine, correct-as-designed match at the mechanical level the guard
+actually runs: `entity_relationship_types.design_coordinates_with` (the
+DB-level taxonomy row RI-ENT-WP-06a seeded) is untouched and remains valid;
+only the *Python enum member* for it was withheld, and only because this
+program's own rules forbid the two ways available to make it pass (editing
+the guard's pattern, or writing an enum value that does not match the
+seeded `relationship_type_code` character-for-character). This is disclosed
+in `EntityRelationshipType`'s own docstring ("One code deliberately
+withheld"), here, and in `tests/database/test_entity_relationship_type_widened_read_path.py`'s
+module docstring, with a dedicated test
+(`test_design_coordinates_with_is_withheld_and_still_raises`) proving the
+gap is real and current rather than a stale claim. **Resolving this — a
+considered, narrow carve-out to the guard's pattern, or picking a different
+code/value for this one taxonomy entry — is a decision this pass does not
+have the authority to make and is left to the campaign owner.**
+
+**The read path, for the nineteen.** `infrastructure/persistence/entity.py`'s
+`_row_to_relationship` (`EntityRelationshipType(str(row.relationship_type))`)
+required no code change: with thirty-four codes present as enum members, the
+same constructor call that used to raise `ValueError` for all twenty new
+codes now succeeds for nineteen of them, because each is now a member;
+`design_coordinates_with` alone still raises, per the exception above. Every
+other typed read path over `entity_relationships.relationship_type` was
+grepped (`EntityRelationshipType(` across `src/`) and confirmed to have
+exactly one call site — `_row_to_relationship` itself — so there was no
+second construction site to fix separately.
+
+**The write path — a mechanical consequence, stated honestly rather than
+narrower than it is.** Widening the enum's membership was not scoped as
+`WP-08`'s own write-path work, but it is not actually separable from it:
+`application/commands.py`'s `CreateEntityRelationship.__post_init__` gates
+`relationship_type` with `isinstance(self.relationship_type,
+EntityRelationshipType)`, and `domain/relationship/proposal_validation.py`'s
+`_member` helper and the equivalent checks in `adapters/normalization.py`
+and `application/entity_promotion.py` all test membership against this
+enum's own value set — none of them hard-code the fifteen-code list
+separately. Because nothing else gates the nineteen newly-admitted codes
+out, widening the enum's membership, by itself, also widens what those
+write-path checks accept for those nineteen. `design_coordinates_with` is
+not a member, so no write path — typed or otherwise — can construct an
+`EntityRelationshipType` for it. This is disclosed here and in the enum's
+own docstring rather than implied to be a narrower or more complete change
+than it is.
+
+**Test evidence, database-level, real PostgreSQL.**
+`tests/database/test_entity_relationship_type_widened_read_path.py` (23
+tests) writes one real `knowledge.entity_relationships` row for each of the
+nineteen newly-admitted codes and reads each back through
+`SqlEntityRepository.relationship` and `SqlEntityRepository.relationships`
+(both of which call `_row_to_relationship`), asserting no `ValueError` is
+raised and the returned `EntityRelationship.relationship_type` equals the
+expected `EntityRelationshipType` member; a dedicated test proves
+`design_coordinates_with` is correctly withheld and still raises. Run:
+`MY_PA_DATABASE_URL='postgresql+psycopg://my_pa@127.0.0.1:5433/my_pa'
+.venv/bin/python -m pytest
+tests/database/test_entity_relationship_type_widened_read_path.py -q` — 23
+passed. `tests/schema/test_entity_relationship_types_migration.py` and
+`tests/relationship/test_relationship_domain.py` (73 passed together) were
+re-run and remain green; no test in the repository hard-coded
+`EntityRelationshipType`'s member count or its exact member list, so none
+needed correcting for the new count beyond this document itself.
+`.venv/bin/python -m mypy src` (305 source files, clean) and
+`.venv/bin/python -m ruff check .` (clean) were re-run after the
+`design_coordinates_with` correction and are clean.
+`MY_PA_DATABASE_URL='postgresql+psycopg://my_pa@127.0.0.1:5433/my_pa'
+.venv/bin/python -m pytest tests/architecture -q -p no:cacheprovider`, run
+from a normal checkout (`/Users/bobbyfetting/my-pa`, no `.claude` path
+component — see "Architecture tier re-verified" below), was re-run after
+the correction and is fully green.
+
+## Architecture tier re-verified: the `.claude`-path-component cause, confirmed
+
+The RI-ENT-WP-06b passage above records "2 known-environmental-only
+failures" as of that PR's own measurement. This section independently
+re-measures that claim rather than restating it, per an explicit operator
+instruction that "'known-environmental failure' is exactly the phrase that
+once hid a real regression in this program, so it must be accurate or
+absent."
+
+**Result, run from `/Users/bobbyfetting/my-pa` (confirmed via `pwd` first,
+not a `.claude/worktrees/...` path):**
+`MY_PA_DATABASE_URL='postgresql+psycopg://my_pa@127.0.0.1:5433/my_pa'
+.venv/bin/python -m pytest tests/architecture -q -p no:cacheprovider` — **4,725
+passed, 0 failed.** `tests/architecture/test_citations_resolve_at_head.py`'s
+two tests, specifically, did not fail.
+
+**The mechanical cause, read out of the guard's own source rather than
+inferred.** `tests/architecture/test_citations_resolve_at_head.py` derives
+its sweep root as `ROOT = Path(__file__).resolve().parents[2]` — the test
+*file's own* resolved on-disk location, two parents up, not
+`Path.cwd()` and not a `git rev-parse --show-toplevel` call. `_repository_files()`
+walks `ROOT.rglob("*")` and skips any path whose `.parts` intersect
+`SKIPPED_DIRECTORIES`, which contains `.claude` (the module's own comment:
+"local Cursor worktrees under `.claude`, which would otherwise duplicate the
+corpus into the shorthand index"). `Path.parts` on a path built from
+`ROOT.rglob(...)` carries every component of `ROOT` itself, not just the
+file's relative subpath — so **if `ROOT` (i.e., the checkout this test file
+lives in) is located anywhere under a directory literally named `.claude`**
+(for example `.claude/worktrees/<agent-name>/...`, the isolation mechanism
+this program's own tooling uses), `SKIPPED_DIRECTORIES & set(path.parts)` is
+non-empty for **every** path the sweep visits, `_repository_files()` returns
+empty, and the two floor assertions (`FEWEST_EXPLICIT = 35`, `FEWEST_BARE =
+5`) fail 100% reproducibly — regardless of any code change, because the
+input to the sweep is zero before a single citation is read. This is not
+about the pytest process's current working directory as such; it is about
+where the checkout `__file__` resolves into sits on disk. In this session's
+case cwd and the checkout path were the same normal, non-`.claude` path
+(`/Users/bobbyfetting/my-pa`), so both readings agree, but the mechanism
+itself keys off the file's resolved path, not `os.getcwd()`.
+`docs/plans/relationship-intelligence-implementation-plan.md`'s own
+Architecture tier row already states this same finding in its own words
+("this sandboxed local worktree's `ROOT` resolves under
+`.claude/worktrees/agent-.../`... confirmed by running the identical test
+file against a real, non-worktree checkout, where it passes cleanly") — this
+section is this campaign's own independent re-confirmation of that same
+mechanism, not a new finding.
+
+**No second, different environmental failure was found.** The "2" in "2
+known-environmental-only failures" is `test_citations_resolve_at_head.py`'s
+own two tests (its floor assertion for explicit citations and its floor
+assertion for bare citations), both zeroed by the same single mechanism
+above — not two failures from two different causes.
+`relationship-intelligence-implementation-plan.md` was grepped for
+"known-environmental" and confirms this: its Architecture tier row names
+only this one file and this one mechanism for both of the two failures it
+counts.
+
+**What this means for the phrase "known-environmental failure" going
+forward.** From a normal checkout — this repository's actual working
+directory for this session, and CI's own working directory — the phrase does
+not apply today: there were zero failures, known-environmental or otherwise,
+in this session's `tests/architecture` run. The phrase remains accurate
+*only* as a description of what happens when this specific test file is run
+from inside a `.claude`-nested path (a Cursor/agent worktree), which is a
+property of where pytest's `ROOT` resolves, never a property of the code
+under test. A future reader should not read "2 known-environmental-only
+failures" as a standing fact about this branch's head; it is contingent on
+the runner's own checkout location and was zero in this session's own,
+normal-checkout run.
 
 ## Test evidence
 

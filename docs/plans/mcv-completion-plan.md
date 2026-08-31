@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and five Python modules under `src/my_pa` and four hundred and twenty-five test modules —
+Three hundred and five Python modules under `src/my_pa` and four hundred and twenty-six test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -93,6 +93,10 @@ four hundred and twenty, when RI-ENT-WP-05 added
 `tests/unit/test_person_organization_affiliation_domain.py`,
 `tests/schema/test_person_organization_affiliations_migration.py`, and
 `tests/database/test_person_organization_affiliations_tbr_fixture.py`,
+likewise without adding a source module, and corrected again on 2026-08-31 to
+four hundred and twenty-six, when the WP-08 blocker-clearing pass widening
+`EntityRelationshipType` to all thirty-five `entity_relationship_types`
+codes added `tests/database/test_entity_relationship_type_widened_read_path.py`,
 likewise without adding a source module. (The audit basis `main@e773e6f` was fifty-six and twenty-seven; the
 pair recorded against it here was the revalidation's, one basis out.) **"Nothing checks them" was the
 diagnosis and it is now wrong**:

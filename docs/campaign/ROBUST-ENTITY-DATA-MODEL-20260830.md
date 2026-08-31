@@ -934,16 +934,47 @@ environmental-only failures -- see the FAST/Architecture tier rows in
 serially against the final combined tree, not assumed from either branch's
 standalone report.
 
-**Blocking dependency, updated status: LIFTED.** The RI-ENT-WP-05-era rule —
-`WP-08` and `WP-11` may not ship a write path for any of the six families
-until this wiring lands — no longer applies to any of the six.
-`entity_names`, `entity_organization_profiles`, `entity_addresses`,
-`entity_communication_methods`, `entity_project_participations`, and
-`entity_person_organization_affiliations` all now have merge reparenting,
-split inversion, post-merge-created ambiguity discovery, and a
-`_DISPOSITIONS_BY_FAMILY` policy. `WP-08` and `WP-11` may proceed to ship
-write paths for all six without reintroducing the class of defect
-(`RI-P2-BLK-001`) this rule existed to prevent.
+**Blocking dependency, updated status: LIFTED for the merge/split hazard.** The
+RI-ENT-WP-05-era rule — `WP-08` and `WP-11` may not ship a write path for any
+of the six families until this wiring lands — no longer applies to any of the
+six, on that specific hazard. `entity_names`, `entity_organization_profiles`,
+`entity_addresses`, `entity_communication_methods`,
+`entity_project_participations`, and `entity_person_organization_affiliations`
+all now have merge reparenting, split inversion, post-merge-created ambiguity
+discovery, and a `_DISPOSITIONS_BY_FAMILY` policy. `WP-08` and `WP-11` may
+proceed to ship write paths for all six without reintroducing the class of
+defect (`RI-P2-BLK-001`) this rule existed to prevent, **on that specific
+hazard alone** — see the second, separate blocking dependency below, which
+this increment did not close and which binds a different, narrower surface.
+
+**Second blocking dependency, new as of this increment's independent review,
+STILL STANDING: `EntityRelationshipType` is not widened.**
+`entity_relationship_types` (RI-ENT-WP-06a) now holds 35 codes, but the
+Python domain enum `EntityRelationshipType`
+(`src/my_pa/domain/relationship/entity.py`) is still the original 15
+members, by RI-ENT-WP-06a's own deliberate, disclosed design choice (see its
+migration's docstring and the "`EntityRelationshipType` is not widened,
+disclosed" section above). The consequence, verified directly against the
+actual code by this increment's own investigation: `infrastructure/
+persistence/entity.py`'s `_row_to_relationship` calls
+`EntityRelationshipType(str(row.relationship_type))` — a `StrEnum`
+constructor — to build every `EntityRelationship` it reads back. That call
+**raises `ValueError`** for any of the 20 new codes, because they are not
+members of the enum. This is unreachable today only because nothing writes a
+new code to `entity_relationships.relationship_type` yet — the same "safe
+only because nothing writes it" argument this document has made for the six
+merge/split-deferred families throughout. **No work package, including
+`WP-08` and `WP-11`, may ship a write path that can emit one of the 20 new
+relationship-type codes until `EntityRelationshipType` is widened to admit
+all 35 codes and `_row_to_relationship` (and any other typed read path over
+`entity_relationships`) is updated to handle all 35 without raising.** This
+was deliberately NOT closed by RI-ENT-WP-06b (this increment): RI-ENT-WP-06b's
+scope is the six deferred Entity-bound families' merge/split wiring, which
+does not touch `EntityRelationshipType` or `entity_relationships` at all
+(confirmed: no file under this increment's diff touches either). Widening
+`EntityRelationshipType` and its read path is separable, narrower work,
+deliberately deferred to a future work package rather than folded into either
+RI-ENT-WP-06a or RI-ENT-WP-06b's already-reviewed scope.
 
 This satisfies RULING 2's first branch for all six families: full
 participation rather than a documented exclusion. (`entity_role_types` and

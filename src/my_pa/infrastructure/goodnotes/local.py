@@ -24,10 +24,11 @@ import subprocess
 import threading
 from collections.abc import Iterator
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import Final
 
+from my_pa.application.goodnotes import GoodNotesSourceLiveness, GoodNotesSourceLivenessReceipt
 from my_pa.domain.goodnotes.models import RegionBox, SourcePage, TranscribedRegion
 
 _MANIFEST_SCHEMA: Final = "my-pa.goodnotes-local-source.v1"
@@ -48,6 +49,10 @@ _NOFOLLOW: Final = getattr(os, "O_NOFOLLOW", 0)
 
 class GoodNotesLocalSourceError(ValueError):
     """A local manifest or page failed the read-only admission contract."""
+
+
+class GoodNotesSourceMissingError(GoodNotesLocalSourceError):
+    """An explicitly named source path was absent at observation time."""
 
 
 class GoodNotesTranscriptionError(RuntimeError):
@@ -251,6 +256,74 @@ class LocalGoodNotesObserver:
             raise GoodNotesLocalSourceError("an explicit GoodNotes path is required")
         return tuple(self.settle(path, page_count=page_count) for path in relative_paths)
 
+    def liveness(
+        self,
+        relative_path: PurePosixPath,
+        *,
+        checked_at: datetime,
+        maximum_staleness: timedelta,
+        previous: GoodNotesSourceLivenessReceipt | None = None,
+        page_count: int | None = None,
+    ) -> GoodNotesSourceLivenessReceipt:
+        """Observe one explicit path without turning absence or reappearance into success."""
+        _validate_relative_path(relative_path)
+        if checked_at.tzinfo is None or checked_at.utcoffset() is None:
+            raise GoodNotesLocalSourceError("the GoodNotes liveness check time must be aware")
+        maximum_staleness_seconds = maximum_staleness.total_seconds()
+        if maximum_staleness_seconds <= 0:
+            raise GoodNotesLocalSourceError("the GoodNotes liveness interval must be positive")
+        path = str(relative_path)
+        if previous is not None:
+            if previous.source_root_id != self.source_root_id or previous.relative_path != path:
+                raise GoodNotesLocalSourceError("the prior GoodNotes liveness binding changed")
+            if checked_at < previous.checked_at:
+                raise GoodNotesLocalSourceError("the GoodNotes liveness clock moved backwards")
+        prior_sha256 = None
+        if previous is not None:
+            prior_sha256 = previous.current_sha256 or previous.prior_sha256
+        try:
+            observation = self.settle(relative_path, page_count=page_count)
+        except GoodNotesSourceMissingError:
+            last_seen_at = previous.last_seen_at if previous is not None else None
+            state = GoodNotesSourceLiveness.MISSING
+            if (
+                last_seen_at is not None
+                and (checked_at - last_seen_at).total_seconds() > maximum_staleness_seconds
+            ):
+                state = GoodNotesSourceLiveness.STALE
+            return GoodNotesSourceLivenessReceipt(
+                source_root_id=self.source_root_id,
+                relative_path=path,
+                state=state,
+                checked_at=checked_at,
+                maximum_staleness_seconds=maximum_staleness_seconds,
+                last_seen_at=last_seen_at,
+                current_sha256=None,
+                prior_sha256=prior_sha256,
+            )
+        reappeared = previous is not None and previous.state in {
+            GoodNotesSourceLiveness.MISSING,
+            GoodNotesSourceLiveness.STALE,
+        }
+        state = (
+            GoodNotesSourceLiveness.REAPPEARED if reappeared else GoodNotesSourceLiveness.AVAILABLE
+        )
+        return GoodNotesSourceLivenessReceipt(
+            source_root_id=self.source_root_id,
+            relative_path=path,
+            state=state,
+            checked_at=checked_at,
+            maximum_staleness_seconds=maximum_staleness_seconds,
+            last_seen_at=checked_at,
+            current_sha256=observation.sha256,
+            prior_sha256=prior_sha256,
+            reappeared_content_changed=(
+                observation.sha256 != prior_sha256
+                if reappeared and prior_sha256 is not None
+                else None
+            ),
+        )
+
 
 @dataclass(frozen=True, slots=True)
 class _AdmittedRead:
@@ -269,6 +342,8 @@ def _read_admitted(
 ) -> _AdmittedRead:
     try:
         root_descriptor = os.open(root, os.O_RDONLY | os.O_DIRECTORY | _NOFOLLOW)
+    except FileNotFoundError as error:
+        raise GoodNotesSourceMissingError("the GoodNotes source path is missing") from error
     except OSError as error:
         raise GoodNotesLocalSourceError("the GoodNotes source root is unavailable") from error
     try:
@@ -324,6 +399,8 @@ def _read_admitted(
         finally:
             for opened in reversed(opened_parents):
                 os.close(opened)
+    except FileNotFoundError as error:
+        raise GoodNotesSourceMissingError("the GoodNotes source path is missing") from error
     except OSError as error:
         raise GoodNotesLocalSourceError("the GoodNotes source file is unavailable") from error
     finally:

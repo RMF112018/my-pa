@@ -4,7 +4,7 @@ import hashlib
 import json
 import sys
 from dataclasses import fields, replace
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path, PurePosixPath
 from typing import ClassVar
 
@@ -13,6 +13,7 @@ import pytest
 from my_pa.application.goodnotes import (
     GoodNotesReconciliationLimits,
     GoodNotesService,
+    GoodNotesSourceLiveness,
     ReconciliationConflictError,
     ReconciliationReceipt,
     SourcePage,
@@ -41,6 +42,7 @@ from my_pa.infrastructure.goodnotes.local import (
     BoundedLocalOCRTranscriber,
     GoodNotesLocalSourceError,
     GoodNotesTranscriptionError,
+    LocalGoodNotesObserver,
     ManifestGoodNotesSource,
 )
 
@@ -269,6 +271,80 @@ def test_local_source_refuses_an_intermediate_link(tmp_path: Path) -> None:
     actual.symlink_to(moved, target_is_directory=True)
     with pytest.raises(GoodNotesLocalSourceError, match="unavailable"):
         source.inventory(A)
+
+
+def test_local_observer_records_missing_then_reappeared_without_false_success(
+    tmp_path: Path,
+) -> None:
+    relative_path = PurePosixPath("notebook/source.pdf")
+    source_path = tmp_path / str(relative_path)
+    source_path.parent.mkdir()
+    source_path.write_bytes(b"%PDF-1.7\nfirst\n%%EOF\n")
+    observed_at = datetime.now(UTC)
+    observer = LocalGoodNotesObserver(root=tmp_path, source_root_id="icloud-goodnotes")
+
+    available = observer.liveness(
+        relative_path,
+        checked_at=observed_at,
+        maximum_staleness=timedelta(minutes=5),
+    )
+    assert available.state is GoodNotesSourceLiveness.AVAILABLE
+    assert available.safe_to_ingest is True
+
+    source_path.unlink()
+    missing = observer.liveness(
+        relative_path,
+        checked_at=observed_at + timedelta(seconds=1),
+        maximum_staleness=timedelta(minutes=5),
+        previous=available,
+    )
+    assert missing.state is GoodNotesSourceLiveness.MISSING
+    assert missing.safe_to_ingest is False
+    assert missing.current_sha256 is None
+    assert missing.prior_sha256 == available.current_sha256
+
+    source_path.write_bytes(b"%PDF-1.7\nreplacement\n%%EOF\n")
+    reappeared = observer.liveness(
+        relative_path,
+        checked_at=observed_at + timedelta(seconds=2),
+        maximum_staleness=timedelta(minutes=5),
+        previous=missing,
+    )
+    assert reappeared.state is GoodNotesSourceLiveness.REAPPEARED
+    assert reappeared.safe_to_ingest is False
+    assert reappeared.reappeared_content_changed is True
+    assert reappeared.prior_sha256 == available.current_sha256
+
+
+def test_local_observer_staleness_is_explicit_bounded_and_binding_safe(tmp_path: Path) -> None:
+    relative_path = PurePosixPath("notebook/source.pdf")
+    source_path = tmp_path / str(relative_path)
+    source_path.parent.mkdir()
+    source_path.write_bytes(b"%PDF-1.7\nsynthetic\n%%EOF\n")
+    checked_at = datetime.now(UTC)
+    observer = LocalGoodNotesObserver(root=tmp_path, source_root_id="icloud-goodnotes")
+
+    available = observer.liveness(
+        relative_path,
+        checked_at=checked_at,
+        maximum_staleness=timedelta(minutes=5),
+    )
+    source_path.unlink()
+    stale = observer.liveness(
+        relative_path,
+        checked_at=checked_at + timedelta(minutes=6),
+        maximum_staleness=timedelta(minutes=5),
+        previous=available,
+    )
+    assert stale.state is GoodNotesSourceLiveness.STALE
+    assert stale.safe_to_ingest is False
+    with pytest.raises(GoodNotesLocalSourceError, match="binding changed"):
+        observer.liveness(
+            PurePosixPath("notebook/other.pdf"),
+            checked_at=checked_at + timedelta(seconds=1),
+            maximum_staleness=timedelta(minutes=5),
+            previous=stale,
+        )
 
 
 def test_local_ocr_refuses_unbounded_or_malformed_output(tmp_path: Path) -> None:

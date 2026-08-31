@@ -121,7 +121,7 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-SCHEMA-003` | High | No typed phones/domains/websites | **Closed by RI-ENT-WP-03** — `entity_communication_methods` (`method_type_code` email/phone/domain/website, `usage_context_code`, `verification_status_code`) |
 | `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | **Closed by RI-ENT-WP-06a** — `entity_relationship_types` (global, table-backed taxonomy seeded with the fifteen existing codes plus twenty new ones; `entity_relationships.relationship_type` now a foreign key into it). `EntityRelationshipType` itself was originally left at fifteen codes, disclosed and deliberate; **as of the WP-08 blocker-clearing pass below, it is widened to thirty-four of the thirty-five** (`design_coordinates_with` deliberately withheld — see below) — see `EntityRelationshipType`'s docstring and "WP-08 blocker cleared: `EntityRelationshipType` widened to 34 of 35 codes" below |
 | `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. No MCP capability or write path exists yet (`RI-ENT-WP-10`/`WP-11`) — see "Merge/split disposition" below |
-| `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | Partially addressed for organization legal identity only, via `legal_identity_status_code` (not a confidence field — see Ruling 1); full assertion/provenance binding is `RI-ENT-WP-07` |
+| `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | **Closed for schema/domain/persistence by RI-ENT-WP-07** — `entity_assertions`/`entity_assertion_evidence` bind fact-level `assertion_status` (a discrete, unordered epistemic vocabulary, never a confidence score) and evidence to the six WP-02–WP-06 record families that previously had none. Still open: repository/service-command wiring (`WP-08`) and MCP exposure (`WP-10`/`WP-11`) — see "RI-ENT-WP-07" below for the exact honest boundary of what is and is not delivered |
 | `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `state = 'active' AND effective_to IS NULL` denoting "current") |
 | `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Unblocked, not closed** — `entity_names` now exists as the structural prerequisite; resolution/search changes are `RI-ENT-WP-09` |
 | `ENTITY-STATE-001` | High | No canonicalization/review state distinct from lifecycle | Design decision recorded in RI-ENT-WP-01 below (`canonicalization_state_code`, separate 1:1 record, deferred); not implemented this increment |
@@ -142,7 +142,7 @@ Preserved from the source audit; status reflects this increment only.
 | WP-04 | Project participation model | **Delivered** — see below |
 | WP-05 | Person affiliation integration | **Delivered** — see below |
 | WP-06 | Corporate/entity relationship graph expansion | **Delivered (partial, RI-ENT-WP-06a)** — `entity_relationship_types` taxonomy and the twenty new codes; merge/split coordination for the six WP-02/04/05 record families remains deferred to a separate PR2 |
-| WP-07 | Assertion/confidence/provenance binding | Deferred (see Ruling 1 — no scalar confidence will be added under this name) |
+| WP-07 | Assertion/confidence/provenance binding | **Delivered (partial)** — `entity_assertions`/`entity_assertion_evidence` (schema, domain, minimal typed persistence helpers, tests); repository/service/command-layer wiring is `WP-08`, MCP exposure is `WP-10`/`WP-11`. No scalar confidence was added under any name (RULING 1) — see below |
 | WP-08 | Repository/domain services and validation | Deferred |
 | WP-09 | Entity resolution/search vNext | Deferred |
 | WP-10 | MCP rich read contracts | Deferred |
@@ -704,6 +704,236 @@ the six WP-02/04/05 families' merge/split wiring.
   `entity_role_types.role_code`/`entity_discipline_types.discipline_code`
   need none.
 
+## RI-ENT-WP-07 — assertion/confidence/provenance binding
+
+**Objective** (source audit, section D.10): bind fact-level assertion,
+evidence, and provenance to the six Entity-bound record families RI-ENT-WP-02
+through RI-ENT-WP-06 added (`entity_names`, `entity_organization_profiles`,
+`entity_addresses`, `entity_communication_methods`,
+`entity_project_participations`, `entity_person_organization_affiliations`),
+closing `ENTITY-PROVENANCE-001` ("no fact-level certainty/verification
+binding — confidence/verification exists only per-family, ad hoc"). **Delivered
+this increment, at the schema/domain/persistence layer** — repository/
+service/command-layer wiring (typed commands, proposal validation, mutation
+ledger integration) is `RI-ENT-WP-08`'s own scope, and MCP capability/tool
+exposure is `RI-ENT-WP-10`/`RI-ENT-WP-11`'s; neither is implemented or assumed
+by this increment.
+
+### `entity_assertions`
+
+One fact-level claim about a field, or an entire record, of one of the six
+target families — **binds TO a normalized record; is never a generic EAV
+store**, the audit's own explicit architectural constraint. Mirrors
+`entity_fact_evidence_links`'s (WP-RI-A-01) "exactly one target" shape
+exactly: six nullable `target_*` columns, one per family, with a `CHECK`
+enforcing exactly one is non-null — chosen over an unconstrained polymorphic
+`(family_code, record_id)` pair with no referential integrity, on the exact
+precedent that table already establishes and this campaign's own prompt
+required following rather than defaulting past.
+
+**`assertion_status` is a discrete, seven-member, unordered epistemic
+vocabulary — never a confidence score (RULING 1).** `verified` /
+`best_supported` / `inferred` / `unresolved` / `awaiting_confirmation` /
+`contradicted` / `superseded`, exactly the audit's own named alternative to
+the "confidence band" and per-dimension "confidence" fields the audit itself
+proposed and this campaign forbids under any name or spelling.
+`AssertionStatus` is a plain `StrEnum` (never `IntEnum`, never given a rich
+comparison dunder), and nothing in `src/` or `tests/` sorts, compares, or
+weights it — proved behaviourally, not merely declared, by
+`tests/unit/test_entity_assertion_domain.py::test_assertion_status_is_a_plain_strenum_not_an_intenum`
+and `::test_nothing_in_the_repository_orders_or_compares_assertion_status`
+(the second walks the AST of every `.py` file under `src/` and `tests/` for a
+`<`/`<=`/`>`/`>=` comparison naming `assertion_status`). `tests/architecture/
+test_relationship_scoring_surface_is_denied.py` was run against this
+increment's schema and domain additions and passed with zero denials — see
+"Test evidence" below for the exact command and count.
+
+**`predicate_code` is free text and nullable**, naming which field of the
+target record the assertion is about; `NULL` means the assertion is about the
+whole record. A closed vocabulary across the dozens of heterogeneous field
+names the six target families carry between them was considered and rejected
+as needing constant widening for no safety benefit a free-text column does
+not already give — the audit's own D.10 text calls this `predicate_code`/
+`field_code` and does not propose a closed set either.
+
+**`asserted_by` reuses `MutationAuthority` and evidence `role` reuses
+`EvidenceRole` — neither vocabulary is reinvented.** Both were verified by
+reading their exact current members before reuse, not assumed to fit:
+`MutationAuthority` (`USER_CONFIRMED_ASSERTION`/`REVIEW_ACCEPTED`/
+`SYSTEM_DETERMINISTIC`) is exactly the audit's "asserted_by actor/system" ask,
+and its own docstring already argues against a second vocabulary answering
+the same question; `EvidenceRole` (`DIRECT`/`SUPPORTING`/`COUNTEREVIDENCE`) is
+exactly the audit's "evidence_role direct/supporting/counterevidence" ask,
+already reused by `entity_fact_evidence_links` and
+`entity_proposal_evidence_links`.
+
+**`supersedes_assertion_id` points backward** (the newer row names the older
+one it replaces) — the opposite direction from every sibling family's
+`superseded_by_*` column, and the reversal is deliberate: the audit's own
+D.10 text names the field `supersedes_assertion_id`, which only reads
+correctly as the new row's own reference to what it replaces. **No
+destructive replacement follows directly and is proven, not just argued**:
+`tests/database/test_entity_assertion_provenance.py::
+test_superseding_an_assertion_leaves_the_old_row_and_its_evidence_intact`
+writes a new assertion that supersedes an old one and confirms the old row's
+every column other than `state`/`assertion_status`/`version`/`updated_at` is
+byte-identical to what it was before, and that every `entity_assertion_evidence`
+row citing it is still present, unmodified, and still resolves.
+
+**Never infer provenance a source did not state (RULING 3).** When the source
+of an assertion is unknown, `assertion_status` is `unresolved` — never a
+guess dressed up as a stronger value, and no writer on this plane may promote
+it without a corroborating source, the same discipline `RoleBasisCode`
+already states for its own dimension.
+
+**`target_organization_profile_entity_id` is a plain, single-column FK with
+`ON UPDATE CASCADE`, not a composite `(id, principal_id)` FK like the other
+five targets.** `entity_organization_profiles.entity_id` is simultaneously
+that table's primary key and its foreign key to `entities` (see
+`EntityOrganizationProfile`'s own docstring), and carries no separate
+`UNIQUE(entity_id, principal_id)` a composite reference could target — see
+"Merge/split disposition" below for the full reasoning and the database test
+that proves this branch specifically.
+
+### `entity_assertion_evidence`
+
+One binding between an `EntityAssertion` and the single record that backs,
+supports, or contradicts it. Mirrors `entity_fact_evidence_links`'s evidence
+half exactly (the same three evidence-source columns — `entity_observation_id`
+/ `capture_span_id` / `knowledge_id` — the same "exactly one" `CHECK`, the
+same `EvidenceRole` vocabulary) with the fact half replaced by a single
+`assertion_id`, since this table's whole subject is already one assertion.
+`source_locator` is free text and nullable ("where permissible", the audit's
+own D.10 phrasing) — never required, never inferred from the cited record
+(RULING 3). No `state`, no `superseded_by_*`, and no write path in this
+revision ever deletes or updates an existing row: superseding an assertion
+touches only the `entity_assertions` row itself.
+
+### Merge/split — a reasoned exclusion, investigated rather than assumed
+
+`entity_assertions` and `entity_assertion_evidence` are **not** members of
+`IdentityEffectFamily`/`MergeFamily`. This is a deliberate, investigated
+exclusion, not an oversight, on two separate arguments for the two tables:
+
+1. **`entity_fact_evidence_links` — the closest existing structural
+   precedent, and the first fact this investigation checked before deciding
+   anything** — is itself **not** a member of `IdentityEffectFamily` (confirmed
+   by reading `IdentityEffectFamily`'s full member list in
+   `src/my_pa/domain/relationship/identity_correction.py` before this
+   decision was made). The reasoning that makes that safe transfers to five
+   of `entity_assertions`' six targets: `reparent_entity_reference`
+   (`src/my_pa/infrastructure/persistence/entity.py`) substitutes only the
+   *entity-reference columns* a `_ChildSubject` names for each family
+   (`entity_id` for `NAME`/`ADDRESS`/`COMMUNICATION_METHOD`, two columns each
+   for `PROJECT_PARTICIPATION`/`PERSON_ORGANIZATION_AFFILIATION`) — never the
+   row's own surrogate primary key (`entity_name_id`, `entity_address_id`,
+   `communication_method_id`, `participation_id`, `affiliation_id`), which
+   `entity_assertions.target_*` actually references. A merge that reparents
+   one of these rows changes which `entity_id` it names; the row's own
+   identity, and therefore the assertion's reference to it, is untouched. A
+   row a merge instead coalesces (`ROW_COALESCED`: state flips to
+   `superseded`, a `superseded_by_*` column is set) is not deleted either —
+   it stays resolvable, and a reader can follow its `superseded_by_*` chain
+   to the row that superseded it. `tests/database/
+   test_entity_assertion_provenance.py::
+   test_an_assertion_bound_to_a_name_stays_resolvable_after_the_name_is_reparented`
+   proves this for one representative family (`entity_names`) against a real
+   merge, rather than assuming the mechanism transfers.
+2. **`entity_organization_profiles` is the one family where this reasoning
+   does *not* trivially transfer**, because its `entity_id` is simultaneously
+   its primary key and its foreign key to `entities` (see
+   `EntityOrganizationProfile`'s own docstring) — a merge's reparenting of a
+   profile is a literal primary-key rewrite (`reparent_entity_reference`'s
+   generic substitution, applied to a `_ChildSubject` whose `id_column` and
+   sole `entity_columns` entry are the same column): `UPDATE
+   entity_organization_profiles SET entity_id = :survivor WHERE entity_id IN
+   (:merged_away)`. This was investigated, not assumed: because it is a
+   genuine SQL `UPDATE` (not a delete-and-reinsert), a real foreign key with
+   `ON UPDATE CASCADE` from
+   `entity_assertions.target_organization_profile_entity_id` to
+   `entity_organization_profiles.entity_id` lets Postgres carry the reference
+   along automatically the moment that statement runs. **Proven with a real
+   database test, not assumed**: `tests/database/
+   test_entity_assertion_provenance.py::
+   test_an_assertion_bound_to_an_organization_profile_follows_the_profile_through_a_merge`
+   binds an assertion to a profile, runs a real merge (through
+   `IdentityCorrectionService`) that reparents that profile, and confirms the
+   assertion's own column now names the survivor. No change to
+   `IdentityEffectFamily`, `MergeFamily`, or any merge/split application code
+   was needed for this branch — the ordinary FK mechanism already does the
+   whole job.
+3. **`entity_assertion_evidence` needs no merge/split wiring at all, on the
+   `entity_role_types`/`entity_discipline_types` argument** the campaign
+   document's own ledger already gives for those two tables: it carries no
+   `entity_id` column of any kind, direct or indirect — its only references
+   are `assertion_id` (opaque, not an entity) and the same evidence-source
+   trio `entity_fact_evidence_links` already carries unwired. There is no row
+   here for a merge to reparent, discover ambiguity for, or invert, because
+   no row here names an entity. Confirmed by reading this table's own
+   declaration in `tables.py` before asserting the exclusion, not assumed
+   from the table's shape in prose.
+
+**No change was made to `IdentityEffectFamily`, `MergeFamily`,
+`_DISPOSITIONS_BY_FAMILY`, or any merge/split application code
+(`src/my_pa/application/identity_correction.py`) by this increment.** Both
+tables' merge/split behavior is fully accounted for by the ordinary FK
+mechanisms already in place — a composite FK's referent staying stable across
+reparenting for five targets, and a plain `ON UPDATE CASCADE` FK for the
+sixth — with no new wiring required, and this is proven by the two database
+tests cited above rather than left as an unexercised claim.
+
+### Delivered artifacts
+
+- Migration `1cda4d536268` (`down_revision = 9a3f6c1e8d24`), purely additive:
+  two new tables (`entity_assertions`, `entity_assertion_evidence`), no
+  altered column or constraint on any existing table.
+- `src/my_pa/domain/relationship/governance.py` (not `entity.py` — see
+  below): `AssertionStatus`, `EntityAssertionState`, `EntityAssertion`,
+  `EntityAssertionEvidence`.
+- `src/my_pa/infrastructure/persistence/tables.py`: `entity_assertions`,
+  `entity_assertion_evidence` (Core `Table` definitions for runtime access;
+  the migration itself is written out in raw DDL per `D-48`/`D-69`).
+- `src/my_pa/infrastructure/persistence/entity.py`: minimal typed read/write
+  helpers on `SqlEntityRepository` — `record_assertion`, `assertion`,
+  `assertions_targeting`, `supersede_assertion`, `record_assertion_evidence`,
+  `assertion_evidence` — concrete methods, **not** added to the
+  `EntitiesRepository` ABC (`contracts/ports.py`): this class already carries
+  concrete methods the ABC does not (107 vs. 89), and adding an abstract
+  method there would force every other implementer
+  (`tests/conftest.py::_Entities`, `tests/evaluation/resolution_harness.py::
+  _CorpusRepository`) to implement it too — a larger, WP-08-shaped surface
+  change this increment does not make.
+- `src/my_pa/domain/common/identifiers.py`: `IdKind.ENTITY_ASSERTION = "east"`,
+  `IdKind.ENTITY_ASSERTION_EVIDENCE = "easev"` — neither collides with any
+  prior member of `IdKind`, checked before use, including the pre-existing,
+  unrelated `IdKind.ASSERTION = "asrt"` (the capture plane's own canonical-fact
+  assertion, `my_pa.domain.capture.assertion` — a different concept this
+  revision does not touch or rename).
+
+**Naming deviation, disclosed.** `EntityAssertion`/`EntityAssertionEvidence`
+and `AssertionStatus`/`EntityAssertionState` live in `governance.py`, not
+`entity.py` where every prior WP-02–WP-06a record family lives. This is
+deliberate, not arbitrary: `governance.py` already houses
+`EntityFactEvidenceLink` — the closest existing structural precedent this
+whole design follows — and `entity.py` cannot import from `governance.py`
+without introducing a circular import (`governance.py` imports from
+`proposal_validation.py`, which imports from `entity.py`); placing the new
+types in `governance.py` (which already declares `EvidenceRole`/
+`MutationAuthority`, reused here without a second import hop) avoids that
+cycle entirely rather than working around it.
+
+### Test evidence
+
+Exact commands, run from the repository root with
+`MY_PA_DATABASE_URL='postgresql+psycopg://my_pa@127.0.0.1:5433/my_pa'`:
+
+- `.venv/bin/python -m pytest tests/unit/test_entity_assertion_domain.py -q` — 26 passed.
+- `.venv/bin/python -m pytest tests/schema/test_entity_assertion_provenance_migration.py -q` — 18 passed.
+- `.venv/bin/python -m pytest tests/database/test_entity_assertion_provenance.py -q` — 12 passed.
+- `.venv/bin/python -m pytest tests/architecture/test_relationship_scoring_surface_is_denied.py -q` — 85 passed, zero denials.
+- `.venv/bin/python -m pytest tests/relationship/test_relationship_domain.py -q` — 17 passed (allow-lists widened to admit `entity_assertions`/`entity_assertion_evidence` and `EntityAssertion`/`EntityAssertionEvidence`; table count 58→60, model count 69→71).
+- `.venv/bin/python -m alembic upgrade head` / `downgrade -1` / `upgrade head` against a disposable database — clean round trip, no residue.
+
 ## Merge/split disposition (RULING 2)
 
 `entity_names`, `entity_organization_profiles`, `entity_addresses`,
@@ -724,6 +954,27 @@ An entity merge or split has no row in either table to reparent, discover
 ambiguity for, or invert, because neither table names an entity. This is a
 reasoned exclusion, not an oversight, and is recorded here so a future reader
 does not have to re-derive it.
+
+**RI-ENT-WP-07 adds two more tables to this ledger, both as reasoned
+exclusions, investigated rather than assumed.** `entity_assertions` and
+`entity_assertion_evidence` are **not** members of
+`IdentityEffectFamily`/`MergeFamily`. `entity_assertion_evidence` needs no
+wiring on the same `entity_role_types`/`entity_discipline_types` argument
+immediately above (no `entity_id` column of any kind). `entity_assertions`
+is subtler: five of its six `target_*` columns reference a sibling row by
+that row's own stable surrogate key, which a merge's
+`reparent_entity_reference` never rewrites, so those references stay valid
+across a merge with no wiring at all — proven, not assumed, by a real
+database test for a representative family (`entity_names`). The sixth,
+`target_organization_profile_entity_id`, is a genuine FK with `ON UPDATE
+CASCADE` to `entity_organization_profiles.entity_id`, which Postgres follows
+automatically the moment that table's own reparenting `UPDATE` runs —
+proven by a second real database test binding an assertion to a profile,
+running a real merge through `IdentityCorrectionService`, and confirming the
+assertion's reference now names the survivor. See "RI-ENT-WP-07 — assertion/
+confidence/provenance binding" above ("Merge/split — a reasoned exclusion,
+investigated rather than assumed") for the full reasoning and the exact test
+names.
 
 **Historical decision, as of RI-ENT-WP-05: deferred, not wired in, for all six
 Entity-bound families.** The five numbered points and the "Blocking
@@ -1184,6 +1435,9 @@ against its own disposable database, never the configured one):
 - `.venv/bin/python -m pytest tests/database/test_person_organization_affiliations_tbr_fixture.py -q`
 - `.venv/bin/python -m pytest tests/unit/test_relationship_type_taxonomy_domain.py -q`
 - `.venv/bin/python -m pytest tests/schema/test_entity_relationship_types_migration.py -q`
+- `.venv/bin/python -m pytest tests/unit/test_entity_assertion_domain.py -q` (RI-ENT-WP-07)
+- `.venv/bin/python -m pytest tests/schema/test_entity_assertion_provenance_migration.py -q` (RI-ENT-WP-07)
+- `.venv/bin/python -m pytest tests/database/test_entity_assertion_provenance.py -q` (RI-ENT-WP-07)
 - `.venv/bin/python -m pytest tests/relationship/test_relationship_domain.py -q`
 - `.venv/bin/python -m pytest tests/architecture/test_relationship_scoring_surface_is_denied.py -q`
 - `.venv/bin/python -m pytest tests/architecture/ -q`
@@ -1199,9 +1453,11 @@ restated here, so this document cannot drift ahead of what actually ran.
 - [`docs/specs/relationship-memory-v0.1.md`](../specs/relationship-memory-v0.1.md) — the sibling record family this campaign's naming and lifecycle conventions follow.
 - [`docs/architecture/module-boundaries.md`](../architecture/module-boundaries.md) — the layering this campaign's domain/persistence split honors.
 - `src/my_pa/domain/relationship/entity.py` — `EntityName`, `EntityNameState`, `NameTypeCode`, `EntityOrganizationProfile`, `OrganizationKindCode`, `LegalIdentityStatusCode`, `EntityAddress`, `EntityAddressState`, `AddressTypeCode`, `EntityCommunicationMethod`, `EntityCommunicationMethodState`, `CommunicationMethodTypeCode`, `CommunicationUsageContextCode`, `CommunicationVerificationStatusCode`, `EntityProjectParticipation`, `EntityProjectParticipationState`, `RoleBasisCode`, `StakeholderSideCode`, `StakeholderClassCode`, `ParticipationStatusCode`, `PersonOrganizationAffiliation`, `PersonOrganizationAffiliationState`, `AffiliationTypeCode`, `RelationshipTypeTaxonomyEntry`, `EntityRelationshipType`.
-- `src/my_pa/infrastructure/persistence/tables.py` — `entity_names`, `entity_organization_profiles`, `entity_addresses`, `entity_communication_methods`, `entity_project_participations`, `entity_role_types`, `entity_discipline_types`, `entity_person_organization_affiliations`, `entity_relationship_types`, `entity_relationships`.
+- `src/my_pa/domain/relationship/governance.py` — `EntityFactEvidenceLink`, `EvidenceRole`, `MutationAuthority` (reused, not reinvented, by RI-ENT-WP-07), `AssertionStatus`, `EntityAssertionState`, `EntityAssertion`, `EntityAssertionEvidence`.
+- `src/my_pa/infrastructure/persistence/tables.py` — `entity_names`, `entity_organization_profiles`, `entity_addresses`, `entity_communication_methods`, `entity_project_participations`, `entity_role_types`, `entity_discipline_types`, `entity_person_organization_affiliations`, `entity_relationship_types`, `entity_relationships`, `entity_assertions`, `entity_assertion_evidence`.
 - `migrations/versions/20260830_7e114f822af2_add_entity_names_and_organization_.py` (RI-ENT-WP-02).
 - `migrations/versions/20260830_441b071bf37b_add_entity_addresses_and_communication_.py` (RI-ENT-WP-03).
 - `migrations/versions/20260830_f5b06925857e_add_entity_project_participations_and_.py` (RI-ENT-WP-04).
 - `migrations/versions/20260830_17149a48fa30_add_entity_person_organization_affiliat.py` (RI-ENT-WP-05).
 - `migrations/versions/20260831_8dc3619891bb_add_entity_relationship_types.py` (RI-ENT-WP-06a).
+- `migrations/versions/20260831_1cda4d536268_add_entity_assertions_and_evidence.py` (RI-ENT-WP-07).

@@ -283,7 +283,16 @@ def test_downgrading_one_step_removes_exactly_this_table_and_restores_the_origin
     command.downgrade(_config(), PREVIOUS_REVISION)
     after = _tables(migrated_engine)
 
-    assert before - after == {"entity_relationship_types"}
+    # `migrated_engine` upgrades to the chain's true head, which now sits above
+    # REVISION: `1cda4d536268` (RI-ENT-WP-07) adds `entity_assertions`/
+    # `entity_assertion_evidence` on top of `8dc3619891bb`, so downgrading all
+    # the way to this file's own PREVIOUS_REVISION also unwinds that later
+    # revision's two tables, not just this file's own one.
+    assert before - after == {
+        "entity_relationship_types",
+        "entity_assertions",
+        "entity_assertion_evidence",
+    }
     # The rest of the entity plane survives the downgrade of this revision alone.
     assert {
         "entities",

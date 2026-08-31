@@ -174,8 +174,16 @@ def test_contract_prefixes_are_stable() -> None:
         # primary keys are stable business codes, not generated ids.
         "eppt",
         # `17149a48fa30` (RI-ENT-WP-05): one person-organization affiliation
-        # row, in `entity_person_organization_affiliations`.
+        # row, in `entity_person_organization_affiliations`. `8dc3619891bb`
+        # (RI-ENT-WP-06a) needs no prefix of its own -- `entity_relationship_
+        # types.relationship_type_code` is a stable business code, not a
+        # generated id.
         "poaf",
+        # `1cda4d536268` (RI-ENT-WP-07): one assertion row, in
+        # `entity_assertions`, and one assertion-evidence row, in
+        # `entity_assertion_evidence`.
+        "east",
+        "easev",
     }
 
 

@@ -898,7 +898,8 @@ tests cited above rather than left as an unexercised claim.
   `assertions_targeting`, `supersede_assertion`, `record_assertion_evidence`,
   `assertion_evidence` — concrete methods, **not** added to the
   `EntitiesRepository` ABC (`contracts/ports.py`): this class already carries
-  concrete methods the ABC does not (107 vs. 89), and adding an abstract
+  concrete methods the ABC does not (113 vs. 89, after this increment's six
+  additions), and adding an abstract
   method there would force every other implementer
   (`tests/conftest.py::_Entities`, `tests/evaluation/resolution_harness.py::
   _CorpusRepository`) to implement it too — a larger, WP-08-shaped surface

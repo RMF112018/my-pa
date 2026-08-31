@@ -268,6 +268,10 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         # `8dc3619891bb`'s global relationship-type taxonomy table
         # (RI-ENT-WP-06a), stacked above this revision like the rest of this set.
         "entity_relationship_types",
+        # `1cda4d536268`'s assertion and assertion-evidence pair
+        # (RI-ENT-WP-07), stacked above this revision like the rest of this set.
+        "entity_assertions",
+        "entity_assertion_evidence",
     }
 )
 

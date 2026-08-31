@@ -334,6 +334,12 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         # CHECK for a foreign key into this table, which does not change
         # what tables this downgrade removes.
         "entity_relationship_types",
+        # `1cda4d536268`'s assertion and assertion-evidence pair
+        # (RI-ENT-WP-07), stacked above the plane for the same reason: they
+        # arrive above `8dc3619891bb` (through the table-free `9a3f6c1e8d24`),
+        # one link further still.
+        "entity_assertions",
+        "entity_assertion_evidence",
     }
 )
 

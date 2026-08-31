@@ -147,6 +147,13 @@ depends_on: str | None = None
 
 SCHEMA: Final = "knowledge"
 
+#: The opaque-identifier suffix shape `IdKind`'s own `_SUFFIX_PATTERN`
+#: enforces in Python (`my_pa.domain.common.identifiers`), restated here
+#: because this migration writes DDL out rather than importing it (`D-48`,
+#: `D-69`) -- the same literal `17149a48fa30` and every sibling migration on
+#: this chain already uses for their own `_is_an_opaque_identifier` CHECKs.
+_IDENTIFIER_SUFFIX: Final = "[A-Za-z0-9]{8,64}"
+
 _ASSERTION_STATUS_VALUES: Final = (
     "'verified', 'best_supported', 'inferred', 'unresolved', "
     "'awaiting_confirmation', 'contradicted', 'superseded'"
@@ -190,6 +197,10 @@ def upgrade() -> None:
           created_at timestamptz NOT NULL DEFAULT now(),
           updated_at timestamptz,
           retired_at timestamptz,
+          CONSTRAINT assertion_id_is_an_opaque_identifier
+            CHECK (assertion_id ~ '^east_{_IDENTIFIER_SUFFIX}$'),
+          CONSTRAINT principal_id_is_an_opaque_identifier
+            CHECK (principal_id ~ '^prn_{_IDENTIFIER_SUFFIX}$'),
           CONSTRAINT an_assertion_status_is_known
             CHECK (assertion_status IN ({_ASSERTION_STATUS_VALUES})),
           CONSTRAINT an_assertion_authority_is_known
@@ -321,6 +332,10 @@ def upgrade() -> None:
           role text NOT NULL,
           source_locator text,
           created_at timestamptz NOT NULL DEFAULT now(),
+          CONSTRAINT evidence_id_is_an_opaque_identifier
+            CHECK (evidence_id ~ '^easev_{_IDENTIFIER_SUFFIX}$'),
+          CONSTRAINT principal_id_is_an_opaque_identifier
+            CHECK (principal_id ~ '^prn_{_IDENTIFIER_SUFFIX}$'),
           CONSTRAINT an_assertion_evidence_role_is_known
             CHECK (role IN ({_EVIDENCE_ROLE_VALUES})),
           CONSTRAINT assertion_evidence_names_exactly_one_record

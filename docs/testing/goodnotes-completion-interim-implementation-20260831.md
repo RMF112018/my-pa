@@ -30,7 +30,7 @@ and was never a transplant or integration source.
 | `origin/main` | commit `5139b0a34d251e0c3d02eb3fb6215880c3066c76`; tree `31bd3dcbab114fb5576ba2dccfb991b173976027` | Authority base for the implementation tranche |
 | Active RI PR #170 | remote/local head `beee2ca4f84ebba12555d391180e7d2f2accf6db`; tree `658f175705c99a2681a7d297f9d0ee97931d61a4` | Preserved; no worker mutated, rebased, merged, or checked out the RI work |
 | Candidate PR #160 | head `9d206cb178ba7efa6d859b5c8fd6861ef4529ce9` | Conflicting evidence only |
-| Interim integration head before this ledger | commit `72679f4ddc06fcc18be205a0c442a1a4bb43b576`; tree `aecc4e6606c01513707b27bd2f9d0889584c7076` | Contains only the integrated independent GoodNotes tranche |
+| Current pre-ledger integration head | commit `e9b6aaaa77bf37d639f7cb7f8f9cbef456049e13`; tree `689984fd2b4308545eaa9ff90e61a1e6d8b44054` | Includes the independent GoodNotes tranche and its architecture-boundary corrective |
 
 PR #160's migration `d8f3a1c6e942` is stale and nonportable. It is not part of
 this branch. RI-owned migrations and shared paths remain serialized behind the
@@ -66,10 +66,40 @@ active RI line.
 | `4a49c43c30fc26690925555e9ec8a146c4f3ba85` | `tests/unit/test_goodnotes_acceptance_corpus.py` |
 | `3bd50533a2dcd920a2656531ac1ee27bf5e60751` | `src/my_pa/application/goodnotes_pull_orchestration.py`; `tests/unit/test_goodnotes_pull_orchestration.py` |
 | `72679f4ddc06fcc18be205a0c442a1a4bb43b576` | `src/my_pa/application/goodnotes_pull_orchestration.py`; `tests/unit/test_goodnotes_pull_orchestration.py` |
+| `e9b6aaaa77bf37d639f7cb7f8f9cbef456049e13` | `src/my_pa/application/goodnotes.py`; `src/my_pa/application/goodnotes_corrections.py`; `src/my_pa/application/goodnotes_delivery.py`; `src/my_pa/application/goodnotes_pull_orchestration.py`; `src/my_pa/domain/goodnotes/liveness.py`; `src/my_pa/infrastructure/goodnotes/local.py`; `src/my_pa/infrastructure/persistence/goodnotes.py`; `tests/unit/test_goodnotes_pull_orchestration.py` |
+
+The `e9b6aaa` corrective restores dependency direction by locating shared
+liveness evidence in the domain, binds pull context to an authenticated
+`Principal`, strengthens immutable-record Principal checks in correction,
+delivery, pull, and replay paths, and makes page-version render-field comparison
+explicit. It does not alter the frozen evaluator identity.
 
 ## Verification evidence
 
-At interim head `72679f4ddc06fcc18be205a0c442a1a4bb43b576`:
+At current pre-ledger head
+`e9b6aaaa77bf37d639f7cb7f8f9cbef456049e13`:
+
+- Ruff check and full-tree format check passed; the format check covered 1,173
+  files.
+- Full configured mypy passed over 434 source files.
+- The combined GoodNotes and relevant architecture selection reported
+  `2,983 passed in 79.28s`: dependency direction `1,453 passed`, the two
+  Principal architecture modules `949 passed`, memory-reach declaration
+  `71 passed`, and full `tests/unit/test_goodnotes*.py` `510 passed`.
+- A separate focused behavior and frozen-evaluator selection reported
+  `82 passed`; the frozen evaluator identity remained unchanged.
+- The broad FAST selection was attempted and stopped, not passed:
+  `5,436 passed, 123 failed, 260 errors, 1,806 deselected in 328.53s`.
+  Dominant transport errors were sandbox denials of loopback binds. Cached
+  architecture attribution separated branch defects now corrected by
+  `e9b6aaa`, sandbox socket failures, and RI-owned stale count/registry prose.
+- Focused database execution was not run: `MY_PA_DATABASE_URL` was unset and
+  raised `SettingsError`, and no verified isolated database target existed.
+  Database lineage collection remains `11 tests collected in 0.13s`.
+- `git diff --check` passed.
+
+Earlier evidence at
+`72679f4ddc06fcc18be205a0c442a1a4bb43b576` remains useful history:
 
 - Orchestrator same-head validation: full GoodNotes unit suite
   `510 passed in 18.41s`; Ruff check and format passed; targeted mypy over the
@@ -77,13 +107,10 @@ At interim head `72679f4ddc06fcc18be205a0c442a1a4bb43b576`:
 - Focused integrated unit tranche:
   `111 passed in 1.02s` across GoodNotes source, acceptance corpus,
   corrections, delivery, pull orchestration, and semantic optimizer tests.
-- Database lineage collection: `11 tests collected in 0.13s`. Execution was
-  intentionally not performed because no verified isolated synthetic database
-  was established for this documentation-only assignment.
 - Earlier blocker audits additionally established current GSQS and MCP baseline
   behavior: R2 `26 passed` plus `21 passed`; R3/R5 `50 passed` plus `4 passed`.
-- `git diff --check`: passed after the ledger edit. No repository Markdown lint
-  command is declared.
+
+No repository Markdown lint command is declared.
 
 ## Serialization blockers
 

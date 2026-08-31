@@ -32,7 +32,9 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesMatchMethod,
     GoodNotesNotebook,
     GoodNotesNotebookPath,
+    GoodNotesPage,
     GoodNotesPagePosition,
+    GoodNotesPageVersion,
     GoodNotesSourceSnapshot,
     SourcePage,
     issue_stable_id,
@@ -270,6 +272,52 @@ def test_exact_snapshot_replay_and_logical_page_positions(engine: Engine) -> Non
         assert first_position.page_number != second_position.page_number
         assert repository.snapshot(B, first.snapshot_id) is None
         assert repository.logical_page(B, logical.logical_page_id) is None
+
+
+def test_page_version_render_identity_is_append_only(engine: Engine) -> None:
+    notebook = _notebook(A, "immutable-render")
+    logical = GoodNotesLogicalPage(
+        logical_page_id=issue_stable_id("gnlp", A, "immutable-render"),
+        principal_id=A,
+        notebook_id=notebook.notebook_id,
+        created_at=WHEN,
+        last_seen_at=WHEN,
+        identity_status=GoodNotesIdentityStatus.ACTIVE,
+    )
+    page = GoodNotesPage(
+        page_id=issue_stable_id("gnpg", A, "immutable-render"),
+        principal_id=A,
+        source_id="src_919191919191919191919191",
+        source_object_id="obj_919191919191919191919191",
+        page_number=1,
+    )
+    version = GoodNotesPageVersion(
+        page_version_id=issue_stable_id("gnver", A, "immutable-render"),
+        page_id=page.page_id,
+        source_version_id="ver_919191919191919191919191",
+        content_sha256=DIGEST_ONE,
+        observed_at=WHEN,
+        logical_page_id=logical.logical_page_id,
+        exact_render_sha256=DIGEST_ONE,
+        normalized_render_sha256=DIGEST_ONE,
+        renderer_name="synthetic",
+        renderer_version="1",
+        render_profile_version="test-v1",
+    )
+    with engine.begin() as connection:
+        repository = PostgresGoodNotesRepository(connection)
+        repository.store_notebook(notebook)
+        repository.store_logical_page(logical)
+        stored = repository.store_page_version_render(page=page, version=version)
+
+        with pytest.raises(ValueError, match="page version identity collided"):
+            repository.store_page_version_render(
+                page=page,
+                version=replace(version, exact_render_sha256=DIGEST_TWO),
+            )
+
+        unchanged = repository.page_version(A, version.page_version_id)
+        assert unchanged == stored
 
 
 def test_request_id_replay_and_fingerprint_conflict(engine: Engine) -> None:

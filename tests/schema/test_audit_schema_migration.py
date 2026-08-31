@@ -279,6 +279,9 @@ TABLES_ABOVE: Final[frozenset[str]] = frozenset(
         "entity_project_participations",
         "entity_role_types",
         "entity_discipline_types",
+        # `17149a48fa30`'s person-organization affiliation table
+        # (RI-ENT-WP-05), stacked above this revision like the rest of this set.
+        "entity_person_organization_affiliations",
     }
 )
 

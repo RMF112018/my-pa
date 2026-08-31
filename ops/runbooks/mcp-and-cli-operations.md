@@ -271,8 +271,10 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and four** current capabilities, and the schema has
-**eighty-one** revisions at head `f5b06925857e` (corrected 2026-08-30 from
-eighty at `441b071bf37b`, on which `f5b06925857e` is additive and adds the
+**eighty-two** revisions at head `17149a48fa30` (corrected 2026-08-30 from
+eighty-one at `f5b06925857e`, on which `17149a48fa30` is additive and adds the
+`entity_person_organization_affiliations` table, RI-ENT-WP-05; `f5b06925857e`
+is itself additive and adds the
 `entity_project_participations`/`entity_role_types`/`entity_discipline_types`
 tables, RI-ENT-WP-04; `441b071bf37b` is itself additive on `7e114f822af2` and
 adds the `entity_addresses`/`entity_communication_methods` tables,

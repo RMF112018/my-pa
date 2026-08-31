@@ -323,6 +323,10 @@ STACKED_ABOVE: Final[frozenset[str]] = frozenset(
         "entity_project_participations",
         "entity_role_types",
         "entity_discipline_types",
+        # `17149a48fa30`'s person-organization affiliation table
+        # (RI-ENT-WP-05), stacked above the plane for the same reason: it
+        # arrives above `f5b06925857e`, one link further still.
+        "entity_person_organization_affiliations",
     }
 )
 

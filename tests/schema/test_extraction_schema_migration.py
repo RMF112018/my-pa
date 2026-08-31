@@ -394,6 +394,13 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "entity_discipline_types",
         }
     ),
+    # `17149a48fa30` (RI-ENT-WP-05): the person-organization affiliation
+    # table, additive on `f5b06925857e` and creating nothing else.
+    "17149a48fa30": frozenset(
+        {
+            "entity_person_organization_affiliations",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

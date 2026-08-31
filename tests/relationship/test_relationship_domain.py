@@ -432,6 +432,23 @@ EXPECTED_MODEL_FIELDS = {
             "superseded_by_participation_id",
         }
     ),
+    "my_pa.domain.relationship.entity.PersonOrganizationAffiliation": frozenset(
+        {
+            "affiliation_id",
+            "principal_id",
+            "person_entity_id",
+            "affiliation_type_code",
+            "organization_entity_id",
+            "job_title",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_affiliation_id",
+        }
+    ),
     "my_pa.domain.relationship.entity.Assignment": frozenset(
         {
             "assignment_id",
@@ -1321,6 +1338,23 @@ EXPECTED_TABLE_COLUMNS = {
             "superseded_by_participation_id",
         }
     ),
+    "entity_person_organization_affiliations": frozenset(
+        {
+            "affiliation_id",
+            "principal_id",
+            "person_entity_id",
+            "organization_entity_id",
+            "job_title",
+            "affiliation_type_code",
+            "effective_from",
+            "effective_to",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+            "superseded_by_affiliation_id",
+        }
+    ),
     "entity_assignments": frozenset(
         {
             "assignment_id",
@@ -1755,8 +1789,9 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
     # after `441b071bf37b` added `EntityAddress` and
     # `EntityCommunicationMethod` (RI-ENT-WP-03); sixty-seven after
     # `f5b06925857e` added `EntityRoleType`, `EntityDisciplineType`, and
-    # `EntityProjectParticipation` (RI-ENT-WP-04).
-    assert len(actual_model_fields) == 67
+    # `EntityProjectParticipation` (RI-ENT-WP-04); sixty-eight after
+    # `17149a48fa30` added `PersonOrganizationAffiliation` (RI-ENT-WP-05).
+    assert len(actual_model_fields) == 68
     # Forty-nine after `b727e870d45e` added the identity-ambiguity pair to the
     # three durable re-enrichment tables RI final completion brought;
     # fifty-one after `7e114f822af2` added `entity_names` and
@@ -1764,9 +1799,11 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
     # `entity_addresses` and `entity_communication_methods` (RI-ENT-WP-03);
     # fifty-six after `f5b06925857e` added `entity_role_types`,
     # `entity_discipline_types`, and `entity_project_participations`
-    # (RI-ENT-WP-04). The figure makes the allow-list closed in both
-    # directions, so it moves with the declaration and never ahead of it.
-    assert len(actual_table_columns) == 56
+    # (RI-ENT-WP-04); fifty-seven after `17149a48fa30` added
+    # `entity_person_organization_affiliations` (RI-ENT-WP-05). The figure
+    # makes the allow-list closed in both directions, so it moves with the
+    # declaration and never ahead of it.
+    assert len(actual_table_columns) == 57
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

@@ -3748,16 +3748,12 @@ class _Entities(EntitiesRepository):
     # database, and a double that only ever succeeds teaches a caller that
     # refusals do not exist.
     #
-    # One divergence from the server, stated rather than hidden.
-    # `SqlEntityRepository.supersede_assertion` (WP-07, and outside WP-08's
-    # write scope) collapses both failure modes into `UnknownScopeError`,
-    # where the six families above split them through `_refuse_stale_or_absent`
-    # into `UnknownScopeError` for an unreachable row and
-    # `StaleDirectedVersionError` for a reachable row at another version.
-    # `_transition` below draws the split, so this double is the more
-    # discriminating of the two for the stale case; a caller must therefore
-    # not treat `StaleDirectedVersionError` as the only answer a stale
-    # supersession can produce against the real repository.
+    # These reproduce the server's refusals, never better ones. The six
+    # families above split a failed versioned write two ways through
+    # `_refuse_stale_or_absent`; `entity_assertions`' supersession does not,
+    # and neither does `supersede_assertion` below. The asymmetry is real,
+    # it is the server's, and it is disclosed at that method rather than
+    # quietly improved on here.
 
     def record_assertion(self, principal_id: str, assertion: EntityAssertion) -> None:
         self._world.fail("entities.record_assertion")
@@ -3842,17 +3838,48 @@ class _Entities(EntitiesRepository):
         # forward `supersedes_assertion_id` the successor row holds. A fake
         # that recorded it anyway would let a test read a column the schema
         # does not have.
-        self._transition(
-            self._world.entity_assertions,
-            principal_id,
-            "assertion_id",
-            assertion_id,
-            expected_version,
-            "assertion",
-            state=EntityAssertionState.SUPERSEDED,
-            assertion_status=AssertionStatus.SUPERSEDED,
-            updated_at=at,
-        )
+        #
+        # Written out longhand rather than through `_transition`, and this is
+        # the one place in this class where that is deliberate.
+        # `entity_assertions`' supersession collapses both failure modes into
+        # a single `UnknownScopeError` -- a row this Principal cannot reach
+        # and a reachable row at another version get the same refusal, with
+        # the same words -- where the six RI-ENT-WP-08 record families split
+        # them through `_refuse_stale_or_absent` into `UnknownScopeError` for
+        # the unreachable row and `StaleDirectedVersionError` for the stale
+        # one. `_transition` draws that split, correctly, for the six; it
+        # cannot express the collapse without changing their behaviour, so it
+        # is left untouched and this method does its own walk.
+        #
+        # This double reproduces the server's answer rather than a better
+        # one. A double that refuses more precisely than production teaches a
+        # caller a distinction production will never make: code written
+        # against a `StaleDirectedVersionError` branch here would pass every
+        # test and then never take that branch against
+        # `SqlEntityRepository.supersede_assertion`, whose only failure
+        # branch is `rowcount == 0`. The message below is the server's own,
+        # verbatim, so the two refusals are indistinguishable to a caller.
+        #
+        # Making the server split them instead is the arguably better end
+        # state and is a deliberate RI-ENT-WP-07 follow-up that has NOT been
+        # taken: it is a behaviour change to landed production code and needs
+        # database-tier proof, and RI-ENT-WP-08's own acceptance wording is to
+        # surface optimistic-version conflicts as the repository already
+        # classifies them.
+        for index, held in enumerate(self._world.entity_assertions):
+            if held.principal_id != principal_id or held.assertion_id != assertion_id:
+                continue
+            if held.version != expected_version:
+                break
+            self._world.entity_assertions[index] = replace(
+                held,
+                state=EntityAssertionState.SUPERSEDED,
+                assertion_status=AssertionStatus.SUPERSEDED,
+                version=held.version + 1,
+                updated_at=at,
+            )
+            return
+        raise UnknownScopeError("a supersession names an assertion this write read unchanged")
 
     def record_assertion_evidence(
         self, principal_id: str, evidence: EntityAssertionEvidence

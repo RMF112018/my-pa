@@ -1713,6 +1713,20 @@ class EntitiesRepository(ABC):
         itself. The caller is expected to have already written the
         superseding assertion; this port does not write it and does not
         require that it exist.
+
+        **One refusal, not two, and deliberately unlike the six families
+        above.** A write that matches no row raises `UnknownScopeError`
+        whether the row is unreachable in this Principal's partition or is
+        right here at a version other than `expected_version` -- the two are
+        not distinguished, and a caller cannot tell them apart. The block
+        comment above promises the `UnknownScopeError`/
+        `StaleDirectedVersionError` split for the six record families'
+        `supersede_*`/`retire_*`; it does not hold here, and this paragraph
+        is the correction rather than an omission a reader has to discover.
+        Splitting them would be the better contract and is an unclaimed
+        RI-ENT-WP-07 follow-up, so the contract is stated as it is rather
+        than as it should be -- an implementer that refused more precisely
+        than this would teach callers a distinction the others cannot make.
         """
 
     @abstractmethod

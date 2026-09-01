@@ -143,7 +143,7 @@ Preserved from the source audit; status reflects this increment only.
 | WP-05 | Person affiliation integration | **Delivered** — see below |
 | WP-06 | Corporate/entity relationship graph expansion | **Delivered (partial, RI-ENT-WP-06a)** — `entity_relationship_types` taxonomy and the twenty new codes; merge/split coordination for the six WP-02/04/05 record families remains deferred to a separate PR2 |
 | WP-07 | Assertion/confidence/provenance binding | **Delivered (partial)** — `entity_assertions`/`entity_assertion_evidence` (schema, domain, minimal typed persistence helpers, tests); repository/service/command-layer wiring is `WP-08`, MCP exposure is `WP-10`/`WP-11`. No scalar confidence was added under any name (RULING 1) — see below |
-| WP-08 | Repository/domain services and validation | **Delivered (partial)** — seventeen `record_*`/`supersede_*`/`retire_*` methods on `SqlEntityRepository` for the six Entity-bound families, the same seventeen plus RI-ENT-WP-07's six assertion methods declared `@abstractmethod` on `EntitiesRepository`, in-memory equivalents in both test doubles, and the application service `EntityRecordFamilyService` with its own command/receipt DTOs. **The service is deliberately unwired** — no `Capability`, no MCP tool, no HTTP route, no CLI command, and no registration in `ApplicationService`; transport exposure is `WP-10`/`WP-11`. Not delivered: mutation-ledger integration, an idempotency key, proposal-validation integration, a retirement verb for `entity_assertions`, and a split of `supersede_assertion`'s single refusal — see below |
+| WP-08 | Repository/domain services and validation | **Delivered (partial)** — seventeen `record_*`/`supersede_*`/`retire_*` methods on `SqlEntityRepository` for the six Entity-bound families, the same seventeen plus RI-ENT-WP-07's six assertion methods declared `@abstractmethod` on `EntitiesRepository`, in-memory equivalents in both test doubles, and the application service `EntityRecordFamilyService` with its own command/receipt DTOs. **The service is deliberately unwired** — no `Capability`, no MCP tool, no HTTP route, no CLI command, and no registration in `ApplicationService`; transport exposure is `WP-10`/`WP-11`. Not delivered: mutation-ledger integration, an idempotency key, proposal-validation integration, a retirement verb for `entity_assertions`, a split of `supersede_assertion`'s single refusal, and **the correction of a row holding the preferred slot** — which is refused outright, because the accepted schema makes it inexpressible as a supersession — see below |
 | WP-09 | Entity resolution/search vNext | Deferred |
 | WP-10 | MCP rich read contracts | Deferred |
 | WP-11 | MCP mutation contracts | Deferred |
@@ -1040,7 +1040,13 @@ The four properties the audit's objective names, each with its exact mechanism:
   before any row names it. `retire_*` retires under `expected_version`. What
   the record said before a correction survives the correction, which is the
   property the whole temporal shape exists to keep.
-  `revise_organization_profile` is the singleton's stated exception.
+  `revise_organization_profile` is the singleton's stated exception. **A
+  second exception is not a choice but a schema fact**: a correction whose
+  successor claims the preferred slot is refused outright on the three
+  families that carry `is_preferred`, because no ordering of the
+  correction's two statements satisfies both the preferred-slot index and
+  the supersession foreign key — see "A preferred row cannot be corrected
+  at all" in the boundary below.
 - **Optimistic versions are the caller's and are never re-read.**
   `expected_version` is a required field on every correction and every
   retirement, and nothing in the service reads the row first to discover its
@@ -1097,15 +1103,23 @@ reparenting bumps a reparented row's own `version`" below. The two doubles are
 covered by the existing `tests/unit`, `tests/relationship` and
 `tests/evaluation` suites that construct them.
 
-**Not yet at head, and named as pending rather than as delivered.** Unit and
-database coverage for `EntityRecordFamilyService` itself —
-`tests/unit/test_entity_record_family_service.py` and
-`tests/database/test_entity_record_family_service_write_path.py` — did not
-exist in the tree when this section was written. They are in flight in a
-concurrent work stream. Until they land, the service's own refusals are proven
-by reading, not by a test run, and this document says so rather than implying
-coverage it cannot cite.
-
+**The service's own coverage has since landed, and this note is promoted from
+pending to delivered.** `tests/unit/test_entity_record_family_service.py`
+(`31cc7bf`, extended by `95b16cf`) exercises the service against the in-memory
+`_Entities` double: Principal scoping as absence read structurally over
+`dataclasses.fields`, the two-row shape of a correction with the predecessor's
+survival as the load-bearing assertion, the profile's in-place revision and its
+nullable clearing, the optimistic-version refusals and the unreachable/absent
+parity, normalization computed from the stated display form, the four no-guess
+rules each at the helper that makes the refusal, the optional assertion and its
+evidence, and `MutationAuthority`'s keyword-only unreachability. It also pins
+the preferred-correction refusal on all three families, the two cases that
+refusal is deliberately wider than, and an AST check that the refusal is the
+first statement of each correction it guards.
+`tests/database/test_entity_record_family_service_write_path.py` (`499a7c1`,
+rewritten by `95b16cf`) holds only what a real schema can decide about the
+service's ordering, and pairs each positive claim with an anti-vacuity test
+proving the constraint it relies on actually fires.
 ### The boundary — what RI-ENT-WP-08 does NOT deliver
 
 **The service is deliberately unwired.** No `Capability` names
@@ -1131,6 +1145,96 @@ followed by a `supersede_*` that raises leaves the successor row written and
 the predecessor still `ACTIVE`.** Both rows are then visible and correctable by
 their own identifiers. The guarantee belongs to the caller's transaction, and
 neither the module nor this document will describe it as the service's own.
+
+**A preferred row cannot be corrected at all, and the refusal is a fact about
+the accepted schema rather than a policy this work package chose.** Found
+against real PostgreSQL after this section's first draft landed, and disclosed
+here explicitly rather than left to be inferred from the code.
+`EntityRecordFamilyService.correct_name`, `correct_address` and
+`correct_communication_method` now **refuse** any command carrying
+`is_preferred=True`, before any write, through `_refuse_preferred_correction`
+(commit `34367b4`); the refusal is the first statement of each of the three
+methods.
+
+*Why no ordering works.* The two possible orderings for a correction are
+mutually exclusive against the accepted schema.
+
+- **Successor-first** — the order every `correct_*` uses — trips the partial
+  unique **index** `an_active_entity_name_has_one_preferred_per_type`,
+  `ON (principal_id, entity_id, name_type_code) WHERE state = 'active' AND
+  is_preferred = true`, because the predecessor has not yet left
+  `state = 'active'`. `an_active_entity_address_has_one_preferred_per_type` and
+  `an_active_communication_method_has_one_preferred_per_type` are the same
+  shape for the other two families.
+- **Supersession-first** trips the self-referencing foreign key
+  `an_entity_name_is_superseded_within_its_principal` — `(superseded_by_*,
+  principal_id)` back to the same table — because the successor row does not
+  exist yet. `an_entity_address_is_superseded_within_its_principal` and
+  `a_communication_method_is_superseded_within_its_principal` are its siblings.
+
+*Why no transaction-level trick works either.* Those foreign keys carry **no
+`DEFERRABLE` clause** in
+`migrations/versions/20260830_7e114f822af2_add_entity_names_and_organization_.py`
+or
+`migrations/versions/20260830_441b071bf37b_add_entity_addresses_and_communication_.py`
+(`grep -c DEFERRABLE` returns zero in both), so they are checked per statement;
+and a unique **index** cannot be deferred at all — only a unique *constraint*
+can — so nothing reaches the first horn. That is proven against the live
+catalogue rather than read off a migration file:
+`tests/database/test_entity_record_family_service_write_path.py::test_no_supersession_foreign_key_is_deferrable`
+reads `pg_constraint` and asserts `condeferrable` and `condeferred` are false
+for every foreign key on a `superseded_by_*` column — matched by column rather
+than by name, so it covers both keys each column carries (the composite named
+one and the single-column one that column's own `REFERENCES` clause created).
+
+**So a preferred row's correction is not expressible as a supersession under
+the accepted schema and the accepted three-verb port.** The service answers
+with `InvalidRequestError` before any statement runs, which is a stable
+application refusal in place of a raw `psycopg` `UniqueViolation` leaking out
+of the repository —
+`test_a_preferred_correction_answers_with_a_refusal_and_not_a_driver_error`
+admits either and then asserts the type, so it locks that improvement rather
+than merely describing it.
+
+**The refusal is deliberately wider than the constraint, and this document
+states it rather than letting a reader assume exactness.** The service performs
+no read of the predecessor, so it also refuses two cases the indexes would in
+fact have admitted: a successor naming a *different* type code from the
+predecessor's, and one whose predecessor was not itself preferred. Narrowing
+the refusal would require reading the predecessor, which would be a second,
+unguarded source of truth beside the caller's `expected_version` — the very
+property the version guard exists to be. Both over-refused cases are pinned by
+tests in `tests/unit/test_entity_record_family_service.py`, so the width is
+held deliberately rather than drifting.
+
+**The available path, and its cost, stated plainly.** A caller replacing a
+preferred row uses `retire_*` on the predecessor — retirement writes
+`is_preferred = false` and releases the slot, proved against real PostgreSQL by
+`tests/database/test_entity_record_family_write_path.py::test_a_retirement_releases_the_preferred_slot`
+— and then `record_*` the replacement as preferred. **This is not equivalent to
+a correction, and the difference is not cosmetic:** it records a retirement,
+not a supersession, so no `superseded_by_*` lineage link is written and the two
+rows carry no relation to each other. A reader following the supersession chain
+will not find the replacement from the retired row. The schema enforces that
+rather than merely leaving it: `an_entity_name_names_a_successor_only_when_superseded`
+refuses a retired row that names a successor, so "a retirement that kept the
+lineage" is not a reachable state.
+
+**A known imprecision, recorded so a later fix reads as a correction rather
+than a regression.** The refusal reports `SafeDetail.PINNED` — the one member
+of that closed set naming a per-record "default to this" boolean.
+`src/my_pa/application/errors.py` has no `is_preferred` member and was outside
+the service work's scope, so `PINNED` is a documented approximation, not the
+precise token.
+
+**Two named follow-ups, neither taken and neither authorised in this branch.**
+A migration making those self-referencing foreign keys `DEFERRABLE INITIALLY
+DEFERRED` would reach the second horn but not the first, and belongs to a
+schema-owning work package rather than to WP-08. An in-place preference verb
+for a temporal family is explicitly rejected by the module's own design
+("there is deliberately no 'update in place' verb for a temporal family").
+Neither is inside RI-ENT-WP-08's objective; both are open, and the first is the
+only one of the two this campaign has not already argued against.
 
 **`supersede_assertion` collapses two refusals into one, and the split was
 deliberately not taken here.** `SqlEntityRepository.supersede_assertion` has a
@@ -1257,6 +1361,14 @@ families, whose parameters were already spelled for their own record.
   rows, so an empty read would be indistinguishable from a resolver that
   consulted the plane and correctly found nothing.
 - `tests/database/test_entity_record_family_write_path.py` (`ed6e057`).
+- `tests/unit/test_entity_record_family_service.py` (`31cc7bf`, `95b16cf`) and
+  `tests/database/test_entity_record_family_service_write_path.py` (`499a7c1`,
+  `95b16cf`): the service's own unit and database coverage, including the
+  preferred-correction refusal and both horns of "not expressible as a
+  supersession" proved against the live schema.
+- `src/my_pa/application/entity_record_families.py` (`34367b4`):
+  `_refuse_preferred_correction`, called as the first statement of
+  `correct_name`, `correct_address` and `correct_communication_method`.
 - `tests/architecture/test_principal_is_never_caller_supplied.py` (`28fb1e5`):
   six registry entries added, none removed, no matcher or control changed.
 
@@ -1893,6 +2005,8 @@ against its own disposable database, never the configured one):
 - `.venv/bin/python -m pytest tests/database/test_entity_record_family_write_path.py -q` (RI-ENT-WP-08; database tier, strictly serial across this campaign)
 - `.venv/bin/python -m pytest tests/architecture/test_principal_is_never_caller_supplied.py -q` (RI-ENT-WP-08 — the guard `28fb1e5` registered six new entries in)
 - `.venv/bin/python -m pytest tests/architecture/test_principal_partition_is_reached_through_the_guard.py -q` (RI-ENT-WP-08 — the guard `_refuse_stale_or_absent`'s call-site shape exists to satisfy)
+- `.venv/bin/python -m pytest tests/unit/test_entity_record_family_service.py -q` (RI-ENT-WP-08)
+- `.venv/bin/python -m pytest tests/database/test_entity_record_family_service_write_path.py -q` (RI-ENT-WP-08; database tier, strictly serial across this campaign)
 - `.venv/bin/python -m pytest tests/unit tests/relationship tests/evaluation -q` (RI-ENT-WP-08 — the two `EntitiesRepository` doubles the port additions obliged)
 - `.venv/bin/python -m mypy src` (RI-ENT-WP-08)
 - `.venv/bin/python -m ruff check .` / `.venv/bin/python -m ruff format --check .` (RI-ENT-WP-08)

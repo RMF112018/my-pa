@@ -1,8 +1,10 @@
 # ADR-008: NAS runtime topology and authority boundaries
 
-**Status:** Accepted; implementation staged as NAS-01 through NAS-10
+**Status:** Accepted; implementation staged as NAS-01 through NAS-10; browser-authentication selection partially superseded by [ADR-011](ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md)
 **Decision date:** 2026-08-12
 **Repository basis:** `main@c10ecf397e1556ac5da64ff49a608aa8e963cdb3`, tree `838169552d9b8db92c5ba38be93fd6dfc9fbac04`
+
+> **Controlling supersession notice (2026-09-01):** ADR-011 supersedes only this ADR's Entra production-browser authentication selection and Entra-specific web egress/authorization-code requirement insofar as it is an enduring application-login requirement. NAS/process placement, filesystem authority, private ingress, network isolation, Apple/TCC split, lifecycle controls, and all other non-authentication topology provisions remain accepted. Current Entra runtime remains implementation truth until UI-IMP-WP02..WP04 replace it.
 
 ## Context
 
@@ -42,9 +44,11 @@ credential nor a general NAS filesystem credential.
 PostgreSQL and database-bearing processes share an internal data-plane network.
 PostgreSQL is not published. Gateway also joins an edge plane so web and proxy
 can reach it; web joins that edge plane for Entra authorization-code traffic.
+**ADR-011 supersedes the Entra authorization-code requirement as an enduring production browser-auth requirement.** The network-separation decision remains valid; later auth implementation may narrow or remove Entra-specific egress only after the replacement path is proven.
 Only gateway and web receive bounded outbound access, restricted by NAS-06's
 verified host/DNS firewall allowlist to the required Microsoft Entra/OIDC
 endpoints. No application data or database port is exposed by that egress path.
+This Entra-specific allowlist is current legacy implementation/topology evidence, not the target browser-auth authority after ADR-011.
 
 The current gateway hard-binds loopback. NAS-04 must add and verify an explicit
 container-mode bind setting so it can listen on `0.0.0.0:8765` inside its own
@@ -64,8 +68,8 @@ The proxy is a fail-closed route allowlist:
 - generic `/v1/{capability}` stays internal and is refused at ingress.
 
 Tailscale identity headers are transport metadata only. They are not a
-substitute for Entra, the Remote Capture `ClientCredential`, or the future
-dedicated Apple machine credential.
+substitute for application authentication, the Remote Capture `ClientCredential`, or the future
+dedicated Apple machine credential. ADR-011 controls the production browser application-authentication target.
 
 ### Filesystem authority
 
@@ -96,8 +100,9 @@ validates the grant, performs the existing TCC read, uploads the exact envelope,
 and deletes the protected spool item only after verifying a durable,
 Principal- and envelope-bound NAS receipt. The Mac cannot mint grants.
 
-Pilot/production browser authentication is Entra. Synthetic/local-operator auth
-is scratch-only. Smoke services use `restart: "no"`. The separately activated
+Historical selection: pilot/production browser authentication is Entra and synthetic/local-operator auth is scratch-only. **The Entra production-browser selection is superseded by ADR-011.** The target normal production browser architecture is WebAuthn/passkey → opaque server-side session → server-derived Principal, with no production Entra/MSAL or browser `local_operator`/shared-secret fallback. Existing runtime remains current implementation truth until UI-IMP-WP02..WP04 complete.
+
+Smoke services use `restart: "no"`. The separately activated
 pilot overlay may use `unless-stopped` only after NAS-10 passes and the operator
 activates the pilot.
 
@@ -132,12 +137,15 @@ identity, and make normal start refuse drift. Normal start never builds.
   activation remain explicit later work packages rather than NAS-01 behavior.
 - Tailscale Serve availability and the live NAS platform are deployment-time
   gates. Failure stops activation rather than selecting a weaker fallback.
+- ADR-011, not this ADR, controls the production browser application-authentication/session target.
 
 ## Supersession
 
 Changing canonical host, publishing PostgreSQL, routing Remote Capture through
 Next.js, allowing generic capability ingress, letting the Mac issue grants, or
-changing the private HTTPS/auth selections requires a superseding ADR. Numeric
+changing the private HTTPS selection requires a superseding ADR. Numeric
 resource tuning, exact NAS paths, UID/GID, ACLs, image digests, and Apple route
 names are measured or frozen in their named later work packages and do not by
 themselves supersede this decision.
+
+ADR-011 specifically supersedes the Entra production-browser authentication selection and Entra-specific browser-auth egress requirement as described above; it does not supersede the remaining NAS topology or authority boundaries.

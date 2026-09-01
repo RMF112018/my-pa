@@ -49,12 +49,18 @@ from my_pa.domain.relationship.entity import (
     Assignment,
     Entity,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityCommunicationMethodState,
+    EntityName,
+    EntityNameState,
     EntityOrganizationProfile,
+    EntityProjectParticipation,
     EntityRelationship,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    PersonOrganizationAffiliation,
 )
 from my_pa.domain.relationship.governance import (
     EntityFactEvidenceLink,
@@ -79,10 +85,14 @@ from tests.evaluation.fixtures.resolution_cases import (
     ResolutionCase,
 )
 from tests.evaluation.fixtures.resolution_corpus import (
+    CORPUS_AFFILIATIONS,
     CORPUS_ALIASES,
     CORPUS_ASSIGNMENTS,
+    CORPUS_COMMUNICATION_METHODS,
     CORPUS_ENTITIES,
     CORPUS_IDENTIFIERS,
+    CORPUS_NAMES,
+    CORPUS_PARTICIPATIONS,
     CORPUS_RELATIONSHIPS,
 )
 
@@ -168,6 +178,19 @@ class _CorpusRepository(EntitiesRepository):
         entity = self._entities.get(entity_id)
         return entity if entity is not None and entity.principal_id == principal_id else None
 
+    def _bounded[Row](self, rows: list[Row], limit: int | None) -> list[Row]:
+        """`limit` rows of an already-ordered read, refusing a limit below one.
+
+        The in-memory counterpart of `_require_row_limit`/`_limited` on the SQL
+        plane, and it refuses rather than clamps for that method's own reason: a
+        caller that asked for zero rows asked a question this port does not
+        answer, and quietly handing back one row -- or none -- would let the
+        mistake reach a resolution answer as a silently short read.
+        """
+        if limit is not None and limit < 1:
+            raise ValueError("a row limit is at least one")
+        return rows if limit is None else rows[:limit]
+
     _entities: Final = {entity.entity_id: entity for entity in CORPUS_ENTITIES}
 
     # --- reads -----------------------------------------------------------
@@ -242,6 +265,84 @@ class _CorpusRepository(EntitiesRepository):
             key=lambda entity: entity.entity_id,
         )
 
+    # --- RI-ENT-WP-09: the two normalized-value reads over record families ----
+    #
+    # `entities_by_alias`' shape rather than `names`'/`communication_methods`',
+    # because the question is theirs -- not "what is this entity called" but
+    # "who, if anyone, is called this" -- so they sit beside it here exactly as
+    # they do in `SqlEntityRepository`.
+    #
+    # **These two are implemented over real corpus rows rather than refused, and
+    # that is the whole point of the pair.** Every other six-family accessor on
+    # this class raises, because resolution reads none of them and a corpus that
+    # answered `[]` would let a resolver consult an empty world and be reported
+    # as precise. Once resolution *does* read a family, the same argument runs
+    # the other way: an empty answer would be indistinguishable from a corpus
+    # that carries no claimant of a contested value, and the calibration figures
+    # would silently stop measuring the basis they name.
+
+    def entities_by_typed_name(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityName]]:
+        """Every entity carrying this normalized name form, with the name that matched.
+
+        `SqlEntityRepository.entities_by_typed_name`'s contract, term for term:
+        the partition applied to the name row and to the entity before anything
+        else, **equality** on the already-normalized value and never a substring
+        or a fuzzy match, only `EntityNameState.ACTIVE` rows, and the collection
+        read whole so no claimant of a contested name can fall off an end.
+
+        The state filter is derived from the enum rather than spelled as a
+        literal, matching the server, and it is what makes
+        `enam_halvard0009supers` and `enam_halvard0010retird` unmatchable: a
+        superseded row holds a spelling the Principal already corrected away and
+        a retired one holds a spelling they withdrew.
+
+        Effective dating is deliberately absent here, as it is on the server and
+        on the alias path: `effective_from`/`effective_to` are judged by the
+        service against the caller's `as_of`, which is the only layer that knows
+        that moment, and a row excluded there is disclosed rather than missing.
+        """
+        matched: list[tuple[Entity, EntityName]] = []
+        for name in CORPUS_NAMES:
+            if name.principal_id != principal_id or name.normalized_value != normalized_value:
+                continue
+            if name.state is not EntityNameState.ACTIVE:
+                continue
+            entity = self._mine(principal_id, name.entity_id)
+            if entity is not None:
+                matched.append((entity, name))
+        return sorted(matched, key=lambda pair: (pair[0].entity_id, pair[1].entity_name_id))
+
+    def entities_by_communication_value(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityCommunicationMethod]]:
+        """Every entity carrying this normalized communication value, with the row that matched.
+
+        `entities_by_typed_name`'s scan over `CORPUS_COMMUNICATION_METHODS`, on
+        every one of its terms including the `ACTIVE`-only filter, which is what
+        keeps `ecmm_halvard0005retird` -- a withdrawn mailbox -- from producing
+        a candidate.
+
+        More than one result is not an error: `ecmm_halvard0001phone` and
+        `ecmm_halvard0002phone` are one switchboard answered by two juristic
+        entities of one corporate family, which is what a corporate family is.
+        Deciding what to do about that is the resolution service's, and audit
+        section M's answer is candidates and never a merge.
+        """
+        matched: list[tuple[Entity, EntityCommunicationMethod]] = []
+        for method in CORPUS_COMMUNICATION_METHODS:
+            if method.principal_id != principal_id or method.normalized_value != normalized_value:
+                continue
+            if method.state is not EntityCommunicationMethodState.ACTIVE:
+                continue
+            entity = self._mine(principal_id, method.entity_id)
+            if entity is not None:
+                matched.append((entity, method))
+        return sorted(
+            matched, key=lambda pair: (pair[0].entity_id, pair[1].communication_method_id)
+        )
+
     def external_identifiers(self, principal_id: str, entity_id: str) -> list[ExternalIdentifier]:
         return [
             identifier
@@ -256,10 +357,20 @@ class _CorpusRepository(EntitiesRepository):
             if alias.principal_id == principal_id and alias.entity_id == entity_id
         ]
 
-    # RI-ENT-WP-06b's six Entity-bound families: resolution never reads any
-    # of them, and the corpus carries no fixture data for them, so every
-    # accessor below follows this class's own established pattern for a
-    # family it does not need -- raise, on the same terms as `observations`.
+    # RI-ENT-WP-06b's six Entity-bound families. Four of the eight accessors
+    # below still raise, on this class's own established terms and for the
+    # reason `observations` gives: resolution reads none of those four, the
+    # corpus carries nothing for them, and an empty answer would let a resolver
+    # that started consulting one be measured against nothing and reported fine.
+    #
+    # The two RI-ENT-WP-09 *does* read -- affiliations as the person, and
+    # participations as the participant -- answer over real corpus rows instead,
+    # because for a family resolution reads the same argument inverts: refusing
+    # would break the run, and answering `[]` would make the corroboration
+    # signals vacuous. They are read whole and unfiltered by state or date,
+    # matching `SqlEntityRepository`: currency is the service's judgement
+    # against `at`/`as_of` through `is_in_force`, and a row excluded there sets
+    # `withheld` rather than vanishing from the read.
 
     def names(self, principal_id: str, entity_id: str, *, limit: int | None = None) -> list:
         raise NotImplementedError("resolution reads no name form")
@@ -284,13 +395,45 @@ class _CorpusRepository(EntitiesRepository):
 
     def project_participations_as_participant(
         self, principal_id: str, entity_id: str, *, limit: int | None = None
-    ) -> list:
-        raise NotImplementedError("resolution reads no project participation")
+    ) -> list[EntityProjectParticipation]:
+        """Participations naming `entity_id` as `participant_entity_id`.
+
+        The partition applied first, then the participant column, then
+        `SqlEntityRepository`'s own `ORDER BY participation_id`. No state or
+        date filter, deliberately: `eppt_leo0003superseded` is open-ended and in
+        force by every date rule and only `state` excludes it, so filtering here
+        would move the currency judgement out of the layer that knows the
+        moment and hide the exclusion from the answer's `withheld` disclosure.
+        """
+        matched = [
+            participation
+            for participation in CORPUS_PARTICIPATIONS
+            if participation.principal_id == principal_id
+            and participation.participant_entity_id == entity_id
+        ]
+        ordered = sorted(matched, key=lambda row: row.participation_id)
+        return self._bounded(ordered, limit)
 
     def person_organization_affiliations_as_person(
         self, principal_id: str, entity_id: str, *, limit: int | None = None
-    ) -> list:
-        raise NotImplementedError("resolution reads no person affiliation")
+    ) -> list[PersonOrganizationAffiliation]:
+        """Affiliations naming `entity_id` as `person_entity_id`.
+
+        `project_participations_as_participant`'s scan on every term, ordered by
+        `affiliation_id` as the server orders it, and unfiltered by state or
+        date for the same reason: `poaf_leo0004superseded` is open-ended and
+        excluded by nothing but `state`, and `poaf_priya0003ended00` is `ACTIVE`
+        and excluded by nothing but its dates. Both exclusions belong to
+        `is_in_force`, not to this read.
+        """
+        matched = [
+            affiliation
+            for affiliation in CORPUS_AFFILIATIONS
+            if affiliation.principal_id == principal_id
+            and affiliation.person_entity_id == entity_id
+        ]
+        ordered = sorted(matched, key=lambda row: row.affiliation_id)
+        return self._bounded(ordered, limit)
 
     def person_organization_affiliations_as_organization(
         self, principal_id: str, entity_id: str, *, limit: int | None = None

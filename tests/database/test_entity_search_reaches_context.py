@@ -119,6 +119,7 @@ DECOY_NAME: Final = "50XYoff"
 EDGE_TYPE: Final = EntityRelationshipType.SUBCONTRACTOR_TO
 
 WHEN: Final = datetime(2026, 9, 1, 12, tzinfo=UTC)
+LATER: Final = datetime(2026, 9, 1, 13, tzinfo=UTC)
 
 
 def _config() -> Config:
@@ -430,6 +431,68 @@ def test_a_historical_typed_name_is_unreachable_through_search(staged: Engine) -
 def test_the_withheld_entity_is_reachable_by_its_own_display_name(staged: Engine) -> None:
     """Anti-vacuity: the two claims above would hold for an absent row too."""
     assert _found(staged, "Zorrandel") == {WITHHELD}
+
+
+# --- The active-state filter on the widened search ------------------------
+#
+# `SqlEntityRepository.search`'s typed-name subquery restricts to
+# `EntityNameState.ACTIVE`, and its own comment states why: "a retired or
+# superseded name form is a name this entity no longer carries, and serving it
+# to a browse query is the disclosure the alias decision refuses." That filter
+# was untested until these two tests. Removing it failed nothing in this
+# module -- proven by mutation, deleting the line and watching all nineteen
+# tests stay green -- which is the same shape of gap that let a broken
+# `correct_affiliation` reach independent review in RI-ENT-WP-08: a documented
+# invariant with nothing holding it.
+#
+# Each test asserts reachability BEFORE the lifecycle transition as well as
+# after, so neither can pass because the row was never findable in the first
+# place.
+
+RETIRED_NAME: Final = "Quenthivar"
+SUPERSEDED_NAME: Final = "Brellowyn"
+SUCCESSOR_NAME: Final = "Kaddrimore"
+"""Deliberately not a superstring of `SUPERSEDED_NAME`: `search` is a
+substring match, so a successor named "Brellowyn Reborn" would be found by
+a query for "Brellowyn" and the supersession assertion would fail for a
+reason that has nothing to do with the active-state filter under test."""
+
+
+def test_a_retired_typed_name_is_unreachable_through_search(staged: Engine) -> None:
+    name_id = "enam_retir0008retire"
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).record_entity_name(
+            PRINCIPAL_A, _name(name_id, NAMED, RETIRED_NAME, NameTypeCode.OPERATING)
+        )
+    assert _found(staged, RETIRED_NAME) == {NAMED}
+
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).retire_entity_name(
+            PRINCIPAL_A, entity_name_id=name_id, expected_version=1, at=LATER
+        )
+    assert _found(staged, RETIRED_NAME) == set()
+    assert _found(staged, TRADING_NAME) == {NAMED}
+
+
+def test_a_superseded_typed_name_is_unreachable_and_its_successor_is(staged: Engine) -> None:
+    name_id = "enam_super0009supers"
+    successor_id = "enam_succe0010succes"
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).record_entity_name(
+            PRINCIPAL_A, _name(name_id, NAMED, SUPERSEDED_NAME, NameTypeCode.ACRONYM)
+        )
+    assert _found(staged, SUPERSEDED_NAME) == {NAMED}
+
+    with staged.begin() as connection:
+        SqlEntityRepository(connection).supersede_entity_name(
+            PRINCIPAL_A,
+            entity_name_id=name_id,
+            successor=_name(successor_id, NAMED, SUCCESSOR_NAME, NameTypeCode.ACRONYM),
+            expected_version=1,
+            at=LATER,
+        )
+    assert _found(staged, SUPERSEDED_NAME) == set()
+    assert _found(staged, SUCCESSOR_NAME) == {NAMED}
 
 
 # --- the partition, asserted in both directions ------------------------------

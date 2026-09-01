@@ -3414,6 +3414,30 @@ class _Entities(EntitiesRepository):
     # caller -- another Principal's record, a merged-away endpoint, and a
     # stale or unreachable version -- rather than only the happy path, because
     # a double that cannot refuse teaches a caller that refusals do not exist.
+    #
+    # **`supersede_*` writes the successor here too.** It takes the successor
+    # record, as the port does, and a caller that superseded a row through
+    # this double sees the replacement row afterwards -- not just a state
+    # change on the row it replaced. A double that took the successor and
+    # dropped it would let a test pass over a correction that never wrote the
+    # corrected value.
+    #
+    # What it deliberately does *not* reproduce is uniqueness. The five active
+    # uniqueness indexes those tables carry are the reason the real
+    # `supersede_*` orders its statements the way it does, and re-deciding
+    # here which rows collide would make this file a second, unversioned
+    # statement of the schema -- one that would drift from the migrations
+    # without any test noticing. Collisions are the database's answer and are
+    # proved against a database, in `tests/database/`.
+    #
+    # The one visible shortcut: the real write marks the predecessor
+    # SUPERSEDED, inserts, and *then* names the successor, because only the
+    # last order satisfies a non-deferrable self-referencing foreign key. This
+    # double names the successor in the same replace, since a list of
+    # dataclasses has no foreign key to satisfy. Refusal order is preserved,
+    # which is the part a caller can observe: a stale or unreachable
+    # predecessor is refused before the successor is inserted, so a refused
+    # correction leaves no orphaned row behind.
 
     def _writable(self, principal_id: str, entity_id: str) -> None:
         entity = self._mine(principal_id, entity_id)
@@ -3441,24 +3465,27 @@ class _Entities(EntitiesRepository):
             return
         raise UnknownScopeError(f"a {subject} write names a row outside this scope")
 
-    def record_entity_name(self, principal_id: str, entity_name: EntityName) -> None:
+    def _insert_entity_name(self, principal_id: str, entity_name: EntityName) -> None:
         self._world.fail("entities.record_entity_name")
         if entity_name.principal_id != principal_id:
             raise ValueError("an entity name belongs to the acting Principal")
         self._writable(principal_id, entity_name.entity_id)
         self._world.entity_names.append(entity_name)
 
+    def record_entity_name(self, principal_id: str, entity_name: EntityName) -> None:
+        self._insert_entity_name(principal_id, entity_name)
+
     def supersede_entity_name(
         self,
         principal_id: str,
         *,
         entity_name_id: str,
-        superseded_by_entity_name_id: str,
+        successor: EntityName,
         expected_version: int,
         at: datetime,
     ) -> None:
         self._world.fail("entities.supersede_entity_name")
-        if superseded_by_entity_name_id == entity_name_id:
+        if successor.entity_name_id == entity_name_id:
             raise ValueError("an entity name is not superseded by itself")
         self._transition(
             self._world.entity_names,
@@ -3468,9 +3495,10 @@ class _Entities(EntitiesRepository):
             expected_version,
             "entity name",
             state=EntityNameState.SUPERSEDED,
-            superseded_by_entity_name_id=superseded_by_entity_name_id,
+            superseded_by_entity_name_id=successor.entity_name_id,
             updated_at=at,
         )
+        self._insert_entity_name(principal_id, successor)
 
     def retire_entity_name(
         self, principal_id: str, *, entity_name_id: str, expected_version: int, at: datetime
@@ -3528,24 +3556,27 @@ class _Entities(EntitiesRepository):
             updated_at=at,
         )
 
-    def record_entity_address(self, principal_id: str, address: EntityAddress) -> None:
+    def _insert_entity_address(self, principal_id: str, address: EntityAddress) -> None:
         self._world.fail("entities.record_entity_address")
         if address.principal_id != principal_id:
             raise ValueError("an entity address belongs to the acting Principal")
         self._writable(principal_id, address.entity_id)
         self._world.entity_addresses.append(address)
 
+    def record_entity_address(self, principal_id: str, address: EntityAddress) -> None:
+        self._insert_entity_address(principal_id, address)
+
     def supersede_entity_address(
         self,
         principal_id: str,
         *,
         entity_address_id: str,
-        superseded_by_entity_address_id: str,
+        successor: EntityAddress,
         expected_version: int,
         at: datetime,
     ) -> None:
         self._world.fail("entities.supersede_entity_address")
-        if superseded_by_entity_address_id == entity_address_id:
+        if successor.entity_address_id == entity_address_id:
             raise ValueError("an entity address is not superseded by itself")
         self._transition(
             self._world.entity_addresses,
@@ -3555,9 +3586,10 @@ class _Entities(EntitiesRepository):
             expected_version,
             "entity address",
             state=EntityAddressState.SUPERSEDED,
-            superseded_by_entity_address_id=superseded_by_entity_address_id,
+            superseded_by_entity_address_id=successor.entity_address_id,
             updated_at=at,
         )
+        self._insert_entity_address(principal_id, successor)
 
     def retire_entity_address(
         self, principal_id: str, *, entity_address_id: str, expected_version: int, at: datetime
@@ -3576,7 +3608,7 @@ class _Entities(EntitiesRepository):
             updated_at=at,
         )
 
-    def record_communication_method(
+    def _insert_communication_method(
         self, principal_id: str, method: EntityCommunicationMethod
     ) -> None:
         self._world.fail("entities.record_communication_method")
@@ -3585,17 +3617,22 @@ class _Entities(EntitiesRepository):
         self._writable(principal_id, method.entity_id)
         self._world.entity_communication_methods.append(method)
 
+    def record_communication_method(
+        self, principal_id: str, method: EntityCommunicationMethod
+    ) -> None:
+        self._insert_communication_method(principal_id, method)
+
     def supersede_communication_method(
         self,
         principal_id: str,
         *,
         communication_method_id: str,
-        superseded_by_communication_method_id: str,
+        successor: EntityCommunicationMethod,
         expected_version: int,
         at: datetime,
     ) -> None:
         self._world.fail("entities.supersede_communication_method")
-        if superseded_by_communication_method_id == communication_method_id:
+        if successor.communication_method_id == communication_method_id:
             raise ValueError("a communication method is not superseded by itself")
         self._transition(
             self._world.entity_communication_methods,
@@ -3605,9 +3642,10 @@ class _Entities(EntitiesRepository):
             expected_version,
             "communication method",
             state=EntityCommunicationMethodState.SUPERSEDED,
-            superseded_by_communication_method_id=superseded_by_communication_method_id,
+            superseded_by_communication_method_id=successor.communication_method_id,
             updated_at=at,
         )
+        self._insert_communication_method(principal_id, successor)
 
     def retire_communication_method(
         self,
@@ -3631,7 +3669,7 @@ class _Entities(EntitiesRepository):
             updated_at=at,
         )
 
-    def record_project_participation(
+    def _insert_project_participation(
         self, principal_id: str, participation: EntityProjectParticipation
     ) -> None:
         self._world.fail("entities.record_project_participation")
@@ -3641,17 +3679,22 @@ class _Entities(EntitiesRepository):
         self._writable(principal_id, participation.participant_entity_id)
         self._world.entity_project_participations.append(participation)
 
+    def record_project_participation(
+        self, principal_id: str, participation: EntityProjectParticipation
+    ) -> None:
+        self._insert_project_participation(principal_id, participation)
+
     def supersede_project_participation(
         self,
         principal_id: str,
         *,
         participation_id: str,
-        superseded_by_participation_id: str,
+        successor: EntityProjectParticipation,
         expected_version: int,
         at: datetime,
     ) -> None:
         self._world.fail("entities.supersede_project_participation")
-        if superseded_by_participation_id == participation_id:
+        if successor.participation_id == participation_id:
             raise ValueError("a project participation is not superseded by itself")
         self._transition(
             self._world.entity_project_participations,
@@ -3661,9 +3704,10 @@ class _Entities(EntitiesRepository):
             expected_version,
             "project participation",
             state=EntityProjectParticipationState.SUPERSEDED,
-            superseded_by_participation_id=superseded_by_participation_id,
+            superseded_by_participation_id=successor.participation_id,
             updated_at=at,
         )
+        self._insert_project_participation(principal_id, successor)
 
     def retire_project_participation(
         self, principal_id: str, *, participation_id: str, expected_version: int, at: datetime
@@ -3681,7 +3725,7 @@ class _Entities(EntitiesRepository):
             updated_at=at,
         )
 
-    def record_person_organization_affiliation(
+    def _insert_person_organization_affiliation(
         self, principal_id: str, affiliation: PersonOrganizationAffiliation
     ) -> None:
         self._world.fail("entities.record_person_organization_affiliation")
@@ -3692,17 +3736,22 @@ class _Entities(EntitiesRepository):
             self._writable(principal_id, affiliation.organization_entity_id)
         self._world.entity_person_organization_affiliations.append(affiliation)
 
+    def record_person_organization_affiliation(
+        self, principal_id: str, affiliation: PersonOrganizationAffiliation
+    ) -> None:
+        self._insert_person_organization_affiliation(principal_id, affiliation)
+
     def supersede_person_organization_affiliation(
         self,
         principal_id: str,
         *,
         affiliation_id: str,
-        superseded_by_affiliation_id: str,
+        successor: PersonOrganizationAffiliation,
         expected_version: int,
         at: datetime,
     ) -> None:
         self._world.fail("entities.supersede_person_organization_affiliation")
-        if superseded_by_affiliation_id == affiliation_id:
+        if successor.affiliation_id == affiliation_id:
             raise ValueError("an affiliation is not superseded by itself")
         self._transition(
             self._world.entity_person_organization_affiliations,
@@ -3712,9 +3761,10 @@ class _Entities(EntitiesRepository):
             expected_version,
             "affiliation",
             state=PersonOrganizationAffiliationState.SUPERSEDED,
-            superseded_by_affiliation_id=superseded_by_affiliation_id,
+            superseded_by_affiliation_id=successor.affiliation_id,
             updated_at=at,
         )
+        self._insert_person_organization_affiliation(principal_id, successor)
 
     def retire_person_organization_affiliation(
         self,

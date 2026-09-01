@@ -30,44 +30,54 @@ start honouring.
 
 **Lifecycle: three verbs, and a correction is never an in-place rewrite.**
 `record_*` mints an identifier and inserts. `correct_*` mints a *second*
-identifier, writes the successor row, and only then supersedes the predecessor
-under the caller's `expected_version` -- the order the port's own
-`supersede_assertion` docstring fixes as the convention for its family, and
-the order every `correct_*` below follows: the successor exists before any row
-names it. `retire_*` retires under `expected_version`. So what a record said
-before a correction survives the correction, which is the property the whole
-temporal shape exists to keep.
+identifier, builds the successor record, and hands that record -- not its
+identifier -- to the port's `supersede_*` under the caller's
+`expected_version`. `retire_*` retires under `expected_version`. So what a
+record said before a correction survives the correction, which is the property
+the whole temporal shape exists to keep.
 
-**A preferred row cannot be corrected, and the refusal is a fact about the
-schema rather than a policy this module chose.** `correct_name`,
-`correct_address` and `correct_communication_method` refuse a command carrying
-`is_preferred=True`, before writing anything. Those three families each hold a
-partial unique *index* admitting one active preferred row per
-`(principal_id, entity_id, type code)` and a NOT DEFERRABLE self-referencing
-foreign key requiring a supersession's successor to already exist, and a
-correction has to satisfy both at once: writing the successor first trips the
-index, because the predecessor has not yet left `state = 'active'`, and
-superseding first trips the foreign key, because the successor is not there to
-be named. A unique index cannot be deferred at all -- only a unique constraint
-can -- so no ordering and no transaction-level trick reaches it. Without the
-refusal the caller received a raw `psycopg` `UniqueViolation` out of the
-repository; with it they receive a stable application refusal before any row is
-written. `_refuse_preferred_correction` names the six constraints, the two
-cases the refusal is deliberately wider than, and the retire-then-record path a
-caller has instead -- along with what that path costs, which is the
-`superseded_by_*` lineage link. Correcting a row that is not preferred is
-untouched, and so is recording a preferred row in the first place.
+**A correction is one repository call, because the order its statements go in
+is a fact about the DDL and not a choice a caller makes.** Each `correct_*`
+below states the correction; `EntitiesRepository.supersede_*` issues it in the
+one order the schema admits -- mark the predecessor SUPERSEDED with its
+`superseded_by_*` still null, insert the successor, then point the
+`superseded_by_*` at it. The first statement is what releases the family's
+active-uniqueness partial unique index, and with it the
+`..._has_one_preferred_per_type` index where the family has one, because every
+one of them is `WHERE state = 'active'`; the last is last because each family's
+self-referencing `(superseded_by_*, principal_id)` foreign key is NOT
+DEFERRABLE and is satisfiable only once the successor row exists. A superseded
+row that names no successor yet is a state the schema admits on purpose:
+`CHECK (superseded_by_X IS NULL OR state = 'superseded')` makes naming a
+successor imply SUPERSEDED and not the converse. Sequencing those statements
+here would make this service a second place that ordering is known, free to
+disagree with the schema -- and an earlier version of this module, which wrote
+the successor first, did disagree with it.
 
-**Atomicity, stated rather than claimed.** A correction is two statements, not
-one. `SqlEntityRepository` takes the connection rather than opening one -- "the
-caller owns the transaction, this class only issues statements on it" -- and
-`SqlUnitOfWork.entities` hands out a repository bound to the open transaction's
-connection, so a correction issued through a unit of work commits or rolls back
-whole. This service does not open, commit or roll back anything, and it holds
-no compensating write: called with a repository that is *not* inside a
-transaction, a `record_*` that succeeds followed by a `supersede_*` that raises
-leaves the successor row written and the predecessor still ACTIVE, and both
-rows are then visible and correctable by their own identifiers. The guarantee
+**Correcting a preferred row is ordinary, and nothing here refuses it.** The
+release step takes the predecessor out of the preferred index along with the
+active-uniqueness one, so the successor may claim the slot the predecessor
+held. What is *not* translated is a collision with some **other** active row --
+a second name of the same type and normalized value, a second preferred address
+of the same type, a second open-ended affiliation of the same person. That
+leaves the repository as the driver's `IntegrityError`, unchanged and exactly
+as it leaves the matching `record_*`, because nothing about a write being a
+correction makes it a different failure. The gap is stated rather than covered
+by a refusal, which is what covering it would cost: telling a real conflict
+apart from a self-collision needs a read of the predecessor, and a read here
+would be a second, unguarded source of truth beside the caller's
+`expected_version`.
+
+**Atomicity, stated rather than claimed.** A correction is a sequence of
+statements the repository issues, not one. `SqlEntityRepository` takes the
+connection rather than opening one -- "the caller owns the transaction, this
+class only issues statements on it" -- and `SqlUnitOfWork.entities` hands out a
+repository bound to the open transaction's connection, so a correction issued
+through a unit of work commits or rolls back whole. This service does not open,
+commit or roll back anything, and it holds no compensating write: called with a
+repository that is *not* inside a transaction, a supersession that fails part
+way leaves the predecessor SUPERSEDED with its `superseded_by_*` still null --
+no longer active, naming nobody, and a state the schema admits. The guarantee
 belongs to the caller's transaction, and this module will not describe it as
 its own.
 
@@ -761,78 +771,6 @@ def _stated_identifier(value: str | None) -> str | None:
     return value
 
 
-def _refuse_preferred_correction(is_preferred: bool) -> None:
-    """Refuse a correction whose successor claims the preferred slot.
-
-    **A preferred row's correction is not expressible as a supersession under
-    this schema, and the two possible orderings are mutually exclusive.** The
-    three temporal families that carry `is_preferred` each hold two constraints
-    that a correction has to satisfy at once and cannot:
-
-    * `an_active_entity_name_has_one_preferred_per_type`,
-      `an_active_entity_address_has_one_preferred_per_type` and
-      `an_active_communication_method_has_one_preferred_per_type` -- unique
-      *indexes* on `(principal_id, entity_id, <type> _code)`
-      `WHERE state = 'active' AND is_preferred = true`. Writing the successor
-      first, which is the order every `correct_*` here uses, trips these: the
-      predecessor is still `state = 'active'` and still preferred when the
-      insert lands.
-    * `an_entity_name_is_superseded_within_its_principal`,
-      `an_entity_address_is_superseded_within_its_principal` and
-      `a_communication_method_is_superseded_within_its_principal` -- the
-      self-referencing foreign keys `(superseded_by_*, principal_id)` back to
-      the same table. Superseding first trips these instead: the successor row
-      the supersession names does not exist yet. All three are declared with no
-      `DEFERRABLE` clause in `migrations/versions/`'s
-      `7e114f822af2` and `441b071bf37b` revisions, so they are NOT DEFERRABLE
-      and are checked per statement.
-
-    So no reordering reaches it, and no transaction-level trick does either: a
-    unique *index* cannot be deferred at all -- only a unique *constraint* can.
-    Making a preferred correction expressible would need a migration making
-    those self-referencing foreign keys deferrable, or an in-place preference
-    verb for a temporal family, which this module's own design rejects ("There
-    is deliberately no 'update in place' verb for a temporal family").
-    Neither is inside RI-ENT-WP-08, and neither is done here.
-
-    **What is refused, and what is not.** Every `correct_*` command carrying
-    `is_preferred=True` on the three families above. A correction of a row that
-    is *not* preferred is untouched, which is the ordinary case. So is every
-    `record_*`, including one that records a preferred row, and so is every
-    `retire_*` and the organization profile's `revise_organization_profile`.
-
-    **The refusal is deliberately wider than the constraint, and that is stated
-    rather than hidden.** Two preferred corrections the indexes would in fact
-    have admitted are refused here too: one whose successor names a *different*
-    type code from the predecessor's, and one whose predecessor was not itself
-    preferred. Telling either case apart needs a read of the predecessor, and
-    this service performs none -- a read here would be a second, unguarded
-    source of truth beside the caller's `expected_version`, which is the whole
-    thing that guard exists to be. A refusal a caller can act on is the honest
-    answer; a read that made the refusal exact would cost the property the
-    module is built on.
-
-    **What a caller does instead, and what it costs.** Replace a preferred row
-    by `retire_*` on the predecessor -- retirement writes `is_preferred = false`
-    and releases the slot, which
-    `tests/database/test_entity_record_family_write_path.py::test_a_retirement_releases_the_preferred_slot`
-    proves against real PostgreSQL -- and then `record_*` the replacement as
-    preferred. **This is not equivalent to a correction and the difference is
-    not cosmetic:** it records a retirement, so no `superseded_by_*` link is
-    written and the two rows carry no lineage relating them. A reader following
-    the supersession chain will not find the replacement from the retired row.
-
-    `SafeDetail` carries no `is_preferred` member and `errors.py` is outside
-    this package's scope, so the refusal reports `PINNED`, the one member of
-    that closed set naming a per-record "this is the one to default to"
-    boolean. The imprecision is named here rather than left for a reader to
-    discover, the way that enum's own comment block records the tokens it
-    declined.
-    """
-    if is_preferred:
-        raise InvalidRequestError(SafeDetail.PINNED)
-
-
 def _normalized_name(display_value: str) -> str:
     """`display_value` as the form two names are compared in.
 
@@ -920,19 +858,26 @@ class EntityRecordFamilyService:
         at: datetime,
         authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
     ) -> CorrectedFact:
-        """Write the corrected name and supersede the row it replaces, in that order.
+        """Supersede one name with the corrected row, in one repository call.
 
-        Refuses a command carrying `is_preferred=True` before writing anything;
-        see `_refuse_preferred_correction` for why no ordering of these two
-        statements satisfies both `an_active_entity_name_has_one_preferred_per_type`
-        and `an_entity_name_is_superseded_within_its_principal`, and for the
-        retire-then-record path a caller has instead.
+        The successor record goes to `supersede_entity_name` rather than being
+        inserted here first, because the predecessor has to leave
+        `an_active_entity_name_is_unique_per_entity_and_type` -- and
+        `an_active_entity_name_has_one_preferred_per_type` with it, both partial
+        on `state = 'active'` -- before the successor can land. That ordering is
+        a fact about the DDL, so this states the correction and the repository
+        issues it in the one order the schema admits. A successor claiming the
+        preferred slot the predecessor held is ordinary and is refused nowhere.
+
+        A collision with some *other* active name of the same type and
+        normalized value is a real conflict, and it surfaces as the driver's
+        `IntegrityError`, untranslated, exactly as it does out of `record_name`.
         """
-        _refuse_preferred_correction(command.is_preferred)
         entity_name_id = issue_identifier(IdKind.ENTITY_NAME)
-        repository.record_entity_name(
+        repository.supersede_entity_name(
             principal_id,
-            EntityName(
+            entity_name_id=command.entity_name_id,
+            successor=EntityName(
                 entity_name_id=entity_name_id,
                 entity_id=command.entity_id,
                 principal_id=principal_id,
@@ -943,11 +888,6 @@ class EntityRecordFamilyService:
                 effective_from=command.effective_from,
                 effective_to=command.effective_to,
             ),
-        )
-        repository.supersede_entity_name(
-            principal_id,
-            entity_name_id=command.entity_name_id,
-            superseded_by_entity_name_id=entity_name_id,
             expected_version=command.expected_version,
             at=at,
         )
@@ -1106,22 +1046,22 @@ class EntityRecordFamilyService:
         at: datetime,
         authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
     ) -> CorrectedFact:
-        """Write the corrected address and supersede the row it replaces, in that order.
+        """Supersede one address with the corrected row, in one repository call.
 
-        Refuses a command carrying `is_preferred=True` before writing anything,
-        on `correct_name`'s terms and for the same pair of constraints:
-        `an_active_entity_address_has_one_preferred_per_type` and
-        `an_entity_address_is_superseded_within_its_principal`.
+        On `correct_name`'s terms and for the same reason: the predecessor
+        leaves `an_active_entity_address_is_unique_per_entity_and_type`, and
+        `an_active_entity_address_has_one_preferred_per_type` with it, before
+        `supersede_entity_address` inserts the successor, so the ordering
+        belongs to the repository and not to a sequence written here. A
+        correction claiming the preferred slot is ordinary; a collision with
+        some *other* active address of the same type surfaces as the driver's
+        `IntegrityError`, the same one `record_address` raises.
         """
-        _refuse_preferred_correction(command.is_preferred)
         entity_address_id = issue_identifier(IdKind.ENTITY_ADDRESS)
-        repository.record_entity_address(
-            principal_id, self._address(command, entity_address_id, principal_id)
-        )
         repository.supersede_entity_address(
             principal_id,
             entity_address_id=command.entity_address_id,
-            superseded_by_entity_address_id=entity_address_id,
+            successor=self._address(command, entity_address_id, principal_id),
             expected_version=command.expected_version,
             at=at,
         )
@@ -1204,22 +1144,24 @@ class EntityRecordFamilyService:
         at: datetime,
         authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
     ) -> CorrectedFact:
-        """Write the corrected channel and supersede the row it replaces, in that order.
+        """Supersede one contact channel with the corrected row, in one repository call.
 
-        Refuses a command carrying `is_preferred=True` before writing anything,
-        on `correct_name`'s terms and for the same pair of constraints:
-        `an_active_communication_method_has_one_preferred_per_type` and
-        `a_communication_method_is_superseded_within_its_principal`.
+        On `correct_name`'s terms and for the same reason: the predecessor
+        leaves `an_active_communication_method_is_unique_per_entity_and_type`,
+        and `an_active_communication_method_has_one_preferred_per_type` with it,
+        before `supersede_communication_method` inserts the successor. The
+        successor's `verification_status_code` is written as stated and
+        unpromoted, the way `record_communication_method` writes it. A
+        correction claiming the preferred slot is ordinary; a collision with
+        some *other* active channel of the same type and normalized value
+        surfaces as the driver's `IntegrityError`, the same one
+        `record_communication_method` raises.
         """
-        _refuse_preferred_correction(command.is_preferred)
         communication_method_id = issue_identifier(IdKind.ENTITY_COMMUNICATION_METHOD)
-        repository.record_communication_method(
-            principal_id, self._channel(command, communication_method_id, principal_id)
-        )
         repository.supersede_communication_method(
             principal_id,
             communication_method_id=command.communication_method_id,
-            superseded_by_communication_method_id=communication_method_id,
+            successor=self._channel(command, communication_method_id, principal_id),
             expected_version=command.expected_version,
             at=at,
         )
@@ -1302,15 +1244,21 @@ class EntityRecordFamilyService:
         at: datetime,
         authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
     ) -> CorrectedFact:
-        """Write the corrected participation and supersede the row it replaces."""
+        """Supersede one participation with the corrected row, in one repository call.
+
+        `supersede_project_participation` takes the predecessor out of
+        `an_active_project_participation_is_unique_per_project_and_role` --
+        partial on `state = 'active'` -- before it inserts the successor, which
+        is why the successor record goes to it rather than being written here
+        first. A collision with some *other* active participation of the same
+        entity in the same project and role leaves as the driver's
+        `IntegrityError`, as it does out of `record_project_participation`.
+        """
         participation_id = issue_identifier(IdKind.ENTITY_PROJECT_PARTICIPATION)
-        repository.record_project_participation(
-            principal_id, self._participation(command, participation_id, principal_id)
-        )
         repository.supersede_project_participation(
             principal_id,
             participation_id=command.participation_id,
-            superseded_by_participation_id=participation_id,
+            successor=self._participation(command, participation_id, principal_id),
             expected_version=command.expected_version,
             at=at,
         )
@@ -1393,15 +1341,28 @@ class EntityRecordFamilyService:
         at: datetime,
         authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
     ) -> CorrectedFact:
-        """Write the corrected affiliation and supersede the row it replaces."""
+        """Supersede one affiliation with the corrected row, in one repository call.
+
+        The family where the ordering is not a nicety.
+        `an_open_ended_affiliation_is_unique_per_person` keys on
+        `(principal_id, person_entity_id)` alone,
+        `WHERE state = 'active' AND effective_to IS NULL`, so a successor
+        inserted before the predecessor left `state = 'active'` collides on
+        *every* correction of a current affiliation, whatever field was being
+        corrected. `supersede_person_organization_affiliation` releases the
+        predecessor first, which is why the successor record goes to it. A null
+        `organization_entity_id` crosses the correction still null, the way
+        `record_affiliation` writes one.
+
+        A collision with some *other* open-ended affiliation of the same person
+        is a real conflict and leaves as the driver's `IntegrityError`,
+        untranslated, exactly as it does out of `record_affiliation`.
+        """
         affiliation_id = issue_identifier(IdKind.PERSON_ORGANIZATION_AFFILIATION)
-        repository.record_person_organization_affiliation(
-            principal_id, self._affiliation(command, affiliation_id, principal_id)
-        )
         repository.supersede_person_organization_affiliation(
             principal_id,
             affiliation_id=command.affiliation_id,
-            superseded_by_affiliation_id=affiliation_id,
+            successor=self._affiliation(command, affiliation_id, principal_id),
             expected_version=command.expected_version,
             at=at,
         )

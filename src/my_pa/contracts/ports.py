@@ -1393,12 +1393,51 @@ class EntitiesRepository(ABC):
     #
     # Three verbs per temporal family, because the columns those tables carry
     # admit exactly three transitions: `record_*` inserts, `supersede_*`
-    # marks SUPERSEDED and names the successor that replaces it, `retire_*`
-    # marks RETIRED and stamps `retired_at`. There is deliberately no
-    # "update in place" verb for a temporal family -- a correction is a new
-    # row plus a supersession, so what the record said before survives the
-    # correction. `entity_organization_profiles` is the exception and says so
-    # at its own method.
+    # replaces one row with the successor it is handed, `retire_*` marks
+    # RETIRED and stamps `retired_at`. There is deliberately no "update in
+    # place" verb for a temporal family -- a correction is a new row plus a
+    # supersession, so what the record said before survives the correction.
+    # `entity_organization_profiles` is the exception and says so at its own
+    # method.
+    #
+    # **`supersede_*` takes the successor record, not the successor's
+    # identifier, and writes it itself.** A correction is three statements
+    # whose order the schema fixes rather than leaves open, which is why it
+    # is one call on this port instead of a `record_*` a caller sequences
+    # before a `supersede_*`:
+    #
+    #   1. Mark the predecessor SUPERSEDED under `expected_version`, leaving
+    #      its `superseded_by_*` null. Every one of these families arbitrates
+    #      its active uniqueness with a *partial* unique index --
+    #      `WHERE state = 'active'` -- so this step is what takes the
+    #      predecessor out of the index the successor is about to land in.
+    #      It is legal because each family's constraint reads
+    #      `CHECK (superseded_by_X IS NULL OR state = 'superseded')`, which
+    #      makes naming a successor imply SUPERSEDED and *not* the converse:
+    #      a superseded row that names nobody yet satisfies it.
+    #   2. Insert the successor, active. It cannot collide with the row it
+    #      replaces, because step 1 removed that row from the index's
+    #      `WHERE`.
+    #   3. Point the predecessor's `superseded_by_*` at the successor. Each
+    #      family's self-referencing composite foreign key is not deferrable,
+    #      so this is satisfiable only once the successor row exists.
+    #
+    # A caller that wrote the successor first would collide with the very row
+    # it is replacing, and for `entity_person_organization_affiliations` --
+    # whose `an_open_ended_affiliation_is_unique_per_person` keys on the
+    # person alone, not on the corrected field -- it would do so on every
+    # correction of a current affiliation, whatever was being corrected.
+    # That ordering is a fact about the DDL and about nothing else, so it is
+    # the implementer's to know and not a sequence each caller has to
+    # rediscover.
+    #
+    # One supersession is one version bump. Step 3 deliberately does not bump
+    # again, so naming the successor is invisible to a caller's version
+    # arithmetic and `expected_version + 1` still describes the predecessor
+    # afterwards. A collision against some *other* active row -- a second
+    # name of the same type and value, a second preferred address -- is not
+    # this port's to translate: it surfaces exactly as it does from the
+    # corresponding `record_*`, unchanged.
     #
     # Every `supersede_*`/`retire_*` takes `expected_version` and raises
     # rather than writing when the row has moved: `UnknownScopeError` when
@@ -1422,11 +1461,19 @@ class EntitiesRepository(ABC):
         principal_id: str,
         *,
         entity_name_id: str,
-        superseded_by_entity_name_id: str,
+        successor: EntityName,
         expected_version: int,
         at: datetime,
     ) -> None:
-        """Mark one name superseded by another, non-destructively."""
+        """Replace one name with `successor`, non-destructively.
+
+        `successor` is written under everything `record_entity_name` applies,
+        `normalized_value` included; what this adds is the pair of statements
+        that retire the row it replaces, in the order fixed above. The
+        released index is `an_active_entity_name_is_unique_per_entity_and_type`,
+        and with it `an_active_entity_name_has_one_preferred_per_type`, both
+        partial on `state = 'active'`.
+        """
 
     @abstractmethod
     def retire_entity_name(
@@ -1480,11 +1527,19 @@ class EntitiesRepository(ABC):
         principal_id: str,
         *,
         entity_address_id: str,
-        superseded_by_entity_address_id: str,
+        successor: EntityAddress,
         expected_version: int,
         at: datetime,
     ) -> None:
-        """Mark one address superseded by another, non-destructively."""
+        """Replace one address with `successor`, non-destructively.
+
+        `successor` is written under everything `record_entity_address`
+        applies; what this adds is the pair of statements that retire the row
+        it replaces, in the order fixed above. The released index is
+        `an_active_entity_address_is_unique_per_entity_and_type`, and with it
+        `an_active_entity_address_has_one_preferred_per_type`, both partial on
+        `state = 'active'`.
+        """
 
     @abstractmethod
     def retire_entity_address(
@@ -1504,11 +1559,20 @@ class EntitiesRepository(ABC):
         principal_id: str,
         *,
         communication_method_id: str,
-        superseded_by_communication_method_id: str,
+        successor: EntityCommunicationMethod,
         expected_version: int,
         at: datetime,
     ) -> None:
-        """Mark one communication method superseded by another."""
+        """Replace one communication method with `successor`.
+
+        `successor` is written under everything `record_communication_method`
+        applies, its `verification_status_code` included and unpromoted; what
+        this adds is the pair of statements that retire the row it replaces,
+        in the order fixed above. The released index is
+        `an_active_communication_method_is_unique_per_entity_and_type`, and
+        with it `an_active_communication_method_has_one_preferred_per_type`,
+        both partial on `state = 'active'`.
+        """
 
     @abstractmethod
     def retire_communication_method(
@@ -1537,11 +1601,19 @@ class EntitiesRepository(ABC):
         principal_id: str,
         *,
         participation_id: str,
-        superseded_by_participation_id: str,
+        successor: EntityProjectParticipation,
         expected_version: int,
         at: datetime,
     ) -> None:
-        """Mark one participation superseded by another."""
+        """Replace one participation with `successor`.
+
+        `successor` is written under everything `record_project_participation`
+        applies, both endpoints checked; what this adds is the pair of
+        statements that retire the row it replaces, in the order fixed above.
+        The released index is
+        `an_active_project_participation_is_unique_per_project_and_role`,
+        partial on `state = 'active'`.
+        """
 
     @abstractmethod
     def retire_project_participation(
@@ -1567,11 +1639,23 @@ class EntitiesRepository(ABC):
         principal_id: str,
         *,
         affiliation_id: str,
-        superseded_by_affiliation_id: str,
+        successor: PersonOrganizationAffiliation,
         expected_version: int,
         at: datetime,
     ) -> None:
-        """Mark one affiliation superseded by another."""
+        """Replace one affiliation with `successor`.
+
+        `successor` is written under everything
+        `record_person_organization_affiliation` applies, a null
+        `organization_entity_id` included and left null; what this adds is
+        the pair of statements that retire the row it replaces, in the order
+        fixed above. The released index is
+        `an_open_ended_affiliation_is_unique_per_person`, partial on
+        `state = 'active' AND effective_to IS NULL` -- and keyed on the person
+        rather than on any corrected field, which is why this family is the
+        one where writing the successor first fails for *every* correction of
+        a current affiliation rather than only for a colliding one.
+        """
 
     @abstractmethod
     def retire_person_organization_affiliation(

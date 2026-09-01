@@ -76,7 +76,7 @@ def test_prior_adrs_preserve_non_auth_architecture_while_marking_auth_supersessi
     adr_004 = _text(ADR_004)
     adr_008 = _text(ADR_008)
 
-    assert "partially superseded by ADR-011" in adr_004.lower()
+    assert "partially superseded by adr-011" in adr_004.lower()
     assert "Next.js App Router" in adr_004
     assert "same-origin BFF" in adr_004
     assert "browser-authentication selection partially superseded" in adr_008

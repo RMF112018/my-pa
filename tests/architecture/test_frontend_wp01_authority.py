@@ -6,7 +6,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 LEDGER = ROOT / "docs" / "plans" / "frontend-acceptance-ledger.md"
 AUTHORITY = ROOT / "docs" / "plans" / "frontend-implementation-authority.md"
-ADR_011 = ROOT / "docs" / "decisions" / "ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md"
+ADR_011 = (
+    ROOT
+    / "docs"
+    / "decisions"
+    / "ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md"
+)
 ADR_004 = ROOT / "docs" / "decisions" / "ADR-004-mossaic-frontend-nextjs-app-router.md"
 ADR_008 = ROOT / "docs" / "decisions" / "ADR-008-nas-runtime-topology.md"
 
@@ -65,8 +70,15 @@ def test_auth_target_is_passkey_opaque_session_server_principal_without_runtime_
     assert "WebAuthn/passkey" in adr
     assert "opaque random server-side session identifier" in adr
     assert "browser never selects or supplies the authoritative Principal" in adr
-    assert "Microsoft Entra/MSAL is not the normal production application-authentication target" in adr
-    assert "production browser shared secret or `local_operator` sign-in is not an approved recovery fallback" in adr
+    assert (
+        "Microsoft Entra/MSAL is not the normal production application-authentication target"
+        in adr
+    )
+    assert (
+        "production browser shared secret or `local_operator` sign-in is not an approved "
+        "recovery fallback"
+        in adr
+    )
     assert "does not claim the replacement runtime is implemented" in adr
     assert "Current implementation truth versus target" in authority
     assert "still supports `synthetic | entra | local_operator`" in authority

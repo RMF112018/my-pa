@@ -5,14 +5,20 @@ and the service has its own unit module against the in-memory double. This one
 holds only what neither of those can decide — the properties that exist because
 a real schema is underneath the service's *ordering*:
 
-* **The active partial uniques.** A correction is two statements, and the order
-  the service issues them in (write the successor, then supersede the
-  predecessor) is a claim about what the database will accept in between.
-  `an_active_entity_name_has_one_preferred_per_type` is a unique index over
+* **The active partial uniques.** A correction is three statements — release
+  the predecessor, insert the successor, name it — and the order they are
+  issued in is a claim about what the database will accept in between. Every
+  one of those indexes is partial on `state = 'active'`, and a unique *index*
+  is not deferrable: whatever is true between two statements is checked at the
+  first one. So a successor written while its own predecessor is still active
+  collides with its own predecessor, which is what
+  `an_active_entity_name_has_one_preferred_per_type` — a unique index over
   `(principal_id, entity_id, name_type_code) WHERE state = 'active' AND
-  is_preferred = true`, and a unique *index* is not deferrable: whatever is true
-  between the two statements is checked at the first one. A double with no
-  indexes cannot see this at all.
+  is_preferred = true` — refuses, and what
+  `an_open_ended_affiliation_is_unique_per_person` refuses on *every*
+  correction of a current affiliation, since it keys on the person alone. A
+  double with no indexes cannot see any of this: it accepted all of it
+  silently, which is how reviewer finding D1 reached review.
 * **A real optimistic-version conflict.** Two corrections built from the same
   read, the second one refused by the guarded `UPDATE`'s own `rowcount` rather
   than by a version this service re-read for itself.
@@ -44,9 +50,11 @@ from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
 from my_pa.application.entity_record_families import (
+    CorrectAffiliation,
     CorrectCommunicationMethod,
     CorrectEntityAddress,
     CorrectEntityName,
+    CorrectProjectParticipation,
     EntityRecordFamilyService,
     RecordAffiliation,
     RecordCommunicationMethod,
@@ -61,7 +69,7 @@ from my_pa.application.entity_record_families import (
     StatedAssertion,
     StatedEvidence,
 )
-from my_pa.application.errors import ErrorCode, InvalidRequestError, SafeDetail
+from my_pa.application.errors import InvalidRequestError
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
@@ -72,12 +80,14 @@ from my_pa.domain.relationship.entity import (
     EntityAddressState,
     EntityCommunicationMethodState,
     EntityNameState,
+    EntityProjectParticipationState,
     EntityStatus,
     EntityType,
     LegalIdentityStatusCode,
     NameTypeCode,
     OrganizationKindCode,
     ParticipationStatusCode,
+    PersonOrganizationAffiliationState,
     RoleBasisCode,
     StakeholderClassCode,
     StakeholderSideCode,
@@ -120,6 +130,13 @@ OBSERVATION: Final = "eobs_aaaa0001aaaa0001"
 SOURCE: Final = "src_aaaa0001aaaa0001"
 SOURCE_OBJECT: Final = "obj_aaaa0001aaaa0001"
 SOURCE_VERSION: Final = "ver_aaaa0001aaaa0001"
+
+#: A seeded `entity_role_types.role_code`.
+#: `an_active_project_participation_is_unique_per_project_and_role` keys on
+#: `role_code`, and PostgreSQL's default `NULLS DISTINCT` means a null one
+#: never collides -- so a participation meant to exercise that index states a
+#: real code rather than leaving it unset.
+ROLE_OF_RECORD: Final = "ARCHITECT_OF_RECORD"
 
 
 def _config() -> Config:
@@ -358,42 +375,54 @@ def test_a_profile_revision_through_the_service_clears_a_nullable_column(
     assert revised.version == 2
 
 
-# --- A preferred row cannot be corrected, and the refusal is a schema fact ---
+# --- A preferred row IS correctable, and that is a schema fact too -----------
 #
 # The three families that carry `is_preferred` each hold two constraints a
-# correction would have to satisfy at once and cannot, and both are checked per
-# statement:
+# correction has to satisfy, and both are checked per statement:
 #
 # * `an_active_<family>_has_one_preferred_per_type` -- a partial unique INDEX
 #   admitting one active preferred row per `(principal_id, entity_id, type)`.
-#   Writing the successor first, the order every `correct_*` uses, trips it,
-#   because the predecessor has not yet left `state = 'active'`. A unique index
-#   cannot be deferred at all; only a unique constraint can.
+#   Writing the successor first trips it, because the predecessor has not yet
+#   left `state = 'active'`. A unique index cannot be deferred at all; only a
+#   unique constraint can.
 # * `an_<family>_is_superseded_within_its_principal` -- the self-referencing
-#   `(superseded_by_*, principal_id)` foreign key. Superseding first trips that
-#   instead, because the successor the supersession names does not exist yet.
+#   `(superseded_by_*, principal_id)` foreign key, NOT DEFERRABLE. Naming the
+#   successor before it exists trips that instead.
 #
-# So `_refuse_preferred_correction` refuses the command before any write. These
-# tests hold three things about that: the refusal happens and nothing is
-# written, the two constraints it exists for are real and fire against this live
-# schema, and the retire-then-record path a caller has instead actually works --
-# together with what that path costs, which is the `superseded_by_*` lineage
-# link.
+# The service used to conclude from those two that a preferred correction was
+# inexpressible and refuse it (`_refuse_preferred_correction`). The conclusion
+# was wrong, and reviewer finding D1 said so: the two constraints are not
+# simultaneous, because `state` and `superseded_by_*` are separate columns and
+# every family's CHECK is `superseded_by_X IS NULL OR state = 'superseded'` --
+# successor-non-null implies superseded, never the converse. So a row may be
+# marked SUPERSEDED while still naming nobody, which leaves the partial unique
+# without violating the foreign key, and the correction lands in three
+# statements.
+#
+# These tests hold what that leaves true: the preferred correction succeeds and
+# writes the lineage link, the two constraints it has to thread are real and
+# fire against this live schema, and the retire-then-record path a caller could
+# use instead still works -- at the cost the correction no longer pays, which is
+# that retirement relates the two rows by nothing at all.
 
 
-def test_a_preferred_name_correction_is_refused_and_retiring_is_the_path_that_works(
+def test_a_preferred_name_correction_succeeds_and_the_slot_passes_to_the_successor(
     staged: Engine, service: EntityRecordFamilyService
 ) -> None:
-    """Refused before any write, and then the documented alternative, end to end.
+    """The correction that used to be refused, made and then read back.
 
-    The row count and the predecessor's `version`, `state` and `is_preferred`
-    are read back after the refusal: a service that wrote the successor and
-    *then* refused would raise the same exception and fail here.
+    `an_active_entity_name_has_one_preferred_per_type` admits one active
+    preferred legal name per entity, so the successor can only claim the slot
+    if the predecessor has already left `state = 'active'`. The slot is
+    *counted* rather than checked on the successor alone: a predecessor left
+    active with `is_preferred` still set would satisfy "the successor is
+    preferred" while being a second holder of a one-holder slot.
 
-    `SafeDetail.PINNED` is a documented approximation rather than a precise
-    token -- `errors.py` carries no `is_preferred` member and is outside this
-    work package's scope -- so a later, more precise token replacing it is a
-    correction and not a regression.
+    Then the alternative a caller used to be forced into, still working, and
+    still costing what it always cost: retirement writes no `superseded_by_*`,
+    so a reader following the supersession chain out of a retired row arrives
+    nowhere. That is why the correction succeeding matters rather than merely
+    being more convenient -- the two paths do not produce the same history.
     """
     with staged.begin() as connection:
         recorded = service.record_name(
@@ -408,8 +437,8 @@ def test_a_preferred_name_correction_is_refused_and_retiring_is_the_path_that_wo
             at=WHEN,
         )
 
-    with pytest.raises(InvalidRequestError) as refused, staged.begin() as connection:
-        service.correct_name(
+    with staged.begin() as connection:
+        corrected = service.correct_name(
             _repository(connection),
             CorrectEntityName(
                 entity_name_id=recorded.record_id,
@@ -422,30 +451,40 @@ def test_a_preferred_name_correction_is_refused_and_retiring_is_the_path_that_wo
             principal_id=PRINCIPAL_A,
             at=LATER,
         )
-    assert refused.value.safe_details == (SafeDetail.PINNED,)
+    assert corrected.superseded_record_id == recorded.record_id
 
     with staged.connect() as connection:
-        untouched = _repository(connection).names(PRINCIPAL_A, ORGANIZATION)
-    assert [row.entity_name_id for row in untouched] == [recorded.record_id]
-    assert untouched[0].version == 1
-    assert untouched[0].state is EntityNameState.ACTIVE
-    assert untouched[0].is_preferred is True
-    assert untouched[0].display_value == "Synthetic Org LLC"
-    assert untouched[0].superseded_by_entity_name_id is None
+        rows = {
+            row.entity_name_id: row
+            for row in _repository(connection).names(PRINCIPAL_A, ORGANIZATION)
+        }
+    assert set(rows) == {recorded.record_id, corrected.record_id}
+    predecessor, successor = rows[recorded.record_id], rows[corrected.record_id]
+    assert predecessor.state is EntityNameState.SUPERSEDED
+    assert predecessor.superseded_by_entity_name_id == corrected.record_id
+    assert predecessor.version == 2
+    assert predecessor.display_value == "Synthetic Org LLC"
+    assert successor.state is EntityNameState.ACTIVE
+    assert successor.version == 1
+    assert successor.display_value == "Synthetic Org Holdings LLC"
+    holders = [
+        row for row in rows.values() if row.state is EntityNameState.ACTIVE and row.is_preferred
+    ]
+    assert [row.entity_name_id for row in holders] == [corrected.record_id]
 
     with staged.begin() as connection:
         service.retire_name(
             _repository(connection),
-            RetireEntityName(entity_name_id=recorded.record_id, expected_version=1),
+            RetireEntityName(entity_name_id=corrected.record_id, expected_version=1),
             principal_id=PRINCIPAL_A,
-            at=LATER,
+            at=LATER_STILL,
         )
     with staged.begin() as connection:
         replacement = service.record_name(
             _repository(connection),
             RecordEntityName(
                 entity_id=ORGANIZATION,
-                display_value="Synthetic Org Holdings LLC",
+                display_value="Synthetic Org Group LLC",
                 name_type_code=NameTypeCode.LEGAL,
                 is_preferred=True,
             ),
@@ -453,23 +492,24 @@ def test_a_preferred_name_correction_is_refused_and_retiring_is_the_path_that_wo
             at=LATER_STILL,
         )
     with staged.connect() as connection:
-        rows = {
+        after = {
             row.entity_name_id: row
             for row in _repository(connection).names(PRINCIPAL_A, ORGANIZATION)
         }
-    predecessor = rows[recorded.record_id]
-    assert predecessor.state is EntityNameState.RETIRED
-    assert predecessor.state is not EntityNameState.SUPERSEDED
-    assert predecessor.is_preferred is False
-    assert predecessor.retired_at == LATER
-    assert rows[replacement.record_id].is_preferred is True
-    # The cost the refusal's own docstring names out loud: retirement writes no
-    # lineage. A reader following the supersession chain from the retired row
-    # will not arrive at its replacement, because no column relates them.
-    assert {row.superseded_by_entity_name_id for row in rows.values()} == {None}
+    retired = after[corrected.record_id]
+    assert retired.state is EntityNameState.RETIRED
+    assert retired.state is not EntityNameState.SUPERSEDED
+    assert retired.is_preferred is False
+    assert retired.retired_at == LATER_STILL
+    assert after[replacement.record_id].is_preferred is True
+    # The cost the retire-then-record path still carries: retirement writes no
+    # lineage. Nothing relates the retired row to its replacement, whereas the
+    # correction above left `superseded_by_entity_name_id` pointing at its own.
+    assert retired.superseded_by_entity_name_id is None
+    assert after[replacement.record_id].superseded_by_entity_name_id is None
 
 
-def test_a_preferred_address_correction_is_refused_and_retiring_is_the_path_that_works(
+def test_a_preferred_address_correction_succeeds_and_the_slot_passes_to_the_successor(
     staged: Engine, service: EntityRecordFamilyService
 ) -> None:
     """`an_active_entity_address_has_one_preferred_per_type` and
@@ -490,8 +530,8 @@ def test_a_preferred_address_correction_is_refused_and_retiring_is_the_path_that
             at=WHEN,
         )
 
-    with pytest.raises(InvalidRequestError) as refused, staged.begin() as connection:
-        service.correct_address(
+    with staged.begin() as connection:
+        corrected = service.correct_address(
             _repository(connection),
             CorrectEntityAddress(
                 entity_address_id=recorded.record_id,
@@ -506,23 +546,29 @@ def test_a_preferred_address_correction_is_refused_and_retiring_is_the_path_that
             principal_id=PRINCIPAL_A,
             at=LATER,
         )
-    assert refused.value.safe_details == (SafeDetail.PINNED,)
 
     with staged.connect() as connection:
-        untouched = _repository(connection).addresses(PRINCIPAL_A, ORGANIZATION)
-    assert [row.entity_address_id for row in untouched] == [recorded.record_id]
-    assert untouched[0].version == 1
-    assert untouched[0].state is EntityAddressState.ACTIVE
-    assert untouched[0].is_preferred is True
-    assert untouched[0].raw_value == "1 Synthetic Way, Springfield"
-    assert untouched[0].superseded_by_entity_address_id is None
+        rows = {
+            row.entity_address_id: row
+            for row in _repository(connection).addresses(PRINCIPAL_A, ORGANIZATION)
+        }
+    assert set(rows) == {recorded.record_id, corrected.record_id}
+    predecessor = rows[recorded.record_id]
+    assert predecessor.state is EntityAddressState.SUPERSEDED
+    assert predecessor.superseded_by_entity_address_id == corrected.record_id
+    assert predecessor.version == 2
+    assert predecessor.raw_value == "1 Synthetic Way, Springfield"
+    holders = [
+        row for row in rows.values() if row.state is EntityAddressState.ACTIVE and row.is_preferred
+    ]
+    assert [row.entity_address_id for row in holders] == [corrected.record_id]
 
     with staged.begin() as connection:
         service.retire_address(
             _repository(connection),
-            RetireEntityAddress(entity_address_id=recorded.record_id, expected_version=1),
+            RetireEntityAddress(entity_address_id=corrected.record_id, expected_version=1),
             principal_id=PRINCIPAL_A,
-            at=LATER,
+            at=LATER_STILL,
         )
     with staged.begin() as connection:
         replacement = service.record_address(
@@ -530,8 +576,8 @@ def test_a_preferred_address_correction_is_refused_and_retiring_is_the_path_that
             RecordEntityAddress(
                 entity_id=ORGANIZATION,
                 address_type_code=AddressTypeCode.HEADQUARTERS,
-                raw_value="2 Synthetic Way, Springfield",
-                line1="2 Synthetic Way",
+                raw_value="3 Synthetic Way, Springfield",
+                line1="3 Synthetic Way",
                 city="Springfield",
                 is_preferred=True,
             ),
@@ -539,17 +585,18 @@ def test_a_preferred_address_correction_is_refused_and_retiring_is_the_path_that
             at=LATER_STILL,
         )
     with staged.connect() as connection:
-        rows = {
+        after = {
             row.entity_address_id: row
             for row in _repository(connection).addresses(PRINCIPAL_A, ORGANIZATION)
         }
-    assert rows[recorded.record_id].state is EntityAddressState.RETIRED
-    assert rows[recorded.record_id].is_preferred is False
-    assert rows[replacement.record_id].is_preferred is True
-    assert {row.superseded_by_entity_address_id for row in rows.values()} == {None}
+    assert after[corrected.record_id].state is EntityAddressState.RETIRED
+    assert after[corrected.record_id].is_preferred is False
+    assert after[corrected.record_id].superseded_by_entity_address_id is None
+    assert after[replacement.record_id].is_preferred is True
+    assert after[replacement.record_id].superseded_by_entity_address_id is None
 
 
-def test_a_preferred_channel_correction_is_refused_and_retiring_is_the_path_that_works(
+def test_a_preferred_channel_correction_succeeds_and_the_slot_passes_to_the_successor(
     staged: Engine, service: EntityRecordFamilyService
 ) -> None:
     """`an_active_communication_method_has_one_preferred_per_type` and
@@ -568,8 +615,8 @@ def test_a_preferred_channel_correction_is_refused_and_retiring_is_the_path_that
             at=WHEN,
         )
 
-    with pytest.raises(InvalidRequestError) as refused, staged.begin() as connection:
-        service.correct_communication_method(
+    with staged.begin() as connection:
+        corrected = service.correct_communication_method(
             _repository(connection),
             CorrectCommunicationMethod(
                 communication_method_id=recorded.record_id,
@@ -583,25 +630,33 @@ def test_a_preferred_channel_correction_is_refused_and_retiring_is_the_path_that
             principal_id=PRINCIPAL_A,
             at=LATER,
         )
-    assert refused.value.safe_details == (SafeDetail.PINNED,)
 
     with staged.connect() as connection:
-        untouched = _repository(connection).communication_methods(PRINCIPAL_A, ORGANIZATION)
-    assert [row.communication_method_id for row in untouched] == [recorded.record_id]
-    assert untouched[0].version == 1
-    assert untouched[0].state is EntityCommunicationMethodState.ACTIVE
-    assert untouched[0].is_preferred is True
-    assert untouched[0].display_value == "Reception@Example.Invalid"
-    assert untouched[0].superseded_by_communication_method_id is None
+        rows = {
+            row.communication_method_id: row
+            for row in _repository(connection).communication_methods(PRINCIPAL_A, ORGANIZATION)
+        }
+    assert set(rows) == {recorded.record_id, corrected.record_id}
+    predecessor = rows[recorded.record_id]
+    assert predecessor.state is EntityCommunicationMethodState.SUPERSEDED
+    assert predecessor.superseded_by_communication_method_id == corrected.record_id
+    assert predecessor.version == 2
+    assert predecessor.display_value == "Reception@Example.Invalid"
+    holders = [
+        row
+        for row in rows.values()
+        if row.state is EntityCommunicationMethodState.ACTIVE and row.is_preferred
+    ]
+    assert [row.communication_method_id for row in holders] == [corrected.record_id]
 
     with staged.begin() as connection:
         service.retire_communication_method(
             _repository(connection),
             RetireCommunicationMethod(
-                communication_method_id=recorded.record_id, expected_version=1
+                communication_method_id=corrected.record_id, expected_version=1
             ),
             principal_id=PRINCIPAL_A,
-            at=LATER,
+            at=LATER_STILL,
         )
     with staged.begin() as connection:
         replacement = service.record_communication_method(
@@ -610,36 +665,41 @@ def test_a_preferred_channel_correction_is_refused_and_retiring_is_the_path_that
                 entity_id=ORGANIZATION,
                 method_type_code=CommunicationMethodTypeCode.EMAIL,
                 usage_context_code=CommunicationUsageContextCode.CORPORATE,
-                display_value="Desk@Example.Invalid",
+                display_value="Studio@Example.Invalid",
                 is_preferred=True,
             ),
             principal_id=PRINCIPAL_A,
             at=LATER_STILL,
         )
     with staged.connect() as connection:
-        rows = {
+        after = {
             row.communication_method_id: row
             for row in _repository(connection).communication_methods(PRINCIPAL_A, ORGANIZATION)
         }
-    assert rows[recorded.record_id].state is EntityCommunicationMethodState.RETIRED
-    assert rows[recorded.record_id].is_preferred is False
-    assert rows[replacement.record_id].is_preferred is True
-    assert {row.superseded_by_communication_method_id for row in rows.values()} == {None}
+    assert after[corrected.record_id].state is EntityCommunicationMethodState.RETIRED
+    assert after[corrected.record_id].is_preferred is False
+    assert after[corrected.record_id].superseded_by_communication_method_id is None
+    assert after[replacement.record_id].is_preferred is True
+    assert after[replacement.record_id].superseded_by_communication_method_id is None
 
 
-def test_a_preferred_correction_answers_with_a_refusal_and_not_a_driver_error(
+def test_a_preferred_correction_answers_with_a_written_row_and_not_a_driver_error(
     staged: Engine, service: EntityRecordFamilyService
 ) -> None:
-    """The actual improvement, locked. Before the refusal existed the caller got
-    a `psycopg` `UniqueViolation` wrapped in `sqlalchemy.exc.IntegrityError` out
-    of the repository -- an opaque driver error naming an index. Now it gets a
-    stable application refusal, raised before any statement runs.
+    """The actual improvement, locked, in the direction it actually runs.
 
-    Both are admitted by `pytest.raises` and then the type is asserted, so
-    removing the refusal does not merely change which exception is caught: the
-    test goes red on the exception it gets back. The empty `__cause__` and
-    `__context__` are what say the refusal was *raised*, not translated from a
-    driver error that had already happened."""
+    This test used to assert that the caller got a stable `InvalidRequestError`
+    where it had once got a `psycopg` `UniqueViolation` wrapped in
+    `sqlalchemy.exc.IntegrityError`. Both of those were wrong answers to the
+    same question. The correction is ordinary, so the right answer is neither
+    exception: it is a written row.
+
+    The claim is made at greater strength than "no exception was raised", which
+    a service that silently did nothing would also satisfy. Every exception is
+    admitted and then the *absence* of one is asserted alongside the rows the
+    call was supposed to produce -- so removing the ordering and restoring the
+    collision reddens here on the `IntegrityError` it gets back, and deleting
+    the write reddens here on the row count."""
     with staged.begin() as connection:
         recorded = service.record_name(
             _repository(connection),
@@ -652,27 +712,43 @@ def test_a_preferred_correction_answers_with_a_refusal_and_not_a_driver_error(
             principal_id=PRINCIPAL_A,
             at=WHEN,
         )
-    with (
-        pytest.raises((InvalidRequestError, IntegrityError)) as raised,
-        staged.begin() as connection,
-    ):
-        service.correct_name(
-            _repository(connection),
-            CorrectEntityName(
-                entity_name_id=recorded.record_id,
-                expected_version=1,
-                entity_id=ORGANIZATION,
-                display_value="Synthetic Org Holdings LLC",
-                name_type_code=NameTypeCode.LEGAL,
-                is_preferred=True,
-            ),
-            principal_id=PRINCIPAL_A,
-            at=LATER,
-        )
-    assert type(raised.value) is InvalidRequestError
-    assert raised.value.code is ErrorCode.INVALID_REQUEST
-    assert raised.value.__cause__ is None
-    assert raised.value.__context__ is None
+
+    raised: Exception | None = None
+    corrected = None
+    try:
+        with staged.begin() as connection:
+            corrected = service.correct_name(
+                _repository(connection),
+                CorrectEntityName(
+                    entity_name_id=recorded.record_id,
+                    expected_version=1,
+                    entity_id=ORGANIZATION,
+                    display_value="Synthetic Org Holdings LLC",
+                    name_type_code=NameTypeCode.LEGAL,
+                    is_preferred=True,
+                ),
+                principal_id=PRINCIPAL_A,
+                at=LATER,
+            )
+    except Exception as error:
+        # Caught rather than allowed to propagate so the assertion below can
+        # name what was raised: an uncaught `IntegrityError` here would report
+        # a unique violation without saying which claim it falsified.
+        raised = error
+    assert raised is None, f"a preferred correction raised {raised!r}"
+    assert not isinstance(raised, IntegrityError | InvalidRequestError)
+    assert corrected is not None
+    assert corrected.superseded_record_id == recorded.record_id
+
+    with staged.connect() as connection:
+        rows = {
+            row.entity_name_id: row
+            for row in _repository(connection).names(PRINCIPAL_A, ORGANIZATION)
+        }
+    assert set(rows) == {recorded.record_id, corrected.record_id}
+    assert rows[recorded.record_id].state is EntityNameState.SUPERSEDED
+    assert rows[corrected.record_id].state is EntityNameState.ACTIVE
+    assert rows[corrected.record_id].is_preferred is True
 
 
 def test_the_names_one_preferred_partial_unique_is_real(
@@ -826,8 +902,21 @@ def test_a_supersession_naming_an_absent_successor_is_refused_at_the_statement(
     """The behavioural half of the claim above, for the family the other two are
     declared identically to. The `UPDATE` naming a successor that does not exist
     raises where it is issued, inside an open transaction and before any commit
-    -- which is what "checked per statement" means and why superseding first is
-    not an ordering the service could have chosen instead.
+    -- which is what "checked per statement" means, and it is why the third of
+    `supersede_entity_name`'s three statements has to come *after* the insert
+    rather than being folded into the first.
+
+    The statements are issued raw here rather than through the port, and that
+    is the point rather than a shortcut: `supersede_entity_name` now takes the
+    successor *record* and inserts it itself, so it no longer offers any way
+    to name a row that does not exist. The DDL fact it relies on is still a
+    fact, and a test that stopped proving it because the port stopped
+    expressing it would be a test deleted rather than a test kept. So the
+    predecessor is moved to `state = 'superseded'` first -- legal on its own,
+    since `an_entity_name_names_a_successor_only_when_superseded` is
+    `superseded_by_X IS NULL OR state = 'superseded'` and this row names
+    nobody -- and only then is the successor pointer written, at an
+    identifier no row carries.
 
     The assertion names the column, not one constraint: two foreign keys guard
     it -- the composite `an_entity_name_is_superseded_within_its_principal` and
@@ -847,18 +936,29 @@ def test_a_supersession_naming_an_absent_successor_is_refused_at_the_statement(
         )
     with staged.connect() as connection:
         transaction = connection.begin()
+        connection.execute(
+            update(entity_names)
+            .where(entity_names.c.entity_name_id == recorded.record_id)
+            .values(state=EntityNameState.SUPERSEDED.value)
+        )
         with pytest.raises(IntegrityError) as violated:
-            _repository(connection).supersede_entity_name(
-                PRINCIPAL_A,
-                entity_name_id=recorded.record_id,
-                superseded_by_entity_name_id=ABSENT_NAME,
-                expected_version=1,
-                at=LATER,
+            connection.execute(
+                update(entity_names)
+                .where(entity_names.c.entity_name_id == recorded.record_id)
+                .values(superseded_by_entity_name_id=ABSENT_NAME)
             )
         transaction.rollback()
     detail = str(violated.value)
     assert "ForeignKeyViolation" in detail
     assert "superseded_by_entity_name_id" in detail
+
+    # And the row the raw statements were issued against is untouched: the
+    # rollback above returned it to ACTIVE, so this test leaves no superseded
+    # row behind that a later reader would mistake for a supersession.
+    with staged.connect() as connection:
+        (row,) = _repository(connection).names(PRINCIPAL_A, ORGANIZATION)
+    assert row.state is EntityNameState.ACTIVE
+    assert row.superseded_by_entity_name_id is None
 
 
 def test_a_retired_row_cannot_also_name_a_successor(
@@ -911,6 +1011,234 @@ def test_a_retired_row_cannot_also_name_a_successor(
             )
         transaction.rollback()
     assert "an_entity_name_names_a_successor_only_when_superseded" in str(violated.value)
+
+
+# --- The two families with no preferred slot, and one that had no cover -----
+
+
+def test_a_current_affiliation_is_correctable_through_the_service(
+    staged: Engine, service: EntityRecordFamilyService
+) -> None:
+    """**Reviewer finding D1's headline case, at the tier that can see it.**
+
+    `an_open_ended_affiliation_is_unique_per_person` is
+    `(principal_id, person_entity_id) WHERE state = 'active' AND effective_to
+    IS NULL` -- keyed on the person alone, not on the job title, the
+    organization, or the affiliation type. Under a successor-first ordering
+    that made `correct_affiliation` unusable for *any* current affiliation,
+    whatever field was being corrected: total, not intermittent, and not a
+    function of the values chosen.
+
+    The correction below changes only the job title, which is as far from that
+    index's key columns as this family allows a correction to get, and the
+    successor stays open-ended rather than acquiring an end date -- closing the
+    window would also satisfy the index, by inventing a fact about when the
+    affiliation ended that the caller never stated.
+
+    This family had no database-tier coverage at all before this test. It was
+    exercised only against the in-memory double, which enforces no uniqueness
+    of any kind and therefore wrote both rows without complaint. That absence
+    is precisely how the defect reached review, so this is the test whose
+    presence, not merely whose passing, is the point.
+    """
+    with staged.begin() as connection:
+        recorded = service.record_affiliation(
+            _repository(connection),
+            RecordAffiliation(
+                person_entity_id=PERSON,
+                affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+                organization_entity_id=ORGANIZATION,
+                job_title="Principal Architect",
+            ),
+            principal_id=PRINCIPAL_A,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        corrected = service.correct_affiliation(
+            _repository(connection),
+            CorrectAffiliation(
+                affiliation_id=recorded.record_id,
+                expected_version=1,
+                person_entity_id=PERSON,
+                affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+                organization_entity_id=ORGANIZATION,
+                job_title="Managing Principal",
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+    assert corrected.superseded_record_id == recorded.record_id
+
+    with staged.connect() as connection:
+        rows = {
+            row.affiliation_id: row
+            for row in _repository(connection).person_organization_affiliations_as_person(
+                PRINCIPAL_A, PERSON
+            )
+        }
+    assert set(rows) == {recorded.record_id, corrected.record_id}
+    predecessor, successor = rows[recorded.record_id], rows[corrected.record_id]
+    assert predecessor.state is PersonOrganizationAffiliationState.SUPERSEDED
+    assert predecessor.superseded_by_affiliation_id == corrected.record_id
+    assert predecessor.version == 2
+    assert predecessor.job_title == "Principal Architect"
+    assert predecessor.effective_to is None
+    assert successor.state is PersonOrganizationAffiliationState.ACTIVE
+    assert successor.version == 1
+    assert successor.job_title == "Managing Principal"
+    assert successor.organization_entity_id == ORGANIZATION
+    # Still the person's one current affiliation, which is what the index
+    # exists to guarantee and what a correction must not quietly give up.
+    current = [
+        row
+        for row in rows.values()
+        if row.state is PersonOrganizationAffiliationState.ACTIVE and row.effective_to is None
+    ]
+    assert [row.affiliation_id for row in current] == [corrected.record_id]
+
+
+def test_a_participation_correction_keeping_its_role_code_reaches_the_database(
+    staged: Engine, service: EntityRecordFamilyService
+) -> None:
+    """`an_active_project_participation_is_unique_per_project_and_role` keys on
+    `(principal_id, project_entity_id, participant_entity_id, role_code)`, and
+    the correction below restates all four while changing the scope text.
+
+    `role_code` is stated rather than left null on purpose. PostgreSQL indexes
+    nulls as distinct by default, so a correction that left `role_code` null
+    would never collide with anything and would have passed under the broken
+    ordering too -- proving nothing about this index. Naming a seeded
+    `entity_role_types` code is what makes the row actually enter it."""
+    with staged.begin() as connection:
+        recorded = service.record_project_participation(
+            _repository(connection),
+            RecordProjectParticipation(
+                project_entity_id=PROJECT,
+                participant_entity_id=ORGANIZATION,
+                project_display_name="Harbour Tower",
+                role_basis_code=RoleBasisCode.CONTRACTUAL,
+                stakeholder_side_code=StakeholderSideCode.CONSULTANT,
+                stakeholder_class_code=StakeholderClassCode.CORE,
+                relationship_status_code=ParticipationStatusCode.ACTIVE,
+                role_code=ROLE_OF_RECORD,
+                scope_text="core and shell",
+            ),
+            principal_id=PRINCIPAL_A,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        corrected = service.correct_project_participation(
+            _repository(connection),
+            CorrectProjectParticipation(
+                participation_id=recorded.record_id,
+                expected_version=1,
+                project_entity_id=PROJECT,
+                participant_entity_id=ORGANIZATION,
+                project_display_name="Harbour Tower",
+                role_basis_code=RoleBasisCode.CONTRACTUAL,
+                stakeholder_side_code=StakeholderSideCode.CONSULTANT,
+                stakeholder_class_code=StakeholderClassCode.CORE,
+                relationship_status_code=ParticipationStatusCode.ACTIVE,
+                role_code=ROLE_OF_RECORD,
+                scope_text="core, shell and interiors",
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+
+    with staged.connect() as connection:
+        rows = {
+            row.participation_id: row
+            for row in _repository(connection).project_participations_as_project(
+                PRINCIPAL_A, PROJECT
+            )
+        }
+    assert set(rows) == {recorded.record_id, corrected.record_id}
+    predecessor, successor = rows[recorded.record_id], rows[corrected.record_id]
+    assert predecessor.state is EntityProjectParticipationState.SUPERSEDED
+    assert predecessor.superseded_by_participation_id == corrected.record_id
+    assert predecessor.version == 2
+    assert predecessor.scope_text == "core and shell"
+    assert successor.state is EntityProjectParticipationState.ACTIVE
+    assert successor.version == 1
+    assert successor.role_code == ROLE_OF_RECORD == predecessor.role_code
+    assert successor.scope_text == "core, shell and interiors"
+
+
+def test_a_correction_colliding_with_another_active_row_still_leaves_as_a_driver_error(
+    staged: Engine, service: EntityRecordFamilyService
+) -> None:
+    """The disclosed limitation, pinned rather than left to be discovered.
+
+    Releasing the predecessor releases exactly one row from
+    `an_active_entity_name_is_unique_per_entity_and_type`. A successor that
+    collides with some *other* active row is a real conflict about the world --
+    two rows claiming one slot -- and RI-ENT-WP-08 does not translate it. It
+    surfaces as the driver's `IntegrityError`, naming the index, exactly as it
+    does out of `record_name`; the service adds no typed refusal in front of
+    it and this test says so rather than letting a reader assume otherwise.
+
+    Both halves are asserted: the same conflict out of `record_name` and out of
+    `correct_name`, so "the correction is no worse than the plain write" is the
+    claim rather than "the correction fails". A later work package that gives
+    these a typed refusal will find this test waiting for it."""
+    with staged.begin() as connection:
+        repository = _repository(connection)
+        recorded = service.record_name(
+            repository,
+            RecordEntityName(
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org LLC",
+                name_type_code=NameTypeCode.LEGAL,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=WHEN,
+        )
+        service.record_name(
+            repository,
+            RecordEntityName(
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org Holdings LLC",
+                name_type_code=NameTypeCode.LEGAL,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=WHEN,
+        )
+
+    with pytest.raises(IntegrityError) as by_record, staged.begin() as connection:
+        service.record_name(
+            _repository(connection),
+            RecordEntityName(
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org Holdings LLC",
+                name_type_code=NameTypeCode.LEGAL,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+
+    with pytest.raises(IntegrityError) as by_correction, staged.begin() as connection:
+        service.correct_name(
+            _repository(connection),
+            CorrectEntityName(
+                entity_name_id=recorded.record_id,
+                expected_version=1,
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org Holdings LLC",
+                name_type_code=NameTypeCode.LEGAL,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+
+    index = "an_active_entity_name_is_unique_per_entity_and_type"
+    assert index in str(by_record.value)
+    assert index in str(by_correction.value)
+    with staged.connect() as connection:
+        rows = _repository(connection).names(PRINCIPAL_A, ORGANIZATION)
+    assert len(rows) == 2
+    assert {row.version for row in rows} == {1}
+    assert {row.state for row in rows} == {EntityNameState.ACTIVE}
 
 
 # --- A real optimistic-version conflict --------------------------------------

@@ -47,10 +47,14 @@ from my_pa.domain.relationship.entity import (
     AssignmentState,
     Entity,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityName,
+    EntityProjectParticipationState,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    PersonOrganizationAffiliationState,
     RelationshipState,
 )
 from my_pa.domain.relationship.normalization import (
@@ -350,7 +354,12 @@ class EntityResolutionService:
 
         held = self._entities.entities_by_identifier(principal_id, request.namespace, normalized)
         if not held:
-            return None
+            # The reference is not an identifier in this namespace at all, which
+            # is the one case this method is allowed to enrich: no row matched,
+            # so nothing here is being discarded. A recorded *contact channel*
+            # carrying the same value is a weaker fact than an identity binding
+            # and is read only here, where the stronger one had nothing to say.
+            return self._by_communication_value(principal_id, request, normalized, warnings)
 
         # Effective dating first, and *before* any caller filter: an identifier
         # that was not in force at the moment asked about is not evidence of
@@ -463,6 +472,103 @@ class EntityResolutionService:
             warnings=tuple(dict.fromkeys(warnings)),
         )
 
+    def _by_communication_value(
+        self,
+        principal_id: str,
+        request: ResolutionRequest,
+        normalized: str,
+        warnings: list[ResolutionWarning],
+    ) -> EntityResolution | None:
+        """Who, if anyone, records this value as a way to reach them.
+
+        Reached only from `_by_identifier`'s no-row-matched fall-through, and
+        that placement is the whole of its safety. `EntityCommunicationMethod`'s
+        own docstring says `entity_external_identifiers` "remains the sole
+        authority for identity resolution"; a contact channel answers a
+        different question -- "is this a way to reach this entity" rather than
+        "which entity does this identify" -- so it is consulted only where the
+        identity plane held no claim on the value at all, and it never
+        overrides, weakens or duplicates one that did.
+
+        **It never resolves, however few claimants there are.** A recorded
+        address is not a verified identifier: a shared mailbox, a switchboard
+        number and a company domain are each reachable by many people, and
+        section 15.2's "ambiguous mentions remain unresolved rather than forced
+        into the nearest person" is exactly the rule for a value whose owner is
+        not established. So a match here is `AMBIGUOUS` with its claimants shown
+        -- retrieval candidates, which is audit section M's ceiling for evidence
+        that does not name an entity -- and `COMMUNICATION_VALUE`'s absence from
+        `_BASES_THAT_NAME_AN_ENTITY` is the structural half of the same refusal.
+
+        `None` means no row matched this value either, which returns the method
+        to its fall-through: the reference may still be a name, and answering
+        "no such person" while a name match was available is the least
+        informative honest answer there is.
+        """
+        held = self._entities.entities_by_communication_value(principal_id, normalized)
+        if not held:
+            return None
+
+        # Effective dating on `_by_identifier`'s own terms: a channel that was
+        # not in force at the moment asked about is not evidence of anything,
+        # and the exclusion is disclosed rather than silent (`RI-AC-014`).
+        effective = [
+            (entity, method)
+            for entity, method in held
+            if _is_effective(method.effective_from, method.effective_to, request.as_of)
+        ]
+        if len(effective) < len(held):
+            warnings.append(ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT)
+
+        admitted = [
+            (entity, method) for entity, method in effective if self._admits(entity, request)
+        ]
+        if not admitted:
+            # A row matched and nothing survived -- every claimant is out of
+            # date, or the caller asked for a different kind of thing. That is
+            # an answer for the reason the identical branch above it is one:
+            # falling through re-reads the address as a **name**, which would
+            # discard channel evidence pointing at a person in order to match a
+            # project whose alias is spelled the way `normalize_name` spells
+            # that address.
+            return EntityResolution(
+                outcome=ResolutionOutcome.NOT_FOUND,
+                warnings=tuple(dict.fromkeys(warnings)),
+            )
+
+        by_entity: dict[str, tuple[Entity, list[ResolutionEvidence]]] = {}
+        for entity, method in admitted:
+            _collect(by_entity, entity, _communication_value_evidence(method))
+        candidates = order_candidates(
+            tuple(
+                ResolutionCandidate(
+                    entity_id=entity.entity_id,
+                    entity_type=entity.entity_type,
+                    display_name=entity.display_name,
+                    status=entity.status,
+                    evidence=tuple(evidence),
+                    superseded_by_entity_id=entity.superseded_by_entity_id,
+                )
+                for entity, evidence in by_entity.values()
+            )
+        )
+        # Bounded on `CONFLICTED_IDENTIFIER`'s terms and for its reason:
+        # `EntityResolution` raises on an over-long candidate list, so an
+        # unbounded one would turn the safety answer into `internal_error`
+        # precisely when a value is most contested. A shared mailbox or a
+        # company domain recorded against every team that uses it is exactly
+        # how a claimant list gets past the bound.
+        bounded = candidates[:RESOLUTION_CANDIDATE_LIMIT]
+        truncated = len(bounded) < len(candidates)
+        if truncated:
+            warnings.append(ResolutionWarning.MORE_CANDIDATES_THAN_THIS_ANSWER_CARRIES)
+        return EntityResolution(
+            outcome=ResolutionOutcome.AMBIGUOUS,
+            candidates=bounded,
+            candidates_were_truncated=truncated,
+            warnings=tuple(dict.fromkeys(warnings)),
+        )
+
     # --- name resolution -------------------------------------------------
 
     def _by_name(
@@ -485,6 +591,22 @@ class EntityResolutionService:
                 warnings.append(ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT)
                 continue
             _collect(by_entity, entity, _alias_evidence(alias))
+
+        # The same read asked of `entity_names`, and dated on exactly the alias
+        # read's terms because it is the same kind of claim: a recorded name
+        # form of the entity, typed rather than untyped. It is *not* the same
+        # kind of evidence as an alias for the purpose of resolving --
+        # `TYPED_NAME` is absent from `_BASES_THAT_NAME_AN_ENTITY`, so a
+        # candidate whose only evidence is one is refused by `_name_outcome`
+        # however unique the name is. An entity matching both keeps both pieces
+        # of evidence, which is `_collect`'s rule and section 6.2's.
+        for entity, name in self._entities.entities_by_typed_name(principal_id, normalized):
+            if not self._admits(entity, request):
+                continue
+            if not _is_effective(name.effective_from, name.effective_to, request.as_of):
+                warnings.append(ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT)
+                continue
+            _collect(by_entity, entity, _typed_name_evidence(name))
 
         for entity in self._entities.entities_by_canonical_name(principal_id, normalized):
             if not self._admits(entity, request):
@@ -595,14 +717,36 @@ class EntityResolutionService:
         # rule that uniqueness is a fact about the database rather than about
         # the person.
         corroborated = bool(only.signals)
-        names_itself = only.strongest_basis is ResolutionBasis.ALIAS
+        # **Asked of the evidence rather than of its presentation order.** This
+        # read `strongest_basis is ResolutionBasis.ALIAS`, which was correct
+        # only for as long as `ALIAS` was the weakest basis that may name an
+        # entity: `strongest_basis` is the minimum of `_BASIS_ORDER`, so any
+        # basis appended below `ALIAS` would have gone on satisfying the old
+        # test and any inserted above it would have silently stopped. Appending
+        # `TYPED_NAME` does exactly the first of those -- a typed-name-only
+        # candidate has `strongest_basis is TYPED_NAME`, not `ALIAS`, so the old
+        # form happened to refuse it, and a candidate matching *both* an alias
+        # and a typed name would have kept `ALIAS` and resolved. Both answers
+        # are right by accident of a dictionary's contents. `names_the_entity`
+        # asks the question the safety rule means -- does any evidence here say
+        # the reference named this entity -- and it is the same answer for all
+        # four pre-existing bases, which `test_entity_resolution.py` pins.
+        names_itself = only.names_the_entity
         resolves = names_itself or was_narrowed or corroborated
         if not resolves:
             return unresolved(ResolutionOutcome.AMBIGUOUS)
 
         warnings.extend(_currency_warnings(only.status))
         if only.status is not EntityStatus.ACTIVE:
-            if only.strongest_basis is ResolutionBasis.CANONICAL_NAME:
+            # `HISTORICAL_MATCH` is a *named* entity that is not current, and
+            # `EntityResolution` refuses it for a candidate that names nothing
+            # ("a name alone does not resolve an entity"). So the same question
+            # is asked here, in the same words, rather than through the
+            # presentation order: a candidate matched only by a canonical name,
+            # a typed name, or a communication value is `AMBIGUOUS` whatever its
+            # status, and reaching for the ordering to say so would re-couple
+            # this refusal to `_BASIS_ORDER`'s contents.
+            if not only.names_the_entity:
                 return unresolved(ResolutionOutcome.AMBIGUOUS)
             return unresolved(ResolutionOutcome.HISTORICAL_MATCH)
 
@@ -669,12 +813,28 @@ class EntityResolutionService:
         moment = request.as_of if request.as_of is not None else request.at
         assigned = self._assigned_to(principal_id, entity_id, request.scope_entity_id, moment)
         related = self._related_to(principal_id, entity_id, request.scope_entity_id, moment)
+        affiliated = self._affiliated_to(principal_id, entity_id, request.scope_entity_id, moment)
+        participates = self._participates_in(
+            principal_id, entity_id, request.scope_entity_id, moment
+        )
         found: list[ContextualSignal] = []
         if assigned.found:
             found.append(ContextualSignal.ASSIGNED_TO_THE_NAMED_SCOPE)
         if related.found:
             found.append(ContextualSignal.RELATED_TO_THE_NAMED_SCOPE)
-        return _ScopeSignals(found=tuple(found), withheld=assigned.withheld or related.withheld)
+        if affiliated.found:
+            found.append(ContextualSignal.AFFILIATED_WITH_THE_NAMED_SCOPE)
+        if participates.found:
+            found.append(ContextualSignal.PARTICIPATES_IN_THE_NAMED_SCOPE)
+        return _ScopeSignals(
+            found=tuple(found),
+            withheld=(
+                assigned.withheld
+                or related.withheld
+                or affiliated.withheld
+                or participates.withheld
+            ),
+        )
 
     def _assigned_to(
         self, principal_id: str, entity_id: str, scope_entity_id: str, moment: datetime | None
@@ -736,6 +896,86 @@ class EntityResolutionService:
             moment,
         )
 
+    def _affiliated_to(
+        self, principal_id: str, entity_id: str, scope_entity_id: str, moment: datetime | None
+    ) -> _Reach:
+        """Whether a *current* recorded affiliation of this candidate names the scope.
+
+        Section 15.1's "organization and role overlap", read off
+        `entity_person_organization_affiliations` rather than inferred from a
+        job title someone typed. Folded through `_reach` on `_assigned_to`'s
+        own terms, so the two ways a row can be stale -- a `state` saying it is
+        no longer the authoritative record, and a window that has closed -- are
+        both excluded *and both disclosed*. `RI-AC-014`'s duty is to say the
+        evidence was not current, and it does not care which column recorded
+        that: an affiliation somebody ended must not corroborate silently, or a
+        bare name is lifted to a confident answer by a person's former employer.
+
+        `state` is compared against `PersonOrganizationAffiliationState`'s own
+        member rather than a spelled `'active'`, for the reason
+        `ACTIVE_ASSIGNMENT_STATUS` exists: two readers of the same column have
+        to agree on which member means live. No module constant is minted for
+        it because this family's `state` is a closed enum on the record itself,
+        so there is no free-text column for a second reader to disagree with.
+
+        **`state = ACTIVE` is not the same claim as "this affiliation is
+        current".** `PersonOrganizationAffiliationState`'s docstring is explicit
+        that an `ACTIVE` row with a closed `effective_to` is the ordinary way to
+        record a *past* affiliation, not a contradiction. `is_in_force` inside
+        `_reach` is what answers the second question, from the dates.
+        """
+        return _reach(
+            (
+                (
+                    affiliation.effective_from,
+                    affiliation.effective_to,
+                    affiliation.state is PersonOrganizationAffiliationState.ACTIVE,
+                )
+                for affiliation in self._entities.person_organization_affiliations_as_person(
+                    principal_id, entity_id
+                )
+                if affiliation.organization_entity_id == scope_entity_id
+            ),
+            moment,
+        )
+
+    def _participates_in(
+        self, principal_id: str, entity_id: str, scope_entity_id: str, moment: datetime | None
+    ) -> _Reach:
+        """Whether a *current* recorded participation of this candidate names the scope.
+
+        Section 15.1's "project-team membership", and deliberately not folded
+        into `_assigned_to` even though both can be true of the same person and
+        the same project. A participation and an assignment are different
+        records making different claims, and reporting one signal for both would
+        name a corroboration the reader could not go and check -- which is the
+        distinction `ContextualSignal.PARTICIPATES_IN_THE_NAMED_SCOPE` states.
+
+        The row is kept when its `project_entity_id` is the named scope: the
+        candidate is the *participant*, which is why the read is
+        `project_participations_as_participant` and not its sibling. Reading the
+        other column would let a project corroborate itself as a participant in
+        the entity somebody named.
+
+        Stale rows are excluded and disclosed on `_affiliated_to`'s terms and
+        for `RI-AC-014`'s reason, with `state` read from
+        `EntityProjectParticipationState`.
+        """
+        return _reach(
+            (
+                (
+                    participation.effective_from,
+                    participation.effective_to,
+                    participation.state is EntityProjectParticipationState.ACTIVE,
+                )
+                for participation in self._entities.project_participations_as_participant(
+                    principal_id, entity_id
+                )
+                if participation.project_entity_id == scope_entity_id
+            ),
+            moment,
+        )
+
 
 def _narrow_by_signals(
     by_entity: dict[str, tuple[Entity, list[ResolutionEvidence]]],
@@ -787,6 +1027,37 @@ def _alias_evidence(alias: EntityAlias) -> ResolutionEvidence:
         basis=ResolutionBasis.ALIAS,
         matched_value=alias.normalized_value,
         source_record_id=alias.alias_id,
+    )
+
+
+def _typed_name_evidence(name: EntityName) -> ResolutionEvidence:
+    """`_alias_evidence`'s shape, over `entity_names`.
+
+    The basis stays coarse: `name.name_type_code` says whether this was a legal,
+    trading, former or document name, and that is a fact on the row a reader can
+    follow through `source_record_id` -- it is deliberately not a member of
+    `ResolutionBasis`, which would multiply that vocabulary and invite the
+    graded reading it refuses.
+    """
+    return ResolutionEvidence(
+        basis=ResolutionBasis.TYPED_NAME,
+        matched_value=name.normalized_value,
+        source_record_id=name.entity_name_id,
+    )
+
+
+def _communication_value_evidence(method: EntityCommunicationMethod) -> ResolutionEvidence:
+    """The channel that matched, named so a reader can go and look at it.
+
+    `verified` stays `False` whatever `method.verification_status_code` says,
+    and `ResolutionEvidence` enforces that: only an external identifier basis
+    may carry verification, because that flag means "this identity binding was
+    verified" and a confirmed *contact channel* is not an identity binding.
+    """
+    return ResolutionEvidence(
+        basis=ResolutionBasis.COMMUNICATION_VALUE,
+        matched_value=method.normalized_value,
+        source_record_id=method.communication_method_id,
     )
 
 

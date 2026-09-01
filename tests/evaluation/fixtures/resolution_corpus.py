@@ -55,13 +55,18 @@ The collisions, and what each is for:
   and a brand) is the audit's description of a class of record, and not one
   character of any real register is imported, transcribed, or paraphrased.
 
-**Four record families carry no labelled case yet, deliberately.**
-`CORPUS_NAMES`, `CORPUS_COMMUNICATION_METHODS`, `CORPUS_AFFILIATIONS` and
-`CORPUS_PARTICIPATIONS` exist ahead of the resolver reading them, because the
-alternative is worse: a corpus that carries no rows for what resolution reads
-measures a resolver against an empty world and reports precision held for one
-that had stopped working. The rows are here first so that the read cannot be
-switched on against nothing.
+**Four record families arrived ahead of the cases that measure them, and are
+measured now.** `CORPUS_NAMES`, `CORPUS_COMMUNICATION_METHODS`,
+`CORPUS_AFFILIATIONS` and `CORPUS_PARTICIPATIONS` were written before the
+resolver read them, because the alternative is worse: a corpus that carries no
+rows for what resolution reads measures a resolver against an empty world and
+reports precision held for one that had stopped working. That ordering left a
+second gap of the same kind — the rows existed, the resolver read them, and no
+labelled case reached them, so the reads were exercised and their answers were
+never the difference between a resolution and a refusal. `resolution_cases.py`
+closes it: the typed-name, communication-value, affiliation and participation
+families each now carry cases that resolve *and* cases that refuse, in both
+directions.
 """
 
 from __future__ import annotations
@@ -821,6 +826,60 @@ CORPUS_COMMUNICATION_METHODS: Final[tuple[EntityCommunicationMethod, ...]] = (
         CommunicationMethodTypeCode.EMAIL,
         principal_id=PRINCIPAL_B,
         usage=CommunicationUsageContextCode.PERSONAL,
+    ),
+    # **One mailbox claimed by two juristic entities of the family**, on the axis
+    # a resolution request can actually reach. The switchboard number at the top
+    # of this collection states the identical collision and nothing can ask
+    # about it: a request carries an `ExternalIdentifierNamespace`, that enum has
+    # no `PHONE` member, and the communication-value read is entered only from
+    # `_by_identifier`'s fall-through — so the only contested value the resolver
+    # could ever be handed is an email one, and until these two rows the corpus
+    # held none. Two claimants of one value is a refusal to make and never a
+    # merge to perform, which is the communication-value axis of the rule the
+    # shared operating name states for the typed-name axis.
+    _communication(
+        "ecmm_halvard0009share",
+        HALVARD_STUDIO,
+        "hello@halvard.example.invalid",
+        CommunicationMethodTypeCode.EMAIL,
+    ),
+    _communication(
+        "ecmm_halvard0010share",
+        HALVARD_HOLDINGS,
+        "hello@halvard.example.invalid",
+        CommunicationMethodTypeCode.EMAIL,
+    ),
+    # **The partition case in its strong form.** The other Principal's contact
+    # card carries the identical shared mailbox, colliding on purpose with the
+    # most contested communication value `PRINCIPAL_A` can reach. Every other
+    # cross-Principal row in this corpus is reachable only through a reference
+    # that finds `PRINCIPAL_A` nothing at all, so a leak there turns a silence
+    # into a name; a leak here is a third candidate on an answer that already
+    # carries two, which is the shape a partition defect actually takes once
+    # both Principals hold a row about one value.
+    _communication(
+        "ecmm_bob0011otherprin",
+        BOB_CHEN_OTHER_PRINCIPAL,
+        "hello@halvard.example.invalid",
+        CommunicationMethodTypeCode.EMAIL,
+        principal_id=PRINCIPAL_B,
+    ),
+    # **The engineer's address on somebody else's contact card**, which is what a
+    # mail connector writing to the wrong row leaves behind. Recorded rather than
+    # corrected, because the whole value of the row is that
+    # `entities_by_identifier` matches this address for the engineer, so the
+    # fall-through to the channel plane is never reached and Roberta can never be
+    # offered for it. `ecmm_alice0006email00` states the same rule with both rows
+    # on one entity, where widening the fall-through would change nothing
+    # visible; this one puts a *second* entity behind the same gate, so widening
+    # it offers her beside the engineer and turns an exact resolution into an
+    # ambiguous one.
+    _communication(
+        "ecmm_roberta0012alice",
+        ROBERTA_CHEN,
+        "a.chen@acme.test",
+        CommunicationMethodTypeCode.EMAIL,
+        usage=CommunicationUsageContextCode.OFFICE,
     ),
 )
 

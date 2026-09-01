@@ -30,13 +30,18 @@ from tests.evaluation.fixtures.resolution_corpus import (
     BOB_CHEN_OTHER_PRINCIPAL,
     CHEN_PARTNERS,
     DEPARTED_CONTRACTOR,
+    HALVARD_BRAND,
+    HALVARD_HOLDINGS,
+    HALVARD_STUDIO,
     IRIS_BELL_CANCELLED,
     IRIS_BELL_OTHER,
     JOSE_ALVAREZ,
     LEO_MARCHETTI,
     MAYA_OSEI,
+    MERIDEL_LEGAL,
     NADIA_OKONKWO_INCOMING,
     NADIA_OKONKWO_OTHER,
+    NORTHWIND,
     OMAR_DIALLO_ENDED,
     OMAR_DIALLO_OTHER,
     PRINCIPAL_A,
@@ -107,6 +112,13 @@ MUST_RESOLVE_FAMILIES: Final[frozenset[str]] = frozenset(
         "contextual_scope",
         "local_part_collision",
         "former_name",
+        # The two corroboration families `RI-ENT-WP-09` put on the resolution
+        # path. Each is a *must-resolve* family rather than a refusal one on
+        # purpose: an affiliation and a participation are the two signals the
+        # work package added, and a corpus that only ever asked them to refuse
+        # would score identically against a resolver that never read them.
+        "affiliated_scope",
+        "participating_scope",
     }
 )
 
@@ -309,6 +321,79 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
             "is as wrong as joining the two Alices."
         ),
     ),
+    ResolutionCase(
+        name="a_typed_name_beside_an_alias_still_resolves_on_the_alias",
+        family="former_name",
+        reference="Alice Nakamura",
+        entity_type=EntityType.PERSON,
+        expected_outcome=ResolutionOutcome.RESOLVED_EXACT,
+        expected_entity_id=ALICE_CHEN_ENGINEER,
+        must_not_include=frozenset({ALICE_CHEN_LAWYER, CHEN_PARTNERS}),
+        note=(
+            "The regression guard on `_BASIS_ORDER`. Her married name is recorded twice "
+            "-- as a `FORMER_NAME` alias and again as a `HISTORICAL_NAME` typed name on "
+            "the same entity -- so this reference is the corpus's one candidate carrying "
+            "both an old basis and a new one. `TYPED_NAME` was appended below `ALIAS`, so "
+            "`strongest_basis` is still `ALIAS` and this answer is bit-identical to the "
+            "one it gave before resolution read `entity_names` at all. An insertion above "
+            "`ALIAS` would move it, and nothing else in the corpus would notice. The "
+            "`entity_type` filter is here too, because `_admits` inside the typed-name "
+            "read had no case exercising it."
+        ),
+    ),
+    ResolutionCase(
+        name="an_identifier_that_matches_never_reaches_the_channel_plane",
+        family="verified_identifier",
+        reference="a.chen@acme.test",
+        namespace=ExternalIdentifierNamespace.EMAIL,
+        expected_outcome=ResolutionOutcome.RESOLVED_EXACT,
+        expected_entity_id=ALICE_CHEN_ENGINEER,
+        must_not_include=frozenset({ROBERTA_CHEN}),
+        note=(
+            "The regression guard on the most delicate edit in this work package. This "
+            "address is an `entity_external_identifiers` row of the engineer's *and* an "
+            "active `entity_communication_methods` row of Roberta's, because a mail "
+            "connector copied it onto the wrong contact card. The communication read is "
+            "reached only where no identifier row matched at all; one did, so Roberta can "
+            "never be offered here. Widen that fall-through and she appears beside the "
+            "engineer, and an exact resolution becomes an ambiguous one."
+        ),
+    ),
+    ResolutionCase(
+        name="an_affiliation_naming_the_scope_resolves_a_lone_name",
+        family="affiliated_scope",
+        reference="Leo Marchetti",
+        scope_entity_id=NORTHWIND,
+        expected_outcome=ResolutionOutcome.RESOLVED_CONTEXTUAL,
+        expected_entity_id=LEO_MARCHETTI,
+        note=(
+            "`AFFILIATED_WITH_THE_NAMED_SCOPE`, and the whole reason this case exists: "
+            "until it, no case supplied a scope any affiliation row's "
+            "`organization_entity_id` was equal to, so the signal was computed on every "
+            "contextual case and fired on none. Leo's corrected employer is Northwind, "
+            "open-ended and active; his Acme row names a different organization and his "
+            "project rows name a different scope, so an affiliation is the only thing "
+            "lifting a bare canonical name here."
+        ),
+    ),
+    ResolutionCase(
+        name="a_participation_separates_two_juristic_entities_sharing_a_name",
+        family="participating_scope",
+        reference="Halvard Studio",
+        scope_entity_id=TOWER_PROJECT,
+        expected_outcome=ResolutionOutcome.RESOLVED_CONTEXTUAL,
+        expected_entity_id=HALVARD_STUDIO,
+        must_not_include=frozenset({HALVARD_HOLDINGS, MERIDEL_LEGAL, HALVARD_BRAND}),
+        note=(
+            "`PARTICIPATES_IN_THE_NAMED_SCOPE`, isolated: the operating studio carries no "
+            "assignment, no edge and no affiliation, so a project participation is the "
+            "only signal available. It is also the constructive half of audit section M's "
+            "rule -- the family must not be collapsed, and it must not be left "
+            "permanently unresolvable either. Exactly one of the four is on this project, "
+            "and a caller who names it gets that one. The answer rests on `TYPED_NAME`, "
+            "which is why it is `RESOLVED_CONTEXTUAL` and can never be `RESOLVED_EXACT`."
+        ),
+    ),
     # --- must not resolve ---------------------------------------------------
     ResolutionCase(
         name="two_people_with_one_name_stay_two",
@@ -448,6 +533,158 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
         reference="Nobody Whatsoever",
         expected_outcome=ResolutionOutcome.NOT_FOUND,
     ),
+    ResolutionCase(
+        name="a_typed_legal_name_alone_does_not_resolve",
+        family="typed_name_alone",
+        reference="Acme Construction Group, LLC",
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({ACME}),
+        note=(
+            "The typed-name half of `a_lone_canonical_name_match_does_not_resolve`. "
+            "Exactly one entity carries this registered name, no other row matches it, "
+            "and it is still not evidence that the reference means it -- a name is a "
+            "name whichever table it was written to. `TYPED_NAME` is absent from "
+            "`_BASES_THAT_NAME_AN_ENTITY` precisely so this answers `AMBIGUOUS`, and "
+            "Acme is named among the candidates because a retrieval candidate is exactly "
+            "what audit section M allows a name to produce."
+        ),
+    ),
+    ResolutionCase(
+        name="an_operating_name_two_juristic_entities_share_is_ambiguous",
+        family="juristic_family",
+        reference="Halvard Studio",
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({HALVARD_STUDIO, HALVARD_HOLDINGS}),
+        must_not_include=frozenset({MERIDEL_LEGAL, HALVARD_BRAND}),
+        note=(
+            "Audit section M's rule, measured on the fast tier: four similarly-named "
+            "organizations 'must not silently mint four unrelated organizations or "
+            "automatically collapse distinct juristic entities solely because names "
+            "resemble each other'. The operating company and its holding company both "
+            "trade under this name, which is what a corporate family is and not a data "
+            "defect. Both are offered, neither is chosen, and the two that do not claim "
+            "this name are not swept in with them."
+        ),
+    ),
+    ResolutionCase(
+        name="a_brand_two_juristic_entities_share_is_ambiguous",
+        family="juristic_family",
+        reference="Halvard Four",
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({MERIDEL_LEGAL, HALVARD_BRAND}),
+        must_not_include=frozenset({HALVARD_STUDIO, HALVARD_HOLDINGS}),
+        note=(
+            "The same refusal on the brand axis, and the case that proves a typed name "
+            "reaches an entity no canonical name could: `MERIDEL_LEGAL` is canonically "
+            "'meridel design works' and shares not one token with the brand it signs "
+            "under. Reading `entity_names` is what finds it; refusing to choose between "
+            "it and the brand-holding company is what keeps that reach safe."
+        ),
+    ),
+    ResolutionCase(
+        name="a_legal_name_naming_one_juristic_entity_offers_no_other",
+        family="juristic_family",
+        reference="Halvard Studio Holdings, LLC",
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({HALVARD_HOLDINGS}),
+        must_not_include=frozenset({HALVARD_STUDIO, MERIDEL_LEGAL, HALVARD_BRAND}),
+        note=(
+            "The other half of the same rule, and the half a timid resolver fails. A "
+            "reference naming one specific juristic person must not hand back its three "
+            "lookalikes as though the family were interchangeable -- 'must not silently "
+            "mint four unrelated organizations' and 'must not collapse them' are one "
+            "requirement read from two sides. The answer is still `AMBIGUOUS`, because "
+            "a legal name is a name."
+        ),
+    ),
+    ResolutionCase(
+        name="a_type_filter_removes_every_juristic_entity_sharing_a_name",
+        family="type_collision",
+        reference="Halvard Studio",
+        entity_type=EntityType.PERSON,
+        expected_outcome=ResolutionOutcome.NOT_FOUND,
+        must_not_include=frozenset({HALVARD_STUDIO, HALVARD_HOLDINGS}),
+        note=(
+            "`_admits` applied inside the typed-name read rather than after it. A caller "
+            "asking for a person is not offered an organization whose operating name "
+            "happens to be spelled this way, and with both claimants removed there is no "
+            "candidate left to be ambiguous between."
+        ),
+    ),
+    ResolutionCase(
+        name="a_superseded_typed_name_matches_nothing",
+        family="withdrawn_name",
+        reference="Halvard Studio Three",
+        expected_outcome=ResolutionOutcome.NOT_FOUND,
+        must_not_include=frozenset({HALVARD_STUDIO}),
+        note=(
+            "The row exists, and it is not evidence. The studio traded under this name "
+            "until the correction that replaced it, so matching it would hand back the "
+            "very spelling the Principal has already corrected away. The read filters on "
+            "`EntityNameState`, and this is the case that makes that filter measurable."
+        ),
+    ),
+    ResolutionCase(
+        name="a_retired_typed_name_matches_nothing",
+        family="withdrawn_name",
+        reference="Halvard Signage",
+        expected_outcome=ResolutionOutcome.NOT_FOUND,
+        must_not_include=frozenset({HALVARD_BRAND}),
+        note=(
+            "Withdrawn rather than corrected: the Principal said to stop using this brand "
+            "and named no successor. The pair of the case above, on the other state a "
+            "name row can be left in -- because a filter written for one of them and not "
+            "the other passes half this rule and reads as though it passed all of it."
+        ),
+    ),
+    ResolutionCase(
+        name="a_communication_value_one_entity_claims_still_does_not_resolve",
+        family="communication_value",
+        reference="studio@halvard.example.invalid",
+        namespace=ExternalIdentifierNamespace.EMAIL,
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({MERIDEL_LEGAL}),
+        must_not_include=frozenset({HALVARD_STUDIO, HALVARD_HOLDINGS, HALVARD_BRAND}),
+        note=(
+            "`COMMUNICATION_VALUE`, which nothing measured until now. The namespace is "
+            "set and no `entity_external_identifiers` row carries this address, so "
+            "`_by_identifier` falls through to the channel plane, where exactly one "
+            "entity records it. One claimant and it still does not resolve: a recorded "
+            "way to reach somebody is not a verified identity binding, and a mailbox with "
+            "a single recorded owner is a mailbox, not a person."
+        ),
+    ),
+    ResolutionCase(
+        name="an_ended_affiliation_to_the_scope_does_not_resolve",
+        family="stale_scope",
+        reference="Priya Rao",
+        scope_entity_id=ACME,
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({PRIYA_RAO}),
+        note=(
+            "The mirror of `an_affiliation_naming_the_scope_resolves_a_lone_name`. Priya "
+            "is uniquely named and her Acme affiliation is recorded as over; `state` is "
+            "still `ACTIVE`, because an active row recording a past employment is this "
+            "family's ordinary shape rather than a contradiction. Only the dates say it "
+            "ended, so this is the case the date half of `is_in_force` is measured by."
+        ),
+    ),
+    ResolutionCase(
+        name="a_superseded_affiliation_to_the_scope_does_not_resolve",
+        family="stale_scope",
+        reference="Leo Marchetti",
+        scope_entity_id=ACME,
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({LEO_MARCHETTI}),
+        note=(
+            "The other half, and the one the date rule cannot catch: Leo's Acme "
+            "affiliation is open-ended and in force by every date, and only its `state` "
+            "says it is no longer the authoritative record. Delete the state filter and a "
+            "corrected-away employer starts lifting a bare name to a confident answer. "
+            "The same reference resolves against Northwind, which is where the "
+            "correction put him."
+        ),
+    ),
     # --- cross-Principal leakage -------------------------------------------
     ResolutionCase(
         name="another_principals_person_is_invisible_by_name",
@@ -470,5 +707,39 @@ RESOLUTION_CASES: Final[tuple[ResolutionCase, ...]] = (
         namespace=ExternalIdentifierNamespace.EMAIL,
         expected_outcome=ResolutionOutcome.NOT_FOUND,
         must_not_include=frozenset({BOB_CHEN_OTHER_PRINCIPAL}),
+    ),
+    ResolutionCase(
+        name="another_principals_typed_name_is_invisible",
+        family="cross_principal",
+        reference="Alice Chen",
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({ALICE_CHEN_ENGINEER, ALICE_CHEN_LAWYER, CHEN_PARTNERS}),
+        must_not_include=frozenset({BOB_CHEN_OTHER_PRINCIPAL}),
+        note=(
+            "The partition case for `entity_names`, and the strong form of it: the three "
+            "cross-Principal cases above all answer `NOT_FOUND`, where a missing "
+            "candidate is indistinguishable from a corpus that had nothing to offer. "
+            "Here `PRINCIPAL_A` gets three candidates and the other Principal's Bob Chen "
+            "-- whose recorded legal name is the identical string -- is not the fourth."
+        ),
+    ),
+    ResolutionCase(
+        name="a_mailbox_two_entities_share_offers_both_and_chooses_neither",
+        family="cross_principal",
+        reference="hello@halvard.example.invalid",
+        namespace=ExternalIdentifierNamespace.EMAIL,
+        expected_outcome=ResolutionOutcome.AMBIGUOUS,
+        must_include=frozenset({HALVARD_STUDIO, HALVARD_HOLDINGS}),
+        must_not_include=frozenset({BOB_CHEN_OTHER_PRINCIPAL, MERIDEL_LEGAL}),
+        note=(
+            "Two claims in one answer, because they are the same read. A shared mailbox "
+            "answered by two juristic entities of one family produces both claimants and "
+            "chooses neither -- `COMMUNICATION_VALUE` never resolves, however few "
+            "claimants there are. And the other Principal's contact card carries the "
+            "identical address, deliberately, so this is also the partition case for "
+            "`entity_communication_methods` in its strong form: a leak here would be a "
+            "third candidate on an answer that already has two, not a silence turning "
+            "into a name."
+        ),
     ),
 )

@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and five Python modules under `src/my_pa` and four hundred and twenty-nine test modules —
+Three hundred and six Python modules under `src/my_pa` and four hundred and thirty-two test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -97,7 +97,23 @@ likewise without adding a source module, and corrected again on 2026-08-31 to
 four hundred and twenty-six, when the WP-08 blocker-clearing pass widening
 `EntityRelationshipType` to all thirty-five `entity_relationship_types`
 codes added `tests/database/test_entity_relationship_type_widened_read_path.py`,
-likewise without adding a source module. (The audit basis `main@e773e6f` was fifty-six and twenty-seven; the
+likewise without adding a source module, and corrected again on 2026-09-01 to
+three hundred and six and four hundred and thirty-two, when RI-ENT-WP-08 added
+one source module and three test modules: `1b2dd18` added
+`src/my_pa/application/entity_record_families.py`, and `ed6e057` added
+`tests/database/test_entity_record_family_write_path.py`, `31cc7bf` added
+`tests/unit/test_entity_record_family_service.py`, and `499a7c1` added
+`tests/database/test_entity_record_family_service_write_path.py` — the first
+time the source-module figure has moved since the 2026-08-29 correction, every
+step between it and this one having been test-side only. `95b16cf` and
+`34367b4` changed the contents of those files without adding a module on either
+side, so neither moves either figure. Both figures were recomputed by running
+the two commands above against this tree rather than by adding an assumed delta
+to the stated pair. The pair standing before this correction, three hundred and
+five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
+therefore skips from four hundred and twenty-six to four hundred and
+twenty-nine, because `f4eaa4f` moved the sentence without extending this note,
+and the skipped step is recorded here rather than reconstructed. (The audit basis `main@e773e6f` was fifty-six and twenty-seven; the
 pair recorded against it here was the revalidation's, one basis out.) **"Nothing checks them" was the
 diagnosis and it is now wrong**:
 `../../tests/architecture/test_spelled_counts_match_the_sets_they_name.py` runs

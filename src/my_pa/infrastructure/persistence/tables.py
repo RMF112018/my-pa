@@ -220,6 +220,8 @@ from my_pa.domain.relationship.governance import (
     OPEN_EQUIVALENT_PROPOSAL_STATES,
     PROPOSAL_METHOD_VERSION_LIMIT,
     ActorClass,
+    AssertionStatus,
+    EntityAssertionState,
     EntityProposalKind,
     EntityProposalMethod,
     EntityProposalState,
@@ -5196,6 +5198,218 @@ entity_fact_evidence_links = Table(
     ),
     Index("entity_fact_evidence_links_by_principal", "principal_id"),
     Index("entity_fact_evidence_links_by_observation", "entity_observation_id"),
+)
+
+#: RI-ENT-WP-07: one fact-level claim about a field or record of one of the
+#: six Entity-bound record families RI-ENT-WP-02 through RI-ENT-WP-06 added
+#: -- closes `ENTITY-PROVENANCE-001` for those six. See `EntityAssertion`'s
+#: own docstring (`my_pa.domain.relationship.governance`) for the full
+#: design: why exactly one `target_*` column may be non-null, why
+#: `assertion_status` is a discrete, unordered epistemic vocabulary rather
+#: than a confidence score, why `asserted_by` reuses `MutationAuthority`
+#: rather than a new vocabulary, why `supersedes_assertion_id` points
+#: backward (new row names the old one it replaces), and the reasoned
+#: merge/split exclusion (this table is not a member of
+#: `IdentityEffectFamily`/`MergeFamily`, on `entity_fact_evidence_links`'s
+#: own unwired precedent, with the one exception --
+#: `target_organization_profile_entity_id`'s `ON UPDATE CASCADE` -- proved
+#: by a real database test rather than assumed).
+#:
+#: **`target_organization_profile_entity_id` is the one target that is a
+#: plain, single-column FK rather than a composite `(id, principal_id)`
+#: one.** `entity_organization_profiles.entity_id` is simultaneously that
+#: table's primary key and its foreign key to `entities` (see
+#: `EntityOrganizationProfile`'s own docstring); it carries no separate
+#: `UNIQUE(entity_id, principal_id)` a composite reference could target, so
+#: this column references it by `entity_id` alone, with `ON UPDATE CASCADE`
+#: so a merge's reparenting `UPDATE` (`reparent_entity_reference`) carries
+#: this reference along automatically. Same-Principal for this one branch is
+#: therefore a stated residual the writer must check, exactly as
+#: `entity_fact_evidence_links`' own docstring already states for
+#: `capture_span_id`/`knowledge_id`: "one half is structural and the other
+#: half is a check the writer must make, and saying which is which is the
+#: difference between a known gap and a false claim."
+entity_assertions = Table(
+    "entity_assertions",
+    METADATA,
+    Column("assertion_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("target_entity_name_id", Text),
+    Column("target_entity_address_id", Text),
+    Column("target_communication_method_id", Text),
+    Column("target_participation_id", Text),
+    Column("target_affiliation_id", Text),
+    Column(
+        "target_organization_profile_entity_id",
+        Text,
+        ForeignKey(
+            f"{SCHEMA}.entity_organization_profiles.entity_id",
+            ondelete="CASCADE",
+            onupdate="CASCADE",
+        ),
+    ),
+    Column("predicate_code", Text),
+    Column("assertion_status", Text, nullable=False),
+    Column("rationale", Text),
+    Column("asserted_by", Text, nullable=False),
+    Column("observed_at", DateTime(timezone=True)),
+    Column("verified_at", DateTime(timezone=True)),
+    Column("supersedes_assertion_id", Text),
+    Column("state", Text, nullable=False, server_default=text("'active'")),
+    Column("version", Integer, nullable=False, server_default=text("1")),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    Column("updated_at", DateTime(timezone=True)),
+    Column("retired_at", DateTime(timezone=True)),
+    _is_identifier("assertion_id", IdKind.ENTITY_ASSERTION),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("assertion_status", AssertionStatus, name="an_assertion_status_is_known"),
+    _one_of("asserted_by", MutationAuthority, name="an_assertion_authority_is_known"),
+    _one_of("state", EntityAssertionState, name="an_assertion_state_is_known"),
+    CheckConstraint("version >= 1", name="an_assertion_version_is_positive"),
+    CheckConstraint(
+        "(target_entity_name_id IS NOT NULL)::int "
+        "+ (target_entity_address_id IS NOT NULL)::int "
+        "+ (target_communication_method_id IS NOT NULL)::int "
+        "+ (target_participation_id IS NOT NULL)::int "
+        "+ (target_affiliation_id IS NOT NULL)::int "
+        "+ (target_organization_profile_entity_id IS NOT NULL)::int = 1",
+        name="an_assertion_names_exactly_one_target",
+    ),
+    CheckConstraint(
+        "predicate_code IS NULL OR length(trim(predicate_code)) > 0",
+        name="an_assertion_predicate_code_is_not_blank",
+    ),
+    CheckConstraint(
+        "rationale IS NULL OR (length(trim(rationale)) > 0 "
+        f"AND length(rationale) <= {ENTITY_CHANGE_REASON_LIMIT})",
+        name="an_assertion_rationale_is_not_blank",
+    ),
+    CheckConstraint(
+        "retired_at IS NULL OR state <> 'active'",
+        name="an_assertion_is_retired_only_once_it_leaves_service",
+    ),
+    CheckConstraint(
+        "supersedes_assertion_id IS NULL OR supersedes_assertion_id <> assertion_id",
+        name="an_assertion_does_not_supersede_itself",
+    ),
+    UniqueConstraint(
+        "assertion_id",
+        "principal_id",
+        name="an_assertion_is_identified_within_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["target_entity_name_id", "principal_id"],
+        [f"{SCHEMA}.entity_names.entity_name_id", f"{SCHEMA}.entity_names.principal_id"],
+        ondelete="CASCADE",
+        name="an_assertion_names_a_name_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["target_entity_address_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_addresses.entity_address_id",
+            f"{SCHEMA}.entity_addresses.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="an_assertion_names_an_address_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["target_communication_method_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_communication_methods.communication_method_id",
+            f"{SCHEMA}.entity_communication_methods.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="an_assertion_names_a_communication_method_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["target_participation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_project_participations.participation_id",
+            f"{SCHEMA}.entity_project_participations.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="an_assertion_names_a_participation_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["target_affiliation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_person_organization_affiliations.affiliation_id",
+            f"{SCHEMA}.entity_person_organization_affiliations.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="an_assertion_names_an_affiliation_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["supersedes_assertion_id", "principal_id"],
+        [f"{SCHEMA}.entity_assertions.assertion_id", f"{SCHEMA}.entity_assertions.principal_id"],
+        name="an_assertion_supersedes_within_its_principal",
+    ),
+    Index("entity_assertions_by_principal", "principal_id"),
+    Index("entity_assertions_by_supersedes", "supersedes_assertion_id"),
+    Index("entity_assertions_by_entity_name", "target_entity_name_id"),
+    Index("entity_assertions_by_entity_address", "target_entity_address_id"),
+    Index("entity_assertions_by_communication_method", "target_communication_method_id"),
+    Index("entity_assertions_by_participation", "target_participation_id"),
+    Index("entity_assertions_by_affiliation", "target_affiliation_id"),
+    Index("entity_assertions_by_organization_profile", "target_organization_profile_entity_id"),
+)
+
+#: RI-ENT-WP-07: one binding between an `EntityAssertion` and the single
+#: record that backs, supports, or contradicts it. Mirrors
+#: `entity_fact_evidence_links`' evidence half exactly (same three
+#: evidence-source columns, same "exactly one" CHECK, same `EvidenceRole`
+#: vocabulary) with the fact half replaced by a single `assertion_id`. See
+#: `EntityAssertionEvidence`'s own docstring for why this table carries no
+#: `entity_id` column of any kind and is therefore excluded from merge/split
+#: on the same terms `entity_role_types`/`entity_discipline_types` already
+#: are.
+entity_assertion_evidence = Table(
+    "entity_assertion_evidence",
+    METADATA,
+    Column("evidence_id", Text, primary_key=True),
+    Column("principal_id", Text, nullable=False),
+    Column("assertion_id", Text, nullable=False),
+    Column("entity_observation_id", Text),
+    Column("capture_span_id", Text),
+    Column("knowledge_id", Text),
+    Column("role", Text, nullable=False),
+    Column("source_locator", Text),
+    Column("created_at", DateTime(timezone=True), nullable=False, server_default=func.now()),
+    _is_identifier("evidence_id", IdKind.ENTITY_ASSERTION_EVIDENCE),
+    _is_identifier("principal_id", IdKind.PRINCIPAL),
+    _one_of("role", EvidenceRole, name="an_assertion_evidence_role_is_known"),
+    CheckConstraint(
+        "(entity_observation_id IS NOT NULL)::int "
+        "+ (capture_span_id IS NOT NULL)::int "
+        "+ (knowledge_id IS NOT NULL)::int = 1",
+        name="assertion_evidence_names_exactly_one_record",
+    ),
+    CheckConstraint(
+        "source_locator IS NULL OR length(trim(source_locator)) > 0",
+        name="assertion_evidence_source_locator_is_not_blank",
+    ),
+    CheckConstraint(
+        f"source_locator IS NULL OR length(source_locator) <= {ENTITY_CHANGE_REASON_LIMIT}",
+        name="assertion_evidence_source_locator_is_bounded",
+    ),
+    ForeignKeyConstraint(
+        ["assertion_id", "principal_id"],
+        [f"{SCHEMA}.entity_assertions.assertion_id", f"{SCHEMA}.entity_assertions.principal_id"],
+        ondelete="CASCADE",
+        name="assertion_evidence_names_an_assertion_of_its_principal",
+    ),
+    ForeignKeyConstraint(
+        ["entity_observation_id", "principal_id"],
+        [
+            f"{SCHEMA}.entity_observations.observation_id",
+            f"{SCHEMA}.entity_observations.principal_id",
+        ],
+        ondelete="CASCADE",
+        name="assertion_evidence_cites_an_observation_of_its_principal",
+    ),
+    Index("entity_assertion_evidence_by_principal", "principal_id"),
+    Index("entity_assertion_evidence_by_assertion", "assertion_id"),
+    Index("entity_assertion_evidence_by_observation", "entity_observation_id"),
 )
 
 #: WP-RI-A-01: one append-only disposition of one observation.

@@ -412,6 +412,17 @@ KNOWLEDGE_TABLES_BY_REVISION: Final[dict[str, frozenset[str]]] = {
             "entity_relationship_types",
         }
     ),
+    # `1cda4d536268` (RI-ENT-WP-07): the assertion and assertion-evidence
+    # tables, additive on `9a3f6c1e8d24` (which itself creates no `knowledge`
+    # table -- it only widens three CHECK constraints, and so carries no
+    # entry here) and creating nothing else. Closes `ENTITY-PROVENANCE-001`
+    # for the six WP-02-WP-06 record families.
+    "1cda4d536268": frozenset(
+        {
+            "entity_assertions",
+            "entity_assertion_evidence",
+        }
+    ),
 }
 
 #: The union of the two lists above. Stated as a name because two tests compare

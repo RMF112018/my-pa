@@ -60,17 +60,18 @@ DISPOSABLE_DATABASE: Final = "my_pa_phase_b_vocabulary_test"
 #: The current head and the Phase B vocabulary edge this suite removes. Written
 #: out rather than imported so current chain drift and historical identity are
 #: checked independently.
-HEAD_REVISION: Final = "9a3f6c1e8d24"
-#: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-06b, widening
-#: the identity-effect family CHECKs). Named so the chain assertion below
-#: stays a statement about the order rather than about whichever revision
-#: happens to be last.
-SECOND_TO_HEAD_REVISION: Final = "8dc3619891bb"
-#: What was head until `SECOND_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-06a,
+HEAD_REVISION: Final = "1cda4d536268"
+#: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-07, adding
+#: entity_assertions/entity_assertion_evidence). Named so the chain assertion
+#: below stays a statement about the order rather than about whichever
+#: revision happens to be last.
+SECOND_TO_HEAD_REVISION: Final = "9a3f6c1e8d24"
+#: What was head until `SECOND_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-06b,
+#: widening the identity-effect family CHECKs).
+THIRD_TO_HEAD_REVISION: Final = "8dc3619891bb"
+#: What was head until `THIRD_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-06a,
 #: the entity_relationship_types taxonomy table).
-THIRD_TO_HEAD_REVISION: Final = "17149a48fa30"
-#: What was head until `THIRD_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-05).
-FOURTH_TO_HEAD_REVISION: Final = "f5b06925857e"
+FOURTH_TO_HEAD_REVISION: Final = "17149a48fa30"
 #: What was head until `FOURTH_TO_HEAD_REVISION` stacked on it. Named so the
 #: chain assertion below stays a statement about the order rather than about
 #: whichever revision happens to be last.
@@ -220,7 +221,7 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     assert script.get_revision(HEAD_REVISION).down_revision == SECOND_TO_HEAD_REVISION
     assert script.get_revision(SECOND_TO_HEAD_REVISION).down_revision == THIRD_TO_HEAD_REVISION
     assert script.get_revision(THIRD_TO_HEAD_REVISION).down_revision == FOURTH_TO_HEAD_REVISION
-    assert script.get_revision(FOURTH_TO_HEAD_REVISION).down_revision == "441b071bf37b"
+    assert script.get_revision(FOURTH_TO_HEAD_REVISION).down_revision == "f5b06925857e"
     assert script.get_revision("441b071bf37b").down_revision == "7e114f822af2"
     assert script.get_revision("7e114f822af2").down_revision == "b727e870d45e"
     assert script.get_revision("b727e870d45e").down_revision == IDENTITY_HISTORY_REVISION

@@ -271,8 +271,12 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and four** current capabilities, and the schema has
-**eighty-four** revisions at head `9a3f6c1e8d24` (corrected 2026-08-31 from
-eighty-three at `8dc3619891bb`, on which `9a3f6c1e8d24` is additive and widens
+**eighty-five** revisions at head `1cda4d536268` (corrected 2026-08-31 from
+eighty-four at `9a3f6c1e8d24`, on which `1cda4d536268` is additive and adds
+the `entity_assertions`/`entity_assertion_evidence` tables, binding
+fact-level `assertion_status` and evidence to six Entity-bound record
+families, RI-ENT-WP-07, closes `ENTITY-PROVENANCE-001`; `9a3f6c1e8d24` is
+itself additive on `8dc3619891bb` and widens
 the `entity_identity_effects`/`entity_identity_preview_ambiguities`/
 `entity_identity_ambiguity_settlements` `record_family` CHECKs to admit six
 new Entity-bound families, RI-ENT-WP-06b; `8dc3619891bb` is itself additive on

@@ -184,6 +184,10 @@ from my_pa.domain.relationship.governance import (
     ACCEPTED_PROPOSAL_STATES,
     UNDECIDED_PROPOSAL_STATES,
     ActorClass,
+    AssertionStatus,
+    EntityAssertion,
+    EntityAssertionEvidence,
+    EntityAssertionState,
     EntityFactEvidenceLink,
     EntityMergeRecord,
     EntityMutationConflictError,
@@ -245,6 +249,8 @@ from my_pa.infrastructure.persistence.tables import (
     entities,
     entity_addresses,
     entity_aliases,
+    entity_assertion_evidence,
+    entity_assertions,
     entity_assignments,
     entity_communication_methods,
     entity_external_identifiers,
@@ -2463,6 +2469,208 @@ class SqlEntityRepository(EntitiesRepository):
         )
         rows = self._connection.execute(_limited(statement, limit)).all()
         return [_row_to_fact_evidence_link(row) for row in rows]
+
+    # --- RI-ENT-WP-07: entity_assertions / entity_assertion_evidence --------
+    #
+    # Minimal, typed read/write helpers -- not full repository/service/
+    # command-layer wiring (WP-08's own, explicitly deferred scope), the same
+    # boundary `record_fact_evidence_link`/`fact_evidence_links` already draw
+    # for the WP-A-01 evidence table this pair mirrors. Not declared on the
+    # `EntitiesRepository` ABC (`contracts/ports.py`): this class already
+    # carries concrete methods the ABC does not, and adding an abstract
+    # method here would force every other implementer
+    # (`tests/conftest.py::_Entities`, `tests/evaluation/resolution_harness.py
+    # ::_CorpusRepository`) to implement it too, which is exactly the larger
+    # surface change WP-08 is the one to make deliberately.
+
+    def record_assertion(self, principal_id: str, assertion: EntityAssertion) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if assertion.principal_id != principal_id:
+            raise ValueError("an assertion belongs to the acting Principal")
+        # Same-Principal is structural for five of the six targets --
+        # each carries a composite (id, principal_id) foreign key. The
+        # sixth, `target_organization_profile_entity_id`, is a plain
+        # single-column FK (see `entity_assertions`' own docstring for why)
+        # and is this repository's own residual to check, on
+        # `entity_fact_evidence_links`' own stated precedent for its
+        # `capture_span_id`/`knowledge_id` columns.
+        if assertion.target_organization_profile_entity_id is not None:
+            self._require_writable_entity(
+                principal_id, assertion.target_organization_profile_entity_id, None
+            )
+        self._connection.execute(
+            insert(entity_assertions).values(
+                _bound(
+                    entity_assertions,
+                    principal_id,
+                    assertion_id=assertion.assertion_id,
+                    target_entity_name_id=assertion.target_entity_name_id,
+                    target_entity_address_id=assertion.target_entity_address_id,
+                    target_communication_method_id=assertion.target_communication_method_id,
+                    target_participation_id=assertion.target_participation_id,
+                    target_affiliation_id=assertion.target_affiliation_id,
+                    target_organization_profile_entity_id=(
+                        assertion.target_organization_profile_entity_id
+                    ),
+                    predicate_code=assertion.predicate_code,
+                    assertion_status=assertion.assertion_status.value,
+                    rationale=assertion.rationale,
+                    asserted_by=assertion.asserted_by.value,
+                    observed_at=assertion.observed_at,
+                    verified_at=assertion.verified_at,
+                    supersedes_assertion_id=assertion.supersedes_assertion_id,
+                    state=assertion.state.value,
+                    version=assertion.version,
+                    created_at=assertion.created_at,
+                    updated_at=assertion.updated_at,
+                    retired_at=assertion.retired_at,
+                )
+            )
+        )
+
+    def assertion(self, principal_id: str, assertion_id: str) -> EntityAssertion | None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(assertion_id, IdKind.ENTITY_ASSERTION)
+        row = self._connection.execute(
+            select(entity_assertions).where(
+                _mine(entity_assertions, principal_id),
+                entity_assertions.c.assertion_id == assertion_id,
+            )
+        ).one_or_none()
+        return None if row is None else _row_to_assertion(row)
+
+    def assertions_targeting(
+        self,
+        principal_id: str,
+        *,
+        target_entity_name_id: str | None = None,
+        target_entity_address_id: str | None = None,
+        target_communication_method_id: str | None = None,
+        target_participation_id: str | None = None,
+        target_affiliation_id: str | None = None,
+        target_organization_profile_entity_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[EntityAssertion]:
+        """Every assertion naming one of the six subjects, in `assertion_id` order.
+
+        Exactly one `target_*` keyword is expected non-`None` -- the same
+        "exactly one subject" shape the table's own CHECK enforces on the
+        write side, restated here on the read side rather than left to a
+        caller to compose correctly.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        # Named by column, not by table column object: naming the table here
+        # (`entity_assertions.c.target_...`) would put a second, unguarded
+        # statement in front of the one `_mine`-scoped `select` below, which
+        # `tests/architecture/test_principal_partition_is_reached_through_the_guard`
+        # rightly refuses -- every statement that names a partitioned table
+        # has to carry its own `_mine`/`_bound`. Kept as plain strings until
+        # the single guarded statement below is the only place `entity_assertions`
+        # is named at all.
+        provided = {
+            "target_entity_name_id": target_entity_name_id,
+            "target_entity_address_id": target_entity_address_id,
+            "target_communication_method_id": target_communication_method_id,
+            "target_participation_id": target_participation_id,
+            "target_affiliation_id": target_affiliation_id,
+            "target_organization_profile_entity_id": target_organization_profile_entity_id,
+        }
+        named = {field: value for field, value in provided.items() if value is not None}
+        if len(named) != 1:
+            raise ValueError("a targeted assertion read names exactly one subject")
+        _require_row_limit(limit)
+        ((field, value),) = named.items()
+        statement = (
+            select(entity_assertions)
+            .where(_mine(entity_assertions, principal_id), entity_assertions.c[field] == value)
+            .order_by(entity_assertions.c.assertion_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_assertion(row) for row in rows]
+
+    def supersede_assertion(
+        self,
+        principal_id: str,
+        *,
+        assertion_id: str,
+        superseded_by_assertion_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Mark one assertion superseded, non-destructively.
+
+        Writes only `state`, `assertion_status`, `version`, and `updated_at`
+        on the old row -- everything else it carries (every `target_*`
+        column, `predicate_code`, `rationale`, `asserted_by`, `observed_at`,
+        `verified_at`) is untouched, and no `EntityAssertionEvidence` row
+        citing it is read, written, or deleted by this call. The caller is
+        expected to have already written the new, superseding assertion
+        (with its own `supersedes_assertion_id` naming this one) before
+        calling this -- `EntityAssertion.__post_init__` already refuses a
+        `supersedes_assertion_id` that names itself, so the two writes
+        cannot be confused for one another.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(assertion_id, IdKind.ENTITY_ASSERTION)
+        validate_identifier(superseded_by_assertion_id, IdKind.ENTITY_ASSERTION)
+        if superseded_by_assertion_id == assertion_id:
+            raise ValueError("an assertion is not superseded by itself")
+        result = self._connection.execute(
+            update(entity_assertions)
+            .where(
+                _mine(entity_assertions, principal_id),
+                entity_assertions.c.assertion_id == assertion_id,
+                entity_assertions.c.version == expected_version,
+            )
+            .values(
+                state=EntityAssertionState.SUPERSEDED.value,
+                assertion_status=AssertionStatus.SUPERSEDED.value,
+                version=entity_assertions.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if result.rowcount == 0:
+            raise UnknownScopeError("a supersession names an assertion this write read unchanged")
+
+    def record_assertion_evidence(
+        self, principal_id: str, evidence: EntityAssertionEvidence
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if evidence.principal_id != principal_id:
+            raise ValueError("assertion evidence belongs to the acting Principal")
+        self._connection.execute(
+            insert(entity_assertion_evidence).values(
+                _bound(
+                    entity_assertion_evidence,
+                    principal_id,
+                    evidence_id=evidence.evidence_id,
+                    assertion_id=evidence.assertion_id,
+                    entity_observation_id=evidence.entity_observation_id,
+                    capture_span_id=evidence.capture_span_id,
+                    knowledge_id=evidence.knowledge_id,
+                    role=evidence.role.value,
+                    source_locator=evidence.source_locator,
+                    created_at=evidence.created_at,
+                )
+            )
+        )
+
+    def assertion_evidence(
+        self, principal_id: str, assertion_id: str, *, limit: int | None = None
+    ) -> list[EntityAssertionEvidence]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(assertion_id, IdKind.ENTITY_ASSERTION)
+        _require_row_limit(limit)
+        statement = (
+            select(entity_assertion_evidence)
+            .where(
+                _mine(entity_assertion_evidence, principal_id),
+                entity_assertion_evidence.c.assertion_id == assertion_id,
+            )
+            .order_by(entity_assertion_evidence.c.evidence_id)
+        )
+        rows = self._connection.execute(_limited(statement, limit)).all()
+        return [_row_to_assertion_evidence(row) for row in rows]
 
     def _proposal_entity_references(
         self, principal_id: str, proposal: EntityProposal
@@ -4734,6 +4942,47 @@ def _row_to_fact_evidence_link(row: Row[Any]) -> EntityFactEvidenceLink:
         entity_observation_id=_text_or_none(row.entity_observation_id),
         capture_span_id=_text_or_none(row.capture_span_id),
         knowledge_id=_text_or_none(row.knowledge_id),
+    )
+
+
+def _row_to_assertion(row: Row[Any]) -> EntityAssertion:
+    return EntityAssertion(
+        assertion_id=str(row.assertion_id),
+        principal_id=str(row.principal_id),
+        assertion_status=AssertionStatus(str(row.assertion_status)),
+        asserted_by=MutationAuthority(str(row.asserted_by)),
+        created_at=row.created_at,
+        target_entity_name_id=_text_or_none(row.target_entity_name_id),
+        target_entity_address_id=_text_or_none(row.target_entity_address_id),
+        target_communication_method_id=_text_or_none(row.target_communication_method_id),
+        target_participation_id=_text_or_none(row.target_participation_id),
+        target_affiliation_id=_text_or_none(row.target_affiliation_id),
+        target_organization_profile_entity_id=_text_or_none(
+            row.target_organization_profile_entity_id
+        ),
+        predicate_code=_text_or_none(row.predicate_code),
+        rationale=_text_or_none(row.rationale),
+        observed_at=row.observed_at,
+        verified_at=row.verified_at,
+        supersedes_assertion_id=_text_or_none(row.supersedes_assertion_id),
+        state=EntityAssertionState(str(row.state)),
+        version=int(row.version),
+        updated_at=row.updated_at,
+        retired_at=row.retired_at,
+    )
+
+
+def _row_to_assertion_evidence(row: Row[Any]) -> EntityAssertionEvidence:
+    return EntityAssertionEvidence(
+        evidence_id=str(row.evidence_id),
+        principal_id=str(row.principal_id),
+        assertion_id=str(row.assertion_id),
+        role=EvidenceRole(str(row.role)),
+        created_at=row.created_at,
+        entity_observation_id=_text_or_none(row.entity_observation_id),
+        capture_span_id=_text_or_none(row.capture_span_id),
+        knowledge_id=_text_or_none(row.knowledge_id),
+        source_locator=_text_or_none(row.source_locator),
     )
 
 

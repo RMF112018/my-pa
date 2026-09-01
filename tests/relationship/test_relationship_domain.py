@@ -462,6 +462,43 @@ EXPECTED_MODEL_FIELDS = {
             "status",
         }
     ),
+    "my_pa.domain.relationship.governance.EntityAssertion": frozenset(
+        {
+            "assertion_id",
+            "principal_id",
+            "assertion_status",
+            "asserted_by",
+            "created_at",
+            "target_entity_name_id",
+            "target_entity_address_id",
+            "target_communication_method_id",
+            "target_participation_id",
+            "target_affiliation_id",
+            "target_organization_profile_entity_id",
+            "predicate_code",
+            "rationale",
+            "observed_at",
+            "verified_at",
+            "supersedes_assertion_id",
+            "state",
+            "version",
+            "updated_at",
+            "retired_at",
+        }
+    ),
+    "my_pa.domain.relationship.governance.EntityAssertionEvidence": frozenset(
+        {
+            "evidence_id",
+            "principal_id",
+            "assertion_id",
+            "role",
+            "created_at",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+            "source_locator",
+        }
+    ),
     "my_pa.domain.relationship.entity.Assignment": frozenset(
         {
             "assignment_id",
@@ -1381,6 +1418,43 @@ EXPECTED_TABLE_COLUMNS = {
             "status",
         }
     ),
+    "entity_assertions": frozenset(
+        {
+            "assertion_id",
+            "principal_id",
+            "target_entity_name_id",
+            "target_entity_address_id",
+            "target_communication_method_id",
+            "target_participation_id",
+            "target_affiliation_id",
+            "target_organization_profile_entity_id",
+            "predicate_code",
+            "assertion_status",
+            "rationale",
+            "asserted_by",
+            "observed_at",
+            "verified_at",
+            "supersedes_assertion_id",
+            "state",
+            "version",
+            "created_at",
+            "updated_at",
+            "retired_at",
+        }
+    ),
+    "entity_assertion_evidence": frozenset(
+        {
+            "evidence_id",
+            "principal_id",
+            "assertion_id",
+            "entity_observation_id",
+            "capture_span_id",
+            "knowledge_id",
+            "role",
+            "source_locator",
+            "created_at",
+        }
+    ),
     "entity_assignments": frozenset(
         {
             "assignment_id",
@@ -1818,8 +1892,9 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
     # `EntityProjectParticipation` (RI-ENT-WP-04); sixty-eight after
     # `17149a48fa30` added `PersonOrganizationAffiliation` (RI-ENT-WP-05);
     # sixty-nine after `8dc3619891bb` added `RelationshipTypeTaxonomyEntry`
-    # (RI-ENT-WP-06a).
-    assert len(actual_model_fields) == 69
+    # (RI-ENT-WP-06a); seventy-one after `1cda4d536268` added `EntityAssertion`
+    # and `EntityAssertionEvidence` (RI-ENT-WP-07).
+    assert len(actual_model_fields) == 71
     # Forty-nine after `b727e870d45e` added the identity-ambiguity pair to the
     # three durable re-enrichment tables RI final completion brought;
     # fifty-one after `7e114f822af2` added `entity_names` and
@@ -1829,10 +1904,12 @@ def test_relationship_models_and_tables_have_a_closed_field_vocabulary() -> None
     # `entity_discipline_types`, and `entity_project_participations`
     # (RI-ENT-WP-04); fifty-seven after `17149a48fa30` added
     # `entity_person_organization_affiliations` (RI-ENT-WP-05); fifty-eight
-    # after `8dc3619891bb` added `entity_relationship_types` (RI-ENT-WP-06a).
+    # after `8dc3619891bb` added `entity_relationship_types` (RI-ENT-WP-06a);
+    # sixty after `1cda4d536268` added `entity_assertions` and
+    # `entity_assertion_evidence` (RI-ENT-WP-07).
     # The figure makes the allow-list closed in both directions, so it moves
     # with the declaration and never ahead of it.
-    assert len(actual_table_columns) == 58
+    assert len(actual_table_columns) == 60
     ast_dataclasses = {
         f"my_pa.domain.relationship.{path.stem}.{node.name}"
         for path in sorted(relationship_package.glob("*.py"))

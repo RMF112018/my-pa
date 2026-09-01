@@ -352,6 +352,20 @@ class IdKind(StrEnum):
     #: they are two records of one question, and the settlement is keyed on the
     #: ambiguity it settles.
     ENTITY_IDENTITY_AMBIGUITY = "eiam"
+    #: RI-ENT-WP-07: fact-level assertion/provenance binding for the six
+    #: Entity-bound record families RI-ENT-WP-02 through RI-ENT-WP-06 added
+    #: (`entity_names`, `entity_organization_profiles`, `entity_addresses`,
+    #: `entity_communication_methods`, `entity_project_participations`,
+    #: `entity_person_organization_affiliations`). Deliberately not a reuse
+    #: of `ASSERTION` (`asrt`, the capture-plane's own canonical-fact
+    #: assertion, `my_pa.domain.capture.assertion`): a stored reference has
+    #: to say which of the two unrelated "assertion" concepts it names, and
+    #: a shared prefix would make that ambiguous, the same argument every
+    #: other member of this enum already makes for its own table. Checked
+    #: against every prior member of this enum before use: `east`/`easev`
+    #: collide with none.
+    ENTITY_ASSERTION = "east"
+    ENTITY_ASSERTION_EVIDENCE = "easev"
 
 
 class InvalidIdentifierError(ValueError):

@@ -70,6 +70,10 @@ __all__ = [
     "PROPOSAL_METHOD_VERSION_LIMIT",
     "UNDECIDED_PROPOSAL_STATES",
     "ActorClass",
+    "AssertionStatus",
+    "EntityAssertion",
+    "EntityAssertionEvidence",
+    "EntityAssertionState",
     "EntityFactEvidenceLink",
     "EntityGovernanceError",
     "EntityMergeRecord",
@@ -1466,3 +1470,350 @@ class EntityResolutionDecision:
         if self.receipt_id is not None:
             validate_identifier(self.receipt_id)
         ensure_utc(self.decided_at)
+
+
+class AssertionStatus(StrEnum):
+    """How well-supported one fact-level claim is, stated as a discrete,
+    named epistemic category -- never a scalar confidence (RI-ENT-WP-07,
+    `ENTITY-PROVENANCE-001`).
+
+    **Not a confidence score, and not a graded band.** The source audit's own
+    proposed field names for this work package -- "confidence band (high/
+    medium/low/unknown)", a per-dimension "confidence" -- are not used
+    anywhere in this codebase.
+    `tests/architecture/test_relationship_scoring_surface_is_denied` denies
+    `confidence|certainty|probability|likelihood|propensity` outright as "a
+    model likelihood", and also denies graded-band tokens (`tier`, `grade`,
+    `rank`, `percentile`) that a numeric-in-spirit vocabulary could hide
+    behind. This is the audit's own named alternative instead: seven
+    discrete, unordered epistemic categories a reviewer can act on, on the
+    exact precedent `LegalIdentityStatusCode` (WP-02) and
+    `CommunicationVerificationStatusCode` (WP-03) already set for their own
+    narrower dimensions, and `RoleBasisCode`/`StakeholderClassCode` (WP-04)
+    set for theirs.
+
+    **Deliberately unordered -- a set of epistemic categories, not a graded
+    scale, and this is a structural claim, not merely a naming one.** Members
+    are declared in no particular rank order (`VERIFIED` first is
+    alphabetically incidental, not "most confident"): `CONTRADICTED` is not
+    "worse" than `UNRESOLVED` in a way arithmetic could combine, it is a
+    *different kind of finding* -- one says nothing is known, the other says
+    something specific is known to be false. `AssertionStatus` MUST remain a
+    plain `StrEnum` (never `IntEnum`, never given an `__lt__`/`__gt__`/
+    `__le__`/`__ge__`), and nothing anywhere in `src/` or `tests/` may sort,
+    compare, weight, or otherwise treat one member as "more" or "less" than
+    another.
+    `tests/unit/test_entity_assertion_domain.py::test_assertion_status_is_a_plain_strenum_not_an_intenum`
+    and `::test_nothing_in_the_repository_orders_or_compares_assertion_status`
+    prove this behaviourally -- the second by walking the AST of every module
+    this revision touches for a comparison operator applied near this type's
+    name, not merely by declaring the rule in prose.
+
+    **Members, and what each states:**
+
+    - `VERIFIED` -- an authoritative, independently checkable source confirmed
+      the claim (the same affirmative-and-checked reading
+      `LegalIdentityStatusCode.VERIFIED` already gives).
+    - `BEST_SUPPORTED` -- affirmative, but from a corroborated, unconfirmed
+      source rather than an authoritative check.
+    - `INFERRED` -- derived from other held facts rather than stated directly
+      by any one source; distinct from `BEST_SUPPORTED`, which names a
+      *source's* strength, not a *derivation's*.
+    - `UNRESOLVED` -- no candidate claim exists to confirm, or the claim's
+      support is not yet known. **The correct value when the source is
+      unknown or absent** (RULING 3: never infer provenance a source did not
+      state) -- never a guess dressed up as a value.
+    - `AWAITING_CONFIRMATION` -- a candidate claim exists and a confirmation
+      step has not yet run.
+    - `CONTRADICTED` -- held evidence argues against the claim (paired with
+      `EvidenceRole.COUNTEREVIDENCE` on the assertion's own evidence rows).
+    - `SUPERSEDED` -- a business fact about the claim itself: a later
+      assertion has overtaken this one. **Not the same axis as
+      `EntityAssertion.state`** (the record-lifecycle housekeeping column
+      every sibling family on this plane already carries) -- the same
+      state/business-status split `ParticipationStatusCode`'s docstring
+      already draws for `entity_project_participations`, restated here: a row
+      can have `state = ACTIVE` (this is the current, readable row) and
+      `assertion_status = SUPERSEDED` (the claim it makes is no longer the
+      best-supported one) at once, which is the ordinary case immediately
+      after a supersession -- the old row is not retired or deleted, only
+      marked as having been overtaken.
+    """
+
+    VERIFIED = "verified"
+    BEST_SUPPORTED = "best_supported"
+    INFERRED = "inferred"
+    UNRESOLVED = "unresolved"
+    AWAITING_CONFIRMATION = "awaiting_confirmation"
+    CONTRADICTED = "contradicted"
+    SUPERSEDED = "superseded"
+
+
+class EntityAssertionState(StrEnum):
+    """Where one assertion row stands, in record-lifecycle terms.
+
+    The same three-state shape `EntityNameState`, `EntityAddressState`,
+    `EntityCommunicationMethodState`, `EntityProjectParticipationState` and
+    `PersonOrganizationAffiliationState` each declare, and deliberately its
+    own vocabulary rather than a shared one, for the reason each of theirs
+    already gives: `entity_assertions` is widened independently of any
+    sibling family, and one shared enum would make widening any of them a
+    silent widening of all six. **Not `AssertionStatus`** -- see that
+    enum's own docstring for the state/business-status split this table
+    draws the same way `entity_project_participations` already does.
+    """
+
+    ACTIVE = "active"
+    RETIRED = "retired"
+    SUPERSEDED = "superseded"
+
+
+@dataclass(frozen=True, slots=True)
+class EntityAssertion:
+    """One fact-level claim about a specific field or record of one of the six
+    Entity-bound record families RI-ENT-WP-02 through RI-ENT-WP-06 added,
+    with who/what asserted it and when (RI-ENT-WP-07, `ENTITY-PROVENANCE-001`).
+
+    **Binds TO a normalized record; is never a generic EAV store.** The
+    source audit's own D.10 section is explicit that fact/assertion/
+    provenance binding must not turn core storage into a generic key-value
+    plane -- normalized tables first, assertions and evidence bind to them,
+    never the reverse. Exactly one of the six `target_*` columns below is
+    non-null, checked both here and by the table's own
+    `an_assertion_names_exactly_one_target` CHECK, on
+    `EntityFactEvidenceLink`'s own "exactly one fact" precedent (the closest
+    structural precedent for this whole record -- see this class's own
+    "Merge/split" note below) restated for a family-of-six subject rather
+    than a family-of-five one.
+
+    **Scope, deliberately not all Entity-bound families.** `entities`,
+    `entity_identifiers`, `entity_aliases`, `entity_assignments`, and
+    `entity_relationships` already have fact-level provenance coverage
+    through `EntityFactEvidenceLink`/`entity_fact_evidence_links` (WP-A-01).
+    This binds the six families that finding `ENTITY-PROVENANCE-001` is
+    actually about, and which had none before this revision: `entity_names`,
+    `entity_organization_profiles`, `entity_addresses`,
+    `entity_communication_methods`, `entity_project_participations`, and
+    `entity_person_organization_affiliations`.
+
+    **`predicate_code` is free text and nullable, deliberately not a closed
+    vocabulary.** It names which field of the target record this assertion is
+    about (`"legal_identity_status_code"`, `"job_title"`, and so on);
+    `NULL` means the assertion is about the whole record rather than one
+    field of it. The audit's own D.10 text calls this `predicate_code`/
+    `field_code`; a closed vocabulary across the dozens of heterogeneous
+    field names the six target families carry between them would need
+    constant widening for no safety benefit a free-text column does not
+    already give (the same reasoning `entity_role_types.category`/
+    `broader_family` already gives for staying free text rather than closed).
+
+    **`asserted_by` reuses `MutationAuthority`, deliberately not a new
+    vocabulary.** `MutationAuthority`'s own docstring already states the
+    argument this reuse follows: "Shared by `entity_mutation_events` and
+    `entity_fact_evidence_links` because they answer the same question about
+    the same act: what admitted this. Two vocabularies would let the ledger
+    and the evidence disagree about a single write" -- restated here for a
+    third record answering the identical question.
+
+    **`supersedes_assertion_id` points backward, from the newer row to the
+    one it replaces -- the opposite direction of `EntityNameState`'s
+    sibling-family `superseded_by_*` columns, and this reversal is
+    deliberate, not an inconsistency.** The audit's own D.10 text names the
+    field `supersedes_assertion_id`, and that name only reads correctly
+    naming the new row's own reference to what it replaces: "this assertion
+    supersedes that one." A reader asking "what superseded assertion X"
+    queries `WHERE supersedes_assertion_id = X`, on the residual the six
+    sibling families' `entity_fact_evidence_links`-shaped `role`-and-CHECK
+    idiom already asks a caller to compose rather than storing a
+    precomputed answer for every direction a query might run in.
+
+    **No destructive replacement.** Superseding an assertion writes a new
+    row and flips the *old* row's `state` to `SUPERSEDED` and its
+    `assertion_status` to `AssertionStatus.SUPERSEDED` -- it never deletes,
+    truncates, or blanks the old row or any `EntityAssertionEvidence` row
+    that cites it. `tests/database/test_entity_assertion_provenance.py::
+    test_superseding_an_assertion_leaves_the_old_row_and_its_evidence_intact`
+    proves this against real PostgreSQL: after a supersession, the old row's
+    every other column is byte-identical to what it was before, and every
+    evidence row citing it is still present, unmodified, and still resolves.
+
+    **Never infer provenance a source did not state (RULING 3).** When the
+    source of an assertion is unknown, `assertion_status` is
+    `AssertionStatus.UNRESOLVED` -- never a guess dressed up as a stronger
+    value, and no writer on this plane may promote it without a
+    corroborating source, the same discipline `RoleBasisCode`'s docstring
+    already states for its own dimension.
+
+    **Merge/split: a reasoned exclusion, not silent, and not uniform across
+    the six targets.** `EntityAssertion` is **not** a member of
+    `IdentityEffectFamily`/`MergeFamily`, on the same argument that already
+    holds for `EntityFactEvidenceLink` (also not a member, confirmed by
+    inspection before this decision was made): five of the six `target_*`
+    columns reference a sibling row by *that row's own stable surrogate
+    key* (`entity_name_id`, `entity_address_id`, `communication_method_id`,
+    `participation_id`, `affiliation_id`), which a merge's
+    `reparent_entity_reference` never rewrites -- only the *entity_id
+    column on the target row itself* changes, and a row a merge coalesces
+    (state flips to `superseded`) keeps its own surrogate key and stays
+    resolvable through its own `superseded_by_*` chain rather than going
+    dangling. The sixth, `target_organization_profile_entity_id`, is the one
+    family whose surrogate key and `entity_id` are the same column (see
+    `EntityOrganizationProfile`'s own docstring) -- a merge's reparenting of
+    an organization profile is a literal `UPDATE ... SET entity_id =
+    :survivor WHERE entity_id IN (:merged_away)`
+    (`reparent_entity_reference`,
+    `src/my_pa/infrastructure/persistence/entity.py`), and the reference this
+    column carries is a genuine SQL foreign key with `ON UPDATE CASCADE`,
+    which Postgres follows automatically the moment that `UPDATE` runs --
+    verified, not assumed, by
+    `tests/database/test_entity_assertion_provenance.py::
+    test_an_assertion_bound_to_an_organization_profile_follows_the_profile_through_a_merge`,
+    which binds an assertion to a profile, runs a real merge that reparents
+    that profile, and confirms the assertion's own column now names the
+    survivor. See the campaign document's "Merge/split disposition" section
+    for the full ledger entry this reasoning was added to.
+    """
+
+    assertion_id: str
+    principal_id: str
+    assertion_status: AssertionStatus
+    asserted_by: MutationAuthority
+    created_at: datetime
+    target_entity_name_id: str | None = None
+    target_entity_address_id: str | None = None
+    target_communication_method_id: str | None = None
+    target_participation_id: str | None = None
+    target_affiliation_id: str | None = None
+    target_organization_profile_entity_id: str | None = None
+    predicate_code: str | None = None
+    rationale: str | None = field(default=None, repr=False)
+    observed_at: datetime | None = None
+    verified_at: datetime | None = None
+    supersedes_assertion_id: str | None = None
+    state: EntityAssertionState = EntityAssertionState.ACTIVE
+    version: int = 1
+    updated_at: datetime | None = None
+    retired_at: datetime | None = None
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.assertion_id, IdKind.ENTITY_ASSERTION)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        if not isinstance(self.assertion_status, AssertionStatus):
+            raise ValueError("an assertion has a closed status")
+        if not isinstance(self.asserted_by, MutationAuthority):
+            raise ValueError("an assertion has a closed authority")
+        ensure_utc(self.created_at)
+        targets = (
+            (self.target_entity_name_id, IdKind.ENTITY_NAME),
+            (self.target_entity_address_id, IdKind.ENTITY_ADDRESS),
+            (self.target_communication_method_id, IdKind.ENTITY_COMMUNICATION_METHOD),
+            (self.target_participation_id, IdKind.ENTITY_PROJECT_PARTICIPATION),
+            (self.target_affiliation_id, IdKind.PERSON_ORGANIZATION_AFFILIATION),
+            (self.target_organization_profile_entity_id, IdKind.ENTITY),
+        )
+        for value, kind in targets:
+            if value is not None:
+                validate_identifier(value, kind)
+        if sum(value is not None for value, _ in targets) != 1:
+            raise ValueError("an assertion names exactly one target")
+        if self.predicate_code is not None and not self.predicate_code.strip():
+            raise ValueError("an assertion predicate code is not blank when present")
+        if self.rationale is not None:
+            if not self.rationale.strip():
+                raise ValueError("an assertion rationale is not blank when present")
+            if len(self.rationale) > ENTITY_CHANGE_REASON_LIMIT:
+                raise ValueError("an assertion rationale is bounded")
+        if self.observed_at is not None:
+            ensure_utc(self.observed_at)
+        if self.verified_at is not None:
+            ensure_utc(self.verified_at)
+        if self.supersedes_assertion_id is not None:
+            validate_identifier(self.supersedes_assertion_id, IdKind.ENTITY_ASSERTION)
+            if self.supersedes_assertion_id == self.assertion_id:
+                raise ValueError("an assertion does not supersede itself")
+        if not isinstance(self.state, EntityAssertionState):
+            raise ValueError("an assertion has a closed state")
+        if self.version < 1:
+            raise ValueError("an assertion version is a positive integer")
+        if self.updated_at is not None:
+            ensure_utc(self.updated_at)
+        if self.retired_at is not None:
+            ensure_utc(self.retired_at)
+            if self.state is EntityAssertionState.ACTIVE:
+                raise ValueError("an assertion is retired only once it leaves service")
+
+
+@dataclass(frozen=True, slots=True)
+class EntityAssertionEvidence:
+    """One binding between an `EntityAssertion` and the single record that
+    backs, supports, or contradicts it (RI-ENT-WP-07).
+
+    Mirrors `EntityFactEvidenceLink`'s "evidence" half exactly -- same three
+    evidence-source columns, same "exactly one" CHECK, same `EvidenceRole`
+    vocabulary (`DIRECT`/`SUPPORTING`/`COUNTEREVIDENCE`, reused rather than
+    reinvented, on `MutationAuthority`'s own docstring's argument against a
+    second vocabulary answering the identical question) -- with the fact
+    half replaced by a single `assertion_id`, since this table's whole
+    subject is already one assertion rather than a choice among five fact
+    kinds.
+
+    **`source_locator` is free text and nullable ("where permissible" --
+    the source audit's own D.10 phrasing).** Some evidence records name a
+    location a locator can state (a document path, a URL, a page or
+    paragraph reference); an observation or a knowledge item may already
+    carry its own location and need none repeated here. Never required,
+    never inferred from the cited record -- RULING 3's "never guess" applied
+    to this field specifically.
+
+    **No destructive replacement, restated for the evidence half.** This
+    table carries no `state`, no `superseded_by_*`, and no write path in this
+    revision ever deletes or updates an existing row -- an assertion's
+    supersession touches only the `entity_assertions` row itself (see
+    `EntityAssertion`'s own docstring); every `EntityAssertionEvidence` row
+    that cited the superseded assertion is left exactly as it was, still
+    resolvable by joining on `assertion_id`.
+
+    **Merge/split: excluded, and for a stronger reason than "not yet
+    wired."** This table carries no `entity_id` column of any kind, direct
+    or indirect -- its only references are `assertion_id` (opaque, not an
+    entity) and the same evidence-source trio
+    (`entity_observation_id`/`capture_span_id`/`knowledge_id`)
+    `EntityFactEvidenceLink` already carries unwired. A merge or split has no
+    row here to reparent, discover ambiguity for, or invert, on the exact
+    `entity_role_types`/`entity_discipline_types` argument the campaign
+    document's "Merge/split disposition" section already gives for those two
+    tables: there is no entity reference for the operation to touch.
+    """
+
+    evidence_id: str
+    principal_id: str
+    assertion_id: str
+    role: EvidenceRole
+    created_at: datetime
+    entity_observation_id: str | None = None
+    capture_span_id: str | None = None
+    knowledge_id: str | None = None
+    source_locator: str | None = field(default=None, repr=False)
+
+    def __post_init__(self) -> None:
+        validate_identifier(self.evidence_id, IdKind.ENTITY_ASSERTION_EVIDENCE)
+        validate_identifier(self.principal_id, IdKind.PRINCIPAL)
+        validate_identifier(self.assertion_id, IdKind.ENTITY_ASSERTION)
+        if not isinstance(self.role, EvidenceRole):
+            raise ValueError("assertion evidence has a closed role")
+        ensure_utc(self.created_at)
+        cited = (
+            (self.entity_observation_id, IdKind.ENTITY_OBSERVATION),
+            (self.capture_span_id, IdKind.SPAN),
+            (self.knowledge_id, IdKind.KNOWLEDGE),
+        )
+        for value, kind in cited:
+            if value is not None:
+                validate_identifier(value, kind)
+        if sum(value is not None for value, _ in cited) != 1:
+            raise ValueError("assertion evidence names exactly one record")
+        if self.source_locator is not None:
+            if not self.source_locator.strip():
+                raise ValueError("assertion evidence source locator is not blank when present")
+            if len(self.source_locator) > ENTITY_CHANGE_REASON_LIMIT:
+                raise ValueError("assertion evidence source locator is bounded")

@@ -50,7 +50,7 @@ def test_this_revision_is_in_the_chain() -> None:
     # taxonomy migration on top of that; 82 since `17149a48fa30`
     # (RI-ENT-WP-05) added the entity_person_organization_affiliations
     # migration on top of that.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 84
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 85
 
 
 def test_the_frozen_literals_are_this_revision_s_vocabulary() -> None:

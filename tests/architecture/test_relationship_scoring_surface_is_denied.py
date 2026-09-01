@@ -272,16 +272,19 @@ def test_the_scan_reaches_the_whole_relationship_surface() -> None:
     # and `entity_project_participations` (RI-ENT-WP-04); fifty-seven after
     # `17149a48fa30` added `entity_person_organization_affiliations`
     # (RI-ENT-WP-05); fifty-eight after `8dc3619891bb` added
-    # `entity_relationship_types` (RI-ENT-WP-06a).
-    assert len(columns) == 58, f"{len(columns)} relationship tables reached, not fifty-eight"
+    # `entity_relationship_types` (RI-ENT-WP-06a); sixty after
+    # `1cda4d536268` added `entity_assertions` and
+    # `entity_assertion_evidence` (RI-ENT-WP-07).
+    assert len(columns) == 60, f"{len(columns)} relationship tables reached, not sixty"
     # Sixty through `b727e870d45e`; sixty-two after `EntityName` and
     # `EntityOrganizationProfile` (RI-ENT-WP-02); sixty-four after
     # `EntityAddress` and `EntityCommunicationMethod` (RI-ENT-WP-03);
     # sixty-seven after `EntityRoleType`, `EntityDisciplineType`, and
     # `EntityProjectParticipation` (RI-ENT-WP-04); sixty-eight after
     # `PersonOrganizationAffiliation` (RI-ENT-WP-05); sixty-nine after
-    # `RelationshipTypeTaxonomyEntry` (RI-ENT-WP-06a).
-    assert len(models) == 69, f"{len(models)} relationship models reached, not sixty-nine"
+    # `RelationshipTypeTaxonomyEntry` (RI-ENT-WP-06a); seventy-one after
+    # `EntityAssertion` and `EntityAssertionEvidence` (RI-ENT-WP-07).
+    assert len(models) == 71, f"{len(models)} relationship models reached, not seventy-one"
     assert vocabularies, "no closed relationship vocabulary was reached"
     assert set(declared) == set(ALLOW_LIST_CONSTANTS), (
         f"{sorted(declared)} allow-list constants were read from "

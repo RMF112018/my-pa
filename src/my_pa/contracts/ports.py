@@ -1213,7 +1213,7 @@ class EntitiesRepository(ABC):
         *,
         after_entity_id: str | None = None,
     ) -> list[EntitySummary]:
-        """One bounded page of entities whose canonical or display name matches `query`.
+        """One bounded page of entities `query` reaches, by name or by context.
 
         `after_entity_id` continues a previous page: it names the last entity of
         that page, and the rows after it in this read's own `(canonical_name,
@@ -1221,17 +1221,53 @@ class EntitiesRepository(ABC):
         continuation — every other listing could be paged and this one, the
         browse surface a person actually scrolls, could only be truncated.
 
-        A case-insensitive substring match over `canonical_name` and
-        `display_name`, scoped by `principal_id` and optionally by
-        `entity_type`. Aliases are *not* searched, and that is now a decision
-        rather than a gap: `entity_aliases` has existed since `b7f4d1a92c36`,
-        and this method still reads only the two name columns.
+        A case-insensitive substring match, scoped by `principal_id` and
+        optionally by `entity_type`, over seven columns' worth of question. The
+        entity's own `canonical_name` and `display_name`; and, as correlated
+        existence tests inside the same partition-guarded statement, its
+        **typed names** (`entity_names`), its **communication values**
+        (`entity_communication_methods`), its **affiliations** (the `job_title`
+        and the affiliated organization's own name), its **project roles** (the
+        participation's `role_text` and `project_display_name`, for this entity
+        as participant), and the **labels of its relationship types**. Every one
+        of those matches only rows in the `active` state: a retired or
+        superseded child row records what an entity used to be, and a browse
+        query did not ask that.
 
-        Searching aliases would put a nickname, a maiden name and a former
-        legal name into a browse result that nobody asked a question about --
-        the disclosure `entities.resolve` makes deliberately, made incidentally
-        here. A caller who wants alias matching asks the question that means
-        it: `entities.resolve` matches aliases and says so in its evidence.
+        **Aliases are still not searched, and the same decision now governs two
+        of the typed-name types.** `entity_aliases` has existed since
+        `b7f4d1a92c36` and this method has never read it, because searching
+        aliases would put a nickname, a maiden name and a former legal name into
+        a browse result that nobody asked a question about — the disclosure
+        `entities.resolve` makes deliberately, made incidentally here. A caller
+        who wants alias matching asks the question that means it:
+        `entities.resolve` matches aliases and says so in its evidence.
+
+        `entity_names` holds exactly the categories that reason was written
+        about, so indexing it wholesale would have reversed the decision while
+        appearing to extend it. `NameTypeCode.ALIAS` and
+        `NameTypeCode.HISTORICAL_NAME` are therefore **excluded here too**
+        (`WP09-DECISION-1`), derived from the enum rather than spelled as
+        literals, and the exclusion is pinned by test rather than described.
+
+        **Where the boundary falls, so the next reader inherits the reason.**
+        What is disclosed is an identity the entity *currently* holds in another
+        register — an active `legal`, `operating`, `dba`, `brand`, `acronym`,
+        `display` or `document_reference` name. What is withheld is an identity
+        somebody no longer uses. That is the same line the alias decision draws;
+        a currently-active trading name of an organization falls on the
+        disclosable side of it, which is what lets a caller searching a
+        company's trading name find the company whose `canonical_name` is
+        something else entirely.
+
+        **Two costs, disclosed rather than hidden.** These are leading-wildcard
+        `ILIKE` matches over columns no index supports, exactly as the two
+        original name matches already were, so the widening makes an
+        already-unindexed browse scan wider; supporting indexes need a migration.
+        And effective dating (`effective_from`/`effective_to`) is *not* applied,
+        because this method carries no clock — a row's `state` is the only
+        in-force test available here, and a row that is `active` with a past
+        `effective_to` still matches.
         """
 
     @abstractmethod

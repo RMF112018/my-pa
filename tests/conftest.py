@@ -235,6 +235,7 @@ from my_pa.domain.relationship.entity import (
     IdentifierState,
     LegalIdentityStatusCode,
     MergedEndpointError,
+    NameTypeCode,
     OrganizationKindCode,
     PersonOrganizationAffiliation,
     PersonOrganizationAffiliationState,
@@ -3213,6 +3214,90 @@ class _Entities(EntitiesRepository):
                 # enforce.
                 _refuse_unnormalized_name(entity.canonical_name)
         needle = query.casefold()
+
+        def hit(value: str | None) -> bool:
+            """One substring test, on the server's terms.
+
+            `ILIKE '%…%'` with `_contains`' escaping is a literal substring
+            match, so `%` and `_` in a query stay literal here as well: `in` on
+            a casefolded string has no metacharacters to begin with. A `NULL`
+            column (`job_title`, `role_text`) answers no rather than raising,
+            which is what `NULL ILIKE …` does on the server.
+            """
+            return value is not None and needle in value.casefold()
+
+        def matches_context(entity_id: str) -> bool:
+            """The five `RI-ENT-WP-09` match paths `SqlEntityRepository.search` adds.
+
+            Held here for the reason the keyset below is: a fake that matched
+            differently would let a unit test assert a search the server does
+            not perform.
+
+            **One new divergence, stated rather than hidden.** The server
+            matches the relationship type's *label*, which lives in
+            `entity_relationship_types` -- a taxonomy table seeded by migration
+            and held on the server. This `World` has no taxonomy rows at all, so
+            the fake matches the relationship type's *code* instead. The codes
+            and their seeded labels differ in punctuation and case rather than
+            in words (`works_for` against "Works for"), so a one-word query
+            reaches the same edges through both; a query spanning the word
+            boundary does not. `tests/database` is where the label match itself
+            is measured.
+            """
+            names = any(
+                name.entity_id == entity_id
+                and name.principal_id == principal_id
+                and name.state is EntityNameState.ACTIVE
+                # `WP09-DECISION-1`: the two types the recorded alias decision
+                # was written about stay out of a browse result, derived from
+                # the enum rather than spelled as literals.
+                and name.name_type_code not in (NameTypeCode.ALIAS, NameTypeCode.HISTORICAL_NAME)
+                and (hit(name.display_value) or hit(name.normalized_value))
+                for name in self._world.entity_names
+            )
+            methods = any(
+                method.entity_id == entity_id
+                and method.principal_id == principal_id
+                and method.state is EntityCommunicationMethodState.ACTIVE
+                and hit(method.normalized_value)
+                for method in self._world.entity_communication_methods
+            )
+            organization_names = {
+                organization.entity_id: (organization.canonical_name, organization.display_name)
+                for organization in self._world.entities
+                if organization.principal_id == principal_id
+            }
+            affiliations = any(
+                affiliation.person_entity_id == entity_id
+                and affiliation.principal_id == principal_id
+                and affiliation.state is PersonOrganizationAffiliationState.ACTIVE
+                and (
+                    hit(affiliation.job_title)
+                    or any(
+                        hit(value)
+                        for value in organization_names.get(
+                            affiliation.organization_entity_id or "", ()
+                        )
+                    )
+                )
+                for affiliation in self._world.entity_person_organization_affiliations
+            )
+            participations = any(
+                participation.participant_entity_id == entity_id
+                and participation.principal_id == principal_id
+                and participation.state is EntityProjectParticipationState.ACTIVE
+                and (hit(participation.role_text) or hit(participation.project_display_name))
+                for participation in self._world.entity_project_participations
+            )
+            relationships = any(
+                entity_id in (edge.from_entity_id, edge.to_entity_id)
+                and edge.principal_id == principal_id
+                and edge.state is RelationshipState.ACTIVE
+                and hit(edge.relationship_type.value)
+                for edge in self._world.entity_relationships
+            )
+            return names or methods or affiliations or participations or relationships
+
         matched = [
             entity
             for entity in self._world.entities
@@ -3221,6 +3306,7 @@ class _Entities(EntitiesRepository):
             and (
                 needle in entity.canonical_name.casefold()
                 or needle in entity.display_name.casefold()
+                or matches_context(entity.entity_id)
             )
         ]
         matched.sort(key=lambda entity: (entity.canonical_name, entity.entity_id))

@@ -42,6 +42,7 @@ from my_pa.contracts.ports import (
     EntitySummary,
     EntityWriteRequest,
     RelationshipWriteRequest,
+    UnknownScopeError,
 )
 from my_pa.domain.relationship.entity import (
     AliasState,
@@ -55,12 +56,16 @@ from my_pa.domain.relationship.entity import (
     EntityNameState,
     EntityOrganizationProfile,
     EntityProjectParticipation,
+    EntityProjectParticipationState,
     EntityRelationship,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    NameTypeCode,
     PersonOrganizationAffiliation,
+    PersonOrganizationAffiliationState,
+    RelationshipState,
 )
 from my_pa.domain.relationship.governance import (
     EntityFactEvidenceLink,
@@ -201,15 +206,129 @@ class _CorpusRepository(EntitiesRepository):
         query: str,
         entity_type: EntityType | None = None,
         limit: int = 50,
+        *,
+        after_entity_id: str | None = None,
     ) -> list[EntitySummary]:
+        """The port's search over the corpus, on `SqlEntityRepository.search`' terms.
+
+        **Three pre-existing divergences from the port were closed here
+        (`RI-ENT-WP-09`), and saying which is the point.** This method took no
+        `after_entity_id` while the port and the other two implementations all
+        did, ordered by `entity_id` while the port orders by `(canonical_name,
+        entity_id)`, and matched `canonical_name` alone while the port matches
+        `display_name` too. A cursor keyword absent from one implementation of
+        an `ABC` is a keyword no test of that implementation can exercise, and a
+        keyset over an order the port does not use is a page nobody could walk.
+
+        Nothing in `EntityResolutionService` reads this method -- resolution
+        asks "who is called this", not "what should I list" -- so no number in
+        `RESOLUTION_CALIBRATION.md` moves with it. It is aligned anyway, because
+        a double that answers a question differently from the server is a
+        licence to assert a search the server does not perform.
+
+        **One divergence remains, and it cannot be closed here.** The server
+        matches the relationship type's *label* out of `entity_relationship_types`,
+        a taxonomy seeded by migration. The corpus carries no taxonomy rows, so
+        this matches the relationship type's *code*.
+        """
         needle = query.casefold()
+
+        def hit(value: str | None) -> bool:
+            """One substring test, with no metacharacter of its own.
+
+            The server's `ILIKE '%…%'` is escaped by `_contains`, so a `%` or
+            `_` in the query is literal there; `in` over a casefolded string is
+            literal here for free. `None` answers no, as `NULL ILIKE …` does.
+            """
+            return value is not None and needle in value.casefold()
+
+        organization_names = {
+            organization.entity_id: (organization.canonical_name, organization.display_name)
+            for organization in CORPUS_ENTITIES
+            if organization.principal_id == principal_id
+        }
+
+        def matches_context(entity_id: str) -> bool:
+            """The five match paths `RI-ENT-WP-09` added, active rows only."""
+            return (
+                any(
+                    name.entity_id == entity_id
+                    and name.principal_id == principal_id
+                    and name.state is EntityNameState.ACTIVE
+                    # `WP09-DECISION-1`: an alias and a historical name stay out
+                    # of a browse result, derived from the enum.
+                    and name.name_type_code
+                    not in (NameTypeCode.ALIAS, NameTypeCode.HISTORICAL_NAME)
+                    and (hit(name.display_value) or hit(name.normalized_value))
+                    for name in CORPUS_NAMES
+                )
+                or any(
+                    method.entity_id == entity_id
+                    and method.principal_id == principal_id
+                    and method.state is EntityCommunicationMethodState.ACTIVE
+                    and hit(method.normalized_value)
+                    for method in CORPUS_COMMUNICATION_METHODS
+                )
+                or any(
+                    affiliation.person_entity_id == entity_id
+                    and affiliation.principal_id == principal_id
+                    and affiliation.state is PersonOrganizationAffiliationState.ACTIVE
+                    and (
+                        hit(affiliation.job_title)
+                        or any(
+                            hit(value)
+                            for value in organization_names.get(
+                                affiliation.organization_entity_id or "", ()
+                            )
+                        )
+                    )
+                    for affiliation in CORPUS_AFFILIATIONS
+                )
+                or any(
+                    participation.participant_entity_id == entity_id
+                    and participation.principal_id == principal_id
+                    and participation.state is EntityProjectParticipationState.ACTIVE
+                    and (hit(participation.role_text) or hit(participation.project_display_name))
+                    for participation in CORPUS_PARTICIPATIONS
+                )
+                or any(
+                    entity_id in (edge.from_entity_id, edge.to_entity_id)
+                    and edge.principal_id == principal_id
+                    and edge.state is RelationshipState.ACTIVE
+                    and hit(edge.relationship_type.value)
+                    for edge in CORPUS_RELATIONSHIPS
+                )
+            )
+
         matched = [
             entity
             for entity in CORPUS_ENTITIES
             if entity.principal_id == principal_id
             and (entity_type is None or entity.entity_type is entity_type)
-            and needle in entity.canonical_name
+            and (
+                hit(entity.canonical_name)
+                or hit(entity.display_name)
+                or matches_context(entity.entity_id)
+            )
         ]
+        matched.sort(key=lambda item: (item.canonical_name, item.entity_id))
+        if after_entity_id is not None:
+            position = next(
+                (
+                    (entity.canonical_name, entity.entity_id)
+                    for entity in CORPUS_ENTITIES
+                    if entity.principal_id == principal_id and entity.entity_id == after_entity_id
+                ),
+                None,
+            )
+            # Refused rather than silently restarted, as the server does: a
+            # cursor naming an entity outside the partition is not a position in
+            # this Principal's ordering.
+            if position is None:
+                raise UnknownScopeError("a search cursor names an entity in this scope")
+            matched = [
+                entity for entity in matched if (entity.canonical_name, entity.entity_id) > position
+            ]
         return [
             EntitySummary(
                 entity_id=entity.entity_id,
@@ -218,7 +337,7 @@ class _CorpusRepository(EntitiesRepository):
                 display_name=entity.display_name,
                 status=entity.status,
             )
-            for entity in sorted(matched, key=lambda item: item.entity_id)[:limit]
+            for entity in matched[:limit]
         ]
 
     def get(self, principal_id: str, entity_id: str) -> Entity | None:

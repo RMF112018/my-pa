@@ -270,6 +270,7 @@ from my_pa.infrastructure.persistence.tables import (
     entity_proposal_evidence_links,
     entity_proposal_review_decisions,
     entity_proposals,
+    entity_relationship_types,
     entity_relationships,
     entity_resolution_decisions,
     extractions,
@@ -586,6 +587,28 @@ class SqlEntityRepository(EntitiesRepository):
             if located is None:
                 raise UnknownScopeError("a search cursor names an entity in this scope")
             after = (located.canonical_name, located.entity_id)
+        # **The two name types the alias decision was written about, derived.**
+        # `WP09-DECISION-1` extends `entity_aliases`' exclusion to the two
+        # `entity_names` types that hold the same thing -- a name somebody no
+        # longer uses. Spelled from the enum rather than as literals so a
+        # renamed member is a compile-time fact rather than a silent widening.
+        withheld_name_types = (NameTypeCode.ALIAS.value, NameTypeCode.HISTORICAL_NAME.value)
+        # **The affiliated organization's own name, as a partition-scoped
+        # derived table.** `entities` is already the outer `FROM`, so a second
+        # read of it inside the correlated subquery has to be a distinct
+        # relation or the correlation binds back to the outer row. It carries
+        # its own `_mine` rather than leaning on the affiliation's composite
+        # foreign key: a partition a reader has to infer from a constraint is a
+        # partition a reader can miss.
+        affiliated_organizations = (
+            select(
+                entities.c.entity_id.label("organization_entity_id"),
+                entities.c.canonical_name.label("organization_canonical_name"),
+                entities.c.display_name.label("organization_display_name"),
+            )
+            .where(_mine(entities, principal_id))
+            .subquery("affiliated_organization")
+        )
         rows = self._connection.execute(
             select(
                 entities.c.entity_id,
@@ -599,6 +622,116 @@ class SqlEntityRepository(EntitiesRepository):
                 or_(
                     entities.c.canonical_name.ilike(pattern, escape="\\"),
                     entities.c.display_name.ilike(pattern, escape="\\"),
+                    # **Typed names, minus the two `WP09-DECISION-1` withholds.**
+                    # Active rows only: a retired or superseded name form is a
+                    # name this entity no longer carries, and serving it to a
+                    # browse query is the disclosure the alias decision refuses.
+                    select(entity_names.c.entity_name_id)
+                    .where(
+                        _mine(entity_names, principal_id),
+                        entity_names.c.entity_id == entities.c.entity_id,
+                        entity_names.c.state == EntityNameState.ACTIVE.value,
+                        entity_names.c.name_type_code.notin_(withheld_name_types),
+                        or_(
+                            entity_names.c.display_value.ilike(pattern, escape="\\"),
+                            entity_names.c.normalized_value.ilike(pattern, escape="\\"),
+                        ),
+                    )
+                    .correlate_except(entity_names)
+                    .exists(),
+                    # **Communication values, which is where domain matching
+                    # comes from.** The match is already a substring `ILIKE`,
+                    # so `acme.test` reaches `alice@acme.test` with no domain
+                    # parser and no second column to keep in step with the
+                    # first.
+                    select(entity_communication_methods.c.communication_method_id)
+                    .where(
+                        _mine(entity_communication_methods, principal_id),
+                        entity_communication_methods.c.entity_id == entities.c.entity_id,
+                        entity_communication_methods.c.state
+                        == EntityCommunicationMethodState.ACTIVE.value,
+                        entity_communication_methods.c.normalized_value.ilike(pattern, escape="\\"),
+                    )
+                    .correlate_except(entity_communication_methods)
+                    .exists(),
+                    # **Affiliations: the job title, and the organization's own
+                    # name.** An outer join, because an affiliation may name no
+                    # organization at all and a job title alone still matches.
+                    select(entity_person_organization_affiliations.c.affiliation_id)
+                    .select_from(
+                        entity_person_organization_affiliations.outerjoin(
+                            affiliated_organizations,
+                            entity_person_organization_affiliations.c.organization_entity_id
+                            == affiliated_organizations.c.organization_entity_id,
+                        )
+                    )
+                    .where(
+                        _mine(entity_person_organization_affiliations, principal_id),
+                        entity_person_organization_affiliations.c.person_entity_id
+                        == entities.c.entity_id,
+                        entity_person_organization_affiliations.c.state
+                        == PersonOrganizationAffiliationState.ACTIVE.value,
+                        or_(
+                            entity_person_organization_affiliations.c.job_title.ilike(
+                                pattern, escape="\\"
+                            ),
+                            affiliated_organizations.c.organization_canonical_name.ilike(
+                                pattern, escape="\\"
+                            ),
+                            affiliated_organizations.c.organization_display_name.ilike(
+                                pattern, escape="\\"
+                            ),
+                        ),
+                    )
+                    .correlate_except(
+                        entity_person_organization_affiliations, affiliated_organizations
+                    )
+                    .exists(),
+                    # **Project roles, for the entity as participant.** The
+                    # project-scoped display name is a fact about this
+                    # participation, never about the entity's identity, and it
+                    # is read here and written nowhere.
+                    select(entity_project_participations.c.participation_id)
+                    .where(
+                        _mine(entity_project_participations, principal_id),
+                        entity_project_participations.c.participant_entity_id
+                        == entities.c.entity_id,
+                        entity_project_participations.c.state
+                        == EntityProjectParticipationState.ACTIVE.value,
+                        or_(
+                            entity_project_participations.c.role_text.ilike(pattern, escape="\\"),
+                            entity_project_participations.c.project_display_name.ilike(
+                                pattern, escape="\\"
+                            ),
+                        ),
+                    )
+                    .correlate_except(entity_project_participations)
+                    .exists(),
+                    # **Relationship-type labels, reached through the edge.**
+                    # `entity_relationship_types` is a global taxonomy with no
+                    # `principal_id` at all, so the partition is imposed on
+                    # `entity_relationships`, which has one. A subquery that
+                    # correlated on `entity_id` alone would reach another
+                    # Principal's edges.
+                    select(entity_relationships.c.relationship_id)
+                    .select_from(
+                        entity_relationships.join(
+                            entity_relationship_types,
+                            entity_relationships.c.relationship_type
+                            == entity_relationship_types.c.relationship_type_code,
+                        )
+                    )
+                    .where(
+                        _mine(entity_relationships, principal_id),
+                        or_(
+                            entity_relationships.c.from_entity_id == entities.c.entity_id,
+                            entity_relationships.c.to_entity_id == entities.c.entity_id,
+                        ),
+                        entity_relationships.c.state == RelationshipState.ACTIVE.value,
+                        entity_relationship_types.c.label.ilike(pattern, escape="\\"),
+                    )
+                    .correlate_except(entity_relationships, entity_relationship_types)
+                    .exists(),
                 ),
                 _optional(entities.c.entity_type == entity_type.value if entity_type else None),
                 _optional(

@@ -1109,35 +1109,121 @@ The four no-guess rules, each a refusal a test can reach:
    `EntityCommunicationMethod` itself declares.
 
 **4. The tests.** `tests/database/test_entity_record_family_write_path.py`
-(`ed6e057`) exercises the repository write path against real PostgreSQL,
-including the merge case whose finding is recorded under "Finding: merge
-reparenting bumps a reparented row's own `version`" below. The two doubles are
-covered by the existing `tests/unit`, `tests/relationship` and
-`tests/evaluation` suites that construct them.
+(`ed6e057`, extended by `f2db56d` from 45 tests to 60) exercises the repository
+write path against real PostgreSQL, including the merge case whose finding is
+recorded under "Finding: merge reparenting bumps a reparented row's own
+`version`" below. The two doubles are covered by the existing `tests/unit`,
+`tests/relationship` and `tests/evaluation` suites that construct them.
 
 **The service's own coverage has since landed, and this note is promoted from
 pending to delivered.** `tests/unit/test_entity_record_family_service.py`
-(`31cc7bf`, extended by `95b16cf`) exercises the service against the in-memory
+(`31cc7bf`, extended by `95b16cf`, rewritten onto the corrected write path by
+`0e17e91` from 145 tests to 185) exercises the service against the in-memory
 `_Entities` double: Principal scoping as absence read structurally over
 `dataclasses.fields`, the two-row shape of a correction with the predecessor's
 survival as the load-bearing assertion, the profile's in-place revision and its
 nullable clearing, the optimistic-version refusals and the unreachable/absent
 parity, normalization computed from the stated display form, the four no-guess
 rules each at the helper that makes the refusal, the optional assertion and its
-evidence, and `MutationAuthority`'s keyword-only unreachability.
+evidence, and `MutationAuthority`'s keyword-only unreachability. Since
+`0e17e91` it also holds the corrected values on the successor with an
+anti-vacuity check against the predecessor's own unchanged values; the
+structural claim that each of the five `correct_*` bodies makes exactly one
+repository call and that the call is its family's `supersede_*` with the
+successor crossing as `successor=` — the property whose loss *is* finding D1 —
+with a behavioural counterpart through a counting proxy and the mirror claim
+that a `record_*` verb is one insert and not a supersession; the whole-row-list
+equality over all five families proving that a correction refused at a stale
+version, or naming an unreachable predecessor, writes nothing at all; and the
+double's own transition-then-insert supersession with its single version bump
+and its successor passing the same guards a fresh record passes.
 `tests/database/test_entity_record_family_service_write_path.py` (`499a7c1`,
-rewritten by `95b16cf`) holds only what a real schema can decide about the
+rewritten by `95b16cf`, corrected by `f2db56d` from 19 tests to 22) holds only
+what a real schema can decide about the
 service's ordering, and pairs each positive claim with an anti-vacuity test
 proving the constraint it relies on actually fires. **What both modules said
 about a preferred correction has changed with the code**: through `95b16cf`
 they pinned the refusal on all three families, the two cases that refusal was
 deliberately wider than, and an AST check that the refusal was the first
 statement of each correction it guarded. That refusal is no longer in the tree
-and neither is its coverage; what the preferred case is now held to is that the
-correction *succeeds* against the real schema — the predecessor superseded, the
-successor active and preferred, and the `superseded_by_*` link written — which
-is the claim the three-statement ordering in the boundary below exists to make
-provable.
+and neither is its coverage; `0e17e91` and `f2db56d` replaced each of those
+tests in place rather than deleting them, and what the preferred case is now
+held to is that the correction *succeeds* against the real schema — the
+predecessor superseded, the successor active and preferred, and the
+`superseded_by_*` link written — which is the claim the three-statement
+ordering in the boundary below exists to make provable.
+
+**What the database tier now proves, and did not before (`f2db56d`).** Finding
+D1 survived review because the repository tier's supersession tests
+pre-recorded each successor as a deliberately *non-colliding* row — the
+affiliation successor named a different person — and then named it by
+identifier, which is not the shape a correction actually issues. Correcting a
+current affiliation therefore had no database-tier coverage at all: it was
+exercised only against the in-memory double, which enforces no uniqueness of
+any kind and wrote both rows without complaint. The repository tier now
+carries, one test per family, the correction that collided under the old
+successor-first ordering:
+
+- `test_a_current_affiliation_is_correctable_at_all` — **`correct_affiliation`
+  on a current, open-ended affiliation, which had no database-tier coverage at
+  all before this commit.** `an_open_ended_affiliation_is_unique_per_person` is
+  `(principal_id, person_entity_id) WHERE state = 'active' AND effective_to IS
+  NULL`, keyed on the person alone rather than on the job title, the
+  organization or the affiliation type, so under the old ordering *every*
+  correction of a current affiliation collided, whatever field was being
+  corrected — total rather than intermittent. The test corrects only the job
+  title, which is as far from the index's key columns as this family allows,
+  and asserts the successor stays open-ended (`effective_to is None`) rather
+  than quietly acquiring an end date, which would also release the index by
+  inventing a fact the caller never stated.
+  `test_a_current_affiliation_is_correctable_through_the_service` carries the
+  same case through the service.
+- one correction per family that keeps its normalized value — name, address,
+  communication method — and one participation correction that restates its
+  `role_code`. The `role_code` is stated rather than left null on purpose:
+  PostgreSQL indexes nulls as distinct by default, so a null `role_code` never
+  collides and would have passed under the broken ordering too.
+- three preferred-slot corrections — name, address, channel — each *counting*
+  the active holders of the slot rather than only inspecting the successor,
+  because a predecessor left active with `is_preferred` still set would satisfy
+  "the successor is preferred" while being a second holder of a one-holder
+  slot. Each also asserts the predecessor keeps its own `is_preferred`:
+  supersession replaces a row, it does not withdraw one, and clearing the flag
+  would rewrite what the superseded row said.
+- **each family's collision case is exercised**: five third-row collision tests
+  — name, address, channel, participation, affiliation — pinning the limitation
+  that is *not* closed. A successor colliding with some other active row is a
+  real conflict about the world, and it still surfaces as the driver's
+  `IntegrityError` naming the index, exactly as the plain `record_*` path does.
+  `test_a_correction_colliding_with_another_active_row_still_leaves_as_a_driver_error`
+  pins the same limitation at the service tier, asserting the identical
+  exception out of `record_name` and out of `correct_name` so the claim is "the
+  correction is no worse than the plain write" rather than "the correction
+  fails".
+- `test_correcting_an_already_superseded_row_aborts_rather_than_leaving_it_unnamed`
+  characterises the third statement's own refusal: `_refuse_unnamed_successor`
+  raises `RuntimeError` and the transaction aborts, so no orphan successor is
+  committed and the predecessor keeps naming the first one.
+- `test_the_organization_profile_family_revises_in_place_because_it_is_not_temporal`
+  covers the sixth family for what it is rather than by analogy: no `state`, no
+  `retired_at`, no `superseded_by_*` column and `entity_id` as its whole primary
+  key, all read off the live catalogue rather than off the migration file, and
+  therefore `revise_organization_profile` and no `correct_*` verb at all.
+
+At the service tier, `f2db56d` turned the three preferred-correction refusal
+tests into tests that the preferred correction succeeds, keeping their
+retire-then-record arcs so that the alternative a caller used to be forced into
+is still shown working and still shown costing the lineage link.
+`test_a_preferred_correction_answers_with_a_written_row_and_not_a_driver_error`
+admits every exception and then asserts the *absence* of one alongside the rows
+the call was supposed to produce, so a service that silently did nothing would
+not satisfy it. `test_a_supersession_naming_an_absent_successor_is_refused_at_the_statement`
+keeps its name and its claim: since the port no longer offers any way to name a
+successor that does not exist, it issues the raw statements instead, and still
+proves the composite self-referencing foreign key is real and checked per
+statement. The anti-vacuity tests that read `pg_index` and `pg_constraint`
+directly — the three one-preferred partial uniques, and
+`test_no_supersession_foreign_key_is_deferrable` — are unchanged.
 ### The boundary — what RI-ENT-WP-08 does NOT deliver
 
 **The service is deliberately unwired.** No `Capability` names
@@ -1279,7 +1365,16 @@ no refusal for it, so what surfaced was the driver's error. The same
 release-then-insert-then-link ordering closes that case with the preferred one,
 because that index is partial on `state = 'active'` like the rest. It is
 recorded here because this document disclosed the narrower defect and never
-this one.
+this one. **It is now proved against real PostgreSQL rather than only reasoned
+about.** `f2db56d` added
+`tests/database/test_entity_record_family_write_path.py::test_a_current_affiliation_is_correctable_at_all`
+and its service-tier counterpart
+`test_a_current_affiliation_is_correctable_through_the_service`, each
+correcting only the job title — as far from the index's key columns as this
+family allows — and each asserting the successor stays open-ended rather than
+acquiring an end date the caller never stated. Before those two this family had
+no database-tier correction coverage at all, which is why the defect reached a
+reviewer rather than a test.
 
 *What did NOT change, so a reader assumes nothing more than landed.* The
 schema. No migration was written for this, no constraint was made deferrable,
@@ -1384,7 +1479,17 @@ same collision, so it is a standing property of these six families rather than
 something the correction path made worse** — but it is a genuine gap against
 the typed-refusal posture the rest of this service holds, it is not closed
 here, and no transport should publish these verbs without deciding what it
-answers for that error.
+answers for that error. **The limitation is pinned by tests rather than left to
+be rediscovered.** `f2db56d` added one third-row collision test per correctable
+family — name, address, communication method, participation and affiliation —
+each asserting the `IntegrityError` names the index it collided with and that
+the two pre-existing rows are left at version 1, so a correction that failed
+this way wrote nothing. `test_a_correction_colliding_with_another_active_row_still_leaves_as_a_driver_error`
+carries the same claim at the service tier, asserting the identical exception
+out of `record_name` and out of `correct_name` so what is stated is "the
+correction is no worse than the plain write" rather than "the correction
+fails". A later work package that gives these a typed refusal will find those
+tests waiting for it.
 
 **No mutation-ledger row, and no idempotency key.** The port's write block for
 these six families takes neither, unlike the directed writes, so the service
@@ -1489,8 +1594,8 @@ families, whose parameters were already spelled for their own record.
 - `src/my_pa/infrastructure/persistence/entity.py` (`ed6e057`, parameter rename
   in `b49c8bd`): the seventeen `record_*`/`supersede_*`/`retire_*`/`revise_*`
   methods on `SqlEntityRepository` and the module-level
-  `_refuse_stale_or_absent`. The preferred-correction follow-up below rewrites
-  the five `supersede_*` bodies into the three-statement ordering and adds the
+  `_refuse_stale_or_absent`. The preferred-correction follow-up (`33d5424`)
+  rewrites the five `supersede_*` bodies into the three-statement ordering and adds the
   five private `_insert_*` helpers they share with `record_*`, plus the
   module-level `_refuse_unnamed_successor`; it adds no public method.
 - `src/my_pa/contracts/ports.py` (`b49c8bd`, `a5a939d`, `7bbc524`): the same
@@ -1498,8 +1603,8 @@ families, whose parameters were already spelled for their own record.
   RI-ENT-WP-07's six assertion methods (`record_assertion`, `assertion`,
   `assertions_targeting`, `supersede_assertion`, `record_assertion_evidence`,
   `assertion_evidence`), and `supersede_assertion`'s collapsed-refusal contract
-  stated outright in its docstring. The preferred-correction follow-up below
-  changes one thing on this port: each of the five `supersede_*` methods takes
+  stated outright in its docstring. The preferred-correction follow-up
+  (`33d5424`) changes one thing on this port: each of the five `supersede_*` methods takes
   the successor *record* in place of the successor's identifier, and the block
   comment above them states the three-statement ordering and why it is the
   implementer's to know rather than each caller's to rediscover.
@@ -1510,8 +1615,9 @@ families, whose parameters were already spelled for their own record.
   to any existing module.
 - `tests/conftest.py` (`b49c8bd`, `a5a939d`, `7bbc524`): `_Entities` in-memory
   equivalents for all twenty-three declared methods. The preferred-correction
-  follow-up moves the double to the new `supersede_*` shape: it takes the
-  successor record and writes it, so a test cannot pass over a correction that
+  follow-up (`33d5424`) moves the double to the new `supersede_*` shape: it
+  takes the successor record and writes it, so a test cannot pass over a
+  correction that
   never wrote the corrected value, and it preserves refusal *order* — a stale
   or unreachable predecessor is refused before the successor is inserted. It
   deliberately reproduces no uniqueness: which rows collide is the database's
@@ -1522,10 +1628,15 @@ families, whose parameters were already spelled for their own record.
   `_CorpusRepository` per-method refusals — the corpus holds none of these
   rows, so an empty read would be indistinguishable from a resolver that
   consulted the plane and correctly found nothing.
-- `tests/database/test_entity_record_family_write_path.py` (`ed6e057`).
-- `tests/unit/test_entity_record_family_service.py` (`31cc7bf`, `95b16cf`) and
-  `tests/database/test_entity_record_family_service_write_path.py` (`499a7c1`,
-  `95b16cf`): the service's own unit and database coverage. Through `95b16cf`
+- `tests/database/test_entity_record_family_write_path.py` (`ed6e057`, extended
+  by `f2db56d` from 45 tests to 60): the repository write path against real
+  PostgreSQL, and since `f2db56d` every family's correction as a correction
+  actually issues it.
+- `tests/unit/test_entity_record_family_service.py` (`31cc7bf`, `95b16cf`,
+  rewritten onto the corrected write path by `0e17e91` from 145 tests to 185)
+  and `tests/database/test_entity_record_family_service_write_path.py`
+  (`499a7c1`, `95b16cf`, corrected by `f2db56d` from 19 tests to 22): the
+  service's own unit and database coverage. Through `95b16cf`
   that included the preferred-correction refusal and both "horns" of the
   "not expressible as a supersession" claim; both are superseded by the
   correction below, and what the preferred case now holds is that the
@@ -1536,15 +1647,45 @@ families, whose parameters were already spelled for their own record.
   **Superseded and no longer in the tree.** The refusal rested on the claim
   that no ordering of a correction's statements satisfied both the
   preferred-slot index and the supersession foreign key; a reviewer refuted
-  that against the accepted DDL, and the follow-up commit on this branch
-  replaced the refusal with the three-statement ordering set out under "A
-  preferred row is correctable, and the ordering that reaches it" above,
-  issued from `src/my_pa/infrastructure/persistence/entity.py`. That commit's
-  SHA and its exact test results are recorded in the pull request and the
-  implementation report bound to the head reviewed, rather than restated here,
-  so this list cannot drift ahead of the tree.
+  that against the accepted DDL, and the follow-up commit on this branch —
+  `33d5424`, listed below — replaced the refusal with the three-statement
+  ordering set out under "A preferred row is correctable, and the ordering that
+  reaches it" above, issued from
+  `src/my_pa/infrastructure/persistence/entity.py`. That commit's exact test
+  results are recorded in the pull request and the implementation report bound
+  to the head reviewed, rather than restated here, so this list cannot drift
+  ahead of the tree.
 - `tests/architecture/test_principal_is_never_caller_supplied.py` (`28fb1e5`):
   six registry entries added, none removed, no matcher or control changed.
+
+**The corrective cycle that closed reviewer finding D1 — four commits on this
+branch, named here so this list does not stop at the head that was reviewed.**
+
+- `33d5424` — replaces `_refuse_preferred_correction` with the three-statement
+  supersession ordering the accepted DDL already admits, in
+  `src/my_pa/infrastructure/persistence/entity.py`, the five `supersede_*`
+  declarations on `src/my_pa/contracts/ports.py`,
+  `src/my_pa/application/entity_record_families.py` and the `_Entities` double
+  in `tests/conftest.py`. No schema change and no migration.
+- `a3b897b` — this document: withdraws in full the five claims that a
+  preferred-slot correction was structurally inexpressible (reviewer finding
+  D2), qualifies "pre-existing" for the three defects `37ead78` introduced on
+  this same unmerged branch (finding D3), and makes the WP-08 "not delivered"
+  list exhaustive rather than merely closed-sounding.
+- `0e17e91` — `tests/unit/test_entity_record_family_service.py`, 145 tests to
+  185: replaces in place the thirteen tests that asserted the refused
+  behaviour, each at the same or greater strength, and adds forty more holding
+  the corrected write path and the double's transition-then-insert.
+- `f2db56d` — `tests/database/test_entity_record_family_write_path.py`, 45
+  tests to 60, and
+  `tests/database/test_entity_record_family_service_write_path.py`, 19 tests to
+  22: every family's correction covered against real PostgreSQL, including
+  `correct_affiliation` on a current affiliation, which had no database-tier
+  coverage at all and is the reason finding D1 survived to review.
+
+The commit refreshing this document for those four is not named here: its SHA
+does not exist while it is being written, and this list states no SHA it cannot
+have read.
 
 **No migration, and no schema change of any kind, was made by RI-ENT-WP-08.**
 It writes to tables `RI-ENT-WP-02` through `RI-ENT-WP-07` already created.

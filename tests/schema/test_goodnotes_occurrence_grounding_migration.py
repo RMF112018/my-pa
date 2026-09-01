@@ -63,7 +63,7 @@ PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
 PHASE_B_START: Final = "c7a1f04b9e63"
-HEAD_REVISION: Final = "1cda4d536268"
+HEAD_REVISION: Final = "2c00c9ac64bc"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_b7f2c9e4a618_ground_goodnotes_note_unit_visual_identity.py"
 )
@@ -145,7 +145,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(PHASE_B_REVISION).down_revision == "a1f7d3c85e40"
     assert script.get_revision(PHASE_B_HEAD).down_revision == PHASE_B_REVISION
     assert script.get_heads() == [HEAD_REVISION]
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 85
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

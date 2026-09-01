@@ -157,7 +157,7 @@ def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     # taxonomy migration on top of that; 82 since `17149a48fa30`
     # (RI-ENT-WP-05) added the entity_person_organization_affiliations
     # migration on top of that.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 85
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

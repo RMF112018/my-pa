@@ -271,8 +271,10 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and four** current capabilities, and the schema has
-**eighty-five** revisions at head `1cda4d536268` (corrected 2026-08-31 from
-eighty-four at `9a3f6c1e8d24`, on which `1cda4d536268` is additive and adds
+**eighty-six** revisions at head `2c00c9ac64bc` (corrected 2026-09-01 from
+eighty-five at `1cda4d536268`, on which `2c00c9ac64bc` is additive and adds
+WebAuthn credential, challenge, recovery-code, and opaque session tables,
+UI-IMP-WP02; `1cda4d536268` is additive on `9a3f6c1e8d24` and adds
 the `entity_assertions`/`entity_assertion_evidence` tables, binding
 fact-level `assertion_status` and evidence to six Entity-bound record
 families, RI-ENT-WP-07, closes `ENTITY-PROVENANCE-001`; `9a3f6c1e8d24` is

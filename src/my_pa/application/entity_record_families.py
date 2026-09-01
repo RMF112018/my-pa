@@ -38,6 +38,26 @@ names it. `retire_*` retires under `expected_version`. So what a record said
 before a correction survives the correction, which is the property the whole
 temporal shape exists to keep.
 
+**A preferred row cannot be corrected, and the refusal is a fact about the
+schema rather than a policy this module chose.** `correct_name`,
+`correct_address` and `correct_communication_method` refuse a command carrying
+`is_preferred=True`, before writing anything. Those three families each hold a
+partial unique *index* admitting one active preferred row per
+`(principal_id, entity_id, type code)` and a NOT DEFERRABLE self-referencing
+foreign key requiring a supersession's successor to already exist, and a
+correction has to satisfy both at once: writing the successor first trips the
+index, because the predecessor has not yet left `state = 'active'`, and
+superseding first trips the foreign key, because the successor is not there to
+be named. A unique index cannot be deferred at all -- only a unique constraint
+can -- so no ordering and no transaction-level trick reaches it. Without the
+refusal the caller received a raw `psycopg` `UniqueViolation` out of the
+repository; with it they receive a stable application refusal before any row is
+written. `_refuse_preferred_correction` names the six constraints, the two
+cases the refusal is deliberately wider than, and the retire-then-record path a
+caller has instead -- along with what that path costs, which is the
+`superseded_by_*` lineage link. Correcting a row that is not preferred is
+untouched, and so is recording a preferred row in the first place.
+
 **Atomicity, stated rather than claimed.** A correction is two statements, not
 one. `SqlEntityRepository` takes the connection rather than opening one -- "the
 caller owns the transaction, this class only issues statements on it" -- and
@@ -741,6 +761,78 @@ def _stated_identifier(value: str | None) -> str | None:
     return value
 
 
+def _refuse_preferred_correction(is_preferred: bool) -> None:
+    """Refuse a correction whose successor claims the preferred slot.
+
+    **A preferred row's correction is not expressible as a supersession under
+    this schema, and the two possible orderings are mutually exclusive.** The
+    three temporal families that carry `is_preferred` each hold two constraints
+    that a correction has to satisfy at once and cannot:
+
+    * `an_active_entity_name_has_one_preferred_per_type`,
+      `an_active_entity_address_has_one_preferred_per_type` and
+      `an_active_communication_method_has_one_preferred_per_type` -- unique
+      *indexes* on `(principal_id, entity_id, <type> _code)`
+      `WHERE state = 'active' AND is_preferred = true`. Writing the successor
+      first, which is the order every `correct_*` here uses, trips these: the
+      predecessor is still `state = 'active'` and still preferred when the
+      insert lands.
+    * `an_entity_name_is_superseded_within_its_principal`,
+      `an_entity_address_is_superseded_within_its_principal` and
+      `a_communication_method_is_superseded_within_its_principal` -- the
+      self-referencing foreign keys `(superseded_by_*, principal_id)` back to
+      the same table. Superseding first trips these instead: the successor row
+      the supersession names does not exist yet. All three are declared with no
+      `DEFERRABLE` clause in `migrations/versions/`'s
+      `7e114f822af2` and `441b071bf37b` revisions, so they are NOT DEFERRABLE
+      and are checked per statement.
+
+    So no reordering reaches it, and no transaction-level trick does either: a
+    unique *index* cannot be deferred at all -- only a unique *constraint* can.
+    Making a preferred correction expressible would need a migration making
+    those self-referencing foreign keys deferrable, or an in-place preference
+    verb for a temporal family, which this module's own design rejects ("There
+    is deliberately no 'update in place' verb for a temporal family").
+    Neither is inside RI-ENT-WP-08, and neither is done here.
+
+    **What is refused, and what is not.** Every `correct_*` command carrying
+    `is_preferred=True` on the three families above. A correction of a row that
+    is *not* preferred is untouched, which is the ordinary case. So is every
+    `record_*`, including one that records a preferred row, and so is every
+    `retire_*` and the organization profile's `revise_organization_profile`.
+
+    **The refusal is deliberately wider than the constraint, and that is stated
+    rather than hidden.** Two preferred corrections the indexes would in fact
+    have admitted are refused here too: one whose successor names a *different*
+    type code from the predecessor's, and one whose predecessor was not itself
+    preferred. Telling either case apart needs a read of the predecessor, and
+    this service performs none -- a read here would be a second, unguarded
+    source of truth beside the caller's `expected_version`, which is the whole
+    thing that guard exists to be. A refusal a caller can act on is the honest
+    answer; a read that made the refusal exact would cost the property the
+    module is built on.
+
+    **What a caller does instead, and what it costs.** Replace a preferred row
+    by `retire_*` on the predecessor -- retirement writes `is_preferred = false`
+    and releases the slot, which
+    `tests/database/test_entity_record_family_write_path.py::test_a_retirement_releases_the_preferred_slot`
+    proves against real PostgreSQL -- and then `record_*` the replacement as
+    preferred. **This is not equivalent to a correction and the difference is
+    not cosmetic:** it records a retirement, so no `superseded_by_*` link is
+    written and the two rows carry no lineage relating them. A reader following
+    the supersession chain will not find the replacement from the retired row.
+
+    `SafeDetail` carries no `is_preferred` member and `errors.py` is outside
+    this package's scope, so the refusal reports `PINNED`, the one member of
+    that closed set naming a per-record "this is the one to default to"
+    boolean. The imprecision is named here rather than left for a reader to
+    discover, the way that enum's own comment block records the tokens it
+    declined.
+    """
+    if is_preferred:
+        raise InvalidRequestError(SafeDetail.PINNED)
+
+
 def _normalized_name(display_value: str) -> str:
     """`display_value` as the form two names are compared in.
 
@@ -828,7 +920,15 @@ class EntityRecordFamilyService:
         at: datetime,
         authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
     ) -> CorrectedFact:
-        """Write the corrected name and supersede the row it replaces, in that order."""
+        """Write the corrected name and supersede the row it replaces, in that order.
+
+        Refuses a command carrying `is_preferred=True` before writing anything;
+        see `_refuse_preferred_correction` for why no ordering of these two
+        statements satisfies both `an_active_entity_name_has_one_preferred_per_type`
+        and `an_entity_name_is_superseded_within_its_principal`, and for the
+        retire-then-record path a caller has instead.
+        """
+        _refuse_preferred_correction(command.is_preferred)
         entity_name_id = issue_identifier(IdKind.ENTITY_NAME)
         repository.record_entity_name(
             principal_id,
@@ -1006,7 +1106,14 @@ class EntityRecordFamilyService:
         at: datetime,
         authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
     ) -> CorrectedFact:
-        """Write the corrected address and supersede the row it replaces, in that order."""
+        """Write the corrected address and supersede the row it replaces, in that order.
+
+        Refuses a command carrying `is_preferred=True` before writing anything,
+        on `correct_name`'s terms and for the same pair of constraints:
+        `an_active_entity_address_has_one_preferred_per_type` and
+        `an_entity_address_is_superseded_within_its_principal`.
+        """
+        _refuse_preferred_correction(command.is_preferred)
         entity_address_id = issue_identifier(IdKind.ENTITY_ADDRESS)
         repository.record_entity_address(
             principal_id, self._address(command, entity_address_id, principal_id)
@@ -1097,7 +1204,14 @@ class EntityRecordFamilyService:
         at: datetime,
         authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
     ) -> CorrectedFact:
-        """Write the corrected channel and supersede the row it replaces, in that order."""
+        """Write the corrected channel and supersede the row it replaces, in that order.
+
+        Refuses a command carrying `is_preferred=True` before writing anything,
+        on `correct_name`'s terms and for the same pair of constraints:
+        `an_active_communication_method_has_one_preferred_per_type` and
+        `a_communication_method_is_superseded_within_its_principal`.
+        """
+        _refuse_preferred_correction(command.is_preferred)
         communication_method_id = issue_identifier(IdKind.ENTITY_COMMUNICATION_METHOD)
         repository.record_communication_method(
             principal_id, self._channel(command, communication_method_id, principal_id)

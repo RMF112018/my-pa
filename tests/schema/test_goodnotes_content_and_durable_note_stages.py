@@ -62,7 +62,11 @@ PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
 PHASE_B_START: Final = "c7a1f04b9e63"
-HEAD_REVISION: Final = "1cda4d536268"
+#: The chain's current head: `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
+#: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
+#: `design_coordination_with`. It stacked on `1cda4d536268` (RI-ENT-WP-07), which was head
+#: before it. Written out rather than derived so chain drift fails here rather than passing.
+HEAD_REVISION: Final = "c99cd8ed8d1c"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_a4d9c2e7b815_admit_goodnotes_content_and_durable_note_stages.py"
 )

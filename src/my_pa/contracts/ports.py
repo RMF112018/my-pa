@@ -1327,6 +1327,65 @@ class EntitiesRepository(ABC):
     ) -> list[EntityName]:
         """Name forms recorded for an entity in this Principal's partition, on `aliases`' terms."""
 
+    # --- RI-ENT-WP-09: the normalized-value reads over two of those families --
+    #
+    # The pair above reads a family *by entity*; this pair reads two of the
+    # same families *by value*, which is the question resolution asks: not
+    # "what is this entity called" but "who, if anyone, is called this". They
+    # are `entities_by_alias`'s shape rather than `names`', because that is the
+    # method whose question they share, and they return the matched row beside
+    # the entity for the reason `entities_by_identifier` does -- a resolution
+    # answer has to be able to say which record made a candidate a candidate.
+    #
+    # Nothing new is needed underneath them: `entity_names_by_normalized_value`
+    # and `entity_communication_methods_by_normalized_value` have existed since
+    # their families were declared, and before this work package nothing read
+    # either one. These two methods are the first readers of indexes that were
+    # already there.
+
+    @abstractmethod
+    def entities_by_typed_name(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityName]]:
+        """Every entity carrying this normalized name form, with the name that matched.
+
+        Scoped by `principal_id` applied first, as part of the lookup rather
+        than as a filter over a wider result, so a name form belonging to
+        another Principal is unreachable here rather than fetched and dropped.
+
+        Matched by **equality on the already-normalized value** -- never a
+        pattern, never a fuzzy or similarity match. `search` is the substring
+        surface; resolution asks who *is* this, and for that a partial match is
+        evidence of nothing.
+
+        The collection is read whole rather than paged, on `entities_by_alias`'
+        terms: resolution must see *every* claimant of a value to decide whether
+        that value is conflicted, and a page is the one shape that could let a
+        claimant fall off the end and leave a genuinely contested name reading
+        as a clean match. The bound belongs on the answer
+        (`RESOLUTION_CANDIDATE_LIMIT`, which discloses its truncation), not on
+        the read that the answer's safety is decided from.
+        """
+
+    @abstractmethod
+    def entities_by_communication_value(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityCommunicationMethod]]:
+        """Every entity carrying this normalized communication value, with the row that matched.
+
+        `entities_by_typed_name`'s contract exactly: `principal_id` applied
+        first as part of the lookup, equality on the already-normalized value
+        and never a pattern or a fuzzy match, and the collection read whole
+        because resolution must see every claimant to decide whether the value
+        is conflicted -- a page could let one fall off the end and turn a
+        contested address into a clean match.
+
+        More than one result is not an error, for `entities_by_identifier`'s
+        reason: a shared address is a fact the caller must be able to see, and
+        what to do about it is the resolution service's decision rather than
+        this port's.
+        """
+
     @abstractmethod
     def organization_profile(
         self, principal_id: str, entity_id: str

@@ -118,6 +118,30 @@ to reflect a later rename, per this campaign's own convention of not editing
 merged migrations to restate later facts. This docstring is where that note
 belongs instead.
 
+**Offline (`--sql`) mode emits the rename; it does not refuse it.** Every
+statement this revision applies is a fixed, server-side statement over fixed
+literals: the `INSERT ... SELECT` copies columns from one row of a table to
+another row of the same table inside the server, and the two `UPDATE`s and the
+`DELETE` match on those same two literals. Nothing here reads a row into
+Python, computes a value from it, or depends on a result the server hands
+back, so an offline script can express the whole rename faithfully -- unlike
+`8e1c4a7b2d90`, whose identity-effect settlement has to read the operation
+ledgers and compute the application's canonical-JSON digest in Python and
+therefore fails closed offline (`DO $$ ... RAISE EXCEPTION ... END $$`). The
+one thing offline mode genuinely cannot do is what the online path does with
+`Result.rowcount`: in `--sql` mode Alembic never executes against a
+connection, `bind.execute(...)` returns `None`, and there is no result object
+to interrogate. That is a limitation of the *Python* verification, not of the
+verification itself -- so rather than emit a script that would silently rename
+zero rows (exactly what this migration's "refusing to guess" posture exists to
+prevent), the offline path re-expresses the same check server-side, wrapping
+the whole rename in a single `DO $$ ... $$` block that reads the insert's
+`GET DIAGNOSTICS ... ROW_COUNT` and raises the same message with the same
+count if it is not exactly one. The block is one statement, so a raise rolls
+the whole rename back whether or not the reviewer wrapped the script in an
+explicit transaction. The online path is untouched: same statements, same
+`rowcount != 1` guards, same error text.
+
 DDL is written out rather than imported from `tables.py` (`D-48`, `D-69`), on
 the same convention `8dc3619891bb` and every other hand-written-DDL migration
 on this chain follows.
@@ -127,7 +151,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from alembic import op
+from alembic import context, op
 from sqlalchemy import text
 
 revision: str = "c99cd8ed8d1c"
@@ -146,7 +170,99 @@ _OLD_CODE: Final = "design_coordinates_with"
 _NEW_CODE: Final = "design_coordination_with"
 
 
+def _sql_literal(value: str) -> str:
+    """A single-quoted SQL string literal, on `8dc3619891bb`'s convention.
+
+    The offline path has no bound parameters to hand the driver -- `--sql`
+    mode renders a script, not a prepared statement -- so the two codes are
+    inlined. Quoting is applied uniformly rather than trusted to be
+    unnecessary for these particular values.
+    """
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _emit_offline_rename(
+    *,
+    from_code: str,
+    to_code: str,
+    guard_prefix: str,
+    guard_suffix: str,
+) -> None:
+    """Emit the whole rename as a static script, guard included.
+
+    Called only from offline (`--sql`) mode, where `bind.execute` returns
+    `None` and `Result.rowcount` does not exist to be read -- see the module
+    docstring. The four statements are the same four the online path runs, in
+    the same order, over the same two literals; the `rowcount != 1` check the
+    online path performs in Python is performed here by the server instead,
+    via `GET DIAGNOSTICS`, raising the same message with the same count. It is
+    re-expressed rather than dropped because a script that emitted the rename
+    without it would silently rename zero rows against a database where the
+    old code is absent or already migrated, which is precisely what this
+    revision refuses to do online.
+
+    All four statements live in one `DO $$ ... $$` block on purpose. A block
+    is a single statement to the server, so the raise unwinds the insert and
+    the repoints with it even if the reviewer applies the emitted script
+    outside an explicit transaction.
+    """
+    op.execute(
+        f"""
+        DO $$
+        DECLARE
+          inserted integer;
+        BEGIN
+          INSERT INTO {SCHEMA}.entity_relationship_types
+            (relationship_type_code, label, directed, inverse_type_code,
+             source_entity_type, target_entity_type, allows_project_scope,
+             cardinality_rule, status)
+          SELECT {_sql_literal(to_code)}, label, directed, inverse_type_code,
+                 source_entity_type, target_entity_type, allows_project_scope,
+                 cardinality_rule, status
+          FROM {SCHEMA}.entity_relationship_types
+          WHERE relationship_type_code = {_sql_literal(from_code)};
+
+          GET DIAGNOSTICS inserted = ROW_COUNT;
+          IF inserted <> 1 THEN
+            RAISE EXCEPTION '%',
+              {_sql_literal(guard_prefix)} || inserted || {_sql_literal(guard_suffix)};
+          END IF;
+
+          UPDATE {SCHEMA}.entity_relationships
+            SET relationship_type = {_sql_literal(to_code)}
+            WHERE relationship_type = {_sql_literal(from_code)};
+          UPDATE {SCHEMA}.entity_relationship_types
+            SET inverse_type_code = {_sql_literal(to_code)}
+            WHERE inverse_type_code = {_sql_literal(from_code)};
+
+          DELETE FROM {SCHEMA}.entity_relationship_types
+            WHERE relationship_type_code = {_sql_literal(from_code)};
+        END $$
+        """  # noqa: S608
+    )
+
+
 def upgrade() -> None:
+    # Offline (`--sql`) mode cannot read Result.rowcount back -- Alembic never
+    # executes against a connection there -- so the identical rename, with the
+    # identical single-row guard restated server-side, is emitted instead. The
+    # online path below is unchanged; see the module docstring for why this
+    # revision emits rather than fails closed the way 8e1c4a7b2d90 must.
+    if context.is_offline_mode():
+        _emit_offline_rename(
+            from_code=_OLD_CODE,
+            to_code=_NEW_CODE,
+            guard_prefix=(
+                f"expected exactly one {SCHEMA}.entity_relationship_types row with "
+                f"relationship_type_code = {_OLD_CODE!r} to rename; found "
+            ),
+            guard_suffix=(
+                ". Refusing to guess -- this migration does not silently rename zero, "
+                "more than one, or an already-migrated row."
+            ),
+        )
+        return
+
     bind = op.get_bind()
 
     # --- step 1: create the new row, copying every other column verbatim ----
@@ -224,6 +340,21 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Same reasoning as upgrade(), in the reverse direction. A downgrade that
+    # is not offline-safe is as broken as an upgrade that is not: `--sql` is
+    # how the reverse script gets reviewed before anyone runs it.
+    if context.is_offline_mode():
+        _emit_offline_rename(
+            from_code=_NEW_CODE,
+            to_code=_OLD_CODE,
+            guard_prefix=(
+                f"expected exactly one {SCHEMA}.entity_relationship_types row with "
+                f"relationship_type_code = {_NEW_CODE!r} to restore; found "
+            ),
+            guard_suffix=". Refusing to guess.",
+        )
+        return
+
     bind = op.get_bind()
 
     # The exact reverse, in the exact reverse order: recreate the old row

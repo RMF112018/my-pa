@@ -130,6 +130,8 @@ from my_pa.domain.relationship.governance import (
     DEFAULT_MUTATION_AUTHORITY,
     ENTITY_CHANGE_REASON_LIMIT,
     ActorClass,
+    EntityAssertion,
+    EntityAssertionEvidence,
     EntityFactEvidenceLink,
     EntityMergeRecord,
     EntityMutationEvent,
@@ -1587,6 +1589,159 @@ class EntitiesRepository(ABC):
         releases the open-ended slot through `state`; *when* an affiliation
         ended is a separate fact the caller states or leaves unstated, never
         one this port invents.
+        """
+
+    # --- RI-ENT-WP-08: RI-ENT-WP-07's assertion surface, declared -------------
+    #
+    # This is the surface change RI-ENT-WP-07's own comment (see
+    # `SqlEntityRepository`'s "entity_assertions / entity_assertion_evidence"
+    # block) named WP-08 as the one to make deliberately rather than make
+    # itself. That repository has carried these six methods concretely since
+    # WP-07 while this port did not declare them, which is precisely the
+    # asymmetry the write-path block above refuses: a concrete method left
+    # off the ABC is one a double can silently not have, and a caller
+    # written against the port would then work in production and vanish in a
+    # test. Declaring them abstract makes every implementer answer for the
+    # assertion plane -- including the one whose honest answer is "nothing"
+    # (`tests/evaluation/resolution_harness.py::_CorpusRepository`).
+    #
+    # What this does NOT change, stated so the boundary is not read wider
+    # than it is: the scope stays WP-07's -- typed read/write helpers over
+    # `entity_assertions`/`entity_assertion_evidence` and nothing else.
+    # Declaring them here is not service, command-layer, `Capability`, MCP,
+    # HTTP, or CLI exposure; that remains WP-10/WP-11's, and no method here
+    # becomes reachable from a transport by virtue of being declared.
+    #
+    # Two verbs and no more, unlike the three the six families above take.
+    # `record_*` inserts; `supersede_assertion` is the family's only
+    # transition. There is deliberately no `retire_assertion`:
+    # `EntityAssertionState.RETIRED` exists in the domain, but WP-07 wrote no
+    # retirement path and this package declares no verb no implementer has.
+    # Neither evidence rows nor assertion rows are ever updated in place or
+    # deleted through this port.
+
+    @abstractmethod
+    def record_assertion(self, principal_id: str, assertion: EntityAssertion) -> None:
+        """Record one fact-level claim about a record of the six families above.
+
+        Refuses, with `ValueError`, an assertion whose own `principal_id` is
+        not the acting one -- an assertion belongs to the Principal writing
+        it, and this port will not file one on another's behalf.
+
+        `assertion_status`, `asserted_by`, `predicate_code` and `rationale`
+        are written exactly as given. Which epistemic category a claim falls
+        in is the caller's claim (`AssertionStatus` is a set of named
+        categories, never a score), and nothing here derives one from the
+        cited evidence, the target record, or the absence of either.
+
+        The scope boundary, honestly: five of the six `target_*` columns are
+        same-Principal by construction, each carrying a composite
+        `(id, principal_id)` foreign key, so only
+        `target_organization_profile_entity_id` -- a plain single-column
+        reference -- is left for an implementer to check for reachability
+        itself, on `record_fact_evidence_link`'s own stated precedent for
+        its `capture_span_id`/`knowledge_id` columns.
+        """
+
+    @abstractmethod
+    def assertion(self, principal_id: str, assertion_id: str) -> EntityAssertion | None:
+        """The assertion with this identifier in this Principal's partition, or `None`.
+
+        `None` is the same answer an assertion held by another Principal
+        gets, so a caller cannot use this read to learn that some other
+        partition holds the identifier it named.
+        """
+
+    @abstractmethod
+    def assertions_targeting(
+        self,
+        principal_id: str,
+        *,
+        target_entity_name_id: str | None = None,
+        target_entity_address_id: str | None = None,
+        target_communication_method_id: str | None = None,
+        target_participation_id: str | None = None,
+        target_affiliation_id: str | None = None,
+        target_organization_profile_entity_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[EntityAssertion]:
+        """Every assertion naming one subject, in `assertion_id` order.
+
+        Exactly one `target_*` keyword is expected non-`None`. Naming none of
+        them, or more than one, raises `ValueError` rather than guessing
+        which subject was meant or silently answering about a different one:
+        that is the read-side restatement of the "exactly one target" CHECK
+        the table already enforces on the write side.
+
+        Superseded and retired assertions come back alongside active ones.
+        `state` is on each row for the caller to read, and a read that
+        quietly dropped them would make an assertion's own history
+        unobservable through this port -- which is the opposite of what a
+        non-destructive family is for.
+
+        `limit` caps the rows the implementer fetches rather than slicing a
+        complete answer, on `aliases`' terms; `None` is genuinely unbounded
+        and is the default.
+        """
+
+    @abstractmethod
+    def supersede_assertion(
+        self,
+        principal_id: str,
+        *,
+        assertion_id: str,
+        superseded_by_assertion_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Mark one assertion superseded, non-destructively, under its version.
+
+        Writes `state`, `assertion_status`, `version` and `updated_at`, and
+        nothing else: every `target_*` column, `predicate_code`,
+        `rationale`, `asserted_by`, `observed_at` and `verified_at` survive
+        the supersession untouched, and no `EntityAssertionEvidence` row
+        citing this assertion is read, written, or deleted -- each stays
+        exactly as it was, still resolvable by `assertion_id`.
+
+        `superseded_by_assertion_id` names the successor but is *not stored
+        by this call*: `entity_assertions` carries no backward pointer, only
+        the forward `supersedes_assertion_id` that the successor row itself
+        holds. It is taken here so the refusal below can be stated, and so
+        the caller cannot describe a supersession it did not perform.
+
+        Refuses, with `ValueError`, a supersession naming the assertion
+        itself. The caller is expected to have already written the
+        superseding assertion; this port does not write it and does not
+        require that it exist.
+        """
+
+    @abstractmethod
+    def record_assertion_evidence(
+        self, principal_id: str, evidence: EntityAssertionEvidence
+    ) -> None:
+        """Bind one assertion to the single record that backs or contradicts it.
+
+        Refuses, with `ValueError`, evidence whose own `principal_id` is not
+        the acting one.
+
+        `role` is written as given -- `COUNTEREVIDENCE` is recorded as
+        readily as `DIRECT`, and recording it changes no assertion's
+        `assertion_status`. An assertion's status is a claim its own writer
+        makes; nothing here recomputes it from the evidence that accumulates
+        against it.
+        """
+
+    @abstractmethod
+    def assertion_evidence(
+        self, principal_id: str, assertion_id: str, *, limit: int | None = None
+    ) -> list[EntityAssertionEvidence]:
+        """Evidence recorded against one assertion, in `evidence_id` order.
+
+        Principal-scoped like every read on this port, and empty rather than
+        raising for an assertion this Principal cannot reach: an assertion
+        with no evidence and an assertion in another partition are the same
+        answer here, deliberately. `limit` behaves as it does on
+        `assertions_targeting`.
         """
 
     @abstractmethod

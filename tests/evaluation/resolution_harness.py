@@ -360,6 +360,35 @@ class _CorpusRepository(EntitiesRepository):
     ) -> None:
         raise NotImplementedError("resolution writes no person affiliation")
 
+    # RI-ENT-WP-07's assertion surface, which RI-ENT-WP-08 declared on the
+    # port: resolution writes none of it, and reads none of it either. The
+    # reads refuse rather than answer `[]`/`None` -- unlike a corpus-backed
+    # read such as `assignments` -- for the reason the governance block below
+    # already gives for `fact_evidence_links` and `observations`: this corpus
+    # holds no assertion, so an empty answer would be indistinguishable from
+    # a resolver that consulted the assertion plane and correctly found
+    # nothing, and the calibration figures would silently stop measuring the
+    # basis they name. Refusing makes any such consultation a failure the run
+    # cannot miss.
+
+    def record_assertion(self, principal_id: str, assertion: object) -> None:
+        raise NotImplementedError("resolution writes no assertion")
+
+    def assertion(self, principal_id: str, assertion_id: str) -> object:
+        raise NotImplementedError("resolution reads no assertion")
+
+    def assertions_targeting(self, principal_id: str, **arguments: object) -> list:
+        raise NotImplementedError("resolution reads no assertion")
+
+    def supersede_assertion(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no assertion")
+
+    def record_assertion_evidence(self, principal_id: str, evidence: object) -> None:
+        raise NotImplementedError("resolution writes no assertion evidence")
+
+    def assertion_evidence(self, principal_id: str, assertion_id: str, **arguments: object) -> list:
+        raise NotImplementedError("resolution reads no assertion evidence")
+
     def assignments(
         self, principal_id: str, entity_id: str, active_only: bool = True
     ) -> list[Assignment]:

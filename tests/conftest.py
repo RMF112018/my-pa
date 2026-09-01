@@ -247,6 +247,10 @@ from my_pa.domain.relationship.governance import (
     OPEN_EQUIVALENT_PROPOSAL_STATES,
     UNDECIDED_PROPOSAL_STATES,
     ActorClass,
+    AssertionStatus,
+    EntityAssertion,
+    EntityAssertionEvidence,
+    EntityAssertionState,
     EntityFactEvidenceLink,
     EntityMergeRecord,
     EntityMutationConflictError,
@@ -614,6 +618,14 @@ class World:
     entity_mutation_events: list[EntityMutationEvent] = field(default_factory=list)
     entity_resolution_decisions: list[EntityResolutionDecision] = field(default_factory=list)
     entity_fact_evidence_links: list[EntityFactEvidenceLink] = field(default_factory=list)
+    #: RI-ENT-WP-07's two assertion tables, whose port surface RI-ENT-WP-08
+    #: declared. Flat lists on `entity_fact_evidence_links`' own terms -- the
+    #: table this pair mirrors -- because this fake's job is the partition
+    #: predicate and the row shape, and a list a filter runs over is the
+    #: clearest place to see either one missing. Separate fields because they
+    #: are two tables about two subjects, exactly as they are in the schema.
+    entity_assertions: list[EntityAssertion] = field(default_factory=list)
+    entity_assertion_evidence: list[EntityAssertionEvidence] = field(default_factory=list)
     entity_assignments: list[Assignment] = field(default_factory=list)
     entity_relationships: list[EntityRelationship] = field(default_factory=list)
     #: The entity plane's mutation ledger (WP-RI-A-02), keyed the way the server
@@ -3726,6 +3738,144 @@ class _Entities(EntitiesRepository):
             updated_at=at,
             **({} if effective_to is None else {"effective_to": effective_to}),
         )
+
+    # --- RI-ENT-WP-08: RI-ENT-WP-07's assertion surface -----------------------
+    #
+    # In-memory equivalents of `SqlEntityRepository`'s six assertion methods,
+    # here because RI-ENT-WP-08 declared them on `EntitiesRepository` and this
+    # class implements that port. Same reasoning as the write block above: a
+    # caller written against the port has to be exercisable without a
+    # database, and a double that only ever succeeds teaches a caller that
+    # refusals do not exist.
+    #
+    # One divergence from the server, stated rather than hidden.
+    # `SqlEntityRepository.supersede_assertion` (WP-07, and outside WP-08's
+    # write scope) collapses both failure modes into `UnknownScopeError`,
+    # where the six families above split them through `_refuse_stale_or_absent`
+    # into `UnknownScopeError` for an unreachable row and
+    # `StaleDirectedVersionError` for a reachable row at another version.
+    # `_transition` below draws the split, so this double is the more
+    # discriminating of the two for the stale case; a caller must therefore
+    # not treat `StaleDirectedVersionError` as the only answer a stale
+    # supersession can produce against the real repository.
+
+    def record_assertion(self, principal_id: str, assertion: EntityAssertion) -> None:
+        self._world.fail("entities.record_assertion")
+        if assertion.principal_id != principal_id:
+            raise ValueError("an assertion belongs to the acting Principal")
+        # Only the sixth target is checked, for the reason
+        # `SqlEntityRepository.record_assertion` gives: the other five carry a
+        # composite `(id, principal_id)` foreign key and are same-Principal by
+        # construction, while `target_organization_profile_entity_id` is a
+        # plain single-column reference this writer has to check itself.
+        if assertion.target_organization_profile_entity_id is not None:
+            self._writable(principal_id, assertion.target_organization_profile_entity_id)
+        self._world.entity_assertions.append(assertion)
+
+    def assertion(self, principal_id: str, assertion_id: str) -> EntityAssertion | None:
+        self._world.fail("entities.assertion")
+        return next(
+            (
+                held
+                for held in self._world.entity_assertions
+                if held.principal_id == principal_id and held.assertion_id == assertion_id
+            ),
+            None,
+        )
+
+    def assertions_targeting(
+        self,
+        principal_id: str,
+        *,
+        target_entity_name_id: str | None = None,
+        target_entity_address_id: str | None = None,
+        target_communication_method_id: str | None = None,
+        target_participation_id: str | None = None,
+        target_affiliation_id: str | None = None,
+        target_organization_profile_entity_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[EntityAssertion]:
+        self._world.fail("entities.assertions_targeting")
+        named = {
+            field_name: value
+            for field_name, value in (
+                ("target_entity_name_id", target_entity_name_id),
+                ("target_entity_address_id", target_entity_address_id),
+                ("target_communication_method_id", target_communication_method_id),
+                ("target_participation_id", target_participation_id),
+                ("target_affiliation_id", target_affiliation_id),
+                (
+                    "target_organization_profile_entity_id",
+                    target_organization_profile_entity_id,
+                ),
+            )
+            if value is not None
+        }
+        if len(named) != 1:
+            raise ValueError("a targeted assertion read names exactly one subject")
+        _refuse_empty_limit(limit)
+        ((field_name, value),) = named.items()
+        found = sorted(
+            (
+                held
+                for held in self._world.entity_assertions
+                if held.principal_id == principal_id and getattr(held, field_name) == value
+            ),
+            key=lambda held: held.assertion_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def supersede_assertion(
+        self,
+        principal_id: str,
+        *,
+        assertion_id: str,
+        superseded_by_assertion_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        self._world.fail("entities.supersede_assertion")
+        if superseded_by_assertion_id == assertion_id:
+            raise ValueError("an assertion is not superseded by itself")
+        # `superseded_by_assertion_id` is checked and then deliberately not
+        # stored: `entity_assertions` carries no backward pointer, only the
+        # forward `supersedes_assertion_id` the successor row holds. A fake
+        # that recorded it anyway would let a test read a column the schema
+        # does not have.
+        self._transition(
+            self._world.entity_assertions,
+            principal_id,
+            "assertion_id",
+            assertion_id,
+            expected_version,
+            "assertion",
+            state=EntityAssertionState.SUPERSEDED,
+            assertion_status=AssertionStatus.SUPERSEDED,
+            updated_at=at,
+        )
+
+    def record_assertion_evidence(
+        self, principal_id: str, evidence: EntityAssertionEvidence
+    ) -> None:
+        self._world.fail("entities.record_assertion_evidence")
+        if evidence.principal_id != principal_id:
+            raise ValueError("assertion evidence belongs to the acting Principal")
+        self._world.entity_assertion_evidence.append(evidence)
+
+    def assertion_evidence(
+        self, principal_id: str, assertion_id: str, *, limit: int | None = None
+    ) -> list[EntityAssertionEvidence]:
+        self._world.fail("entities.assertion_evidence")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                held
+                for held in self._world.entity_assertion_evidence
+                if held.principal_id == principal_id and held.assertion_id == assertion_id
+            ),
+            key=lambda held: held.evidence_id,
+        )
+        return found if limit is None else found[:limit]
 
     def entities_by_identifier(
         self,

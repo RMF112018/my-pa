@@ -39,7 +39,7 @@ from typing import Final
 import pytest
 from alembic import command
 from alembic.config import Config
-from sqlalchemy import Connection, Engine, insert, select, text
+from sqlalchemy import Connection, Engine, insert, select, text, update
 from sqlalchemy.engine import make_url
 from sqlalchemy.exc import IntegrityError
 
@@ -61,6 +61,7 @@ from my_pa.application.entity_record_families import (
     StatedAssertion,
     StatedEvidence,
 )
+from my_pa.application.errors import ErrorCode, InvalidRequestError, SafeDetail
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
@@ -95,6 +96,7 @@ from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.tables import (
     entity_assertion_evidence,
     entity_assertions,
+    entity_names,
 )
 
 pytestmark = pytest.mark.database
@@ -356,22 +358,43 @@ def test_a_profile_revision_through_the_service_clears_a_nullable_column(
     assert revised.version == 2
 
 
-# --- The active partial uniques, and the ordering that has to satisfy them ---
+# --- A preferred row cannot be corrected, and the refusal is a schema fact ---
+#
+# The three families that carry `is_preferred` each hold two constraints a
+# correction would have to satisfy at once and cannot, and both are checked per
+# statement:
+#
+# * `an_active_<family>_has_one_preferred_per_type` -- a partial unique INDEX
+#   admitting one active preferred row per `(principal_id, entity_id, type)`.
+#   Writing the successor first, the order every `correct_*` uses, trips it,
+#   because the predecessor has not yet left `state = 'active'`. A unique index
+#   cannot be deferred at all; only a unique constraint can.
+# * `an_<family>_is_superseded_within_its_principal` -- the self-referencing
+#   `(superseded_by_*, principal_id)` foreign key. Superseding first trips that
+#   instead, because the successor the supersession names does not exist yet.
+#
+# So `_refuse_preferred_correction` refuses the command before any write. These
+# tests hold three things about that: the refusal happens and nothing is
+# written, the two constraints it exists for are real and fire against this live
+# schema, and the retire-then-record path a caller has instead actually works --
+# together with what that path costs, which is the `superseded_by_*` lineage
+# link.
 
 
-def test_correcting_a_preferred_name_satisfies_the_one_preferred_partial_unique(
+def test_a_preferred_name_correction_is_refused_and_retiring_is_the_path_that_works(
     staged: Engine, service: EntityRecordFamilyService
 ) -> None:
-    """`an_active_entity_name_has_one_preferred_per_type` is a unique index over
-    `(principal_id, entity_id, name_type_code)` restricted to
-    `state = 'active' AND is_preferred = true`. A unique index is not deferrable,
-    so it is checked at every statement, not at commit -- which makes the
-    ordering `correct_name` uses a claim the database gets to test: the successor
-    is inserted ACTIVE and preferred while the predecessor is still ACTIVE and
-    preferred.
+    """Refused before any write, and then the documented alternative, end to end.
 
-    Both rows survive, the predecessor SUPERSEDED and no longer occupying the
-    slot, the successor ACTIVE and preferred."""
+    The row count and the predecessor's `version`, `state` and `is_preferred`
+    are read back after the refusal: a service that wrote the successor and
+    *then* refused would raise the same exception and fail here.
+
+    `SafeDetail.PINNED` is a documented approximation rather than a precise
+    token -- `errors.py` carries no `is_preferred` member and is outside this
+    work package's scope -- so a later, more precise token replacing it is a
+    correction and not a regression.
+    """
     with staged.begin() as connection:
         recorded = service.record_name(
             _repository(connection),
@@ -384,8 +407,9 @@ def test_correcting_a_preferred_name_satisfies_the_one_preferred_partial_unique(
             principal_id=PRINCIPAL_A,
             at=WHEN,
         )
-    with staged.begin() as connection:
-        corrected = service.correct_name(
+
+    with pytest.raises(InvalidRequestError) as refused, staged.begin() as connection:
+        service.correct_name(
             _repository(connection),
             CorrectEntityName(
                 entity_name_id=recorded.record_id,
@@ -398,26 +422,59 @@ def test_correcting_a_preferred_name_satisfies_the_one_preferred_partial_unique(
             principal_id=PRINCIPAL_A,
             at=LATER,
         )
+    assert refused.value.safe_details == (SafeDetail.PINNED,)
+
+    with staged.connect() as connection:
+        untouched = _repository(connection).names(PRINCIPAL_A, ORGANIZATION)
+    assert [row.entity_name_id for row in untouched] == [recorded.record_id]
+    assert untouched[0].version == 1
+    assert untouched[0].state is EntityNameState.ACTIVE
+    assert untouched[0].is_preferred is True
+    assert untouched[0].display_value == "Synthetic Org LLC"
+    assert untouched[0].superseded_by_entity_name_id is None
+
+    with staged.begin() as connection:
+        service.retire_name(
+            _repository(connection),
+            RetireEntityName(entity_name_id=recorded.record_id, expected_version=1),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+    with staged.begin() as connection:
+        replacement = service.record_name(
+            _repository(connection),
+            RecordEntityName(
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org Holdings LLC",
+                name_type_code=NameTypeCode.LEGAL,
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER_STILL,
+        )
     with staged.connect() as connection:
         rows = {
             row.entity_name_id: row
             for row in _repository(connection).names(PRINCIPAL_A, ORGANIZATION)
         }
-    assert set(rows) == {recorded.record_id, corrected.record_id}
     predecessor = rows[recorded.record_id]
-    successor = rows[corrected.record_id]
-    assert predecessor.state is EntityNameState.SUPERSEDED
-    assert predecessor.superseded_by_entity_name_id == corrected.record_id
-    assert predecessor.display_value == "Synthetic Org LLC"
-    assert successor.state is EntityNameState.ACTIVE
-    assert successor.is_preferred is True
+    assert predecessor.state is EntityNameState.RETIRED
+    assert predecessor.state is not EntityNameState.SUPERSEDED
+    assert predecessor.is_preferred is False
+    assert predecessor.retired_at == LATER
+    assert rows[replacement.record_id].is_preferred is True
+    # The cost the refusal's own docstring names out loud: retirement writes no
+    # lineage. A reader following the supersession chain from the retired row
+    # will not arrive at its replacement, because no column relates them.
+    assert {row.superseded_by_entity_name_id for row in rows.values()} == {None}
 
 
-def test_correcting_a_preferred_address_satisfies_the_one_preferred_partial_unique(
+def test_a_preferred_address_correction_is_refused_and_retiring_is_the_path_that_works(
     staged: Engine, service: EntityRecordFamilyService
 ) -> None:
-    """`an_active_entity_address_has_one_preferred_per_type`, same shape and same
-    question about the same ordering."""
+    """`an_active_entity_address_has_one_preferred_per_type` and
+    `an_entity_address_is_superseded_within_its_principal`, same shape and same
+    arc as the name case above."""
     with staged.begin() as connection:
         recorded = service.record_address(
             _repository(connection),
@@ -432,8 +489,9 @@ def test_correcting_a_preferred_address_satisfies_the_one_preferred_partial_uniq
             principal_id=PRINCIPAL_A,
             at=WHEN,
         )
-    with staged.begin() as connection:
-        corrected = service.correct_address(
+
+    with pytest.raises(InvalidRequestError) as refused, staged.begin() as connection:
+        service.correct_address(
             _repository(connection),
             CorrectEntityAddress(
                 entity_address_id=recorded.record_id,
@@ -448,20 +506,54 @@ def test_correcting_a_preferred_address_satisfies_the_one_preferred_partial_uniq
             principal_id=PRINCIPAL_A,
             at=LATER,
         )
+    assert refused.value.safe_details == (SafeDetail.PINNED,)
+
+    with staged.connect() as connection:
+        untouched = _repository(connection).addresses(PRINCIPAL_A, ORGANIZATION)
+    assert [row.entity_address_id for row in untouched] == [recorded.record_id]
+    assert untouched[0].version == 1
+    assert untouched[0].state is EntityAddressState.ACTIVE
+    assert untouched[0].is_preferred is True
+    assert untouched[0].raw_value == "1 Synthetic Way, Springfield"
+    assert untouched[0].superseded_by_entity_address_id is None
+
+    with staged.begin() as connection:
+        service.retire_address(
+            _repository(connection),
+            RetireEntityAddress(entity_address_id=recorded.record_id, expected_version=1),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+    with staged.begin() as connection:
+        replacement = service.record_address(
+            _repository(connection),
+            RecordEntityAddress(
+                entity_id=ORGANIZATION,
+                address_type_code=AddressTypeCode.HEADQUARTERS,
+                raw_value="2 Synthetic Way, Springfield",
+                line1="2 Synthetic Way",
+                city="Springfield",
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER_STILL,
+        )
     with staged.connect() as connection:
         rows = {
             row.entity_address_id: row
             for row in _repository(connection).addresses(PRINCIPAL_A, ORGANIZATION)
         }
-    assert rows[recorded.record_id].state is EntityAddressState.SUPERSEDED
-    assert rows[corrected.record_id].state is EntityAddressState.ACTIVE
-    assert rows[corrected.record_id].is_preferred is True
+    assert rows[recorded.record_id].state is EntityAddressState.RETIRED
+    assert rows[recorded.record_id].is_preferred is False
+    assert rows[replacement.record_id].is_preferred is True
+    assert {row.superseded_by_entity_address_id for row in rows.values()} == {None}
 
 
-def test_correcting_a_preferred_channel_satisfies_the_one_preferred_partial_unique(
+def test_a_preferred_channel_correction_is_refused_and_retiring_is_the_path_that_works(
     staged: Engine, service: EntityRecordFamilyService
 ) -> None:
-    """`an_active_communication_method_has_one_preferred_per_type`, same again."""
+    """`an_active_communication_method_has_one_preferred_per_type` and
+    `a_communication_method_is_superseded_within_its_principal`, same again."""
     with staged.begin() as connection:
         recorded = service.record_communication_method(
             _repository(connection),
@@ -475,8 +567,9 @@ def test_correcting_a_preferred_channel_satisfies_the_one_preferred_partial_uniq
             principal_id=PRINCIPAL_A,
             at=WHEN,
         )
-    with staged.begin() as connection:
-        corrected = service.correct_communication_method(
+
+    with pytest.raises(InvalidRequestError) as refused, staged.begin() as connection:
+        service.correct_communication_method(
             _repository(connection),
             CorrectCommunicationMethod(
                 communication_method_id=recorded.record_id,
@@ -490,23 +583,104 @@ def test_correcting_a_preferred_channel_satisfies_the_one_preferred_partial_uniq
             principal_id=PRINCIPAL_A,
             at=LATER,
         )
+    assert refused.value.safe_details == (SafeDetail.PINNED,)
+
+    with staged.connect() as connection:
+        untouched = _repository(connection).communication_methods(PRINCIPAL_A, ORGANIZATION)
+    assert [row.communication_method_id for row in untouched] == [recorded.record_id]
+    assert untouched[0].version == 1
+    assert untouched[0].state is EntityCommunicationMethodState.ACTIVE
+    assert untouched[0].is_preferred is True
+    assert untouched[0].display_value == "Reception@Example.Invalid"
+    assert untouched[0].superseded_by_communication_method_id is None
+
+    with staged.begin() as connection:
+        service.retire_communication_method(
+            _repository(connection),
+            RetireCommunicationMethod(
+                communication_method_id=recorded.record_id, expected_version=1
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+    with staged.begin() as connection:
+        replacement = service.record_communication_method(
+            _repository(connection),
+            RecordCommunicationMethod(
+                entity_id=ORGANIZATION,
+                method_type_code=CommunicationMethodTypeCode.EMAIL,
+                usage_context_code=CommunicationUsageContextCode.CORPORATE,
+                display_value="Desk@Example.Invalid",
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER_STILL,
+        )
     with staged.connect() as connection:
         rows = {
             row.communication_method_id: row
             for row in _repository(connection).communication_methods(PRINCIPAL_A, ORGANIZATION)
         }
-    assert rows[recorded.record_id].state is EntityCommunicationMethodState.SUPERSEDED
-    assert rows[corrected.record_id].state is EntityCommunicationMethodState.ACTIVE
-    assert rows[corrected.record_id].is_preferred is True
+    assert rows[recorded.record_id].state is EntityCommunicationMethodState.RETIRED
+    assert rows[recorded.record_id].is_preferred is False
+    assert rows[replacement.record_id].is_preferred is True
+    assert {row.superseded_by_communication_method_id for row in rows.values()} == {None}
 
 
-def test_the_one_preferred_partial_unique_is_real(
+def test_a_preferred_correction_answers_with_a_refusal_and_not_a_driver_error(
     staged: Engine, service: EntityRecordFamilyService
 ) -> None:
-    """The anti-vacuity half of the three tests above. Two ACTIVE preferred names
-    of one type for one entity are refused by the index, so the corrections above
-    passing is a fact about the ordering rather than about an index that never
-    fires."""
+    """The actual improvement, locked. Before the refusal existed the caller got
+    a `psycopg` `UniqueViolation` wrapped in `sqlalchemy.exc.IntegrityError` out
+    of the repository -- an opaque driver error naming an index. Now it gets a
+    stable application refusal, raised before any statement runs.
+
+    Both are admitted by `pytest.raises` and then the type is asserted, so
+    removing the refusal does not merely change which exception is caught: the
+    test goes red on the exception it gets back. The empty `__cause__` and
+    `__context__` are what say the refusal was *raised*, not translated from a
+    driver error that had already happened."""
+    with staged.begin() as connection:
+        recorded = service.record_name(
+            _repository(connection),
+            RecordEntityName(
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org LLC",
+                name_type_code=NameTypeCode.LEGAL,
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=WHEN,
+        )
+    with (
+        pytest.raises((InvalidRequestError, IntegrityError)) as raised,
+        staged.begin() as connection,
+    ):
+        service.correct_name(
+            _repository(connection),
+            CorrectEntityName(
+                entity_name_id=recorded.record_id,
+                expected_version=1,
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org Holdings LLC",
+                name_type_code=NameTypeCode.LEGAL,
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+    assert type(raised.value) is InvalidRequestError
+    assert raised.value.code is ErrorCode.INVALID_REQUEST
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
+def test_the_names_one_preferred_partial_unique_is_real(
+    staged: Engine, service: EntityRecordFamilyService
+) -> None:
+    """The anti-vacuity half. Two ACTIVE preferred names of one type for one
+    entity are refused by the index against this live schema, so the refusal
+    above is guarding a rule that exists rather than an imaginary one."""
     with staged.begin() as connection:
         service.record_name(
             _repository(connection),
@@ -519,7 +693,7 @@ def test_the_one_preferred_partial_unique_is_real(
             principal_id=PRINCIPAL_A,
             at=WHEN,
         )
-    with pytest.raises(IntegrityError), staged.begin() as connection:
+    with pytest.raises(IntegrityError) as violated, staged.begin() as connection:
         service.record_name(
             _repository(connection),
             RecordEntityName(
@@ -531,6 +705,212 @@ def test_the_one_preferred_partial_unique_is_real(
             principal_id=PRINCIPAL_A,
             at=LATER,
         )
+    assert "an_active_entity_name_has_one_preferred_per_type" in str(violated.value)
+
+
+def test_the_addresses_one_preferred_partial_unique_is_real(
+    staged: Engine, service: EntityRecordFamilyService
+) -> None:
+    with staged.begin() as connection:
+        service.record_address(
+            _repository(connection),
+            RecordEntityAddress(
+                entity_id=ORGANIZATION,
+                address_type_code=AddressTypeCode.HEADQUARTERS,
+                raw_value="1 Synthetic Way, Springfield",
+                line1="1 Synthetic Way",
+                city="Springfield",
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=WHEN,
+        )
+    with pytest.raises(IntegrityError) as violated, staged.begin() as connection:
+        service.record_address(
+            _repository(connection),
+            RecordEntityAddress(
+                entity_id=ORGANIZATION,
+                address_type_code=AddressTypeCode.HEADQUARTERS,
+                raw_value="2 Synthetic Way, Springfield",
+                line1="2 Synthetic Way",
+                city="Springfield",
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+    assert "an_active_entity_address_has_one_preferred_per_type" in str(violated.value)
+
+
+def test_the_channels_one_preferred_partial_unique_is_real(
+    staged: Engine, service: EntityRecordFamilyService
+) -> None:
+    with staged.begin() as connection:
+        service.record_communication_method(
+            _repository(connection),
+            RecordCommunicationMethod(
+                entity_id=ORGANIZATION,
+                method_type_code=CommunicationMethodTypeCode.EMAIL,
+                usage_context_code=CommunicationUsageContextCode.CORPORATE,
+                display_value="Reception@Example.Invalid",
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=WHEN,
+        )
+    with pytest.raises(IntegrityError) as violated, staged.begin() as connection:
+        service.record_communication_method(
+            _repository(connection),
+            RecordCommunicationMethod(
+                entity_id=ORGANIZATION,
+                method_type_code=CommunicationMethodTypeCode.EMAIL,
+                usage_context_code=CommunicationUsageContextCode.CORPORATE,
+                display_value="Desk@Example.Invalid",
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+    assert "an_active_communication_method_has_one_preferred_per_type" in str(violated.value)
+
+
+#: The three named self-referencing `(superseded_by_*, principal_id)` foreign
+#: keys the other horn of the refusal is about. Each column additionally carries
+#: the single-column key its own `REFERENCES` clause created, which the query
+#: below finds as well and which is why that query matches on the column rather
+#: than on this list.
+SUPERSESSION_FOREIGN_KEYS: Final = (
+    "an_entity_name_is_superseded_within_its_principal",
+    "an_entity_address_is_superseded_within_its_principal",
+    "a_communication_method_is_superseded_within_its_principal",
+)
+
+#: The three tables that carry a `superseded_by_*` column and a preferred slot.
+SUPERSEDING_TABLES: Final = (
+    "entity_names",
+    "entity_addresses",
+    "entity_communication_methods",
+)
+
+
+def test_no_supersession_foreign_key_is_deferrable(staged: Engine) -> None:
+    """The second horn, read off the live catalogue rather than off a migration
+    file. "Supersede first, then write the successor" would be a way out only if
+    these could be postponed to commit; `pg_constraint.condeferrable` says they
+    cannot, so the successor has to exist before any row names it.
+
+    Matched by column rather than by name, so the single-column keys the three
+    `REFERENCES` clauses created are covered too -- a deferrable key added to one
+    of these columns under any name would redden here."""
+    with staged.connect() as connection:
+        found = connection.execute(
+            text(
+                "SELECT c.conname, c.condeferrable, c.condeferred "
+                "FROM pg_constraint c JOIN pg_class t ON t.oid = c.conrelid "
+                "WHERE c.contype = 'f' AND t.relname = ANY(:tables) "
+                "AND pg_get_constraintdef(c.oid) LIKE '%superseded_by%'"
+            ),
+            {"tables": list(SUPERSEDING_TABLES)},
+        ).all()
+    assert set(SUPERSESSION_FOREIGN_KEYS) <= {row.conname for row in found}
+    # Two per column: the composite named one and the single-column one the
+    # column's own `REFERENCES` clause created.
+    assert len(found) == 6
+    assert [row.condeferrable for row in found] == [False] * 6
+    assert [row.condeferred for row in found] == [False] * 6
+
+
+def test_a_supersession_naming_an_absent_successor_is_refused_at_the_statement(
+    staged: Engine, service: EntityRecordFamilyService
+) -> None:
+    """The behavioural half of the claim above, for the family the other two are
+    declared identically to. The `UPDATE` naming a successor that does not exist
+    raises where it is issued, inside an open transaction and before any commit
+    -- which is what "checked per statement" means and why superseding first is
+    not an ordering the service could have chosen instead.
+
+    The assertion names the column, not one constraint: two foreign keys guard
+    it -- the composite `an_entity_name_is_superseded_within_its_principal` and
+    the single-column key its own `REFERENCES` clause created -- and PostgreSQL
+    reports whichever it happens to check first. Either firing is the same
+    fact."""
+    with staged.begin() as connection:
+        recorded = service.record_name(
+            _repository(connection),
+            RecordEntityName(
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org LLC",
+                name_type_code=NameTypeCode.LEGAL,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=WHEN,
+        )
+    with staged.connect() as connection:
+        transaction = connection.begin()
+        with pytest.raises(IntegrityError) as violated:
+            _repository(connection).supersede_entity_name(
+                PRINCIPAL_A,
+                entity_name_id=recorded.record_id,
+                superseded_by_entity_name_id=ABSENT_NAME,
+                expected_version=1,
+                at=LATER,
+            )
+        transaction.rollback()
+    detail = str(violated.value)
+    assert "ForeignKeyViolation" in detail
+    assert "superseded_by_entity_name_id" in detail
+
+
+def test_a_retired_row_cannot_also_name_a_successor(
+    staged: Engine, service: EntityRecordFamilyService
+) -> None:
+    """Why retire-then-record costs the lineage link, as a schema fact rather
+    than a service choice. `an_entity_name_names_a_successor_only_when_superseded`
+    admits `superseded_by_entity_name_id` only on a row whose `state` is
+    `superseded`, so a retired predecessor cannot carry a pointer to its
+    replacement even if a later writer wanted to add one. The cost the refusal
+    documents is therefore structural, and the three tests above assert an
+    absence the database is enforcing rather than one the service merely
+    happens to leave."""
+    with staged.begin() as connection:
+        retired = service.record_name(
+            _repository(connection),
+            RecordEntityName(
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org LLC",
+                name_type_code=NameTypeCode.LEGAL,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        replacement = service.record_name(
+            _repository(connection),
+            RecordEntityName(
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org Holdings LLC",
+                name_type_code=NameTypeCode.LEGAL,
+            ),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+    with staged.begin() as connection:
+        service.retire_name(
+            _repository(connection),
+            RetireEntityName(entity_name_id=retired.record_id, expected_version=1),
+            principal_id=PRINCIPAL_A,
+            at=LATER,
+        )
+    with staged.connect() as connection:
+        transaction = connection.begin()
+        with pytest.raises(IntegrityError) as violated:
+            connection.execute(
+                update(entity_names)
+                .where(entity_names.c.entity_name_id == retired.record_id)
+                .values(superseded_by_entity_name_id=replacement.record_id)
+            )
+        transaction.rollback()
+    assert "an_entity_name_names_a_successor_only_when_superseded" in str(violated.value)
 
 
 # --- A real optimistic-version conflict --------------------------------------

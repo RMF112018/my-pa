@@ -42,6 +42,7 @@ from __future__ import annotations
 
 import ast
 import inspect
+import textwrap
 from collections.abc import Callable
 from dataclasses import MISSING, dataclass, fields, replace
 from datetime import UTC, datetime, timedelta
@@ -640,6 +641,270 @@ def test_a_receipt_names_a_record_and_never_the_value_it_recorded(
     recorded = service.record_name(repository, _name_command(), principal_id=PRINCIPAL, at=WHEN)
     assert recorded.family is EntityRecordFamily.NAME
     assert recorded.recorded_at == WHEN
+
+
+# --- A2b. A preferred row cannot be corrected, and that is a schema fact -----
+#
+# `correct_name`, `correct_address` and `correct_communication_method` refuse a
+# command carrying `is_preferred=True` before writing anything, because the two
+# possible orderings of a correction are mutually exclusive under the three
+# families' constraints: writing the successor first trips the partial unique
+# index on the preferred slot, and superseding first trips the NOT DEFERRABLE
+# self-referencing foreign key. Both halves are proved against the real schema
+# in `tests/database/test_entity_record_family_service_write_path.py`; what is
+# held here is the caller-facing shape of the refusal.
+
+
+#: The three commands that can reach the refusal, with the method that takes
+#: each. `CorrectProjectParticipation` and `CorrectAffiliation` are absent
+#: because their families carry no preferred slot at all -- see
+#: `test_the_families_without_a_preferred_slot_carry_no_such_field`.
+PREFERRED_CORRECTIONS: Final = (
+    (
+        "correct_name",
+        lambda record_id, **overrides: CorrectEntityName(
+            entity_name_id=record_id,
+            expected_version=1,
+            entity_id=ORGANIZATION,
+            display_value="Synthetic Org Holdings LLC",
+            name_type_code=overrides.get("name_type_code", NameTypeCode.LEGAL),
+            is_preferred=overrides.get("is_preferred", True),
+        ),
+        "record_name",
+        lambda **overrides: _name_command(
+            is_preferred=overrides.get("is_preferred", True),
+            name_type_code=overrides.get("name_type_code", NameTypeCode.LEGAL),
+        ),
+        lambda world: world.entity_names,
+        "entity_name_id",
+    ),
+    (
+        "correct_address",
+        lambda record_id, **overrides: CorrectEntityAddress(
+            entity_address_id=record_id,
+            expected_version=1,
+            entity_id=ORGANIZATION,
+            address_type_code=AddressTypeCode.HEADQUARTERS,
+            raw_value="2 Synthetic Way, Springfield",
+            line1="2 Synthetic Way",
+            city="Springfield",
+            is_preferred=overrides.get("is_preferred", True),
+        ),
+        "record_address",
+        lambda **overrides: _address_command(is_preferred=overrides.get("is_preferred", True)),
+        lambda world: world.entity_addresses,
+        "entity_address_id",
+    ),
+    (
+        "correct_communication_method",
+        lambda record_id, **overrides: CorrectCommunicationMethod(
+            communication_method_id=record_id,
+            expected_version=1,
+            entity_id=ORGANIZATION,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="Desk@Example.Invalid",
+            is_preferred=overrides.get("is_preferred", True),
+        ),
+        "record_communication_method",
+        lambda **overrides: _channel_command(is_preferred=overrides.get("is_preferred", True)),
+        lambda world: world.entity_communication_methods,
+        "communication_method_id",
+    ),
+)
+
+_PREFERRED_CASES: Final = [pytest.param(case, id=case[0]) for case in PREFERRED_CORRECTIONS]
+
+
+@pytest.mark.parametrize("case", _PREFERRED_CASES)
+def test_a_preferred_correction_is_refused_before_anything_is_written(
+    world: World,
+    repository: EntitiesRepository,
+    service: EntityRecordFamilyService,
+    case: tuple[str, Any, str, Any, Any, str],
+) -> None:
+    """The refusal, and the "before" in "before any write". The row list is read
+    back after: a service that minted an identifier, wrote the successor and
+    *then* refused would raise the same exception and fail here.
+
+    `SafeDetail.PINNED` is a documented approximation -- `errors.py` carries no
+    `is_preferred` member and was outside this work package's scope -- so a
+    later, more precise token replacing it is a correction, not a regression.
+    """
+    correct_name, build_correction, record_name, build_record, rows, key = case
+    recorded = getattr(service, record_name)(
+        repository, build_record(), principal_id=PRINCIPAL, at=WHEN
+    )
+    before = list(rows(world))
+
+    with pytest.raises(InvalidRequestError) as refused:
+        getattr(service, correct_name)(
+            repository,
+            build_correction(recorded.record_id),
+            principal_id=PRINCIPAL,
+            at=LATER,
+        )
+    assert refused.value.safe_details == (SafeDetail.PINNED,)
+    assert rows(world) == before
+    assert [getattr(row, key) for row in rows(world)] == [recorded.record_id]
+    assert rows(world)[0].version == 1
+    assert rows(world)[0].is_preferred is True
+
+
+@pytest.mark.parametrize("case", _PREFERRED_CASES)
+def test_a_correction_that_does_not_claim_the_preferred_slot_is_untouched(
+    world: World,
+    repository: EntitiesRepository,
+    service: EntityRecordFamilyService,
+    case: tuple[str, Any, str, Any, Any, str],
+) -> None:
+    """The ordinary case still works, which is what makes the refusal narrow
+    enough to be usable: a correction of a row that is not preferred writes its
+    successor and supersedes its predecessor exactly as before."""
+    correct_name, build_correction, record_name, build_record, rows, _ = case
+    recorded = getattr(service, record_name)(
+        repository, build_record(is_preferred=False), principal_id=PRINCIPAL, at=WHEN
+    )
+    corrected = getattr(service, correct_name)(
+        repository,
+        build_correction(recorded.record_id, is_preferred=False),
+        principal_id=PRINCIPAL,
+        at=LATER,
+    )
+    assert corrected.superseded_record_id == recorded.record_id
+    assert len(rows(world)) == 2
+
+
+def test_the_preferred_correction_refusal_is_wider_than_the_constraint(
+    world: World, repository: EntitiesRepository, service: EntityRecordFamilyService
+) -> None:
+    """Pinned as the stated contract rather than treated as a bug.
+
+    Two preferred corrections the index would in fact have admitted are refused
+    here as well: one whose successor names a *different* name type from the
+    predecessor's, and one whose predecessor was not itself preferred. Telling
+    either apart needs a read of the predecessor, and this service performs
+    none -- a read would be a second, unguarded source of truth beside the
+    caller's `expected_version`. Narrowing the refusal is therefore a change to
+    what the service is, not a tightening of a loose check, and this test is
+    where that stops being a claim in a docstring."""
+    admissible = service.record_name(
+        repository,
+        _name_command(name_type_code=NameTypeCode.LEGAL, is_preferred=True),
+        principal_id=PRINCIPAL,
+        at=WHEN,
+    )
+    # The successor names DISPLAY, a different slot from the predecessor's
+    # LEGAL, so the index would not have been reached at all.
+    with pytest.raises(InvalidRequestError) as other_type:
+        service.correct_name(
+            repository,
+            CorrectEntityName(
+                entity_name_id=admissible.record_id,
+                expected_version=1,
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org",
+                name_type_code=NameTypeCode.DISPLAY,
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL,
+            at=LATER,
+        )
+    assert other_type.value.safe_details == (SafeDetail.PINNED,)
+
+    # And a predecessor that never held the slot, so nothing was occupying it.
+    unpreferred = service.record_name(
+        repository,
+        _name_command(name_type_code=NameTypeCode.OPERATING, is_preferred=False),
+        principal_id=PRINCIPAL,
+        at=WHEN,
+    )
+    with pytest.raises(InvalidRequestError) as from_unpreferred:
+        service.correct_name(
+            repository,
+            CorrectEntityName(
+                entity_name_id=unpreferred.record_id,
+                expected_version=1,
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org Operating",
+                name_type_code=NameTypeCode.OPERATING,
+                is_preferred=True,
+            ),
+            principal_id=PRINCIPAL,
+            at=LATER,
+        )
+    assert from_unpreferred.value.safe_details == (SafeDetail.PINNED,)
+    assert len(world.entity_names) == 2
+
+
+def test_recording_and_retiring_a_preferred_row_are_untouched_by_the_refusal(
+    world: World, repository: EntitiesRepository, service: EntityRecordFamilyService
+) -> None:
+    """The refusal is on `correct_*` alone. Recording a preferred row is how one
+    comes to exist, and retiring it is the documented way to replace it, so a
+    refusal that reached either would leave the preferred slot unusable."""
+    recorded = service.record_name(
+        repository, _name_command(is_preferred=True), principal_id=PRINCIPAL, at=WHEN
+    )
+    assert world.entity_names[0].is_preferred is True
+    service.retire_name(
+        repository,
+        RetireEntityName(entity_name_id=recorded.record_id, expected_version=1),
+        principal_id=PRINCIPAL,
+        at=LATER,
+    )
+    assert world.entity_names[0].state is EntityNameState.RETIRED
+    assert world.entity_names[0].is_preferred is False
+    replacement = service.record_name(
+        repository,
+        _name_command(display_value="Synthetic Org Holdings LLC", is_preferred=True),
+        principal_id=PRINCIPAL,
+        at=LATER,
+    )
+    held = _held(world.entity_names, "entity_name_id", replacement.record_id)
+    assert held.is_preferred is True
+    # The cost of the path that works: retirement writes no lineage, so nothing
+    # relates the replacement to the row it replaces.
+    assert {row.superseded_by_entity_name_id for row in world.entity_names} == {None}
+
+
+def test_the_families_without_a_preferred_slot_carry_no_such_field() -> None:
+    """Participations and affiliations hold no `is_preferred` column and no
+    partial unique over one, so their corrections cannot reach the refusal and
+    are not given one. Structural, so a field added to either would redden here
+    rather than silently acquiring an unrefused correction."""
+    for command in (CorrectProjectParticipation, CorrectAffiliation):
+        assert "is_preferred" not in {declared.name for declared in fields(command)}
+    for command in (RecordProjectParticipation, RecordAffiliation):
+        assert "is_preferred" not in {declared.name for declared in fields(command)}
+
+
+@pytest.mark.parametrize(
+    "method_name",
+    ("correct_name", "correct_address", "correct_communication_method"),
+)
+def test_the_refusal_is_the_first_statement_of_the_correction_it_guards(
+    method_name: str,
+) -> None:
+    """ "Before any write" as a fact about the code, not only about one observed
+    call. The method's syntax tree is walked and the refusal is asserted to be
+    its first statement after the docstring -- ahead of `issue_identifier` and
+    ahead of every repository call -- so a later edit that moved it below the
+    insert would redden here even though the exception still reached a caller."""
+    body = ast.parse(
+        textwrap.dedent(inspect.getsource(getattr(EntityRecordFamilyService, method_name)))
+    ).body[0]
+    assert isinstance(body, ast.FunctionDef)
+    statements = [
+        node
+        for node in body.body
+        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant))
+    ]
+    first = statements[0]
+    assert isinstance(first, ast.Expr)
+    assert isinstance(first.value, ast.Call)
+    assert isinstance(first.value.func, ast.Name)
+    assert first.value.func.id == "_refuse_preferred_correction"
 
 
 # --- A3. `EntityOrganizationProfile` is the singleton exception ---------------

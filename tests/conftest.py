@@ -3995,6 +3995,68 @@ class _Entities(EntitiesRepository):
             key=lambda entity: entity.entity_id,
         )
 
+    # --- RI-ENT-WP-09: the two normalized-value reads --------------------
+    #
+    # `entities_by_alias`' question — "who, if anyone, is called this" — asked
+    # of `entity_names` and `entity_communication_methods`. Two properties of
+    # `SqlEntityRepository`'s statements are reproduced here exactly, because
+    # both are properties a resolution answer's safety is decided from, and a
+    # double that answered either more generously than the server would let a
+    # unit test assert a resolution the server never makes:
+    #
+    # * **The active-state filter.** The server restricts each read to
+    #   `EntityNameState.ACTIVE` / `EntityCommunicationMethodState.ACTIVE`, so a
+    #   superseded or retired row is not a claimant of its value. Held here from
+    #   the same enum members rather than a spelled `"active"`, on the terms
+    #   `_transition_alias` and the identifier reads already state. Note this is
+    #   narrower than `names`/`communication_methods`, which read a family *by
+    #   entity* and hand a caller the row's own `state` to judge; a read *by
+    #   value* is asked which rows still make a claim, and a retired one does
+    #   not.
+    # * **Equality on the normalized value.** Never a substring, never
+    #   case-folded again, never fuzzy. `search` is this class's substring
+    #   surface and these are not: resolution asks who *is* this, and for that a
+    #   partial match is evidence of nothing.
+    #
+    # Neither pages, on the port docstrings' own terms — resolution must see
+    # every claimant of a value to decide whether that value is contested, and a
+    # page is the one shape that could let a claimant fall off the end and leave
+    # a genuinely contested value reading as a clean match. Neither takes a
+    # `limit`, so `_refuse_empty_limit` does not apply to them. The entity comes
+    # from `_mine`, the same partition-guarded lookup the other joined reads
+    # use, so a row whose entity is absent or held by another Principal produces
+    # no candidate at all.
+
+    def entities_by_typed_name(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityName]]:
+        self._world.fail("entities.entities_by_typed_name")
+        matched = [
+            (entity, name)
+            for name in self._world.entity_names
+            if name.principal_id == principal_id
+            and name.state is EntityNameState.ACTIVE
+            and name.normalized_value == normalized_value
+            and (entity := self._mine(principal_id, name.entity_id)) is not None
+        ]
+        return sorted(matched, key=lambda pair: (pair[0].entity_id, pair[1].entity_name_id))
+
+    def entities_by_communication_value(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityCommunicationMethod]]:
+        self._world.fail("entities.entities_by_communication_value")
+        matched = [
+            (entity, method)
+            for method in self._world.entity_communication_methods
+            if method.principal_id == principal_id
+            and method.state is EntityCommunicationMethodState.ACTIVE
+            and method.normalized_value == normalized_value
+            and (entity := self._mine(principal_id, method.entity_id)) is not None
+        ]
+        return sorted(
+            matched, key=lambda pair: (pair[0].entity_id, pair[1].communication_method_id)
+        )
+
     def assignments(
         self,
         principal_id: str,

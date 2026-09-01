@@ -30,6 +30,8 @@ from my_pa.infrastructure.persistence.webauthn_auth import (
     recovery_codes,
 )
 
+pytestmark = pytest.mark.database
+
 ROOT: Final = Path(__file__).resolve().parents[2]
 DISPOSABLE_DATABASE: Final = "my_pa_webauthn_auth_persistence_test"
 WHEN: Final = datetime(2026, 9, 1, 15, tzinfo=UTC)

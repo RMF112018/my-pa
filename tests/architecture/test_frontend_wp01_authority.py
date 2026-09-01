@@ -71,13 +71,11 @@ def test_auth_target_is_passkey_opaque_session_server_principal_without_runtime_
     assert "opaque random server-side session identifier" in adr
     assert "browser never selects or supplies the authoritative Principal" in adr
     assert (
-        "Microsoft Entra/MSAL is not the normal production application-authentication target"
-        in adr
+        "Microsoft Entra/MSAL is not the normal production application-authentication target" in adr
     )
     assert (
         "production browser shared secret or `local_operator` sign-in is not an approved "
-        "recovery fallback"
-        in adr
+        "recovery fallback" in adr
     )
     assert "does not claim the replacement runtime is implemented" in adr
     assert "Current implementation truth versus target" in authority

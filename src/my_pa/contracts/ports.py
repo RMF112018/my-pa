@@ -437,13 +437,55 @@ class EntitySummary:
     Carries only the fields a caller needs to identify and display an entity
     without loading the full domain model.  `entity_id` and `entity_type`
     are the minimum required; all other fields are optional display hints.
+
+    **Two disambiguators (`RI-AC-038`), added with defaults so every existing
+    construction site keeps working.** The acceptance ledger recorded the gap as
+    "`entities.search` returns ID/type/canonical/display/status only -- no
+    disambiguators": two people genuinely called the same thing came back as two
+    identical rows, and a caller looking at them had nothing to choose between
+    them with. `affiliated_organizations` and `project_roles` are the two facts
+    that separate them in practice -- who they work for, and what they are doing
+    on which project.
+
+    **A browse row, not a profile, and the ceiling is what makes that true.**
+    Each collection is capped at `DISAMBIGUATOR_CEILING` deterministically
+    ordered entries, so a person with forty affiliations does not turn a search
+    page into a dossier and does not make one row cost forty times another. Both
+    default to empty, which is what a caller sees for an entity with no current
+    affiliation and no current project -- an ordinary fact, not a truncation, so
+    nothing is disclosed about it.
+
+    Only rows in the family's `active` state are carried: a superseded or
+    retired affiliation records who somebody *used* to work for, and a browse
+    row that offered it as a way of telling two people apart would be offering
+    an answer that is no longer true.
     """
+
+    #: How many of each disambiguator one row carries. Small on purpose: this is
+    #: the number that keeps a list row a list row, and the collections are cut
+    #: on a deterministic order so the same page always cuts the same way.
+    DISAMBIGUATOR_CEILING: ClassVar[int] = 3
 
     entity_id: str
     entity_type: EntityType
     canonical_name: str
     display_name: str
     status: EntityStatus
+    affiliated_organizations: tuple[str, ...] = ()
+    project_roles: tuple[str, ...] = ()
+
+    @staticmethod
+    def project_role(project_display_name: str, role_text: str | None) -> str:
+        """One project engagement, as the single string a browse row carries.
+
+        Composed here rather than at each of the three construction sites, so
+        the server, the in-memory fake and the evaluation corpus cannot spell
+        the same fact differently -- which is how a unit test comes to assert a
+        string the server never produces. `role_text` is nullable in the schema
+        and a participation with no recorded role is an ordinary row, so the
+        project's own name is the whole answer then.
+        """
+        return f"{role_text} on {project_display_name}" if role_text else project_display_name
 
 
 # --- WP-RI-A-02: the entity plane's governed writes ---------------------------
@@ -1259,6 +1301,13 @@ class EntitiesRepository(ABC):
         disclosable side of it, which is what lets a caller searching a
         company's trading name find the company whose `canonical_name` is
         something else entirely.
+
+        **What a row carries back (`RI-AC-038`).** Each `EntitySummary` carries
+        the entity's current affiliated organizations and current project roles,
+        bounded at `EntitySummary.DISAMBIGUATOR_CEILING` each. They are fetched
+        for the whole page in two further bounded statements rather than one per
+        row: a browse page of fifty must not become fifty-one round trips, and
+        that is the shape of defect this method is most likely to acquire.
 
         **Two costs, disclosed rather than hidden.** These are leading-wildcard
         `ILIKE` matches over columns no index supports, exactly as the two

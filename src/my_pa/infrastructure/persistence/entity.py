@@ -743,7 +743,116 @@ class SqlEntityRepository(EntitiesRepository):
             .order_by(entities.c.canonical_name, entities.c.entity_id)
             .limit(limit)
         ).all()
-        return [_row_to_summary(row) for row in rows]
+        page = [_row_to_summary(row) for row in rows]
+        if not page:
+            return page
+        # **Two more statements for the whole page, never one per row
+        # (`RI-AC-038`).** A browse page of fifty must not become fifty-one
+        # round trips, which is the shape of defect a per-row disambiguator
+        # acquires by default. Both reads are keyed by `IN (the page's ids)`,
+        # both carry their own `_mine`, and both are bounded twice over: a
+        # `row_number()` window cuts each entity to `DISAMBIGUATOR_CEILING`
+        # rows so one entity with forty affiliations cannot starve the rest of
+        # the page, and a `LIMIT` over the whole read caps it again in case the
+        # window is ever changed out from under that claim.
+        identifiers = [summary.entity_id for summary in page]
+        ceiling = EntitySummary.DISAMBIGUATOR_CEILING
+        # `entities` under a second name, partition-scoped in its own right:
+        # the organization whose display name a person's row carries is another
+        # row of the same table, and correlating to the outer one would read
+        # the person's own name back.
+        current_organizations = (
+            select(
+                entities.c.entity_id.label("organization_entity_id"),
+                entities.c.display_name.label("organization_display_name"),
+            )
+            .where(_mine(entities, principal_id))
+            .subquery("current_organization")
+        )
+        affiliation_places = (
+            select(
+                entity_person_organization_affiliations.c.person_entity_id.label("subject"),
+                current_organizations.c.organization_display_name.label("value"),
+                func.row_number()
+                .over(
+                    partition_by=entity_person_organization_affiliations.c.person_entity_id,
+                    order_by=(
+                        current_organizations.c.organization_display_name,
+                        entity_person_organization_affiliations.c.affiliation_id,
+                    ),
+                )
+                .label("place"),
+            )
+            .select_from(
+                entity_person_organization_affiliations.join(
+                    current_organizations,
+                    entity_person_organization_affiliations.c.organization_entity_id
+                    == current_organizations.c.organization_entity_id,
+                )
+            )
+            .where(
+                _mine(entity_person_organization_affiliations, principal_id),
+                entity_person_organization_affiliations.c.person_entity_id.in_(identifiers),
+                entity_person_organization_affiliations.c.state
+                == PersonOrganizationAffiliationState.ACTIVE.value,
+            )
+            .subquery("affiliation_place")
+        )
+        affiliated: dict[str, list[str]] = {}
+        for row in self._connection.execute(
+            select(affiliation_places.c.subject, affiliation_places.c.value)
+            .where(affiliation_places.c.place <= ceiling)
+            .order_by(affiliation_places.c.subject, affiliation_places.c.place)
+            .limit(len(identifiers) * ceiling)
+        ).all():
+            affiliated.setdefault(str(row.subject), []).append(str(row.value))
+        participation_places = (
+            select(
+                entity_project_participations.c.participant_entity_id.label("subject"),
+                entity_project_participations.c.project_display_name.label("project"),
+                entity_project_participations.c.role_text.label("role"),
+                func.row_number()
+                .over(
+                    partition_by=entity_project_participations.c.participant_entity_id,
+                    order_by=(
+                        entity_project_participations.c.project_display_name,
+                        entity_project_participations.c.participation_id,
+                    ),
+                )
+                .label("place"),
+            )
+            .where(
+                _mine(entity_project_participations, principal_id),
+                entity_project_participations.c.participant_entity_id.in_(identifiers),
+                entity_project_participations.c.state
+                == EntityProjectParticipationState.ACTIVE.value,
+            )
+            .subquery("participation_place")
+        )
+        engaged: dict[str, list[str]] = {}
+        for row in self._connection.execute(
+            select(
+                participation_places.c.subject,
+                participation_places.c.project,
+                participation_places.c.role,
+            )
+            .where(participation_places.c.place <= ceiling)
+            .order_by(participation_places.c.subject, participation_places.c.place)
+            .limit(len(identifiers) * ceiling)
+        ).all():
+            engaged.setdefault(str(row.subject), []).append(
+                EntitySummary.project_role(
+                    str(row.project), None if row.role is None else str(row.role)
+                )
+            )
+        return [
+            replace(
+                summary,
+                affiliated_organizations=tuple(affiliated.get(summary.entity_id, ())),
+                project_roles=tuple(engaged.get(summary.entity_id, ())),
+            )
+            for summary in page
+        ]
 
     def get(self, principal_id: str, entity_id: str) -> Entity | None:
         validate_identifier(principal_id, IdKind.PRINCIPAL)

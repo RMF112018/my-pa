@@ -329,6 +329,48 @@ class _CorpusRepository(EntitiesRepository):
             matched = [
                 entity for entity in matched if (entity.canonical_name, entity.entity_id) > position
             ]
+        organization_display_names = {
+            organization.entity_id: organization.display_name
+            for organization in CORPUS_ENTITIES
+            if organization.principal_id == principal_id
+        }
+
+        def affiliated_organizations(entity_id: str) -> tuple[str, ...]:
+            """The current employers, cut as `SqlEntityRepository.search` cuts them."""
+            found = sorted(
+                (
+                    organization_display_names[affiliation.organization_entity_id],
+                    affiliation.affiliation_id,
+                )
+                for affiliation in CORPUS_AFFILIATIONS
+                if affiliation.person_entity_id == entity_id
+                and affiliation.principal_id == principal_id
+                and affiliation.state is PersonOrganizationAffiliationState.ACTIVE
+                and affiliation.organization_entity_id in organization_display_names
+            )
+            return tuple(name for name, _ in found[: EntitySummary.DISAMBIGUATOR_CEILING])
+
+        def project_roles(entity_id: str) -> tuple[str, ...]:
+            """The current project engagements, cut on the same terms."""
+            found = sorted(
+                (
+                    (
+                        participation.project_display_name,
+                        participation.participation_id,
+                        participation.role_text,
+                    )
+                    for participation in CORPUS_PARTICIPATIONS
+                    if participation.participant_entity_id == entity_id
+                    and participation.principal_id == principal_id
+                    and participation.state is EntityProjectParticipationState.ACTIVE
+                ),
+                key=lambda item: (item[0], item[1]),
+            )
+            return tuple(
+                EntitySummary.project_role(project, role)
+                for project, _, role in found[: EntitySummary.DISAMBIGUATOR_CEILING]
+            )
+
         return [
             EntitySummary(
                 entity_id=entity.entity_id,
@@ -336,6 +378,8 @@ class _CorpusRepository(EntitiesRepository):
                 canonical_name=entity.canonical_name,
                 display_name=entity.display_name,
                 status=entity.status,
+                affiliated_organizations=affiliated_organizations(entity.entity_id),
+                project_roles=project_roles(entity.entity_id),
             )
             for entity in matched[:limit]
         ]

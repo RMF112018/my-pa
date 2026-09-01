@@ -493,3 +493,45 @@ def test_a_cursor_naming_another_principals_entity_is_refused(staged: Engine) ->
 
 def test_an_entity_type_filter_still_narrows_a_context_match(staged: Engine) -> None:
     assert _found(staged, "Vasqueline", entity_type=EntityType.ORGANIZATION) == {EMPLOYER}
+
+
+# --- RI-AC-038: the disambiguators the page carries back ----------------------
+
+
+def test_a_summary_carries_the_current_employer_and_the_current_project(
+    staged: Engine,
+) -> None:
+    """The two bounded reads that follow the page, against real rows.
+
+    `tests/unit/test_entity_search_disambiguators.py` proves there are exactly
+    two of them however large the page is, by counting statements against a
+    recording connection. What it cannot show is that the `row_number()` window
+    and the joined `current_organization` derived table produce the right
+    values on a real server, which is what this asserts.
+    """
+    with staged.begin() as connection:
+        repository = SqlEntityRepository(connection)
+        (employed,) = repository.search(PRINCIPAL_A, "Threndal")
+        (staffed,) = repository.search(PRINCIPAL_A, "Oskarven")
+        (unattached,) = repository.search(PRINCIPAL_A, "Kalvedge")
+    assert employed.affiliated_organizations == ("Vasqueline",)
+    assert staffed.project_roles == (f"{ROLE_TEXT} on {PROJECT_NAME}",)
+    # Empty rather than absent: an entity with neither family is an ordinary
+    # row, and a caller reading the field does not have to tell "none" from
+    # "not carried".
+    assert unattached.affiliated_organizations == ()
+    assert unattached.project_roles == ()
+
+
+def test_the_disambiguator_reads_stay_inside_the_partition(staged: Engine) -> None:
+    """B's affiliation names no organization, and A's rows are not reachable from B.
+
+    The disambiguator reads are keyed by the page's identifiers, so the leak
+    they could carry is not another Principal's *entity* but another
+    Principal's *organization name* joined onto one of these rows. Asserted by
+    reading the same families as B and getting only B's own answer.
+    """
+    with staged.begin() as connection:
+        theirs = SqlEntityRepository(connection).search(PRINCIPAL_B, "Yalvenmar")
+    assert [summary.entity_id for summary in theirs] == [FOREIGN]
+    assert theirs[0].affiliated_organizations == ()

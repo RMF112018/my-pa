@@ -3329,6 +3329,52 @@ class _Entities(EntitiesRepository):
             matched = [
                 entity for entity in matched if (entity.canonical_name, entity.entity_id) > position
             ]
+
+        def affiliated_organizations(entity_id: str) -> tuple[str, ...]:
+            """The current employers, on `SqlEntityRepository.search`'s terms.
+
+            Ordered by the organization's display name then the affiliation
+            identifier and cut at `EntitySummary.DISAMBIGUATOR_CEILING`, which
+            is the same deterministic cut the server's `row_number()` window
+            makes -- a fake that cut differently would let a test assert a
+            browse row the server never renders.
+            """
+            names = {
+                organization.entity_id: organization.display_name
+                for organization in self._world.entities
+                if organization.principal_id == principal_id
+            }
+            found = sorted(
+                (names[affiliation.organization_entity_id], affiliation.affiliation_id)
+                for affiliation in self._world.entity_person_organization_affiliations
+                if affiliation.person_entity_id == entity_id
+                and affiliation.principal_id == principal_id
+                and affiliation.state is PersonOrganizationAffiliationState.ACTIVE
+                and affiliation.organization_entity_id in names
+            )
+            return tuple(name for name, _ in found[: EntitySummary.DISAMBIGUATOR_CEILING])
+
+        def project_roles(entity_id: str) -> tuple[str, ...]:
+            """The current project engagements, cut on the same terms."""
+            found = sorted(
+                (
+                    (
+                        participation.project_display_name,
+                        participation.participation_id,
+                        participation.role_text,
+                    )
+                    for participation in self._world.entity_project_participations
+                    if participation.participant_entity_id == entity_id
+                    and participation.principal_id == principal_id
+                    and participation.state is EntityProjectParticipationState.ACTIVE
+                ),
+                key=lambda item: (item[0], item[1]),
+            )
+            return tuple(
+                EntitySummary.project_role(project, role)
+                for project, _, role in found[: EntitySummary.DISAMBIGUATOR_CEILING]
+            )
+
         return [
             EntitySummary(
                 entity_id=entity.entity_id,
@@ -3336,6 +3382,8 @@ class _Entities(EntitiesRepository):
                 canonical_name=entity.canonical_name,
                 display_name=entity.display_name,
                 status=entity.status,
+                affiliated_organizations=affiliated_organizations(entity.entity_id),
+                project_roles=project_roles(entity.entity_id),
             )
             for entity in matched[:limit]
         ]

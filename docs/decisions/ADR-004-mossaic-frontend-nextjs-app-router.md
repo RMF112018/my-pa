@@ -1,10 +1,12 @@
 # ADR-004: MossAIc First-Party Frontend on Next.js App Router with MSAL-Shaped Identity
 
-- **Status:** Accepted
+- **Status:** Accepted with authentication/session provisions partially superseded by [ADR-011](ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md)
 - **Decision ID:** `PKL-MYPA-D-WP02-001`
 - **Repository:** `RMF112018/my-pa`
 - **Scope:** Frontend architecture and authentication boundary. No production deployment,
   live Entra credential, or live personal-data authority.
+
+> **Controlling supersession notice (2026-09-01):** ADR-011 supersedes this ADR's MSAL/Entra production identity target, its Entra-shaped production session model, and the use of a Principal-bearing signed browser cookie as the target session authority. The Next.js/BFF/frontend architecture and other non-authentication provisions below remain accepted. Current legacy runtime paths remain implementation truth until UI-IMP-WP02..WP04 replace them; this notice does not claim WebAuthn is already implemented.
 
 ## Context
 
@@ -21,6 +23,8 @@ with fail-closed principal scoping in persistence. The frontend must now present
 five-destination shell and the authentication boundary that consumes that identity
 plane — without live Entra credentials, which remain an operator-only activation step.
 
+The historical context above is preserved as provenance. ADR-011 now controls the production browser authentication/session target.
+
 ## Decision
 
 1. **The first-party frontend lives in `web/`** as a Next.js App Router + TypeScript +
@@ -35,11 +39,13 @@ plane — without live Entra credentials, which remain an operator-only activati
    (`web/src/lib/auth/msal.config.ts`) is present but **inert** — no client ID, no
    authority, no live redemption path. Replacing the synthetic issuer with MSAL redemption
    changes one module, not the session or guard model.
+   **Superseded for the production target by ADR-011.** Retained only as historical/current-legacy implementation context until WP02-WP04 complete.
 4. **Server-held session, fail-closed guard.** Claims are validated server-side with the
    same rules as the Python identity plane (home-tenant `tid` check, required `oid`,
    caller-supplied `principal_id` rejection) and carried in an HMAC-signed HttpOnly
    cookie. `middleware.ts` redirects unauthenticated requests to `/sign-in`; every API
    route derives the principal from the validated session only.
+   **Partially superseded by ADR-011:** fail-closed server-derived Principal authority remains valid, but the target browser cookie carries only an opaque SID and authoritative Principal/session state is server-owned.
 5. **Backend-for-frontend route handlers.** The browser never calls Microsoft Graph,
    never holds refresh-token material, and never receives another principal's rows. Route
    handlers under `web/src/app/api/` are the only data plane; in WP-02 they return
@@ -56,12 +62,12 @@ plane — without live Entra credentials, which remain an operator-only activati
 
 - Development and tests run entirely on synthetic principals; two fixtures
   (`Synthetic A`, `Synthetic B`) support cross-principal UI isolation checks.
-- Live Entra activation requires only: an app registration, MSAL config values, and
-  swapping the synthetic issuer for the MSAL redemption path — an operator-gated step.
+- Historical consequence: live Entra activation was originally expected to require only an app registration, MSAL config values, and swapping the synthetic issuer for the MSAL redemption path. **That production-authentication consequence is superseded by ADR-011 and must not be used as implementation authority.**
 - The Python FAST/database tiers are unaffected; `web/` carries its own lint,
   typecheck, and vitest suites.
 
 ## Supersession
 
-Supersedes the v3.0 React + Vite frontend recommendation. Superseded in turn only by a
-later accepted ADR; live-credential activation does not modify this ADR, it fulfills it.
+Supersedes the v3.0 React + Vite frontend recommendation.
+
+Partially superseded by ADR-011 as follows: the MSAL/Entra production identity target, Entra-shaped production session model, Principal-bearing signed-cookie target, and live-Entra-completion consequence are superseded. The Next.js App Router, same-origin BFF, server-derived Principal invariant, typed-contract, PWA, and other non-authentication frontend architecture remain accepted unless separately superseded.

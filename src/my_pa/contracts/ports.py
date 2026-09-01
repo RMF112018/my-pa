@@ -120,6 +120,8 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    LegalIdentityStatusCode,
+    OrganizationKindCode,
     PersonOrganizationAffiliation,
 )
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
@@ -1377,6 +1379,215 @@ class EntitiesRepository(ABC):
         self, principal_id: str, entity_id: str, *, limit: int | None = None
     ) -> list[PersonOrganizationAffiliation]:
         """Affiliations naming `entity_id` as `organization_entity_id`."""
+
+    # --- RI-ENT-WP-08: the same six families' write path ----------------------
+    #
+    # Declared abstract here, deliberately, and this is the surface change
+    # RI-ENT-WP-07 named WP-08 as "the one to make deliberately" rather than
+    # make itself: every implementer of this port now has to answer for the
+    # write path, which is the point. A concrete method left off the ABC is
+    # one a double can silently not have, and a caller written against the
+    # port would then work in production and vanish in a test.
+    #
+    # Three verbs per temporal family, because the columns those tables carry
+    # admit exactly three transitions: `record_*` inserts, `supersede_*`
+    # marks SUPERSEDED and names the successor that replaces it, `retire_*`
+    # marks RETIRED and stamps `retired_at`. There is deliberately no
+    # "update in place" verb for a temporal family -- a correction is a new
+    # row plus a supersession, so what the record said before survives the
+    # correction. `entity_organization_profiles` is the exception and says so
+    # at its own method.
+    #
+    # Every `supersede_*`/`retire_*` takes `expected_version` and raises
+    # rather than writing when the row has moved: `UnknownScopeError` when
+    # this Principal cannot reach the row at all (the same answer an absent
+    # row gets, so the refusal discloses nothing about another partition),
+    # and `StaleDirectedVersionError` when the row is reachable at a
+    # different version.
+
+    @abstractmethod
+    def record_entity_name(self, principal_id: str, entity_name: EntityName) -> None:
+        """Record one typed name form.
+
+        `normalized_value` is taken as given and checked, never derived from
+        `display_value`: which two strings match is a claim the caller makes,
+        not one this port invents on their behalf.
+        """
+
+    @abstractmethod
+    def supersede_entity_name(
+        self,
+        principal_id: str,
+        *,
+        entity_name_id: str,
+        superseded_by_entity_name_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Mark one name superseded by another, non-destructively."""
+
+    @abstractmethod
+    def retire_entity_name(
+        self, principal_id: str, *, entity_name_id: str, expected_version: int, at: datetime
+    ) -> None:
+        """Retire one name, releasing any preferred slot it held."""
+
+    @abstractmethod
+    def record_organization_profile(
+        self, principal_id: str, profile: EntityOrganizationProfile
+    ) -> None:
+        """Record the one profile row an organization entity holds.
+
+        The implementer is responsible for refusing a profile on an entity
+        that is not an organization -- the cross-table invariant
+        `EntityOrganizationProfile`'s docstring names the writer as owning,
+        because no CHECK expresses it without a trigger the schema does not
+        carry.
+        """
+
+    @abstractmethod
+    def revise_organization_profile(
+        self,
+        principal_id: str,
+        *,
+        entity_id: str,
+        organization_kind_code: OrganizationKindCode,
+        legal_identity_status_code: LegalIdentityStatusCode,
+        jurisdiction_code: str | None,
+        registration_identifier: str | None,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace the profile's classification in place, under its version.
+
+        The one family corrected in place rather than by supersession,
+        because it is the one family with nowhere to retire to: no `state`,
+        no `superseded_by_*`, one row per entity by construction. Every
+        mutable column is a required parameter, including the two nullable
+        ones, so a revision cannot silently carry forward a jurisdiction or a
+        registration identifier the caller believes it cleared.
+        """
+
+    @abstractmethod
+    def record_entity_address(self, principal_id: str, address: EntityAddress) -> None:
+        """Record one typed address."""
+
+    @abstractmethod
+    def supersede_entity_address(
+        self,
+        principal_id: str,
+        *,
+        entity_address_id: str,
+        superseded_by_entity_address_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Mark one address superseded by another, non-destructively."""
+
+    @abstractmethod
+    def retire_entity_address(
+        self, principal_id: str, *, entity_address_id: str, expected_version: int, at: datetime
+    ) -> None:
+        """Retire one address, releasing any preferred slot it held."""
+
+    @abstractmethod
+    def record_communication_method(
+        self, principal_id: str, method: EntityCommunicationMethod
+    ) -> None:
+        """Record one contact channel, at the verification status given."""
+
+    @abstractmethod
+    def supersede_communication_method(
+        self,
+        principal_id: str,
+        *,
+        communication_method_id: str,
+        superseded_by_communication_method_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Mark one communication method superseded by another."""
+
+    @abstractmethod
+    def retire_communication_method(
+        self,
+        principal_id: str,
+        *,
+        communication_method_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Retire one communication method."""
+
+    @abstractmethod
+    def record_project_participation(
+        self, principal_id: str, participation: EntityProjectParticipation
+    ) -> None:
+        """Record one project participation.
+
+        `role_code`/`discipline_code` are taxonomy claims and are written as
+        given; nothing derives one from `role_text`/`discipline_text`.
+        """
+
+    @abstractmethod
+    def supersede_project_participation(
+        self,
+        principal_id: str,
+        *,
+        participation_id: str,
+        superseded_by_participation_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Mark one participation superseded by another."""
+
+    @abstractmethod
+    def retire_project_participation(
+        self, principal_id: str, *, participation_id: str, expected_version: int, at: datetime
+    ) -> None:
+        """Retire one participation."""
+
+    @abstractmethod
+    def record_person_organization_affiliation(
+        self, principal_id: str, affiliation: PersonOrganizationAffiliation
+    ) -> None:
+        """Record one person-organization affiliation.
+
+        A null `organization_entity_id` stays null: RI-ENT-WP-05 made the
+        column nullable so an independent consultant needs no placeholder
+        organization, and no implementer of this port may create one to
+        satisfy the foreign key.
+        """
+
+    @abstractmethod
+    def supersede_person_organization_affiliation(
+        self,
+        principal_id: str,
+        *,
+        affiliation_id: str,
+        superseded_by_affiliation_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Mark one affiliation superseded by another."""
+
+    @abstractmethod
+    def retire_person_organization_affiliation(
+        self,
+        principal_id: str,
+        *,
+        affiliation_id: str,
+        expected_version: int,
+        at: datetime,
+        effective_to: datetime | None = None,
+    ) -> None:
+        """Retire one affiliation, closing its window only when told to.
+
+        `effective_to` is written only when supplied. Retirement already
+        releases the open-ended slot through `state`; *when* an affiliation
+        ended is a separate fact the caller states or leaves unstated, never
+        one this port invents.
+        """
 
     @abstractmethod
     def entities_by_identifier(

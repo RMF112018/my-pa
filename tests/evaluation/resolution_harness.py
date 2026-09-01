@@ -297,6 +297,69 @@ class _CorpusRepository(EntitiesRepository):
     ) -> list:
         raise NotImplementedError("resolution reads no person affiliation")
 
+    # RI-ENT-WP-08's write path for the same six families: resolution writes
+    # to none of them, so each raises on this class's own established terms.
+    # Declared rather than inherited because the port makes them abstract --
+    # which is the point of declaring them there: an implementer has to say
+    # what it does about the write path, even when the answer is "nothing".
+
+    def record_entity_name(self, principal_id: str, entity_name: object) -> None:
+        raise NotImplementedError("resolution writes no name form")
+
+    def supersede_entity_name(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no name form")
+
+    def retire_entity_name(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no name form")
+
+    def record_organization_profile(self, principal_id: str, profile: object) -> None:
+        raise NotImplementedError("resolution writes no organization profile")
+
+    def revise_organization_profile(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no organization profile")
+
+    def record_entity_address(self, principal_id: str, address: object) -> None:
+        raise NotImplementedError("resolution writes no address")
+
+    def supersede_entity_address(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no address")
+
+    def retire_entity_address(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no address")
+
+    def record_communication_method(self, principal_id: str, method: object) -> None:
+        raise NotImplementedError("resolution writes no communication method")
+
+    def supersede_communication_method(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no communication method")
+
+    def retire_communication_method(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no communication method")
+
+    def record_project_participation(self, principal_id: str, participation: object) -> None:
+        raise NotImplementedError("resolution writes no project participation")
+
+    def supersede_project_participation(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no project participation")
+
+    def retire_project_participation(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no project participation")
+
+    def record_person_organization_affiliation(
+        self, principal_id: str, affiliation: object
+    ) -> None:
+        raise NotImplementedError("resolution writes no person affiliation")
+
+    def supersede_person_organization_affiliation(
+        self, principal_id: str, **arguments: object
+    ) -> None:
+        raise NotImplementedError("resolution writes no person affiliation")
+
+    def retire_person_organization_affiliation(
+        self, principal_id: str, **arguments: object
+    ) -> None:
+        raise NotImplementedError("resolution writes no person affiliation")
+
     def assignments(
         self, principal_id: str, entity_id: str, active_only: bool = True
     ) -> list[Assignment]:

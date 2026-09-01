@@ -271,9 +271,17 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and four** current capabilities, and the schema has
-**eighty-five** revisions at head `1cda4d536268` (corrected 2026-08-31 from
-eighty-four at `9a3f6c1e8d24`, on which `1cda4d536268` is additive and adds
-the `entity_assertions`/`entity_assertion_evidence` tables, binding
+**eighty-six** revisions at head `c99cd8ed8d1c` (corrected 2026-08-31 from
+eighty-five at `1cda4d536268`, on which `c99cd8ed8d1c` is additive and
+renames the seeded `entity_relationship_types` row `design_coordinates_with`
+to `design_coordination_with` -- every other column unchanged -- closing
+`EntityRelationshipType` to 35-of-35 parity with the taxonomy table by
+admitting `DESIGN_COORDINATION_WITH` where `DESIGN_COORDINATES_WITH` had
+tripped `tests/architecture/test_relationship_scoring_surface_is_denied.py`'s
+"location tracking" pattern, the WP-08 blocker-clearing rename; corrected
+2026-08-31 from eighty-four at `9a3f6c1e8d24`, on which `1cda4d536268` is
+additive and adds the `entity_assertions`/`entity_assertion_evidence`
+tables, binding
 fact-level `assertion_status` and evidence to six Entity-bound record
 families, RI-ENT-WP-07, closes `ENTITY-PROVENANCE-001`; `9a3f6c1e8d24` is
 itself additive on `8dc3619891bb` and widens

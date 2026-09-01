@@ -11,11 +11,23 @@ place able to get wrong:
   there is no field a later change could start honouring. That is asserted
   structurally over `dataclasses.fields`, because a prose promise about a field
   that does not exist is exactly the promise a new field breaks silently.
-* **A correction is two rows.** The predecessor is still there afterwards, its
-  content byte-identical, marked SUPERSEDED and naming its successor. The
-  assertion that matters is the *survival* of the old row: a test that only read
-  the new one would pass just as happily against a service that rewrote the old
-  row in place, which is the failure the whole temporal shape exists to prevent.
+* **A correction is two rows, written by exactly one repository call.** The
+  predecessor is still there afterwards, its content byte-identical, marked
+  SUPERSEDED and naming its successor. The assertion that matters is the
+  *survival* of the old row: a test that only read the new one would pass just
+  as happily against a service that rewrote the old row in place, which is the
+  failure the whole temporal shape exists to prevent. The *single call* is the
+  second half, and it is a structural claim rather than an aesthetic one: a
+  `correct_*` that inserted the successor itself and then superseded the
+  predecessor would put the insert ahead of the release of the active-uniqueness
+  partial indexes — `an_active_entity_name_is_unique_per_entity_and_type`,
+  `an_active_entity_address_is_unique_per_entity_and_type`,
+  `an_active_communication_method_is_unique_per_entity_and_type`,
+  `an_active_project_participation_is_unique_per_project_and_role` and
+  `an_open_ended_affiliation_is_unique_per_person`, all partial on
+  `state = 'active'` — so the successor would collide with the very row it
+  replaces. That ordering is the schema's, so it lives in `supersede_*`, and
+  this module holds the guard that no `correct_*` grows a sequence of its own.
 * **The four no-guess rules, each as a refusal a caller can reach.** A name with
   no stated type, an affiliation with a blank organization, a participation with
   a blank taxonomy code, and every closed vocabulary that carries no default.
@@ -46,7 +58,7 @@ import textwrap
 from collections.abc import Callable
 from dataclasses import MISSING, dataclass, fields, replace
 from datetime import UTC, datetime, timedelta
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import pytest
 
@@ -300,7 +312,23 @@ def _profile_command(**overrides: object) -> RecordOrganizationProfile:
 @dataclass(frozen=True)
 class _Family:
     """How to record, correct and retire one of the five temporal families, and
-    where its rows land in the `World`."""
+    where its rows land in the `World`.
+
+    `correct_method` and `port_verb` are the two names a correction is made of:
+    the service method a caller reaches, and the one port verb that method is
+    permitted to call. Both are spelled out rather than derived from `label`,
+    because a derivation would rename both sides at once and the drift worth
+    catching is precisely the one that renames a single side.
+
+    `spare_id` is an identifier of this family's own kind that nothing else in
+    the module uses, for the two tests that build a successor record themselves
+    instead of letting the service mint one.
+
+    `corrected` is the set of columns this family's `correct` actually changes,
+    paired with the value the successor must carry. Each is also asserted to
+    differ from the predecessor's, so a family whose correction quietly stopped
+    changing anything could not satisfy the comparison by holding still.
+    """
 
     label: str
     rows: Callable[[World], list[Any]]
@@ -309,6 +337,10 @@ class _Family:
     superseded_state: Any
     retired_state: Any
     family: EntityRecordFamily
+    correct_method: str
+    port_verb: str
+    spare_id: str
+    corrected: tuple[tuple[str, Any], ...]
     record: Callable[[EntityRecordFamilyService, EntitiesRepository], RecordedFact]
     correct: Callable[[EntityRecordFamilyService, EntitiesRepository, str, int], CorrectedFact]
     retire: Callable[[EntityRecordFamilyService, EntitiesRepository, str, int], RetiredFact]
@@ -327,6 +359,13 @@ FAMILIES: Final = (
         superseded_state=EntityNameState.SUPERSEDED,
         retired_state=EntityNameState.RETIRED,
         family=EntityRecordFamily.NAME,
+        correct_method="correct_name",
+        port_verb="supersede_entity_name",
+        spare_id="enam_cccc0003cccc0003",
+        corrected=(
+            ("display_value", "Synthetic Org Holdings LLC"),
+            ("normalized_value", normalize_name("Synthetic Org Holdings LLC")),
+        ),
         record=lambda service, repository: service.record_name(
             repository, _name_command(), principal_id=PRINCIPAL, at=WHEN
         ),
@@ -357,6 +396,25 @@ FAMILIES: Final = (
         superseded_state=EntityAddressState.SUPERSEDED,
         retired_state=EntityAddressState.RETIRED,
         family=EntityRecordFamily.ADDRESS,
+        correct_method="correct_address",
+        port_verb="supersede_entity_address",
+        spare_id="eadr_cccc0003cccc0003",
+        corrected=(
+            ("raw_value", "2 Synthetic Way, Springfield"),
+            ("line1", "2 Synthetic Way"),
+            (
+                "normalized_address_value",
+                normalize_address(
+                    line1="2 Synthetic Way",
+                    line2=None,
+                    city="Springfield",
+                    region=None,
+                    postal_code=None,
+                    country=None,
+                    raw_value="2 Synthetic Way, Springfield",
+                ),
+            ),
+        ),
         record=lambda service, repository: service.record_address(
             repository, _address_command(), principal_id=PRINCIPAL, at=WHEN
         ),
@@ -389,6 +447,18 @@ FAMILIES: Final = (
         superseded_state=EntityCommunicationMethodState.SUPERSEDED,
         retired_state=EntityCommunicationMethodState.RETIRED,
         family=EntityRecordFamily.COMMUNICATION_METHOD,
+        correct_method="correct_communication_method",
+        port_verb="supersede_communication_method",
+        spare_id="ecmm_cccc0003cccc0003",
+        corrected=(
+            ("display_value", "Desk@Example.Invalid"),
+            (
+                "normalized_value",
+                normalize_communication_value(
+                    CommunicationMethodTypeCode.EMAIL, "Desk@Example.Invalid"
+                ),
+            ),
+        ),
         record=lambda service, repository: service.record_communication_method(
             repository, _channel_command(), principal_id=PRINCIPAL, at=WHEN
         ),
@@ -422,6 +492,10 @@ FAMILIES: Final = (
         superseded_state=EntityProjectParticipationState.SUPERSEDED,
         retired_state=EntityProjectParticipationState.RETIRED,
         family=EntityRecordFamily.PROJECT_PARTICIPATION,
+        correct_method="correct_project_participation",
+        port_verb="supersede_project_participation",
+        spare_id="eppt_cccc0003cccc0003",
+        corrected=(("scope_text", "the north elevation"),),
         record=lambda service, repository: service.record_project_participation(
             repository, _participation_command(), principal_id=PRINCIPAL, at=WHEN
         ),
@@ -459,6 +533,10 @@ FAMILIES: Final = (
         superseded_state=PersonOrganizationAffiliationState.SUPERSEDED,
         retired_state=PersonOrganizationAffiliationState.RETIRED,
         family=EntityRecordFamily.PERSON_ORGANIZATION_AFFILIATION,
+        correct_method="correct_affiliation",
+        port_verb="supersede_person_organization_affiliation",
+        spare_id="poaf_cccc0003cccc0003",
+        corrected=(("job_title", "Associate Principal"),),
         record=lambda service, repository: service.record_affiliation(
             repository, _affiliation_command(), principal_id=PRINCIPAL, at=WHEN
         ),
@@ -609,6 +687,56 @@ def test_a_correction_writes_a_new_row_and_leaves_the_old_one_standing(
 
 
 @pytest.mark.parametrize("family", _FAMILY_CASES)
+def test_a_correction_writes_the_corrected_values_onto_the_successor(
+    world: World,
+    repository: EntitiesRepository,
+    service: EntityRecordFamilyService,
+    family: _Family,
+) -> None:
+    """The other half of the test above, and the half a correction can silently
+    lose.
+
+    The predecessor's survival says nothing about whether the *correction*
+    happened. `supersede_*` is now the verb that inserts, so a repository that
+    took the successor record and dropped it, or one that re-inserted the
+    predecessor's own values under a fresh identifier, would leave two rows,
+    a supersession pointer and a `CorrectedFact` -- and would satisfy every
+    assertion the survival test makes while the corrected value never reached
+    the store.
+
+    Each corrected column is checked twice: the successor carries the new value,
+    and the predecessor does *not*. The second check is what stops the test
+    going vacuous if a family's `correct` lambda drifts into restating what
+    `record` already wrote.
+
+    The successor is then reconstructed: with its own identifier and its
+    corrected columns replaced by the predecessor's, it must equal the
+    predecessor exactly. So a correction that changed a column nobody asked it
+    to change -- a cleared `label`, a dropped `usage_context_code`, a
+    `verification_status_code` promoted on the way past -- reddens here, and
+    `test_a_correction_writes_a_new_row_and_leaves_the_old_one_standing` makes
+    the mirror-image claim about the row that stayed.
+    """
+    recorded = family.record(service, repository)
+    before = _held(family.rows(world), family.key, recorded.record_id)
+
+    corrected = family.correct(service, repository, recorded.record_id, 1)
+    successor = _held(family.rows(world), family.key, corrected.record_id)
+
+    assert family.corrected != ()
+    for column, expected in family.corrected:
+        assert getattr(successor, column) == expected
+        assert getattr(before, column) != expected
+
+    restored = replace(
+        successor,
+        **{family.key: recorded.record_id},
+        **{column: getattr(before, column) for column, _ in family.corrected},
+    )
+    assert restored == before
+
+
+@pytest.mark.parametrize("family", _FAMILY_CASES)
 def test_a_retirement_keeps_the_row_and_marks_it(
     world: World,
     repository: EntitiesRepository,
@@ -643,206 +771,290 @@ def test_a_receipt_names_a_record_and_never_the_value_it_recorded(
     assert recorded.recorded_at == WHEN
 
 
-# --- A2b. A preferred row cannot be corrected, and that is a schema fact -----
+# --- A2b. A preferred row is corrected like any other row --------------------
 #
-# `correct_name`, `correct_address` and `correct_communication_method` refuse a
-# command carrying `is_preferred=True` before writing anything, because the two
-# possible orderings of a correction are mutually exclusive under the three
-# families' constraints: writing the successor first trips the partial unique
-# index on the preferred slot, and superseding first trips the NOT DEFERRABLE
-# self-referencing foreign key. Both halves are proved against the real schema
-# in `tests/database/test_entity_record_family_service_write_path.py`; what is
-# held here is the caller-facing shape of the refusal.
+# `correct_name`, `correct_address` and `correct_communication_method` once
+# refused a command carrying `is_preferred=True` outright, on the claim that a
+# preferred-slot correction was structurally inexpressible: writing the
+# successor first would trip the partial unique index on the preferred slot, and
+# superseding first would trip the NOT DEFERRABLE self-referencing foreign key.
+# The second half of that was false. The predecessor is released with its
+# `superseded_by_*` still NULL, the successor is inserted, and only then is the
+# predecessor updated to name it -- three statements, no schema change, and the
+# foreign key satisfied because by the time it is asserted the row it names
+# exists. The refusal was a limitation of the verb, not a fact about the schema,
+# and it is gone.
+#
+# What that leaves this section holding is the *positive* contract, which is
+# harder to get right than the refusal was: a preferred correction writes the
+# successor carrying `is_preferred=True`, and the predecessor's own
+# `is_preferred` is left exactly as it was. Nothing clears it, because nothing
+# needs to -- both indexes are partial on `state = 'active'`, so a row that has
+# become SUPERSEDED is out of them through `state` alone. A `supersede_*` that
+# "helpfully" cleared the flag would lose the record of which form was preferred
+# at the moment it was superseded, which is precisely the history the temporal
+# shape exists to keep.
 
 
-#: The three commands that can reach the refusal, with the method that takes
-#: each. `CorrectProjectParticipation` and `CorrectAffiliation` are absent
-#: because their families carry no preferred slot at all -- see
-#: `test_the_families_without_a_preferred_slot_carry_no_such_field`.
-PREFERRED_CORRECTIONS: Final = (
-    (
-        "correct_name",
-        lambda record_id, **overrides: CorrectEntityName(
-            entity_name_id=record_id,
-            expected_version=1,
-            entity_id=ORGANIZATION,
-            display_value="Synthetic Org Holdings LLC",
-            name_type_code=overrides.get("name_type_code", NameTypeCode.LEGAL),
-            is_preferred=overrides.get("is_preferred", True),
+@dataclass(frozen=True)
+class _PreferredFamily:
+    """One of the three families that carries a preferred slot: how to put a row
+    into it, how to correct one, and where its rows land in the `World`.
+
+    `CorrectProjectParticipation` and `CorrectAffiliation` have no counterpart
+    here because their families carry no `is_preferred` column at all -- see
+    `test_the_families_without_a_preferred_slot_carry_no_such_field`, which is
+    the structural half of that statement.
+
+    `record` and `correct` both take the `is_preferred` the command should
+    carry, so the same three cases drive the preferred correction, the
+    unpreferred one, and the promotion of an unpreferred predecessor's successor
+    into the slot.
+    """
+
+    label: str
+    rows: Callable[[World], list[Any]]
+    key: str
+    successor_key: str
+    superseded_state: Any
+    record: Callable[[EntityRecordFamilyService, EntitiesRepository, bool], RecordedFact]
+    correct: Callable[[EntityRecordFamilyService, EntitiesRepository, str, bool], CorrectedFact]
+
+
+PREFERRED_FAMILIES: Final = (
+    _PreferredFamily(
+        label="correct_name",
+        rows=lambda world: world.entity_names,
+        key="entity_name_id",
+        successor_key="superseded_by_entity_name_id",
+        superseded_state=EntityNameState.SUPERSEDED,
+        record=lambda service, repository, is_preferred: service.record_name(
+            repository,
+            _name_command(is_preferred=is_preferred, name_type_code=NameTypeCode.LEGAL),
+            principal_id=PRINCIPAL,
+            at=WHEN,
         ),
-        "record_name",
-        lambda **overrides: _name_command(
-            is_preferred=overrides.get("is_preferred", True),
-            name_type_code=overrides.get("name_type_code", NameTypeCode.LEGAL),
+        correct=lambda service, repository, record_id, is_preferred: service.correct_name(
+            repository,
+            CorrectEntityName(
+                entity_name_id=record_id,
+                expected_version=1,
+                entity_id=ORGANIZATION,
+                display_value="Synthetic Org Holdings LLC",
+                name_type_code=NameTypeCode.LEGAL,
+                is_preferred=is_preferred,
+            ),
+            principal_id=PRINCIPAL,
+            at=LATER,
         ),
-        lambda world: world.entity_names,
-        "entity_name_id",
     ),
-    (
-        "correct_address",
-        lambda record_id, **overrides: CorrectEntityAddress(
-            entity_address_id=record_id,
-            expected_version=1,
-            entity_id=ORGANIZATION,
-            address_type_code=AddressTypeCode.HEADQUARTERS,
-            raw_value="2 Synthetic Way, Springfield",
-            line1="2 Synthetic Way",
-            city="Springfield",
-            is_preferred=overrides.get("is_preferred", True),
+    _PreferredFamily(
+        label="correct_address",
+        rows=lambda world: world.entity_addresses,
+        key="entity_address_id",
+        successor_key="superseded_by_entity_address_id",
+        superseded_state=EntityAddressState.SUPERSEDED,
+        record=lambda service, repository, is_preferred: service.record_address(
+            repository,
+            _address_command(is_preferred=is_preferred),
+            principal_id=PRINCIPAL,
+            at=WHEN,
         ),
-        "record_address",
-        lambda **overrides: _address_command(is_preferred=overrides.get("is_preferred", True)),
-        lambda world: world.entity_addresses,
-        "entity_address_id",
+        correct=lambda service, repository, record_id, is_preferred: service.correct_address(
+            repository,
+            CorrectEntityAddress(
+                entity_address_id=record_id,
+                expected_version=1,
+                entity_id=ORGANIZATION,
+                address_type_code=AddressTypeCode.HEADQUARTERS,
+                raw_value="2 Synthetic Way, Springfield",
+                line1="2 Synthetic Way",
+                city="Springfield",
+                is_preferred=is_preferred,
+            ),
+            principal_id=PRINCIPAL,
+            at=LATER,
+        ),
     ),
-    (
-        "correct_communication_method",
-        lambda record_id, **overrides: CorrectCommunicationMethod(
-            communication_method_id=record_id,
-            expected_version=1,
-            entity_id=ORGANIZATION,
-            method_type_code=CommunicationMethodTypeCode.EMAIL,
-            usage_context_code=CommunicationUsageContextCode.CORPORATE,
-            display_value="Desk@Example.Invalid",
-            is_preferred=overrides.get("is_preferred", True),
+    _PreferredFamily(
+        label="correct_communication_method",
+        rows=lambda world: world.entity_communication_methods,
+        key="communication_method_id",
+        successor_key="superseded_by_communication_method_id",
+        superseded_state=EntityCommunicationMethodState.SUPERSEDED,
+        record=lambda service, repository, is_preferred: service.record_communication_method(
+            repository,
+            _channel_command(is_preferred=is_preferred),
+            principal_id=PRINCIPAL,
+            at=WHEN,
         ),
-        "record_communication_method",
-        lambda **overrides: _channel_command(is_preferred=overrides.get("is_preferred", True)),
-        lambda world: world.entity_communication_methods,
-        "communication_method_id",
+        correct=lambda service, repository, record_id, is_preferred: (
+            service.correct_communication_method(
+                repository,
+                CorrectCommunicationMethod(
+                    communication_method_id=record_id,
+                    expected_version=1,
+                    entity_id=ORGANIZATION,
+                    method_type_code=CommunicationMethodTypeCode.EMAIL,
+                    usage_context_code=CommunicationUsageContextCode.CORPORATE,
+                    display_value="Desk@Example.Invalid",
+                    is_preferred=is_preferred,
+                ),
+                principal_id=PRINCIPAL,
+                at=LATER,
+            )
+        ),
     ),
 )
 
-_PREFERRED_CASES: Final = [pytest.param(case, id=case[0]) for case in PREFERRED_CORRECTIONS]
+_PREFERRED_CASES: Final = [pytest.param(family, id=family.label) for family in PREFERRED_FAMILIES]
 
 
-@pytest.mark.parametrize("case", _PREFERRED_CASES)
-def test_a_preferred_correction_is_refused_before_anything_is_written(
+@pytest.mark.parametrize("family", _PREFERRED_CASES)
+def test_a_preferred_correction_is_written_and_the_predecessor_keeps_its_flag(
     world: World,
     repository: EntitiesRepository,
     service: EntityRecordFamilyService,
-    case: tuple[str, Any, str, Any, Any, str],
+    family: _PreferredFamily,
 ) -> None:
-    """The refusal, and the "before" in "before any write". The row list is read
-    back after: a service that minted an identifier, wrote the successor and
-    *then* refused would raise the same exception and fail here.
+    """The case that was refused, asserted as the ordinary write it is.
 
-    `SafeDetail.PINNED` is a documented approximation -- `errors.py` carries no
-    `is_preferred` member and was outside this work package's scope -- so a
-    later, more precise token replacing it is a correction, not a regression.
+    Three separate claims, because a test that only asserted "no exception"
+    would pass against a `supersede_*` that dropped the successor on the floor:
+    the successor exists and carries `is_preferred=True`; the predecessor ends
+    SUPERSEDED naming it; and the predecessor's own `is_preferred` is still
+    `True`, untouched. That last one is the claim with teeth. A supersession
+    that cleared the flag to "make room" for the successor would pass the first
+    two and would be wrong: `an_active_entity_name_has_one_preferred_per_type`
+    and its two siblings are partial on `state = 'active'`, so the predecessor
+    left the index the moment its state changed, and clearing the flag would
+    destroy the record of which form was preferred when it was superseded.
     """
-    correct_name, build_correction, record_name, build_record, rows, key = case
-    recorded = getattr(service, record_name)(
-        repository, build_record(), principal_id=PRINCIPAL, at=WHEN
-    )
-    before = list(rows(world))
+    recorded = family.record(service, repository, True)
+    before = _held(family.rows(world), family.key, recorded.record_id)
+    assert before.is_preferred is True
 
-    with pytest.raises(InvalidRequestError) as refused:
-        getattr(service, correct_name)(
-            repository,
-            build_correction(recorded.record_id),
-            principal_id=PRINCIPAL,
-            at=LATER,
-        )
-    assert refused.value.safe_details == (SafeDetail.PINNED,)
-    assert rows(world) == before
-    assert [getattr(row, key) for row in rows(world)] == [recorded.record_id]
-    assert rows(world)[0].version == 1
-    assert rows(world)[0].is_preferred is True
+    corrected = family.correct(service, repository, recorded.record_id, True)
+
+    rows = family.rows(world)
+    assert len(rows) == 2
+    successor = _held(rows, family.key, corrected.record_id)
+    assert successor.is_preferred is True
+    assert getattr(successor, family.successor_key) is None
+    assert successor.version == 1
+
+    predecessor = _held(rows, family.key, recorded.record_id)
+    assert predecessor.state is family.superseded_state
+    assert getattr(predecessor, family.successor_key) == corrected.record_id
+    assert predecessor.is_preferred is True
+    assert predecessor.version == 2
 
 
-@pytest.mark.parametrize("case", _PREFERRED_CASES)
+@pytest.mark.parametrize("family", _PREFERRED_CASES)
 def test_a_correction_that_does_not_claim_the_preferred_slot_is_untouched(
     world: World,
     repository: EntitiesRepository,
     service: EntityRecordFamilyService,
-    case: tuple[str, Any, str, Any, Any, str],
+    family: _PreferredFamily,
 ) -> None:
-    """The ordinary case still works, which is what makes the refusal narrow
-    enough to be usable: a correction of a row that is not preferred writes its
-    successor and supersedes its predecessor exactly as before."""
-    correct_name, build_correction, record_name, build_record, rows, _ = case
-    recorded = getattr(service, record_name)(
-        repository, build_record(is_preferred=False), principal_id=PRINCIPAL, at=WHEN
-    )
-    corrected = getattr(service, correct_name)(
-        repository,
-        build_correction(recorded.record_id, is_preferred=False),
-        principal_id=PRINCIPAL,
-        at=LATER,
-    )
+    """The unpreferred correction, which never depended on the refusal and must
+    not have acquired anything from its removal: a correction of a row that is
+    not preferred writes its successor unpreferred and supersedes its
+    predecessor exactly as it always did."""
+    recorded = family.record(service, repository, False)
+    corrected = family.correct(service, repository, recorded.record_id, False)
     assert corrected.superseded_record_id == recorded.record_id
-    assert len(rows(world)) == 2
+
+    rows = family.rows(world)
+    assert len(rows) == 2
+    assert _held(rows, family.key, corrected.record_id).is_preferred is False
+    assert _held(rows, family.key, recorded.record_id).is_preferred is False
 
 
-def test_the_preferred_correction_refusal_is_wider_than_the_constraint(
+@pytest.mark.parametrize("family", _PREFERRED_CASES)
+def test_a_correction_may_promote_an_unpreferred_row_into_the_preferred_slot(
+    world: World,
+    repository: EntitiesRepository,
+    service: EntityRecordFamilyService,
+    family: _PreferredFamily,
+) -> None:
+    """The case the deleted refusal was *wider* than, now written rather than
+    refused.
+
+    A predecessor that never held the slot is corrected by a successor that
+    claims it. Nothing was occupying the slot, so no index was ever going to be
+    reached -- which is why the old blanket refusal was over-wide and not merely
+    cautious, and why a caller who wanted to promote a name, address or channel
+    while correcting its value had no verb that could do it. The predecessor is
+    still `is_preferred=False` afterwards and the successor is `True`, so the
+    slot moved rather than being duplicated.
+    """
+    recorded = family.record(service, repository, False)
+    corrected = family.correct(service, repository, recorded.record_id, True)
+
+    rows = family.rows(world)
+    assert len(rows) == 2
+    assert _held(rows, family.key, corrected.record_id).is_preferred is True
+    predecessor = _held(rows, family.key, recorded.record_id)
+    assert predecessor.is_preferred is False
+    assert predecessor.state is family.superseded_state
+
+
+def test_a_correction_may_move_the_preferred_slot_to_another_name_type(
     world: World, repository: EntitiesRepository, service: EntityRecordFamilyService
 ) -> None:
-    """Pinned as the stated contract rather than treated as a bug.
+    """The second case the deleted refusal was wider than, kept because it is a
+    different shape from the one above.
 
-    Two preferred corrections the index would in fact have admitted are refused
-    here as well: one whose successor names a *different* name type from the
-    predecessor's, and one whose predecessor was not itself preferred. Telling
-    either apart needs a read of the predecessor, and this service performs
-    none -- a read would be a second, unguarded source of truth beside the
-    caller's `expected_version`. Narrowing the refusal is therefore a change to
-    what the service is, not a tightening of a loose check, and this test is
-    where that stops being a claim in a docstring."""
+    Here the predecessor *is* preferred and the successor claims the preferred
+    slot of a *different* name type, so
+    `an_active_entity_name_has_one_preferred_per_type` -- keyed on
+    `(entity_id, name_type_code)` -- was never in play across the two rows at
+    all. The old refusal could not tell that case apart from a genuine
+    collision, because telling them apart would need a read of the predecessor
+    and this service performs none: a read would be a second, unguarded source
+    of truth beside the caller's `expected_version`. Under the corrected
+    ordering it does not need to tell them apart, because the predecessor is out
+    of every one of those indexes before the successor is inserted."""
     admissible = service.record_name(
         repository,
         _name_command(name_type_code=NameTypeCode.LEGAL, is_preferred=True),
         principal_id=PRINCIPAL,
         at=WHEN,
     )
-    # The successor names DISPLAY, a different slot from the predecessor's
-    # LEGAL, so the index would not have been reached at all.
-    with pytest.raises(InvalidRequestError) as other_type:
-        service.correct_name(
-            repository,
-            CorrectEntityName(
-                entity_name_id=admissible.record_id,
-                expected_version=1,
-                entity_id=ORGANIZATION,
-                display_value="Synthetic Org",
-                name_type_code=NameTypeCode.DISPLAY,
-                is_preferred=True,
-            ),
-            principal_id=PRINCIPAL,
-            at=LATER,
-        )
-    assert other_type.value.safe_details == (SafeDetail.PINNED,)
-
-    # And a predecessor that never held the slot, so nothing was occupying it.
-    unpreferred = service.record_name(
+    corrected = service.correct_name(
         repository,
-        _name_command(name_type_code=NameTypeCode.OPERATING, is_preferred=False),
+        CorrectEntityName(
+            entity_name_id=admissible.record_id,
+            expected_version=1,
+            entity_id=ORGANIZATION,
+            display_value="Synthetic Org",
+            name_type_code=NameTypeCode.DISPLAY,
+            is_preferred=True,
+        ),
         principal_id=PRINCIPAL,
-        at=WHEN,
+        at=LATER,
     )
-    with pytest.raises(InvalidRequestError) as from_unpreferred:
-        service.correct_name(
-            repository,
-            CorrectEntityName(
-                entity_name_id=unpreferred.record_id,
-                expected_version=1,
-                entity_id=ORGANIZATION,
-                display_value="Synthetic Org Operating",
-                name_type_code=NameTypeCode.OPERATING,
-                is_preferred=True,
-            ),
-            principal_id=PRINCIPAL,
-            at=LATER,
-        )
-    assert from_unpreferred.value.safe_details == (SafeDetail.PINNED,)
     assert len(world.entity_names) == 2
+    successor = _held(world.entity_names, "entity_name_id", corrected.record_id)
+    assert successor.name_type_code is NameTypeCode.DISPLAY
+    assert successor.is_preferred is True
+    predecessor = _held(world.entity_names, "entity_name_id", admissible.record_id)
+    assert predecessor.name_type_code is NameTypeCode.LEGAL
+    assert predecessor.is_preferred is True
+    assert predecessor.state is EntityNameState.SUPERSEDED
+    assert predecessor.superseded_by_entity_name_id == corrected.record_id
 
 
-def test_recording_and_retiring_a_preferred_row_are_untouched_by_the_refusal(
+def test_recording_and_retiring_a_preferred_row_stay_the_verbs_they_were(
     world: World, repository: EntitiesRepository, service: EntityRecordFamilyService
 ) -> None:
-    """The refusal is on `correct_*` alone. Recording a preferred row is how one
-    comes to exist, and retiring it is the documented way to replace it, so a
-    refusal that reached either would leave the preferred slot unusable."""
+    """Retirement is no longer the *only* way to replace a preferred row, but it
+    is still a way, and the difference between the two paths is now the point.
+    Recording a preferred row is how one comes to exist; retiring it clears
+    `is_preferred` and writes no lineage; correcting it -- which the test above
+    proves is now possible -- keeps the flag on the predecessor and does write
+    lineage. Neither of these two verbs changed, and this holds them still."""
     recorded = service.record_name(
         repository, _name_command(is_preferred=True), principal_id=PRINCIPAL, at=WHEN
     )
@@ -863,8 +1075,10 @@ def test_recording_and_retiring_a_preferred_row_are_untouched_by_the_refusal(
     )
     held = _held(world.entity_names, "entity_name_id", replacement.record_id)
     assert held.is_preferred is True
-    # The cost of the path that works: retirement writes no lineage, so nothing
-    # relates the replacement to the row it replaces.
+    # The cost of retire-then-record, and the reason it is no longer the only
+    # path: retirement writes no lineage, so nothing relates the replacement to
+    # the row it replaces. A correction does, which is what the tests above
+    # assert about the same slot.
     assert {row.superseded_by_entity_name_id for row in world.entity_names} == {None}
 
 
@@ -879,32 +1093,209 @@ def test_the_families_without_a_preferred_slot_carry_no_such_field() -> None:
         assert "is_preferred" not in {declared.name for declared in fields(command)}
 
 
-@pytest.mark.parametrize(
-    "method_name",
-    ("correct_name", "correct_address", "correct_communication_method"),
-)
-def test_the_refusal_is_the_first_statement_of_the_correction_it_guards(
-    method_name: str,
-) -> None:
-    """ "Before any write" as a fact about the code, not only about one observed
-    call. The method's syntax tree is walked and the refusal is asserted to be
-    its first statement after the docstring -- ahead of `issue_identifier` and
-    ahead of every repository call -- so a later edit that moved it below the
-    insert would redden here even though the exception still reached a caller."""
-    body = ast.parse(
+def _repository_calls(method_name: str) -> list[ast.Call]:
+    """Every `repository.<verb>(...)` call in one service method's own body.
+
+    `self._attach(repository, ...)` is deliberately not one of them: it hands
+    the repository on to a helper that writes the *assertion* plane, which is a
+    different set of tables with no active-uniqueness index between them and
+    nothing this ordering claim is about. What is counted is what the method
+    itself does to the record family it names.
+    """
+    parsed = ast.parse(
         textwrap.dedent(inspect.getsource(getattr(EntityRecordFamilyService, method_name)))
     ).body[0]
-    assert isinstance(body, ast.FunctionDef)
-    statements = [
+    assert isinstance(parsed, ast.FunctionDef)
+    return [
         node
-        for node in body.body
-        if not (isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant))
+        for node in ast.walk(parsed)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Attribute)
+        and isinstance(node.func.value, ast.Name)
+        and node.func.value.id == "repository"
     ]
-    first = statements[0]
-    assert isinstance(first, ast.Expr)
-    assert isinstance(first.value, ast.Call)
-    assert isinstance(first.value.func, ast.Name)
-    assert first.value.func.id == "_refuse_preferred_correction"
+
+
+@pytest.mark.parametrize("family", _FAMILY_CASES)
+def test_a_correction_is_exactly_one_repository_call_and_it_is_the_supersession(
+    family: _Family,
+) -> None:
+    """The ordering guard, as a fact about the code rather than about one
+    observed call — and the structural property whose loss reintroduces D1.
+
+    D1 was a `correct_*` that called `record_*` and *then* `supersede_*`: two
+    calls, in the one order the schema cannot take, so the successor was
+    inserted while the predecessor still held `state = 'active'` and collided
+    with it on the family's active-uniqueness index. For `correct_affiliation`
+    that made the verb unusable against any current affiliation at all, because
+    `an_open_ended_affiliation_is_unique_per_person` keys on
+    `(principal_id, person_entity_id)` alone and every field is beside the
+    point.
+
+    The fix was not to reorder the two calls here — no order of two calls made
+    from this layer is correct, since the middle statement has to sit between
+    the release and the naming — but to make it one call and let the repository
+    issue the three statements the DDL admits. So the property held here is
+    *exactly one* `repository.<verb>` call in the method's body, and that verb
+    being the family's `supersede_*`. A `record_*` reappearing beside it fails
+    on the count; a `record_*` replacing it fails on the name.
+
+    The successor is additionally asserted to cross as `successor=`, because
+    passing an identifier instead is the older port shape, and a port that
+    took only an identifier could not insert the successor between its own two
+    updates — which is the whole reason the verb takes a record.
+
+    Walked over all five families rather than the three that carry a preferred
+    slot: the ordering is not about the preferred slot, it is about every
+    partial unique index that is `WHERE state = 'active'`, and participations
+    and affiliations carry one each.
+    """
+    calls = _repository_calls(family.correct_method)
+    assert len(calls) == 1
+    (call,) = calls
+    assert isinstance(call.func, ast.Attribute)
+    assert call.func.attr == family.port_verb
+
+    keywords = [keyword.arg for keyword in call.keywords]
+    assert "successor" in keywords
+    assert [name for name in keywords if name and name.startswith("superseded_by")] == []
+
+
+@pytest.mark.parametrize("family", _FAMILY_CASES)
+def test_a_record_verb_makes_exactly_one_repository_call_too(family: _Family) -> None:
+    """The anti-vacuity half of the test above, and a claim in its own right.
+
+    If `_repository_calls` matched nothing — a renamed parameter, a changed
+    call shape — the assertion that a `correct_*` makes exactly one call would
+    fail loudly rather than pass, so that direction is already safe. What is
+    not otherwise covered is the mirror image: `record_*` is the verb that
+    *inserts*, and it must still be one insert and not a supersession, or the
+    two verbs have swapped roles while every behavioural test above still
+    passes against a `World` that enforces no uniqueness.
+    """
+    record_method = family.correct_method.replace("correct_", "record_", 1)
+    record_verb = family.port_verb.replace("supersede_", "record_", 1)
+    calls = _repository_calls(record_method)
+    assert len(calls) == 1
+    (call,) = calls
+    assert isinstance(call.func, ast.Attribute)
+    assert call.func.attr == record_verb
+
+
+class _CountingRepository:
+    """Every call made through it is recorded by name and then delegated.
+
+    Wraps the real double rather than replacing it, for two reasons. A stub
+    would fail on the first call it had not been taught, which would make every
+    failure here look like an incomplete fake instead of a wrong call count. And
+    delegating means the `World` behind it is really written, so the same test
+    can assert both what was called and what landed.
+
+    Annotated with `object` rather than `Any` throughout: nothing here reads an
+    argument or a return value, it only passes them along, so the wider
+    annotation would be a claim about types this class never inspects.
+    """
+
+    def __init__(self, inner: EntitiesRepository) -> None:
+        self.inner = inner
+        self.calls: list[str] = []
+
+    def __getattr__(self, name: str) -> object:
+        member = getattr(self.inner, name)
+        if not callable(member):
+            return member
+
+        def recorded(*args: object, **kwargs: object) -> object:
+            self.calls.append(name)
+            return member(*args, **kwargs)
+
+        return recorded
+
+
+@pytest.mark.parametrize("family", _FAMILY_CASES)
+def test_a_correction_makes_that_one_call_when_it_actually_runs(
+    world: World,
+    repository: EntitiesRepository,
+    service: EntityRecordFamilyService,
+    family: _Family,
+) -> None:
+    """The behavioural half of the ordering guard, held beside the syntactic one
+    because the two fail to different things.
+
+    The syntax-tree test reads the method's own body and would not see a call
+    made from a helper the method delegates to; this counts what the service
+    actually did through the port, wherever it came from. Together they say: one
+    call in the source and one call at run time, and the same verb both times.
+
+    The two rows are then read back, because "one call" and "the correction
+    happened" are separate facts and a port that was called once and wrote
+    nothing would satisfy the first.
+    """
+    recorder = _CountingRepository(repository)
+    proxied = cast(EntitiesRepository, recorder)
+
+    recorded = family.record(service, proxied)
+    assert recorder.calls == [family.port_verb.replace("supersede_", "record_", 1)]
+
+    recorder.calls.clear()
+    corrected = family.correct(service, proxied, recorded.record_id, 1)
+    assert recorder.calls == [family.port_verb]
+
+    rows = family.rows(world)
+    assert len(rows) == 2
+    assert _held(rows, family.key, recorded.record_id).state is family.superseded_state
+    assert getattr(_held(rows, family.key, corrected.record_id), family.successor_key) is None
+
+
+def test_a_correction_carrying_an_assertion_still_makes_one_record_family_call(
+    repository: EntitiesRepository, service: EntityRecordFamilyService
+) -> None:
+    """The one-call claim, stated precisely enough to survive the optional
+    assertion a command may carry.
+
+    `_attach` writes the assertion plane through the same port, so a correction
+    that carries one makes three calls in total, and the record-family call is
+    the *first* of them. That extra pair is not a second write to the record
+    family and is not subject to the ordering the schema imposes on it:
+    `entity_assertions` and `entity_assertion_evidence` carry no
+    active-uniqueness index and no partial index on `state` at all.
+
+    Spelled out so nobody later reads "exactly one repository call" as a claim
+    the assertion plane violates. Held for `correct_name` alone rather than for
+    all five, because `_attach` is one shared static method reached identically
+    from every `correct_*` -- and the claim that each of them reaches it exactly
+    once, from a body with exactly one repository call of its own, is what
+    `test_a_correction_is_exactly_one_repository_call_and_it_is_the_supersession`
+    already walks for all five.
+    """
+    recorder = _CountingRepository(repository)
+    proxied = cast(EntitiesRepository, recorder)
+    recorded = service.record_name(proxied, _name_command(), principal_id=PRINCIPAL, at=WHEN)
+
+    recorder.calls.clear()
+    service.correct_name(
+        proxied,
+        CorrectEntityName(
+            entity_name_id=recorded.record_id,
+            expected_version=1,
+            entity_id=ORGANIZATION,
+            display_value="Synthetic Org Holdings LLC",
+            name_type_code=NameTypeCode.LEGAL,
+            assertion=StatedAssertion(
+                assertion_status=AssertionStatus.VERIFIED,
+                evidence=(
+                    StatedEvidence(role=EvidenceRole.DIRECT, entity_observation_id=OBSERVATION),
+                ),
+            ),
+        ),
+        principal_id=PRINCIPAL,
+        at=LATER,
+    )
+    assert recorder.calls == [
+        "supersede_entity_name",
+        "record_assertion",
+        "record_assertion_evidence",
+    ]
 
 
 # --- A3. `EntityOrganizationProfile` is the singleton exception ---------------
@@ -1058,34 +1449,72 @@ def test_an_unreachable_row_gets_exactly_the_answer_an_absent_row_gets(
     assert str(unreachable.value) == str(absent.value)
 
 
-def test_a_correction_that_fails_at_the_supersession_leaves_the_successor_written(
-    world: World, repository: EntitiesRepository, service: EntityRecordFamilyService
+@pytest.mark.parametrize("family", _FAMILY_CASES)
+def test_a_correction_refused_at_a_stale_version_writes_nothing_at_all(
+    world: World,
+    repository: EntitiesRepository,
+    service: EntityRecordFamilyService,
+    family: _Family,
 ) -> None:
-    """The module's own stated limitation, locked so it cannot become an
-    undisclosed one. The service holds no compensating write: outside a
-    transaction, a `record_*` that succeeded followed by a `supersede_*` that
-    raised leaves the successor row written and the predecessor still ACTIVE,
-    and both remain correctable by their own identifiers. The guarantee belongs
-    to the caller's transaction, and this asserts that the service does not
-    quietly claim it."""
-    recorded = service.record_name(repository, _name_command(), principal_id=PRINCIPAL, at=WHEN)
+    """The partial-failure window, asserted at its new and much narrower width.
+
+    This test used to pin the opposite shape, and it was right to: a `correct_*`
+    that called `record_*` and then `supersede_*` left the successor written and
+    the predecessor still ACTIVE when the version guard fired, and that stated
+    limitation was better locked than undisclosed. It is not the shape any more.
+    A correction is one call, and the version guard is that call's *first*
+    statement -- the `UPDATE` that releases the predecessor -- so a stale
+    version is refused before anything has been inserted and there is no
+    half-written pair to reason about.
+
+    Asserted as whole-list equality against the snapshot rather than as a row
+    count, and over all five families rather than over `entity_names` alone. A
+    count would pass against a refusal that had already mutated the predecessor
+    in place; this fails unless every column of every row is where it was, the
+    predecessor's `version` and `state` included.
+
+    What this does *not* claim is atomicity in general. A successor that
+    collides with some *other* active row is refused by the database after the
+    predecessor has already been released, and unwinding that is the caller's
+    transaction's job, exactly as the service's own docstring says. The claim
+    here is about the guard the service's caller can actually reach.
+    """
+    recorded = family.record(service, repository)
+    before = list(family.rows(world))
+    assert len(before) == 1
+
     with pytest.raises(StaleDirectedVersionError):
-        service.correct_name(
-            repository,
-            CorrectEntityName(
-                entity_name_id=recorded.record_id,
-                expected_version=99,
-                entity_id=ORGANIZATION,
-                display_value="Synthetic Org Holdings LLC",
-                name_type_code=NameTypeCode.LEGAL,
-            ),
-            principal_id=PRINCIPAL,
-            at=LATER,
-        )
-    assert len(world.entity_names) == 2
-    predecessor = _held(world.entity_names, "entity_name_id", recorded.record_id)
-    assert predecessor.state is EntityNameState.ACTIVE
-    assert predecessor.superseded_by_entity_name_id is None
+        family.correct(service, repository, recorded.record_id, 99)
+
+    assert family.rows(world) == before
+    predecessor = _held(family.rows(world), family.key, recorded.record_id)
+    assert predecessor.version == 1
+    assert predecessor.state is not family.superseded_state
+    assert getattr(predecessor, family.successor_key) is None
+
+
+@pytest.mark.parametrize("family", _FAMILY_CASES)
+def test_a_correction_naming_an_unreachable_predecessor_writes_nothing_either(
+    world: World,
+    repository: EntitiesRepository,
+    service: EntityRecordFamilyService,
+    family: _Family,
+) -> None:
+    """The second refusal the same first statement produces, and the one a
+    mistyped identifier reaches. `_transition` finds no row, so it raises before
+    the insert and the successor is never minted into the store -- the whole
+    row list is unchanged, not merely the predecessor's. Held separately from
+    the stale case because the two are different facts about the world and the
+    repository classifies them differently; a fix that closed one window and
+    left the other open would pass one of these tests."""
+    recorded = family.record(service, repository)
+    before = list(family.rows(world))
+
+    with pytest.raises(UnknownScopeError):
+        family.correct(service, repository, family.spare_id, 1)
+
+    assert family.rows(world) == before
+    assert [getattr(row, family.key) for row in family.rows(world)] == [recorded.record_id]
 
 
 # --- A5. Normalization is performed, and is only normalization ---------------
@@ -1671,29 +2100,140 @@ def test_the_double_refuses_an_organization_profile_on_a_non_organization(
 
 @pytest.mark.parametrize("family", _FAMILY_CASES)
 def test_the_double_refuses_a_self_supersession(
-    repository: EntitiesRepository, service: EntityRecordFamilyService, family: _Family
+    world: World,
+    repository: EntitiesRepository,
+    service: EntityRecordFamilyService,
+    family: _Family,
 ) -> None:
     """A row that names itself as its own successor is a cycle of one, and it is
     refused before the version guard rather than written and then reasoned
-    about."""
+    about.
+
+    The successor is now a *record* rather than an identifier, so the self-
+    reference is expressed as a record carrying the predecessor's own
+    identifier. It is deliberately not the predecessor byte-for-byte: one column
+    is changed first, so the refusal is proved to key on the identifier and not
+    on "the successor happens to equal the row it replaces", which would refuse
+    the cycle by accident and let a differing one through.
+    """
     recorded = family.record(service, repository)
-    supersede = getattr(
-        repository,
-        {
-            "name": "supersede_entity_name",
-            "address": "supersede_entity_address",
-            "communication method": "supersede_communication_method",
-            "project participation": "supersede_project_participation",
-            "affiliation": "supersede_person_organization_affiliation",
-        }[family.label],
-    )
+    predecessor = _held(family.rows(world), family.key, recorded.record_id)
+    itself = replace(predecessor, updated_at=LATER)
+    assert getattr(itself, family.key) == recorded.record_id
+
+    supersede = getattr(repository, family.port_verb)
     with pytest.raises(ValueError, match="superseded by itself"):
         supersede(
             PRINCIPAL,
-            **{family.key: recorded.record_id, family.successor_key: recorded.record_id},
+            **{family.key: recorded.record_id},
+            successor=itself,
             expected_version=1,
             at=LATER,
         )
+    assert family.rows(world) == [predecessor]
+
+
+@pytest.mark.parametrize("family", _FAMILY_CASES)
+def test_the_double_supersedes_by_transitioning_the_predecessor_then_inserting(
+    world: World,
+    repository: EntitiesRepository,
+    service: EntityRecordFamilyService,
+    family: _Family,
+) -> None:
+    """`supersede_*` writes the successor here too, and that is the property a
+    caller of this double most needs it to have.
+
+    Called directly rather than through the service, because the subject is the
+    double's own contract with anything written against `EntitiesRepository`.
+    A double that took the successor record and dropped it would let every
+    correction test above pass over a correction that never wrote the corrected
+    value -- the supersession pointer would be there, the `CorrectedFact` would
+    be returned, and the row would not exist.
+
+    The successor is asserted equal to the record that was handed in, field for
+    field: nothing is invented, no lifecycle column is stamped on the way past,
+    and it lands at `version = 1` and ACTIVE, holding no successor of its own.
+
+    The predecessor is asserted at `version = 2`, which is the "exactly once"
+    claim. One supersession is one bump, whatever number of statements it takes
+    on the server: there, the third statement that names the successor guards on
+    `state` and `superseded_by_* IS NULL` and does not bump again, and a double
+    that bumped per statement rather than per supersession would teach a caller
+    an `expected_version` arithmetic the server does not use.
+
+    What this double deliberately does not reproduce is uniqueness -- the very
+    indexes that make the ordering necessary. Re-deciding here which rows
+    collide would make `conftest.py` a second, unversioned statement of the
+    schema, so collisions are the database's answer and are proved against a
+    database in `tests/database/`.
+    """
+    recorded = family.record(service, repository)
+    predecessor = _held(family.rows(world), family.key, recorded.record_id)
+    successor = replace(predecessor, **{family.key: family.spare_id})
+
+    getattr(repository, family.port_verb)(
+        PRINCIPAL,
+        **{family.key: recorded.record_id},
+        successor=successor,
+        expected_version=1,
+        at=LATER,
+    )
+
+    rows = family.rows(world)
+    assert len(rows) == 2
+    inserted = _held(rows, family.key, family.spare_id)
+    assert inserted == successor
+    assert inserted.version == 1
+    assert inserted.state is predecessor.state
+    assert getattr(inserted, family.successor_key) is None
+
+    transitioned = _held(rows, family.key, recorded.record_id)
+    assert transitioned.state is family.superseded_state
+    assert getattr(transitioned, family.successor_key) == family.spare_id
+    assert transitioned.version == 2
+    assert transitioned.updated_at == LATER
+
+
+@pytest.mark.parametrize("family", _FAMILY_CASES)
+def test_the_double_puts_a_successor_through_the_same_guards_as_a_fresh_record(
+    world: World,
+    repository: EntitiesRepository,
+    service: EntityRecordFamilyService,
+    family: _Family,
+) -> None:
+    """The successor is inserted by the same private helper `record_*` uses, so
+    it meets the same refusals -- here, the one that would otherwise file
+    another Principal's record under this one and report success.
+
+    This mirrors the server, where five `_insert_*` helpers back both verbs
+    precisely so a successor cannot enter through a door with fewer checks on
+    it. A `supersede_*` that inlined its own insert would be the second place
+    that decision is made, and the second place is the one that forgets.
+
+    The predecessor is asserted to have been *released* before the refusal
+    reached the insert. That is not an accident being pinned as a feature: it
+    is the disclosed window the service's own docstring names -- a successor
+    that cannot land after the predecessor has left `state = 'active'` leaves
+    the unwinding to the caller's transaction -- and a test asserting the
+    predecessor was untouched would be asserting the opposite of how the three
+    statements are ordered.
+    """
+    recorded = family.record(service, repository)
+    predecessor = _held(family.rows(world), family.key, recorded.record_id)
+    theirs = replace(predecessor, **{family.key: family.spare_id}, principal_id=OTHER)
+
+    with pytest.raises(ValueError, match="belongs to the acting Principal"):
+        getattr(repository, family.port_verb)(
+            PRINCIPAL,
+            **{family.key: recorded.record_id},
+            successor=theirs,
+            expected_version=1,
+            at=LATER,
+        )
+
+    rows = family.rows(world)
+    assert [getattr(row, family.key) for row in rows] == [recorded.record_id]
+    assert _held(rows, family.key, recorded.record_id).state is family.superseded_state
 
 
 def test_the_double_refuses_a_stale_version_and_an_unreachable_row_differently(

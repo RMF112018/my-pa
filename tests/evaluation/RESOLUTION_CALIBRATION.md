@@ -12,9 +12,16 @@ does not.
 
 `calibration_by_outcome_and_basis` is the table a reader consults: a `RESOLVED_*`
 answer names the basis it rests on, and this says what that combination has
-been worth against a corpus built to break it. Note that `canonical_name`
-appears only under `resolved_contextual` — a bare name never resolves on its
-own, and `exact_resolutions_on_a_bare_name` is the count that must stay zero.
+been worth against a corpus built to break it. Note that the two name-shaped
+bases, `canonical_name` and `typed_name`, appear only under
+`resolved_contextual` — a name never resolves on its own however it was
+recorded, and a contextual signal did the selecting wherever one of them is
+named. `communication_value` appears under neither `RESOLVED_*` outcome, for
+the same reason: it is not a verified identifier.
+`exact_resolutions_on_a_bare_name` is the count that must stay zero. It is
+measured against a hardcoded allowlist of the three bases that may resolve
+exactly, rather than against the basis vocabulary itself, so a basis added
+later is caught by it rather than admitted by it.
 
 **What this does not measure.** The corpus is synthetic and small. It is
 evidence that the stated refusals hold and that the resolver still answers

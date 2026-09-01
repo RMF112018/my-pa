@@ -123,7 +123,7 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. **The "no write path exists yet" clause is superseded**: RI-ENT-WP-08 delivered `record_project_participation`/`supersede_project_participation`/`retire_project_participation` on `EntitiesRepository` and `SqlEntityRepository`, and `EntityRecordFamilyService`'s three verbs above them. No MCP capability or tool exists yet (`RI-ENT-WP-10`/`WP-11`) and the service that calls the write path is unwired — see "RI-ENT-WP-08" and "Merge/split disposition" below |
 | `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | **Closed for schema/domain/persistence by RI-ENT-WP-07** — `entity_assertions`/`entity_assertion_evidence` bind fact-level `assertion_status` (a discrete, unordered epistemic vocabulary, never a confidence score) and evidence to the six WP-02–WP-06 record families that previously had none. **The "repository/service-command wiring (`WP-08`)" clause is now partly closed, not fully**: RI-ENT-WP-08 declared all six assertion methods on the `EntitiesRepository` ABC and implemented them in both test doubles (`a5a939d`, corrected by `7bbc524`), and `EntityRecordFamilyService` records an optional `StatedAssertion` plus one `EntityAssertionEvidence` row per `StatedEvidence` alongside any create or correction of the six families. Still open: MCP exposure (`WP-10`/`WP-11`), which no part of WP-08 delivers, and — inside WP-08's own boundary — mutation-ledger integration, `supersede_assertion`'s collapsed refusal, and the absent retirement verb for `entity_assertions`. See "RI-ENT-WP-07" below and "RI-ENT-WP-08" below for the exact honest boundary of what is and is not delivered |
 | `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `state = 'active' AND effective_to IS NULL` denoting "current") |
-| `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Unblocked, not closed** — `entity_names` now exists as the structural prerequisite; resolution/search changes are `RI-ENT-WP-09` |
+| `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Substantially closed, not fully closed** (`RI-ENT-WP-09`) — resolution reads `entity_names` and `entity_communication_methods` by normalized value and corroborates through affiliations and project participations; the three normalized-value indexes that were read by nothing now have their first readers. Two new match reasons and two new contextual signals ship as **unordered categorical** vocabulary per `RULING-M4`, and the domain's "a name alone does not resolve an entity" refusal was decoupled from `_BASIS_ORDER` onto an explicit `_BASES_THAT_NAME_AN_ENTITY`. Remaining: relationship-type and domain-only matching reach search but not resolution; the communication-value read is EMAIL-shaped (see the limitations below); and the database-tier evidence is written but unexecuted |
 | `ENTITY-STATE-001` | High | No canonicalization/review state distinct from lifecycle | Design decision recorded in RI-ENT-WP-01 below (`canonicalization_state_code`, separate 1:1 record, deferred); not implemented this increment |
 | `MCP-CONTRACT-001` | Critical | No rich structured profile read | Not in scope (`RI-ENT-WP-10`) |
 | `MCP-CONTRACT-002` | High | No record-family mutation capabilities for the new families | Not in scope (`RI-ENT-WP-11`); RULING 5 (no mass-assignment endpoint) remains binding when it is |
@@ -144,7 +144,7 @@ Preserved from the source audit; status reflects this increment only.
 | WP-06 | Corporate/entity relationship graph expansion | **Delivered (partial, RI-ENT-WP-06a)** — `entity_relationship_types` taxonomy and the twenty new codes; merge/split coordination for the six WP-02/04/05 record families remains deferred to a separate PR2 |
 | WP-07 | Assertion/confidence/provenance binding | **Delivered (partial)** — `entity_assertions`/`entity_assertion_evidence` (schema, domain, minimal typed persistence helpers, tests); repository/service/command-layer wiring is `WP-08`, MCP exposure is `WP-10`/`WP-11`. No scalar confidence was added under any name (RULING 1) — see below |
 | WP-08 | Repository/domain services and validation | **Delivered (partial)** — seventeen `record_*`/`supersede_*`/`retire_*` methods on `SqlEntityRepository` for the six Entity-bound families, the same seventeen plus RI-ENT-WP-07's six assertion methods declared `@abstractmethod` on `EntitiesRepository`, in-memory equivalents in both test doubles, and the application service `EntityRecordFamilyService` with its own command/receipt DTOs. **The service is deliberately unwired** — no `Capability`, no MCP tool, no HTTP route, no CLI command, and no registration in `ApplicationService`; transport exposure is `WP-10`/`WP-11`. Not delivered — the same list the boundary section below enumerates in full, and it adds nothing to it: mutation-ledger integration, an idempotency key, proposal-validation integration, a retirement verb for `entity_assertions`, a split of `supersede_assertion`'s single refusal, no `correct_*` and no `retire_*` for the singleton `entity_organization_profiles` (which has the in-place `revise_organization_profile` instead — **five** families carry `correct_*`, not six), and no typed refusal for a correction whose successor collides with a *third* active row, which still surfaces the raw `IntegrityError` the plain `record_*` path surfaces. **The correction of a row holding the preferred slot IS delivered**: an earlier revision of this row called it inexpressible as a supersession and refused it outright, which was wrong — see "A preferred row is correctable, and the ordering that reaches it" below |
-| WP-09 | Entity resolution/search vNext | Deferred |
+| WP-09 | Entity resolution/search vNext | **Delivered (partial)** — resolution now reads typed names, communication values, affiliations and project participations; `entities.search` matches five further paths and carries two disambiguators (`RI-AC-038`). Not delivered: no supporting index (no migration in scope), no effective dating on search, no MCP capability change (`WP-10`/`WP-11`), and **three committed database-tier modules have never been executed** — see below |
 | WP-10 | MCP rich read contracts | Deferred |
 | WP-11 | MCP mutation contracts | Deferred |
 | WP-12 | Legacy migration/backfill and compatibility adapters | Deferred |
@@ -2331,6 +2331,146 @@ under test. A future reader should not read "2 known-environmental-only
 failures" as a standing fact about this branch's head; it is contingent on
 the runner's own checkout location and was zero in this session's own,
 normal-checkout run.
+
+## RI-ENT-WP-09 — entity resolution/search vNext
+
+**Objective** (source audit, section M): index typed names, domains,
+affiliations, project roles and relationship types, and produce match reasons
+and ambiguity. **Finding**: `ENTITY-RESOLUTION-001` (Critical). **Non-goal**:
+MCP capability wiring (`WP-10`/`WP-11`), legacy backfill (`WP-12`), the TBR
+fixture (`WP-13`).
+
+### What the plane could not do before this work package
+
+Three normalized-value indexes existed and **were read by nothing**:
+`entity_names_by_normalized_value`,
+`entity_addresses_by_normalized_address_value`, and
+`entity_communication_methods_by_normalized_value`. The repository's six-family
+reads were entity-id-keyed only, so a legal or trading name recorded in
+`entity_names` was invisible to both resolution and search. `entities.search`
+was an `ILIKE` substring match over `canonical_name` and `display_name` alone.
+
+### What was delivered
+
+**Match reasons, unordered and categorical (`RULING-M4`).** Two
+`ResolutionBasis` members, `TYPED_NAME` and `COMMUNICATION_VALUE`, and two
+`ContextualSignal` members, `AFFILIATED_WITH_THE_NAMED_SCOPE` and
+`PARTICIPATES_IN_THE_NAMED_SCOPE`. The audit's five numbered "resolution tiers"
+were **not** transcribed: `tier` is a denied token and the numbering implies an
+ordering this campaign refuses. `_BASIS_ORDER` was extended only as a
+deterministic presentation tie-break, is exposed as no field, and is serialized
+nowhere; the `ResolutionBasis` docstring, and `order_candidates`' docstring with
+it, were rewritten to stop calling the first position "strongest".
+
+**The central safety refusal was decoupled from that ordering.** The domain
+refused "a name alone resolves an entity" via
+`strongest_basis is CANONICAL_NAME`, which was correct only because
+`CANONICAL_NAME` happened to sort last — a safety property resting on a
+presentation order, and one that would have mis-fired silently the moment a
+weaker basis was appended, which is exactly what this work package does. It now
+rests on an explicit `_BASES_THAT_NAME_AN_ENTITY` and
+`ResolutionCandidate.names_the_entity`. The refactor is **proved**
+behaviour-preserving over all fifteen non-empty combinations of the four
+pre-existing bases, rather than asserted to be.
+
+**Neither new basis may resolve an entity on its own**, which is audit section
+M's rule that "name/alias alone -> retrieval candidates, never automatic merge".
+A typed name is a name; a communication value is not a verified identifier.
+
+**Two new repository reads**, `entities_by_typed_name` and
+`entities_by_communication_value`, declared `@abstractmethod` on
+`EntitiesRepository` and implemented in **all three** implementations —
+`SqlEntityRepository`, `tests/conftest.py::_Entities`, and
+`tests/evaluation/resolution_harness.py::_CorpusRepository`. Both match by
+**equality on the already-normalized value**, never a pattern and never fuzzy,
+and both read the collection **whole** rather than paged, because resolution
+must see every claimant to decide whether a value is conflicted and a page is
+the one shape that could let a claimant fall off the end and read as a clean
+match. Both filter to the family's `active` state, deliberately diverging from
+`entities_by_alias`, which applies no lifecycle filter: matching a superseded
+row would resurrect a value the Principal has already corrected away.
+
+**`entities.search`** gained five correlated `EXISTS` paths inside its one
+existing partition-guarded, keyset-paged statement — typed names, communication
+values (which yields domain matching without a domain parser, since the match is
+already a substring), affiliation job titles and the affiliated organization's
+name, project participation roles, and relationship-type labels. `EntitySummary`
+gained two defaulted disambiguator collections, bounded at three entries each,
+closing `RI-AC-038`. The five original wire keys keep their names and their
+meanings, and a compatibility test holds that claim rather than a paragraph
+asserting it.
+
+**`WP09-DECISION-1`, recorded rather than made silently.** `entities.search`
+carries a recorded decision that aliases are deliberately not searched, because
+searching them would put a nickname or a former legal name into a browse result
+nobody asked a question about. That reasoning applies with full force to
+`entity_names`, which holds exactly those categories. Search therefore indexes
+typed names **excluding `NameTypeCode.ALIAS` and `NameTypeCode.HISTORICAL_NAME`**,
+which extends the recorded decision consistently rather than reversing it. It is
+one `WHERE` clause and is reversible without rework if the Manager reads audit
+section M differently.
+
+**The evaluation gate was made non-vacuous, and that was not automatic.**
+`_CorpusRepository` answered every six-family method with `NotImplementedError`
+and the corpus carried no rows for any of them, so a resolver reading a family
+would have been measured against an empty world and would have reported
+`RESOLUTION_PRECISION_HELD` regardless. Instrumenting the harness after the
+resolver changes landed showed `entities_by_communication_value` called once and
+returning nothing, and `AFFILIATED_WITH_THE_NAMED_SCOPE` never firing. Sixteen
+cases and six families were added to close both gaps. Every read and every
+signal now has non-zero hits: `communication_value` appears on three candidates
+and `typed_name` on nine, from zero and one respectively.
+
+The GS4 acceptance rule — four similarly-named juristic entities "must not
+silently mint four unrelated organizations or automatically collapse distinct
+juristic entities solely because names resemble each other" — was previously
+exercised **only** by a `database`-marked fixture. A synthetic four-member
+organization family now exercises it on the fast tier.
+
+`RESOLUTION_CALIBRATION.md` was **regenerated from the harness**, never
+hand-edited. `RECALL_FLOOR` stays 0.9 and untouched; recall is 1.0;
+`exact_resolutions_on_a_bare_name` stays 0; the disposition stays
+`RESOLUTION_PRECISION_HELD`; false resolutions, cross-Principal leakage and
+forbidden candidates all stay 0. `BASES_THAT_MAY_RESOLVE_EXACTLY` remains a
+hardcoded three-member allowlist and was **not** widened — it is deliberate
+double-entry against the domain's own set, and a new basis appearing under
+`resolved_exact` is meant to fail it. Neither `resolved_exact:canonical_name`
+nor `resolved_exact:typed_name` is a key in the table.
+
+### Not delivered, and disclosed rather than implied
+
+- **No supporting index and no migration.** The seven leading-wildcard `ILIKE`
+  predicates run over unindexed columns, exactly as the original two already
+  did; this makes an already-unindexed browse scan **wider**, not deeper. Adding
+  indexes needs a migration, which was out of scope and unverifiable with the
+  database tier closed. Recorded in the `search` port docstring, not only here.
+- **`entities.search` filters child rows by state only, not by effective
+  dating.** The search request carries no clock, so there is no moment to judge
+  "in force" against, and adding one would be a request-shape change. A row that
+  is `active` with a past `effective_to` still matches.
+- **The communication-value read is EMAIL-shaped.** `_by_identifier` passes
+  `normalize_identifier(namespace, raw)`, which equals the stored communication
+  form for EMAIL. Re-normalizing per method type would mean **inferring** a
+  `CommunicationMethodTypeCode` from a string, which `RULING 3` forbids.
+- **Relationship-type and domain-only matching reach search but not
+  resolution.** A relationship-type code is not something a human reference
+  names, and a shared mail domain is an employer fact about many people that
+  would manufacture candidate crowds on the resolution path.
+- **No `Capability`, MCP tool, route, CLI command, or request-shape change.**
+- **Three database-tier modules are committed and have NEVER been executed** —
+  `tests/database/test_entity_resolution_value_reads.py` and
+  `tests/database/test_entity_search_reaches_context.py` — because the WP-08
+  database gate was running on the same machine for the whole of this work
+  package. They are statically verified only and may need adjustment on first
+  execution. Their figures are collection, not execution.
+
+### Tiers run for this work package
+
+The allowed tiers only: `tests/unit`, `tests/relationship`,
+`tests/architecture` and `tests/contract` under
+`-m "not slow and not database and not network and not connector and not
+evaluation and not e2e and not recovery"`, plus `ruff` and `mypy`. Nothing
+marked `database`, `recovery` or `e2e` was run at any point by any WP-09 worker.
 
 ## Test evidence
 

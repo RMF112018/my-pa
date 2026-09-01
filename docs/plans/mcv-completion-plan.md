@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and six Python modules under `src/my_pa` and four hundred and thirty-two test modules —
+Three hundred and six Python modules under `src/my_pa` and four hundred and thirty-eight test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -109,7 +109,24 @@ step between it and this one having been test-side only. `95b16cf` and
 `34367b4` changed the contents of those files without adding a module on either
 side, so neither moves either figure. Both figures were recomputed by running
 the two commands above against this tree rather than by adding an assumed delta
-to the stated pair. The pair standing before this correction, three hundred and
+to the stated pair, and corrected again on 2026-09-01 to three hundred and six
+and four hundred and thirty-eight, when RI-ENT-WP-09 added six test modules and
+no source module: `bb3bf22` added
+`tests/unit/test_entity_resolution_vocabulary.py`, `8f6c576` added
+`tests/database/test_entity_resolution_value_reads.py`, `1062251` added
+`tests/unit/test_entity_search_reaches_context.py` and
+`tests/database/test_entity_search_reaches_context.py`, and `5700c37` added
+`tests/contract/test_entity_search_disambiguators.py` and
+`tests/unit/test_entity_search_disambiguators.py`. The source-module figure is
+unmoved because RI-ENT-WP-09 added no module under `src/my_pa` — it changed
+`domain/relationship/resolution.py`, `contracts/ports.py`,
+`application/entity_resolution.py`, `application/service.py` and
+`infrastructure/persistence/entity.py` in place. `dcae6bd`, `c0e36d7` and
+`2534a22` changed `tests/conftest.py` and the evaluation fixtures without
+adding a module on either side, so none of the three moves either figure. Both
+figures were recomputed by running the two commands above against this tree
+rather than by adding an assumed delta. The pair standing before this
+correction, three hundred and
 five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
 therefore skips from four hundred and twenty-six to four hundred and
 twenty-nine, because `f4eaa4f` moved the sentence without extending this note,

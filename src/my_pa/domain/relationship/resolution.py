@@ -460,7 +460,7 @@ class EntityResolution:
 def order_candidates(
     candidates: tuple[ResolutionCandidate, ...],
 ) -> tuple[ResolutionCandidate, ...]:
-    """Candidates strongest evidence first, then by identifier.
+    """Candidates in `_BASIS_ORDER`, then by identifier.
 
     The identifier tiebreak is there so the order is total and stable: two
     candidates with the same basis would otherwise be presented in whatever
@@ -470,6 +470,17 @@ def order_candidates(
     Ordering is *presentation*, and does not make the first candidate the
     answer. `resolved_entity_id` is the only thing that names an answer, and it
     is `None` whenever there is more than one candidate.
+
+    **This said "strongest evidence first" until RI-ENT-WP-09, and that phrasing
+    had to go rather than be left as harmless prose.** `_BASIS_ORDER` is a
+    deterministic presentation tie-break and not a scale of evidential worth --
+    see `ResolutionBasis`, which says so at length -- so a docstring calling the
+    first position "strongest" republished, in the one place a reader would look
+    for the meaning of the order, exactly the graded reading that vocabulary
+    refuses. Which bases may *resolve* is a separate question with its own
+    separate answer, `_BASES_THAT_NAME_AN_ENTITY`; position here answers it
+    neither way, and a candidate at the top of this list may still be one no
+    outcome is allowed to name.
     """
     return tuple(
         sorted(

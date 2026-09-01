@@ -131,7 +131,11 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 85
+    # 86 migration files: 85 through `1cda4d536268` (RI-ENT-WP-07), plus
+    # `c99cd8ed8d1c` (commit `37ead78`, RI-ENT-WP-08's blocker-clearing pass),
+    # which renames the seeded entity_relationship_types row
+    # `design_coordinates_with` to `design_coordination_with`.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

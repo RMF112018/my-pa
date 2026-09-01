@@ -329,7 +329,38 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # for `evidence` (an `EntityAssertionEvidence`). The two `row` reads are
     # `_row_to_assertion` and `_row_to_assertion_evidence`, the same pattern
     # every other `row` read in this file already is.
+    #
+    # RI-ENT-WP-08 adds six reads and nothing new in kind: one per `record_*`
+    # method of the six Entity-bound record families whose mappers WP-06b
+    # already registered. `record_entity_name` reads `entity_name`,
+    # `record_organization_profile` reads `profile`, `record_entity_address`
+    # reads `address`, `record_communication_method` reads `method`,
+    # `record_project_participation` reads `participation`, and
+    # `record_person_organization_affiliation` reads `affiliation`. Each read
+    # is the same `if X.principal_id != principal_id: raise ValueError(...)`
+    # this module already performs for `assertion`, `link`, `observation` and
+    # `proposal` -- the value is read *in order to refuse a mismatch* against
+    # the server-resolved Principal, and the refusal is made before any
+    # statement runs, ahead of the scope lock and the merged-endpoint check.
+    # None of these six values is caller input: the records are domain objects
+    # the application hands down having already stamped the resolved partition,
+    # and none of the reads decides a partition -- the partition is the
+    # `principal_id` argument, and the read exists only to prove the record
+    # agrees with it.
+    #
+    # The first is spelled `entity_name` rather than `name` because commit
+    # `b49c8bd` renamed that parameter, and the rename is load-bearing. Claim 1
+    # propagates "caller-supplied" by *local name*, transitively across a whole
+    # module; `_row_to_proposal` binds `name` in `{str(name):
+    # _payload_value(value) for name, value in payload.items()}`, and `payload`
+    # is one of claim 1's caller-supplied containers -- so `name.principal_id`
+    # reddened claim 1, which has no registry to record an exception in.
+    # Renaming the parameter is the only response that neither edits the guard
+    # nor stops checking the Principal, and it matches the other five families,
+    # whose parameters were already spelled for their own record.
     "infrastructure/persistence/entity.py": (
+        ("address", "principal_id"),
+        ("affiliation", "principal_id"),
         ("alias", "principal_id"),
         ("assertion", "principal_id"),
         ("assignment", "principal_id"),
@@ -339,15 +370,19 @@ VERIFIED_CALLER_STATEMENTS: Final = {
         ("entity", "principal_id"),
         ("entity", "principal_id"),
         ("entity", "principal_id"),
+        ("entity_name", "principal_id"),
         ("event", "principal_id"),
         ("evidence", "principal_id"),
         ("identifier", "principal_id"),
         ("link", "principal_id"),
         ("link", "principal_id"),
+        ("method", "principal_id"),
         ("observation", "principal_id"),
         ("operation", "principal_id"),
         ("operation", "principal_id"),
+        ("participation", "principal_id"),
         ("preview", "principal_id"),
+        ("profile", "principal_id"),
         ("proposal", "principal_id"),
         ("proposal", "principal_id"),
         ("record", "principal_id"),

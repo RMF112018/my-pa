@@ -293,7 +293,7 @@ _ENTITY_COLUMNS = (
     entities.c.archived_from_status,
 )
 
-#: The prefix the two joined resolution lookups label their child table's
+#: The prefix the four joined resolution lookups label their child table's
 #: columns with.
 #:
 #: `entities`, `entity_external_identifiers` and `entity_aliases` all declare
@@ -318,10 +318,11 @@ def _labelled(column: Column[Any]) -> Label[Any]:
 class _ChildRow:
     """A joined row read as though it held only the child table's columns.
 
-    Both joined resolution lookups select `entities` and one child table at
+    All four joined resolution lookups select `entities` and one child table at
     once, and label the child side; this adapts the labelled row back to the
     attribute names the child row mappers read, so those mappers stay the single
-    definition of what a stored identifier or alias means.
+    definition of what a stored identifier, alias, name form or communication
+    method means.
     """
 
     def __init__(self, row: Row[Any]) -> None:
@@ -1796,6 +1797,108 @@ class SqlEntityRepository(EntitiesRepository):
             .order_by(entities.c.entity_id)
         ).all()
         return [_row_to_entity(row) for row in rows]
+
+    # --- RI-ENT-WP-09: the two normalized-value reads over record families ----
+    #
+    # `entities_by_alias`' shape rather than `names`'/`communication_methods`',
+    # because the question is theirs: not "what is this entity called" but "who,
+    # if anyone, is called this". They sit here, beside the method whose question
+    # they share, rather than in the six-family by-entity block above.
+
+    def entities_by_typed_name(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityName]]:
+        """Every entity carrying this normalized name form, with the name that matched.
+
+        `entities_by_alias`' statement over `entity_names`: the partition applied
+        to both tables inside the one statement, equality on the already
+        normalized value and never a pattern or a fuzzy match, and the collection
+        read whole, because resolution has to see every claimant of a value
+        before it can say whether that value is contested.
+
+        **One filter `entities_by_alias` does not apply, and it is deliberate
+        rather than an oversight: only `EntityNameState.ACTIVE` rows match.**
+        `entity_names` carries an explicit `active`/`retired`/`superseded`
+        lifecycle that WP-08's correction path drives, and the two non-active
+        states are precisely the two a resolution answer must not be built from.
+        A superseded row holds a value the Principal has already corrected away,
+        so matching it hands back the very spelling the correction replaced; a
+        retired row holds one they withdrew, so matching it hands back something
+        they said to stop using. The state is read off `EntityNameState` rather
+        than spelled as a literal, so the enum stays the single definition of
+        what the column may hold. A later reader who wants this made consistent
+        with `entities_by_alias` should treat that as a decision taken with the
+        alias path's own callers in view, not as a tidy-up of an inconsistency.
+
+        **Effective dating stays out of this repository**, exactly as it does on
+        the alias path: `effective_from`/`effective_to` are judged by the service
+        against the caller's `as_of` (`entity_resolution.py::_is_effective`),
+        which is the only layer that knows that moment, and a row excluded there
+        is disclosed to the caller rather than quietly missing from a read.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        rows = self._connection.execute(
+            select(*_ENTITY_COLUMNS, *(_labelled(column) for column in entity_names.c))
+            .join_from(
+                entities,
+                entity_names,
+                entities.c.entity_id == entity_names.c.entity_id,
+            )
+            .where(
+                _mine(entities, principal_id),
+                _mine(entity_names, principal_id),
+                entity_names.c.normalized_value == normalized_value,
+                entity_names.c.state == EntityNameState.ACTIVE.value,
+            )
+            .order_by(entities.c.entity_id, entity_names.c.entity_name_id)
+        ).all()
+        return [(_row_to_entity(row), _row_to_name(_ChildRow(row))) for row in rows]
+
+    def entities_by_communication_value(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityCommunicationMethod]]:
+        """Every entity carrying this normalized communication value, with the row that matched.
+
+        `entities_by_typed_name`'s statement over
+        `entity_communication_methods`, on every one of its terms: the partition
+        applied to both tables inside the one statement, equality on the already
+        normalized value and never a pattern or a fuzzy match, the collection
+        read whole so no claimant of a contested address can fall off the end of
+        a page, and effective dating left to the service against `as_of`.
+
+        The active-state filter is `entities_by_typed_name`'s too, for the same
+        reason and with the same deliberate divergence from `entities_by_alias`:
+        `entity_communication_methods` carries the same explicit
+        `active`/`retired`/`superseded` lifecycle, driven by the same WP-08
+        correction path, so a superseded row is an address the Principal has
+        already corrected away and a retired one is an address they withdrew.
+        Neither is something a reference should be allowed to match today, and
+        the state is derived from `EntityCommunicationMethodState` rather than
+        spelled out.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        rows = self._connection.execute(
+            select(
+                *_ENTITY_COLUMNS,
+                *(_labelled(column) for column in entity_communication_methods.c),
+            )
+            .join_from(
+                entities,
+                entity_communication_methods,
+                entities.c.entity_id == entity_communication_methods.c.entity_id,
+            )
+            .where(
+                _mine(entities, principal_id),
+                _mine(entity_communication_methods, principal_id),
+                entity_communication_methods.c.normalized_value == normalized_value,
+                entity_communication_methods.c.state == EntityCommunicationMethodState.ACTIVE.value,
+            )
+            .order_by(
+                entities.c.entity_id,
+                entity_communication_methods.c.communication_method_id,
+            )
+        ).all()
+        return [(_row_to_entity(row), _row_to_communication_method(_ChildRow(row))) for row in rows]
 
     def assignments(
         self,

@@ -196,8 +196,12 @@ __all__ = [
     "LinkSituationToProjectCommand",
     "ListCaptures",
     "ListCommitments",
+    "ListEntityAddresses",
     "ListEntityAliases",
+    "ListEntityCommunicationMethods",
     "ListEntityIdentifiers",
+    "ListEntityNames",
+    "ListEntityParticipations",
     "ListIntelligenceArtifacts",
     "ListManagedDocuments",
     "ListManagedDocumentsCommand",
@@ -4616,6 +4620,14 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
         "alias_types": {"description": "Optional filter to these alias types."},
         "page_size": {"description": "How many results to return in this page."},
         "after": {"description": "Opaque cursor from a previous page's next_cursor."},
+        "perspective": {
+            "description": (
+                "Which end of the participation to list from: project, for the "
+                "participants of this project, or participant, for the projects "
+                "this entity takes part in. Required; there is no default, because "
+                "the two answer different questions."
+            )
+        },
     }
 )
 
@@ -4814,6 +4826,163 @@ class ListEntityAliases:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
         if self.after is not None:
             _identifier(self.after, IdKind.ENTITY_ALIAS, SafeDetail.CURSOR)
+
+
+# --- RI-ENT-WP-10: the record families' read surface -------------------------
+#
+# One composite and four pages, and the division is the one `entities.context`
+# and `entities.aliases.list` already draw on this plane: a card that says what
+# is recorded, bounded and complete-or-disclosed, and a paged reader for each
+# collection that might overflow the card's ceiling.
+#
+# **None of these carries a filter.** `ListEntityIdentifiers` and
+# `ListEntityAliases` publish `states`/`namespaces`/`alias_types` because a
+# caller driving a lifecycle write needs to select the row it is about to
+# supersede. These four answer a caller reading a record, and every row of a
+# temporal family -- retired and superseded included -- is part of that record.
+# Adding a filter later is additive; publishing one now that a caller must pass
+# to see everything is not.
+
+
+@dataclass(frozen=True, slots=True)
+class GetEntityProfile:
+    """Everything recorded about one entity across the six entity-bound record families.
+
+    Typed names, the organization profile, addresses, communication methods,
+    project participations from both ends, and person/organization affiliations
+    from both ends — assembled into one bounded answer.
+
+    Distinct from `entities.context`, which summarises *who this is* out of
+    aliases, identifiers, assignments, edges, observations and memories. This
+    returns *what is on file*, and the two read different tables.
+
+    Every collection is bounded and the answer says whether it hit that bound.
+    When one did, the four `entities.*.list` capabilities page the family that
+    overflowed; this one issues no cursor, deliberately, because a cursor into
+    an assembly of seven collections would have to mean seven different
+    positions at once.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PROFILE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs("entity_id")
+
+    entity_id: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityNames:
+    """List the typed name forms recorded for one entity, oldest first.
+
+    The paged reader for the collection `entities.profile` bounds. Every state
+    is returned — a retired or superseded name form is a fact about this entity
+    that a reader of its record has to be able to see.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_NAMES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "page_size", "after"
+    )
+
+    entity_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            # Validated as this family's own identifier rather than accepted as
+            # an opaque string, for the reason `GetEntityRelationships` states
+            # about its own cursor: the repository compares it against the
+            # column the order is taken on, so an arbitrary string would order
+            # somewhere in the middle of the key space and skip rows rather
+            # than continue past them.
+            _identifier(self.after, IdKind.ENTITY_NAME, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityAddresses:
+    """List the addresses recorded for one entity, oldest first.
+
+    `ListEntityNames`' contract over the address family.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ADDRESSES_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "page_size", "after"
+    )
+
+    entity_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_ADDRESS, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityCommunicationMethods:
+    """List the communication methods recorded for one entity, oldest first.
+
+    `ListEntityNames`' contract over the communication family.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_COMMUNICATION_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "page_size", "after"
+    )
+
+    entity_id: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_COMMUNICATION_METHOD, SafeDetail.CURSOR)
+
+
+@dataclass(frozen=True, slots=True)
+class ListEntityParticipations:
+    """List one entity's project participations from one end, oldest first.
+
+    `perspective` says which end and has no default: `project` lists who takes
+    part in this project, `participant` lists the projects this entity takes
+    part in. A caller silently handed the other end would read one entity's
+    answer as another's, which is why an unrecognised value is refused rather
+    than corrected — the same reason `entities.relationships` refuses a
+    `direction` it does not know.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PARTICIPATIONS_LIST
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id", "perspective", "page_size", "after"
+    )
+
+    entity_id: str
+    perspective: str
+    page_size: int | None = None
+    after: str | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.TARGET_ID)
+        if self.perspective not in ("project", "participant"):
+            raise InvalidRequestError(SafeDetail.SELECTOR)
+        _positive(self.page_size, SafeDetail.PAGE_SIZE)
+        if self.after is not None:
+            _identifier(self.after, IdKind.ENTITY_PROJECT_PARTICIPATION, SafeDetail.CURSOR)
 
 
 @dataclass(frozen=True, slots=True)
@@ -5941,6 +6110,11 @@ type Command = (
     | ListUnresolvedMentions
     | ListEntityIdentifiers
     | ListEntityAliases
+    | GetEntityProfile
+    | ListEntityNames
+    | ListEntityAddresses
+    | ListEntityCommunicationMethods
+    | ListEntityParticipations
     | CreateEntity
     | UpdateEntity
     | ArchiveEntity

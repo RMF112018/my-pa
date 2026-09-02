@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and four capabilities is addressable
+**Reachability.** Every one of the one hundred and nine capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-fifth capability added to the domain arrives as
-a failing row instead of as an untested one. Thirteen of the one hundred and four answer a
+written here, so a one-hundred-tenth capability added to the domain arrives as
+a failing row instead of as an untested one. Thirteen of the one hundred and nine answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -112,6 +112,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -125,10 +126,14 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -688,6 +693,26 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_id": person.entity_id,
             "states": ["active"],
             "alias_types": ["nickname"],
+            "page_size": 10,
+        },
+        # `RI-ENT-WP-10`'s five record-family reads, over the same staged
+        # person. `perspective` is spelled because the command has no default.
+        Capability.ENTITIES_PROFILE: {"entity_id": person.entity_id},
+        Capability.ENTITIES_NAMES_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_ADDRESSES_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_COMMUNICATION_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_PARTICIPATIONS_LIST: {
+            "entity_id": person.entity_id,
+            "perspective": "participant",
             "page_size": 10,
         },
         Capability.ENTITIES_CREATE: {
@@ -1307,6 +1332,24 @@ def commands_for(
             entity_id=person.entity_id,
             states=(AliasState.ACTIVE,),
             alias_types=(AliasType.NICKNAME,),
+            page_size=10,
+        ),
+        Capability.ENTITIES_PROFILE: GetEntityProfile(entity_id=person.entity_id),
+        Capability.ENTITIES_NAMES_LIST: ListEntityNames(
+            entity_id=person.entity_id,
+            page_size=10,
+        ),
+        Capability.ENTITIES_ADDRESSES_LIST: ListEntityAddresses(
+            entity_id=person.entity_id,
+            page_size=10,
+        ),
+        Capability.ENTITIES_COMMUNICATION_LIST: ListEntityCommunicationMethods(
+            entity_id=person.entity_id,
+            page_size=10,
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_LIST: ListEntityParticipations(
+            entity_id=person.entity_id,
+            perspective="participant",
             page_size=10,
         ),
         Capability.ENTITIES_CREATE: CreateEntity(

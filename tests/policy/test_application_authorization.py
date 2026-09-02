@@ -84,6 +84,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -97,10 +98,14 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -570,6 +575,22 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         Capability.ENTITIES_ALIASES_LIST: ListEntityAliases(
             entity_id=issue_identifier(IdKind.ENTITY)
         ),
+        # `RI-ENT-WP-10`'s five record-family reads. Minted identifiers for the
+        # reason every read above mints one, and `perspective` is spelled out
+        # because the command has no default: an omitted one is an
+        # `invalid_request`, which would stand in for the `denied` these tests
+        # exist to prove.
+        Capability.ENTITIES_PROFILE: GetEntityProfile(entity_id=issue_identifier(IdKind.ENTITY)),
+        Capability.ENTITIES_NAMES_LIST: ListEntityNames(entity_id=issue_identifier(IdKind.ENTITY)),
+        Capability.ENTITIES_ADDRESSES_LIST: ListEntityAddresses(
+            entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        Capability.ENTITIES_COMMUNICATION_LIST: ListEntityCommunicationMethods(
+            entity_id=issue_identifier(IdKind.ENTITY)
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_LIST: ListEntityParticipations(
+            entity_id=issue_identifier(IdKind.ENTITY), perspective="participant"
+        ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,
             display_name="Synthetic Person",
@@ -979,6 +1000,16 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_OBSERVATIONS_LIST,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # `RI-ENT-WP-10`'s five record-family reads. A typed name, an address, a
+        # communication method, a participation and an affiliation are the
+        # Principal's own record of their own contact: those rows carry no
+        # `source_id` and no `enrollment_id` for a scope to be compared
+        # against. All five sit in `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_PROFILE,
+        Capability.ENTITIES_NAMES_LIST,
+        Capability.ENTITIES_ADDRESSES_LIST,
+        Capability.ENTITIES_COMMUNICATION_LIST,
+        Capability.ENTITIES_PARTICIPATIONS_LIST,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its
@@ -1151,6 +1182,16 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_OBSERVATIONS_LIST,
         Capability.ENTITIES_OBSERVE,
         Capability.ENTITIES_UNRESOLVED_MENTIONS_RESOLVE,
+        # `RI-ENT-WP-10`'s five record-family reads. A typed name, an address, a
+        # communication method, a participation and an affiliation are the
+        # Principal's own record of their own contact: those rows carry no
+        # `source_id` and no `enrollment_id` for a scope to be compared
+        # against. All five sit in `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_PROFILE,
+        Capability.ENTITIES_NAMES_LIST,
+        Capability.ENTITIES_ADDRESSES_LIST,
+        Capability.ENTITIES_COMMUNICATION_LIST,
+        Capability.ENTITIES_PARTICIPATIONS_LIST,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its

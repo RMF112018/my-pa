@@ -82,6 +82,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -95,10 +96,14 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -359,6 +364,17 @@ def _requested_scope(
             # carries no `source_id` and no `enrollment_id` at all.
             | ListEntityIdentifiers()
             | ListEntityAliases()
+            # `RI-ENT-WP-10`'s five record-family reads make the same
+            # measurement as the two paged reads above them. A typed name, an
+            # address, a communication method, a participation and an
+            # affiliation are the Principal's own record of their own contact:
+            # those rows carry no `source_id` and no `enrollment_id`, so there
+            # is nothing here for a caller to state and nothing to resolve.
+            | GetEntityProfile()
+            | ListEntityNames()
+            | ListEntityAddresses()
+            | ListEntityCommunicationMethods()
+            | ListEntityParticipations()
             | CreateEntity()
             | UpdateEntity()
             | ArchiveEntity()

@@ -24,7 +24,7 @@ these names is in a public enum.
 **Three states, and all three are asserted**, because a gate that refused in
 every state would satisfy a one-sided test:
 
-* plane off — all thirty-four `entities.` names refuse, reads included;
+* plane off — all thirty-nine `entities.` names refuse, reads included;
 * plane on, writes off — the eleven reads answer and the twenty-three writes refuse;
 * plane on, writes on — all thirty-one are served.
 

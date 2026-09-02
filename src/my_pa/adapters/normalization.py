@@ -91,6 +91,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -104,10 +105,14 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -1167,6 +1172,34 @@ def _list_entity_aliases(payload: Mapping[str, Any]) -> Command:
     return ListEntityAliases(**_entity_vocabulary(dict(payload), AliasState))
 
 
+# RI-ENT-WP-10's five reads take no closed-vocabulary field and no moment, so
+# each is the plain constructor: there is no shape JSON cannot carry in any of
+# them. `perspective` arrives as the string it is and the command refuses a
+# spelling it does not know, rather than this module converting it -- which is
+# the rule stated above `_entity_vocabulary`: conversion happens here, and
+# *validation* stays where the command states it once.
+
+
+def _get_entity_profile(payload: Mapping[str, Any]) -> Command:
+    return GetEntityProfile(**payload)
+
+
+def _list_entity_names(payload: Mapping[str, Any]) -> Command:
+    return ListEntityNames(**payload)
+
+
+def _list_entity_addresses(payload: Mapping[str, Any]) -> Command:
+    return ListEntityAddresses(**payload)
+
+
+def _list_entity_communication_methods(payload: Mapping[str, Any]) -> Command:
+    return ListEntityCommunicationMethods(**payload)
+
+
+def _list_entity_participations(payload: Mapping[str, Any]) -> Command:
+    return ListEntityParticipations(**payload)
+
+
 def _create_entity(payload: Mapping[str, Any]) -> Command:
     return CreateEntity(**_entity_vocabulary(dict(payload)))
 
@@ -1636,6 +1669,11 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_UNRESOLVED_MENTIONS: _list_unresolved_mentions,
         Capability.ENTITIES_IDENTIFIERS_LIST: _list_entity_identifiers,
         Capability.ENTITIES_ALIASES_LIST: _list_entity_aliases,
+        Capability.ENTITIES_PROFILE: _get_entity_profile,
+        Capability.ENTITIES_NAMES_LIST: _list_entity_names,
+        Capability.ENTITIES_ADDRESSES_LIST: _list_entity_addresses,
+        Capability.ENTITIES_COMMUNICATION_LIST: _list_entity_communication_methods,
+        Capability.ENTITIES_PARTICIPATIONS_LIST: _list_entity_participations,
         Capability.ENTITIES_CREATE: _create_entity,
         Capability.ENTITIES_UPDATE: _update_entity,
         Capability.ENTITIES_ARCHIVE: _archive_entity,

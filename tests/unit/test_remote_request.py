@@ -524,7 +524,10 @@ def test_no_entity_read_is_stamped_with_an_idempotency_key() -> None:
         if capability.value.startswith("entities.")
         and not permitted_purposes(capability) & _WRITE_PURPOSES
     }
-    assert len(reads) == 11
+    # Sixteen after `RI-ENT-WP-10`: the eleven earlier reads plus its five
+    # record-family reads, none of which carries an `idempotency_key` field
+    # because none of them writes.
+    assert len(reads) == 16
     assert not reads & _IDEMPOTENT_REMOTE_CAPABILITIES
 
 

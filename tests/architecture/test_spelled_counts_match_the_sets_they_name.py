@@ -375,6 +375,17 @@ _ORDINAL_UNITS = (
     "hundred-third",
     "hundred-fourth",
     "hundred-fifth",
+    # `RI-ENT-WP-10` took the capability set to a hundred and nine, so
+    # `a hundred-tenth capability` became the ordinal a correct claim would use
+    # and the green-half plant indexes one past the set. The boundary announced
+    # itself exactly as every one above it did -- `IndexError` in the plant
+    # rather than a false pass -- which is the property the density of this
+    # tuple buys.
+    "hundred-sixth",
+    "hundred-seventh",
+    "hundred-eighth",
+    "hundred-ninth",
+    "hundred-tenth",
 )
 
 
@@ -884,9 +895,9 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "**fifty-five**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
-        "`documents.`, thirty-four `entities.` and nine `relationship_memory.` names it "
+        "`documents.`, thirty-nine `entities.` and nine `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as one hundred four",
+        "correctly as one hundred nine",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",

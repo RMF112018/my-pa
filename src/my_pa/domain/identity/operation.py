@@ -397,7 +397,7 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
-    # The relationship-intelligence entity plane. Thirty-four `entities.` names
+    # The relationship-intelligence entity plane. Thirty-nine `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
     # WP-RI-A-02's twelve, WP-RI-A-03's seven and WP-RI-A-04's three.
@@ -605,6 +605,40 @@ class Capability(StrEnum):
     ENTITIES_IDENTITY_HISTORY = "entities.identity_history"
     ENTITIES_SPLIT_PREVIEW = "entities.split.preview"
     ENTITIES_SPLIT = "entities.split"
+
+    #: `RI-ENT-WP-10`. Five reads over the six Entity-bound record families —
+    #: typed names, the organization profile, addresses, communication methods,
+    #: project participations and person/organization affiliations — which this
+    #: plane has stored since `RI-ENT-WP-02`..`WP-06b` and published through no
+    #: capability at all. Every one of the five is a read; none of them appears
+    #: in `_WRITE_CAPABILITIES`, `_ADDITIVE_WRITE_CAPABILITIES`, `_OPERATOR_ONLY`
+    #: or any other write register, and all five map to `Purpose.ENTITY_READ`.
+    #:
+    #: **`entities.profile` is a new name rather than a widening of
+    #: `entities.context`.** The card that capability returns is a fixed twelve
+    #: keys that existing callers parse, and adding collections to it would
+    #: change a response every one of them already reads — the compatibility
+    #: table classes that as breaking. `entities.context` summarises *who this
+    #: is* out of aliases, identifiers, assignments, edges, observations and
+    #: memories; `entities.profile` returns *what is recorded about them* out of
+    #: the six record families, which is a different set of tables answering a
+    #: different question. `D-91`'s test the other way: a caller granted one has
+    #: no occasion to hold the other, and neither answer contains the other's.
+    #:
+    #: **The paged names exist because `entities.profile` is bounded.** The
+    #: composite carries a per-collection ceiling and discloses when it hit one,
+    #: exactly as the context card does, and it issues no cursor — so a caller
+    #: whose entity has more names, addresses, communication methods or
+    #: participations than the ceiling admits needs somewhere to go, and these
+    #: are it. Each covers one family, keyset-paged on that family's own primary
+    #: key. The organization profile has no such name and needs none: it is one
+    #: row per entity by construction, and the affiliation families are read
+    #: whole within the composite's own bound.
+    ENTITIES_PROFILE = "entities.profile"
+    ENTITIES_NAMES_LIST = "entities.names.list"
+    ENTITIES_ADDRESSES_LIST = "entities.addresses.list"
+    ENTITIES_COMMUNICATION_LIST = "entities.communication.list"
+    ENTITIES_PARTICIPATIONS_LIST = "entities.participations.list"
 
     # The Relationship Memory plane: durable, entity-bound knowledge the user
     # meant to keep. **A family of its own rather than an `entities.update`**,
@@ -996,6 +1030,21 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ENTITIES_IDENTITY_HISTORY: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_SPLIT_PREVIEW: frozenset({Purpose.ENTITY_IDENTITY_CORRECTION}),
         Capability.ENTITIES_SPLIT: frozenset({Purpose.ENTITY_IDENTITY_CORRECTION}),
+        # `RI-ENT-WP-10`'s five reads, all under `ENTITY_READ` and no new
+        # purpose. The reuse widens nothing: they return rows of the same
+        # Principal's own entities that `entities.context` already summarises
+        # and `entities.resolve` already corroborates against, and a read
+        # purpose of its own would map to exactly these five and separate them
+        # from nothing. None of them is permitted under `ENTITY_AUTHORING`,
+        # which is what keeps them out of `_ENTITY_WRITE_CAPABILITIES` --
+        # `tests/contract/test_entity_write_gate.py` derives that set from this
+        # mapping, so a read admitted under a write purpose here would be a
+        # write gate this plane never intended.
+        Capability.ENTITIES_PROFILE: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_NAMES_LIST: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_ADDRESSES_LIST: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_COMMUNICATION_LIST: frozenset({Purpose.ENTITY_READ}),
+        Capability.ENTITIES_PARTICIPATIONS_LIST: frozenset({Purpose.ENTITY_READ}),
         # The Relationship Memory pair, and neither is a reuse. `D-91`'s test
         # asks whether reuse would widen the grant, and here it plainly would in
         # both directions: `entity_read` is the identity plane — aliases,

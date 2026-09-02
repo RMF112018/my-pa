@@ -461,6 +461,30 @@ def _require_row_limit(limit: int | None) -> None:
         raise ValueError("an entity row limit asks for at least one row")
 
 
+def _require_participation_perspective(perspective: str) -> None:
+    """Refuse a participation perspective this family does not have an end for.
+
+    `RI-ENT-WP-10`. Refused rather than defaulted for the reason
+    `_require_row_limit` refuses a limit of zero rather than clamping it: a
+    caller silently given the other end of the relation would read one entity's
+    participations as another's, and an answer to a question nobody asked is
+    worse than no answer. The two spellings are the two the port names and
+    there is deliberately no third that means "either end" -- one row can name
+    the same entity at both ends, and a page spanning both would walk it twice.
+
+    **It checks the value and does not resolve the column**, which is not a
+    style choice. `tests/architecture/test_principal_partition_is_reached_through_the_guard`
+    reads one *statement* at a time, so a helper that named
+    `entity_project_participations` while its caller named the Principal would
+    put the two halves of one predicate in two functions -- exactly the shape
+    that guard exists to notice, and it cannot tell a safe instance of it from
+    an unsafe one. `_located_child` solves the same problem the other way, by
+    taking the partition it needs as an argument.
+    """
+    if perspective not in ("project", "participant"):
+        raise ValueError("a participation perspective is `project` or `participant`")
+
+
 def _limited[StatementT: Select[Any]](statement: StatementT, limit: int | None) -> StatementT:
     """`statement` with a `LIMIT`, or unchanged when the caller asked for none.
 
@@ -2323,6 +2347,179 @@ class SqlEntityRepository(EntitiesRepository):
         ).all()
         return EntityChildPage(
             records=tuple(_row_to_alias(row) for row in rows[:limit]),
+            is_truncated=len(rows) > limit,
+        )
+
+    # --- RI-ENT-WP-10: the record families' paged reads -----------------------
+    #
+    # `alias_page`'s body four times over, each on its own family's table and
+    # its own primary key. The `limit`-only readers above are untouched: those
+    # answer identity correction, which reads a bounded prefix to compare two
+    # entities, and these answer a caller walking a collection.
+
+    def name_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_entity_name_id: str | None = None,
+    ) -> EntityChildPage[EntityName]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        self._require_own_entity(principal_id, entity_id)
+        after = self._located_child(
+            entity_names.c.entity_name_id,
+            entity_names.c.entity_id,
+            _mine(entity_names, principal_id),
+            entity_id=entity_id,
+            cursor=after_entity_name_id,
+            kind=IdKind.ENTITY_NAME,
+        )
+        rows = self._connection.execute(
+            select(entity_names)
+            .where(
+                _mine(entity_names, principal_id),
+                entity_names.c.entity_id == entity_id,
+                _optional(entity_names.c.entity_name_id > after if after else None),
+            )
+            .order_by(entity_names.c.entity_name_id)
+            # One row past the ceiling, so truncation is proved rather than
+            # inferred from a page that happened to be full.
+            .limit(limit + 1)
+        ).all()
+        return EntityChildPage(
+            records=tuple(_row_to_name(row) for row in rows[:limit]),
+            is_truncated=len(rows) > limit,
+        )
+
+    def address_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_entity_address_id: str | None = None,
+    ) -> EntityChildPage[EntityAddress]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        self._require_own_entity(principal_id, entity_id)
+        after = self._located_child(
+            entity_addresses.c.entity_address_id,
+            entity_addresses.c.entity_id,
+            _mine(entity_addresses, principal_id),
+            entity_id=entity_id,
+            cursor=after_entity_address_id,
+            kind=IdKind.ENTITY_ADDRESS,
+        )
+        rows = self._connection.execute(
+            select(entity_addresses)
+            .where(
+                _mine(entity_addresses, principal_id),
+                entity_addresses.c.entity_id == entity_id,
+                _optional(entity_addresses.c.entity_address_id > after if after else None),
+            )
+            .order_by(entity_addresses.c.entity_address_id)
+            .limit(limit + 1)
+        ).all()
+        return EntityChildPage(
+            records=tuple(_row_to_address(row) for row in rows[:limit]),
+            is_truncated=len(rows) > limit,
+        )
+
+    def communication_method_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_communication_method_id: str | None = None,
+    ) -> EntityChildPage[EntityCommunicationMethod]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        self._require_own_entity(principal_id, entity_id)
+        after = self._located_child(
+            entity_communication_methods.c.communication_method_id,
+            entity_communication_methods.c.entity_id,
+            _mine(entity_communication_methods, principal_id),
+            entity_id=entity_id,
+            cursor=after_communication_method_id,
+            kind=IdKind.ENTITY_COMMUNICATION_METHOD,
+        )
+        rows = self._connection.execute(
+            select(entity_communication_methods)
+            .where(
+                _mine(entity_communication_methods, principal_id),
+                entity_communication_methods.c.entity_id == entity_id,
+                _optional(
+                    entity_communication_methods.c.communication_method_id > after
+                    if after
+                    else None
+                ),
+            )
+            .order_by(entity_communication_methods.c.communication_method_id)
+            .limit(limit + 1)
+        ).all()
+        return EntityChildPage(
+            records=tuple(_row_to_communication_method(row) for row in rows[:limit]),
+            is_truncated=len(rows) > limit,
+        )
+
+    def participation_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        perspective: str,
+        limit: int,
+        after_participation_id: str | None = None,
+    ) -> EntityChildPage[EntityProjectParticipation]:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        _require_row_limit(limit)
+        _require_participation_perspective(perspective)
+        self._require_own_entity(principal_id, entity_id)
+        # The end is chosen inside each statement that uses it rather than
+        # bound to a local first, and that repetition is deliberate:
+        # `tests/architecture/test_principal_partition_is_reached_through_the_guard`
+        # reads one statement at a time, so a column resolved in a statement of
+        # its own is a partitioned table named where no partition predicate is
+        # -- the exact shape that guard exists to notice, and it cannot tell a
+        # safe instance of it from an unsafe one.
+        after = self._located_child(
+            entity_project_participations.c.participation_id,
+            (
+                entity_project_participations.c.project_entity_id
+                if perspective == "project"
+                else entity_project_participations.c.participant_entity_id
+            ),
+            _mine(entity_project_participations, principal_id),
+            entity_id=entity_id,
+            cursor=after_participation_id,
+            kind=IdKind.ENTITY_PROJECT_PARTICIPATION,
+        )
+        rows = self._connection.execute(
+            select(entity_project_participations)
+            .where(
+                _mine(entity_project_participations, principal_id),
+                (
+                    entity_project_participations.c.project_entity_id
+                    if perspective == "project"
+                    else entity_project_participations.c.participant_entity_id
+                )
+                == entity_id,
+                _optional(
+                    entity_project_participations.c.participation_id > after if after else None
+                ),
+            )
+            .order_by(entity_project_participations.c.participation_id)
+            .limit(limit + 1)
+        ).all()
+        return EntityChildPage(
+            records=tuple(_row_to_project_participation(row) for row in rows[:limit]),
             is_truncated=len(rows) > limit,
         )
 

@@ -4457,6 +4457,110 @@ class _Entities(EntitiesRepository):
             limit=limit,
         )
 
+    # --- RI-ENT-WP-10: the record families' paged reads --------------------
+    #
+    # `alias_page`'s body over each family's own list and primary key, through
+    # the same `_child_page` helper, so the keyset and the cursor refusal are
+    # stated once for every paged read this fake serves.
+
+    def name_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_entity_name_id: str | None = None,
+    ) -> EntityChildPage[EntityName]:
+        self._world.fail("entities.name_page")
+        _refuse_empty_limit(limit)
+        self._require_own(principal_id, entity_id)
+        mine = [
+            name
+            for name in self._world.entity_names
+            if name.principal_id == principal_id and name.entity_id == entity_id
+        ]
+        return _child_page(
+            sorted(mine, key=lambda name: name.entity_name_id),
+            cursor=after_entity_name_id,
+            key=lambda name: name.entity_name_id,
+            known=[name.entity_name_id for name in mine],
+            limit=limit,
+        )
+
+    def address_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_entity_address_id: str | None = None,
+    ) -> EntityChildPage[EntityAddress]:
+        self._world.fail("entities.address_page")
+        _refuse_empty_limit(limit)
+        self._require_own(principal_id, entity_id)
+        mine = [
+            address
+            for address in self._world.entity_addresses
+            if address.principal_id == principal_id and address.entity_id == entity_id
+        ]
+        return _child_page(
+            sorted(mine, key=lambda address: address.entity_address_id),
+            cursor=after_entity_address_id,
+            key=lambda address: address.entity_address_id,
+            known=[address.entity_address_id for address in mine],
+            limit=limit,
+        )
+
+    def communication_method_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_communication_method_id: str | None = None,
+    ) -> EntityChildPage[EntityCommunicationMethod]:
+        self._world.fail("entities.communication_method_page")
+        _refuse_empty_limit(limit)
+        self._require_own(principal_id, entity_id)
+        mine = [
+            method
+            for method in self._world.entity_communication_methods
+            if method.principal_id == principal_id and method.entity_id == entity_id
+        ]
+        return _child_page(
+            sorted(mine, key=lambda method: method.communication_method_id),
+            cursor=after_communication_method_id,
+            key=lambda method: method.communication_method_id,
+            known=[method.communication_method_id for method in mine],
+            limit=limit,
+        )
+
+    def participation_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        perspective: str,
+        limit: int,
+        after_participation_id: str | None = None,
+    ) -> EntityChildPage[EntityProjectParticipation]:
+        self._world.fail("entities.participation_page")
+        _refuse_empty_limit(limit)
+        end = _participation_end(perspective)
+        self._require_own(principal_id, entity_id)
+        mine = [
+            row
+            for row in self._world.entity_project_participations
+            if row.principal_id == principal_id and end(row) == entity_id
+        ]
+        return _child_page(
+            sorted(mine, key=lambda row: row.participation_id),
+            cursor=after_participation_id,
+            key=lambda row: row.participation_id,
+            known=[row.participation_id for row in mine],
+            limit=limit,
+        )
+
     # --- WP-RI-A-02: the governed write path -------------------------------
     #
     # The server's ordering, spelled out in Python: the entity guard first and
@@ -6126,6 +6230,22 @@ def _refuse_empty_limit(limit: int | None) -> None:
         raise ValueError("an entity row limit asks for at least one row")
 
 
+def _participation_end(
+    perspective: str,
+) -> Callable[[EntityProjectParticipation], str]:
+    """The participation end one perspective names, as `SqlEntityRepository` names it.
+
+    Parity with `persistence.entity._participation_end`, refusal included: a
+    perspective the server refuses and this fake defaulted would let a unit test
+    prove that an unspelled end has an answer.
+    """
+    if perspective == "project":
+        return lambda row: row.project_entity_id
+    if perspective == "participant":
+        return lambda row: row.participant_entity_id
+    raise ValueError("a participation perspective is `project` or `participant`")
+
+
 def _child_page[T](
     found: list[T],
     *,
@@ -7305,7 +7425,7 @@ def build_service(
         # names its own service refuses.
         task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
         commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
-        # Enabled by the same default reasoning: the thirty-four `entities.` names are
+        # Enabled by the same default reasoning: the thirty-nine `entities.` names are
         # withheld from a build that has not turned the plane on, and a suite
         # that quantifies over `Capability` would be quantifying over names its
         # own service refuses. A test about the *withheld* build passes `False`

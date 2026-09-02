@@ -310,6 +310,15 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     102: "One hundred two",
     103: "One hundred three",
     104: "One hundred and four",
+    # Extended at `RI-ENT-WP-10`, when the entity plane's five record-family
+    # reads took the public set past a hundred and four. The map is extended
+    # rather than the assertion relaxed, for the reason stated at the eighties:
+    # a figure this test cannot spell is a figure it cannot check.
+    105: "One hundred five",
+    106: "One hundred six",
+    107: "One hundred seven",
+    108: "One hundred eight",
+    109: "One hundred and nine",
 }
 
 
@@ -432,20 +441,21 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
-    # composed by default. The combined surface therefore exposes fifty-five
-    # and withholds the same forty-six feature-gated names.
-    assert default == 55 and total == 104 and withheld == 49
+    # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrive
+    # on the withheld side too. The combined surface therefore still exposes
+    # fifty-five and withholds five more feature-gated names than before.
+    assert default == 55 and total == 109 and withheld == 54
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and four capabilities" in system_context
+    assert "one hundred and nine capabilities" in system_context
     assert "exposes fifty-five of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and four capabilities" in module_boundaries
+    assert "one hundred and nine capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

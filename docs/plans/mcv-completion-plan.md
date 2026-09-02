@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and six Python modules under `src/my_pa` and four hundred and thirty-eight test modules —
+Three hundred and six Python modules under `src/my_pa` and four hundred and thirty-nine test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -117,7 +117,16 @@ no source module: `bb3bf22` added
 `tests/unit/test_entity_search_reaches_context.py` and
 `tests/database/test_entity_search_reaches_context.py`, and `5700c37` added
 `tests/contract/test_entity_search_disambiguators.py` and
-`tests/unit/test_entity_search_disambiguators.py`. The source-module figure is
+`tests/unit/test_entity_search_disambiguators.py`, and corrected again on
+2026-09-01 to three hundred and six and four hundred and thirty-nine, when
+RI-ENT-WP-10 added one test module and no source module:
+`tests/contract/test_entity_record_family_reads.py`. That work package's five
+`entities.` record-family reads were added to `application/service.py`,
+`application/commands.py`, `adapters/normalization.py`, `contracts/ports.py`,
+`domain/identity/operation.py`, `domain/policy/decision.py`,
+`domain/relationship/entity.py`, `application/authorization.py` and
+`infrastructure/persistence/entity.py` in place, so the source-module figure
+does not move. The source-module figure is
 unmoved because RI-ENT-WP-09 added no module under `src/my_pa` — it changed
 `domain/relationship/resolution.py`, `contracts/ports.py`,
 `application/entity_resolution.py`, `application/service.py` and
@@ -152,7 +161,7 @@ exact current claim disagrees with the tree.
 | Alembic revisions — schemas and extensions, target tables, control plane, indexes, foreign keys, views, `knowledge` schema, extraction tables, audit events, enrolled objects, continuity, native sources, managed documents, GoodNotes, operations, task management, context prepare/feedback, OAuth refresh-token families, GoodNotes notebook lineage, GoodNotes NOTE_UNIT occurrence persistence, GoodNotes semantic work/proposal receipts, GoodNotes entity associations with NEW-only delivery receipts, and additive GoodNotes exact visual render digests, additive `goodnotes.content` vocabulary, additive durable-note stage ledger and Principal-bound page rasters, additive GoodNotes server-grounded NOTE_UNIT crop identity with immutable revision provenance, additive GoodNotes Meeting/Agenda association kinds, and an additive dormant GoodNotes delivery-attempt ledger, and the relationship-intelligence entity plane — `entities`, `entity_external_identifiers`, `entity_assignments`, `entity_relationships`, the additive `entity_aliases` table, and the `entities.*` capability family with the `entity_read` purpose, and the entity observation, proposal, and merge-lineage tables, and the additive `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02), and the additive `entity_addresses`/`entity_communication_methods` tables (RI-ENT-WP-03), and the additive `entity_project_participations`/`entity_role_types`/`entity_discipline_types` tables (RI-ENT-WP-04), and the additive `entity_person_organization_affiliations` table (RI-ENT-WP-05), and the additive `entity_relationship_types` table with `entity_relationships.relationship_type` re-pointed at it by foreign key (RI-ENT-WP-06a), and the Intelligence Artifact report plane — cycle runs, producer runs, immutable artifacts, commit receipts, pipeline dependencies, and external provenance, with the eight `reports.*` capabilities and the `report_authoring`/`report_read` purposes, and the Work Task/Commitment contract, history digests, and bounded bulk ledger with the three further `commitments.` capabilities, and the Relationship Memory plane — the memory pointer, its immutable version ledger, submissions, context and evidence links, proposals with their evidence, and the append-only review-decision ledger, with the nine `relationship_memory.` capabilities and the `relationship_memory_read`/`relationship_memory_authoring` purposes | Implemented, eighty-six revisions, head `c99cd8ed8d1c`; `c99cd8ed8d1c` is additive on `1cda4d536268` and renames the seeded `entity_relationship_types` row `design_coordinates_with` to `design_coordination_with` (every other column unchanged), closing `EntityRelationshipType` to 35-of-35 parity with the taxonomy table (the WP-08 blocker-clearing rename); `1cda4d536268` is additive on `9a3f6c1e8d24` and adds the `entity_assertions`/`entity_assertion_evidence` tables, binding fact-level `assertion_status` and evidence to the six Entity-bound record families RI-ENT-WP-02 through RI-ENT-WP-06 added (RI-ENT-WP-07, closes `ENTITY-PROVENANCE-001`); `9a3f6c1e8d24` is additive on `8dc3619891bb` and widens the `entity_identity_effects`/`entity_identity_preview_ambiguities`/`entity_identity_ambiguity_settlements` `record_family` CHECKs to admit six new Entity-bound families (RI-ENT-WP-06b); `8dc3619891bb` is additive on `17149a48fa30` and adds the `entity_relationship_types` table, re-pointing `entity_relationships.relationship_type` at it by foreign key (RI-ENT-WP-06a); GSQS `c4b0a1d9e827` precedes Phase B `c7a1f04b9e63`; `b727e870d45e` is additive on `8e1c4a7b2d90` and carries the merge-preview ambiguity and settlement tables, the `partial` re-enrichment state with its `limitations` column, the `reenrichment` heartbeat plane, and the append-only trigger on `entity_proposal_review_decisions`; `7e114f822af2` is additive on `b727e870d45e` and adds the `entity_names`/`entity_organization_profiles` tables; `441b071bf37b` is additive on `7e114f822af2` and adds the `entity_addresses`/`entity_communication_methods` tables; `f5b06925857e` is additive on `441b071bf37b` and adds the `entity_project_participations`/`entity_role_types`/`entity_discipline_types` tables; `17149a48fa30` is additive on `f5b06925857e` and adds the `entity_person_organization_affiliations` table. Corrected 2026-08-31 from eighty-five/`1cda4d536268` (prior correction, from eighty-four/`9a3f6c1e8d24`) |
 | CI — `repository-checks.yml` including the database tier | Implemented |
 
-All one hundred and four capability names, their operator-only flags, and their permitted
+All one hundred and nine capability names, their operator-only flags, and their permitted
 purposes exist in `domain/identity/operation.py`, alongside 34 purposes. The v1 request,
 response, disclosure, and error shapes already exist and are contract-tested.
 

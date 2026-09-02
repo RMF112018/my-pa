@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and four capability names and none of them
+  ends: the transport routes one hundred and nine capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -643,6 +643,16 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
         # tests never reach the handler that would look one up.
         Capability.ENTITIES_IDENTIFIERS_LIST: {"entity_id": person.entity_id},
         Capability.ENTITIES_ALIASES_LIST: {"entity_id": person.entity_id},
+        # `RI-ENT-WP-10`'s five record-family reads, over the same staged
+        # subject. `perspective` is spelled because the command has no default.
+        Capability.ENTITIES_PROFILE: {"entity_id": person.entity_id},
+        Capability.ENTITIES_NAMES_LIST: {"entity_id": person.entity_id},
+        Capability.ENTITIES_ADDRESSES_LIST: {"entity_id": person.entity_id},
+        Capability.ENTITIES_COMMUNICATION_LIST: {"entity_id": person.entity_id},
+        Capability.ENTITIES_PARTICIPATIONS_LIST: {
+            "entity_id": person.entity_id,
+            "perspective": "participant",
+        },
         # A name no staged entity carries, so duplicate resolution admits it.
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
@@ -1197,6 +1207,15 @@ SCOPED_CAPABILITIES = [
         # `domain.policy.decision._SCOPELESS`.
         Capability.ENTITIES_IDENTIFIERS_LIST,
         Capability.ENTITIES_ALIASES_LIST,
+        # `RI-ENT-WP-10`'s five record-family reads join them: a typed name, an
+        # address, a communication method, a participation and an affiliation
+        # belong to no `src_…` and no `enr_…` either. All five sit in
+        # `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_PROFILE,
+        Capability.ENTITIES_NAMES_LIST,
+        Capability.ENTITIES_ADDRESSES_LIST,
+        Capability.ENTITIES_COMMUNICATION_LIST,
+        Capability.ENTITIES_PARTICIPATIONS_LIST,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_UPDATE,
         Capability.ENTITIES_ARCHIVE,

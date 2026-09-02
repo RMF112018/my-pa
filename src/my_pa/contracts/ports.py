@@ -844,13 +844,28 @@ class EntityMutationAdmission:
 
 
 @dataclass(frozen=True, slots=True)
-class EntityChildPage[T: (ExternalIdentifier, EntityAlias)]:
-    """One bounded page of an entity's identifiers or aliases.
+class EntityChildPage[
+    T: (
+        ExternalIdentifier,
+        EntityAlias,
+        EntityName,
+        EntityAddress,
+        EntityCommunicationMethod,
+        EntityProjectParticipation,
+    )
+]:
+    """One bounded page of an entity's identifiers, aliases or record-family rows.
 
     `is_truncated` is proved by reading one row past the ceiling rather than
     inferred from a full page, which is the rule every other listing on this
     plane follows: a page that happened to hold exactly `limit` rows and a page
     that was cut are different facts, and only one of them has a continuation.
+
+    **`RI-ENT-WP-10` widened the constraint rather than declaring a second page
+    class.** The four record families it pages carry the same fact this class
+    already carries -- some rows and whether more were left behind -- and a
+    parallel type would be a second place the overflow rule could drift from
+    `identifier_page`'s.
     """
 
     records: tuple[T, ...]
@@ -2701,6 +2716,92 @@ class EntitiesRepository(ABC):
 
         The terms `identifier_page` states, over the alias plane's own
         vocabulary.
+        """
+
+    # --- RI-ENT-WP-10: the record families' paged reads ----------------------
+    #
+    # Four siblings of `identifier_page`/`alias_page`, and the existing
+    # `names`/`addresses`/`communication_methods`/`project_participations_*`
+    # readers are left exactly as they are. Those take a `limit` and no cursor,
+    # which is right for their caller: `IdentityCorrectionService._analyse`
+    # reads a bounded prefix of a family to compare two entities, and a cursor
+    # there would be a continuation nobody walks. These four answer a person
+    # scrolling, so they carry the keyset and they *disclose* their bound.
+    #
+    # Keyset ordering is ascending on each family's own primary key, exactly as
+    # `alias_page` orders on `alias_id`: unique and totally ordered, so a row
+    # written between two requests cannot shift a later page backwards and hide
+    # a record -- which is what an `OFFSET` does to a table still being written
+    # to. A cursor naming a record this Principal cannot read is refused rather
+    # than silently restarting the walk.
+
+    @abstractmethod
+    def name_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_entity_name_id: str | None = None,
+    ) -> EntityChildPage[EntityName]:
+        """One bounded page of an entity's recorded typed name forms.
+
+        `identifier_page`'s contract over `entity_names`. Unfiltered by state
+        and by date, deliberately: a retired or superseded name form is a fact
+        about this entity that a caller reading its record must be able to see,
+        and the currency judgement belongs to whoever holds the moment rather
+        than to this read.
+        """
+
+    @abstractmethod
+    def address_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_entity_address_id: str | None = None,
+    ) -> EntityChildPage[EntityAddress]:
+        """One bounded page of an entity's recorded addresses, on `name_page`'s terms."""
+
+    @abstractmethod
+    def communication_method_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_communication_method_id: str | None = None,
+    ) -> EntityChildPage[EntityCommunicationMethod]:
+        """One bounded page of an entity's communication methods, on `name_page`'s terms."""
+
+    @abstractmethod
+    def participation_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        perspective: str,
+        limit: int,
+        after_participation_id: str | None = None,
+    ) -> EntityChildPage[EntityProjectParticipation]:
+        """One bounded page of an entity's project participations, from one end.
+
+        `perspective` is `"project"` or `"participant"` and selects
+        `project_entity_id` or `participant_entity_id` as the column
+        `entity_id` is matched against. Stated by the caller rather than
+        answered "either end", for the reason
+        `project_participations_as_project` and
+        `project_participations_as_participant` are two methods: the two
+        columns are not interchangeable roles the way an edge's two ends are,
+        so a page spanning both would have to invent a direction vocabulary
+        this family's own domain class does not name -- and it could not be
+        keyset-paged coherently anyway, since one row can appear under both
+        ends and would be walked twice.
+
+        A `perspective` that is neither value is refused rather than defaulted:
+        a caller silently given the other end would read one entity's answer as
+        another's.
         """
 
     # --- the directed-relationship write path (WP-RI-A-03) ------------------

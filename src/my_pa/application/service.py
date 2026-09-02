@@ -155,6 +155,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -168,10 +169,14 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListManagedDocumentsCommand,
@@ -446,16 +451,24 @@ from my_pa.domain.relationship.authoring import (
 )
 from my_pa.domain.relationship.context_card import EntityContextCard
 from my_pa.domain.relationship.entity import (
+    ENTITY_PROFILE_COLLECTION_LIMIT,
     Assignment,
     DirectedWriteError,
     DuplicateDirectedFactError,
     Entity,
+    EntityAddress,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityName,
+    EntityOrganizationProfile,
+    EntityProfileLimitation,
+    EntityProjectParticipation,
     EntityRelationship,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     MergedEndpointError,
+    PersonOrganizationAffiliation,
     StaleDirectedVersionError,
 )
 from my_pa.domain.relationship.governance import (
@@ -2172,6 +2185,222 @@ def _recorded_observation_view(observation: EntityObservation) -> dict[str, obje
     }
 
 
+# --- RI-ENT-WP-10: the six record families as the wire sees them -------------
+#
+# One function per family, beside `_alias_view` and `_identifier_view` and on
+# their terms. Three rules hold across all six and are stated once here rather
+# than six times below.
+#
+# **`principal_id` is never emitted.** Every one of these records carries it as
+# its partition column, and it is the one field on them that is about the
+# caller rather than about the entity. `_entity_view` omits it for the same
+# reason and has since the plane's first read.
+#
+# **Every moment goes out through `format_rfc3339`/`_moment_or_none` and every
+# closed vocabulary goes out as `.value`.** A `datetime` rendered by `str()` and
+# a `StrEnum` rendered by `str()` both happen to produce something readable,
+# which is exactly why a view that did it by accident would stay unnoticed
+# until a caller parsed one.
+#
+# **Nothing here is a judgement about the record.** No field is computed, no
+# collection is ordered by anything but its own key, and there is no derived
+# figure standing in for a person -- `tests/architecture/
+# test_relationship_scoring_surface_is_denied.py` states that prohibition and
+# these views add no field it would have to reach.
+
+
+def _entity_name_view(name: EntityName) -> dict[str, object]:
+    """One typed name form, as recorded.
+
+    Both values go out. `display_value` is what a source wrote and
+    `normalized_value` is the form resolution compares, and `_entity_view`
+    publishes `canonical_name` beside `display_name` for the identical reason:
+    a caller debugging why a reference did not resolve needs the form that was
+    compared, not only the form that is shown. This is the Principal's own
+    record of their own contact returned to the Principal who holds it, which
+    is what separates it from an observation's `observed_value` -- that one is
+    text lifted out of somebody else's mail and is published nowhere.
+    """
+    return {
+        "entity_name_id": name.entity_name_id,
+        "entity_id": name.entity_id,
+        "name_type_code": name.name_type_code.value,
+        "display_value": name.display_value,
+        "normalized_value": name.normalized_value,
+        "is_preferred": name.is_preferred,
+        "effective_from": _moment_or_none(name.effective_from),
+        "effective_to": _moment_or_none(name.effective_to),
+        "state": name.state.value,
+        "version": name.version,
+        "updated_at": _moment_or_none(name.updated_at),
+        "retired_at": _moment_or_none(name.retired_at),
+        "superseded_by_entity_name_id": name.superseded_by_entity_name_id,
+    }
+
+
+def _entity_address_view(address: EntityAddress) -> dict[str, object]:
+    """One address, as recorded, with the components the writer supplied.
+
+    The parsed components are published beside `raw_value` rather than instead
+    of it: a component the writer left null is a fact about what was recorded,
+    and a view that showed only the parse would make an unparsed address look
+    like a missing one.
+
+    There is no geocode here and there is not going to be one. The plane stores
+    a postal address a Principal recorded about their own contact; a resolved
+    point on the earth is a different class of datum, and
+    `tests/architecture/test_relationship_scoring_surface_is_denied.py` denies
+    the vocabulary for it outright.
+    """
+    return {
+        "entity_address_id": address.entity_address_id,
+        "entity_id": address.entity_id,
+        "address_type_code": address.address_type_code.value,
+        "raw_value": address.raw_value,
+        "normalized_address_value": address.normalized_address_value,
+        "line1": address.line1,
+        "line2": address.line2,
+        "city": address.city,
+        "region": address.region,
+        "postal_code": address.postal_code,
+        "country": address.country,
+        "label": address.label,
+        "is_preferred": address.is_preferred,
+        "effective_from": _moment_or_none(address.effective_from),
+        "effective_to": _moment_or_none(address.effective_to),
+        "state": address.state.value,
+        "version": address.version,
+        "updated_at": _moment_or_none(address.updated_at),
+        "retired_at": _moment_or_none(address.retired_at),
+        "superseded_by_entity_address_id": address.superseded_by_entity_address_id,
+    }
+
+
+def _communication_method_view(method: EntityCommunicationMethod) -> dict[str, object]:
+    """One communication method, as recorded.
+
+    `verification_status_code` is a lifecycle fact about the channel -- whether
+    anybody confirmed it reaches the person -- and not a judgement about the
+    person. `linked_external_identifier_id` is published because it is the
+    join a caller needs to see that this address and that binding are the same
+    channel recorded twice.
+    """
+    return {
+        "communication_method_id": method.communication_method_id,
+        "entity_id": method.entity_id,
+        "method_type_code": method.method_type_code.value,
+        "usage_context_code": method.usage_context_code.value,
+        "display_value": method.display_value,
+        "normalized_value": method.normalized_value,
+        "verification_status_code": method.verification_status_code.value,
+        "is_preferred": method.is_preferred,
+        "effective_from": _moment_or_none(method.effective_from),
+        "effective_to": _moment_or_none(method.effective_to),
+        "state": method.state.value,
+        "version": method.version,
+        "updated_at": _moment_or_none(method.updated_at),
+        "retired_at": _moment_or_none(method.retired_at),
+        "superseded_by_communication_method_id": method.superseded_by_communication_method_id,
+        "linked_external_identifier_id": method.linked_external_identifier_id,
+    }
+
+
+def _participation_view(participation: EntityProjectParticipation) -> dict[str, object]:
+    """One project participation, as recorded, from whichever end was asked for.
+
+    Both entity columns go out on every row regardless of which end the caller
+    paged from, because a row that named only the far end would leave a reader
+    holding two pages unable to say which entity either belonged to.
+
+    The coded and free-text halves of role and discipline are both published.
+    A writer that had a code recorded a code, a writer that had only a phrase
+    recorded a phrase, and collapsing the two here would make "there is no
+    taxonomy entry for this" indistinguishable from "nobody said".
+    """
+    return {
+        "participation_id": participation.participation_id,
+        "project_entity_id": participation.project_entity_id,
+        "participant_entity_id": participation.participant_entity_id,
+        "project_display_name": participation.project_display_name,
+        "role_basis_code": participation.role_basis_code.value,
+        "stakeholder_side_code": participation.stakeholder_side_code.value,
+        "stakeholder_class_code": participation.stakeholder_class_code.value,
+        "relationship_status_code": participation.relationship_status_code.value,
+        "role_code": participation.role_code,
+        "role_text": participation.role_text,
+        "discipline_code": participation.discipline_code,
+        "discipline_text": participation.discipline_text,
+        "scope_text": participation.scope_text,
+        "effective_from": _moment_or_none(participation.effective_from),
+        "effective_to": _moment_or_none(participation.effective_to),
+        "state": participation.state.value,
+        "version": participation.version,
+        "updated_at": _moment_or_none(participation.updated_at),
+        "retired_at": _moment_or_none(participation.retired_at),
+        "superseded_by_participation_id": participation.superseded_by_participation_id,
+    }
+
+
+def _affiliation_view(affiliation: PersonOrganizationAffiliation) -> dict[str, object]:
+    """One person/organization affiliation, as recorded.
+
+    `organization_entity_id` is nullable and stays nullable here: an
+    affiliation whose organization this plane holds no entity for is a real
+    recorded state, and a view that dropped the row or invented an identifier
+    would report it as an absence.
+    """
+    return {
+        "affiliation_id": affiliation.affiliation_id,
+        "person_entity_id": affiliation.person_entity_id,
+        "affiliation_type_code": affiliation.affiliation_type_code.value,
+        "organization_entity_id": affiliation.organization_entity_id,
+        "job_title": affiliation.job_title,
+        "effective_from": _moment_or_none(affiliation.effective_from),
+        "effective_to": _moment_or_none(affiliation.effective_to),
+        "state": affiliation.state.value,
+        "version": affiliation.version,
+        "updated_at": _moment_or_none(affiliation.updated_at),
+        "retired_at": _moment_or_none(affiliation.retired_at),
+        "superseded_by_affiliation_id": affiliation.superseded_by_affiliation_id,
+    }
+
+
+def _organization_profile_view(profile: EntityOrganizationProfile) -> dict[str, object]:
+    """One organization profile, as recorded.
+
+    No `state` and no `retired_at`, because this family has neither: its
+    primary key is `entity_id` itself, so an entity carries at most one row
+    here and the row is corrected in place rather than superseded. A view that
+    published the temporal columns the other five carry would be describing a
+    lifecycle this table does not have.
+    """
+    return {
+        "entity_id": profile.entity_id,
+        "organization_kind_code": profile.organization_kind_code.value,
+        "legal_identity_status_code": profile.legal_identity_status_code.value,
+        "jurisdiction_code": profile.jurisdiction_code,
+        "registration_identifier": profile.registration_identifier,
+        "version": profile.version,
+        "created_at": _moment_or_none(profile.created_at),
+        "updated_at": _moment_or_none(profile.updated_at),
+    }
+
+
+def _profile_collection[T](records: list[T]) -> tuple[list[T], bool]:
+    """The first `ENTITY_PROFILE_COLLECTION_LIMIT` records, and whether that bit.
+
+    The caller asks the repository for one row past the ceiling and hands the
+    whole answer here, which is `application.entity_context._bounded`'s shape
+    and its reason: asking for exactly the ceiling and reporting a limitation
+    when a full collection came back would claim "there are more addresses than
+    this profile carries" for an entity holding exactly twenty-five. The extra
+    row turns the claim into an observation -- it either exists or it does not.
+    """
+    return records[:ENTITY_PROFILE_COLLECTION_LIMIT], len(records) > (
+        ENTITY_PROFILE_COLLECTION_LIMIT
+    )
+
+
 def _moment_or_none(moment: datetime | None) -> str | None:
     return None if moment is None else format_rfc3339(moment)
 
@@ -2465,7 +2694,7 @@ class ApplicationService:
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
         something the composition root did not supply — the six `documents.`
-        names in a process with no managed root, and the thirty-four `entities.` names
+        names in a process with no managed root, and the thirty-nine `entities.` names
         in one that has not enabled the relationship plane. It is one answer with
         two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
@@ -4578,7 +4807,7 @@ class ApplicationService:
         the request.
 
         **This is the floor, and it was missing.** `available_capabilities`
-        withholds the thirty-four `entities.` names, and two readers consult it —
+        withholds the thirty-nine `entities.` names, and two readers consult it —
         `capabilities.get` and the MCP tool list. The HTTP transport is not one
         of them: `/v1/{capability}` routes by path segment and `_run` dispatches
         straight from `_HANDLERS`, so every one of the six executed and
@@ -5517,6 +5746,339 @@ class ApplicationService:
                     reason="page_size_reached" if page.is_truncated else None,
                     next_cursor=(
                         page.records[-1].alias_id if page.is_truncated and page.records else None
+                    ),
+                ),
+            ),
+        )
+
+    # ---- RI-ENT-WP-10: the record families' read surface --------------------
+    #
+    # One composite and four pages. All five read through `unit_of_work.entities`
+    # after `self._entity_plane()` -- the read gate -- and never through
+    # `self._entity_repository`, which is the *write* gate: routing a read
+    # through it would withhold these five from every build that composed the
+    # plane without turning writes on, which is the composition the runbook
+    # calls the ordinary one.
+    #
+    # Every one of the five reads the entity first, so an unknown identifier is
+    # `not_found` rather than an empty collection. "Nothing is recorded about
+    # this person" and "there is no such person" are different answers and a
+    # caller can act on only one of them -- the argument `_entities_relationships`
+    # makes beside its own read, and these five make it the same way.
+
+    def _entities_profile(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: GetEntityProfile
+    ) -> _Result:
+        """`entities.profile`: everything on file about one entity, bounded per collection.
+
+        **A new capability rather than a widening of `entities.context`.** That
+        card is a fixed set of keys existing callers already parse, and adding
+        collections to it would change a response none of them asked to change.
+        The two answer different questions off different tables: the card
+        summarises who this is out of aliases, identifiers, assignments, edges,
+        observations and memories, and this returns what is recorded out of the
+        six entity-bound record families.
+
+        **Bounded like the card, not like the pages.** Each collection is read
+        one row past `ENTITY_PROFILE_COLLECTION_LIMIT`, so an overflow is
+        observed rather than inferred from a collection that happened to be
+        full, and each overflow names itself: a caller told only "something was
+        truncated" would have to page all four families to find out which. No
+        cursor is issued, and that is deliberate -- a cursor into an assembly of
+        seven collections would have to mean seven positions at once. The four
+        `entities.*.list` capabilities are the continuation, one family each.
+
+        `partial_result` is not set here. `unenrolled_disclosure` derives it,
+        and a handler that also set it would be a second statement of one fact.
+        """
+        self._entity_plane()
+        principal_id = authorization.principal.principal_id
+        fetch = ENTITY_PROFILE_COLLECTION_LIMIT + 1
+        entity_id = command.entity_id
+        with _translated(), _entity_translated():
+            entity = unit_of_work.entities.get(principal_id, entity_id)
+            if entity is None:
+                raise NotFoundError(SafeDetail.TARGET_ID)
+            entities = unit_of_work.entities
+            organization_profile = entities.organization_profile(principal_id, entity_id)
+            names, more_names = _profile_collection(
+                entities.names(principal_id, entity_id, limit=fetch)
+            )
+            addresses, more_addresses = _profile_collection(
+                entities.addresses(principal_id, entity_id, limit=fetch)
+            )
+            methods, more_methods = _profile_collection(
+                entities.communication_methods(principal_id, entity_id, limit=fetch)
+            )
+            as_project, more_as_project = _profile_collection(
+                entities.project_participations_as_project(principal_id, entity_id, limit=fetch)
+            )
+            as_participant, more_as_participant = _profile_collection(
+                entities.project_participations_as_participant(principal_id, entity_id, limit=fetch)
+            )
+            as_person, more_as_person = _profile_collection(
+                entities.person_organization_affiliations_as_person(
+                    principal_id, entity_id, limit=fetch
+                )
+            )
+            as_organization, more_as_organization = _profile_collection(
+                entities.person_organization_affiliations_as_organization(
+                    principal_id, entity_id, limit=fetch
+                )
+            )
+        limitations = [
+            limitation
+            for overflowed, limitation in (
+                (more_names, EntityProfileLimitation.MORE_NAMES_THAN_THIS_PROFILE_CARRIES),
+                (
+                    more_addresses,
+                    EntityProfileLimitation.MORE_ADDRESSES_THAN_THIS_PROFILE_CARRIES,
+                ),
+                (
+                    more_methods,
+                    EntityProfileLimitation.MORE_COMMUNICATION_METHODS_THAN_THIS_PROFILE_CARRIES,
+                ),
+                (
+                    more_as_project,
+                    EntityProfileLimitation.MORE_PARTICIPATIONS_AS_PROJECT_THAN_THIS_PROFILE_CARRIES,
+                ),
+                (
+                    more_as_participant,
+                    EntityProfileLimitation.MORE_PARTICIPATIONS_AS_PARTICIPANT_THAN_THIS_PROFILE_CARRIES,
+                ),
+                (
+                    more_as_person,
+                    EntityProfileLimitation.MORE_AFFILIATIONS_AS_PERSON_THAN_THIS_PROFILE_CARRIES,
+                ),
+                (
+                    more_as_organization,
+                    EntityProfileLimitation.MORE_AFFILIATIONS_AS_ORGANIZATION_THAN_THIS_PROFILE_CARRIES,
+                ),
+            )
+            if overflowed
+        ]
+        is_complete = not limitations
+        return _Result(
+            payload={
+                "profile": {
+                    # Limitations and completeness before the records, per
+                    # `RI-AC-013`: what was left out belongs above the list it
+                    # qualifies, not appended after a reader has already drawn
+                    # a conclusion from it.
+                    "entity": _entity_view(entity),
+                    "assembled_at": format_rfc3339(authorization.at),
+                    "limitations": [limitation.value for limitation in limitations],
+                    "is_complete": is_complete,
+                    "organization_profile": (
+                        None
+                        if organization_profile is None
+                        else _organization_profile_view(organization_profile)
+                    ),
+                    "names": [_entity_name_view(record) for record in names],
+                    "addresses": [_entity_address_view(record) for record in addresses],
+                    "communication_methods": [
+                        _communication_method_view(record) for record in methods
+                    ],
+                    "participations_as_project": [
+                        _participation_view(record) for record in as_project
+                    ],
+                    "participations_as_participant": [
+                        _participation_view(record) for record in as_participant
+                    ],
+                    "affiliations_as_person": [_affiliation_view(record) for record in as_person],
+                    "affiliations_as_organization": [
+                        _affiliation_view(record) for record in as_organization
+                    ],
+                }
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=not is_complete,
+                    # `Truncation` refuses `is_truncated` without a reason. The
+                    # bound is this answer's own per-collection ceiling rather
+                    # than a page size the caller chose, and the reason says so
+                    # -- exactly as `entities.context` distinguishes its card
+                    # ceiling from a page.
+                    reason=None if is_complete else "profile_collection_limit_reached",
+                ),
+            ),
+        )
+
+    def _entities_names_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListEntityNames
+    ) -> _Result:
+        """`entities.names.list`: one bounded page of an entity's typed name forms.
+
+        The continuation for the collection `entities.profile` bounds. The
+        overflow flag comes off `EntityChildPage` rather than being re-derived
+        from the length of the page, which is `_entities_identifiers_list`'s
+        idiom: the repository read one row past the ceiling and already knows.
+        """
+        self._entity_plane()
+        page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            if unit_of_work.entities.get(principal_id, command.entity_id) is None:
+                raise NotFoundError(SafeDetail.TARGET_ID)
+        with _translated(), _entity_translated():
+            page = unit_of_work.entities.name_page(
+                command.entity_id,
+                principal_id=principal_id,
+                limit=page_size,
+                after_entity_name_id=command.after,
+            )
+        return _Result(
+            payload={
+                "entity_id": command.entity_id,
+                "names": [_entity_name_view(record) for record in page.records],
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.is_truncated,
+                    reason="page_size_reached" if page.is_truncated else None,
+                    next_cursor=(
+                        page.records[-1].entity_name_id
+                        if page.is_truncated and page.records
+                        else None
+                    ),
+                ),
+            ),
+        )
+
+    def _entities_addresses_list(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: ListEntityAddresses
+    ) -> _Result:
+        """`entities.addresses.list`: one bounded page of an entity's addresses.
+
+        `_entities_names_list`'s contract over the address family.
+        """
+        self._entity_plane()
+        page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            if unit_of_work.entities.get(principal_id, command.entity_id) is None:
+                raise NotFoundError(SafeDetail.TARGET_ID)
+        with _translated(), _entity_translated():
+            page = unit_of_work.entities.address_page(
+                command.entity_id,
+                principal_id=principal_id,
+                limit=page_size,
+                after_entity_address_id=command.after,
+            )
+        return _Result(
+            payload={
+                "entity_id": command.entity_id,
+                "addresses": [_entity_address_view(record) for record in page.records],
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.is_truncated,
+                    reason="page_size_reached" if page.is_truncated else None,
+                    next_cursor=(
+                        page.records[-1].entity_address_id
+                        if page.is_truncated and page.records
+                        else None
+                    ),
+                ),
+            ),
+        )
+
+    def _entities_communication_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListEntityCommunicationMethods,
+    ) -> _Result:
+        """`entities.communication.list`: one bounded page of an entity's channels.
+
+        `_entities_names_list`'s contract over the communication family.
+        """
+        self._entity_plane()
+        page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            if unit_of_work.entities.get(principal_id, command.entity_id) is None:
+                raise NotFoundError(SafeDetail.TARGET_ID)
+        with _translated(), _entity_translated():
+            page = unit_of_work.entities.communication_method_page(
+                command.entity_id,
+                principal_id=principal_id,
+                limit=page_size,
+                after_communication_method_id=command.after,
+            )
+        return _Result(
+            payload={
+                "entity_id": command.entity_id,
+                "communication_methods": [
+                    _communication_method_view(record) for record in page.records
+                ],
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.is_truncated,
+                    reason="page_size_reached" if page.is_truncated else None,
+                    next_cursor=(
+                        page.records[-1].communication_method_id
+                        if page.is_truncated and page.records
+                        else None
+                    ),
+                ),
+            ),
+        )
+
+    def _entities_participations_list(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ListEntityParticipations,
+    ) -> _Result:
+        """`entities.participations.list`: one bounded page from one end of the relation.
+
+        `_entities_names_list`'s contract over the participation family, plus
+        the end the caller stated. `perspective` is echoed in the payload
+        beside `entity_id` because the two together are what the page is about:
+        a caller holding two pages of participations and no perspective on
+        either cannot tell which one lists the projects and which lists the
+        people.
+        """
+        self._entity_plane()
+        page_size = self._page_size(command.page_size)
+        principal_id = authorization.principal.principal_id
+        with _translated():
+            if unit_of_work.entities.get(principal_id, command.entity_id) is None:
+                raise NotFoundError(SafeDetail.TARGET_ID)
+        with _translated(), _entity_translated():
+            page = unit_of_work.entities.participation_page(
+                command.entity_id,
+                principal_id=principal_id,
+                perspective=command.perspective,
+                limit=page_size,
+                after_participation_id=command.after,
+            )
+        return _Result(
+            payload={
+                "entity_id": command.entity_id,
+                "perspective": command.perspective,
+                "participations": [_participation_view(record) for record in page.records],
+            },
+            disclosure=unenrolled_disclosure(
+                authorization.at,
+                trust_basis=_ENTITY_TRUST_BASIS,
+                truncation=Truncation(
+                    is_truncated=page.is_truncated,
+                    reason="page_size_reached" if page.is_truncated else None,
+                    next_cursor=(
+                        page.records[-1].participation_id
+                        if page.is_truncated and page.records
+                        else None
                     ),
                 ),
             ),
@@ -8962,6 +9524,11 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_UNRESOLVED_MENTIONS: (ApplicationService._entities_unresolved_mentions),
         Capability.ENTITIES_IDENTIFIERS_LIST: ApplicationService._entities_identifiers_list,
         Capability.ENTITIES_ALIASES_LIST: ApplicationService._entities_aliases_list,
+        Capability.ENTITIES_PROFILE: ApplicationService._entities_profile,
+        Capability.ENTITIES_NAMES_LIST: ApplicationService._entities_names_list,
+        Capability.ENTITIES_ADDRESSES_LIST: ApplicationService._entities_addresses_list,
+        Capability.ENTITIES_COMMUNICATION_LIST: ApplicationService._entities_communication_list,
+        Capability.ENTITIES_PARTICIPATIONS_LIST: (ApplicationService._entities_participations_list),
         Capability.ENTITIES_CREATE: ApplicationService._entities_create,
         Capability.ENTITIES_UPDATE: ApplicationService._entities_update,
         Capability.ENTITIES_ARCHIVE: ApplicationService._entities_archive,
@@ -9051,6 +9618,15 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_IDENTITY_HISTORY,
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
+        # `RI-ENT-WP-10`'s five reads. Here and deliberately not in
+        # `_ENTITY_WRITE_CAPABILITIES`: they read the six record families and
+        # write none of them, so the write switch narrows nothing about them
+        # and the plane switch withholds them like every other `entities.` name.
+        Capability.ENTITIES_PROFILE,
+        Capability.ENTITIES_NAMES_LIST,
+        Capability.ENTITIES_ADDRESSES_LIST,
+        Capability.ENTITIES_COMMUNICATION_LIST,
+        Capability.ENTITIES_PARTICIPATIONS_LIST,
     }
 )
 

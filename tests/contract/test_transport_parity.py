@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and four capabilities. There are two ways to prove that and only one stays
+one hundred and nine capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -28,7 +28,7 @@ command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
 default composition exposes fifty-five: the six managed-document names, the
-thirty-four `entities.` names and the nine Relationship Memory names are
+thirty-nine `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
 second switch over the `entities.` family and withholds its twenty-three writes on
@@ -956,6 +956,26 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "alias_types": ["nickname"],
             "page_size": 10,
         },
+        # `RI-ENT-WP-10`'s five record-family reads, over the same staged
+        # person. `perspective` is spelled because the command has no default.
+        Capability.ENTITIES_PROFILE: {"entity_id": person.entity_id},
+        Capability.ENTITIES_NAMES_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_ADDRESSES_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_COMMUNICATION_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_PARTICIPATIONS_LIST: {
+            "entity_id": person.entity_id,
+            "perspective": "participant",
+            "page_size": 10,
+        },
         # A name no staged entity carries, so duplicate resolution admits it.
         # A create naming "Parity Person" would be refused as ambiguous, which
         # is the plane behaving correctly and this table measuring the wrong
@@ -1376,8 +1396,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and four commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 105, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and nine commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 110, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

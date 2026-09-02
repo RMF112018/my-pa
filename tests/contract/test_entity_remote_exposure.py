@@ -121,6 +121,15 @@ def test_the_names_this_file_is_about_are_the_family() -> None:
         "entities.resolve",
         "entities.search",
         "entities.unresolved_mentions",
+        # `RI-ENT-WP-10`'s five. They read the six entity-bound record
+        # families and write none of them, so all five carry `entity_read`
+        # alone and land in this half. A sixth appearing in the write set
+        # below is what a purpose mis-mapping would look like from here.
+        "entities.profile",
+        "entities.names.list",
+        "entities.addresses.list",
+        "entities.communication.list",
+        "entities.participations.list",
     }
     assert set(ENTITY_WRITES) == {
         "entities.aliases.add",

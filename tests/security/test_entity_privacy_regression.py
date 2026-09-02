@@ -41,11 +41,16 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
@@ -311,6 +316,22 @@ _EVERY_CAPABILITY: Final = (
     # trying to rename it.
     (Capability.ENTITIES_IDENTIFIERS_LIST, ListEntityIdentifiers(entity_id=FOREIGN_ENTITY)),
     (Capability.ENTITIES_ALIASES_LIST, ListEntityAliases(entity_id=FOREIGN_ENTITY)),
+    # `RI-ENT-WP-10`'s five record-family reads, aimed at the other Principal's
+    # entity like every entry here. These are the sharpest reads on the plane
+    # for this claim: a typed name, an address and a communication method are
+    # exactly the contact details a caller must not be able to confirm about a
+    # stranger by naming their identifier.
+    (Capability.ENTITIES_PROFILE, GetEntityProfile(entity_id=FOREIGN_ENTITY)),
+    (Capability.ENTITIES_NAMES_LIST, ListEntityNames(entity_id=FOREIGN_ENTITY)),
+    (Capability.ENTITIES_ADDRESSES_LIST, ListEntityAddresses(entity_id=FOREIGN_ENTITY)),
+    (
+        Capability.ENTITIES_COMMUNICATION_LIST,
+        ListEntityCommunicationMethods(entity_id=FOREIGN_ENTITY),
+    ),
+    (
+        Capability.ENTITIES_PARTICIPATIONS_LIST,
+        ListEntityParticipations(entity_id=FOREIGN_ENTITY, perspective="participant"),
+    ),
     (
         Capability.ENTITIES_CREATE,
         CreateEntity(
@@ -589,10 +610,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    # Thirty-four after RI final completion. The count is asserted as
+    # Thirty-nine after `RI-ENT-WP-10`. The count is asserted as
     # well as the set, because a prefix scan that stopped matching would satisfy
     # the equality against an equally empty tuple.
-    assert len(served) == 34
+    assert len(served) == 39
 
 
 # --- the partition, under every capability ---------------------------------

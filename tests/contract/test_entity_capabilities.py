@@ -31,11 +31,16 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListUnresolvedMentions,
     MergeEntities,
     ObserveEntityMention,
@@ -460,6 +465,152 @@ def test_an_entity_no_source_has_observed_says_so(staged: Scene) -> None:
     assert card["is_complete"] is True
 
 
+# --- RULING-M7: what these responses publish, exhaustively -------------------
+#
+# The assertions above name keys they care about; none of them compares the
+# whole key set, so a field *added* to any of these responses satisfies every
+# one of them. That is the change a consumer has to be told about, and
+# `RI-ENT-WP-10` added a plane beside these five without touching any of them --
+# a claim worth holding as a test rather than as a sentence in a report.
+#
+# Written out rather than derived from the view functions, deliberately. A set
+# derived from `_context_card_view` would agree with itself after any edit and
+# would prove nothing; these are the keys the published contract names, and the
+# edit that changes one has to change this list too.
+
+
+def test_the_context_card_publishes_exactly_twelve_keys(staged: Scene) -> None:
+    """`entities.context` is unchanged by `RI-ENT-WP-10`, and this is the proof.
+
+    Ordered comparison rather than set equality, because `RI-AC-013` is about
+    reading order: coverage, freshness and exclusions belong *before* the
+    records they qualify, and a card that moved `limitations` below `memories`
+    would satisfy a set comparison while losing the property the order carries.
+    """
+    result = _payload(staged, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE))
+    card = result["context_card"]
+    assert isinstance(card, dict)
+    assert list(card) == [
+        "entity",
+        "assembled_at",
+        "coverage",
+        "most_recent_observation_at",
+        "limitations",
+        "is_complete",
+        "aliases",
+        "identifiers",
+        "assignments",
+        "relationships",
+        "observations",
+        "memories",
+    ]
+
+
+def test_the_context_cards_nested_entries_publish_exactly_their_own_keys(
+    staged: Scene,
+) -> None:
+    """The two collections a widening would most plausibly reach into.
+
+    `coverage` and `memories` are the card's own composed shapes rather than a
+    record view shared with another capability, so a field added to either
+    would appear here and nowhere else.
+    """
+    _record_memory(staged, ALICE, ALICE_MEMORY)
+    result = _payload(staged, Capability.ENTITIES_CONTEXT, GetEntityContext(entity_id=ALICE))
+    card = result["context_card"]
+    assert isinstance(card, dict)
+    assert set(card["coverage"][0]) == {
+        "source_id",
+        "observation_count",
+        "most_recent_observation_at",
+    }
+    assert set(card["memories"][0]) == {
+        "memory_id",
+        "kind",
+        "statement",
+        "authority",
+        "classification",
+        "pinned",
+        "effective_from",
+        "effective_to",
+        "recorded_at",
+    }
+
+
+def test_the_four_other_entity_reads_publish_exactly_the_keys_they_publish(
+    staged: Scene,
+) -> None:
+    """`entities.get`, `.relationships`, `.identifiers.list` and `.aliases.list`.
+
+    One test over the four, because the claim is one claim: none of these four
+    responses changed. Each envelope and each record it carries is compared
+    whole.
+    """
+    got = _payload(staged, Capability.ENTITIES_GET, GetEntity(entity_id=ALICE))
+    assert set(got) == {"entity"}
+    assert set(got["entity"]) == {  # type: ignore[arg-type]
+        "entity_id",
+        "entity_type",
+        "canonical_name",
+        "display_name",
+        "status",
+        "created_at",
+        "updated_at",
+        "version",
+        "superseded_by_entity_id",
+    }
+
+    edges = _payload(
+        staged, Capability.ENTITIES_RELATIONSHIPS, GetEntityRelationships(entity_id=ALICE)
+    )
+    assert set(edges) == {"relationships"}
+    assert set(edges["relationships"][0]) == {  # type: ignore[index]
+        "relationship_id",
+        "from_entity_id",
+        "relationship_type",
+        "to_entity_id",
+        "scope_entity_id",
+        "state",
+        "version",
+        "effective_from",
+        "effective_to",
+        "is_current",
+    }
+
+    identifiers = _payload(
+        staged, Capability.ENTITIES_IDENTIFIERS_LIST, ListEntityIdentifiers(entity_id=ALICE)
+    )
+    assert set(identifiers) == {"entity_id", "identifiers"}
+    assert set(identifiers["identifiers"][0]) == {  # type: ignore[index]
+        "identifier_id",
+        "namespace",
+        "display_value",
+        "verified",
+        "state",
+        "version",
+        "effective_from",
+        "effective_to",
+        "retired_at",
+        "updated_at",
+        "superseded_by_identifier_id",
+    }
+
+    aliases = _payload(staged, Capability.ENTITIES_ALIASES_LIST, ListEntityAliases(entity_id=ALICE))
+    assert set(aliases) == {"entity_id", "aliases"}
+    assert set(aliases["aliases"][0]) == {  # type: ignore[index]
+        "alias_id",
+        "alias_type",
+        "display_value",
+        "state",
+        "version",
+        "effective_from",
+        "effective_to",
+        "retired_at",
+        "updated_at",
+        "superseded_by_alias_id",
+    }
+
+
 def test_a_context_card_for_an_unknown_entity_is_not_found(staged: Scene) -> None:
     body = _invoke(
         staged,
@@ -616,6 +767,15 @@ _OFF_SWITCH_COMMANDS: dict[Capability, object] = {
     # each command has to be is well formed rather than resolvable.
     Capability.ENTITIES_IDENTIFIERS_LIST: ListEntityIdentifiers(entity_id=ALICE),
     Capability.ENTITIES_ALIASES_LIST: ListEntityAliases(entity_id=ALICE),
+    # `RI-ENT-WP-10`'s five record-family reads, all naming `ALICE`.
+    # `perspective` is spelled because the command has no default.
+    Capability.ENTITIES_PROFILE: GetEntityProfile(entity_id=ALICE),
+    Capability.ENTITIES_NAMES_LIST: ListEntityNames(entity_id=ALICE),
+    Capability.ENTITIES_ADDRESSES_LIST: ListEntityAddresses(entity_id=ALICE),
+    Capability.ENTITIES_COMMUNICATION_LIST: ListEntityCommunicationMethods(entity_id=ALICE),
+    Capability.ENTITIES_PARTICIPATIONS_LIST: ListEntityParticipations(
+        entity_id=ALICE, perspective="participant"
+    ),
     Capability.ENTITIES_CREATE: CreateEntity(
         entity_type=EntityType.PERSON,
         display_name="Alice Chen",
@@ -792,11 +952,12 @@ def test_the_off_switch_sweep_covers_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert set(_OFF_SWITCH_COMMANDS) == served
-    # Thirty-four after RI final completion: identity history and the governed
-    # split's two halves join the existing plane. The count is asserted rather than derived for
-    # the reason it always was -- it is what tells a reader the prefix scan found
-    # the plane and not a substring of it.
-    assert len(served) == 34
+    # Thirty-nine after `RI-ENT-WP-10`: identity history and the governed
+    # split's two halves joined the plane at RI final completion, and the five
+    # record-family reads join it here. The count is asserted rather than
+    # derived for the reason it always was -- it is what tells a reader the
+    # prefix scan found the plane and not a substring of it.
+    assert len(served) == 39
 
 
 @pytest.mark.parametrize(

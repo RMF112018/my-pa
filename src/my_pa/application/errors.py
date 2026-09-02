@@ -383,6 +383,16 @@ class SafeDetail(StrEnum):
     ENTITY_NAME_ID = "entity_name_id"
     NAME_TYPE_CODE = "name_type_code"
     IS_PREFERRED = "is_preferred"
+    ENTITY_ADDRESS_ID = "entity_address_id"
+    ADDRESS_TYPE_CODE = "address_type_code"
+    RAW_VALUE = "raw_value"
+    LINE1 = "line1"
+    LINE2 = "line2"
+    CITY = "city"
+    REGION = "region"
+    POSTAL_CODE = "postal_code"
+    COUNTRY = "country"
+    LABEL = "label"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

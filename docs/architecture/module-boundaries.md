@@ -137,7 +137,7 @@ a README and nothing else.
 
 The operator commands and transport entry point share this directory, and the split is
 the reason they sit together rather than a reason to separate them. `invoke.py`
-invokes one of the one hundred and twelve capabilities and therefore composes
+invokes one of the one hundred and fifteen capabilities and therefore composes
 `bootstrap.gateway.build_gateway_runtime`, exactly as the served transports do,
 so it cannot differ from them in a limit, a clock, or a principal.
 `migration.py` and `sources.py` invoke none, compose their own engine, and reach
@@ -202,7 +202,7 @@ Owns transport-neutral public request/response/disclosure/error schemas and appl
 ### 5.3 `application`
 
 
-Owns the 112 public capability use cases; request normalization; semantic validation; principal/purpose/scope authorization; enrollment normalization/idempotency; capture admission, idempotent replay, and the durable-first save; source, knowledge, capture, and managed-document orchestration; disclosure construction; operation/cancellation/recovery coordination; transaction boundaries; and mapping internal failures to public errors.
+Owns the 115 public capability use cases; request normalization; semantic validation; principal/purpose/scope authorization; enrollment normalization/idempotency; capture admission, idempotent replay, and the durable-first save; source, knowledge, capture, and managed-document orchestration; disclosure construction; operation/cancellation/recovery coordination; transaction boundaries; and mapping internal failures to public errors.
 
 
 It does not parse HTTP/MCP, execute SQL, open files, call provider SDKs, or embed process lifecycle.

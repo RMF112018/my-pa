@@ -19,6 +19,7 @@ import pytest
 from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
     AddEntityName,
     ArchiveEntity,
@@ -50,9 +51,11 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveUnresolvedMention,
     RestoreEntity,
+    RetireEntityAddress,
     RetireEntityAlias,
     RetireEntityIdentifier,
     RetireEntityName,
+    ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityRelationship,
     SearchEntities,
@@ -71,6 +74,7 @@ from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
     AliasType,
     Assignment,
     AssignmentType,
@@ -113,6 +117,7 @@ TOWER = "ent_tower0004tower0004"
 ASSIGNMENT = "asn_offswitch01offswitch1"
 RELATIONSHIP = "erel_offswitch1offswitch"
 ENTITY_NAME = "enam_offswitch1offswitc"
+ENTITY_ADDRESS = "eadr_offswitch1offswitc"
 WHEN = datetime(2026, 8, 18, 12, tzinfo=UTC)
 
 #: What the one staged memory says. Synthetic and about a working preference, so
@@ -804,6 +809,25 @@ _OFF_SWITCH_COMMANDS: dict[Capability, object] = {
         expected_version=1,
         idempotency_key="off-switch-names-retire",
     ),
+    Capability.ENTITIES_ADDRESSES_ADD: AddEntityAddress(
+        entity_id=ALICE,
+        address_type_code=AddressTypeCode.BUSINESS,
+        raw_value="1 Synthetic Way",
+        idempotency_key="off-switch-addresses-add",
+    ),
+    Capability.ENTITIES_ADDRESSES_REVISE: ReviseEntityAddress(
+        entity_address_id=ENTITY_ADDRESS,
+        expected_version=1,
+        entity_id=ALICE,
+        address_type_code=AddressTypeCode.BUSINESS,
+        raw_value="2 Synthetic Way",
+        idempotency_key="off-switch-addresses-revise",
+    ),
+    Capability.ENTITIES_ADDRESSES_RETIRE: RetireEntityAddress(
+        entity_address_id=ENTITY_ADDRESS,
+        expected_version=1,
+        idempotency_key="off-switch-addresses-retire",
+    ),
     Capability.ENTITIES_CREATE: CreateEntity(
         entity_type=EntityType.PERSON,
         display_name="Alice Chen",
@@ -980,11 +1004,11 @@ def test_the_off_switch_sweep_covers_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert set(_OFF_SWITCH_COMMANDS) == served
-    # Forty-two after `RI-ENT-WP-11`'s first record family: the thirty-nine
-    # `RI-ENT-WP-10` left plus that family's three write verbs. The count is
+    # Forty-five after `RI-ENT-WP-11`'s first two record families: the
+    # thirty-nine `RI-ENT-WP-10` left plus three write verbs per family. The count is
     # asserted rather than derived for the reason it always was -- it is what
     # tells a reader the prefix scan found the plane and not a substring of it.
-    assert len(served) == 42
+    assert len(served) == 45
 
 
 @pytest.mark.parametrize(

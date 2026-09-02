@@ -49,6 +49,7 @@ from dataclasses import dataclass
 from datetime import datetime
 
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
     AddEntityName,
     ArchiveEntity,
@@ -135,11 +136,13 @@ from my_pa.application.commands import (
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAddress,
     RetireEntityAlias,
     RetireEntityIdentifier,
     RetireEntityName,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityRelationship,
     ReviseManagedDocument,
@@ -386,6 +389,9 @@ def _requested_scope(
             | AddEntityName()
             | SupersedeEntityName()
             | RetireEntityName()
+            | AddEntityAddress()
+            | ReviseEntityAddress()
+            | RetireEntityAddress()
             | CreateEntity()
             | UpdateEntity()
             | ArchiveEntity()

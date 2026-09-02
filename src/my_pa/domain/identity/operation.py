@@ -397,7 +397,7 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
-    # The relationship-intelligence entity plane. Forty-two `entities.` names
+    # The relationship-intelligence entity plane. Forty-five `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
     # WP-RI-A-02's twelve, WP-RI-A-03's seven and WP-RI-A-04's three.
@@ -684,6 +684,9 @@ class Capability(StrEnum):
     ENTITIES_NAMES_ADD = "entities.names.add"
     ENTITIES_NAMES_SUPERSEDE = "entities.names.supersede"
     ENTITIES_NAMES_RETIRE = "entities.names.retire"
+    ENTITIES_ADDRESSES_ADD = "entities.addresses.add"
+    ENTITIES_ADDRESSES_REVISE = "entities.addresses.revise"
+    ENTITIES_ADDRESSES_RETIRE = "entities.addresses.retire"
 
     # The Relationship Memory plane: durable, entity-bound knowledge the user
     # meant to keep. **A family of its own rather than an `entities.update`**,
@@ -1112,6 +1115,9 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ENTITIES_NAMES_ADD: frozenset({Purpose.ENTITY_AUTHORING}),
         Capability.ENTITIES_NAMES_SUPERSEDE: frozenset({Purpose.ENTITY_AUTHORING}),
         Capability.ENTITIES_NAMES_RETIRE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_ADDRESSES_ADD: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_ADDRESSES_REVISE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_ADDRESSES_RETIRE: frozenset({Purpose.ENTITY_AUTHORING}),
         # The Relationship Memory pair, and neither is a reuse. `D-91`'s test
         # asks whether reuse would widen the grant, and here it plainly would in
         # both directions: `entity_read` is the identity plane — aliases,
@@ -1244,6 +1250,9 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_NAMES_ADD,
         Capability.ENTITIES_NAMES_SUPERSEDE,
         Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
     }
 )
 
@@ -1300,6 +1309,7 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # publish a `readOnlyHint`-adjacent annotation that contradicts the
         # transaction, which is the same reading that keeps `entities.merge` out.
         Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_ADDRESSES_ADD,
     }
 )
 

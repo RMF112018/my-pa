@@ -57,14 +57,19 @@ from sqlalchemy import Connection, Engine, select, text
 from sqlalchemy.engine import make_url
 
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityName,
+    RetireEntityAddress,
     RetireEntityName,
+    ReviseEntityAddress,
     SupersedeEntityName,
 )
 from my_pa.application.entity_family_writes import EntityFamilyWriteService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
     Entity,
+    EntityAddressState,
     EntityNameState,
     EntityStatus,
     EntityType,
@@ -78,7 +83,11 @@ from my_pa.domain.relationship.governance import (
 from my_pa.domain.relationship.normalization import normalize_name
 from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
-from my_pa.infrastructure.persistence.tables import entity_mutation_events, entity_names
+from my_pa.infrastructure.persistence.tables import (
+    entity_addresses,
+    entity_mutation_events,
+    entity_names,
+)
 
 pytestmark = pytest.mark.database
 
@@ -518,3 +527,220 @@ def test_a_second_ledger_row_for_one_key_and_capability_is_refused(
         SqlEntityRepository(connection).record_mutation_event(PRINCIPAL_A, conflicting)
     with staged.connect() as connection:
         assert len(_ledger(connection)) == 1
+
+
+# --- entity_addresses -------------------------------------------------------
+
+
+def _addresses(connection: Connection) -> list[dict[str, object]]:
+    rows = connection.execute(
+        select(entity_addresses).where(entity_addresses.c.principal_id == PRINCIPAL_A)
+    ).all()
+    return [dict(row._mapping) for row in rows]
+
+
+def _add_address(
+    key: str = "wp11-addresses-add-0001", raw_value: str = "1 Synthetic Way"
+) -> AddEntityAddress:
+    return AddEntityAddress(
+        entity_id=PERSON,
+        address_type_code=AddressTypeCode.BUSINESS,
+        raw_value=raw_value,
+        idempotency_key=key,
+    )
+
+
+def test_an_added_address_writes_a_ledger_row_naming_the_address_family(
+    staged: Engine,
+) -> None:
+    """`record_family` is `address`, which the phase's migration has to admit."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        receipt = service.add_address(
+            SqlEntityRepository(connection),
+            _add_address(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    assert receipt.record_family is MutationRecordFamily.ADDRESS
+    assert receipt.version == 1
+    assert receipt.state == EntityAddressState.ACTIVE.value
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = _addresses(connection)
+    assert len(ledger) == 1
+    assert ledger[0]["record_family"] == MutationRecordFamily.ADDRESS.value
+    assert ledger[0]["capability"] == "entities.addresses.add"
+    assert ledger[0]["record_id"] == receipt.record_id
+    # No address text anywhere in the photograph. A raw address value in
+    # `after_state` is the disclosure this ledger's own docstring forbids, and
+    # this is exactly where it would land.
+    assert ledger[0]["after_state"] == {"state": EntityAddressState.ACTIVE.value}
+    assert len(written) == 1
+    assert written[0]["entity_address_id"] == receipt.record_id
+
+
+def test_an_address_retry_with_the_same_key_and_payload_replays(staged: Engine) -> None:
+    """One row, and the second call says it did no work."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        first = service.add_address(
+            SqlEntityRepository(connection),
+            _add_address(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        second = service.add_address(
+            SqlEntityRepository(connection),
+            _add_address(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert first.replayed is False
+    assert second.replayed is True
+    assert second.record_id == first.record_id
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert len(_addresses(connection)) == 1
+
+
+def test_an_address_retry_with_a_different_payload_is_refused(staged: Engine) -> None:
+    """Same key, different address: a conflict rather than a silent second write."""
+    from my_pa.domain.relationship.entity import DirectedWriteError
+
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        service.add_address(
+            SqlEntityRepository(connection),
+            _add_address(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with pytest.raises(DirectedWriteError), staged.begin() as connection:
+        service.add_address(
+            SqlEntityRepository(connection),
+            _add_address(raw_value="2 Synthetic Way"),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert len(_addresses(connection)) == 1
+
+
+def test_an_address_revision_is_a_supersession_and_not_an_edit(staged: Engine) -> None:
+    """`revise` is this family's spelling of what names call `supersede`.
+
+    The predecessor is marked SUPERSEDED pointing at a brand-new successor row,
+    so both remain readable and neither was edited in place.
+    """
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        added = service.add_address(
+            SqlEntityRepository(connection),
+            _add_address(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        revised = service.revise_address(
+            SqlEntityRepository(connection),
+            ReviseEntityAddress(
+                entity_address_id=added.record_id,
+                expected_version=1,
+                entity_id=PERSON,
+                address_type_code=AddressTypeCode.BUSINESS,
+                raw_value="2 Synthetic Way",
+                idempotency_key="wp11-addresses-revise-0001",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert revised.superseded_id == added.record_id
+    assert revised.record_id != added.record_id
+    assert revised.prior_version is None
+    assert revised.version == 1
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = {row["entity_address_id"]: row for row in _addresses(connection)}
+    assert ledger[1]["record_family"] == MutationRecordFamily.ADDRESS.value
+    assert ledger[1]["before_state"] == {"record_id": added.record_id, "version": 1}
+    assert written[added.record_id]["state"] == EntityAddressState.SUPERSEDED.value
+    assert written[added.record_id]["superseded_by_entity_address_id"] == revised.record_id
+    assert written[revised.record_id]["state"] == EntityAddressState.ACTIVE.value
+
+
+def test_an_address_retirement_advances_its_version_and_releases_its_slot(
+    staged: Engine,
+) -> None:
+    """`version + 1` under the guarded `UPDATE`, read back off the row itself."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        added = service.add_address(
+            SqlEntityRepository(connection),
+            _add_address(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        retired = service.retire_address(
+            SqlEntityRepository(connection),
+            RetireEntityAddress(
+                entity_address_id=added.record_id,
+                expected_version=1,
+                idempotency_key="wp11-addresses-retire-0001",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert retired.prior_version == 1
+    assert retired.version == 2
+    assert retired.state == EntityAddressState.RETIRED.value
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = _addresses(connection)
+    assert ledger[1]["prior_version"] == 1
+    assert ledger[1]["new_version"] == 2
+    assert written[0]["state"] == EntityAddressState.RETIRED.value
+    assert written[0]["version"] == 2
+    assert written[0]["is_preferred"] is False
+
+
+def test_a_stale_address_version_is_refused_and_leaves_no_ledger_row(
+    staged: Engine,
+) -> None:
+    """The write comes first and the ledger second, so a refusal records nothing."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        added = service.add_address(
+            SqlEntityRepository(connection),
+            _add_address(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with pytest.raises(StaleDirectedVersionError), staged.begin() as connection:
+        service.retire_address(
+            SqlEntityRepository(connection),
+            RetireEntityAddress(
+                entity_address_id=added.record_id,
+                expected_version=2,
+                idempotency_key="wp11-addresses-retire-stale",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert _addresses(connection)[0]["version"] == 1

@@ -379,6 +379,9 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.ENTITIES_NAMES_ADD,
         Capability.ENTITIES_NAMES_SUPERSEDE,
         Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
     }
 )
 

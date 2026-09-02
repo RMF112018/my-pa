@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and twelve capability names and none of them
+  ends: the transport routes one hundred and fifteen capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -675,6 +675,25 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "expected_version": 1,
             "idempotency_key": "wire-entity-names-retire-0001",
         },
+        Capability.ENTITIES_ADDRESSES_ADD: {
+            "entity_id": person.entity_id,
+            "address_type_code": "business",
+            "raw_value": "1 Wire Way",
+            "idempotency_key": "wire-entity-addresses-add-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_REVISE: {
+            "entity_address_id": issue_identifier(IdKind.ENTITY_ADDRESS),
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "address_type_code": "business",
+            "raw_value": "2 Wire Way",
+            "idempotency_key": "wire-entity-addresses-revise-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_RETIRE: {
+            "entity_address_id": issue_identifier(IdKind.ENTITY_ADDRESS),
+            "expected_version": 1,
+            "idempotency_key": "wire-entity-addresses-retire-0001",
+        },
         # A name no staged entity carries, so duplicate resolution admits it.
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
@@ -1244,6 +1263,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_NAMES_ADD,
         Capability.ENTITIES_NAMES_SUPERSEDE,
         Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_UPDATE,
         Capability.ENTITIES_ARCHIVE,

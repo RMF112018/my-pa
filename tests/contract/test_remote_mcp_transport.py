@@ -348,6 +348,9 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.ENTITIES_NAMES_ADD,
         Capability.ENTITIES_NAMES_SUPERSEDE,
         Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
@@ -392,6 +395,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         # `_ADDITIVE_WRITE_CAPABILITIES`.
         Capability.ENTITIES_NAMES_SUPERSEDE,
         Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

@@ -51,6 +51,7 @@ from tests.conftest import (
 )
 
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
     AddEntityName,
     ArchiveEntity,
@@ -137,11 +138,13 @@ from my_pa.application.commands import (
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAddress,
     RetireEntityAlias,
     RetireEntityIdentifier,
     RetireEntityName,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityRelationship,
     ReviseManagedDocument,
@@ -189,6 +192,7 @@ from my_pa.domain.intelligence.catalog import (
 from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
     AliasType,
     AssignmentType,
     EntityRelationshipType,
@@ -619,6 +623,25 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             expected_version=1,
             idempotency_key="policy-entity-names-retire",
         ),
+        Capability.ENTITIES_ADDRESSES_ADD: AddEntityAddress(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            address_type_code=AddressTypeCode.BUSINESS,
+            raw_value="1 Synthetic Way",
+            idempotency_key="policy-entity-addresses-add",
+        ),
+        Capability.ENTITIES_ADDRESSES_REVISE: ReviseEntityAddress(
+            entity_address_id=issue_identifier(IdKind.ENTITY_ADDRESS),
+            expected_version=1,
+            entity_id=issue_identifier(IdKind.ENTITY),
+            address_type_code=AddressTypeCode.BUSINESS,
+            raw_value="2 Synthetic Way",
+            idempotency_key="policy-entity-addresses-revise",
+        ),
+        Capability.ENTITIES_ADDRESSES_RETIRE: RetireEntityAddress(
+            entity_address_id=issue_identifier(IdKind.ENTITY_ADDRESS),
+            expected_version=1,
+            idempotency_key="policy-entity-addresses-retire",
+        ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,
             display_name="Synthetic Person",
@@ -1046,6 +1069,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_NAMES_ADD,
         Capability.ENTITIES_NAMES_SUPERSEDE,
         Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its
@@ -1236,6 +1262,9 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_NAMES_ADD,
         Capability.ENTITIES_NAMES_SUPERSEDE,
         Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its

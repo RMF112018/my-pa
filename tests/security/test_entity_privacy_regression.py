@@ -29,6 +29,7 @@ import pytest
 from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
     AddEntityName,
     ArchiveEntity,
@@ -60,9 +61,11 @@ from my_pa.application.commands import (
     ResolveEntity,
     ResolveUnresolvedMention,
     RestoreEntity,
+    RetireEntityAddress,
     RetireEntityAlias,
     RetireEntityIdentifier,
     RetireEntityName,
+    ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityRelationship,
     SearchEntities,
@@ -86,6 +89,7 @@ from my_pa.domain.identity.operation import Capability, permitted_purposes
 from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
     AliasType,
     Assignment,
     AssignmentType,
@@ -139,6 +143,7 @@ FOREIGN_RELATIONSHIP: Final = "erel_foreign1foreign1"
 #: here for the reason the two above are: a refusal for something absent proves
 #: less than a refusal for a row that exists and is not mine.
 FOREIGN_ENTITY_NAME: Final = "enam_foreign1foreign1"
+FOREIGN_ENTITY_ADDRESS: Final = "eadr_foreign1foreign1"
 OWN_ENTITY: Final = "ent_mine0002mine00002"
 #: A second entity of my own, so a write of mine that has to name two of them
 #: does not have to borrow one of theirs.
@@ -372,6 +377,34 @@ _EVERY_CAPABILITY: Final = (
             entity_name_id=FOREIGN_ENTITY_NAME,
             expected_version=1,
             idempotency_key="privacy-entity-names-retire",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ADDRESSES_ADD,
+        AddEntityAddress(
+            entity_id=FOREIGN_ENTITY,
+            address_type_code=AddressTypeCode.BUSINESS,
+            raw_value="1 Confidential Way",
+            idempotency_key="privacy-entity-addresses-add",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        ReviseEntityAddress(
+            entity_address_id=FOREIGN_ENTITY_ADDRESS,
+            expected_version=1,
+            entity_id=FOREIGN_ENTITY,
+            address_type_code=AddressTypeCode.BUSINESS,
+            raw_value="2 Confidential Way",
+            idempotency_key="privacy-entity-addresses-revise",
+        ),
+    ),
+    (
+        Capability.ENTITIES_ADDRESSES_RETIRE,
+        RetireEntityAddress(
+            entity_address_id=FOREIGN_ENTITY_ADDRESS,
+            expected_version=1,
+            idempotency_key="privacy-entity-addresses-retire",
         ),
     ),
     (
@@ -652,10 +685,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    # Forty-two after `RI-ENT-WP-11`'s first record family. The count is
+    # Forty-five after `RI-ENT-WP-11`'s first two record families. The count is
     # asserted as well as the set, because a prefix scan that stopped matching
     # would satisfy the equality against an equally empty tuple.
-    assert len(served) == 42
+    assert len(served) == 45
 
 
 # --- the partition, under every capability ---------------------------------

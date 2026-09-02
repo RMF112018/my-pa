@@ -104,6 +104,7 @@ from my_pa.domain.relationship.entity import (
     MAX_DIRECTED_EVIDENCE_REFS,
     MAX_DIRECTED_REASON_CHARACTERS,
     MAX_DIRECTED_TEXT_CHARACTERS,
+    AddressTypeCode,
     AliasState,
     AliasType,
     AssignmentType,
@@ -4651,6 +4652,45 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 "preferred form takes it from whichever held it before."
             )
         },
+        "entity_address_id": {
+            "description": (
+                "Opaque identifier of the recorded address, as returned by "
+                "entities.addresses.list or entities.profile."
+            )
+        },
+        "address_type_code": {
+            "description": (
+                "What role this address plays, from the closed address-type "
+                "vocabulary. An entity may hold several simultaneously active "
+                "addresses of different types; a headquarters and a project "
+                "address are not competing facts."
+            )
+        },
+        "raw_value": {
+            "description": (
+                "The address exactly as a source wrote it, kept verbatim. The "
+                "server derives the normalized form it matches on; you never "
+                "send that."
+            )
+        },
+        "line1": {
+            "description": (
+                "Optional first structured line. Supply the structured fields "
+                "only where you already know that structure: nothing here "
+                "splits raw_value to invent one."
+            )
+        },
+        "line2": {"description": "Optional second structured line."},
+        "city": {"description": "Optional city or locality, where it is known."},
+        "region": {"description": "Optional state, province or region, where it is known."},
+        "postal_code": {"description": "Optional postal or ZIP code, where it is known."},
+        "country": {"description": "Optional country, where it is known."},
+        "label": {
+            "description": (
+                "Optional short label a person would use for this address. A "
+                "name for the record, not part of the address itself."
+            )
+        },
     }
 )
 
@@ -4666,6 +4706,37 @@ def _entity_name(value: object, detail: SafeDetail) -> str:
     if not name.strip():
         raise InvalidRequestError(detail)
     return name
+
+
+def _record_text(value: object, detail: SafeDetail) -> str:
+    """One required record-family text field: a string, and not blank.
+
+    `value` is `object` on `_idempotency_key`'s terms. Blank is refused here as
+    well as in the domain record, because the two refuse it at different
+    distances from the caller: the record raises `ValueError`, which reaches a
+    caller as `internal_error`, and this reaches them as `invalid_request`
+    naming the field they can correct.
+
+    **No length bound.** The column's own limit and the domain record's are the
+    two that decide, and a third copy here could only disagree with them. That
+    is the same division `_text` states for a capture's content.
+    """
+    if not isinstance(value, str) or not value.strip():
+        raise InvalidRequestError(detail)
+    return value
+
+
+def _optional_record_text(value: object, detail: SafeDetail) -> str | None:
+    """The same field where absence is a complete answer.
+
+    `None` is passed through untouched and a blank string is refused rather than
+    read as absence -- exactly what `EntityAddress.__post_init__` means by "not
+    blank when present", stated at the boundary where the field name is still
+    known.
+    """
+    if value is None:
+        return None
+    return _record_text(value, detail)
 
 
 def _flag(value: object, detail: SafeDetail) -> bool:
@@ -5186,6 +5257,189 @@ class RetireEntityName:
 
     def __post_init__(self) -> None:
         _identifier(self.entity_name_id, IdKind.ENTITY_NAME, SafeDetail.ENTITY_NAME_ID)
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class AddEntityAddress:
+    """`entities.addresses.add`: record one typed address for an entity.
+
+    `raw_value` is the address exactly as a source wrote it and is always
+    required. The structured fields are for what you already know: nothing here
+    splits `raw_value` to invent a structure, and the server derives the
+    normalized form the address is compared in from exactly the fields present.
+
+    An entity may hold several simultaneously active addresses of different
+    types -- a headquarters and a project address are not competing facts --
+    and more than one of the same type only when they are not identical.
+
+    Retrying with the same `idempotency_key` and the same payload returns the
+    original receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ADDRESSES_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "address_type_code",
+        "raw_value",
+        "idempotency_key",
+        "line1",
+        "line2",
+        "city",
+        "region",
+        "postal_code",
+        "country",
+        "label",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    entity_id: str
+    address_type_code: AddressTypeCode
+    raw_value: str = field(repr=False)
+    idempotency_key: str
+    line1: str | None = field(default=None, repr=False)
+    line2: str | None = field(default=None, repr=False)
+    city: str | None = field(default=None, repr=False)
+    region: str | None = field(default=None, repr=False)
+    postal_code: str | None = field(default=None, repr=False)
+    country: str | None = None
+    label: str | None = None
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(self.address_type_code, AddressTypeCode, SafeDetail.ADDRESS_TYPE_CODE)
+        _record_text(self.raw_value, SafeDetail.RAW_VALUE)
+        _idempotency_key(self.idempotency_key)
+        # Each structured part named at its own call site rather than routed
+        # through one helper taking `self`. A helper that took the command
+        # would type-check every field and be invisible to
+        # `test_commands_check_the_type_before_the_content`, which measures
+        # type-checking per named field -- the exact extraction that module
+        # records having been made green by once before.
+        _optional_record_text(self.line1, SafeDetail.LINE1)
+        _optional_record_text(self.line2, SafeDetail.LINE2)
+        _optional_record_text(self.city, SafeDetail.CITY)
+        _optional_record_text(self.region, SafeDetail.REGION)
+        _optional_record_text(self.postal_code, SafeDetail.POSTAL_CODE)
+        _optional_record_text(self.country, SafeDetail.COUNTRY)
+        _optional_record_text(self.label, SafeDetail.LABEL)
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseEntityAddress:
+    """`entities.addresses.revise`: replace one recorded address with a corrected one.
+
+    **A supersession, not an update**, exactly as `entities.names.supersede` is:
+    a new address row is written and the one named by `entity_address_id` is
+    marked superseded, pointing at its successor. Nothing is edited in place and
+    nothing is deleted. The word is `revise` here and `supersede` for names
+    because the source audit fixed both names; the act is the same one.
+
+    The successor's content is stated in full rather than read off the
+    predecessor: a field you do not restate is not carried forward, because this
+    write performs no read. `expected_version` is the version a recent
+    `entities.addresses.list` returned.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ADDRESSES_REVISE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_address_id",
+        "expected_version",
+        "entity_id",
+        "address_type_code",
+        "raw_value",
+        "idempotency_key",
+        "line1",
+        "line2",
+        "city",
+        "region",
+        "postal_code",
+        "country",
+        "label",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    entity_address_id: str
+    expected_version: int
+    entity_id: str
+    address_type_code: AddressTypeCode
+    raw_value: str = field(repr=False)
+    idempotency_key: str
+    line1: str | None = field(default=None, repr=False)
+    line2: str | None = field(default=None, repr=False)
+    city: str | None = field(default=None, repr=False)
+    region: str | None = field(default=None, repr=False)
+    postal_code: str | None = field(default=None, repr=False)
+    country: str | None = None
+    label: str | None = None
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_address_id, IdKind.ENTITY_ADDRESS, SafeDetail.ENTITY_ADDRESS_ID)
+        _expected_version(self.expected_version)
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(self.address_type_code, AddressTypeCode, SafeDetail.ADDRESS_TYPE_CODE)
+        _record_text(self.raw_value, SafeDetail.RAW_VALUE)
+        _idempotency_key(self.idempotency_key)
+        # Each structured part named at its own call site rather than routed
+        # through one helper taking `self`. A helper that took the command
+        # would type-check every field and be invisible to
+        # `test_commands_check_the_type_before_the_content`, which measures
+        # type-checking per named field -- the exact extraction that module
+        # records having been made green by once before.
+        _optional_record_text(self.line1, SafeDetail.LINE1)
+        _optional_record_text(self.line2, SafeDetail.LINE2)
+        _optional_record_text(self.city, SafeDetail.CITY)
+        _optional_record_text(self.region, SafeDetail.REGION)
+        _optional_record_text(self.postal_code, SafeDetail.POSTAL_CODE)
+        _optional_record_text(self.country, SafeDetail.COUNTRY)
+        _optional_record_text(self.label, SafeDetail.LABEL)
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class RetireEntityAddress:
+    """`entities.addresses.retire`: withdraw one recorded address from service.
+
+    The row is kept and its history with it; there is no capability that
+    destroys a recorded address. Retiring releases the preferred slot the
+    address held, if it held one.
+
+    Use this when the address stopped applying and nothing replaces it; use
+    `entities.addresses.revise` when something does.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_ADDRESSES_RETIRE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_address_id", "expected_version", "idempotency_key"
+    )
+
+    entity_address_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_address_id, IdKind.ENTITY_ADDRESS, SafeDetail.ENTITY_ADDRESS_ID)
         _expected_version(self.expected_version)
         _idempotency_key(self.idempotency_key)
 
@@ -6323,6 +6577,9 @@ type Command = (
     | AddEntityName
     | SupersedeEntityName
     | RetireEntityName
+    | AddEntityAddress
+    | ReviseEntityAddress
+    | RetireEntityAddress
     | CreateEntity
     | UpdateEntity
     | ArchiveEntity

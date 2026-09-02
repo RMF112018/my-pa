@@ -2479,6 +2479,13 @@ writer and `RI-ENT-WP-10` published five reads over them; neither published a
 way to *change* one. This work package publishes the capabilities that do, three
 verbs per family, and the mutation-ledger row that accounts for each write.
 
+**Landed so far, by family** (this list is what the migration owner needs):
+
+| Family | Capabilities | `MutationRecordFamily` |
+|---|---|---|
+| Typed names | `entities.names.add`, `entities.names.supersede`, `entities.names.retire` | `name` |
+| Addresses | `entities.addresses.add`, `entities.addresses.revise`, `entities.addresses.retire` | `address` |
+
 **RULING 5 holds and is enforced by the transport rather than by a convention.**
 There is no `entities.profile.save` and there will not be one. Every command
 declares its fields explicitly and the generated MCP schema carries

@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and twelve capabilities is addressable
+**Reachability.** Every one of the one hundred and fifteen capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-thirteenth capability added to the domain arrives as
-a failing row instead of as an untested one. Thirteen of the one hundred and twelve answer a
+written here, so a one-hundred-sixteenth capability added to the domain arrives as
+a failing row instead of as an untested one. Thirteen of the one hundred and fifteen answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -71,6 +71,7 @@ from tests.contract.test_transport_parity import (
     staged_child_records,
     staged_edge,
     staged_entities,
+    staged_entity_address,
     staged_entity_name,
     staged_mention,
 )
@@ -80,6 +81,7 @@ from my_pa.adapters.http import create_http_app
 from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
     AddEntityName,
     ArchiveEntity,
@@ -167,11 +169,13 @@ from my_pa.application.commands import (
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAddress,
     RetireEntityAlias,
     RetireEntityIdentifier,
     RetireEntityName,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityRelationship,
     ReviseManagedDocument,
@@ -220,6 +224,7 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
     AliasState,
     AliasType,
     AssignmentType,
@@ -408,6 +413,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     # two staged names two rows.
     supersede_name = staged_entity_name(scene, NameTypeCode.LEGAL)
     retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
+    revise_address = staged_entity_address(scene, AddressTypeCode.BUSINESS)
+    retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -745,6 +752,25 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_name_id": retire_name,
             "expected_version": 1,
             "idempotency_key": "http-entity-names-retire-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_ADD: {
+            "entity_id": person.entity_id,
+            "address_type_code": "headquarters",
+            "raw_value": "1 HTTP Headquarters Way",
+            "idempotency_key": "http-entity-addresses-add-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_REVISE: {
+            "entity_address_id": revise_address,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "address_type_code": "business",
+            "raw_value": "2 HTTP Business Way",
+            "idempotency_key": "http-entity-addresses-revise-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_RETIRE: {
+            "entity_address_id": retire_address,
+            "expected_version": 1,
+            "idempotency_key": "http-entity-addresses-retire-0001",
         },
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
@@ -1095,6 +1121,8 @@ def commands_for(
     # two staged names two rows.
     supersede_name = staged_entity_name(scene, NameTypeCode.LEGAL)
     retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
+    revise_address = staged_entity_address(scene, AddressTypeCode.BUSINESS)
+    retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -1406,6 +1434,25 @@ def commands_for(
             entity_name_id=retire_name,
             expected_version=1,
             idempotency_key="http-entity-names-retire-0001",
+        ),
+        Capability.ENTITIES_ADDRESSES_ADD: AddEntityAddress(
+            entity_id=person.entity_id,
+            address_type_code=AddressTypeCode.HEADQUARTERS,
+            raw_value="1 HTTP Headquarters Way",
+            idempotency_key="http-entity-addresses-add-0001",
+        ),
+        Capability.ENTITIES_ADDRESSES_REVISE: ReviseEntityAddress(
+            entity_address_id=revise_address,
+            expected_version=1,
+            entity_id=person.entity_id,
+            address_type_code=AddressTypeCode.BUSINESS,
+            raw_value="2 HTTP Business Way",
+            idempotency_key="http-entity-addresses-revise-0001",
+        ),
+        Capability.ENTITIES_ADDRESSES_RETIRE: RetireEntityAddress(
+            entity_address_id=retire_address,
+            expected_version=1,
+            idempotency_key="http-entity-addresses-retire-0001",
         ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,

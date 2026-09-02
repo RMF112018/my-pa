@@ -358,7 +358,7 @@ email, or calendar data.
 **That describes WP-9, and is no longer true of the plane.** Corrected
 2026-08-19 when it acquired public reads, and again after Phase A, which gave it
 writes: the Relationship Intelligence entity plane is forty-two `entities.`
-names now — sixteen reads and twenty-six writes over identity, identifiers, aliases,
+names now — sixteen reads and twenty-nine writes over identity, identifiers, aliases,
 assignments, directed edges, observations, mention resolution, proposal staging,
 and governed merge preview/apply. This document,
 whose job is stating what the build does not do, said nothing about them. What
@@ -369,7 +369,7 @@ remains true, and is the limitation:
   forty-two and refuses each with `unsupported` on every transport. A process
   that has set it but not
   `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` serves the reads and refuses
-  all twenty-six writes the same way.
+  all twenty-nine writes the same way.
 * **Proposal review and governed merge are available, but remain fail-closed and
   off by default.** Entity and Relationship Memory cases use canonical
   `review.list`/`review.decide`; accepting a merge proposal does not execute a

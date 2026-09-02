@@ -81,8 +81,11 @@ from typing import Any
 
 from my_pa.application import entity_record_families as record_families
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityName,
+    RetireEntityAddress,
     RetireEntityName,
+    ReviseEntityAddress,
     SupersedeEntityName,
 )
 
@@ -100,7 +103,7 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
-from my_pa.domain.relationship.entity import EntityNameState
+from my_pa.domain.relationship.entity import EntityAddressState, EntityNameState
 from my_pa.domain.relationship.governance import (
     DEFAULT_MUTATION_ACTOR_CLASS,
     DEFAULT_MUTATION_AUTHORITY,
@@ -366,6 +369,196 @@ class EntityFamilyWriteService:
             actor_class=actor_class,
         )
 
+    # --- entity_addresses --------------------------------------------------
+
+    def add_address(
+        self,
+        repository: EntitiesRepository,
+        command: AddEntityAddress,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Record one typed address, or return the receipt this key already has."""
+        payload = _address_payload(command)
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_ADDRESSES_ADD.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        recorded = self._families.record_address(
+            repository,
+            record_families.RecordEntityAddress(
+                entity_id=command.entity_id,
+                address_type_code=command.address_type_code,
+                raw_value=command.raw_value,
+                line1=command.line1,
+                line2=command.line2,
+                city=command.city,
+                region=command.region,
+                postal_code=command.postal_code,
+                country=command.country,
+                label=command.label,
+                is_preferred=command.is_preferred,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+            ),
+            principal_id=principal_id,
+            at=at,
+            authority=authority,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_ADDRESSES_ADD,
+            family=MutationRecordFamily.ADDRESS,
+            record_id=recorded.record_id,
+            prior_version=None,
+            new_version=1,
+            state=EntityAddressState.ACTIVE.value,
+            before_state=None,
+            superseded_id=None,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
+    def revise_address(
+        self,
+        repository: EntitiesRepository,
+        command: ReviseEntityAddress,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Supersede one recorded address with its corrected successor.
+
+        `revise` is the audit's spelling for this family and `supersede` is its
+        spelling for names; the act is the same one, and it is a supersession
+        rather than an edit in both.
+        """
+        payload = {
+            "entity_address_id": command.entity_address_id,
+            "expected_version": command.expected_version,
+            **_address_payload(command),
+        }
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_ADDRESSES_REVISE.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        corrected = self._families.correct_address(
+            repository,
+            record_families.CorrectEntityAddress(
+                entity_address_id=command.entity_address_id,
+                expected_version=command.expected_version,
+                entity_id=command.entity_id,
+                address_type_code=command.address_type_code,
+                raw_value=command.raw_value,
+                line1=command.line1,
+                line2=command.line2,
+                city=command.city,
+                region=command.region,
+                postal_code=command.postal_code,
+                country=command.country,
+                label=command.label,
+                is_preferred=command.is_preferred,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+            ),
+            principal_id=principal_id,
+            at=at,
+            authority=authority,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_ADDRESSES_REVISE,
+            family=MutationRecordFamily.ADDRESS,
+            record_id=corrected.record_id,
+            prior_version=None,
+            new_version=1,
+            state=EntityAddressState.ACTIVE.value,
+            before_state=_predecessor(corrected.superseded_record_id, command.expected_version),
+            superseded_id=corrected.superseded_record_id,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
+    def retire_address(
+        self,
+        repository: EntitiesRepository,
+        command: RetireEntityAddress,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Withdraw one recorded address, keeping the row and releasing its slot."""
+        payload = {
+            "entity_address_id": command.entity_address_id,
+            "expected_version": command.expected_version,
+        }
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_ADDRESSES_RETIRE.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        retired = self._families.retire_address(
+            repository,
+            record_families.RetireEntityAddress(
+                entity_address_id=command.entity_address_id,
+                expected_version=command.expected_version,
+            ),
+            principal_id=principal_id,
+            at=at,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_ADDRESSES_RETIRE,
+            family=MutationRecordFamily.ADDRESS,
+            record_id=retired.record_id,
+            prior_version=command.expected_version,
+            new_version=command.expected_version + 1,
+            state=EntityAddressState.RETIRED.value,
+            before_state={"state": EntityAddressState.ACTIVE.value},
+            superseded_id=None,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
     # --- the ledger row every verb above leaves behind ----------------------
 
     def _account_for(
@@ -446,6 +639,33 @@ class EntityFamilyWriteService:
             issued_at=at,
             replayed=False,
         )
+
+
+def _address_payload(command: AddEntityAddress | ReviseEntityAddress) -> dict[str, Any]:
+    """The caller-supplied half of an address write, in canonical form.
+
+    Shared by the addition and the correction because the two state the same
+    address, which is the same reason `EntityRecordFamilyService._address`
+    builds one row for both. The correction's own two fields -- the predecessor
+    it names and the version it asserts -- are added by its caller, so a
+    correction and an addition carrying identical addresses still hash
+    differently, which is correct: they are different acts on different state.
+    """
+    return {
+        "entity_id": command.entity_id,
+        "address_type_code": command.address_type_code.value,
+        "raw_value": command.raw_value,
+        "line1": command.line1,
+        "line2": command.line2,
+        "city": command.city,
+        "region": command.region,
+        "postal_code": command.postal_code,
+        "country": command.country,
+        "label": command.label,
+        "is_preferred": command.is_preferred,
+        "effective_from": _moment(command.effective_from),
+        "effective_to": _moment(command.effective_to),
+    }
 
 
 def _predecessor(record_id: str, expected_version: int) -> dict[str, Any]:

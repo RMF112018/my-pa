@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and twelve capabilities. There are two ways to prove that and only one stays
+one hundred and fifteen capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -28,10 +28,10 @@ command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
 default composition exposes fifty-five: the six managed-document names, the
-forty-two `entities.` names and the nine Relationship Memory names are
+forty-five `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
-second switch over the `entities.` family and withholds its twenty-six writes on
+second switch over the `entities.` family and withholds its twenty-nine writes on
 its own. Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
@@ -108,10 +108,12 @@ from my_pa.domain.intelligence.catalog import (
     IntelligenceStage,
 )
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
     AliasType,
     Assignment,
     AssignmentType,
     Entity,
+    EntityAddress,
     EntityAlias,
     EntityName,
     EntityRelationship,
@@ -121,6 +123,7 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     NameTypeCode,
+    normalize_address,
 )
 from my_pa.domain.relationship.governance import (
     EntityObservation,
@@ -378,6 +381,51 @@ def staged_assignment(scene: Scene, role: str) -> str:
     )
     FakeUnitOfWork(scene.world).entities.record_assignment(principal_id, assignment)
     return assignment.assignment_id
+
+
+def staged_entity_address(scene: Scene, address_type_code: AddressTypeCode) -> str:
+    """One recorded address the staged person carries, of the stated type.
+
+    `staged_entity_name`'s contract over the address family, memoized on the
+    type for the same reason: the active unique keys on
+    `(entity, type, normalized_address_value)`, so two stagings that differ only
+    in the type are two rows and two that differ in neither are one.
+    """
+    principal_id = scene.principal.principal_id
+    person, _ = staged_entities(scene)
+    held = next(
+        (
+            address
+            for address in scene.world.entity_addresses
+            if address.principal_id == principal_id
+            and address.address_type_code is address_type_code
+        ),
+        None,
+    )
+    if held is not None:
+        return held.entity_address_id
+    entity_address_id = issue_identifier(IdKind.ENTITY_ADDRESS)
+    raw_value = f"1 Parity {address_type_code.value} Way"
+    FakeUnitOfWork(scene.world).entities.record_entity_address(
+        principal_id,
+        EntityAddress(
+            entity_address_id=entity_address_id,
+            entity_id=person.entity_id,
+            principal_id=principal_id,
+            address_type_code=address_type_code,
+            raw_value=raw_value,
+            normalized_address_value=normalize_address(
+                line1=None,
+                line2=None,
+                city=None,
+                region=None,
+                postal_code=None,
+                country=None,
+                raw_value=raw_value,
+            ),
+        ),
+    )
+    return entity_address_id
 
 
 def staged_entity_name(scene: Scene, name_type_code: NameTypeCode) -> str:
@@ -687,6 +735,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     # third type that no staged row holds.
     supersede_name = staged_entity_name(scene, NameTypeCode.LEGAL)
     retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
+    revise_address = staged_entity_address(scene, AddressTypeCode.BUSINESS)
+    retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -1048,6 +1098,25 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_name_id": retire_name,
             "expected_version": 1,
             "idempotency_key": "parity-entity-names-retire-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_ADD: {
+            "entity_id": person.entity_id,
+            "address_type_code": "headquarters",
+            "raw_value": "1 Parity Headquarters Way",
+            "idempotency_key": "parity-entity-addresses-add-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_REVISE: {
+            "entity_address_id": revise_address,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "address_type_code": "business",
+            "raw_value": "2 Parity Business Way",
+            "idempotency_key": "parity-entity-addresses-revise-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_RETIRE: {
+            "entity_address_id": retire_address,
+            "expected_version": 1,
+            "idempotency_key": "parity-entity-addresses-retire-0001",
         },
         # A name no staged entity carries, so duplicate resolution admits it.
         # A create naming "Parity Person" would be refused as ambiguous, which
@@ -1469,8 +1538,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and twelve commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 113, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and fifteen commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 116, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

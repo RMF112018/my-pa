@@ -2867,8 +2867,11 @@ for. Widening the subject vocabulary belongs to the re-enrichment package.
   object; the schema builder describes no nested dataclass, so the only shape
   that would publish is `dict[str, object]` — the free-form payload RULING 5
   forbids. It is omitted rather than half-exposed, and every command here writes
-  a fact with no assertion attached. `ENTITY-PROVENANCE-001`'s MCP-exposure
-  clause therefore remains open.
+  a fact with no assertion attached. The *assertion* half of
+  `ENTITY-PROVENANCE-001`'s MCP-exposure clause therefore remains open, even
+  though the *facts* half is now closed by these contracts and by
+  `RI-ENT-WP-10`'s reads — which is why that finding's row reads "partly closed"
+  and names both halves rather than reporting a verdict.
 - **A correction whose successor collides with a *third* active row still
   answers `internal_error`.** The five families' inserts raise the driver's own
   `IntegrityError`, untranslated, exactly as `EntityRecordFamilyService`'s

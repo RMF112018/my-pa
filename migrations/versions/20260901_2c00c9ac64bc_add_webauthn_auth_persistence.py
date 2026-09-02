@@ -1,7 +1,7 @@
 """Add WebAuthn credential, challenge, recovery, and session persistence.
 
 Revision ID: 2c00c9ac64bc
-Revises: 1cda4d536268
+Revises: c99cd8ed8d1c
 Create Date: 2026-09-01
 
 UI-IMP-WP02 durable identity-plane substrate for ADR-011. Additive tables only.
@@ -17,7 +17,7 @@ from collections.abc import Sequence
 from alembic import op
 
 revision: str = "2c00c9ac64bc"
-down_revision: str | tuple[str, ...] | None = "1cda4d536268"
+down_revision: str | tuple[str, ...] | None = "c99cd8ed8d1c"
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

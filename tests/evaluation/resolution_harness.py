@@ -297,6 +297,98 @@ class _CorpusRepository(EntitiesRepository):
     ) -> list:
         raise NotImplementedError("resolution reads no person affiliation")
 
+    # RI-ENT-WP-08's write path for the same six families: resolution writes
+    # to none of them, so each raises on this class's own established terms.
+    # Declared rather than inherited because the port makes them abstract --
+    # which is the point of declaring them there: an implementer has to say
+    # what it does about the write path, even when the answer is "nothing".
+
+    def record_entity_name(self, principal_id: str, entity_name: object) -> None:
+        raise NotImplementedError("resolution writes no name form")
+
+    def supersede_entity_name(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no name form")
+
+    def retire_entity_name(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no name form")
+
+    def record_organization_profile(self, principal_id: str, profile: object) -> None:
+        raise NotImplementedError("resolution writes no organization profile")
+
+    def revise_organization_profile(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no organization profile")
+
+    def record_entity_address(self, principal_id: str, address: object) -> None:
+        raise NotImplementedError("resolution writes no address")
+
+    def supersede_entity_address(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no address")
+
+    def retire_entity_address(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no address")
+
+    def record_communication_method(self, principal_id: str, method: object) -> None:
+        raise NotImplementedError("resolution writes no communication method")
+
+    def supersede_communication_method(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no communication method")
+
+    def retire_communication_method(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no communication method")
+
+    def record_project_participation(self, principal_id: str, participation: object) -> None:
+        raise NotImplementedError("resolution writes no project participation")
+
+    def supersede_project_participation(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no project participation")
+
+    def retire_project_participation(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no project participation")
+
+    def record_person_organization_affiliation(
+        self, principal_id: str, affiliation: object
+    ) -> None:
+        raise NotImplementedError("resolution writes no person affiliation")
+
+    def supersede_person_organization_affiliation(
+        self, principal_id: str, **arguments: object
+    ) -> None:
+        raise NotImplementedError("resolution writes no person affiliation")
+
+    def retire_person_organization_affiliation(
+        self, principal_id: str, **arguments: object
+    ) -> None:
+        raise NotImplementedError("resolution writes no person affiliation")
+
+    # RI-ENT-WP-07's assertion surface, which RI-ENT-WP-08 declared on the
+    # port: resolution writes none of it, and reads none of it either. The
+    # reads refuse rather than answer `[]`/`None` -- unlike a corpus-backed
+    # read such as `assignments` -- for the reason the governance block below
+    # already gives for `fact_evidence_links` and `observations`: this corpus
+    # holds no assertion, so an empty answer would be indistinguishable from
+    # a resolver that consulted the assertion plane and correctly found
+    # nothing, and the calibration figures would silently stop measuring the
+    # basis they name. Refusing makes any such consultation a failure the run
+    # cannot miss.
+
+    def record_assertion(self, principal_id: str, assertion: object) -> None:
+        raise NotImplementedError("resolution writes no assertion")
+
+    def assertion(self, principal_id: str, assertion_id: str) -> object:
+        raise NotImplementedError("resolution reads no assertion")
+
+    def assertions_targeting(self, principal_id: str, **arguments: object) -> list:
+        raise NotImplementedError("resolution reads no assertion")
+
+    def supersede_assertion(self, principal_id: str, **arguments: object) -> None:
+        raise NotImplementedError("resolution writes no assertion")
+
+    def record_assertion_evidence(self, principal_id: str, evidence: object) -> None:
+        raise NotImplementedError("resolution writes no assertion evidence")
+
+    def assertion_evidence(self, principal_id: str, assertion_id: str, **arguments: object) -> list:
+        raise NotImplementedError("resolution reads no assertion evidence")
+
     def assignments(
         self, principal_id: str, entity_id: str, active_only: bool = True
     ) -> list[Assignment]:

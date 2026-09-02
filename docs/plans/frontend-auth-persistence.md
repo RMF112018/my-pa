@@ -2,7 +2,7 @@
 
 **Package:** `UI-IMP-WP02 — Auth Persistence and Session Topology`  
 **Architecture authority:** [ADR-011](../decisions/ADR-011-passkey-webauthn-authentication-and-opaque-server-sessions.md)  
-**Alembic:** `2c00c9ac64bc` on `1cda4d536268` (`identity` schema only)
+**Alembic:** `2c00c9ac64bc` on `c99cd8ed8d1c` (`identity` schema only)
 
 This document describes the durable PostgreSQL substrate WP02 added. It does not restate ADR-011. It does not claim WebAuthn ceremonies, opaque browser-cookie cutover, or Entra/`local_operator` retirement.
 

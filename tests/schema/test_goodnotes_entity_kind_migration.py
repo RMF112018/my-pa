@@ -62,6 +62,11 @@ PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
 PHASE_B_START: Final = "c7a1f04b9e63"
+#: The chain's current head: `2c00c9ac64bc` (UI-IMP-WP02 auth persistence), additive on
+#: `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
+#: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
+#: `design_coordination_with`. Written out rather than derived so chain drift
+#: fails here rather than passing.
 HEAD_REVISION: Final = "2c00c9ac64bc"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_d9c4e1a7b628_widen_goodnotes_entity_kind_meeting_agenda.py"
@@ -146,7 +151,10 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(PHASE_B_REVISION).down_revision == "a1f7d3c85e40"
     assert script.get_revision(PHASE_B_HEAD).down_revision == PHASE_B_REVISION
     assert script.get_heads() == [HEAD_REVISION]
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
+    # 87 migration files: 86 through `c99cd8ed8d1c` (RI-ENT-WP-08), plus
+    # `2c00c9ac64bc` (UI-IMP-WP02), which adds WebAuthn credential, challenge,
+    # recovery-code, and opaque session tables.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 87
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

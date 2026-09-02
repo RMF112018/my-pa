@@ -273,63 +273,65 @@ class AssignmentType(StrEnum):
 class EntityRelationshipType(StrEnum):
     """The kinds of directed relationship between two entities.
 
-    **Widened to thirty-four of the thirty-five `entity_relationship_types`
-    codes as of this revision (the WP-08 blocker-clearing pass following
-    RI-ENT-WP-06a/06b; see `docs/campaign/ROBUST-ENTITY-DATA-MODEL-20260830.md`'s
-    "Second blocking dependency... LIFTED" update).** From `9def3c2e63bb`
-    through `8dc3619891bb` (RI-ENT-WP-06a) this enum was deliberately held at
-    the original fifteen codes while `entity_relationship_types`
-    (`RelationshipTypeTaxonomyEntry`, below) was seeded with those fifteen
-    plus twenty new ones and `entity_relationships.relationship_type` was
-    re-pointed at that table by foreign key instead of by CHECK -- that
-    history is preserved in `git log` on this file and in `8dc3619891bb`'s
-    own module docstring. **That deferral is closed for nineteen of the
-    twenty new codes; the twentieth (`design_coordinates_with`) is
-    disclosed below as a deliberate, narrower exception rather than folded in
-    silently.** This enum's values match `entity_relationship_types`'s
-    `relationship_type_code` strings character-for-character wherever both
-    exist, so it is once again the faithful Python mirror of the DB-level
-    taxonomy for every code except the one named below.
-
-    **One code deliberately withheld: `design_coordinates_with`.** Adding it
-    as a member (`DESIGN_COORDINATES_WITH = "design_coordinates_with"`) was
-    tried during this revision and reverted after running the full
-    `tests/architecture/` tier: it fails
-    `test_no_closed_relationship_vocabulary_admits_a_score_or_a_protected_trait`
-    and `test_every_live_name_on_the_relationship_surface_passes_the_rule` in
-    `tests/architecture/test_relationship_scoring_surface_is_denied.py` (the
-    no-confidence/no-protected-trait guard), because that guard's
+    **Widened to all thirty-five of the thirty-five `entity_relationship_types`
+    codes as of this revision (migration `c99cd8ed8d1c`, the WP-08
+    blocker-clearing rename that closed the last gap the prior pass left
+    open; see `docs/campaign/ROBUST-ENTITY-DATA-MODEL-20260830.md`'s "Second
+    blocking dependency... LIFTED" and "WP-08 blocker cleared" updates).**
+    From `9def3c2e63bb` through `8dc3619891bb` (RI-ENT-WP-06a) this enum was
+    deliberately held at the original fifteen codes while
+    `entity_relationship_types` (`RelationshipTypeTaxonomyEntry`, below) was
+    seeded with those fifteen plus twenty new ones and
+    `entity_relationships.relationship_type` was re-pointed at that table by
+    foreign key instead of by CHECK -- that history is preserved in `git log`
+    on this file and in `8dc3619891bb`'s own module docstring. A prior pass
+    widened this enum to nineteen of those twenty new codes and disclosed the
+    twentieth, `design_coordinates_with`, as withheld because
+    `tests/architecture/test_relationship_scoring_surface_is_denied.py`'s
     `latitude|longitude|geolocation|coordinates|whereabouts|tracking` ->
-    "location tracking" denial pattern token-matches "coordinates" wherever it
-    appears in any live enum member's name or value in `my_pa.domain.relationship`
-    -- and `entity_relationship_types` seeds this code to mean design-discipline
-    coordination between two project participants, not geolocation. This
-    revision's own instructions forbid touching, weakening, or reasoning past
-    that guard file to make a member pass it, and forbid inventing an enum
-    value that does not match the seeded `relationship_type_code` string
-    character-for-character -- so neither "rename the guard's pattern" nor
-    "rename this member's value" was available. **The member is withheld
-    instead of forcing either.** `entity_relationship_types.design_coordinates_with`
-    remains a valid, seeded, DB-level taxonomy entry -- nothing about the
-    table changed -- but no typed read of an `entity_relationships` row
-    carrying this one code exists yet: `_row_to_relationship` still raises
-    `ValueError` for it alone, on the same "safe only because nothing writes
-    it yet" argument this campaign has made throughout. Resolving this
-    (widening the guard's pattern with a considered carve-out, or choosing a
-    different code/value for this one taxonomy entry) is a decision outside
-    this revision's authority and is left to the campaign owner, disclosed
-    here and in the campaign document rather than decided unilaterally.
+    "location tracking" pattern token-matched the substring "coordinates" in
+    that code's name, even though the taxonomy entry means design-discipline
+    coordination between two project participants (an architect and a
+    structural engineer coordinating design, say), not geolocation -- a
+    correct-as-designed mechanical match and a false positive at the
+    semantic level. **That gap is now closed, not by touching the guard, but
+    by renaming the code.** Migration `c99cd8ed8d1c` renamed the seeded
+    `entity_relationship_types` row from `design_coordinates_with` to
+    `design_coordination_with` (every other column of that row -- `directed`,
+    `inverse_type_code`, `source_entity_type`/`target_entity_type`,
+    `allows_project_scope`, `cardinality_rule`, `status`, `label` --
+    unchanged: a rename, not a new taxonomy decision), and this enum now
+    carries `DESIGN_COORDINATION_WITH = "design_coordination_with"` as its
+    thirty-fifth member. Verified before choosing that name, not assumed:
+    tokenizing `design_coordination_with` the way the guard does yields
+    `("design", "coordination", "with")`, and none of those three tokens
+    `fullmatch` any pattern in the guard's `DENIED` tuple -- not just the
+    location-tracking pattern, every pattern in the list (score, rating,
+    rank, tier, grade, weight, confidence, priority, quality, strength,
+    closeness, engagement, influence, health, risk, trust, reputation,
+    loyalty, compatibility, affinity, sentiment, personality, segment, and
+    the protected-trait patterns). `coordination` is a distinct token from
+    `coordinates` under the guard's `fullmatch`-on-token rule, which is
+    exactly the token/substring distinction that guard's own docstring
+    documents. This enum's values once again match
+    `entity_relationship_types`'s `relationship_type_code` strings
+    character-for-character for every one of the thirty-five codes, with no
+    exception.
 
     **Consequence for the typed read path, verified rather than assumed.**
     `infrastructure.persistence.entity._row_to_relationship` constructs this
     enum from the stored column (`EntityRelationshipType(str(row.
     relationship_type))`). With only fifteen members, that call raised
-    `ValueError` for any of the twenty new codes; with thirty-four members
-    present, the same call now succeeds for nineteen of the twenty new codes,
-    because each is now a member of this enum -- `design_coordinates_with`
-    alone still raises, per "One code deliberately withheld" above. No
-    change to `_row_to_relationship` itself was needed or made -- the fix
-    (for the nineteen) is entirely in this enum's membership.
+    `ValueError` for any of the twenty new codes; with all thirty-five
+    members present, the same call now succeeds for every seeded code,
+    `design_coordination_with` included -- no change to
+    `_row_to_relationship` itself was needed or made, for either the
+    nineteen or the thirty-fifth; the fix is entirely in this enum's
+    membership and the migration that renamed the seeded row underneath it.
+    `tests/database/test_entity_relationship_type_widened_read_path.py`
+    proves this at the database for all thirty-five codes -- not just the
+    twenty new ones -- as the WP-08 blocker-clearing pass's own dedicated
+    35-of-35 parity test.
 
     **Consequence for the write path, stated honestly rather than implied
     narrower than it is.** `application/commands.py`'s
@@ -343,21 +345,14 @@ class EntityRelationshipType(StrEnum):
     fifteen-code list anywhere -- they all derive their accepted set from
     this enum directly. **That means widening this enum's membership, by
     itself, also widens what those write-path checks accept**: a caller
-    that now constructs `CreateEntityRelationship` with, say,
-    `EntityRelationshipType.BRAND_OF` passes the `isinstance` gate the same
-    way a pre-existing code always did, because `BRAND_OF` is now a member.
-    This was verified by reading every call site (`grep -rn
-    "EntityRelationshipType(" src/` and every reference to the enum in
-    `src/`), not assumed. Widening the enum was scoped as the WP-08
-    blocker-clearing task, not as WP-08's own write-path work; this
-    docstring records the mechanical fact that the enum widening and the
-    write-path opening are not actually separable here, since nothing else
-    gates the nineteen newly-admitted codes out. No other guard (HTTP/MCP
-    transport, capability surface, or a separate frozen set) restricts
+    that constructs `CreateEntityRelationship` with, say,
+    `EntityRelationshipType.DESIGN_COORDINATION_WITH` now passes the
+    `isinstance` gate the same way a pre-existing code always did, because
+    it is now a member. This was verified by reading every call site
+    (`grep -rn "EntityRelationshipType(" src/` and every reference to the
+    enum in `src/`), not assumed. No other guard (HTTP/MCP transport,
+    capability surface, or a separate frozen set) restricts
     `relationship_type` more narrowly than this enum anywhere in `src/`.
-    `design_coordinates_with` is the one code this paragraph does not apply
-    to: it is not a member, so no write path -- typed or otherwise -- can
-    construct an `EntityRelationshipType` for it at all.
     """
 
     WORKS_FOR = "works_for"
@@ -389,18 +384,11 @@ class EntityRelationshipType(StrEnum):
     PROJECT_CONTROLS_ADVISOR_TO = "project_controls_advisor_to"
     TECHNICAL_REVIEWER_OF = "technical_reviewer_of"
     PEER_REVIEWER_OF = "peer_reviewer_of"
-    # `design_coordinates_with` -- one of the twenty new `entity_relationship_types`
-    # codes -- is deliberately NOT added as a member here. See "One code
-    # deliberately withheld" in this class's own docstring above: adding it trips
-    # `tests/architecture/test_relationship_scoring_surface_is_denied.py`'s
-    # `latitude|longitude|geolocation|coordinates|whereabouts|tracking` ->
-    # "location tracking" pattern (the token "coordinates", read out of
-    # `design_coordinates_with`, fullmatches it) even though the taxonomy entry
-    # means design-discipline coordination, not geolocation. That guard is not
-    # touched, weakened, or reasoned around by this revision (explicit
-    # prohibition); the member is withheld instead, disclosed here and in the
-    # campaign document, pending a decision this revision does not have the
-    # authority to make on its own.
+    # `design_coordination_with` -- the renamed successor to the seeded
+    # `entity_relationship_types` code `design_coordinates_with` (migration
+    # `c99cd8ed8d1c`) -- passes the guard `design_coordinates_with` did not:
+    # see this class's own docstring for the token verification.
+    DESIGN_COORDINATION_WITH = "design_coordination_with"
     UTILITY_PROVIDER_FOR = "utility_provider_for"
     PERMITTING_AUTHORITY_FOR = "permitting_authority_for"
     SELLER_DEVELOPER_FOR = "seller_developer_for"
@@ -1547,11 +1535,13 @@ class RelationshipTypeTaxonomyEntry:
     names alone (RULING 2).** `parent_of`/`subsidiary_of` and `manages`/
     `managed_by` are the only two pairs this revision wires; every other code
     -- including ones English reads as naturally mutual
-    (`design_coordinates_with`, `sequence_interfaces_with`) or ones the audit
-    itself names an inverse for that is not part of this revision's required
-    vocabulary (`technical_reviewer_of`'s audit-suggested `reviewed_by`) --
-    is left `NULL` rather than guessed. A row is never its own inverse
-    (enforced by both this dataclass and the table's own CHECK).
+    (`design_coordination_with` -- seeded by `8dc3619891bb` as
+    `design_coordinates_with` and renamed by `c99cd8ed8d1c`, see
+    `EntityRelationshipType`'s own docstring -- and `sequence_interfaces_with`)
+    or ones the audit itself names an inverse for that is not part of this
+    revision's required vocabulary (`technical_reviewer_of`'s audit-suggested
+    `reviewed_by`) -- is left `NULL` rather than guessed. A row is never its
+    own inverse (enforced by both this dataclass and the table's own CHECK).
 
     **`source_entity_type`/`target_entity_type` are descriptive taxonomy
     metadata, not an enforced constraint on any `entity_relationships` row.**

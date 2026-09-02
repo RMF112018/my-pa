@@ -218,19 +218,26 @@ from my_pa.domain.relationship.entity import (
     DuplicateDirectedFactError,
     Entity,
     EntityAddress,
+    EntityAddressState,
     EntityAlias,
     EntityCommunicationMethod,
+    EntityCommunicationMethodState,
     EntityName,
+    EntityNameState,
     EntityOrganizationProfile,
     EntityProjectParticipation,
+    EntityProjectParticipationState,
     EntityRelationship,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    LegalIdentityStatusCode,
     MergedEndpointError,
+    OrganizationKindCode,
     PersonOrganizationAffiliation,
+    PersonOrganizationAffiliationState,
     RelationshipState,
     StaleDirectedVersionError,
     descriptor_key,
@@ -240,6 +247,10 @@ from my_pa.domain.relationship.governance import (
     OPEN_EQUIVALENT_PROPOSAL_STATES,
     UNDECIDED_PROPOSAL_STATES,
     ActorClass,
+    AssertionStatus,
+    EntityAssertion,
+    EntityAssertionEvidence,
+    EntityAssertionState,
     EntityFactEvidenceLink,
     EntityMergeRecord,
     EntityMutationConflictError,
@@ -607,6 +618,14 @@ class World:
     entity_mutation_events: list[EntityMutationEvent] = field(default_factory=list)
     entity_resolution_decisions: list[EntityResolutionDecision] = field(default_factory=list)
     entity_fact_evidence_links: list[EntityFactEvidenceLink] = field(default_factory=list)
+    #: RI-ENT-WP-07's two assertion tables, whose port surface RI-ENT-WP-08
+    #: declared. Flat lists on `entity_fact_evidence_links`' own terms -- the
+    #: table this pair mirrors -- because this fake's job is the partition
+    #: predicate and the row shape, and a list a filter runs over is the
+    #: clearest place to see either one missing. Separate fields because they
+    #: are two tables about two subjects, exactly as they are in the schema.
+    entity_assertions: list[EntityAssertion] = field(default_factory=list)
+    entity_assertion_evidence: list[EntityAssertionEvidence] = field(default_factory=list)
     entity_assignments: list[Assignment] = field(default_factory=list)
     entity_relationships: list[EntityRelationship] = field(default_factory=list)
     #: The entity plane's mutation ledger (WP-RI-A-02), keyed the way the server
@@ -3384,6 +3403,554 @@ class _Entities(EntitiesRepository):
                 if row.principal_id == principal_id and row.organization_entity_id == entity_id
             ),
             key=lambda row: row.affiliation_id,
+        )
+        return found if limit is None else found[:limit]
+
+    # --- RI-ENT-WP-08: the six families' write path ---------------------------
+    #
+    # In-memory equivalents of `SqlEntityRepository`'s writes. They exist so a
+    # caller written against `EntitiesRepository` can be exercised without a
+    # database, and they reproduce the three refusals that matter to such a
+    # caller -- another Principal's record, a merged-away endpoint, and a
+    # stale or unreachable version -- rather than only the happy path, because
+    # a double that cannot refuse teaches a caller that refusals do not exist.
+    #
+    # **`supersede_*` writes the successor here too.** It takes the successor
+    # record, as the port does, and a caller that superseded a row through
+    # this double sees the replacement row afterwards -- not just a state
+    # change on the row it replaced. A double that took the successor and
+    # dropped it would let a test pass over a correction that never wrote the
+    # corrected value.
+    #
+    # What it deliberately does *not* reproduce is uniqueness. The five active
+    # uniqueness indexes those tables carry are the reason the real
+    # `supersede_*` orders its statements the way it does, and re-deciding
+    # here which rows collide would make this file a second, unversioned
+    # statement of the schema -- one that would drift from the migrations
+    # without any test noticing. Collisions are the database's answer and are
+    # proved against a database, in `tests/database/`.
+    #
+    # The one visible shortcut: the real write marks the predecessor
+    # SUPERSEDED, inserts, and *then* names the successor, because only the
+    # last order satisfies a non-deferrable self-referencing foreign key. This
+    # double names the successor in the same replace, since a list of
+    # dataclasses has no foreign key to satisfy. Refusal order is preserved,
+    # which is the part a caller can observe: a stale or unreachable
+    # predecessor is refused before the successor is inserted, so a refused
+    # correction leaves no orphaned row behind.
+
+    def _writable(self, principal_id: str, entity_id: str) -> None:
+        entity = self._mine(principal_id, entity_id)
+        if entity is None:
+            raise UnknownScopeError("a write names an entity outside this scope")
+        if entity.status is EntityStatus.MERGED_REDIRECT:
+            raise MergedEndpointError("a write names an entity that was merged away")
+
+    def _transition(
+        self,
+        rows: list[Any],
+        principal_id: str,
+        key: str,
+        identifier: str,
+        expected_version: int,
+        subject: str,
+        **changes: object,
+    ) -> None:
+        for index, row in enumerate(rows):
+            if row.principal_id != principal_id or getattr(row, key) != identifier:
+                continue
+            if row.version != expected_version:
+                raise StaleDirectedVersionError(f"the expected {subject} version is stale")
+            rows[index] = replace(row, version=row.version + 1, **changes)  # type: ignore[arg-type]
+            return
+        raise UnknownScopeError(f"a {subject} write names a row outside this scope")
+
+    def _insert_entity_name(self, principal_id: str, entity_name: EntityName) -> None:
+        self._world.fail("entities.record_entity_name")
+        if entity_name.principal_id != principal_id:
+            raise ValueError("an entity name belongs to the acting Principal")
+        self._writable(principal_id, entity_name.entity_id)
+        self._world.entity_names.append(entity_name)
+
+    def record_entity_name(self, principal_id: str, entity_name: EntityName) -> None:
+        self._insert_entity_name(principal_id, entity_name)
+
+    def supersede_entity_name(
+        self,
+        principal_id: str,
+        *,
+        entity_name_id: str,
+        successor: EntityName,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        self._world.fail("entities.supersede_entity_name")
+        if successor.entity_name_id == entity_name_id:
+            raise ValueError("an entity name is not superseded by itself")
+        self._transition(
+            self._world.entity_names,
+            principal_id,
+            "entity_name_id",
+            entity_name_id,
+            expected_version,
+            "entity name",
+            state=EntityNameState.SUPERSEDED,
+            superseded_by_entity_name_id=successor.entity_name_id,
+            updated_at=at,
+        )
+        self._insert_entity_name(principal_id, successor)
+
+    def retire_entity_name(
+        self, principal_id: str, *, entity_name_id: str, expected_version: int, at: datetime
+    ) -> None:
+        self._world.fail("entities.retire_entity_name")
+        self._transition(
+            self._world.entity_names,
+            principal_id,
+            "entity_name_id",
+            entity_name_id,
+            expected_version,
+            "entity name",
+            state=EntityNameState.RETIRED,
+            is_preferred=False,
+            retired_at=at,
+            updated_at=at,
+        )
+
+    def record_organization_profile(
+        self, principal_id: str, profile: EntityOrganizationProfile
+    ) -> None:
+        self._world.fail("entities.record_organization_profile")
+        if profile.principal_id != principal_id:
+            raise ValueError("an organization profile belongs to the acting Principal")
+        self._writable(principal_id, profile.entity_id)
+        subject = self._mine(principal_id, profile.entity_id)
+        if subject is None or subject.entity_type is not EntityType.ORGANIZATION:
+            raise ValueError("an organization profile describes an organization entity")
+        self._world.entity_organization_profiles.append(profile)
+
+    def revise_organization_profile(
+        self,
+        principal_id: str,
+        *,
+        entity_id: str,
+        organization_kind_code: OrganizationKindCode,
+        legal_identity_status_code: LegalIdentityStatusCode,
+        jurisdiction_code: str | None,
+        registration_identifier: str | None,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        self._world.fail("entities.revise_organization_profile")
+        self._transition(
+            self._world.entity_organization_profiles,
+            principal_id,
+            "entity_id",
+            entity_id,
+            expected_version,
+            "organization profile",
+            organization_kind_code=organization_kind_code,
+            legal_identity_status_code=legal_identity_status_code,
+            jurisdiction_code=jurisdiction_code,
+            registration_identifier=registration_identifier,
+            updated_at=at,
+        )
+
+    def _insert_entity_address(self, principal_id: str, address: EntityAddress) -> None:
+        self._world.fail("entities.record_entity_address")
+        if address.principal_id != principal_id:
+            raise ValueError("an entity address belongs to the acting Principal")
+        self._writable(principal_id, address.entity_id)
+        self._world.entity_addresses.append(address)
+
+    def record_entity_address(self, principal_id: str, address: EntityAddress) -> None:
+        self._insert_entity_address(principal_id, address)
+
+    def supersede_entity_address(
+        self,
+        principal_id: str,
+        *,
+        entity_address_id: str,
+        successor: EntityAddress,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        self._world.fail("entities.supersede_entity_address")
+        if successor.entity_address_id == entity_address_id:
+            raise ValueError("an entity address is not superseded by itself")
+        self._transition(
+            self._world.entity_addresses,
+            principal_id,
+            "entity_address_id",
+            entity_address_id,
+            expected_version,
+            "entity address",
+            state=EntityAddressState.SUPERSEDED,
+            superseded_by_entity_address_id=successor.entity_address_id,
+            updated_at=at,
+        )
+        self._insert_entity_address(principal_id, successor)
+
+    def retire_entity_address(
+        self, principal_id: str, *, entity_address_id: str, expected_version: int, at: datetime
+    ) -> None:
+        self._world.fail("entities.retire_entity_address")
+        self._transition(
+            self._world.entity_addresses,
+            principal_id,
+            "entity_address_id",
+            entity_address_id,
+            expected_version,
+            "entity address",
+            state=EntityAddressState.RETIRED,
+            is_preferred=False,
+            retired_at=at,
+            updated_at=at,
+        )
+
+    def _insert_communication_method(
+        self, principal_id: str, method: EntityCommunicationMethod
+    ) -> None:
+        self._world.fail("entities.record_communication_method")
+        if method.principal_id != principal_id:
+            raise ValueError("a communication method belongs to the acting Principal")
+        self._writable(principal_id, method.entity_id)
+        self._world.entity_communication_methods.append(method)
+
+    def record_communication_method(
+        self, principal_id: str, method: EntityCommunicationMethod
+    ) -> None:
+        self._insert_communication_method(principal_id, method)
+
+    def supersede_communication_method(
+        self,
+        principal_id: str,
+        *,
+        communication_method_id: str,
+        successor: EntityCommunicationMethod,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        self._world.fail("entities.supersede_communication_method")
+        if successor.communication_method_id == communication_method_id:
+            raise ValueError("a communication method is not superseded by itself")
+        self._transition(
+            self._world.entity_communication_methods,
+            principal_id,
+            "communication_method_id",
+            communication_method_id,
+            expected_version,
+            "communication method",
+            state=EntityCommunicationMethodState.SUPERSEDED,
+            superseded_by_communication_method_id=successor.communication_method_id,
+            updated_at=at,
+        )
+        self._insert_communication_method(principal_id, successor)
+
+    def retire_communication_method(
+        self,
+        principal_id: str,
+        *,
+        communication_method_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        self._world.fail("entities.retire_communication_method")
+        self._transition(
+            self._world.entity_communication_methods,
+            principal_id,
+            "communication_method_id",
+            communication_method_id,
+            expected_version,
+            "communication method",
+            state=EntityCommunicationMethodState.RETIRED,
+            is_preferred=False,
+            retired_at=at,
+            updated_at=at,
+        )
+
+    def _insert_project_participation(
+        self, principal_id: str, participation: EntityProjectParticipation
+    ) -> None:
+        self._world.fail("entities.record_project_participation")
+        if participation.principal_id != principal_id:
+            raise ValueError("a project participation belongs to the acting Principal")
+        self._writable(principal_id, participation.project_entity_id)
+        self._writable(principal_id, participation.participant_entity_id)
+        self._world.entity_project_participations.append(participation)
+
+    def record_project_participation(
+        self, principal_id: str, participation: EntityProjectParticipation
+    ) -> None:
+        self._insert_project_participation(principal_id, participation)
+
+    def supersede_project_participation(
+        self,
+        principal_id: str,
+        *,
+        participation_id: str,
+        successor: EntityProjectParticipation,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        self._world.fail("entities.supersede_project_participation")
+        if successor.participation_id == participation_id:
+            raise ValueError("a project participation is not superseded by itself")
+        self._transition(
+            self._world.entity_project_participations,
+            principal_id,
+            "participation_id",
+            participation_id,
+            expected_version,
+            "project participation",
+            state=EntityProjectParticipationState.SUPERSEDED,
+            superseded_by_participation_id=successor.participation_id,
+            updated_at=at,
+        )
+        self._insert_project_participation(principal_id, successor)
+
+    def retire_project_participation(
+        self, principal_id: str, *, participation_id: str, expected_version: int, at: datetime
+    ) -> None:
+        self._world.fail("entities.retire_project_participation")
+        self._transition(
+            self._world.entity_project_participations,
+            principal_id,
+            "participation_id",
+            participation_id,
+            expected_version,
+            "project participation",
+            state=EntityProjectParticipationState.RETIRED,
+            retired_at=at,
+            updated_at=at,
+        )
+
+    def _insert_person_organization_affiliation(
+        self, principal_id: str, affiliation: PersonOrganizationAffiliation
+    ) -> None:
+        self._world.fail("entities.record_person_organization_affiliation")
+        if affiliation.principal_id != principal_id:
+            raise ValueError("an affiliation belongs to the acting Principal")
+        self._writable(principal_id, affiliation.person_entity_id)
+        if affiliation.organization_entity_id is not None:
+            self._writable(principal_id, affiliation.organization_entity_id)
+        self._world.entity_person_organization_affiliations.append(affiliation)
+
+    def record_person_organization_affiliation(
+        self, principal_id: str, affiliation: PersonOrganizationAffiliation
+    ) -> None:
+        self._insert_person_organization_affiliation(principal_id, affiliation)
+
+    def supersede_person_organization_affiliation(
+        self,
+        principal_id: str,
+        *,
+        affiliation_id: str,
+        successor: PersonOrganizationAffiliation,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        self._world.fail("entities.supersede_person_organization_affiliation")
+        if successor.affiliation_id == affiliation_id:
+            raise ValueError("an affiliation is not superseded by itself")
+        self._transition(
+            self._world.entity_person_organization_affiliations,
+            principal_id,
+            "affiliation_id",
+            affiliation_id,
+            expected_version,
+            "affiliation",
+            state=PersonOrganizationAffiliationState.SUPERSEDED,
+            superseded_by_affiliation_id=successor.affiliation_id,
+            updated_at=at,
+        )
+        self._insert_person_organization_affiliation(principal_id, successor)
+
+    def retire_person_organization_affiliation(
+        self,
+        principal_id: str,
+        *,
+        affiliation_id: str,
+        expected_version: int,
+        at: datetime,
+        effective_to: datetime | None = None,
+    ) -> None:
+        self._world.fail("entities.retire_person_organization_affiliation")
+        self._transition(
+            self._world.entity_person_organization_affiliations,
+            principal_id,
+            "affiliation_id",
+            affiliation_id,
+            expected_version,
+            "affiliation",
+            state=PersonOrganizationAffiliationState.RETIRED,
+            retired_at=at,
+            updated_at=at,
+            **({} if effective_to is None else {"effective_to": effective_to}),
+        )
+
+    # --- RI-ENT-WP-08: RI-ENT-WP-07's assertion surface -----------------------
+    #
+    # In-memory equivalents of `SqlEntityRepository`'s six assertion methods,
+    # here because RI-ENT-WP-08 declared them on `EntitiesRepository` and this
+    # class implements that port. Same reasoning as the write block above: a
+    # caller written against the port has to be exercisable without a
+    # database, and a double that only ever succeeds teaches a caller that
+    # refusals do not exist.
+    #
+    # These reproduce the server's refusals, never better ones. The six
+    # families above split a failed versioned write two ways through
+    # `_refuse_stale_or_absent`; `entity_assertions`' supersession does not,
+    # and neither does `supersede_assertion` below. The asymmetry is real,
+    # it is the server's, and it is disclosed at that method rather than
+    # quietly improved on here.
+
+    def record_assertion(self, principal_id: str, assertion: EntityAssertion) -> None:
+        self._world.fail("entities.record_assertion")
+        if assertion.principal_id != principal_id:
+            raise ValueError("an assertion belongs to the acting Principal")
+        # Only the sixth target is checked, for the reason
+        # `SqlEntityRepository.record_assertion` gives: the other five carry a
+        # composite `(id, principal_id)` foreign key and are same-Principal by
+        # construction, while `target_organization_profile_entity_id` is a
+        # plain single-column reference this writer has to check itself.
+        if assertion.target_organization_profile_entity_id is not None:
+            self._writable(principal_id, assertion.target_organization_profile_entity_id)
+        self._world.entity_assertions.append(assertion)
+
+    def assertion(self, principal_id: str, assertion_id: str) -> EntityAssertion | None:
+        self._world.fail("entities.assertion")
+        return next(
+            (
+                held
+                for held in self._world.entity_assertions
+                if held.principal_id == principal_id and held.assertion_id == assertion_id
+            ),
+            None,
+        )
+
+    def assertions_targeting(
+        self,
+        principal_id: str,
+        *,
+        target_entity_name_id: str | None = None,
+        target_entity_address_id: str | None = None,
+        target_communication_method_id: str | None = None,
+        target_participation_id: str | None = None,
+        target_affiliation_id: str | None = None,
+        target_organization_profile_entity_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[EntityAssertion]:
+        self._world.fail("entities.assertions_targeting")
+        named = {
+            field_name: value
+            for field_name, value in (
+                ("target_entity_name_id", target_entity_name_id),
+                ("target_entity_address_id", target_entity_address_id),
+                ("target_communication_method_id", target_communication_method_id),
+                ("target_participation_id", target_participation_id),
+                ("target_affiliation_id", target_affiliation_id),
+                (
+                    "target_organization_profile_entity_id",
+                    target_organization_profile_entity_id,
+                ),
+            )
+            if value is not None
+        }
+        if len(named) != 1:
+            raise ValueError("a targeted assertion read names exactly one subject")
+        _refuse_empty_limit(limit)
+        ((field_name, value),) = named.items()
+        found = sorted(
+            (
+                held
+                for held in self._world.entity_assertions
+                if held.principal_id == principal_id and getattr(held, field_name) == value
+            ),
+            key=lambda held: held.assertion_id,
+        )
+        return found if limit is None else found[:limit]
+
+    def supersede_assertion(
+        self,
+        principal_id: str,
+        *,
+        assertion_id: str,
+        superseded_by_assertion_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        self._world.fail("entities.supersede_assertion")
+        if superseded_by_assertion_id == assertion_id:
+            raise ValueError("an assertion is not superseded by itself")
+        # `superseded_by_assertion_id` is checked and then deliberately not
+        # stored: `entity_assertions` carries no backward pointer, only the
+        # forward `supersedes_assertion_id` the successor row holds. A fake
+        # that recorded it anyway would let a test read a column the schema
+        # does not have.
+        #
+        # Written out longhand rather than through `_transition`, and this is
+        # the one place in this class where that is deliberate.
+        # `entity_assertions`' supersession collapses both failure modes into
+        # a single `UnknownScopeError` -- a row this Principal cannot reach
+        # and a reachable row at another version get the same refusal, with
+        # the same words -- where the six RI-ENT-WP-08 record families split
+        # them through `_refuse_stale_or_absent` into `UnknownScopeError` for
+        # the unreachable row and `StaleDirectedVersionError` for the stale
+        # one. `_transition` draws that split, correctly, for the six; it
+        # cannot express the collapse without changing their behaviour, so it
+        # is left untouched and this method does its own walk.
+        #
+        # This double reproduces the server's answer rather than a better
+        # one. A double that refuses more precisely than production teaches a
+        # caller a distinction production will never make: code written
+        # against a `StaleDirectedVersionError` branch here would pass every
+        # test and then never take that branch against
+        # `SqlEntityRepository.supersede_assertion`, whose only failure
+        # branch is `rowcount == 0`. The message below is the server's own,
+        # verbatim, so the two refusals are indistinguishable to a caller.
+        #
+        # Making the server split them instead is the arguably better end
+        # state and is a deliberate RI-ENT-WP-07 follow-up that has NOT been
+        # taken: it is a behaviour change to landed production code and needs
+        # database-tier proof, and RI-ENT-WP-08's own acceptance wording is to
+        # surface optimistic-version conflicts as the repository already
+        # classifies them.
+        for index, held in enumerate(self._world.entity_assertions):
+            if held.principal_id != principal_id or held.assertion_id != assertion_id:
+                continue
+            if held.version != expected_version:
+                break
+            self._world.entity_assertions[index] = replace(
+                held,
+                state=EntityAssertionState.SUPERSEDED,
+                assertion_status=AssertionStatus.SUPERSEDED,
+                version=held.version + 1,
+                updated_at=at,
+            )
+            return
+        raise UnknownScopeError("a supersession names an assertion this write read unchanged")
+
+    def record_assertion_evidence(
+        self, principal_id: str, evidence: EntityAssertionEvidence
+    ) -> None:
+        self._world.fail("entities.record_assertion_evidence")
+        if evidence.principal_id != principal_id:
+            raise ValueError("assertion evidence belongs to the acting Principal")
+        self._world.entity_assertion_evidence.append(evidence)
+
+    def assertion_evidence(
+        self, principal_id: str, assertion_id: str, *, limit: int | None = None
+    ) -> list[EntityAssertionEvidence]:
+        self._world.fail("entities.assertion_evidence")
+        _refuse_empty_limit(limit)
+        found = sorted(
+            (
+                held
+                for held in self._world.entity_assertion_evidence
+                if held.principal_id == principal_id and held.assertion_id == assertion_id
+            ),
+            key=lambda held: held.evidence_id,
         )
         return found if limit is None else found[:limit]
 

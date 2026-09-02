@@ -120,6 +120,8 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    LegalIdentityStatusCode,
+    OrganizationKindCode,
     PersonOrganizationAffiliation,
 )
 from my_pa.domain.relationship.event import RelationshipEvent, RelationshipEventType
@@ -128,6 +130,8 @@ from my_pa.domain.relationship.governance import (
     DEFAULT_MUTATION_AUTHORITY,
     ENTITY_CHANGE_REASON_LIMIT,
     ActorClass,
+    EntityAssertion,
+    EntityAssertionEvidence,
     EntityFactEvidenceLink,
     EntityMergeRecord,
     EntityMutationEvent,
@@ -1377,6 +1381,466 @@ class EntitiesRepository(ABC):
         self, principal_id: str, entity_id: str, *, limit: int | None = None
     ) -> list[PersonOrganizationAffiliation]:
         """Affiliations naming `entity_id` as `organization_entity_id`."""
+
+    # --- RI-ENT-WP-08: the same six families' write path ----------------------
+    #
+    # Declared abstract here, deliberately, and this is the surface change
+    # RI-ENT-WP-07 named WP-08 as "the one to make deliberately" rather than
+    # make itself: every implementer of this port now has to answer for the
+    # write path, which is the point. A concrete method left off the ABC is
+    # one a double can silently not have, and a caller written against the
+    # port would then work in production and vanish in a test.
+    #
+    # Three verbs per temporal family, because the columns those tables carry
+    # admit exactly three transitions: `record_*` inserts, `supersede_*`
+    # replaces one row with the successor it is handed, `retire_*` marks
+    # RETIRED and stamps `retired_at`. There is deliberately no "update in
+    # place" verb for a temporal family -- a correction is a new row plus a
+    # supersession, so what the record said before survives the correction.
+    # `entity_organization_profiles` is the exception and says so at its own
+    # method.
+    #
+    # **`supersede_*` takes the successor record, not the successor's
+    # identifier, and writes it itself.** A correction is three statements
+    # whose order the schema fixes rather than leaves open, which is why it
+    # is one call on this port instead of a `record_*` a caller sequences
+    # before a `supersede_*`:
+    #
+    #   1. Mark the predecessor SUPERSEDED under `expected_version`, leaving
+    #      its `superseded_by_*` null. Every one of these families arbitrates
+    #      its active uniqueness with a *partial* unique index --
+    #      `WHERE state = 'active'` -- so this step is what takes the
+    #      predecessor out of the index the successor is about to land in.
+    #      It is legal because each family's constraint reads
+    #      `CHECK (superseded_by_X IS NULL OR state = 'superseded')`, which
+    #      makes naming a successor imply SUPERSEDED and *not* the converse:
+    #      a superseded row that names nobody yet satisfies it.
+    #   2. Insert the successor, active. It cannot collide with the row it
+    #      replaces, because step 1 removed that row from the index's
+    #      `WHERE`.
+    #   3. Point the predecessor's `superseded_by_*` at the successor. Each
+    #      family's self-referencing composite foreign key is not deferrable,
+    #      so this is satisfiable only once the successor row exists.
+    #
+    # A caller that wrote the successor first would collide with the very row
+    # it is replacing, and for `entity_person_organization_affiliations` --
+    # whose `an_open_ended_affiliation_is_unique_per_person` keys on the
+    # person alone, not on the corrected field -- it would do so on every
+    # correction of a current affiliation, whatever was being corrected.
+    # That ordering is a fact about the DDL and about nothing else, so it is
+    # the implementer's to know and not a sequence each caller has to
+    # rediscover.
+    #
+    # One supersession is one version bump. Step 3 deliberately does not bump
+    # again, so naming the successor is invisible to a caller's version
+    # arithmetic and `expected_version + 1` still describes the predecessor
+    # afterwards. A collision against some *other* active row -- a second
+    # name of the same type and value, a second preferred address -- is not
+    # this port's to translate: it surfaces exactly as it does from the
+    # corresponding `record_*`, unchanged.
+    #
+    # Every `supersede_*`/`retire_*` takes `expected_version` and raises
+    # rather than writing when the row has moved: `UnknownScopeError` when
+    # this Principal cannot reach the row at all (the same answer an absent
+    # row gets, so the refusal discloses nothing about another partition),
+    # and `StaleDirectedVersionError` when the row is reachable at a
+    # different version.
+
+    @abstractmethod
+    def record_entity_name(self, principal_id: str, entity_name: EntityName) -> None:
+        """Record one typed name form.
+
+        `normalized_value` is taken as given and checked, never derived from
+        `display_value`: which two strings match is a claim the caller makes,
+        not one this port invents on their behalf.
+        """
+
+    @abstractmethod
+    def supersede_entity_name(
+        self,
+        principal_id: str,
+        *,
+        entity_name_id: str,
+        successor: EntityName,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace one name with `successor`, non-destructively.
+
+        `successor` is written under everything `record_entity_name` applies,
+        `normalized_value` included; what this adds is the pair of statements
+        that retire the row it replaces, in the order fixed above. The
+        released index is `an_active_entity_name_is_unique_per_entity_and_type`,
+        and with it `an_active_entity_name_has_one_preferred_per_type`, both
+        partial on `state = 'active'`.
+        """
+
+    @abstractmethod
+    def retire_entity_name(
+        self, principal_id: str, *, entity_name_id: str, expected_version: int, at: datetime
+    ) -> None:
+        """Retire one name, releasing any preferred slot it held."""
+
+    @abstractmethod
+    def record_organization_profile(
+        self, principal_id: str, profile: EntityOrganizationProfile
+    ) -> None:
+        """Record the one profile row an organization entity holds.
+
+        The implementer is responsible for refusing a profile on an entity
+        that is not an organization -- the cross-table invariant
+        `EntityOrganizationProfile`'s docstring names the writer as owning,
+        because no CHECK expresses it without a trigger the schema does not
+        carry.
+        """
+
+    @abstractmethod
+    def revise_organization_profile(
+        self,
+        principal_id: str,
+        *,
+        entity_id: str,
+        organization_kind_code: OrganizationKindCode,
+        legal_identity_status_code: LegalIdentityStatusCode,
+        jurisdiction_code: str | None,
+        registration_identifier: str | None,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace the profile's classification in place, under its version.
+
+        The one family corrected in place rather than by supersession,
+        because it is the one family with nowhere to retire to: no `state`,
+        no `superseded_by_*`, one row per entity by construction. Every
+        mutable column is a required parameter, including the two nullable
+        ones, so a revision cannot silently carry forward a jurisdiction or a
+        registration identifier the caller believes it cleared.
+        """
+
+    @abstractmethod
+    def record_entity_address(self, principal_id: str, address: EntityAddress) -> None:
+        """Record one typed address."""
+
+    @abstractmethod
+    def supersede_entity_address(
+        self,
+        principal_id: str,
+        *,
+        entity_address_id: str,
+        successor: EntityAddress,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace one address with `successor`, non-destructively.
+
+        `successor` is written under everything `record_entity_address`
+        applies; what this adds is the pair of statements that retire the row
+        it replaces, in the order fixed above. The released index is
+        `an_active_entity_address_is_unique_per_entity_and_type`, and with it
+        `an_active_entity_address_has_one_preferred_per_type`, both partial on
+        `state = 'active'`.
+        """
+
+    @abstractmethod
+    def retire_entity_address(
+        self, principal_id: str, *, entity_address_id: str, expected_version: int, at: datetime
+    ) -> None:
+        """Retire one address, releasing any preferred slot it held."""
+
+    @abstractmethod
+    def record_communication_method(
+        self, principal_id: str, method: EntityCommunicationMethod
+    ) -> None:
+        """Record one contact channel, at the verification status given."""
+
+    @abstractmethod
+    def supersede_communication_method(
+        self,
+        principal_id: str,
+        *,
+        communication_method_id: str,
+        successor: EntityCommunicationMethod,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace one communication method with `successor`.
+
+        `successor` is written under everything `record_communication_method`
+        applies, its `verification_status_code` included and unpromoted; what
+        this adds is the pair of statements that retire the row it replaces,
+        in the order fixed above. The released index is
+        `an_active_communication_method_is_unique_per_entity_and_type`, and
+        with it `an_active_communication_method_has_one_preferred_per_type`,
+        both partial on `state = 'active'`.
+        """
+
+    @abstractmethod
+    def retire_communication_method(
+        self,
+        principal_id: str,
+        *,
+        communication_method_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Retire one communication method."""
+
+    @abstractmethod
+    def record_project_participation(
+        self, principal_id: str, participation: EntityProjectParticipation
+    ) -> None:
+        """Record one project participation.
+
+        `role_code`/`discipline_code` are taxonomy claims and are written as
+        given; nothing derives one from `role_text`/`discipline_text`.
+        """
+
+    @abstractmethod
+    def supersede_project_participation(
+        self,
+        principal_id: str,
+        *,
+        participation_id: str,
+        successor: EntityProjectParticipation,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace one participation with `successor`.
+
+        `successor` is written under everything `record_project_participation`
+        applies, both endpoints checked; what this adds is the pair of
+        statements that retire the row it replaces, in the order fixed above.
+        The released index is
+        `an_active_project_participation_is_unique_per_project_and_role`,
+        partial on `state = 'active'`.
+        """
+
+    @abstractmethod
+    def retire_project_participation(
+        self, principal_id: str, *, participation_id: str, expected_version: int, at: datetime
+    ) -> None:
+        """Retire one participation."""
+
+    @abstractmethod
+    def record_person_organization_affiliation(
+        self, principal_id: str, affiliation: PersonOrganizationAffiliation
+    ) -> None:
+        """Record one person-organization affiliation.
+
+        A null `organization_entity_id` stays null: RI-ENT-WP-05 made the
+        column nullable so an independent consultant needs no placeholder
+        organization, and no implementer of this port may create one to
+        satisfy the foreign key.
+        """
+
+    @abstractmethod
+    def supersede_person_organization_affiliation(
+        self,
+        principal_id: str,
+        *,
+        affiliation_id: str,
+        successor: PersonOrganizationAffiliation,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace one affiliation with `successor`.
+
+        `successor` is written under everything
+        `record_person_organization_affiliation` applies, a null
+        `organization_entity_id` included and left null; what this adds is
+        the pair of statements that retire the row it replaces, in the order
+        fixed above. The released index is
+        `an_open_ended_affiliation_is_unique_per_person`, partial on
+        `state = 'active' AND effective_to IS NULL` -- and keyed on the person
+        rather than on any corrected field, which is why this family is the
+        one where writing the successor first fails for *every* correction of
+        a current affiliation rather than only for a colliding one.
+        """
+
+    @abstractmethod
+    def retire_person_organization_affiliation(
+        self,
+        principal_id: str,
+        *,
+        affiliation_id: str,
+        expected_version: int,
+        at: datetime,
+        effective_to: datetime | None = None,
+    ) -> None:
+        """Retire one affiliation, closing its window only when told to.
+
+        `effective_to` is written only when supplied. Retirement already
+        releases the open-ended slot through `state`; *when* an affiliation
+        ended is a separate fact the caller states or leaves unstated, never
+        one this port invents.
+        """
+
+    # --- RI-ENT-WP-08: RI-ENT-WP-07's assertion surface, declared -------------
+    #
+    # This is the surface change RI-ENT-WP-07's own comment (see
+    # `SqlEntityRepository`'s "entity_assertions / entity_assertion_evidence"
+    # block) named WP-08 as the one to make deliberately rather than make
+    # itself. That repository has carried these six methods concretely since
+    # WP-07 while this port did not declare them, which is precisely the
+    # asymmetry the write-path block above refuses: a concrete method left
+    # off the ABC is one a double can silently not have, and a caller
+    # written against the port would then work in production and vanish in a
+    # test. Declaring them abstract makes every implementer answer for the
+    # assertion plane -- including the one whose honest answer is "nothing"
+    # (`tests/evaluation/resolution_harness.py::_CorpusRepository`).
+    #
+    # What this does NOT change, stated so the boundary is not read wider
+    # than it is: the scope stays WP-07's -- typed read/write helpers over
+    # `entity_assertions`/`entity_assertion_evidence` and nothing else.
+    # Declaring them here is not service, command-layer, `Capability`, MCP,
+    # HTTP, or CLI exposure; that remains WP-10/WP-11's, and no method here
+    # becomes reachable from a transport by virtue of being declared.
+    #
+    # Two verbs and no more, unlike the three the six families above take.
+    # `record_*` inserts; `supersede_assertion` is the family's only
+    # transition. There is deliberately no `retire_assertion`:
+    # `EntityAssertionState.RETIRED` exists in the domain, but WP-07 wrote no
+    # retirement path and this package declares no verb no implementer has.
+    # Neither evidence rows nor assertion rows are ever updated in place or
+    # deleted through this port.
+
+    @abstractmethod
+    def record_assertion(self, principal_id: str, assertion: EntityAssertion) -> None:
+        """Record one fact-level claim about a record of the six families above.
+
+        Refuses, with `ValueError`, an assertion whose own `principal_id` is
+        not the acting one -- an assertion belongs to the Principal writing
+        it, and this port will not file one on another's behalf.
+
+        `assertion_status`, `asserted_by`, `predicate_code` and `rationale`
+        are written exactly as given. Which epistemic category a claim falls
+        in is the caller's claim (`AssertionStatus` is a set of named
+        categories, never a score), and nothing here derives one from the
+        cited evidence, the target record, or the absence of either.
+
+        The scope boundary, honestly: five of the six `target_*` columns are
+        same-Principal by construction, each carrying a composite
+        `(id, principal_id)` foreign key, so only
+        `target_organization_profile_entity_id` -- a plain single-column
+        reference -- is left for an implementer to check for reachability
+        itself, on `record_fact_evidence_link`'s own stated precedent for
+        its `capture_span_id`/`knowledge_id` columns.
+        """
+
+    @abstractmethod
+    def assertion(self, principal_id: str, assertion_id: str) -> EntityAssertion | None:
+        """The assertion with this identifier in this Principal's partition, or `None`.
+
+        `None` is the same answer an assertion held by another Principal
+        gets, so a caller cannot use this read to learn that some other
+        partition holds the identifier it named.
+        """
+
+    @abstractmethod
+    def assertions_targeting(
+        self,
+        principal_id: str,
+        *,
+        target_entity_name_id: str | None = None,
+        target_entity_address_id: str | None = None,
+        target_communication_method_id: str | None = None,
+        target_participation_id: str | None = None,
+        target_affiliation_id: str | None = None,
+        target_organization_profile_entity_id: str | None = None,
+        limit: int | None = None,
+    ) -> list[EntityAssertion]:
+        """Every assertion naming one subject, in `assertion_id` order.
+
+        Exactly one `target_*` keyword is expected non-`None`. Naming none of
+        them, or more than one, raises `ValueError` rather than guessing
+        which subject was meant or silently answering about a different one:
+        that is the read-side restatement of the "exactly one target" CHECK
+        the table already enforces on the write side.
+
+        Superseded and retired assertions come back alongside active ones.
+        `state` is on each row for the caller to read, and a read that
+        quietly dropped them would make an assertion's own history
+        unobservable through this port -- which is the opposite of what a
+        non-destructive family is for.
+
+        `limit` caps the rows the implementer fetches rather than slicing a
+        complete answer, on `aliases`' terms; `None` is genuinely unbounded
+        and is the default.
+        """
+
+    @abstractmethod
+    def supersede_assertion(
+        self,
+        principal_id: str,
+        *,
+        assertion_id: str,
+        superseded_by_assertion_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Mark one assertion superseded, non-destructively, under its version.
+
+        Writes `state`, `assertion_status`, `version` and `updated_at`, and
+        nothing else: every `target_*` column, `predicate_code`,
+        `rationale`, `asserted_by`, `observed_at` and `verified_at` survive
+        the supersession untouched, and no `EntityAssertionEvidence` row
+        citing this assertion is read, written, or deleted -- each stays
+        exactly as it was, still resolvable by `assertion_id`.
+
+        `superseded_by_assertion_id` names the successor but is *not stored
+        by this call*: `entity_assertions` carries no backward pointer, only
+        the forward `supersedes_assertion_id` that the successor row itself
+        holds. It is taken here so the refusal below can be stated, and so
+        the caller cannot describe a supersession it did not perform.
+
+        Refuses, with `ValueError`, a supersession naming the assertion
+        itself. The caller is expected to have already written the
+        superseding assertion; this port does not write it and does not
+        require that it exist.
+
+        **One refusal, not two, and deliberately unlike the six families
+        above.** A write that matches no row raises `UnknownScopeError`
+        whether the row is unreachable in this Principal's partition or is
+        right here at a version other than `expected_version` -- the two are
+        not distinguished, and a caller cannot tell them apart. The block
+        comment above promises the `UnknownScopeError`/
+        `StaleDirectedVersionError` split for the six record families'
+        `supersede_*`/`retire_*`; it does not hold here, and this paragraph
+        is the correction rather than an omission a reader has to discover.
+        Splitting them would be the better contract and is an unclaimed
+        RI-ENT-WP-07 follow-up, so the contract is stated as it is rather
+        than as it should be -- an implementer that refused more precisely
+        than this would teach callers a distinction the others cannot make.
+        """
+
+    @abstractmethod
+    def record_assertion_evidence(
+        self, principal_id: str, evidence: EntityAssertionEvidence
+    ) -> None:
+        """Bind one assertion to the single record that backs or contradicts it.
+
+        Refuses, with `ValueError`, evidence whose own `principal_id` is not
+        the acting one.
+
+        `role` is written as given -- `COUNTEREVIDENCE` is recorded as
+        readily as `DIRECT`, and recording it changes no assertion's
+        `assertion_status`. An assertion's status is a claim its own writer
+        makes; nothing here recomputes it from the evidence that accumulates
+        against it.
+        """
+
+    @abstractmethod
+    def assertion_evidence(
+        self, principal_id: str, assertion_id: str, *, limit: int | None = None
+    ) -> list[EntityAssertionEvidence]:
+        """Evidence recorded against one assertion, in `evidence_id` order.
+
+        Principal-scoped like every read on this port, and empty rather than
+        raising for an assertion this Principal cannot reach: an assertion
+        with no evidence and an assertion in another partition are the same
+        answer here, deliberately. `limit` behaves as it does on
+        `assertions_targeting`.
+        """
 
     @abstractmethod
     def entities_by_identifier(

@@ -29,7 +29,7 @@ ROOT: Final = Path(__file__).resolve().parents[2]
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260901_2c00c9ac64bc_add_webauthn_auth_persistence.py"
 )
-PRIOR_REVISION: Final = "1cda4d536268"
+PRIOR_REVISION: Final = "c99cd8ed8d1c"
 HEAD_REVISION: Final = "2c00c9ac64bc"
 NEW_TABLES: Final = frozenset(
     {
@@ -102,7 +102,7 @@ def test_the_chain_has_one_head_and_this_revision_is_it() -> None:
     script = ScriptDirectory.from_config(_config())
     assert script.get_heads() == [HEAD_REVISION]
     assert script.get_revision(HEAD_REVISION).down_revision == PRIOR_REVISION
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 87
 
 
 @pytest.mark.database

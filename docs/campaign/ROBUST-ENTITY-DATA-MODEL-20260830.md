@@ -119,9 +119,9 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-SCHEMA-001` | Critical | No typed legal/brand/DBA/operating-name semantics | **Closed by RI-ENT-WP-02** — `entity_names` (9 typed `name_type_code` values) and `entity_organization_profiles.organization_kind_code`/`legal_identity_status_code` |
 | `ENTITY-SCHEMA-002` | High | No normalized entity-address family | **Closed by RI-ENT-WP-03** — `entity_addresses` (9 typed `address_type_code` values, per-(entity, type) uniqueness on `normalized_address_value`) |
 | `ENTITY-SCHEMA-003` | High | No typed phones/domains/websites | **Closed by RI-ENT-WP-03** — `entity_communication_methods` (`method_type_code` email/phone/domain/website, `usage_context_code`, `verification_status_code`) |
-| `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | **Closed by RI-ENT-WP-06a** — `entity_relationship_types` (global, table-backed taxonomy seeded with the fifteen existing codes plus twenty new ones; `entity_relationships.relationship_type` now a foreign key into it). `EntityRelationshipType` itself was originally left at fifteen codes, disclosed and deliberate; **as of the WP-08 blocker-clearing pass below, it is widened to thirty-four of the thirty-five** (`design_coordinates_with` deliberately withheld — see below) — see `EntityRelationshipType`'s docstring and "WP-08 blocker cleared: `EntityRelationshipType` widened to 34 of 35 codes" below |
-| `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. No MCP capability or write path exists yet (`RI-ENT-WP-10`/`WP-11`) — see "Merge/split disposition" below |
-| `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | **Closed for schema/domain/persistence by RI-ENT-WP-07** — `entity_assertions`/`entity_assertion_evidence` bind fact-level `assertion_status` (a discrete, unordered epistemic vocabulary, never a confidence score) and evidence to the six WP-02–WP-06 record families that previously had none. Still open: repository/service-command wiring (`WP-08`) and MCP exposure (`WP-10`/`WP-11`) — see "RI-ENT-WP-07" below for the exact honest boundary of what is and is not delivered |
+| `ENTITY-REL-001` | Critical | Closed relationship vocabulary (15 of 22 required codes) | **Closed by RI-ENT-WP-06a** — `entity_relationship_types` (global, table-backed taxonomy seeded with the fifteen existing codes plus twenty new ones; `entity_relationships.relationship_type` now a foreign key into it). `EntityRelationshipType` itself was originally left at fifteen codes, disclosed and deliberate; the WP-08 blocker-clearing pass then widened it to thirty-four of the thirty-five, withholding `design_coordinates_with`. **That thirty-four-of-thirty-five state is superseded and is no longer current**: commit `37ead78` renamed the taxonomy entry to `design_coordination_with` (migration `c99cd8ed8d1c`) and closed `EntityRelationshipType` at **thirty-five of thirty-five**, with no withheld code and no change to `tests/architecture/test_relationship_scoring_surface_is_denied.py` — see `EntityRelationshipType`'s docstring and "WP-08 blocker cleared: `EntityRelationshipType` widened to 35 of 35 codes" below |
+| `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. **The "no write path exists yet" clause is superseded**: RI-ENT-WP-08 delivered `record_project_participation`/`supersede_project_participation`/`retire_project_participation` on `EntitiesRepository` and `SqlEntityRepository`, and `EntityRecordFamilyService`'s three verbs above them. No MCP capability or tool exists yet (`RI-ENT-WP-10`/`WP-11`) and the service that calls the write path is unwired — see "RI-ENT-WP-08" and "Merge/split disposition" below |
+| `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | **Closed for schema/domain/persistence by RI-ENT-WP-07** — `entity_assertions`/`entity_assertion_evidence` bind fact-level `assertion_status` (a discrete, unordered epistemic vocabulary, never a confidence score) and evidence to the six WP-02–WP-06 record families that previously had none. **The "repository/service-command wiring (`WP-08`)" clause is now partly closed, not fully**: RI-ENT-WP-08 declared all six assertion methods on the `EntitiesRepository` ABC and implemented them in both test doubles (`a5a939d`, corrected by `7bbc524`), and `EntityRecordFamilyService` records an optional `StatedAssertion` plus one `EntityAssertionEvidence` row per `StatedEvidence` alongside any create or correction of the six families. Still open: MCP exposure (`WP-10`/`WP-11`), which no part of WP-08 delivers, and — inside WP-08's own boundary — mutation-ledger integration, `supersede_assertion`'s collapsed refusal, and the absent retirement verb for `entity_assertions`. See "RI-ENT-WP-07" below and "RI-ENT-WP-08" below for the exact honest boundary of what is and is not delivered |
 | `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `state = 'active' AND effective_to IS NULL` denoting "current") |
 | `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Unblocked, not closed** — `entity_names` now exists as the structural prerequisite; resolution/search changes are `RI-ENT-WP-09` |
 | `ENTITY-STATE-001` | High | No canonicalization/review state distinct from lifecycle | Design decision recorded in RI-ENT-WP-01 below (`canonicalization_state_code`, separate 1:1 record, deferred); not implemented this increment |
@@ -143,7 +143,7 @@ Preserved from the source audit; status reflects this increment only.
 | WP-05 | Person affiliation integration | **Delivered** — see below |
 | WP-06 | Corporate/entity relationship graph expansion | **Delivered (partial, RI-ENT-WP-06a)** — `entity_relationship_types` taxonomy and the twenty new codes; merge/split coordination for the six WP-02/04/05 record families remains deferred to a separate PR2 |
 | WP-07 | Assertion/confidence/provenance binding | **Delivered (partial)** — `entity_assertions`/`entity_assertion_evidence` (schema, domain, minimal typed persistence helpers, tests); repository/service/command-layer wiring is `WP-08`, MCP exposure is `WP-10`/`WP-11`. No scalar confidence was added under any name (RULING 1) — see below |
-| WP-08 | Repository/domain services and validation | Deferred |
+| WP-08 | Repository/domain services and validation | **Delivered (partial)** — seventeen `record_*`/`supersede_*`/`retire_*` methods on `SqlEntityRepository` for the six Entity-bound families, the same seventeen plus RI-ENT-WP-07's six assertion methods declared `@abstractmethod` on `EntitiesRepository`, in-memory equivalents in both test doubles, and the application service `EntityRecordFamilyService` with its own command/receipt DTOs. **The service is deliberately unwired** — no `Capability`, no MCP tool, no HTTP route, no CLI command, and no registration in `ApplicationService`; transport exposure is `WP-10`/`WP-11`. Not delivered — the same list the boundary section below enumerates in full, and it adds nothing to it: mutation-ledger integration, an idempotency key, proposal-validation integration, a retirement verb for `entity_assertions`, a split of `supersede_assertion`'s single refusal, no `correct_*` and no `retire_*` for the singleton `entity_organization_profiles` (which has the in-place `revise_organization_profile` instead — **five** families carry `correct_*`, not six), and no typed refusal for a correction whose successor collides with a *third* active row, which still surfaces the raw `IntegrityError` the plain `record_*` path surfaces. **The correction of a row holding the preferred slot IS delivered**: an earlier revision of this row called it inexpressible as a supersession and refused it outright, which was wrong — see "A preferred row is correctable, and the ordering that reaches it" below |
 | WP-09 | Entity resolution/search vNext | Deferred |
 | WP-10 | MCP rich read contracts | Deferred |
 | WP-11 | MCP mutation contracts | Deferred |
@@ -186,7 +186,7 @@ sharing a representation share an owner by construction.
 | Project address / legal principal address / HQ / regional or known office / city hall | `entity_addresses` | WP-03 | Deferred |
 | Phone / website / domain / email as a contact channel | `entity_communication_methods` | WP-03 | Deferred |
 | Key/known contact, with title, at a project or organization | Person entity + `entity_person_organization_affiliations` + project participation | WP-05, WP-04 | **Delivered** — the project-participation half (`entity_project_participations`) was delivered by WP-04; the affiliation/title half (`entity_person_organization_affiliations.job_title`) is delivered by WP-05 |
-| Relationship / parent / practice / acquisition lineage / technical-review / seller-developer-SPV / utility-authority edge | `entity_relationship_types` taxonomy (table-backed successor to the CHECK that froze `EntityRelationshipType` at fifteen codes) | WP-06a | **Delivered** — thirty-five codes seeded (the fifteen existing plus twenty new); `entity_relationships.relationship_type` is now a foreign key into this table. `EntityRelationshipType` itself was originally left at fifteen codes, deliberately not widened; **now widened to thirty-four of the thirty-five** as of the WP-08 blocker-clearing pass (`design_coordinates_with` deliberately withheld) — see its own docstring and "WP-08 blocker cleared" below |
+| Relationship / parent / practice / acquisition lineage / technical-review / seller-developer-SPV / utility-authority edge | `entity_relationship_types` taxonomy (table-backed successor to the CHECK that froze `EntityRelationshipType` at fifteen codes) | WP-06a | **Delivered** — thirty-five codes seeded (the fifteen existing plus twenty new); `entity_relationships.relationship_type` is now a foreign key into this table. `EntityRelationshipType` itself was originally left at fifteen codes, deliberately not widened; the WP-08 blocker-clearing pass widened it to thirty-four of the thirty-five (`design_coordinates_with` withheld), and **that state is superseded — it is now widened to all thirty-five** as of `37ead78`, which renamed the seeded row to `design_coordination_with` (migration `c99cd8ed8d1c`) rather than weakening any guard — see its own docstring and "WP-08 blocker cleared" below |
 | Project role / discipline / scope / stakeholder side / stakeholder tier / role basis / participation state | `entity_project_participations` — named `entity_project_participations` rather than the audit's own `project_entity_participations`; see "Naming deviations" under RI-ENT-WP-04 below | WP-04 | **Delivered** |
 | "Confidence" (register label) at any dimension (role/scope/participation/legal-identity) | **Not a scalar confidence field anywhere** — discrete `assertion_status`/`role_basis_code`/`legal_identity_status_code`-family vocabularies, one per dimension, bound to the fact/edge/participation that carries it | WP-02 delivers `legal_identity_status_code`; the rest is WP-07 | Partial — RULING 1 governs all of it, see below |
 | Evidence / source type-URI / observation and verification timestamps / assertion author / conflicting evidence / supersession / source-driven correction | Existing `entity_fact_evidence_links`, `entity_observations`, `entity_mutation_events`, `entity_resolution_decisions`, extended to bind the new record families | WP-07 | Deferred; the ledgers exist and are unmodified, but do not yet bind `entity_names`/`entity_organization_profiles` rows |
@@ -626,6 +626,16 @@ Element Inventory names: `brand_of`, `operates_as`, `dba_of`,
 `utility_provider_for`, `permitting_authority_for`, `seller_developer_for`,
 `sales_marketing_agent_for`, `sequence_interfaces_with`.
 
+**One of those seeded codes has since been renamed, and the list above is
+left as `8dc3619891bb` actually wrote it rather than rewritten.** Migration
+`c99cd8ed8d1c` (commit `37ead78`) renamed the seeded row
+`design_coordinates_with` to `design_coordination_with`, changing no other
+column of that row. The count is unchanged at thirty-five, and every
+statement in this section about the seeded population holds for the renamed
+code exactly as it held for the old name; see "WP-08 blocker cleared:
+`EntityRelationshipType` widened to 35 of 35 codes" below for why the rename
+happened.
+
 `directed` is `true` for all thirty-five (every code in this vocabulary is a
 directed edge, seeded and future). `inverse_type_code` is wired for exactly
 two pairs self-evident from the code names alone — `parent_of`/
@@ -665,8 +675,8 @@ codes (one assertion per code) and for each of the twenty new ones.
 
 **This section records what was true through RI-ENT-WP-06a and why the
 deferral was reasoned, not an oversight; it is superseded by "WP-08 blocker
-cleared: `EntityRelationshipType` widened to 35 codes" further down this
-document, which records what actually changed.** As of RI-ENT-WP-06a,
+cleared: `EntityRelationshipType` widened to 35 of 35 codes" further down
+this document, which records what actually changed.** As of RI-ENT-WP-06a,
 `EntityRelationshipType` (the application-facing `StrEnum`) stayed at
 fifteen codes. It is deeply threaded through the already-shipped
 `entity_relationships` write path (`application/commands.py`'s directed-
@@ -903,7 +913,12 @@ tests cited above rather than left as an unexercised claim.
   method there would force every other implementer
   (`tests/conftest.py::_Entities`, `tests/evaluation/resolution_harness.py::
   _CorpusRepository`) to implement it too — a larger, WP-08-shaped surface
-  change this increment does not make.
+  change this increment does not make. **That state is superseded and is no
+  longer current**: RI-ENT-WP-08 made exactly the surface change this comment
+  named it for. Commit `a5a939d` declares all six abstract on
+  `EntitiesRepository`, and both doubles implement them; the recorded counts
+  (113 vs. 89) are the WP-07-era measurement and are not head's — see
+  "RI-ENT-WP-08" below.
 - `src/my_pa/domain/common/identifiers.py`: `IdKind.ENTITY_ASSERTION = "east"`,
   `IdKind.ENTITY_ASSERTION_EVIDENCE = "easev"` — neither collides with any
   prior member of `IdKind`, checked before use, including the pre-existing,
@@ -934,6 +949,746 @@ Exact commands, run from the repository root with
 - `.venv/bin/python -m pytest tests/architecture/test_relationship_scoring_surface_is_denied.py -q` — 85 passed, zero denials.
 - `.venv/bin/python -m pytest tests/relationship/test_relationship_domain.py -q` — 17 passed (allow-lists widened to admit `entity_assertions`/`entity_assertion_evidence` and `EntityAssertion`/`EntityAssertionEvidence`; table count 58→60, model count 69→71).
 - `.venv/bin/python -m alembic upgrade head` / `downgrade -1` / `upgrade head` against a disposable database — clean round trip, no residue.
+
+## RI-ENT-WP-08 — repository/domain services and validation
+
+**Objective** (source audit, section P): "Implement repositories/services/DTOs
+with Principal scoping, lifecycle, optimistic versions, normalization and
+no-guess rules."
+
+**Delivered this increment at the repository, port and application-service
+layers, and deliberately no further.** Nothing this work package wrote is
+reachable from any transport, and the boundary section below states exactly
+where it stops rather than leaving a reader to infer parity with the earlier,
+schema-level work packages.
+
+### What is delivered
+
+**1. The repository write path (`ed6e057`).**
+`src/my_pa/infrastructure/persistence/entity.py` gains seventeen methods on
+`SqlEntityRepository`: three verbs — `record_*`, `supersede_*`, `retire_*` —
+for each of the five temporal families (`entity_names`, `entity_addresses`,
+`entity_communication_methods`, `entity_project_participations`,
+`entity_person_organization_affiliations`), plus the one singleton exception.
+`entity_organization_profiles` is that exception: one row per entity, with
+`entity_id` both primary key and foreign key, no `state` and no
+`superseded_by_*`, so it gets `record_organization_profile` and the in-place
+`revise_organization_profile` and no third verb — 5 × 3 + 2 = 17. **Seventeen
+survives the preferred-correction fix recorded in the boundary below, and was
+re-measured rather than carried forward**: that fix added no verb to the port.
+It changed one signature — every `supersede_*` now takes the *successor record*
+in place of the successor's identifier and writes it itself — and added five
+private `_insert_*` helpers to `SqlEntityRepository`, which are not port
+methods and are not counted here.
+
+Every versioned write is a guarded `UPDATE` carrying its own `_mine(...)`
+Principal predicate together with `version == expected_version`. When it
+matches no row, a guarded re-read — carrying its own `_mine(...)` at the call
+site — hands the version it found, or `None`, to the module-level
+`_refuse_stale_or_absent`, which raises `UnknownScopeError` for an absent or
+out-of-scope row and `StaleDirectedVersionError` for a reachable row at a
+different version. The helper takes the version rather than the table
+deliberately: a helper handed the table would name a partitioned table in a
+statement of its own, which
+`tests/architecture/test_principal_partition_is_reached_through_the_guard.py`
+refuses, and keeping the re-read at the call site is what lets that guard see
+each one carry its own predicate. Eleven call sites use it, two per temporal
+family plus the profile revision.
+
+`revise_organization_profile` passes and writes **every** mutable column,
+including both nullable ones (`jurisdiction_code`, `registration_identifier`),
+so a revision cannot silently carry forward a jurisdiction or a registration
+identifier the caller believes it cleared.
+
+**2. The port declarations (`b49c8bd`, `a5a939d`, `7bbc524`).**
+`src/my_pa/contracts/ports.py` declares the same seventeen methods
+`@abstractmethod` on `EntitiesRepository`, so every implementer of the port has
+to answer for the write path rather than leave it to whichever concrete class
+happens to carry it. `tests/conftest.py`'s `_Entities` gains in-memory
+equivalents; `tests/evaluation/resolution_harness.py`'s `_CorpusRepository`
+states, per method, that resolution writes none of them.
+
+`a5a939d` additionally declares **RI-ENT-WP-07's six assertion methods** —
+`record_assertion`, `assertion`, `assertions_targeting`, `supersede_assertion`,
+`record_assertion_evidence`, `assertion_evidence` — abstract on the same ABC,
+and implements them in both doubles. **This is the surface change WP-07
+explicitly deferred to WP-08**, in its own in-file comment and in this
+document's WP-07 "Delivered artifacts" list above; making it here is that
+deferral being honoured, not scope creep. Two verbs, not three: `record_*`
+inserts and `supersede_assertion` is the family's only transition.
+
+**3. The application service (`1b2dd18`).**
+`src/my_pa/application/entity_record_families.py` declares
+`EntityRecordFamilyService` over the six families, plus `StatedAssertion` and
+`StatedEvidence` — the optional fact-level claim a create or a correction may
+carry — the `EntityRecordFamily` receipt discriminator, one command dataclass
+per verb per family, and the four receipt DTOs (`RecordedFact`,
+`CorrectedFact`, `RetiredFact`, `RevisedFact`). The DTOs live in this module
+rather than in `src/my_pa/application/commands.py`, which is the
+transport-facing surface `WP-11` owns. The service is stateless: it takes the
+`EntitiesRepository` as a per-method argument rather than at construction, so
+it never holds one.
+
+The four properties the audit's objective names, each with its exact mechanism:
+
+- **Principal scoping is by absence, not validation.** `principal_id` is a
+  keyword-only argument on every method, supplied by the composition root from
+  `Authorization.principal.principal_id`, exactly as `EntityDirectedService`
+  takes it. **No command dataclass in the module declares `principal_id`** — nor
+  `version`, `state`, `superseded_by_*`, `retired_at` or `updated_at` — so a
+  payload naming one is refused by the dataclass constructor before any of the
+  service runs. There is no field that can be sent and is then ignored, because
+  a field that can be sent is a field a later change can start honouring.
+- **Lifecycle: a correction is a new row plus a supersession, never an in-place
+  rewrite.** `record_*` mints an identifier and inserts. `correct_*` mints a
+  *second* identifier, builds the successor record, and hands it to
+  `supersede_*` under the caller's `expected_version` — one call, whose three
+  statements the repository issues in the one order the schema admits.
+  `retire_*` retires under `expected_version`. What the record said before a
+  correction survives the correction, which is the property the whole temporal
+  shape exists to keep.
+  `revise_organization_profile` is the singleton's stated exception, and it is
+  the only one. **A correction whose successor claims the preferred slot is
+  not a second exception**: it is written by the same `correct_*` verb as any
+  other, because the ordering the accepted DDL admits is three statements
+  rather than two — the predecessor is marked `superseded` while its
+  `superseded_by_*` is still `NULL`, which releases both partial indexes at
+  once because both are `WHERE state = 'active'`; the successor is then
+  inserted active; and only then is the predecessor pointed at it, by which
+  time the self-referencing foreign key has a row to name. This document
+  previously called that correction "structurally inexpressible" and refused
+  it outright; that claim was wrong and is withdrawn — see "A preferred row is
+  correctable, and the ordering that reaches it" in the boundary below.
+- **Optimistic versions are the caller's and are never re-read.**
+  `expected_version` is a required field on every correction and every
+  retirement, and nothing in the service reads the row first to discover its
+  version — a service that did would guard against a value it had just fetched,
+  which is no guard at all. `UnknownScopeError` and `StaleDirectedVersionError`
+  surface **untranslated**, for the reason `EntityDirectedService` does not
+  translate them either: the classification into the public error family
+  already happens in one place, at the transport edge, where
+  `src/my_pa/application/service.py`'s `_directed_translated` maps
+  `UnknownScopeError` to `not_found` naming `SUBJECT` and
+  `StaleDirectedVersionError` to `conflict` naming `EXPECTED_VERSION`. A second
+  translation here would be a second place those answers are decided, free to
+  disagree with the first.
+- **Normalization is allowed; inference is not, and the line is exact.**
+  Computing a normalized key from a display value the caller stated is
+  normalization — the caller says what the value is, the service says what form
+  two such values are compared in. Inferring a *different fact* is guessing.
+  So the service computes `EntityName.normalized_value` with `normalize_name`,
+  `EntityAddress.normalized_address_value` with `normalize_address` over
+  whichever structured fields the caller populated, and
+  `EntityCommunicationMethod.normalized_value` with
+  `normalize_communication_value` for the method type the caller *stated* — and
+  it never splits `raw_value` into `line1`/`city`/`postal_code`, never decides
+  from a string's shape that it is an email, and never folds a display name
+  into a legal one.
+
+The four no-guess rules, each a refusal a test can reach:
+
+1. **A legal name is stated, never promoted.** `_stated_name_type` refuses a
+   `None` `name_type_code` with `InvalidRequestError(SafeDetail.NAME)`. No code
+   path in the module chooses a `NameTypeCode`; a `LEGAL` row exists only
+   because a caller said `LEGAL`.
+2. **A nullable organization stays null.** `_stated_identifier` passes `None`
+   through untouched and refuses a present-but-blank identifier rather than
+   reading it as "work out who". Nothing creates an organization entity,
+   selects one by name, or substitutes a placeholder to satisfy the foreign key
+   RI-ENT-WP-05 made nullable precisely so an independent consultant needs none.
+3. **A taxonomy code is stated or absent, never derived from text.**
+   `_stated_code` refuses a blank code, naming the taxonomy to quote instead; a
+   command carrying only `role_text` records `role_code=None` and keeps the
+   text, which is the honest record of what was known.
+4. **Unknown stays unresolved.** Every closed vocabulary a caller must decide is
+   a field with no default on every command that writes it, so omitting one is
+   refused by the constructor rather than filled in.
+   `verification_status_code` is the single exception that keeps a default, and
+   it defaults to `CommunicationVerificationStatusCode.UNRESOLVED` — that
+   vocabulary's own name for "not yet known", and the same default
+   `EntityCommunicationMethod` itself declares.
+
+**4. The tests.** `tests/database/test_entity_record_family_write_path.py`
+(`ed6e057`, extended by `f2db56d` from 45 tests to 60) exercises the repository
+write path against real PostgreSQL, including the merge case whose finding is
+recorded under "Finding: merge reparenting bumps a reparented row's own
+`version`" below. The two doubles are covered by the existing `tests/unit`,
+`tests/relationship` and `tests/evaluation` suites that construct them.
+
+**The service's own coverage has since landed, and this note is promoted from
+pending to delivered.** `tests/unit/test_entity_record_family_service.py`
+(`31cc7bf`, extended by `95b16cf`, rewritten onto the corrected write path by
+`0e17e91` from 145 tests to 185) exercises the service against the in-memory
+`_Entities` double: Principal scoping as absence read structurally over
+`dataclasses.fields`, the two-row shape of a correction with the predecessor's
+survival as the load-bearing assertion, the profile's in-place revision and its
+nullable clearing, the optimistic-version refusals and the unreachable/absent
+parity, normalization computed from the stated display form, the four no-guess
+rules each at the helper that makes the refusal, the optional assertion and its
+evidence, and `MutationAuthority`'s keyword-only unreachability. Since
+`0e17e91` it also holds the corrected values on the successor with an
+anti-vacuity check against the predecessor's own unchanged values; the
+structural claim that each of the five `correct_*` bodies makes exactly one
+repository call and that the call is its family's `supersede_*` with the
+successor crossing as `successor=` — the property whose loss *is* finding D1 —
+with a behavioural counterpart through a counting proxy and the mirror claim
+that a `record_*` verb is one insert and not a supersession; the whole-row-list
+equality over all five families proving that a correction refused at a stale
+version, or naming an unreachable predecessor, writes nothing at all; and the
+double's own transition-then-insert supersession with its single version bump
+and its successor passing the same guards a fresh record passes.
+`tests/database/test_entity_record_family_service_write_path.py` (`499a7c1`,
+rewritten by `95b16cf`, corrected by `f2db56d` from 19 tests to 22) holds only
+what a real schema can decide about the
+service's ordering, and pairs each positive claim with an anti-vacuity test
+proving the constraint it relies on actually fires. **What both modules said
+about a preferred correction has changed with the code**: through `95b16cf`
+they pinned the refusal on all three families, the two cases that refusal was
+deliberately wider than, and an AST check that the refusal was the first
+statement of each correction it guarded. That refusal is no longer in the tree
+and neither is its coverage; `0e17e91` and `f2db56d` replaced each of those
+tests in place rather than deleting them, and what the preferred case is now
+held to is that the correction *succeeds* against the real schema — the
+predecessor superseded, the successor active and preferred, and the
+`superseded_by_*` link written — which is the claim the three-statement
+ordering in the boundary below exists to make provable.
+
+**What the database tier now proves, and did not before (`f2db56d`).** Finding
+D1 survived review because the repository tier's supersession tests
+pre-recorded each successor as a deliberately *non-colliding* row — the
+affiliation successor named a different person — and then named it by
+identifier, which is not the shape a correction actually issues. Correcting a
+current affiliation therefore had no database-tier coverage at all: it was
+exercised only against the in-memory double, which enforces no uniqueness of
+any kind and wrote both rows without complaint. The repository tier now
+carries, one test per family, the correction that collided under the old
+successor-first ordering:
+
+- `test_a_current_affiliation_is_correctable_at_all` — **`correct_affiliation`
+  on a current, open-ended affiliation, which had no database-tier coverage at
+  all before this commit.** `an_open_ended_affiliation_is_unique_per_person` is
+  `(principal_id, person_entity_id) WHERE state = 'active' AND effective_to IS
+  NULL`, keyed on the person alone rather than on the job title, the
+  organization or the affiliation type, so under the old ordering *every*
+  correction of a current affiliation collided, whatever field was being
+  corrected — total rather than intermittent. The test corrects only the job
+  title, which is as far from the index's key columns as this family allows,
+  and asserts the successor stays open-ended (`effective_to is None`) rather
+  than quietly acquiring an end date, which would also release the index by
+  inventing a fact the caller never stated.
+  `test_a_current_affiliation_is_correctable_through_the_service` carries the
+  same case through the service.
+- one correction per family that keeps its normalized value — name, address,
+  communication method — and one participation correction that restates its
+  `role_code`. The `role_code` is stated rather than left null on purpose:
+  PostgreSQL indexes nulls as distinct by default, so a null `role_code` never
+  collides and would have passed under the broken ordering too.
+- three preferred-slot corrections — name, address, channel — each *counting*
+  the active holders of the slot rather than only inspecting the successor,
+  because a predecessor left active with `is_preferred` still set would satisfy
+  "the successor is preferred" while being a second holder of a one-holder
+  slot. Each also asserts the predecessor keeps its own `is_preferred`:
+  supersession replaces a row, it does not withdraw one, and clearing the flag
+  would rewrite what the superseded row said.
+- **each family's collision case is exercised**: five third-row collision tests
+  — name, address, channel, participation, affiliation — pinning the limitation
+  that is *not* closed. A successor colliding with some other active row is a
+  real conflict about the world, and it still surfaces as the driver's
+  `IntegrityError` naming the index, exactly as the plain `record_*` path does.
+  `test_a_correction_colliding_with_another_active_row_still_leaves_as_a_driver_error`
+  pins the same limitation at the service tier, asserting the identical
+  exception out of `record_name` and out of `correct_name` so the claim is "the
+  correction is no worse than the plain write" rather than "the correction
+  fails".
+- `test_correcting_an_already_superseded_row_aborts_rather_than_leaving_it_unnamed`
+  characterises the third statement's own refusal: `_refuse_unnamed_successor`
+  raises `RuntimeError` and the transaction aborts, so no orphan successor is
+  committed and the predecessor keeps naming the first one.
+- `test_the_organization_profile_family_revises_in_place_because_it_is_not_temporal`
+  covers the sixth family for what it is rather than by analogy: no `state`, no
+  `retired_at`, no `superseded_by_*` column and `entity_id` as its whole primary
+  key, all read off the live catalogue rather than off the migration file, and
+  therefore `revise_organization_profile` and no `correct_*` verb at all.
+
+At the service tier, `f2db56d` turned the three preferred-correction refusal
+tests into tests that the preferred correction succeeds, keeping their
+retire-then-record arcs so that the alternative a caller used to be forced into
+is still shown working and still shown costing the lineage link.
+`test_a_preferred_correction_answers_with_a_written_row_and_not_a_driver_error`
+admits every exception and then asserts the *absence* of one alongside the rows
+the call was supposed to produce, so a service that silently did nothing would
+not satisfy it. `test_a_supersession_naming_an_absent_successor_is_refused_at_the_statement`
+keeps its name and its claim: since the port no longer offers any way to name a
+successor that does not exist, it issues the raw statements instead, and still
+proves the composite self-referencing foreign key is real and checked per
+statement. The anti-vacuity tests that read `pg_index` and `pg_constraint`
+directly — the three one-preferred partial uniques, and
+`test_no_supersession_foreign_key_is_deferrable` — are unchanged.
+### The boundary — what RI-ENT-WP-08 does NOT deliver
+
+**The service is deliberately unwired.** No `Capability` names
+`EntityRecordFamilyService`, no MCP tool, HTTP route or CLI command reaches it,
+and `ApplicationService` does not hold it — the module is imported by nothing
+outside itself. Transport exposure is `RI-ENT-WP-10`/`RI-ENT-WP-11`'s, and
+`WP-11` additionally owns the capability and purpose `CHECK` migrations that
+would have to land before any of this could be published. Declaring the service
+now is the same deliberate half-step `contracts.ports` took when it declared
+the write block abstract: the caller-facing shape is fixed and reviewable
+before anything can invoke it. The module's own docstring says this; it is
+reproduced here rather than paraphrased into something stronger.
+
+**Atomicity belongs to the caller's transaction, not to the service.** A
+correction is a sequence of statements, never one. `SqlEntityRepository` takes the
+connection rather than opening one — "the caller owns the transaction, this
+class only issues statements on it" — and `SqlUnitOfWork.entities` hands out a
+repository bound to the open transaction's connection, so a correction issued
+through a unit of work commits or rolls back whole. The service opens, commits
+and rolls back nothing, and holds no compensating write: **called with a
+repository that is not inside a transaction, a correction that fails partway
+leaves the statements that already ran.** Since the ordering correction below,
+those statements are the three `supersede_*` issues, so the state a failure can
+leave is a predecessor already marked `superseded` whose `superseded_by_*` is
+still `NULL`, with or without the successor row beside it — not, as an earlier
+revision of this paragraph said, a written successor beside a predecessor still
+`ACTIVE`, which was the shape of the two-call sequence that ordering replaced.
+The repository refuses to *return* into that state rather than committing it
+silently: when the third statement matches no row, `_refuse_unnamed_successor`
+raises and the transaction aborts. What is left after an abort outside a
+transaction is still the caller's to see and to correct by the rows' own
+identifiers. The guarantee belongs to the caller's transaction, and
+neither the module nor this document will describe it as the service's own.
+
+**A preferred row is correctable, and the ordering that reaches it — this
+section's earlier "structurally inexpressible" claim was wrong and is withdrawn
+in full.** Through commit `34367b4` both this document and the module said that
+`EntityRecordFamilyService.correct_name`, `correct_address` and
+`correct_communication_method` could not write a successor claiming the
+preferred slot at all, and refused every such command outright through
+`_refuse_preferred_correction` before any write. **An independent review
+refuted that, and the refutation is a fact about the accepted DDL rather than a
+matter of judgement: the schema, unmodified, already admits an ordering that
+satisfies every constraint involved.** The blanket refusal is gone, and a
+preferred correction writes. This correction is recorded here, inside the
+section that lists what is *not* delivered, rather than only in "What is
+delivered" above — a limitation this section asserted has to be withdrawn where
+a reader who remembers it will come looking for it.
+
+*The ordering, in three statements rather than two.*
+
+1. `UPDATE` the predecessor to `state = 'superseded'`, leaving its
+   `superseded_by_*` `NULL`. This is legal, and legal for a reason that is
+   written into the constraint's own text rather than inferred: each family's
+   CHECK is of the form `CHECK (superseded_by_X IS NULL OR state =
+   'superseded')` — `an_entity_name_names_a_successor_only_when_superseded` and
+   its two siblings. It binds a *non-null successor* to the superseded state,
+   and says nothing that forbids a superseded row whose successor is still
+   `NULL`. The predecessor has now left `state = 'active'`, and with it **both**
+   partial unique indexes at once, because both are predicated on exactly that:
+   `an_active_entity_name_is_unique_per_entity_and_type`
+   (`WHERE state = 'active'`) and
+   `an_active_entity_name_has_one_preferred_per_type`
+   (`WHERE state = 'active' AND is_preferred = true`).
+2. `INSERT` the successor as active and preferred. There is no collision to
+   have: the predecessor is no longer inside either index's `WHERE` clause.
+3. `UPDATE` the predecessor's `superseded_by_*` to the successor's identifier.
+   The self-referencing composite foreign key
+   `an_entity_name_is_superseded_within_its_principal` — `(superseded_by_*,
+   principal_id)` back to the same table — is satisfiable at this point,
+   because the successor row exists, so its being NOT DEFERRABLE costs nothing.
+
+Nothing in the three steps holds for `entity_names` alone.
+`an_entity_address_is_superseded_within_its_principal` and
+`a_communication_method_is_superseded_within_its_principal` are that foreign
+key's siblings, `an_active_entity_address_has_one_preferred_per_type` and
+`an_active_communication_method_has_one_preferred_per_type` are the
+preferred-slot index's, and each family carries the same
+`CHECK (superseded_by_X IS NULL OR state = 'superseded')` shape and the same
+`WHERE state = 'active'` predicate on its active-uniqueness index. All three
+families reach the correction by the same ordering.
+
+*What was actually limiting, named exactly.* Not the schema — **a verb
+limitation**. The port's `supersede_*` set `state` and `superseded_by_*` in a
+single statement, so the release-then-link shape above could not be expressed
+through it at all, and the application service ordered the successor first.
+Both are properties of code this campaign wrote and can change, not properties
+of the accepted DDL. **Every earlier statement in this document that the schema
+made a preferred correction impossible, that no ordering reached it, or that a
+migration making a constraint `DEFERRABLE INITIALLY DEFERRED` would be
+required, was false; it is corrected here rather than softened, and the
+mischaracterisation is recorded rather than quietly removed.**
+
+*Where the ordering lives, and why there.* In the persistence tier, in
+`src/my_pa/infrastructure/persistence/entity.py`, beside the rest of the write
+path. The ordering is not a policy an application layer chose between: it is
+the one sequence the DDL admits, derived from the constraints' own predicates,
+so it belongs where those statements are issued and the constraints are
+checked, not in a service free to order them differently. The application
+service still passes the caller's `expected_version`, and the version guard
+means what it always meant — a correction proceeds only against the
+predecessor the caller believed it was correcting.
+
+*The window this opens, and what closes it.* Between the first statement and
+the third, the predecessor is `superseded` and names no successor — legal,
+which is exactly why the ordering works, and indistinguishable from a row that
+was superseded and never linked. Two things keep that window from being
+observable as a resting state. The first statement write-locks the predecessor
+for the transaction, so no other session can move it before the third runs;
+and if the third matches no row anyway, `_refuse_unnamed_successor` raises
+`RuntimeError` and the transaction aborts rather than committing a superseded
+row that names nobody. That refusal is deliberately *not* one of the two typed
+ones: `UnknownScopeError` would claim a row is absent when it was just updated,
+and `StaleDirectedVersionError` would claim a version conflict the third
+statement does not test for. Issued through `SqlUnitOfWork.entities` the whole
+correction commits or rolls back together; issued against a repository that is
+not inside a transaction, the abort still leaves whatever already ran. That is
+the same atomicity boundary the paragraph above states, on the same terms.
+
+*One supersession is still one version bump.* The first statement bumps
+`version` under the caller's `expected_version`; the third deliberately does
+not bump again, and guards on `state = 'superseded'` and `superseded_by_* IS
+NULL` instead of on a version. So `expected_version + 1` still describes the
+predecessor after a correction, exactly as it did when a supersession was one
+statement, and naming the successor is invisible to a caller's version
+arithmetic. A caller written against the old shape needs no arithmetic change.
+
+**The preferred slot was not the only thing successor-first broke, and the
+wider case was never disclosed.** `entity_person_organization_affiliations`
+arbitrates its active uniqueness with
+`an_open_ended_affiliation_is_unique_per_person`, `ON (principal_id,
+person_entity_id) WHERE state = 'active' AND effective_to IS NULL` — keyed on
+the *person alone*, not on the field being corrected. Writing the successor
+first therefore collided with the very row being replaced on **every**
+correction of a current affiliation that left it current — whatever the
+correction changed, and with no preferred slot involved anywhere, since this
+family carries no `is_preferred` column at all. `correct_affiliation` carried
+no refusal for it, so what surfaced was the driver's error. The same
+release-then-insert-then-link ordering closes that case with the preferred one,
+because that index is partial on `state = 'active'` like the rest. It is
+recorded here because this document disclosed the narrower defect and never
+this one. **It is now proved against real PostgreSQL rather than only reasoned
+about.** `f2db56d` added
+`tests/database/test_entity_record_family_write_path.py::test_a_current_affiliation_is_correctable_at_all`
+and its service-tier counterpart
+`test_a_current_affiliation_is_correctable_through_the_service`, each
+correcting only the job title — as far from the index's key columns as this
+family allows — and each asserting the successor stays open-ended rather than
+acquiring an end date the caller never stated. Before those two this family had
+no database-tier correction coverage at all, which is why the defect reached a
+reviewer rather than a test.
+
+*What did NOT change, so a reader assumes nothing more than landed.* The
+schema. No migration was written for this, no constraint was made deferrable,
+no index was dropped, and no `DEFERRABLE` clause exists on any
+`superseded_by_*` foreign key in
+`migrations/versions/20260830_7e114f822af2_add_entity_names_and_organization_.py`
+or
+`migrations/versions/20260830_441b071bf37b_add_entity_addresses_and_communication_.py`
+today.
+`tests/database/test_entity_record_family_service_write_path.py::test_no_supersession_foreign_key_is_deferrable`
+still reads `pg_constraint` and still asserts `condeferrable` and `condeferred`
+are false for every foreign key on a `superseded_by_*` column — matched by
+column rather than by name, so it covers both keys each column carries (the
+composite named one and the single-column one that column's own `REFERENCES`
+clause created). **That test was right all along; what was wrong was the
+conclusion drawn from it.** Non-deferrability closes off exactly one thing:
+naming the successor in the same statement that supersedes the predecessor. It
+never closed off doing the two in sequence.
+
+**`retire_*` is unchanged, and is still not a substitute for a correction.**
+Retirement writes `is_preferred = false` and releases the slot, proved against
+real PostgreSQL by
+`tests/database/test_entity_record_family_write_path.py::test_a_retirement_releases_the_preferred_slot`.
+It remains the verb for taking a row out of service, and it still writes no
+`superseded_by_*` lineage link — `an_entity_name_names_a_successor_only_when_superseded`
+refuses a retired row that names a successor, so "a retirement that kept the
+lineage" is still not a reachable state. What has changed is that
+retire-then-record is no longer the *only* path to replacing a preferred row,
+and a caller who wants the lineage link no longer has to give it up to get one.
+
+**The `SafeDetail.PINNED` imprecision went with the refusal.** This section
+recorded that `_refuse_preferred_correction` reported `SafeDetail.PINNED` as a
+documented approximation, `src/my_pa/application/errors.py` having no
+`is_preferred` member. With no blanket refusal left to report, there is no
+approximation left to carry; `errors.py` is unchanged and still outside this
+work package's scope.
+
+**One named follow-up, not taken and not authorised in this branch.** An
+in-place preference verb for a temporal family is explicitly rejected by the
+module's own design ("there is deliberately no 'update in place' verb for a
+temporal family"), and nothing here reopens that. The second follow-up this
+section used to name — a migration making the self-referencing foreign keys
+`DEFERRABLE INITIALLY DEFERRED` — is **withdrawn rather than left open**: it
+was premised on the mistaken claim corrected above, and no correction, preferred
+or otherwise, needs it.
+
+**`supersede_assertion` collapses two refusals into one, and the split was
+deliberately not taken here.** `SqlEntityRepository.supersede_assertion` has a
+single failure branch — `rowcount == 0` — and raises `UnknownScopeError` for
+both a stale version and an unreachable row, where the six WP-08 families split
+the two through `_refuse_stale_or_absent`. The in-memory double originally
+split them and was corrected (`7bbc524`) to reproduce the server's answer
+verbatim instead, because a double that refuses *more precisely* than
+production teaches a caller a distinction production will never make: a caller
+written against a `StaleDirectedVersionError` branch would pass every test and
+never take that branch in production, which is the class of defect this whole
+program exists to correct. **Splitting the server's answer is an available
+RI-ENT-WP-07 follow-up that was deliberately NOT taken in WP-08** — it changes
+landed production behaviour and needs database-tier proof, and WP-08's
+acceptance is to surface optimistic-version conflicts as the repository already
+classifies them. It remains unclaimed. A reader should not assume parity
+between the assertion family and the six record families on this point.
+
+**No retirement verb for `entity_assertions`.** `EntityAssertionState.RETIRED`
+exists in `src/my_pa/domain/relationship/governance.py`, but RI-ENT-WP-07 wrote
+no retirement path, and this work package declares no verb no implementer has —
+an abstract `retire_assertion` on the port would be a method every double would
+have to fake. No `retire_assertion` exists anywhere in `src/` or `tests/` at
+head; the port records the omission and its reason in a comment above the
+assertion block rather than leaving it silent.
+
+**`entity_organization_profiles` has no retire verb and no `correct_*` verb,
+so the six families are not symmetrical and this document will not imply that
+they are.** The singleton has nowhere to retire to — no `state`, no
+`superseded_by_*`, one row per entity by construction, so there is nothing a
+supersession could name. It is not a temporal record family, and it therefore
+gets no `correct_organization_profile`: its correction is
+`revise_organization_profile`, an in-place update under its
+`expected_version`, passing every mutable column including the two nullable
+ones so a revision cannot silently carry forward a cleared value. **Counted at
+the service, that is five `correct_*` verbs and one `revise_*`, not six
+`correct_*`** — `correct_name`, `correct_address`,
+`correct_communication_method`, `correct_project_participation` and
+`correct_affiliation`, read off the module rather than assumed from the
+families' count. The asymmetry is the schema's, not an omission this work
+package could have closed.
+
+**A correction that collides with a *third* active row still raises a raw
+`IntegrityError`, not a typed refusal.** The three-statement ordering below
+removes the collision a correction had with *its own predecessor*, and only
+that one. A successor that collides with some other active row — a normalized
+value already held by a different active row of the same
+`(principal_id, entity_id, type code)` under
+`an_active_entity_name_is_unique_per_entity_and_type`, or another active
+preferred row of that type under
+`an_active_entity_name_has_one_preferred_per_type` — is refused by PostgreSQL,
+and neither `SqlEntityRepository`'s `record_*` methods for these six families
+nor `EntityRecordFamilyService` catches it. The caller receives a
+SQLAlchemy `IntegrityError` wrapping the driver's `UniqueViolation` naming the
+index. **This is exactly what the plain `record_*` path has always done for the
+same collision, so it is a standing property of these six families rather than
+something the correction path made worse** — but it is a genuine gap against
+the typed-refusal posture the rest of this service holds, it is not closed
+here, and no transport should publish these verbs without deciding what it
+answers for that error. **The limitation is pinned by tests rather than left to
+be rediscovered.** `f2db56d` added one third-row collision test per correctable
+family — name, address, communication method, participation and affiliation —
+each asserting the `IntegrityError` names the index it collided with and that
+the two pre-existing rows are left at version 1, so a correction that failed
+this way wrote nothing. `test_a_correction_colliding_with_another_active_row_still_leaves_as_a_driver_error`
+carries the same claim at the service tier, asserting the identical exception
+out of `record_name` and out of `correct_name` so what is stated is "the
+correction is no worse than the plain write" rather than "the correction
+fails". A later work package that gives these a typed refusal will find those
+tests waiting for it.
+
+**No mutation-ledger row, and no idempotency key.** The port's write block for
+these six families takes neither, unlike the directed writes, so the service
+has no replay to consult and writes no `entity_mutation_events` row. Retrying a
+`record_*` mints a fresh identifier and writes a second row; the active partial
+uniques those tables carry are what refuse a genuine duplicate. **This is a
+narrowing of what this document's WP-07 section named as WP-08's scope** —
+"typed commands, proposal validation, mutation ledger integration" — of which
+WP-08 delivered the typed commands and neither of the other two. A transport
+that publishes these methods will have to say what it does about a retry, and
+`WP-11` inherits that question along with proposal validation.
+
+**Merge/split behaviour is inherited, not added.** WP-08 introduced no
+`IdentityEffectFamily` or `_DISPOSITIONS_BY_FAMILY` member and changed no
+merge/split code. It inherits the reparenting semantics RI-ENT-WP-06b wired,
+including the version bump recorded under "Finding: merge reparenting bumps a
+reparented row's own `version`" below — the finding proven by a test this work
+package landed.
+
+**`EntityRecordFamilyService` declares no read verb, and
+`entity_assertion_evidence` has no removal verb.** The service is a write path
+only: its public methods are the five temporal families'
+`record_*`/`correct_*`/`retire_*` plus the singleton's
+`record_*`/`revise_*`, and a caller that needs
+to read a row before or after a write goes to `EntitiesRepository`'s own read
+methods, not to this service. On the assertion side the port declares
+`record_assertion_evidence` and the `assertion_evidence` read and nothing else,
+so an evidence row, once written, has no verb that retires, supersedes or
+removes it — the same shape as, and for the same RI-ENT-WP-07 reason as, the
+absent `retire_assertion` above.
+
+**This section is the whole of it, and it is enumerated rather than
+recollected.** The items above are what RI-ENT-WP-08 does not deliver inside
+its own boundary, derived by reading the verbs
+`src/my_pa/application/entity_record_families.py` and
+`src/my_pa/contracts/ports.py` actually declare and comparing them against the
+objective this section opens with — not by remembering what was left out. The
+short list in the work-package table above restates these and adds nothing to
+them. Two qualifications a reader is owed rather than left to infer: the list
+is bounded to WP-08's own boundary, so everything `WP-09`/`WP-10`/`WP-11` owns
+(entity resolution, transport exposure, the capability and purpose `CHECK`
+migrations) sits outside it by construction and is not repeated here; and a
+limitation nobody has yet found is still a limitation, so this is an exhaustive
+statement of what is known at this head, not a proof that nothing else exists.
+The preferred-correction claim is precisely why that distinction is written
+down: it stood in this section as a confident structural impossibility until a
+reviewer read the DDL and found it was neither.
+
+### The guard that was touched, and exactly how
+
+`tests/architecture/test_principal_is_never_caller_supplied.py` was modified by
+commit `28fb1e5`, and it is the only test or guard this work package touched.
+The change is **35 lines added and 0 removed**: a comment block, and six tuples
+inserted in their sorted positions into `VERIFIED_CALLER_STATEMENTS`'s entry
+for `infrastructure/persistence/entity.py` —
+
+    ("address", "principal_id")
+    ("affiliation", "principal_id")
+    ("entity_name", "principal_id")
+    ("method", "principal_id")
+    ("participation", "principal_id")
+    ("profile", "principal_id")
+
+**No matcher, detector, control set, or other test was changed.**
+`CALLER_SUPPLIED`, `IDENTITY_KEYS`, `PRINCIPAL_FIELDS`, `DERIVED_CHAINS`,
+`_DERIVED_RECEIVERS`, `CONTINUITY_COMMANDS`, `MANAGED_DOCUMENT_COMMANDS`, every
+detector function and claim 1's matcher are untouched; no pattern was relaxed
+and no test was skipped, weakened, or deleted. The diff is additions only.
+
+**Why this is the guard working rather than an allow-list widening.**
+`VERIFIED_CALLER_STATEMENTS` records production sites that read a
+caller-stated `principal_id` **in order to refuse a mismatch**. The six new
+entries are the six families' `record_*` methods — `record_entity_name`,
+`record_organization_profile`, `record_entity_address`,
+`record_communication_method`, `record_project_participation`,
+`record_person_organization_affiliation` — each performing the same
+`if X.principal_id != principal_id: raise ValueError(...)` the module already
+performs for `assertion`, `link`, `observation` and `proposal`, before any
+statement runs and ahead of the scope lock and the merged-endpoint check. None
+of the six values is caller input: the records are domain objects the
+application hands down having already stamped the resolved partition, and none
+of the reads decides a partition — the partition is the `principal_id`
+argument, and the read exists only to prove the record agrees with it.
+**Registering a check that *adds* a refusal removes none.** Each entry was
+verified by reading its method, not inferred from the measurement that went red.
+
+**The separate `name` → `entity_name` parameter rename (`b49c8bd`), and why it
+was necessary.** The guard's first claim propagates "caller-supplied" by *local
+name*, transitively across a whole module. `_row_to_proposal` binds `name` in
+`{str(name): _payload_value(value) for name, value in payload.items()}`, and
+`payload` is one of that claim's caller-supplied containers — so every `name`
+in `infrastructure/persistence/entity.py` is a name claim 1 has been told not
+to read a Principal off. `record_entity_name` read `name.principal_id` in order
+to *refuse* a mismatch, which reddened claim 1 — and **claim 1 has no registry
+to record an exception in.** Renaming the parameter to `entity_name`, in the
+port, the SQL repository and both doubles, is the only response that neither
+edits the guard nor stops checking the Principal, and it matches the other five
+families, whose parameters were already spelled for their own record.
+
+### Delivered artifacts
+
+- `src/my_pa/infrastructure/persistence/entity.py` (`ed6e057`, parameter rename
+  in `b49c8bd`): the seventeen `record_*`/`supersede_*`/`retire_*`/`revise_*`
+  methods on `SqlEntityRepository` and the module-level
+  `_refuse_stale_or_absent`. The preferred-correction follow-up (`33d5424`)
+  rewrites the five `supersede_*` bodies into the three-statement ordering and adds the
+  five private `_insert_*` helpers they share with `record_*`, plus the
+  module-level `_refuse_unnamed_successor`; it adds no public method.
+- `src/my_pa/contracts/ports.py` (`b49c8bd`, `a5a939d`, `7bbc524`): the same
+  seventeen declared `@abstractmethod` on `EntitiesRepository`, plus
+  RI-ENT-WP-07's six assertion methods (`record_assertion`, `assertion`,
+  `assertions_targeting`, `supersede_assertion`, `record_assertion_evidence`,
+  `assertion_evidence`), and `supersede_assertion`'s collapsed-refusal contract
+  stated outright in its docstring. The preferred-correction follow-up
+  (`33d5424`) changes one thing on this port: each of the five `supersede_*` methods takes
+  the successor *record* in place of the successor's identifier, and the block
+  comment above them states the three-statement ordering and why it is the
+  implementer's to know rather than each caller's to rediscover.
+- `src/my_pa/application/entity_record_families.py` (`1b2dd18`):
+  `EntityRecordFamilyService`, `EntityRecordFamily`, `StatedAssertion`,
+  `StatedEvidence`, the per-verb command dataclasses, and the `RecordedFact`/
+  `CorrectedFact`/`RetiredFact`/`RevisedFact` receipts. No migration; no change
+  to any existing module.
+- `tests/conftest.py` (`b49c8bd`, `a5a939d`, `7bbc524`): `_Entities` in-memory
+  equivalents for all twenty-three declared methods. The preferred-correction
+  follow-up (`33d5424`) moves the double to the new `supersede_*` shape: it
+  takes the successor record and writes it, so a test cannot pass over a
+  correction that
+  never wrote the corrected value, and it preserves refusal *order* — a stale
+  or unreachable predecessor is refused before the successor is inserted. It
+  deliberately reproduces no uniqueness: which rows collide is the database's
+  answer, proved in `tests/database/`, and restating it in a double would be a
+  second, unversioned statement of the schema free to drift from the
+  migrations.
+- `tests/evaluation/resolution_harness.py` (`b49c8bd`, `a5a939d`):
+  `_CorpusRepository` per-method refusals — the corpus holds none of these
+  rows, so an empty read would be indistinguishable from a resolver that
+  consulted the plane and correctly found nothing.
+- `tests/database/test_entity_record_family_write_path.py` (`ed6e057`, extended
+  by `f2db56d` from 45 tests to 60): the repository write path against real
+  PostgreSQL, and since `f2db56d` every family's correction as a correction
+  actually issues it.
+- `tests/unit/test_entity_record_family_service.py` (`31cc7bf`, `95b16cf`,
+  rewritten onto the corrected write path by `0e17e91` from 145 tests to 185)
+  and `tests/database/test_entity_record_family_service_write_path.py`
+  (`499a7c1`, `95b16cf`, corrected by `f2db56d` from 19 tests to 22): the
+  service's own unit and database coverage. Through `95b16cf`
+  that included the preferred-correction refusal and both "horns" of the
+  "not expressible as a supersession" claim; both are superseded by the
+  correction below, and what the preferred case now holds is that the
+  correction succeeds against the live schema.
+- `src/my_pa/application/entity_record_families.py` (`34367b4`):
+  `_refuse_preferred_correction`, called as the first statement of
+  `correct_name`, `correct_address` and `correct_communication_method`.
+  **Superseded and no longer in the tree.** The refusal rested on the claim
+  that no ordering of a correction's statements satisfied both the
+  preferred-slot index and the supersession foreign key; a reviewer refuted
+  that against the accepted DDL, and the follow-up commit on this branch —
+  `33d5424`, listed below — replaced the refusal with the three-statement
+  ordering set out under "A preferred row is correctable, and the ordering that
+  reaches it" above, issued from
+  `src/my_pa/infrastructure/persistence/entity.py`. That commit's exact test
+  results are recorded in the pull request and the implementation report bound
+  to the head reviewed, rather than restated here, so this list cannot drift
+  ahead of the tree.
+- `tests/architecture/test_principal_is_never_caller_supplied.py` (`28fb1e5`):
+  six registry entries added, none removed, no matcher or control changed.
+
+**The corrective cycle that closed reviewer finding D1 — four commits on this
+branch, named here so this list does not stop at the head that was reviewed.**
+
+- `33d5424` — replaces `_refuse_preferred_correction` with the three-statement
+  supersession ordering the accepted DDL already admits, in
+  `src/my_pa/infrastructure/persistence/entity.py`, the five `supersede_*`
+  declarations on `src/my_pa/contracts/ports.py`,
+  `src/my_pa/application/entity_record_families.py` and the `_Entities` double
+  in `tests/conftest.py`. No schema change and no migration.
+- `a3b897b` — this document: withdraws in full the five claims that a
+  preferred-slot correction was structurally inexpressible (reviewer finding
+  D2), qualifies "pre-existing" for the three defects `37ead78` introduced on
+  this same unmerged branch (finding D3), and makes the WP-08 "not delivered"
+  list exhaustive rather than merely closed-sounding.
+- `0e17e91` — `tests/unit/test_entity_record_family_service.py`, 145 tests to
+  185: replaces in place the thirteen tests that asserted the refused
+  behaviour, each at the same or greater strength, and adds forty more holding
+  the corrected write path and the double's transition-then-insert.
+- `f2db56d` — `tests/database/test_entity_record_family_write_path.py`, 45
+  tests to 60, and
+  `tests/database/test_entity_record_family_service_write_path.py`, 19 tests to
+  22: every family's correction covered against real PostgreSQL, including
+  `correct_affiliation` on a current affiliation, which had no database-tier
+  coverage at all and is the reason finding D1 survived to review.
+
+The commit refreshing this document for those four is not named here: its SHA
+does not exist while it is being written, and this list states no SHA it cannot
+have read.
+
+**No migration, and no schema change of any kind, was made by RI-ENT-WP-08.**
+It writes to tables `RI-ENT-WP-02` through `RI-ENT-WP-07` already created.
 
 ## Merge/split disposition (RULING 2)
 
@@ -1251,24 +2006,85 @@ participation rather than a documented exclusion. (`entity_role_types` and
 under RULING 2's second branch, for the reason stated above this update: no
 `entity_id` column of any kind, so there is no row for a merge to touch.)
 
-## WP-08 blocker cleared: `EntityRelationshipType` widened to 34 of 35 codes
+### Finding: merge reparenting bumps a reparented row's own `version`
 
-**Status: the second blocking dependency above is LIFTED for nineteen of the
-twenty new codes; one code, `design_coordinates_with`, is a disclosed,
-narrower exception this pass found and did not have the authority to
-resolve unilaterally.** As a prerequisite pass ahead of `WP-08`'s own
-write-path work, `EntityRelationshipType` (`src/my_pa/domain/relationship/
-entity.py`) was widened from the original fifteen members. All twenty new
-codes were added and the full test suite was run, including
-`tests/architecture/`, per this program's own process rules — which is what
-caught the exception below before it could ship silently. The enum's
-docstring is rewritten to state the actual, 34-of-35 result plainly, cite
-`8dc3619891bb` and this update, and remove the now-false claims that the
-enum is frozen at fifteen and that `_row_to_relationship` raises for all
-twenty new codes (it now raises for exactly one).
+**Recorded here, in the merge/split material, rather than under a work
+package, because it is a property of the reparenting machinery this section
+describes that every future write path over these six families inherits —
+`WP-08`'s and `WP-11`'s included.** It is a consequence of the wiring above,
+not a defect in it, and it is written down because it is the kind of fact a
+caller discovers as a surprising failure rather than by reading a contract.
 
-**The one exception, found by running the full test suite rather than
-assumed clean: `design_coordinates_with` trips the no-confidence guard.**
+**The fact.** `SqlEntityRepository.reparent_entity_reference`
+(`src/my_pa/infrastructure/persistence/entity.py`) writes `version = version
++ 1` (and `updated_at = at`) in the same `UPDATE` that substitutes the
+survivor's `entity_id` into the row's entity-reference columns. It does this
+for every family whose `_ChildSubject.version_column` is `"version"`, which
+is all six of the RI-ENT-WP-06b families — `NAME`, `ORGANIZATION_PROFILE`,
+`ADDRESS`, `COMMUNICATION_METHOD`, `PROJECT_PARTICIPATION`,
+`PERSON_ORGANIZATION_AFFILIATION` — as well as `ALIAS`, `IDENTIFIER`,
+`ASSIGNMENT`, `RELATIONSHIP`, `ENTITY`, and `PROPOSAL`. The one member that
+does not take this branch is `OBSERVATION`, whose `version_column` is
+`resolution_version`; the claim is stated at that width rather than as a
+universal one.
+
+**What it means for a caller holding an `expected_version`.** A caller that
+read a row's `version`, and then had someone else's merge reparent that row
+before the caller's write landed, is holding a stale version — **stale as a
+pure side effect of an operation the caller neither performed nor edited the
+row's own content with.** The optimistic-version predicate then refuses the
+write with `StaleDirectedVersionError` rather than silently applying it.
+That refusal is the contract working, not a bug: the row's entity binding
+changed underneath the caller, so the state the caller reasoned about is no
+longer the state on disk, and the correct recovery is to re-read and retry
+against the current version. A write path must not treat a post-merge
+stale-version refusal as an anomaly to be worked around, and must not carry
+a pre-merge version across a merge boundary.
+
+**What proves it.**
+`tests/database/test_entity_record_family_write_path.py::test_a_versioned_write_still_reaches_a_row_a_merge_reparented`,
+landed in commit `ed6e057` ("feat(ri-ent): add the six record families'
+write path (RI-ENT-WP-08)"). The test creates an `entity_names` row under an
+entity that is then merged away, runs a real merge through
+`IdentityCorrectionService`, reads the row back under the survivor and
+asserts it is the same row by its own `entity_name_id` and now at `version
+== 2`; asserts that `retire_entity_name` at `expected_version=1` — the
+version a pre-merge caller would be holding — raises
+`StaleDirectedVersionError`; and then retires at the current version, which
+succeeds and lands the row at `version == 3`. It states the bump rather than
+working around it, which is why it is citable as the proof of this finding.
+
+**Status of the run.** This test is under `tests/database`, which is strictly
+serial across this campaign and run by the Orchestrator; this document does
+not restate a pass count it did not measure.
+
+## WP-08 blocker cleared: `EntityRelationshipType` widened to 35 of 35 codes
+
+**Status: the second blocking dependency above is LIFTED for all twenty new
+codes. `EntityRelationshipType` holds thirty-five members and there is no
+withheld code.** As a prerequisite pass ahead of `WP-08`'s own write-path
+work, `EntityRelationshipType` (`src/my_pa/domain/relationship/entity.py`)
+was widened from the original fifteen members. All twenty new codes were
+added and the full test suite was run, including `tests/architecture/`, per
+this program's own process rules — which is what caught the one exception
+recorded below before it could ship silently, and that exception has since
+been resolved.
+
+**Superseded statement, preserved rather than rewritten.** Through commit
+`f4eaa4f` this section was headed "widened to 34 of 35 codes" and stated
+that the blocker was lifted "for nineteen of the twenty new codes; one code,
+`design_coordinates_with`, is a disclosed, narrower exception this pass
+found and did not have the authority to resolve unilaterally", left to the
+campaign owner. **That was true when it was written and is no longer true.**
+The two paragraphs below record, in order, why the enum member was withheld
+and how the withholding was actually resolved; neither rewrites the history
+into "it was always thirty-five". The enum's docstring was rewritten by the
+same pass to state the result plainly and to cite `8dc3619891bb` and this
+update, removing the then-false claims that the enum was frozen at fifteen
+and that `_row_to_relationship` raised for all twenty new codes.
+
+**Why the enum member was withheld (historical, the state through
+`f4eaa4f`): `design_coordinates_with` tripped the no-confidence guard.**
 Adding `DESIGN_COORDINATES_WITH = "design_coordinates_with"` as a member was
 tried, and `tests/architecture/test_relationship_scoring_surface_is_denied.py`
 — the guard this program is explicitly forbidden from touching, weakening,
@@ -1276,38 +2092,108 @@ or reasoning around — turned red:
 `test_no_closed_relationship_vocabulary_admits_a_score_or_a_protected_trait`
 and `test_every_live_name_on_the_relationship_surface_passes_the_rule` both
 failed, because that guard's `latitude|longitude|geolocation|coordinates|
-whereabouts|tracking` → "location tracking" denial pattern token-matches the
-substring "coordinates" in `design_coordinates_with`'s name and value,
-mechanically, with no awareness that the taxonomy entry means
-design-discipline coordination between two project participants (an
-architect and a structural engineer coordinating design, say), not
-geolocation. This is a genuine false positive at the semantic level and a
-genuine, correct-as-designed match at the mechanical level the guard
-actually runs: `entity_relationship_types.design_coordinates_with` (the
-DB-level taxonomy row RI-ENT-WP-06a seeded) is untouched and remains valid;
-only the *Python enum member* for it was withheld, and only because this
-program's own rules forbid the two ways available to make it pass (editing
-the guard's pattern, or writing an enum value that does not match the
-seeded `relationship_type_code` character-for-character). This is disclosed
-in `EntityRelationshipType`'s own docstring ("One code deliberately
-withheld"), here, and in `tests/database/test_entity_relationship_type_widened_read_path.py`'s
-module docstring, with a dedicated test
-(`test_design_coordinates_with_is_withheld_and_still_raises`) proving the
-gap is real and current rather than a stale claim. **Resolving this — a
-considered, narrow carve-out to the guard's pattern, or picking a different
-code/value for this one taxonomy entry — is a decision this pass does not
-have the authority to make and is left to the campaign owner.**
+whereabouts|tracking` → "location tracking" denial pattern matched the token
+`coordinates` in `design_coordinates_with`'s name and value, mechanically,
+with no awareness that the taxonomy entry means design-discipline
+coordination between two project participants (an architect and a structural
+engineer coordinating design, say), not geolocation. That was a genuine
+false positive at the semantic level and a genuine, correct-as-designed
+match at the mechanical level the guard actually runs:
+`entity_relationship_types.design_coordinates_with` (the DB-level taxonomy
+row RI-ENT-WP-06a seeded) was untouched and remained valid; only the *Python
+enum member* for it was withheld, and only because this program's own rules
+forbid the two ways then available to make it pass (editing the guard's
+pattern, or writing an enum value that does not match the seeded
+`relationship_type_code` character-for-character). That gap was disclosed at
+the time in `EntityRelationshipType`'s own docstring, here, and in
+`tests/database/test_entity_relationship_type_widened_read_path.py`'s module
+docstring, with a dedicated test proving it was real and current rather than
+a stale claim.
 
-**The read path, for the nineteen.** `infrastructure/persistence/entity.py`'s
+**How it was resolved: the taxonomy entry was renamed, and the guard was not
+edited.** Commit `37ead78` ("fix(ri-ent): rename design_coordinates_with ->
+design_coordination_with, close EntityRelationshipType to 35/35") took
+neither of the two routes the withholding pass had named as unavailable to
+it, and in particular did **not** carve out an exception in the guard.
+`tests/architecture/test_relationship_scoring_surface_is_denied.py` is
+unmodified by this branch: `37ead78` touched exactly two files
+(`migrations/versions/20260831_c99cd8ed8d1c_rename_design_coordinates_with.py`
+and `src/my_pa/domain/relationship/entity.py`), and `git log
+f4eaa4f..HEAD -- tests/architecture/test_relationship_scoring_surface_is_denied.py`
+returns no commits at all. Instead, migration `c99cd8ed8d1c`
+(`down_revision = 1cda4d536268`) renamed the seeded
+`entity_relationship_types` row from `design_coordinates_with` to
+`design_coordination_with`, leaving every other column of that row
+(`directed`, `inverse_type_code`, `source_entity_type`/`target_entity_type`,
+`allows_project_scope`, `cardinality_rule`, `status`, `label`) unchanged — a
+rename, not a new taxonomy decision — and
+`EntityRelationshipType.DESIGN_COORDINATION_WITH = "design_coordination_with"`
+became the enum's thirty-fifth member. The new name carries the meaning the
+old one always intended (design-discipline coordination between project
+participants) and does not collide with the denied token family, because
+that guard matches `fullmatch` on snake_case tokens rather than on
+substrings — it documents that distinction in its own docstring — and
+`design_coordination_with` tokenizes to `("design", "coordination", "with")`,
+none of which fullmatches `latitude|longitude|geolocation|coordinates|
+whereabouts|tracking` or any other pattern in the guard's `DENIED` tuple.
+`coordination` is a different token from `coordinates`. **The guard's
+strength is therefore unchanged: nothing in it was excepted, weakened, or
+reasoned around; the name that tripped it simply no longer exists in the
+tree.** `8dc3619891bb`'s own text still says `design_coordinates_with` —
+that migration is history and is deliberately not rewritten.
+
+**`37ead78` also introduced three defects, and this branch — not `origin/main`
+— is where they came from.** Adding `c99cd8ed8d1c` moved the Alembic head and
+the `migrations/versions/` file count, and the revision performed its rename
+through `op.get_bind().execute(...)` and then read `Result.rowcount` off the
+return value, which is `None` in Alembic's offline (`--sql`) mode. Three later
+commits on this same branch repaired that fallout: `b2c1d79` corrected the
+stale head literal `1cda4d536268` in twelve test modules, `2ca2a27` corrected
+the stale `85` migration-count literal in sixteen `tests/schema` modules, and
+`8638433` gave `c99cd8ed8d1c` an offline branch that re-expresses its
+single-row check server-side through `GET DIAGNOSTICS ... ROW_COUNT`, leaving
+the online path byte-identical. **Those commits' own messages call the defects
+"pre-existing", and that word is qualified here rather than left to mislead a
+pull-request reader.** They were pre-existing only relative to the RI-ENT-WP-08
+write-path increment, which did not author them. They were **not** inherited
+from `main`. `37ead78` is on this unmerged branch, `ri-ent/wp08-write-path`,
+and nowhere else, verified rather than assumed: `git merge-base --is-ancestor
+37ead78 origin/main` exits non-zero against `origin/main` at
+`f4eaa4f950009847eb9bde2836f422d5cd731cbc`, `git branch -a --contains 37ead78`
+names only `ri-ent/wp08-write-path` and its remote, and `37ead78` is the oldest
+entry in `git log --oneline f4eaa4f..HEAD`. **The honest formulation, and the
+one this document uses: this branch introduced them, an earlier work package's
+commit on it authored them, and the WP-08 increment did not** — whoever merges
+this branch is merging the defects and their repairs together, not receiving a
+fix for something `main` was already carrying. The statement above that
+`37ead78` touched exactly two files remains a statement about that commit and
+stays true; `8638433` later added to one of the two (the migration), and
+`tests/architecture/test_relationship_scoring_surface_is_denied.py` is still
+untouched by every commit on this branch — `git log f4eaa4f..HEAD --
+tests/architecture/test_relationship_scoring_surface_is_denied.py` returns
+nothing at this head, three commits later than when that claim was first
+written.
+
+**Current state, verified against the tree rather than restated.**
+`EntityRelationshipType` has thirty-five members, `DESIGN_COORDINATION_WITH`
+among them and no `DESIGN_COORDINATES_WITH`; the enum's values match
+`entity_relationship_types.relationship_type_code` character-for-character
+for all thirty-five codes, with no exception. `grep -rn
+"design_coordinates_with" src/ tests/ migrations/` finds the old spelling
+only in prose — the enum docstring's and the tests' own historical accounts,
+`8dc3619891bb`'s untouched text, and `c99cd8ed8d1c`'s rename statements —
+and never as a live enum member or as a seeded code.
+
+**The read path.** `infrastructure/persistence/entity.py`'s
 `_row_to_relationship` (`EntityRelationshipType(str(row.relationship_type))`)
-required no code change: with thirty-four codes present as enum members, the
-same constructor call that used to raise `ValueError` for all twenty new
-codes now succeeds for nineteen of them, because each is now a member;
-`design_coordinates_with` alone still raises, per the exception above. Every
-other typed read path over `entity_relationships.relationship_type` was
-grepped (`EntityRelationshipType(` across `src/`) and confirmed to have
-exactly one call site — `_row_to_relationship` itself — so there was no
-second construction site to fix separately.
+required no code change for either half of this: with all thirty-five codes
+present as enum members, the same constructor call that used to raise
+`ValueError` for all twenty new codes now succeeds for every seeded code,
+`design_coordination_with` included. Every other typed read path over
+`entity_relationships.relationship_type` was grepped
+(`EntityRelationshipType(` across `src/`) and confirmed to have exactly one
+call site — `_row_to_relationship` itself — so there was no second
+construction site to fix separately.
 
 **The write path — a mechanical consequence, stated honestly rather than
 narrower than it is.** Widening the enum's membership was not scoped as
@@ -1318,34 +2204,58 @@ EntityRelationshipType)`, and `domain/relationship/proposal_validation.py`'s
 `_member` helper and the equivalent checks in `adapters/normalization.py`
 and `application/entity_promotion.py` all test membership against this
 enum's own value set — none of them hard-code the fifteen-code list
-separately. Because nothing else gates the nineteen newly-admitted codes
-out, widening the enum's membership, by itself, also widens what those
-write-path checks accept for those nineteen. `design_coordinates_with` is
-not a member, so no write path — typed or otherwise — can construct an
-`EntityRelationshipType` for it. This is disclosed here and in the enum's
-own docstring rather than implied to be a narrower or more complete change
-than it is.
+separately. Because nothing else gates the newly-admitted codes out,
+widening the enum's membership, by itself, also widens what those write-path
+checks accept — originally for nineteen codes, and, after `37ead78` added
+`DESIGN_COORDINATION_WITH`, for all twenty. The withheld-code caveat this
+paragraph used to carry ("`design_coordinates_with` is not a member, so no
+write path — typed or otherwise — can construct an `EntityRelationshipType`
+for it") is superseded and no longer applies to any code. This is disclosed
+here and in the enum's own docstring rather than implied to be a narrower or
+more complete change than it is.
 
-**Test evidence, database-level, real PostgreSQL.**
+**Test evidence, database-level, real PostgreSQL — historical measurement,
+against the 34-of-35 tree.** As measured at the withholding pass,
 `tests/database/test_entity_relationship_type_widened_read_path.py` (23
-tests) writes one real `knowledge.entity_relationships` row for each of the
-nineteen newly-admitted codes and reads each back through
+tests) wrote one real `knowledge.entity_relationships` row for each of the
+nineteen newly-admitted codes and read each back through
 `SqlEntityRepository.relationship` and `SqlEntityRepository.relationships`
-(both of which call `_row_to_relationship`), asserting no `ValueError` is
-raised and the returned `EntityRelationship.relationship_type` equals the
-expected `EntityRelationshipType` member; a dedicated test proves
-`design_coordinates_with` is correctly withheld and still raises. Run:
+(both of which call `_row_to_relationship`), asserting no `ValueError` was
+raised and the returned `EntityRelationship.relationship_type` equalled the
+expected `EntityRelationshipType` member; a dedicated test proved
+`design_coordinates_with` was correctly withheld and still raised. Run:
 `MY_PA_DATABASE_URL='postgresql+psycopg://my_pa@127.0.0.1:5433/my_pa'
 .venv/bin/python -m pytest
 tests/database/test_entity_relationship_type_widened_read_path.py -q` — 23
-passed. `tests/schema/test_entity_relationship_types_migration.py` and
-`tests/relationship/test_relationship_domain.py` (73 passed together) were
-re-run and remain green; no test in the repository hard-coded
-`EntityRelationshipType`'s member count or its exact member list, so none
-needed correcting for the new count beyond this document itself.
+passed at that tree. `tests/schema/test_entity_relationship_types_migration.py`
+and `tests/relationship/test_relationship_domain.py` (73 passed together)
+were re-run and were green, and at that point no test in the repository
+hard-coded `EntityRelationshipType`'s member count or its exact member list.
 `.venv/bin/python -m mypy src` (305 source files, clean) and
 `.venv/bin/python -m ruff check .` (clean) were re-run after the
-`design_coordinates_with` correction and are clean.
+`design_coordinates_with` correction and were clean. **Every figure in this
+paragraph is a measurement of the pre-rename tree and is retained as the
+record of that pass, not as a current-state claim.**
+
+**Test evidence after the rename.** Commit `87e1e0f` rewrote
+`tests/database/test_entity_relationship_type_widened_read_path.py` to cover
+all thirty-five seeded codes rather than only the twenty new ones. Its
+`ALL_35_CODES` is `EXISTING_CODES` (fifteen) `+ NEW_CODES` (twenty), both
+restated verbatim from the migrations rather than re-derived from the enum,
+so the file cannot pass merely because the enum and the list were built from
+the same spelling; two of its five test functions are parametrized across
+all thirty-five codes (round-trip through `SqlEntityRepository.relationship`
+and through the paged `.relationships` list), and
+`test_the_seeded_taxonomy_table_and_the_enum_are_exact_mirrors` asserts the
+live table's seeded codes equal `{member.value for member in
+EntityRelationshipType}` in both directions, asserting specifically that
+`design_coordinates_with` is *not* seeded and `design_coordination_with`
+*is*. The same commit removed the now-false `WITHHELD_CODE` constant and its
+dedicated test, and updated
+`tests/schema/test_entity_relationship_types_migration.py`'s `NEW_CODES` to
+the renamed code. **These database and schema tests are strictly serial
+across this campaign and are run by the Orchestrator, not restated here with
+a pass count this document did not measure.**
 `MY_PA_DATABASE_URL='postgresql+psycopg://my_pa@127.0.0.1:5433/my_pa'
 .venv/bin/python -m pytest tests/architecture -q -p no:cacheprovider`, run
 from a normal checkout (`/Users/bobbyfetting/my-pa`, no `.claude` path
@@ -1439,6 +2349,14 @@ against its own disposable database, never the configured one):
 - `.venv/bin/python -m pytest tests/unit/test_entity_assertion_domain.py -q` (RI-ENT-WP-07)
 - `.venv/bin/python -m pytest tests/schema/test_entity_assertion_provenance_migration.py -q` (RI-ENT-WP-07)
 - `.venv/bin/python -m pytest tests/database/test_entity_assertion_provenance.py -q` (RI-ENT-WP-07)
+- `.venv/bin/python -m pytest tests/database/test_entity_record_family_write_path.py -q` (RI-ENT-WP-08; database tier, strictly serial across this campaign)
+- `.venv/bin/python -m pytest tests/architecture/test_principal_is_never_caller_supplied.py -q` (RI-ENT-WP-08 — the guard `28fb1e5` registered six new entries in)
+- `.venv/bin/python -m pytest tests/architecture/test_principal_partition_is_reached_through_the_guard.py -q` (RI-ENT-WP-08 — the guard `_refuse_stale_or_absent`'s call-site shape exists to satisfy)
+- `.venv/bin/python -m pytest tests/unit/test_entity_record_family_service.py -q` (RI-ENT-WP-08)
+- `.venv/bin/python -m pytest tests/database/test_entity_record_family_service_write_path.py -q` (RI-ENT-WP-08; database tier, strictly serial across this campaign)
+- `.venv/bin/python -m pytest tests/unit tests/relationship tests/evaluation -q` (RI-ENT-WP-08 — the two `EntitiesRepository` doubles the port additions obliged)
+- `.venv/bin/python -m mypy src` (RI-ENT-WP-08)
+- `.venv/bin/python -m ruff check .` / `.venv/bin/python -m ruff format --check .` (RI-ENT-WP-08)
 - `.venv/bin/python -m pytest tests/relationship/test_relationship_domain.py -q`
 - `.venv/bin/python -m pytest tests/architecture/test_relationship_scoring_surface_is_denied.py -q`
 - `.venv/bin/python -m pytest tests/architecture/ -q`
@@ -1462,3 +2380,4 @@ restated here, so this document cannot drift ahead of what actually ran.
 - `migrations/versions/20260830_17149a48fa30_add_entity_person_organization_affiliat.py` (RI-ENT-WP-05).
 - `migrations/versions/20260831_8dc3619891bb_add_entity_relationship_types.py` (RI-ENT-WP-06a).
 - `migrations/versions/20260831_1cda4d536268_add_entity_assertions_and_evidence.py` (RI-ENT-WP-07).
+- `migrations/versions/20260831_c99cd8ed8d1c_rename_design_coordinates_with.py` (the WP-08 blocker-clearing rename of the seeded `design_coordinates_with` row to `design_coordination_with`; `down_revision = 1cda4d536268`).

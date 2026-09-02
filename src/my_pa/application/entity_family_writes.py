@@ -18,7 +18,7 @@ retries instead of writing twice. This module is where the two are supplied.
 **It is a new module rather than an edit to `entity_record_families`, and the
 separation is the design.** That file is `RI-ENT-WP-08`'s and is under
 independent review on another branch; the alternative -- making the five
-families reach `SqlEntitiesRepository._append_mutation` -- would mean changing
+families reach `SqlEntityRepository._append_mutation` -- would mean changing
 around fifteen accepted `EntitiesRepository` port methods from `-> None` to
 `-> DirectedReceipt` and giving each an idempotency key and a payload digest,
 which is a redesign of an accepted contract rather than a use of one. What this

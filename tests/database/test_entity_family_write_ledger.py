@@ -125,8 +125,14 @@ PROJECT: Final = "ent_bbbb0002bbbb0002"
 WHEN: Final = datetime(2026, 9, 1, 12, tzinfo=UTC)
 LATER: Final = WHEN + timedelta(hours=1)
 
-AUDIT: Final = "aud_aaaa0001aaaa0001"
-AUDIT_TWO: Final = "aud_bbbb0002bbbb0002"
+# `IdKind.AUDIT`'s prefix is `audit`, not `aud`. These read `aud_` until this
+# module's first execution, at which point all 32 of its tests failed with
+# `InvalidIdentifierError: unknown identifier prefix: 'aud'` -- the module had
+# been statically verified and never run, the same way
+# `tests/database/test_entity_resolution_value_reads.py` named a `NameTypeCode`
+# member that never existed and errored at setup on all eleven of its tests.
+AUDIT: Final = "audit_aaaa0001aaaa0001"
+AUDIT_TWO: Final = "audit_bbbb0002bbbb0002"
 
 
 def _config() -> Config:
@@ -549,7 +555,8 @@ def test_a_second_ledger_row_for_one_key_and_capability_is_refused(
     with staged.connect() as connection:
         held = _ledger(connection)[0]
     conflicting = EntityMutationEvent(
-        event_id="emev_cccc0003cccc0003",
+        # `IdKind.ENTITY_MUTATION_EVENT`'s prefix is `emut`, not `emev`.
+        event_id="emut_cccc0003cccc0003",
         principal_id=PRINCIPAL_A,
         capability="entities.names.add",
         record_family=MutationRecordFamily.NAME,

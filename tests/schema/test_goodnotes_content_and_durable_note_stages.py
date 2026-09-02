@@ -66,7 +66,7 @@ PHASE_B_START: Final = "c7a1f04b9e63"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`. It stacked on `1cda4d536268` (RI-ENT-WP-07), which was head
 #: before it. Written out rather than derived so chain drift fails here rather than passing.
-HEAD_REVISION: Final = "c99cd8ed8d1c"
+HEAD_REVISION: Final = "b8e4d1a6c073"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260817_a4d9c2e7b815_admit_goodnotes_content_and_durable_note_stages.py"
 )
@@ -186,7 +186,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # `c99cd8ed8d1c` (commit `37ead78`, RI-ENT-WP-08's blocker-clearing pass),
     # which renames the seeded entity_relationship_types row
     # `design_coordinates_with` to `design_coordination_with`.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 87
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

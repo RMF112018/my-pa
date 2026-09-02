@@ -271,7 +271,15 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and four** current capabilities, and the schema has
-**eighty-six** revisions at head `c99cd8ed8d1c` (corrected 2026-08-31 from
+**eighty-seven** revisions at head `b8e4d1a6c073` (corrected 2026-09-02 from
+eighty-six at `c99cd8ed8d1c`, on which `b8e4d1a6c073` is additive and
+backfills one `display`-typed `entity_names` row per active `entities` row --
+`display_value` from `entities.display_name`, `normalized_value` from
+`entities.canonical_name`, never a `legal` name -- writing no
+`entity_project_participations`, `entity_addresses` or
+`entity_communication_methods` row and leaving `entity_aliases`,
+`entity_assignments` and `entity_external_identifiers` untouched,
+RI-ENT-WP-12; corrected 2026-08-31 from
 eighty-five at `1cda4d536268`, on which `c99cd8ed8d1c` is additive and
 renames the seeded `entity_relationship_types` row `design_coordinates_with`
 to `design_coordination_with` -- every other column unchanged -- closing

@@ -279,8 +279,10 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_managed_plane() ->
     # migration on top of that; 86 since `c99cd8ed8d1c` (commit `37ead78`,
     # RI-ENT-WP-08's blocker-clearing pass) renamed the seeded
     # entity_relationship_types row `design_coordinates_with` to
-    # `design_coordination_with` on top of that.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
+    # `design_coordination_with` on top of that; 87 since `b8e4d1a6c073`
+    # (RI-ENT-WP-12) backfilled one `display`-typed `entity_names` row per
+    # active `entities` row on top of that.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 87
 
 
 def test_the_widening_is_exactly_the_managed_plane() -> None:

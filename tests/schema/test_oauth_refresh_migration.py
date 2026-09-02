@@ -85,7 +85,7 @@ PHASE_B_START = "c7a1f04b9e63"
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
 #: `design_coordination_with`. It stacked on `1cda4d536268` (RI-ENT-WP-07), which was head
 #: before it. Written out rather than derived so chain drift fails here rather than passing.
-HEAD_REVISION = "c99cd8ed8d1c"
+HEAD_REVISION = "b8e4d1a6c073"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -193,7 +193,7 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     # `c99cd8ed8d1c` (commit `37ead78`, RI-ENT-WP-08's blocker-clearing pass),
     # which renames the seeded entity_relationship_types row
     # `design_coordinates_with` to `design_coordination_with`.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 87
 
 
 @pytest.mark.database

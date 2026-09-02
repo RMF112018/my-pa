@@ -147,7 +147,7 @@ Preserved from the source audit; status reflects this increment only.
 | WP-09 | Entity resolution/search vNext | Deferred |
 | WP-10 | MCP rich read contracts | Deferred |
 | WP-11 | MCP mutation contracts | Deferred |
-| WP-12 | Legacy migration/backfill and compatibility adapters | **Stopped at `RULING-M5` rule 3** — the compatibility projection pin is delivered; the participation backfill cannot be written without fabricating a `project_display_name` the legacy plane does not carry, so no revision was added and the resolution is the campaign owner's. See "RI-ENT-WP-12 — STOPPED at rule 3" below |
+| WP-12 | Legacy migration/backfill and compatibility adapters | **Delivered** — migration `b8e4d1a6c073` carries `entities.display_name`/`canonical_name` into one `display`-typed `entity_names` row per active entity (never a `legal` name), and writes **zero** `entity_project_participations` rows because, per `RULING-M10`, rule 3 correctly applied returns the empty set: no legacy row is directly representable. `entity_aliases`, `entity_assignments` and `entity_external_identifiers` are untouched. Upgrade/downgrade evidence is written but **unexecuted** — the database gate was held by the Manager. See "RI-ENT-WP-12 — legacy backfill" below |
 | WP-13 | TBR completeness fixture, security, compatibility and documentation | Deferred |
 
 ## RI-ENT-WP-01 — architecture/taxonomy freeze
@@ -2332,140 +2332,121 @@ failures" as a standing fact about this branch's head; it is contingent on
 the runner's own checkout location and was zero in this session's own,
 normal-checkout run.
 
-## RI-ENT-WP-12 — STOPPED at rule 3: the participation backfill cannot be written without fabricating a fact
+## RI-ENT-WP-12 — legacy backfill: display names carried, participation correctly empty
 
 RI-ENT-WP-12 (legacy migration/backfill and compatibility adapters, source
-audit section J) is bound by `RULING-M5`, whose five conservative rules are
-the whole of its authorized behavior. Four of the five are executable against
-this tree. **The third is not**, and this section records why, so the finding
-survives whether or not the session that found it does.
+audit section J) is bound by `RULING-M5`'s five conservative rules and by
+`RULING-M10`, which resolved the one of them that could not be executed as
+written. Migration `b8e4d1a6c073` is the single revision this work package
+adds. It runs against disposable test databases only; mutating the persistent
+`my_pa` database remains `AGENTS.md` 8.2 operator-reserved.
 
-### The four executable rules, restated
+### Rule 1 — the display name, carried and never promoted
 
-1. Copy `entities.display_name` into a `NameTypeCode.DISPLAY` row of
-   `entity_names` and `entities.canonical_name` as that row's normalized match
-   representation. Neither becomes a `LEGAL` name. Executable: every column
-   `entity_names` requires is supplied by the legacy row or by a column
-   default, and both source columns already carry non-blank CHECKs
-   (`an_entity_canonical_name_is_not_blank`,
-   `an_entity_display_name_is_not_blank`), so no new refusal is introduced.
-2. Carry `entity_aliases` with its existing semantics — this is an
-   *additional* family, not a migration of that one. Executable by doing
-   nothing to it, which is what the rule asks for.
-4. Never infer an address or channel type from string position; unknown stays
-   unresolved/untyped. Executable: the legacy plane carries no address or
-   channel rows to type, so the conservative outcome is the empty set.
-5. Preserve `entity_id`; legacy relationship person/organization IDs remain
-   bindings through the existing `legacy_relationship_person_id` /
-   `legacy_relationship_organization_id` namespaces of
-   `entity_external_identifiers`. Executable by renumbering nothing.
+`b8e4d1a6c073` inserts exactly one `entity_names` row per **active** `entities`
+row: `name_type_code = 'display'`, `display_value` from
+`entities.display_name`, `normalized_value` from `entities.canonical_name`.
 
-### Rule 3 is blocked, and the block is in the schema, not in the plan
+**Neither becomes a `legal` name.** There is no evidence in a display name
+about what an entity is legally called, and `ENTITY-SCHEMA-001` — this
+campaign's founding finding — exists precisely because that conflation was the
+defect. The migration writes the literal `'display'`, frozen in a module
+constant and not derived from `NameTypeCode` (`D-69`).
 
-Rule 3 directs a backfill of `entity_project_participations` from
-`entity_assignments` for directly representable values. **No legacy row is
-directly representable**, because the target table requires a value the
-legacy plane does not carry and the campaign forbids deriving:
+Three narrowings are deliberate and each is a refusal to assert more than the
+legacy row carries:
 
-- `knowledge.entity_project_participations.project_display_name` is
-  `text NOT NULL` **with no column default**, and additionally carries
-  `CONSTRAINT a_project_participation_display_name_is_not_blank
-  CHECK (length(trim(project_display_name)) > 0)`
-  (`migrations/versions/20260830_f5b06925857e_add_entity_project_participations_and_.py`).
-  An `INSERT` that omits it fails on `NOT NULL`; one that supplies `''` or
-  whitespace fails on the CHECK.
-- `knowledge.entity_assignments` carries **no name-bearing column at all**.
-  Its only free-text columns — `role`, `discipline`, `responsibility_class` —
-  are role/discipline/responsibility descriptors. Its remaining columns are
-  identifiers, the closed `assignment_type`, effective dates, and lifecycle
-  bookkeeping.
-- The one obvious substitute is expressly forbidden. RI-ENT-WP-04 wrote the
-  prohibition into the migration's own DDL comment — "*the name this
-  participant is known by ON THIS PROJECT — project-scoped fact, never global
-  identity. Nothing may ever write this value to `entities.display_name` or
-  `entities.canonical_name`, and nothing may read either of those columns into
-  this one*" — and its module docstring calls that boundary "**the single most
-  important semantic boundary in this work package**".
-  `EntityProjectParticipation`'s docstring in
-  `src/my_pa/domain/relationship/entity.py` states it a third time.
+- **`is_preferred` is `false`.** Preference among display names is not a fact
+  the legacy schema records. `false` is both the column default and the
+  strictly conservative choice.
+- **`effective_from`/`effective_to` are NULL.** The legacy row carries no
+  dating for the name.
+- **Only `status = 'active'` entities are backfilled.** The other four statuses
+  are `archived`, `historical`, `inactive` and `merged_redirect`. A name row
+  with `state = 'active'` asserts the name is *currently in service*, and that
+  assertion is not supported for an entity that has been archived, retired, or
+  merged away — writing one would resurrect a retired name into RI-ENT-WP-09's
+  typed-name search, which is a behaviour change rather than a copy.
 
-No escape hatch exists. Verified, not assumed, by an adversarial check
-instructed to break the finding rather than confirm it:
+### Rule 3 — applied, not withdrawn, and it returns zero rows
 
-- **No later revision relaxes it.** Every `ALTER TABLE` naming
-  `entity_project_participations` anywhere in `migrations/versions/` is an
-  `ADD CONSTRAINT ... FOREIGN KEY` in the creating revision itself. There is
-  no `DROP NOT NULL`, no dropped CHECK, no added DEFAULT.
-- **No mechanism would fill it.** The table carries no trigger; the repository
-  contains no `GENERATED ALWAYS` column and no `CREATE RULE`.
-- **The write path does not derive it.** `RecordProjectParticipation`
-  (`src/my_pa/application/entity_record_families.py`) declares
-  `project_display_name` with no default, and both the service and
-  `SqlEntityRepository.record_project_participation` copy it verbatim. The
-  merge/split planner substitutes the two entity IDs and never rewrites this
-  column.
-- **The domain refuses empty and `None`.** `EntityProjectParticipation`
-  validates `if not self.project_display_name.strip(): raise ValueError(...)`.
-- **No other legacy table supplies the value.** `entity_relationships` has a
-  `scope_entity_id` but no name; `entity_observations` and
-  `relationship_identity_observations` carry names but no project scope;
-  `knowledge.projects` has no join key to `knowledge.entities` (`prj_` versus
-  `ent_` identifier kinds). `entity_aliases.display_value` and
-  `entity_names.display_value` fall outside the prohibition's literal wording,
-  but neither table carries any project or scope column, so reading either one
-  in would still fabricate the project-scoping the column asserts.
+`RULING-M10` is explicit that this is rule 3 *being applied correctly*, not
+overridden. Audit section J authorizes backfilling participation **"only for
+directly representable"** role/discipline/responsibility values.
+`entity_project_participations.project_display_name` is `text NOT NULL` with a
+non-blank CHECK and no default; legacy `knowledge.entity_assignments` carries
+no name-bearing column at all (only `role`, `discipline`,
+`responsibility_class`); and reading `entities.display_name` or
+`entities.canonical_name` into that column is forbidden by the column's own
+DDL comment in
+`migrations/versions/20260830_f5b06925857e_add_entity_project_participations_and_.py`,
+which RI-ENT-WP-04 called "the single most important semantic boundary in this
+work package".
 
-Therefore a rule-3 backfill must either invent a project-facing name or
-smuggle a global-identity name into a project-scoped column. Both write a
-derived claim that becomes indistinguishable from evidence the moment it
-lands, which is the specific harm `ENTITY-SCHEMA-001` exists to prevent and
-the specific harm `RULING-M5` was issued to avoid. **This is a mandatory stop
-under `AGENTS.md` section 9** ("the objective, acceptance criteria, or path
-scope materially conflicts"), and it is escalated rather than worked around.
+No legacy row is therefore directly representable, and **the correct output of
+rule 3 on this tree is the empty set**. That is a real answer, not a gap.
 
-### One honest narrowing, disclosed
+`RULING-M10` refused the two alternatives on the record. Making
+`project_display_name` nullable would relax an accepted `NOT NULL` that exists
+precisely to stop a fabricated project name entering the record, in order to
+make a migration easier — reopening RI-ENT-WP-04's central semantic decision to
+serve convenience, and needing operator authorization under 8.2 that it does
+not have. Withdrawing rule 3 would lose the finding.
 
-The prohibition is **normative prose, not a mechanical guard**. No test in the
-repository fails if a writer reads `entities.display_name` into
-`project_display_name`. The two tests that look like they enforce it do not:
-`test_entity_project_participation_carries_no_global_identity_field`
-(`tests/unit/test_project_entity_participation_domain.py`) is a reflection
-test over dataclass *field names*, and
-`tests/database/test_project_entity_participation_isolation.py` proves that
-writing a participation does not *mutate* the entity row — neither tests
-derivation of the value. Nothing here is being represented as guarded when it
-is only written down. Adding that guard is a candidate for whichever work
-package resolves this stop; it was not added here, because a guard authored by
-the same context that wants the rule relaxed is not evidence.
+The finding is held by a test rather than by this paragraph:
+`tests/database/test_legacy_entity_backfill_migration.py` asserts the migration
+creates **zero** `entity_project_participations` rows even against a fixture
+staging legacy `entity_assignments` rows that a careless backfill would have
+consumed. It fails if a future increment quietly starts fabricating project
+names.
 
-### The decision, which belongs to the campaign owner
+### Rules 2, 4 and 5 — carried by writing nothing
 
-Three resolutions exist, and choosing between them is a materially different
-product outcome rather than an implementation detail, so it is not taken here:
+- **Rule 2.** `entity_aliases` is not read, not written, not migrated. It keeps
+  its existing semantics; `entity_names` is an ADDITIONAL family, and whether
+  to consolidate the two is a later decision nobody has made (`RULING 3`).
+- **Rule 4.** No address or channel TYPE is ever inferred from string position.
+  The migration writes zero `entity_addresses` and zero
+  `entity_communication_methods` rows; unknown stays unresolved and untyped.
+- **Rule 5.** `entity_id` is preserved and nothing is renumbered. Legacy
+  relationship person/organization IDs remain bindings through the existing
+  namespaces of `entity_external_identifiers`, which the migration does not
+  touch.
 
-1. **Accept an empty participation backfill.** Rule 3's correct output on this
-   tree is the empty set, and WP-12 ships rules 1, 2, 4 and 5. Nothing is
-   fabricated and nothing is lost — `entity_assignments` is untouched and
-   keeps serving `entities.context` exactly as it does today.
-2. **Make `project_display_name` nullable** in a separately authorized
-   revision, so a participation may exist with the project-facing name
-   genuinely absent rather than invented. This reopens RI-ENT-WP-04's central
-   semantic decision and is a schema change to an accepted contract.
-3. **Withdraw rule 3** from `RULING-M5` as not implementable against this
-   schema, the way `RULING-M3` withdrew the audit's `role_confidence` /
-   `legal_identity_confidence` response shape for the same class of reason.
+### Abort on ambiguity, and an exact downgrade
 
-Until one is chosen, **no Alembic revision has been added for RI-ENT-WP-12**.
-The chain head remains `c99cd8ed8d1c` at 86 revisions and every spelled count
-that names it is still correct. This is deliberate: `RULING-M5` and the WP-12
-brief require WP-12 to land as **one** revision, and its correct contents are
-not knowable until the stop is resolved. Authoring it now would either bake in
-an answer to a question the campaign owner has not been asked, or force a
-second revision and break the one-revision constraint.
+The migration refuses rather than guesses. Three fail-closed guards run
+**before any write**, so it cannot half-apply: an entity that already carries
+an active `display` name row (the migration cannot decide whether the existing
+row or the legacy value is the truth), a derived identity that already exists,
+and a source value that is blank after trimming. Each raises naming the count
+and a bounded sample of `entity_id`s — identifiers only, never a name or any
+other free text, per `AGENTS.md` section 5.
 
-### What RI-ENT-WP-12 did deliver
+`entity_name_id` is derived deterministically as
+`'enam_' || md5('ri-ent-wp-12:display:' || entity_id)`, the same
+derive-an-opaque-id-in-SQL pattern
+`migrations/versions/20260825_3d07af4dc513_complete_relationship_intelligence_.py`
+already uses for `'rcpt_' || md5(...)`. Determinism is what makes `downgrade()`
+exact: it deletes only rows whose identifier equals that derived value, and a
+row written by any other writer carries a server-issued random identifier and
+cannot match. **That last claim is verified, not assumed**: the only production
+minter of an `enam_` identifier is `issue_identifier(IdKind.ENTITY_NAME)`
+(`src/my_pa/application/entity_record_families.py`), which returns
+`secrets.token_hex(...)` and whose docstring records that it takes no subject
+argument precisely so that "a function that cannot see the subject cannot
+encode it" (`src/my_pa/domain/source/registry.py`). No application-written row
+can therefore collide with a derived identifier, and guard B refuses the
+upgrade outright if one somehow does. The downgrade aborts first if any
+backfilled row has been superseded or is referenced as a successor, rather than
+destroying a later writer's data or dangling a foreign key.
 
-`tests/contract/test_entity_read_shape_compatibility.py` — the compatibility
+Every statement is set-based SQL or a `DO` block, so the revision renders
+identically in offline (`--sql`) mode and needs no online/offline branch.
+
+### Compatibility
+
+`tests/contract/test_entity_read_shape_compatibility.py` is the compatibility
 projection pin required by both the WP-12 brief and `RULING-M7`
 ("compatibility is a test obligation, not an assertion"). It asserts the
 **exhaustive** response key sets of `entities.get`, `entities.search` and
@@ -2479,10 +2460,28 @@ shapes is defined solely by the view builders in
 `src/my_pa/application/service.py`, so a pin over their output is the only
 thing that can catch a compatibility break.
 
-The pin is independent of the stop above and correct regardless of how it is
-resolved: whichever resolution is chosen, these three response shapes must not
-move, and a backfill that writes only to the new record families cannot move
-them, because none of the three reads those families.
+The backfill cannot move those shapes: none of the three capabilities reads
+`entity_names` or any other new record family. `RULING-M10` kept the pin as a
+new file rather than an extension of `tests/contract/test_entity_capabilities.py`,
+because RI-ENT-WP-10/WP-11 is concurrently editing that file and the
+obligation is met either way.
+
+### One thing deliberately not done
+
+The prohibition on deriving `project_display_name` from `entities.display_name`
+or `entities.canonical_name` is **normative prose, not a mechanical guard**. No
+test fails if a writer violates it. The two tests that look like they enforce
+it do not: `test_entity_project_participation_carries_no_global_identity_field`
+(`tests/unit/test_project_entity_participation_domain.py`) is a reflection test
+over dataclass *field names*, and
+`tests/database/test_project_entity_participation_isolation.py` proves that
+writing a participation does not *mutate* the entity row. Neither tests
+derivation of the value.
+
+That guard was **not** authored here. `RULING-M10` adopted the reasoning: a
+guard written by the context that wanted the rule relaxed is not evidence. It
+belongs to RI-ENT-WP-13 or a later increment, and is recorded as owed rather
+than quietly left out.
 
 ## Test evidence
 
@@ -2533,3 +2532,4 @@ restated here, so this document cannot drift ahead of what actually ran.
 - `migrations/versions/20260831_8dc3619891bb_add_entity_relationship_types.py` (RI-ENT-WP-06a).
 - `migrations/versions/20260831_1cda4d536268_add_entity_assertions_and_evidence.py` (RI-ENT-WP-07).
 - `migrations/versions/20260831_c99cd8ed8d1c_rename_design_coordinates_with.py` (the WP-08 blocker-clearing rename of the seeded `design_coordinates_with` row to `design_coordination_with`; `down_revision = 1cda4d536268`).
+- `migrations/versions/20260902_b8e4d1a6c073_backfill_legacy_entity_display_names.py` (RI-ENT-WP-12's legacy backfill: one `display`-typed `entity_names` row per active `entities` row, zero `entity_project_participations`/`entity_addresses`/`entity_communication_methods` rows; `down_revision = c99cd8ed8d1c`).

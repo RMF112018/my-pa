@@ -2116,7 +2116,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: 104 capabilities answered from an empty world prove little."""
+    """Guard the matrix: 109 capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

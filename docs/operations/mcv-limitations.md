@@ -358,7 +358,7 @@ email, or calendar data.
 **That describes WP-9, and is no longer true of the plane.** Corrected
 2026-08-19 when it acquired public reads, and again after Phase A, which gave it
 writes: the Relationship Intelligence entity plane is thirty-nine `entities.`
-names now — eleven reads and twenty-three writes over identity, identifiers, aliases,
+names now — sixteen reads and twenty-three writes over identity, identifiers, aliases,
 assignments, directed edges, observations, mention resolution, proposal staging,
 and governed merge preview/apply. This document,
 whose job is stating what the build does not do, said nothing about them. What

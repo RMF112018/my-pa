@@ -202,7 +202,7 @@ Owns transport-neutral public request/response/disclosure/error schemas and appl
 ### 5.3 `application`
 
 
-Owns the 104 public capability use cases; request normalization; semantic validation; principal/purpose/scope authorization; enrollment normalization/idempotency; capture admission, idempotent replay, and the durable-first save; source, knowledge, capture, and managed-document orchestration; disclosure construction; operation/cancellation/recovery coordination; transaction boundaries; and mapping internal failures to public errors.
+Owns the 109 public capability use cases; request normalization; semantic validation; principal/purpose/scope authorization; enrollment normalization/idempotency; capture admission, idempotent replay, and the durable-first save; source, knowledge, capture, and managed-document orchestration; disclosure construction; operation/cancellation/recovery coordination; transaction boundaries; and mapping internal failures to public errors.
 
 
 It does not parse HTTP/MCP, execute SQL, open files, call provider SDKs, or embed process lifecycle.

@@ -183,7 +183,7 @@ one declared capability, `tools`, and nothing else.
 `tools/list` returns the tools **this process can serve**, and that is not the
 same as the tools this build implements. The build implements one hundred and nine, one
 per capability name. A default process publishes **fifty-five**. That is the
-104, less the six `documents.` names, the thirty-nine `entities.` names
+109, less the six `documents.` names, the thirty-nine `entities.` names
 and the nine `relationship_memory.` names a default composition withholds.
 
 **The six `documents.` tools appear only when `MY_PA_MANAGED_DOCUMENT_ROOT` is
@@ -192,11 +192,11 @@ inference: with the variable unset the composition root builds no managed byte
 store, `capabilities.get` omits those names, `tools/list` omits those tools, and
 a `tools/call` naming one is refused `unsupported`. Set the variable and the
 same child publishes those six, reaching sixty-one of the one hundred and nine. The
-remaining forty-three are the thirty-nine `entities.` names, which `D-RI-20`
+remaining forty-eight are the thirty-nine `entities.` names, which `D-RI-20`
 gates behind `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` on exactly the same terms
 — and whose twenty-three writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` beside it, so a process with
-the plane switch alone publishes seventy-two — and the nine
+the plane switch alone publishes seventy-seven — and the nine
 `relationship_memory.` names, which need the plane variable *and*
 `MY_PA_RELATIONSHIP_MEMORY_ENABLED`; a child publishing all one hundred and nine has
 all required feature gates and composition dependencies satisfied. An operator who expects `documents.create`

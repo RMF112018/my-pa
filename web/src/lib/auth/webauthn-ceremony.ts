@@ -19,29 +19,39 @@ export function webAuthnSupported(): boolean {
 }
 
 function reviveCreateOptions(options: Record<string, unknown>): CredentialCreationOptions {
-  const publicKey = { ...(options as PublicKeyCredentialCreationOptions) };
-  publicKey.challenge = base64UrlToBuffer(String(options.challenge));
+  const source = options as unknown as PublicKeyCredentialCreationOptions;
   const user = options.user as { id: string; name: string; displayName: string };
-  publicKey.user = { ...user, id: base64UrlToBuffer(user.id) };
-  if (Array.isArray(options.excludeCredentials)) {
-    publicKey.excludeCredentials = options.excludeCredentials.map((item) => {
-      const descriptor = item as { id: string; type: PublicKeyCredentialType };
-      return { ...descriptor, id: base64UrlToBuffer(descriptor.id) };
-    });
-  }
-  return { publicKey };
+  const exclude = Array.isArray(options.excludeCredentials)
+    ? options.excludeCredentials.map((item) => {
+        const descriptor = item as { id: string; type: PublicKeyCredentialType };
+        return { ...descriptor, id: base64UrlToBuffer(descriptor.id) };
+      })
+    : undefined;
+  return {
+    publicKey: {
+      ...source,
+      challenge: base64UrlToBuffer(String(options.challenge)),
+      user: { ...user, id: base64UrlToBuffer(user.id) },
+      excludeCredentials: exclude,
+    },
+  };
 }
 
 function reviveRequestOptions(options: Record<string, unknown>): CredentialRequestOptions {
-  const publicKey = { ...(options as PublicKeyCredentialRequestOptions) };
-  publicKey.challenge = base64UrlToBuffer(String(options.challenge));
-  if (Array.isArray(options.allowCredentials)) {
-    publicKey.allowCredentials = options.allowCredentials.map((item) => {
-      const descriptor = item as { id: string; type: PublicKeyCredentialType };
-      return { ...descriptor, id: base64UrlToBuffer(descriptor.id) };
-    });
-  }
-  return { publicKey };
+  const source = options as unknown as PublicKeyCredentialRequestOptions;
+  const allow = Array.isArray(options.allowCredentials)
+    ? options.allowCredentials.map((item) => {
+        const descriptor = item as { id: string; type: PublicKeyCredentialType };
+        return { ...descriptor, id: base64UrlToBuffer(descriptor.id) };
+      })
+    : undefined;
+  return {
+    publicKey: {
+      ...source,
+      challenge: base64UrlToBuffer(String(options.challenge)),
+      allowCredentials: allow,
+    },
+  };
 }
 
 function serializeCredential(credential: PublicKeyCredential): Record<string, unknown> {

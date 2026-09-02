@@ -1,18 +1,18 @@
 "use client";
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import {
   getPasskey,
-  webAuthnSupported,
   WebAuthnBrowserError,
 } from "@/lib/auth/webauthn-ceremony";
 
 export function PasskeySignIn() {
+  const router = useRouter();
   const [status, setStatus] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [busy, setBusy] = useState(false);
-  const supported = webAuthnSupported();
 
   async function authenticate() {
     setBusy(true);
@@ -40,7 +40,8 @@ export function PasskeySignIn() {
         setStatus("Passkey sign-in failed.");
         return;
       }
-      window.location.assign("/today");
+      router.push("/today");
+      router.refresh();
     } catch (error) {
       setStatus(
         error instanceof WebAuthnBrowserError && error.code === "cancelled"
@@ -69,12 +70,13 @@ export function PasskeySignIn() {
       setBusy(false);
       return;
     }
-    window.location.assign("/system/security");
+    router.push("/system/security");
+    router.refresh();
   }
 
   return (
     <section className="mt-6 flex flex-col gap-3" aria-label="Passkey and recovery">
-      <Button type="button" disabled={busy || !supported} onClick={() => void authenticate()}>
+      <Button type="button" disabled={busy} onClick={() => void authenticate()}>
         Sign in with a passkey
       </Button>
       <form className="flex flex-col gap-2" onSubmit={(event) => void recover(event)}>

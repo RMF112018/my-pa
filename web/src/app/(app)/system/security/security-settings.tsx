@@ -1,12 +1,11 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardBody, CardTitle } from "@/components/ui/card";
-import { SurfaceState } from "@/components/ui/surface-state";
-import { createPasskey, getPasskey, webAuthnSupported, WebAuthnBrowserError } from "@/lib/auth/webauthn-ceremony";
+import { createPasskey, getPasskey, WebAuthnBrowserError } from "@/lib/auth/webauthn-ceremony";
 
-interface CredentialRow {
+export interface CredentialRow {
   readonly credentialId: string;
   readonly label: string | null;
   readonly createdAt: string;
@@ -41,23 +40,18 @@ async function post(action: string, body: Record<string, unknown> = {}): Promise
   });
 }
 
-export function SecuritySettings() {
-  const [credentials, setCredentials] = useState<CredentialRow[]>([]);
+export function SecuritySettings({ initialCredentials }: { initialCredentials: CredentialRow[] }) {
+  const [credentials, setCredentials] = useState<CredentialRow[]>(initialCredentials);
   const [codes, setCodes] = useState<string[] | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const supported = webAuthnSupported();
 
-  const refresh = useCallback(async () => {
+  async function refresh() {
     const response = await post("credentials/list");
     if (!response.ok) return;
     const payload = (await response.json()) as { credentials: CredentialRow[] };
     setCredentials(payload.credentials);
-  }, []);
-
-  useEffect(() => {
-    void refresh();
-  }, [refresh]);
+  }
 
   async function withStepUp(): Promise<string | null> {
     const optionsResponse = await post("step-up/options");
@@ -144,13 +138,7 @@ export function SecuritySettings() {
 
   return (
     <div className="flex flex-col gap-4">
-      {!supported ? (
-        <SurfaceState
-          kind="unavailable"
-          title="Passkeys unavailable"
-          detail="This browser does not expose the Web Authentication API."
-        />
-      ) : null}
+
       {status ? (
         <p role="status" className="text-sm">
           {status}
@@ -177,7 +165,7 @@ export function SecuritySettings() {
               ))}
             </ul>
           )}
-          <Button className="mt-4 min-h-11" type="button" disabled={busy || !supported} onClick={() => void enroll()}>
+          <Button className="mt-4 min-h-11" type="button" disabled={busy} onClick={() => void enroll()}>
             Add a passkey
           </Button>
         </CardBody>

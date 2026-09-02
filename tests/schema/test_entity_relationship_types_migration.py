@@ -75,6 +75,14 @@ EXISTING_CODES: Final = (
     "affiliated_with",
 )
 
+#: The twenty codes `8dc3619891bb` (this revision) originally seeded, restated
+#: verbatim from its own `_NEW_CODES` tuple except for `design_coordinates_with`,
+#: which migration `c99cd8ed8d1c` (RI-ENT-WP-08 blocker-clearing pass, later in
+#: this chain) renamed to `design_coordination_with`. `migrated_engine` below
+#: upgrades to the chain's true head, not to this file's own `REVISION` alone,
+#: so this list has to state the code's *current* (post-rename) value or the
+#: parametrized tests further down -- which insert live rows against a
+#: head-migrated database -- would fail the foreign key this revision installs.
 NEW_CODES: Final = (
     "brand_of",
     "operates_as",
@@ -90,7 +98,7 @@ NEW_CODES: Final = (
     "project_controls_advisor_to",
     "technical_reviewer_of",
     "peer_reviewer_of",
-    "design_coordinates_with",
+    "design_coordination_with",
     "utility_provider_for",
     "permitting_authority_for",
     "seller_developer_for",

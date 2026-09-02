@@ -81,7 +81,11 @@ PHASE_B_REVISION = "b64e29a0f7c1"
 PHASE_B_HEAD = "3d07af4dc513"
 GSQS_REVISION = "c4b0a1d9e827"
 PHASE_B_START = "c7a1f04b9e63"
-HEAD_REVISION = "1cda4d536268"
+#: The chain's current head: `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
+#: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
+#: `design_coordination_with`. It stacked on `1cda4d536268` (RI-ENT-WP-07), which was head
+#: before it. Written out rather than derived so chain drift fails here rather than passing.
+HEAD_REVISION = "c99cd8ed8d1c"
 WHEN = datetime(2026, 8, 16, 12, tzinfo=UTC)
 ISSUER = "https://mcp.example.invalid"
 RESOURCE = f"{ISSUER}/mcp"
@@ -185,7 +189,11 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert script.get_revision(PHASE_B_REVISION).down_revision == "a1f7d3c85e40"
     assert script.get_revision(PHASE_B_HEAD).down_revision == PHASE_B_REVISION
     assert script.get_heads() == [HEAD_REVISION]
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 85
+    # 86 migration files: 85 through `1cda4d536268` (RI-ENT-WP-07), plus
+    # `c99cd8ed8d1c` (commit `37ead78`, RI-ENT-WP-08's blocker-clearing pass),
+    # which renames the seeded entity_relationship_types row
+    # `design_coordinates_with` to `design_coordination_with`.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
 
 
 @pytest.mark.database

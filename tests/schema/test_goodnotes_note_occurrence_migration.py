@@ -59,7 +59,11 @@ PHASE_A_REVISION: Final = "823e23b6cc63"
 PHASE_B_REVISION: Final = "b64e29a0f7c1"
 PHASE_B_HEAD: Final = "3d07af4dc513"
 GSQS_REVISION: Final = "c4b0a1d9e827"
-HEAD_REVISION: Final = "1cda4d536268"
+#: The chain's current head: `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
+#: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
+#: `design_coordination_with`. It stacked on `1cda4d536268` (RI-ENT-WP-07), which was head
+#: before it. Written out rather than derived so chain drift fails here rather than passing.
+HEAD_REVISION: Final = "c99cd8ed8d1c"
 PRIOR: Final = "f8c3a1e6b247"
 MIGRATION: Final = ROOT / (
     "migrations/versions/20260816_c9e2b6a4d813_add_goodnotes_note_unit_occurrence_.py"
@@ -146,7 +150,11 @@ def test_the_chain_has_one_head_and_this_revision_is_on_it() -> None:
     assert len(list(script.get_heads())) == 1
     assert REVISION in {entry.revision for entry in script.walk_revisions()}
     assert script.get_revision(REVISION).down_revision == PRIOR
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 85
+    # 86 migration files: 85 through `1cda4d536268` (RI-ENT-WP-07), plus
+    # `c99cd8ed8d1c` (commit `37ead78`, RI-ENT-WP-08's blocker-clearing pass),
+    # which renames the seeded entity_relationship_types row
+    # `design_coordinates_with` to `design_coordination_with`.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
 
 
 def test_the_revision_imports_neither_tables_nor_domain_enums() -> None:

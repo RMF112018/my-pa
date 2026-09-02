@@ -88,7 +88,7 @@ from collections.abc import Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, NoReturn
 
 from sqlalchemy import (
     Column,
@@ -352,6 +352,56 @@ def _optional(criterion: ColumnElement[bool] | None) -> ColumnElement[bool]:
     to assemble from two places is a partition a reader can miss.
     """
     return true() if criterion is None else criterion
+
+
+def _refuse_stale_or_absent(present_version: int | None, subject: str) -> NoReturn:
+    """Say which of the two reasons a versioned write matched no row.
+
+    Called only after a guarded `UPDATE` reported `rowcount == 0`, with the
+    version that guarded re-read of the same row found (or `None` when it
+    found nothing). The two are deliberately not collapsed: an absent or
+    foreign row is `UnknownScopeError`, which the application renders as
+    `not_found` and which is therefore the same answer another Principal's
+    row gets, so this cannot be used to probe a partition; a row that is
+    right here at a different version is `StaleDirectedVersionError`, because
+    the caller read something and the world moved. That is the same split
+    `_require_writable_entity` already draws, and without it an
+    optimistic-version conflict would be indistinguishable from a mistyped
+    identifier.
+
+    Takes the version rather than the table so that the re-read stays at the
+    call site, where `test_principal_partition_is_reached_through_the_guard`
+    can see it carry its own `_mine`; a helper handed the table would name a
+    partitioned table in an unguarded statement, which is exactly what that
+    guard refuses.
+    """
+    if present_version is None:
+        raise UnknownScopeError(f"a {subject} write names a row outside this scope")
+    raise StaleDirectedVersionError(f"the expected {subject} version is stale")
+
+
+def _refuse_unnamed_successor(subject: str) -> NoReturn:
+    """Refuse a supersession whose third statement matched no row.
+
+    Called only when a `supersede_*` has already marked its predecessor
+    SUPERSEDED and inserted the successor, and the follow-up that writes
+    `superseded_by_*` back onto the predecessor changed nothing. Under the
+    guard those three statements carry -- same Principal, same identifier,
+    `state = 'superseded'`, `superseded_by_* IS NULL` -- that cannot happen
+    from outside: the first statement left the row write-locked by this
+    transaction, so no other session can move it before the third runs.
+
+    So this is not a caller-visible refusal and is deliberately not one of
+    the two typed ones. `UnknownScopeError` would claim the row is absent or
+    foreign when it was just updated, and `StaleDirectedVersionError` would
+    claim a version conflict the third statement does not even test for;
+    either would send a caller looking for a conflict that is not there. A
+    `RuntimeError` says what is true -- this repository's own invariant did
+    not hold -- and aborts the transaction rather than leaving a superseded
+    row that names nobody, which is the one outcome silently returning here
+    would commit.
+    """
+    raise RuntimeError(f"a superseded {subject} could not be pointed at its successor")
 
 
 def _require_normalized_name(value: str) -> None:
@@ -733,6 +783,960 @@ class SqlEntityRepository(EntitiesRepository):
         )
         rows = self._connection.execute(_limited(statement, limit)).all()
         return [_row_to_affiliation(row) for row in rows]
+
+    # --- RI-ENT-WP-08: the six families' write path ---------------------------
+    #
+    # Read paths for these six families landed with RI-ENT-WP-06b; until this
+    # work package nothing in the repository could put a row into any of them,
+    # which is what made every property deferred on the argument "nothing
+    # writes to them yet" safe. That argument is spent here, so each write
+    # below carries, explicitly, the four things the audit's WP-08 objective
+    # names -- Principal scoping, lifecycle, optimistic versions, and the
+    # no-guess rule -- rather than assuming the domain object arrived correct:
+    #
+    #   * **Principal scoping.** Every insert goes through `_bound`, every
+    #     update through `_mine`, and each write re-checks that the record's
+    #     own `principal_id` is the acting one, so a correctly-partitioned
+    #     statement cannot be handed a record belonging to somebody else.
+    #   * **Lifecycle.** Three verbs, and only three: `record_*` inserts,
+    #     `supersede_*` replaces a row with the successor it is handed, and
+    #     `retire_*` marks it RETIRED with a `retired_at`. No in-place field
+    #     rewrite exists for a temporal family -- a correction is a new row
+    #     plus a supersession, so history survives it. (The one exception is
+    #     `entity_organization_profiles`, which by its own design is a
+    #     singleton with no `state` and no `superseded_by_*`; see
+    #     `revise_organization_profile` below.)
+    #
+    # **Why each `supersede_*` writes the successor itself.** It takes the
+    # successor *record*, not its identifier, and issues three statements in
+    # an order the schema fixes rather than leaves open. Every one of these
+    # five families arbitrates its active uniqueness with a partial unique
+    # index -- `an_active_entity_name_is_unique_per_entity_and_type`,
+    # `an_active_entity_address_is_unique_per_entity_and_type`,
+    # `an_active_communication_method_is_unique_per_entity_and_type`,
+    # `an_active_project_participation_is_unique_per_project_and_role`,
+    # `an_open_ended_affiliation_is_unique_per_person`, plus the three
+    # `..._has_one_preferred_per_type` indexes -- and every one of them is
+    # `WHERE state = 'active'`. So the successor of an *active* predecessor
+    # collides with the predecessor it replaces unless the predecessor leaves
+    # that `WHERE` first:
+    #
+    #   1. `UPDATE` the predecessor to SUPERSEDED under `expected_version`,
+    #      leaving `superseded_by_*` null. Legal because each family's
+    #      constraint is `CHECK (superseded_by_X IS NULL OR state =
+    #      'superseded')` -- naming a successor implies SUPERSEDED, not the
+    #      converse -- so a superseded row that names nobody yet is a state
+    #      the schema admits. This is the statement that releases the index.
+    #   2. `INSERT` the successor, through the same private `_insert_*` helper
+    #      the matching `record_*` uses, so the Principal check, the scope
+    #      lock, the writability check and the normalization check are the
+    #      same ones and not a second, drifting copy of them.
+    #   3. `UPDATE` the predecessor's `superseded_by_*` to the successor's
+    #      identifier. The self-referencing composite foreign key
+    #      (`(superseded_by_X, principal_id)` back into the same table) is not
+    #      deferrable, so it is satisfiable only now that the successor row
+    #      exists.
+    #
+    # `entity_person_organization_affiliations` is why the ordering is not a
+    # tuning detail: `an_open_ended_affiliation_is_unique_per_person` keys on
+    # `(principal_id, person_entity_id)` alone, so successor-first collides on
+    # *every* correction of a current affiliation, whatever field the caller
+    # was correcting.
+    #
+    # One supersession is one version bump: statement 3 does not bump again,
+    # and is guarded on Principal, identifier, `state = 'superseded'` and
+    # `superseded_by_* IS NULL` rather than on a version, so a caller's
+    # `expected_version + 1` still describes the predecessor afterwards. A
+    # collision against some *other* active row -- a second name of the same
+    # type and value, a second preferred address -- is not translated here: it
+    # leaves as the driver's `IntegrityError`, exactly as it does out of the
+    # matching `record_*`, because nothing about being a correction makes that
+    # a different failure.
+    #   * **Optimistic versions.** Every state transition carries
+    #     `expected_version` into the `WHERE`, and a transition that changes
+    #     no row is re-read to say *why*: absent or foreign is
+    #     `UnknownScopeError`, present at another version is
+    #     `StaleDirectedVersionError`, which is the same split
+    #     `_require_writable_entity` already draws.
+    #   * **No guessing.** Nothing here derives a value it was not given.
+    #     `normalized_value`/`normalized_address_value` are re-checked against
+    #     the domain's own normalizer rather than recomputed from
+    #     `display_value`; a null `organization_entity_id` on an affiliation
+    #     stays null rather than acquiring an invented organization; and no
+    #     write infers a legal name, a jurisdiction, or a registration
+    #     identifier from a display form.
+
+    def record_entity_name(self, principal_id: str, entity_name: EntityName) -> None:
+        """Insert one typed name form.
+
+        `normalized_value` is checked, not computed: the caller states both
+        forms and this write refuses a `normalized_value` that is not already
+        normalized, rather than folding `display_value` itself. A name row is
+        evidence about what an entity is called; deriving the normalized key
+        here would make this write the author of a matching claim the caller
+        never made.
+
+        The parameter is `entity_name` rather than `name`, and the spelling is
+        load-bearing rather than cosmetic.
+        `tests/architecture/test_principal_is_never_caller_supplied.py`'s first
+        claim propagates "caller-supplied" by the *local name* a value is bound
+        to, transitively and across the whole module: `_row_to_proposal` binds
+        `name` in `{str(name): _payload_value(value) for name, value in
+        payload.items()}`, and `payload` is one of that guard's caller-supplied
+        containers, so every `name` in this module is a name the guard has been
+        told not to read a Principal off. Reading `name.principal_id` here --
+        even to *refuse* a mismatch, which is what this line does -- reddens
+        that claim, and the claim has no registry to record an exception in.
+        Renaming this parameter is the only response that neither edits the
+        guard nor stops checking the Principal; it also matches the other five
+        families, whose parameters are already spelled for their own record
+        (`profile`, `address`, `method`, `participation`, `affiliation`).
+        """
+        self._insert_entity_name(principal_id, entity_name)
+
+    def _insert_entity_name(self, principal_id: str, entity_name: EntityName) -> None:
+        """The insert `record_entity_name` and `supersede_entity_name` share.
+
+        Shared rather than repeated because the two paths must admit exactly
+        the same rows: a correction that skipped the normalization check, the
+        Principal check or the scope lock would let in, by the corrective
+        route, a row the direct route refuses. The parameter keeps the
+        spelling `record_entity_name` explains, for the reason it gives there
+        -- the Principal read below is the read that spelling exists to keep
+        legible.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if entity_name.principal_id != principal_id:
+            raise ValueError("an entity name belongs to the acting Principal")
+        _require_normalized_name(entity_name.normalized_value)
+        lock_entity_mutation_scopes(self._connection, principal_id, (entity_name.entity_id,))
+        self._require_writable_entity(principal_id, entity_name.entity_id, None)
+        self._connection.execute(
+            insert(entity_names).values(
+                _bound(
+                    entity_names,
+                    principal_id,
+                    entity_name_id=entity_name.entity_name_id,
+                    entity_id=entity_name.entity_id,
+                    name_type_code=entity_name.name_type_code.value,
+                    normalized_value=entity_name.normalized_value,
+                    display_value=entity_name.display_value,
+                    is_preferred=entity_name.is_preferred,
+                    effective_from=entity_name.effective_from,
+                    effective_to=entity_name.effective_to,
+                    state=entity_name.state.value,
+                    version=entity_name.version,
+                    updated_at=entity_name.updated_at,
+                    retired_at=entity_name.retired_at,
+                    superseded_by_entity_name_id=entity_name.superseded_by_entity_name_id,
+                )
+            )
+        )
+
+    def supersede_entity_name(
+        self,
+        principal_id: str,
+        *,
+        entity_name_id: str,
+        successor: EntityName,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace one name with `successor`, in the three statements above.
+
+        The predecessor leaves `an_active_entity_name_is_unique_per_entity_and_type`
+        -- and `an_active_entity_name_has_one_preferred_per_type` with it --
+        before the successor is inserted, because both are partial on
+        `state = 'active'`. A collision with any *other* active name of the
+        same type and normalized value is a real conflict and leaves as the
+        driver's `IntegrityError`, the same way it leaves `record_entity_name`.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_name_id, IdKind.ENTITY_NAME)
+        validate_identifier(successor.entity_name_id, IdKind.ENTITY_NAME)
+        if successor.entity_name_id == entity_name_id:
+            raise ValueError("an entity name is not superseded by itself")
+        ensure_utc(at)
+        released = self._connection.execute(
+            update(entity_names)
+            .where(
+                _mine(entity_names, principal_id),
+                entity_names.c.entity_name_id == entity_name_id,
+                entity_names.c.version == expected_version,
+            )
+            .values(
+                state=EntityNameState.SUPERSEDED.value,
+                version=entity_names.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if released.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_names.c.version).where(
+                    _mine(entity_names, principal_id),
+                    entity_names.c.entity_name_id == entity_name_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "entity name")
+        self._insert_entity_name(principal_id, successor)
+        named = self._connection.execute(
+            update(entity_names)
+            .where(
+                _mine(entity_names, principal_id),
+                entity_names.c.entity_name_id == entity_name_id,
+                entity_names.c.state == EntityNameState.SUPERSEDED.value,
+                entity_names.c.superseded_by_entity_name_id.is_(None),
+            )
+            .values(superseded_by_entity_name_id=successor.entity_name_id)
+        )
+        if named.rowcount == 0:
+            _refuse_unnamed_successor("entity name")
+
+    def retire_entity_name(
+        self, principal_id: str, *, entity_name_id: str, expected_version: int, at: datetime
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_name_id, IdKind.ENTITY_NAME)
+        ensure_utc(at)
+        result = self._connection.execute(
+            update(entity_names)
+            .where(
+                _mine(entity_names, principal_id),
+                entity_names.c.entity_name_id == entity_name_id,
+                entity_names.c.version == expected_version,
+            )
+            .values(
+                state=EntityNameState.RETIRED.value,
+                is_preferred=False,
+                retired_at=at,
+                version=entity_names.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if result.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_names.c.version).where(
+                    _mine(entity_names, principal_id),
+                    entity_names.c.entity_name_id == entity_name_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "entity name")
+
+    def record_organization_profile(
+        self, principal_id: str, profile: EntityOrganizationProfile
+    ) -> None:
+        """Insert the one profile row an organization entity holds.
+
+        The entity's own `entity_type` is checked here rather than left to a
+        trigger the schema deliberately does not carry (see
+        `EntityOrganizationProfile`'s docstring, which names the writer as
+        responsible for exactly this invariant). Nothing is inferred: a
+        profile whose `legal_identity_status_code` says the legal identity is
+        unresolved stays unresolved -- this write never reads a name row to
+        promote it.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if profile.principal_id != principal_id:
+            raise ValueError("an organization profile belongs to the acting Principal")
+        lock_entity_mutation_scopes(self._connection, principal_id, (profile.entity_id,))
+        self._require_writable_entity(principal_id, profile.entity_id, None)
+        subject = self.get(principal_id, profile.entity_id)
+        if subject is None or subject.entity_type is not EntityType.ORGANIZATION:
+            raise ValueError("an organization profile describes an organization entity")
+        self._connection.execute(
+            insert(entity_organization_profiles).values(
+                _bound(
+                    entity_organization_profiles,
+                    principal_id,
+                    entity_id=profile.entity_id,
+                    organization_kind_code=profile.organization_kind_code.value,
+                    legal_identity_status_code=profile.legal_identity_status_code.value,
+                    jurisdiction_code=profile.jurisdiction_code,
+                    registration_identifier=profile.registration_identifier,
+                    version=profile.version,
+                    created_at=profile.created_at,
+                    updated_at=profile.updated_at,
+                )
+            )
+        )
+
+    def revise_organization_profile(
+        self,
+        principal_id: str,
+        *,
+        entity_id: str,
+        organization_kind_code: OrganizationKindCode,
+        legal_identity_status_code: LegalIdentityStatusCode,
+        jurisdiction_code: str | None,
+        registration_identifier: str | None,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace the profile's classification in place, under its version.
+
+        The one family in this work package that corrects in place rather
+        than by supersession, because it is the one family with nowhere to
+        retire to -- no `state`, no `superseded_by_*`, one row per entity by
+        construction. Every mutable column is passed explicitly and written,
+        including the two nullable ones: a revision that omitted them would
+        silently preserve a jurisdiction or a registration identifier the
+        caller believes it has cleared, which is the quiet-carry-forward
+        failure this program exists to catch.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_id, IdKind.ENTITY)
+        if not isinstance(organization_kind_code, OrganizationKindCode):
+            raise ValueError("an organization profile has a closed organization kind")
+        if not isinstance(legal_identity_status_code, LegalIdentityStatusCode):
+            raise ValueError("an organization profile has a closed legal identity status")
+        for field_name, field_value in (
+            ("jurisdiction code", jurisdiction_code),
+            ("registration identifier", registration_identifier),
+        ):
+            if field_value is not None and not field_value.strip():
+                raise ValueError(f"an organization profile {field_name} is not blank when present")
+        ensure_utc(at)
+        result = self._connection.execute(
+            update(entity_organization_profiles)
+            .where(
+                _mine(entity_organization_profiles, principal_id),
+                entity_organization_profiles.c.entity_id == entity_id,
+                entity_organization_profiles.c.version == expected_version,
+            )
+            .values(
+                organization_kind_code=organization_kind_code.value,
+                legal_identity_status_code=legal_identity_status_code.value,
+                jurisdiction_code=jurisdiction_code,
+                registration_identifier=registration_identifier,
+                version=entity_organization_profiles.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if result.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_organization_profiles.c.version).where(
+                    _mine(entity_organization_profiles, principal_id),
+                    entity_organization_profiles.c.entity_id == entity_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "organization profile")
+
+    def record_entity_address(self, principal_id: str, address: EntityAddress) -> None:
+        """Insert one typed address.
+
+        `EntityAddress.__post_init__` already recomputes
+        `normalized_address_value` from the structured parts and refuses a
+        mismatch, so this write does not fold the address a second time; what
+        it adds is the Principal check, the merged-endpoint refusal, and the
+        scope lock the domain object cannot perform.
+        """
+        self._insert_entity_address(principal_id, address)
+
+    def _insert_entity_address(self, principal_id: str, address: EntityAddress) -> None:
+        """The insert `record_entity_address` and `supersede_entity_address` share.
+
+        Shared rather than repeated so a correction admits exactly the rows a
+        direct record admits, and no others.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if address.principal_id != principal_id:
+            raise ValueError("an entity address belongs to the acting Principal")
+        lock_entity_mutation_scopes(self._connection, principal_id, (address.entity_id,))
+        self._require_writable_entity(principal_id, address.entity_id, None)
+        self._connection.execute(
+            insert(entity_addresses).values(
+                _bound(
+                    entity_addresses,
+                    principal_id,
+                    entity_address_id=address.entity_address_id,
+                    entity_id=address.entity_id,
+                    address_type_code=address.address_type_code.value,
+                    line1=address.line1,
+                    line2=address.line2,
+                    city=address.city,
+                    region=address.region,
+                    postal_code=address.postal_code,
+                    country=address.country,
+                    raw_value=address.raw_value,
+                    normalized_address_value=address.normalized_address_value,
+                    label=address.label,
+                    is_preferred=address.is_preferred,
+                    effective_from=address.effective_from,
+                    effective_to=address.effective_to,
+                    state=address.state.value,
+                    version=address.version,
+                    updated_at=address.updated_at,
+                    retired_at=address.retired_at,
+                    superseded_by_entity_address_id=address.superseded_by_entity_address_id,
+                )
+            )
+        )
+
+    def supersede_entity_address(
+        self,
+        principal_id: str,
+        *,
+        entity_address_id: str,
+        successor: EntityAddress,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace one address with `successor`, in the three statements above.
+
+        The predecessor leaves
+        `an_active_entity_address_is_unique_per_entity_and_type` -- and
+        `an_active_entity_address_has_one_preferred_per_type` with it --
+        before the successor is inserted, because both are partial on
+        `state = 'active'`. A collision with any *other* active address of the
+        same type and normalized value leaves as the driver's
+        `IntegrityError`, the same way it leaves `record_entity_address`.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_address_id, IdKind.ENTITY_ADDRESS)
+        validate_identifier(successor.entity_address_id, IdKind.ENTITY_ADDRESS)
+        if successor.entity_address_id == entity_address_id:
+            raise ValueError("an entity address is not superseded by itself")
+        ensure_utc(at)
+        released = self._connection.execute(
+            update(entity_addresses)
+            .where(
+                _mine(entity_addresses, principal_id),
+                entity_addresses.c.entity_address_id == entity_address_id,
+                entity_addresses.c.version == expected_version,
+            )
+            .values(
+                state=EntityAddressState.SUPERSEDED.value,
+                version=entity_addresses.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if released.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_addresses.c.version).where(
+                    _mine(entity_addresses, principal_id),
+                    entity_addresses.c.entity_address_id == entity_address_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "entity address")
+        self._insert_entity_address(principal_id, successor)
+        named = self._connection.execute(
+            update(entity_addresses)
+            .where(
+                _mine(entity_addresses, principal_id),
+                entity_addresses.c.entity_address_id == entity_address_id,
+                entity_addresses.c.state == EntityAddressState.SUPERSEDED.value,
+                entity_addresses.c.superseded_by_entity_address_id.is_(None),
+            )
+            .values(superseded_by_entity_address_id=successor.entity_address_id)
+        )
+        if named.rowcount == 0:
+            _refuse_unnamed_successor("entity address")
+
+    def retire_entity_address(
+        self, principal_id: str, *, entity_address_id: str, expected_version: int, at: datetime
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(entity_address_id, IdKind.ENTITY_ADDRESS)
+        ensure_utc(at)
+        result = self._connection.execute(
+            update(entity_addresses)
+            .where(
+                _mine(entity_addresses, principal_id),
+                entity_addresses.c.entity_address_id == entity_address_id,
+                entity_addresses.c.version == expected_version,
+            )
+            .values(
+                state=EntityAddressState.RETIRED.value,
+                is_preferred=False,
+                retired_at=at,
+                version=entity_addresses.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if result.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_addresses.c.version).where(
+                    _mine(entity_addresses, principal_id),
+                    entity_addresses.c.entity_address_id == entity_address_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "entity address")
+
+    def record_communication_method(
+        self, principal_id: str, method: EntityCommunicationMethod
+    ) -> None:
+        """Insert one contact channel.
+
+        `verification_status_code` is written exactly as given. An email a
+        source merely mentioned is `UNVERIFIED` and stays `UNVERIFIED`; this
+        write never promotes a channel because it happens to match an
+        external identifier the entity already holds.
+        """
+        self._insert_communication_method(principal_id, method)
+
+    def _insert_communication_method(
+        self, principal_id: str, method: EntityCommunicationMethod
+    ) -> None:
+        """The insert `record_communication_method` and `supersede_communication_method` share.
+
+        Shared rather than repeated so a correction admits exactly the rows a
+        direct record admits, and no others -- a corrected channel is no more
+        verified than a recorded one.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if method.principal_id != principal_id:
+            raise ValueError("a communication method belongs to the acting Principal")
+        lock_entity_mutation_scopes(self._connection, principal_id, (method.entity_id,))
+        self._require_writable_entity(principal_id, method.entity_id, None)
+        self._connection.execute(
+            insert(entity_communication_methods).values(
+                _bound(
+                    entity_communication_methods,
+                    principal_id,
+                    communication_method_id=method.communication_method_id,
+                    entity_id=method.entity_id,
+                    method_type_code=method.method_type_code.value,
+                    usage_context_code=method.usage_context_code.value,
+                    normalized_value=method.normalized_value,
+                    display_value=method.display_value,
+                    verification_status_code=method.verification_status_code.value,
+                    is_preferred=method.is_preferred,
+                    effective_from=method.effective_from,
+                    effective_to=method.effective_to,
+                    state=method.state.value,
+                    version=method.version,
+                    updated_at=method.updated_at,
+                    retired_at=method.retired_at,
+                    superseded_by_communication_method_id=(
+                        method.superseded_by_communication_method_id
+                    ),
+                    linked_external_identifier_id=method.linked_external_identifier_id,
+                )
+            )
+        )
+
+    def supersede_communication_method(
+        self,
+        principal_id: str,
+        *,
+        communication_method_id: str,
+        successor: EntityCommunicationMethod,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace one communication method with `successor`, in the three statements above.
+
+        The predecessor leaves
+        `an_active_communication_method_is_unique_per_entity_and_type` -- and
+        `an_active_communication_method_has_one_preferred_per_type` with it --
+        before the successor is inserted, because both are partial on
+        `state = 'active'`. A collision with any *other* active channel of the
+        same type and normalized value leaves as the driver's
+        `IntegrityError`, the same way it leaves `record_communication_method`.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(communication_method_id, IdKind.ENTITY_COMMUNICATION_METHOD)
+        validate_identifier(successor.communication_method_id, IdKind.ENTITY_COMMUNICATION_METHOD)
+        if successor.communication_method_id == communication_method_id:
+            raise ValueError("a communication method is not superseded by itself")
+        ensure_utc(at)
+        released = self._connection.execute(
+            update(entity_communication_methods)
+            .where(
+                _mine(entity_communication_methods, principal_id),
+                entity_communication_methods.c.communication_method_id == communication_method_id,
+                entity_communication_methods.c.version == expected_version,
+            )
+            .values(
+                state=EntityCommunicationMethodState.SUPERSEDED.value,
+                version=entity_communication_methods.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if released.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_communication_methods.c.version).where(
+                    _mine(entity_communication_methods, principal_id),
+                    entity_communication_methods.c.communication_method_id
+                    == communication_method_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "communication method")
+        self._insert_communication_method(principal_id, successor)
+        named = self._connection.execute(
+            update(entity_communication_methods)
+            .where(
+                _mine(entity_communication_methods, principal_id),
+                entity_communication_methods.c.communication_method_id == communication_method_id,
+                entity_communication_methods.c.state
+                == EntityCommunicationMethodState.SUPERSEDED.value,
+                entity_communication_methods.c.superseded_by_communication_method_id.is_(None),
+            )
+            .values(superseded_by_communication_method_id=successor.communication_method_id)
+        )
+        if named.rowcount == 0:
+            _refuse_unnamed_successor("communication method")
+
+    def retire_communication_method(
+        self,
+        principal_id: str,
+        *,
+        communication_method_id: str,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(communication_method_id, IdKind.ENTITY_COMMUNICATION_METHOD)
+        ensure_utc(at)
+        result = self._connection.execute(
+            update(entity_communication_methods)
+            .where(
+                _mine(entity_communication_methods, principal_id),
+                entity_communication_methods.c.communication_method_id == communication_method_id,
+                entity_communication_methods.c.version == expected_version,
+            )
+            .values(
+                state=EntityCommunicationMethodState.RETIRED.value,
+                is_preferred=False,
+                retired_at=at,
+                version=entity_communication_methods.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if result.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_communication_methods.c.version).where(
+                    _mine(entity_communication_methods, principal_id),
+                    entity_communication_methods.c.communication_method_id
+                    == communication_method_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "communication method")
+
+    def record_project_participation(
+        self, principal_id: str, participation: EntityProjectParticipation
+    ) -> None:
+        """Insert one project participation.
+
+        Both endpoints are locked and checked, because a participation binds
+        two entities and either could have been merged away since the caller
+        read them. `role_code`/`discipline_code` are written as given and
+        never derived from `role_text`/`discipline_text`: a free-text role a
+        source wrote is not a taxonomy code, and inventing one here would put
+        a structured claim into the record that nobody made.
+        """
+        self._insert_project_participation(principal_id, participation)
+
+    def _insert_project_participation(
+        self, principal_id: str, participation: EntityProjectParticipation
+    ) -> None:
+        """The insert `record_project_participation` and `supersede_project_participation` share.
+
+        Shared rather than repeated so a correction locks and checks both
+        endpoints exactly as a direct record does: either endpoint could have
+        been merged away since the caller read the row it is correcting.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if participation.principal_id != principal_id:
+            raise ValueError("a project participation belongs to the acting Principal")
+        lock_entity_mutation_scopes(
+            self._connection,
+            principal_id,
+            (participation.project_entity_id, participation.participant_entity_id),
+        )
+        self._require_writable_entity(principal_id, participation.project_entity_id, None)
+        self._require_writable_entity(principal_id, participation.participant_entity_id, None)
+        self._connection.execute(
+            insert(entity_project_participations).values(
+                _bound(
+                    entity_project_participations,
+                    principal_id,
+                    participation_id=participation.participation_id,
+                    project_entity_id=participation.project_entity_id,
+                    participant_entity_id=participation.participant_entity_id,
+                    project_display_name=participation.project_display_name,
+                    role_code=participation.role_code,
+                    role_text=participation.role_text,
+                    discipline_code=participation.discipline_code,
+                    discipline_text=participation.discipline_text,
+                    scope_text=participation.scope_text,
+                    role_basis_code=participation.role_basis_code.value,
+                    stakeholder_side_code=participation.stakeholder_side_code.value,
+                    stakeholder_class_code=participation.stakeholder_class_code.value,
+                    relationship_status_code=participation.relationship_status_code.value,
+                    effective_from=participation.effective_from,
+                    effective_to=participation.effective_to,
+                    state=participation.state.value,
+                    version=participation.version,
+                    updated_at=participation.updated_at,
+                    retired_at=participation.retired_at,
+                    superseded_by_participation_id=participation.superseded_by_participation_id,
+                )
+            )
+        )
+
+    def supersede_project_participation(
+        self,
+        principal_id: str,
+        *,
+        participation_id: str,
+        successor: EntityProjectParticipation,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace one participation with `successor`, in the three statements above.
+
+        The predecessor leaves
+        `an_active_project_participation_is_unique_per_project_and_role`,
+        partial on `state = 'active'`, before the successor is inserted. A
+        collision with any *other* active participation of the same project,
+        participant and role leaves as the driver's `IntegrityError`, the same
+        way it leaves `record_project_participation`.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(participation_id, IdKind.ENTITY_PROJECT_PARTICIPATION)
+        validate_identifier(successor.participation_id, IdKind.ENTITY_PROJECT_PARTICIPATION)
+        if successor.participation_id == participation_id:
+            raise ValueError("a project participation is not superseded by itself")
+        ensure_utc(at)
+        released = self._connection.execute(
+            update(entity_project_participations)
+            .where(
+                _mine(entity_project_participations, principal_id),
+                entity_project_participations.c.participation_id == participation_id,
+                entity_project_participations.c.version == expected_version,
+            )
+            .values(
+                state=EntityProjectParticipationState.SUPERSEDED.value,
+                version=entity_project_participations.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if released.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_project_participations.c.version).where(
+                    _mine(entity_project_participations, principal_id),
+                    entity_project_participations.c.participation_id == participation_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "project participation")
+        self._insert_project_participation(principal_id, successor)
+        named = self._connection.execute(
+            update(entity_project_participations)
+            .where(
+                _mine(entity_project_participations, principal_id),
+                entity_project_participations.c.participation_id == participation_id,
+                entity_project_participations.c.state
+                == EntityProjectParticipationState.SUPERSEDED.value,
+                entity_project_participations.c.superseded_by_participation_id.is_(None),
+            )
+            .values(superseded_by_participation_id=successor.participation_id)
+        )
+        if named.rowcount == 0:
+            _refuse_unnamed_successor("project participation")
+
+    def retire_project_participation(
+        self, principal_id: str, *, participation_id: str, expected_version: int, at: datetime
+    ) -> None:
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(participation_id, IdKind.ENTITY_PROJECT_PARTICIPATION)
+        ensure_utc(at)
+        result = self._connection.execute(
+            update(entity_project_participations)
+            .where(
+                _mine(entity_project_participations, principal_id),
+                entity_project_participations.c.participation_id == participation_id,
+                entity_project_participations.c.version == expected_version,
+            )
+            .values(
+                state=EntityProjectParticipationState.RETIRED.value,
+                retired_at=at,
+                version=entity_project_participations.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if result.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_project_participations.c.version).where(
+                    _mine(entity_project_participations, principal_id),
+                    entity_project_participations.c.participation_id == participation_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "project participation")
+
+    def record_person_organization_affiliation(
+        self, principal_id: str, affiliation: PersonOrganizationAffiliation
+    ) -> None:
+        """Insert one person-organization affiliation.
+
+        **A null `organization_entity_id` stays null.** RI-ENT-WP-05 made the
+        column nullable precisely so an independent consultant needs no
+        placeholder organization; this write honours that by locking and
+        checking the organization endpoint only when one was named. Nothing
+        here creates an organization entity to satisfy the foreign key.
+        """
+        self._insert_person_organization_affiliation(principal_id, affiliation)
+
+    def _insert_person_organization_affiliation(
+        self, principal_id: str, affiliation: PersonOrganizationAffiliation
+    ) -> None:
+        """The insert both affiliation writes share.
+
+        Used by `record_person_organization_affiliation` and by
+        `supersede_person_organization_affiliation`, so a correction locks
+        and checks the same endpoints -- and leaves a null
+        `organization_entity_id` null -- exactly as a direct record does.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        if affiliation.principal_id != principal_id:
+            raise ValueError("an affiliation belongs to the acting Principal")
+        lock_entity_mutation_scopes(
+            self._connection,
+            principal_id,
+            (
+                entity_id
+                for entity_id in (
+                    affiliation.person_entity_id,
+                    affiliation.organization_entity_id,
+                )
+                if entity_id
+            ),
+        )
+        self._require_writable_entity(principal_id, affiliation.person_entity_id, None)
+        if affiliation.organization_entity_id is not None:
+            self._require_writable_entity(principal_id, affiliation.organization_entity_id, None)
+        self._connection.execute(
+            insert(entity_person_organization_affiliations).values(
+                _bound(
+                    entity_person_organization_affiliations,
+                    principal_id,
+                    affiliation_id=affiliation.affiliation_id,
+                    person_entity_id=affiliation.person_entity_id,
+                    organization_entity_id=affiliation.organization_entity_id,
+                    job_title=affiliation.job_title,
+                    affiliation_type_code=affiliation.affiliation_type_code.value,
+                    effective_from=affiliation.effective_from,
+                    effective_to=affiliation.effective_to,
+                    state=affiliation.state.value,
+                    version=affiliation.version,
+                    updated_at=affiliation.updated_at,
+                    retired_at=affiliation.retired_at,
+                    superseded_by_affiliation_id=affiliation.superseded_by_affiliation_id,
+                )
+            )
+        )
+
+    def supersede_person_organization_affiliation(
+        self,
+        principal_id: str,
+        *,
+        affiliation_id: str,
+        successor: PersonOrganizationAffiliation,
+        expected_version: int,
+        at: datetime,
+    ) -> None:
+        """Replace one affiliation with `successor`, in the three statements above.
+
+        **The family where the ordering is not an optimization.**
+        `an_open_ended_affiliation_is_unique_per_person` is partial on
+        `state = 'active' AND effective_to IS NULL` and keys on
+        `(principal_id, person_entity_id)` alone -- not on the job title, the
+        organization, or anything else a correction might be changing -- so a
+        successor written while the predecessor is still active collides with
+        it on *every* correction of a current affiliation. Marking the
+        predecessor SUPERSEDED first takes it out of that index's `WHERE`;
+        nothing else does, short of closing its window, which would invent an
+        end date the caller never stated (see
+        `retire_person_organization_affiliation`).
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(affiliation_id, IdKind.PERSON_ORGANIZATION_AFFILIATION)
+        validate_identifier(successor.affiliation_id, IdKind.PERSON_ORGANIZATION_AFFILIATION)
+        if successor.affiliation_id == affiliation_id:
+            raise ValueError("an affiliation is not superseded by itself")
+        ensure_utc(at)
+        released = self._connection.execute(
+            update(entity_person_organization_affiliations)
+            .where(
+                _mine(entity_person_organization_affiliations, principal_id),
+                entity_person_organization_affiliations.c.affiliation_id == affiliation_id,
+                entity_person_organization_affiliations.c.version == expected_version,
+            )
+            .values(
+                state=PersonOrganizationAffiliationState.SUPERSEDED.value,
+                version=entity_person_organization_affiliations.c.version + 1,
+                updated_at=at,
+            )
+        )
+        if released.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_person_organization_affiliations.c.version).where(
+                    _mine(entity_person_organization_affiliations, principal_id),
+                    entity_person_organization_affiliations.c.affiliation_id == affiliation_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "affiliation")
+        self._insert_person_organization_affiliation(principal_id, successor)
+        named = self._connection.execute(
+            update(entity_person_organization_affiliations)
+            .where(
+                _mine(entity_person_organization_affiliations, principal_id),
+                entity_person_organization_affiliations.c.affiliation_id == affiliation_id,
+                entity_person_organization_affiliations.c.state
+                == PersonOrganizationAffiliationState.SUPERSEDED.value,
+                entity_person_organization_affiliations.c.superseded_by_affiliation_id.is_(None),
+            )
+            .values(superseded_by_affiliation_id=successor.affiliation_id)
+        )
+        if named.rowcount == 0:
+            _refuse_unnamed_successor("affiliation")
+
+    def retire_person_organization_affiliation(
+        self,
+        principal_id: str,
+        *,
+        affiliation_id: str,
+        expected_version: int,
+        at: datetime,
+        effective_to: datetime | None = None,
+    ) -> None:
+        """Retire one affiliation, optionally closing its temporal window.
+
+        `effective_to` is written only when the caller supplies it. The
+        partial unique `an_open_ended_affiliation_is_unique_per_person`
+        keys on `state = 'active' AND effective_to IS NULL`, so a retirement
+        already releases the slot by moving `state`; closing the window is a
+        separate, caller-stated fact about *when* the affiliation ended, and
+        this write will not invent a date for it.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        validate_identifier(affiliation_id, IdKind.PERSON_ORGANIZATION_AFFILIATION)
+        ensure_utc(at)
+        if effective_to is not None:
+            ensure_utc(effective_to)
+        result = self._connection.execute(
+            update(entity_person_organization_affiliations)
+            .where(
+                _mine(entity_person_organization_affiliations, principal_id),
+                entity_person_organization_affiliations.c.affiliation_id == affiliation_id,
+                entity_person_organization_affiliations.c.version == expected_version,
+            )
+            .values(
+                state=PersonOrganizationAffiliationState.RETIRED.value,
+                retired_at=at,
+                version=entity_person_organization_affiliations.c.version + 1,
+                updated_at=at,
+                **({} if effective_to is None else {"effective_to": effective_to}),
+            )
+        )
+        if result.rowcount == 0:
+            present = self._connection.execute(
+                select(entity_person_organization_affiliations.c.version).where(
+                    _mine(entity_person_organization_affiliations, principal_id),
+                    entity_person_organization_affiliations.c.affiliation_id == affiliation_id,
+                )
+            ).scalar_one_or_none()
+            _refuse_stale_or_absent(present, "affiliation")
 
     def entities_by_identifier(
         self,

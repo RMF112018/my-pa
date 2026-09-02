@@ -313,6 +313,7 @@ def test_real_gateway_startup_observes_versions_before_each_transport_serves(
         remote_client = None
         apple_authenticate = None
         apple_control = None
+        webauthn = None
         mcp_enabled = True
         work_engine = SimpleNamespace(begin=lambda: None)
 
@@ -437,6 +438,7 @@ def test_entra_http_observes_each_authenticated_principal_before_application_dis
         remote_client = None
         apple_authenticate = None
         apple_control = None
+        webauthn = None
         mcp_enabled = True
         work_engine = SimpleNamespace(begin=lambda: None)
 
@@ -628,6 +630,7 @@ def test_remote_mcp_observes_only_authenticated_request_principals_before_contex
     class Runtime:
         principal = None
         service = object()
+        webauthn = None
         work_engine = SimpleNamespace(begin=lambda: None)
 
         def observe_reenrichment_versions(

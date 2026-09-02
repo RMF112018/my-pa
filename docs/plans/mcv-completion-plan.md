@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and eleven Python modules under `src/my_pa` and four hundred and forty-one test modules —
+Three hundred and fifteen Python modules under `src/my_pa` and four hundred and forty-three test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -117,7 +117,7 @@ no source module: `bb3bf22` added
 `tests/unit/test_entity_search_reaches_context.py` and
 `tests/database/test_entity_search_reaches_context.py`, and `5700c37` added
 `tests/contract/test_entity_search_disambiguators.py` and
-`tests/unit/test_entity_search_disambiguators.py`. 
+`tests/unit/test_entity_search_disambiguators.py`.
 Corrected again on
 2026-09-02 to three hundred and eleven and four hundred and thirty-five, when
 UI-IMP-WP02 added five source modules and three test modules:
@@ -129,7 +129,7 @@ UI-IMP-WP02 added five source modules and three test modules:
 `tests/database/test_webauthn_auth_persistence.py`,
 `tests/schema/test_webauthn_auth_persistence_migration.py`, and
 `tests/unit/test_webauthn_auth_persistence.py`. 
-Corrected again on 2026-09-02 to **three hundred and eleven and four hundred and forty-one**, when `ri-ent/wp09-resolution` and `origin/main` were merged and NEITHER side's pair was true of the result: this branch had corrected the pair to 306/438 for RI-ENT-WP-09's six test modules, `origin/main` had corrected the same pair to 311/435 for UI-IMP-WP02's five source and three test modules, and both corrections were made from the same baseline. The merged tree carries both sets of modules, so the true pair is neither. **Re-measured on the merged tree by running the two commands above -- never by summing the two deltas**, which is the trap an independent reviewer named when it found this exact conflict before the merge was attempted. `95b16cf` and `34367b4` changed the contents of the WP-08 files without adding a module on either side, so neither moves either figure. The source-module ffive and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
+Corrected again on 2026-09-02 to **three hundred and fifteen and four hundred and forty-three**, when this tree's `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"` were run after merging `ri-ent/wp09-resolution` with `origin/main` and landing UI-IMP-WP03. The merge of WP-09's six test modules onto WP-02's five source and three test modules produced 311/441; WP-03 then added four source modules (`src/my_pa/application/webauthn_bff_attestation.py`, `src/my_pa/domain/identity/webauthn_relying_party.py`, `src/my_pa/infrastructure/security/webauthn_ceremony.py`, `src/my_pa/adapters/http/webauthn.py`) and two test modules (`tests/unit/test_webauthn_ceremony.py`, `tests/database/test_webauthn_ceremony.py`). Isolation (`7452cc6`) moved ceremony execute into the existing `bootstrap.gateway` composition root and added neither a source module nor a test module. 311+4=315 and 441+2=443, which is the pair `find` reports on this tree. Prior correction the same day to three hundred and eleven and four hundred and forty-one recorded the merge of `ri-ent/wp09-resolution` (306/438) with `origin/main` (311/435) before ceremony landed; that pair was a scaffold for the merge, not this tree. **Re-measured by running the two commands above -- never by summing the two deltas**, which is the trap an independent reviewer named when it found this exact conflict before the merge was attempted. `95b16cf` and `34367b4` changed the contents of the WP-08 files without adding a module on either side, so neither moves either figure. The source-module ffive and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
 therefore skips from four hundred and twenty-six to four hundred and
 twenty-nine, because `f4eaa4f` moved the sentence without extending this note,
 and the skipped step is recorded here rather than reconstructed. (The audit basis `main@e773e6f` was fifty-six and twenty-seven; the

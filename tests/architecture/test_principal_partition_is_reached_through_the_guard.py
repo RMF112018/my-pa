@@ -578,6 +578,7 @@ HAND_WRITTEN_COMPARISONS: Final = {
         ("continuity_authoring_submissions", "principal_id"),
     ),
     "infrastructure/persistence/remote_identity.py": (("remote_clients", "principal_id"),),
+    "infrastructure/persistence/user_accounts.py": (("user_accounts", "principal_id"),),
     # WP02 identity-plane stores are Connection-bound and not yet behind
     # PrincipalContext. Each comparison is table.c.principal_id against a
     # UUID the caller already resolved (list/revoke-all) or a generation
@@ -585,6 +586,7 @@ HAND_WRITTEN_COMPARISONS: Final = {
     # that supplies that UUID from a payload (WP03/WP04).
     "infrastructure/persistence/webauthn_auth.py": (
         ("auth_sessions", "principal_id"),
+        ("recovery_code_sets", "principal_id"),
         ("recovery_code_sets", "principal_id"),
         ("webauthn_credentials", "principal_id"),
     ),

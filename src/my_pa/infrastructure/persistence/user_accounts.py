@@ -29,7 +29,7 @@ same reason every other revision names its own.
 from __future__ import annotations
 
 from datetime import datetime
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from sqlalchemy import (
     Boolean,
@@ -162,6 +162,13 @@ class UserAccountRepository:
         ).returning(*user_accounts.c)
         row = self._connection.execute(resolved).one()
         return _account(row)
+
+    def get(self, principal_id: UUID) -> UserAccount | None:
+        """The account for this durable UUID, or `None`."""
+        row = self._connection.execute(
+            select(*user_accounts.c).where(user_accounts.c.principal_id == principal_id)
+        ).one_or_none()
+        return None if row is None else _account(row)
 
     def account_for(self, context: PrincipalContext | None) -> UserAccount | None:
         """The context's own account, or `None`. Fails closed without context."""

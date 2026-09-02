@@ -32,7 +32,12 @@ const PUBLIC_PATHS = new Set(["/sign-in"]);
 
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl;
-  if (PUBLIC_PATHS.has(pathname) || pathname.startsWith("/api/session")) {
+  if (
+    PUBLIC_PATHS.has(pathname) ||
+    pathname.startsWith("/api/session") ||
+    pathname.startsWith("/api/webauthn/authentication/") ||
+    pathname === "/api/webauthn/recovery/consume"
+  ) {
     return NextResponse.next();
   }
   const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;

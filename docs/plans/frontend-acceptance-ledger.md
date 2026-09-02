@@ -145,6 +145,15 @@ These overrides record only the persistence substrate WP02 actually proved. They
 
 Unchanged and still not claimed by WP02: PFE-AC-091, 092, 093, 095, 099, 100, 102, 103, 104, 105, and user-facing WebAuthn/sign-in criteria. PFE-AC-136 security tests remain later-package evidence.
 
+## UI-IMP-WP03 ceremony notes
+
+Ceremony options/verify, recovery issue/consume, step-up grants, and passkey UX exist on this package. Conservative dispositions:
+
+- PFE-AC-094/096/098 remain `VALIDATION_REQUIRED` (now with ceremony tests in addition to stores).
+- PFE-AC-097 remains `IMPLEMENTATION_REQUIRED` (hashed recovery is live; operator-local recovery is not).
+- PFE-AC-101 remains WP04 cookie cutover. WP03 creates `identity.auth_sessions` rows and still mints HMAC `mypa_session`.
+- PFE-AC-091/092/093/095/099/100: `VALIDATION_REQUIRED` for ceremony/CI, not `PASS_VERIFIED` for production cutover.
+
 ## Known evidence limitations / record overrides
 
 These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING` status and do not create a pass:

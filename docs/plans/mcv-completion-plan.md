@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and six Python modules under `src/my_pa` and four hundred and thirty-two test modules —
+Three hundred and six Python modules under `src/my_pa` and four hundred and thirty-four test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -107,7 +107,15 @@ one source module and three test modules: `1b2dd18` added
 time the source-module figure has moved since the 2026-08-29 correction, every
 step between it and this one having been test-side only. `95b16cf` and
 `34367b4` changed the contents of those files without adding a module on either
-side, so neither moves either figure. Both figures were recomputed by running
+side, so neither moves either figure. Corrected again on 2026-09-02, on the
+test side only, from four hundred and thirty-two to four hundred and
+thirty-four: RI-ENT-WP-13 added two test modules and no source module —
+`tests/database/test_tbr_completeness_fixture.py`, the synthetic TBR
+completeness fixture, and
+`tests/unit/test_entity_record_family_security_matrix.py`, the structural half
+of the audit's security matrix. That accounts for the movement in full, with no
+residual, and the source-module figure is unmoved because RI-ENT-WP-13 adds
+nothing under `src/my_pa`. Both figures were recomputed by running
 the two commands above against this tree rather than by adding an assumed delta
 to the stated pair. The pair standing before this correction, three hundred and
 five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above

@@ -29,7 +29,7 @@ __all__ = [
 ]
 
 WEBAUTHN_PATH_PREFIX: Final = "/webauthn/v1/"
-WEBAUTHN_PATH: Final = "/webauthn/v1/{action}"
+WEBAUTHN_PATH: Final = "/webauthn/v1/{action:path}"
 _JSON: Final = "application/json"
 _ATTESTATION_HEADER: Final = "x-my-pa-webauthn-attestation"
 _AUTHENTICATED_ACTIONS: Final = frozenset(

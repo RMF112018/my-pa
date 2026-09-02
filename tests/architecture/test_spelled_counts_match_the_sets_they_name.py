@@ -915,9 +915,9 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "**fifty-five**",
         "A default process publishes",
         "the count a default composition publishes — `Capability` less the six "
-        "`documents.`, thirty-nine `entities.` and nine `relationship_memory.` names it "
+        "`documents.`, fifty-four `entities.` and nine `relationship_memory.` names it "
         "withholds — not the size of `Capability`, which the same block states "
-        "correctly as one hundred nine",
+        "correctly as 124",
     ),
     (
         "ops/runbooks/mcp-and-cli-operations.md",
@@ -932,7 +932,7 @@ EXCUSED: tuple[tuple[str, str, str, str], ...] = (
         "the same default-publication count, in the bullet describing the MCP "
         "adapter; the tool list is derived from `available_capabilities`, not "
         "from `Capability`, which the same bullet states correctly as "
-        "one hundred four",
+        "one hundred and twenty-four",
     ),
     # --- the Intelligence Artifact plane, newly swept --------------------------
     #

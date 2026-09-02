@@ -2533,7 +2533,7 @@ nor `resolved_exact:typed_name` is a key in the table.
   different one.** It reached this document from `origin/main` at `6db2a203`
   with no conflict marker anywhere near it -- the exact shape of FINDING-M1 --
   and was caught by re-measuring rather than by resolving. The selection here
-  collects 2,075 of 18,331 rather than 2,008 of 17,216, because this branch
+  collects 2,075 of 18,333 rather than 2,008 of 17,216, because this branch
   carries RI-ENT-WP-10/11 on top of the same WP-09 commits; the executed figure
   at this head is recorded in the closeout gate block below, and is the one that
   governs. These two defects are
@@ -3112,9 +3112,42 @@ The eighteen gate-safe directories are `tests/unit`, `tests/relationship`,
 `tests/integration`, `tests/jobs`, `tests/parser_isolation`, `tests/pipeline`,
 `tests/projection`, `tests/provider_conformance`, `tests/runtime_attestation`,
 `tests/search_quality` and `tests/situation`. Everything outside them was
-unexecuted at `959f6c1b`, as recorded above; at the closeout head `3dfa74f9`
-everything outside them has been executed too, chunked and summed in the gate
-block below.
+unexecuted at `959f6c1b`, as recorded above.
+
+**The sentence that stood here was false, and it is FINDING-M7.** It said that
+at the closeout head everything outside those eighteen had been executed too.
+It had not. That list omits `tests/security`, and `tests/security` is mostly
+outside the `database or recovery or e2e` selection as well -- 196 of its tests
+carry one of those markers and **742 do not** -- so those 742 were executed by
+neither half of the gate and the gate reported green over a hole. Tree-wide the
+hole was **1,047 FAST-selected tests**: `tests/security` 742,
+`tests/migration` 173, `tests/schema` 125, `tests/concurrency` 5 and
+`tests/database` 2, each of them a test the marker selection admits and the
+directory list did not reach.
+
+Three real failures were sitting in it. `tests/security/test_http_negative_evidence.py`
+had ten `RI-ENT-WP-11` capabilities answering `404` over the wire, caught by CI
+and by an independent reviewer rather than by this gate.
+
+**The list is retired as a gate boundary.** The FAST tier is now run tree-wide
+by marker, which is what CI runs and what the marker expression already means,
+and the gate reconciles
+
+```
+FAST collected  -  FAST executed  ==  0
+```
+
+at every head that claims a green gate. A directory list can fall behind the
+tree; a marker expression cannot, because it is the same expression on both
+sides of the subtraction. The eighteen names above are kept as the record of
+what was executed at `959f6c1b`, not as a boundary anything still relies on.
+
+Eleven tests sit outside both selections at this head and that is by their own
+markers, not by a hole: five `slow` in `tests/contract/test_task_mcp_protocol_harness.py`,
+one `slow` in `tests/integration/test_gsqs_remote_eval_http.py`, two
+`evaluation` in `tests/evaluation/test_semantic_gate_harness.py`, and three
+`connector` in `tests/unit/test_wp12_slice_c_application.py`. 16,247 + 2,075 +
+11 = 18,333, which is the whole tree.
 
 Two guard diffs from `516f9e0` are **empty**, and were checked rather than
 assumed: `AGENTS.md`, which no worker on either package may amend, and

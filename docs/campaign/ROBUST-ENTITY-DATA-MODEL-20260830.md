@@ -2978,8 +2978,9 @@ The modules, by name:
   still refused so the widening did not open them, downgrades one revision and
   requires every new value to vanish before upgrading and requiring it back, and
   drives every live `Capability`, `Purpose` and `MutationRecordFamily` through
-  the stored CHECKs. `pytest --collect-only` collects thirty-five tests in it and
-  **no assertion in it has ever run against a server.**
+  the stored CHECKs. Its own commit records `pytest --collect-only` collecting
+  thirty-five tests in it, and **no assertion in it has ever run against a
+  server.**
 - **`tests/security/test_mcp_and_cli_negative_evidence.py`**,
   **`tests/security/test_http_negative_evidence.py`** and
   **`tests/security/test_entity_privacy_regression.py`** — all three were

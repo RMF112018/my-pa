@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and fifteen Python modules under `src/my_pa` and four hundred and thirty-seven test modules —
+Three hundred and eleven Python modules under `src/my_pa` and four hundred and forty-one test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -105,9 +105,20 @@ one source module and three test modules: `1b2dd18` added
 `tests/unit/test_entity_record_family_service.py`, and `499a7c1` added
 `tests/database/test_entity_record_family_service_write_path.py` — the first
 time the source-module figure has moved since the 2026-08-29 correction, every
-step between it and this one having been test-side only. Corrected again on
-2026-09-02 to three hundred and fifteen and four hundred and thirty-seven, when
-UI-IMP-WP03 added four source modules and two test modules, and earlier on
+step between it and this one having been test-side only. `95b16cf` and
+`34367b4` changed the contents of those files without adding a module on either
+side, so neither moves either figure. Both figures were recomputed by running
+the two commands above against this tree rather than by adding an assumed delta
+to the stated pair, and corrected again on 2026-09-01 to three hundred and six
+and four hundred and thirty-eight, when RI-ENT-WP-09 added six test modules and
+no source module: `bb3bf22` added
+`tests/unit/test_entity_resolution_vocabulary.py`, `8f6c576` added
+`tests/database/test_entity_resolution_value_reads.py`, `1062251` added
+`tests/unit/test_entity_search_reaches_context.py` and
+`tests/database/test_entity_search_reaches_context.py`, and `5700c37` added
+`tests/contract/test_entity_search_disambiguators.py` and
+`tests/unit/test_entity_search_disambiguators.py`.
+Corrected again on
 2026-09-02 to three hundred and eleven and four hundred and thirty-five, when
 UI-IMP-WP02 added five source modules and three test modules:
 `src/my_pa/domain/identity/secret_digests.py`,
@@ -117,12 +128,8 @@ UI-IMP-WP02 added five source modules and three test modules:
 `src/my_pa/infrastructure/persistence/webauthn_auth.py`,
 `tests/database/test_webauthn_auth_persistence.py`,
 `tests/schema/test_webauthn_auth_persistence_migration.py`, and
-`tests/unit/test_webauthn_auth_persistence.py`. `95b16cf` and
-`34367b4` changed the contents of the WP-08 files without adding a module on
-either side, so neither moves either figure. Both figures were recomputed by
-running the two commands above against this tree rather than by adding an
-assumed delta to the stated pair. The pair standing before this correction, three hundred and
-five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
+`tests/unit/test_webauthn_auth_persistence.py`. 
+Corrected again on 2026-09-02 to **three hundred and eleven and four hundred and forty-one**, when `ri-ent/wp09-resolution` and `origin/main` were merged and NEITHER side's pair was true of the result: this branch had corrected the pair to 306/438 for RI-ENT-WP-09's six test modules, `origin/main` had corrected the same pair to 311/435 for UI-IMP-WP02's five source and three test modules, and both corrections were made from the same baseline. The merged tree carries both sets of modules, so the true pair is neither. **Re-measured on the merged tree by running the two commands above -- never by summing the two deltas**, which is the trap an independent reviewer named when it found this exact conflict before the merge was attempted. This tree also carries UI-IMP-WP03 WebAuthn ceremony (four source modules and two test modules). The spelled pair at the head of this section remains origin/main's 311/441 scaffold; Worker C will recompute it from the find commands. `95b16cf` and `34367b4` changed the contents of the WP-08 files without adding a module on either side, so neither moves either figure. The source-module ffive and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
 therefore skips from four hundred and twenty-six to four hundred and
 twenty-nine, because `f4eaa4f` moved the sentence without extending this note,
 and the skipped step is recorded here rather than reconstructed. (The audit basis `main@e773e6f` was fifty-six and twenty-seven; the

@@ -437,13 +437,55 @@ class EntitySummary:
     Carries only the fields a caller needs to identify and display an entity
     without loading the full domain model.  `entity_id` and `entity_type`
     are the minimum required; all other fields are optional display hints.
+
+    **Two disambiguators (`RI-AC-038`), added with defaults so every existing
+    construction site keeps working.** The acceptance ledger recorded the gap as
+    "`entities.search` returns ID/type/canonical/display/status only -- no
+    disambiguators": two people genuinely called the same thing came back as two
+    identical rows, and a caller looking at them had nothing to choose between
+    them with. `affiliated_organizations` and `project_roles` are the two facts
+    that separate them in practice -- who they work for, and what they are doing
+    on which project.
+
+    **A browse row, not a profile, and the ceiling is what makes that true.**
+    Each collection is capped at `DISAMBIGUATOR_CEILING` deterministically
+    ordered entries, so a person with forty affiliations does not turn a search
+    page into a dossier and does not make one row cost forty times another. Both
+    default to empty, which is what a caller sees for an entity with no current
+    affiliation and no current project -- an ordinary fact, not a truncation, so
+    nothing is disclosed about it.
+
+    Only rows in the family's `active` state are carried: a superseded or
+    retired affiliation records who somebody *used* to work for, and a browse
+    row that offered it as a way of telling two people apart would be offering
+    an answer that is no longer true.
     """
+
+    #: How many of each disambiguator one row carries. Small on purpose: this is
+    #: the number that keeps a list row a list row, and the collections are cut
+    #: on a deterministic order so the same page always cuts the same way.
+    DISAMBIGUATOR_CEILING: ClassVar[int] = 3
 
     entity_id: str
     entity_type: EntityType
     canonical_name: str
     display_name: str
     status: EntityStatus
+    affiliated_organizations: tuple[str, ...] = ()
+    project_roles: tuple[str, ...] = ()
+
+    @staticmethod
+    def project_role(project_display_name: str, role_text: str | None) -> str:
+        """One project engagement, as the single string a browse row carries.
+
+        Composed here rather than at each of the three construction sites, so
+        the server, the in-memory fake and the evaluation corpus cannot spell
+        the same fact differently -- which is how a unit test comes to assert a
+        string the server never produces. `role_text` is nullable in the schema
+        and a participation with no recorded role is an ordinary row, so the
+        project's own name is the whole answer then.
+        """
+        return f"{role_text} on {project_display_name}" if role_text else project_display_name
 
 
 # --- WP-RI-A-02: the entity plane's governed writes ---------------------------
@@ -1213,7 +1255,7 @@ class EntitiesRepository(ABC):
         *,
         after_entity_id: str | None = None,
     ) -> list[EntitySummary]:
-        """One bounded page of entities whose canonical or display name matches `query`.
+        """One bounded page of entities `query` reaches, by name or by context.
 
         `after_entity_id` continues a previous page: it names the last entity of
         that page, and the rows after it in this read's own `(canonical_name,
@@ -1221,17 +1263,60 @@ class EntitiesRepository(ABC):
         continuation — every other listing could be paged and this one, the
         browse surface a person actually scrolls, could only be truncated.
 
-        A case-insensitive substring match over `canonical_name` and
-        `display_name`, scoped by `principal_id` and optionally by
-        `entity_type`. Aliases are *not* searched, and that is now a decision
-        rather than a gap: `entity_aliases` has existed since `b7f4d1a92c36`,
-        and this method still reads only the two name columns.
+        A case-insensitive substring match, scoped by `principal_id` and
+        optionally by `entity_type`, over seven columns' worth of question. The
+        entity's own `canonical_name` and `display_name`; and, as correlated
+        existence tests inside the same partition-guarded statement, its
+        **typed names** (`entity_names`), its **communication values**
+        (`entity_communication_methods`), its **affiliations** (the `job_title`
+        and the affiliated organization's own name), its **project roles** (the
+        participation's `role_text` and `project_display_name`, for this entity
+        as participant), and the **labels of its relationship types**. Every one
+        of those matches only rows in the `active` state: a retired or
+        superseded child row records what an entity used to be, and a browse
+        query did not ask that.
 
-        Searching aliases would put a nickname, a maiden name and a former
-        legal name into a browse result that nobody asked a question about --
-        the disclosure `entities.resolve` makes deliberately, made incidentally
-        here. A caller who wants alias matching asks the question that means
-        it: `entities.resolve` matches aliases and says so in its evidence.
+        **Aliases are still not searched, and the same decision now governs two
+        of the typed-name types.** `entity_aliases` has existed since
+        `b7f4d1a92c36` and this method has never read it, because searching
+        aliases would put a nickname, a maiden name and a former legal name into
+        a browse result that nobody asked a question about — the disclosure
+        `entities.resolve` makes deliberately, made incidentally here. A caller
+        who wants alias matching asks the question that means it:
+        `entities.resolve` matches aliases and says so in its evidence.
+
+        `entity_names` holds exactly the categories that reason was written
+        about, so indexing it wholesale would have reversed the decision while
+        appearing to extend it. `NameTypeCode.ALIAS` and
+        `NameTypeCode.HISTORICAL_NAME` are therefore **excluded here too**
+        (`WP09-DECISION-1`), derived from the enum rather than spelled as
+        literals, and the exclusion is pinned by test rather than described.
+
+        **Where the boundary falls, so the next reader inherits the reason.**
+        What is disclosed is an identity the entity *currently* holds in another
+        register — an active `legal`, `operating`, `dba`, `brand`, `acronym`,
+        `display` or `document_reference` name. What is withheld is an identity
+        somebody no longer uses. That is the same line the alias decision draws;
+        a currently-active trading name of an organization falls on the
+        disclosable side of it, which is what lets a caller searching a
+        company's trading name find the company whose `canonical_name` is
+        something else entirely.
+
+        **What a row carries back (`RI-AC-038`).** Each `EntitySummary` carries
+        the entity's current affiliated organizations and current project roles,
+        bounded at `EntitySummary.DISAMBIGUATOR_CEILING` each. They are fetched
+        for the whole page in two further bounded statements rather than one per
+        row: a browse page of fifty must not become fifty-one round trips, and
+        that is the shape of defect this method is most likely to acquire.
+
+        **Two costs, disclosed rather than hidden.** These are leading-wildcard
+        `ILIKE` matches over columns no index supports, exactly as the two
+        original name matches already were, so the widening makes an
+        already-unindexed browse scan wider; supporting indexes need a migration.
+        And effective dating (`effective_from`/`effective_to`) is *not* applied,
+        because this method carries no clock — a row's `state` is the only
+        in-force test available here, and a row that is `active` with a past
+        `effective_to` still matches.
         """
 
     @abstractmethod
@@ -1326,6 +1411,65 @@ class EntitiesRepository(ABC):
         self, principal_id: str, entity_id: str, *, limit: int | None = None
     ) -> list[EntityName]:
         """Name forms recorded for an entity in this Principal's partition, on `aliases`' terms."""
+
+    # --- RI-ENT-WP-09: the normalized-value reads over two of those families --
+    #
+    # The pair above reads a family *by entity*; this pair reads two of the
+    # same families *by value*, which is the question resolution asks: not
+    # "what is this entity called" but "who, if anyone, is called this". They
+    # are `entities_by_alias`'s shape rather than `names`', because that is the
+    # method whose question they share, and they return the matched row beside
+    # the entity for the reason `entities_by_identifier` does -- a resolution
+    # answer has to be able to say which record made a candidate a candidate.
+    #
+    # Nothing new is needed underneath them: `entity_names_by_normalized_value`
+    # and `entity_communication_methods_by_normalized_value` have existed since
+    # their families were declared, and before this work package nothing read
+    # either one. These two methods are the first readers of indexes that were
+    # already there.
+
+    @abstractmethod
+    def entities_by_typed_name(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityName]]:
+        """Every entity carrying this normalized name form, with the name that matched.
+
+        Scoped by `principal_id` applied first, as part of the lookup rather
+        than as a filter over a wider result, so a name form belonging to
+        another Principal is unreachable here rather than fetched and dropped.
+
+        Matched by **equality on the already-normalized value** -- never a
+        pattern, never a fuzzy or similarity match. `search` is the substring
+        surface; resolution asks who *is* this, and for that a partial match is
+        evidence of nothing.
+
+        The collection is read whole rather than paged, on `entities_by_alias`'
+        terms: resolution must see *every* claimant of a value to decide whether
+        that value is conflicted, and a page is the one shape that could let a
+        claimant fall off the end and leave a genuinely contested name reading
+        as a clean match. The bound belongs on the answer
+        (`RESOLUTION_CANDIDATE_LIMIT`, which discloses its truncation), not on
+        the read that the answer's safety is decided from.
+        """
+
+    @abstractmethod
+    def entities_by_communication_value(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityCommunicationMethod]]:
+        """Every entity carrying this normalized communication value, with the row that matched.
+
+        `entities_by_typed_name`'s contract exactly: `principal_id` applied
+        first as part of the lookup, equality on the already-normalized value
+        and never a pattern or a fuzzy match, and the collection read whole
+        because resolution must see every claimant to decide whether the value
+        is conflicted -- a page could let one fall off the end and turn a
+        contested address into a clean match.
+
+        More than one result is not an error, for `entities_by_identifier`'s
+        reason: a shared address is a fact the caller must be able to see, and
+        what to do about it is the resolution service's decision rather than
+        this port's.
+        """
 
     @abstractmethod
     def organization_profile(

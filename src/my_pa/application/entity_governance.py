@@ -523,9 +523,13 @@ class EntityGovernanceService:
         the canonical receipt so the proposal can be correlated with Review.
 
         No mutation-ledger row is written, and that is the ledger's own rule
-        rather than an omission — `MutationRecordFamily` holds the six canonical
-        families and deliberately excludes proposals, because a ledger that
-        recorded requests would record the asking as if it were the doing.
+        rather than an omission — `MutationRecordFamily` holds the eleven
+        canonical families and deliberately excludes proposals, because a ledger
+        that recorded requests would record the asking as if it were the doing.
+        (Six until `RI-ENT-WP-11` gave the five further Entity-bound families
+        their writers and their ledger rows; the exclusion of proposals is
+        unchanged by that widening, which is the part of this sentence that
+        carries the argument.)
         """
         validate_identifier(principal_id, IdKind.PRINCIPAL)
         checked = EntityProposalPayload.of(kind, payload)

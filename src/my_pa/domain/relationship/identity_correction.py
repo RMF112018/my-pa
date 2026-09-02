@@ -235,8 +235,9 @@ class IdentityEffectFamily(StrEnum):
     """Which record family one effect is about.
 
     Deliberately **not** `MutationRecordFamily`, and the difference is the point
-    rather than an oversight. That vocabulary is closed at the six families the
-    entity plane holds as canonical fact and excludes proposals on the argument
+    rather than an oversight. That vocabulary is closed at the eleven families
+    the entity plane holds as canonical fact -- six until `RI-ENT-WP-11` widened
+    it -- and excludes proposals on the argument
     that "a mutation ledger that also recorded proposals would record the asking
     as if it were the doing". A merge genuinely does something to a proposal: an
     identity change invalidates the pending requests that named the identity, and

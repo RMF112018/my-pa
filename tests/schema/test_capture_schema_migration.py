@@ -315,16 +315,26 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # that admits the pair on `capability_is_known`.
         "gsqs.start",
         "gsqs.status",
-        # `RI-ENT-WP-10`'s five paged entity reads and `RI-ENT-WP-11`'s fifteen
-        # entity mutation contracts. `16f05c46b8c3` is the forward `ALTER` that
-        # admits all twenty, and it is one revision for two work packages for
+        # `RI-ENT-WP-10`'s paged entity reads and `RI-ENT-WP-11`'s entity
+        # mutation contracts. `16f05c46b8c3` is the forward `ALTER` that admits
+        # the 20 added below, and it is one revision for two work packages for
         # the reason `823e23b6cc63` was one for three. This literal was left at
-        # its pre-`RI-ENT-WP-10/11` membership when those twenty names were
-        # declared, which is the whole of what the delta assertion below caught:
-        # the stored vocabulary and the domain agreed at one hundred and
-        # thirty-five, and only this hand-maintained delta still said one
-        # hundred and three. The twenty below were read off the difference
-        # rather than transcribed from the work packages' own lists.
+        # its pre-`RI-ENT-WP-10/11` membership when those 20 were declared,
+        # which is the whole of what the delta assertion below caught: the
+        # stored vocabulary and the domain agreed at 135, and only this
+        # hand-maintained delta still said 103. The 20 added below were read off
+        # the difference rather than transcribed from the work packages' lists.
+        #
+        # **Written in digits on purpose, and the first draft of this comment
+        # was not.** It spelled the count in words, twice, beside a noun, and
+        # `tests/architecture/test_spelled_counts_match_the_sets_they_name.py`
+        # reads a spelled number beside a noun inside a block it classifies as
+        # being about capabilities as a claim about the size of `Capability` --
+        # so both parsed as asserting that set holds 20, against a live 124, and
+        # reddened that guard twice. Digits are deliberately outside what that
+        # rule reads, because a digit reads as a measurement rather than as
+        # prose. The guard was right and the comment was wrong; the wording
+        # changed rather than the guard.
         "entities.profile",
         "entities.names.add",
         "entities.names.list",

@@ -169,7 +169,21 @@ the base merge to three hundred and twelve and four hundred and forty-four, by
 running the two commands above against the merged tree once the conflict
 markers were gone -- a figure read while they were still present counts both
 branches' prose and is void -- and again after this paragraph had itself been
-rewritten, to prove the pair stable across its own edit. The pair standing before this
+rewritten, to prove the pair stable across its own edit. **Unmoved on 2026-09-02
+by the RI-ENT-WP-09 integration** (`origin/main` at `6db2a203`, PR #175), which
+this branch merged after that base merge: the pair stays three hundred and
+twelve and four hundred and forty-four, re-measured by running the two commands
+above against the merged tree with every conflict marker gone, not carried
+forward on the assumption that a merge which adds no file cannot move it.
+`origin/main` corrected this same paragraph to three hundred and eleven and
+four hundred and forty-one, true of *its* tree, and that figure is not true
+here: `ri-ent/wp09-resolution` and this branch carry RI-ENT-WP-09's six test
+modules as the same commits, so the two trees share them and the merge adds no
+module on either side. It brings content changes to two files only --
+`tests/database/test_entity_resolution_value_reads.py` (the `NameTypeCode`
+member that never existed) and `tests/database/test_entity_search_reaches_context.py`
+(two further tests for the widened search's active-state filter) -- both of
+which already existed here. The pair standing before this
 correction, three hundred and
 five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
 therefore skips from four hundred and twenty-six to four hundred and

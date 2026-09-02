@@ -123,7 +123,7 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. **The "no write path exists yet" clause is superseded**: RI-ENT-WP-08 delivered `record_project_participation`/`supersede_project_participation`/`retire_project_participation` on `EntitiesRepository` and `SqlEntityRepository`, and `EntityRecordFamilyService`'s three verbs above them. **The "no MCP capability or tool exists yet" clause is also superseded, and so is the claim beside it that the service is unwired**: `RI-ENT-WP-10` published `entities.participations.list`, a keyset page that makes the caller state which end of the participation it means, and `RI-ENT-WP-11` published `entities.participations.create`, `entities.participations.revise` and `entities.participations.end`, which reach `EntityRecordFamilyService`'s three verbs through `EntityFamilyWriteService`'s ledger bridge. Still open: no participation write carries a `StatedAssertion`, and the database-tier tests for all of it are unexecuted — see "RI-ENT-WP-10", "RI-ENT-WP-11", "RI-ENT-WP-08" and "Merge/split disposition" below |
 | `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | **Closed for schema/domain/persistence by RI-ENT-WP-07** — `entity_assertions`/`entity_assertion_evidence` bind fact-level `assertion_status` (a discrete, unordered epistemic vocabulary, never a confidence score) and evidence to the six WP-02–WP-06 record families that previously had none. **The "repository/service-command wiring (`WP-08`)" clause is now partly closed, not fully**: RI-ENT-WP-08 declared all six assertion methods on the `EntitiesRepository` ABC and implemented them in both test doubles (`a5a939d`, corrected by `7bbc524`), and `EntityRecordFamilyService` records an optional `StatedAssertion` plus one `EntityAssertionEvidence` row per `StatedEvidence` alongside any create or correction of the six families. **The "MCP exposure (`WP-10`/`WP-11`)" clause is now partly closed and must not be read as closed.** The six families' *facts* are reachable over MCP: `RI-ENT-WP-10` publishes five reads over them and `RI-ENT-WP-11` fifteen mutation contracts. **The assertion binding itself is not.** No command published by either package carries a `StatedAssertion` or a `StatedEvidence`, and no response view emits an `entity_assertions` row, so every fact written through the published contracts is written with no assertion attached and no caller can read or state fact-level `assertion_status` over any transport. `RI-ENT-WP-11` omitted it rather than half-exposing it: the schema builder describes no nested dataclass, so the only shape that would publish is the free-form `dict[str, object]` RULING 5 forbids. Also still open, inside WP-08's own boundary: `supersede_assertion`'s collapsed refusal and the absent retirement verb for `entity_assertions`. Mutation-ledger integration is *bridged rather than integrated* — `RI-ENT-WP-11` writes the ledger row from the application tier through the generic `record_mutation_event`, not through `_append_mutation`, with the atomicity consequence recorded under "RI-ENT-WP-11" below. See "RI-ENT-WP-07" below and "RI-ENT-WP-08" below for the exact honest boundary of what is and is not delivered |
 | `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `state = 'active' AND effective_to IS NULL` denoting "current") |
-| `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Substantially closed, not fully closed** (`RI-ENT-WP-09`) — resolution reads `entity_names` and `entity_communication_methods` by normalized value and corroborates through affiliations and project participations; the three normalized-value indexes that were read by nothing now have their first readers. Two new match reasons and two new contextual signals ship as **unordered categorical** vocabulary per `RULING-M4`, and the domain's "a name alone does not resolve an entity" refusal was decoupled from `_BASIS_ORDER` onto an explicit `_BASES_THAT_NAME_AN_ENTITY`. Remaining: relationship-type and domain-only matching reach search but not resolution; the communication-value read is EMAIL-shaped (see the limitations below); and the database-tier evidence is written but unexecuted |
+| `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Substantially closed, not fully closed** (`RI-ENT-WP-09`) — resolution reads `entity_names` and `entity_communication_methods` by normalized value and corroborates through affiliations and project participations; the three normalized-value indexes that were read by nothing now have their first readers. Two new match reasons and two new contextual signals ship as **unordered categorical** vocabulary per `RULING-M4`, and the domain's "a name alone does not resolve an entity" refusal was decoupled from `_BASIS_ORDER` onto an explicit `_BASES_THAT_NAME_AN_ENTITY`. Remaining: relationship-type and domain-only matching reach search but not resolution; the communication-value read is EMAIL-shaped (see the limitations below); and the database-tier evidence, written unexecuted during authoring, has since been executed by the controlling context -- which found two defects static verification had not; see RI-ENT-WP-09 below |
 | `ENTITY-STATE-001` | High | No canonicalization/review state distinct from lifecycle | Design decision recorded in RI-ENT-WP-01 below (`canonicalization_state_code`, separate 1:1 record, deferred); not implemented this increment |
 | `MCP-CONTRACT-001` | Critical | No rich structured profile read | **Closed by RI-ENT-WP-10** — `entities.profile` publishes one bounded composite over all six Entity-bound record families, and `entities.names.list`, `entities.addresses.list`, `entities.communication.list` and `entities.participations.list` are the keyset pages a caller continues on when a collection overflows the profile's per-collection ceiling. **`entities.context` is unchanged**, because widening the bounded card is classified BREAKING by the audit's own compatibility table and prohibited by `COMPAT-001`; the profile is a new capability beside it, and `RULING-M7`'s three exhaustive key-set assertions now hold "no consumer broke" as a test result rather than as a sentence. Not closed by it: the profile issues no cursor, so an overflowing collection is reported incomplete rather than continued in place, and the four `*_page` SQL bodies have never been executed — see "RI-ENT-WP-10" below |
 | `MCP-CONTRACT-002` | High | No record-family mutation capabilities for the new families | **Closed by RI-ENT-WP-11** — all five Entity-bound record families, three verbs each, every verb an explicit command with named fields and an `idempotency_key`, and every write appending an `entity_mutation_events` row through the new `application/entity_family_writes.py`. RULING 5 holds and is enforced by the generated schema's `"additionalProperties": false` rather than by convention: there is no `entities.profile.save` and there will not be one. **Closed with three disclosures, not silently**: the ledger bridge writes the family row and the ledger row as two statements rather than one, so outside a transaction a family row can be left with no ledger row; `RI-ENT-WP-08`'s caller-supplied `StatedAssertion`/`StatedEvidence` is deliberately not exposed; and every database-tier test proving any of it is committed and has never been executed. See "RI-ENT-WP-11" below |
@@ -144,7 +144,7 @@ Preserved from the source audit; status reflects this increment only.
 | WP-06 | Corporate/entity relationship graph expansion | **Delivered (partial, RI-ENT-WP-06a)** — `entity_relationship_types` taxonomy and the twenty new codes; merge/split coordination for the six WP-02/04/05 record families remains deferred to a separate PR2 |
 | WP-07 | Assertion/confidence/provenance binding | **Delivered (partial)** — `entity_assertions`/`entity_assertion_evidence` (schema, domain, minimal typed persistence helpers, tests); repository/service/command-layer wiring is `WP-08`, MCP exposure is `WP-10`/`WP-11`. No scalar confidence was added under any name (RULING 1) — see below |
 | WP-08 | Repository/domain services and validation | **Delivered (partial)** — seventeen `record_*`/`supersede_*`/`retire_*` methods on `SqlEntityRepository` for the six Entity-bound families, the same seventeen plus RI-ENT-WP-07's six assertion methods declared `@abstractmethod` on `EntitiesRepository`, in-memory equivalents in both test doubles, and the application service `EntityRecordFamilyService` with its own command/receipt DTOs. ~~**The service is deliberately unwired** — no `Capability`, no MCP tool, no HTTP route, no CLI command, and no registration in `ApplicationService`; transport exposure is `WP-10`/`WP-11`.~~ **Withdrawn 2026-09-02: that was true when written and is now false.** `RI-ENT-WP-10` and `RI-ENT-WP-11` are the transport exposure it deferred, and they landed: MCP tools, HTTP routes and CLI commands reach the six families under the `entities.` values those two packages added, twenty in all, and `ApplicationService` registers handlers for every one. What remains true of the original claim is only its narrowest reading: no `Capability` names `EntityRecordFamilyService` *directly*, because `RI-ENT-WP-11`'s handlers reach it through `EntityFamilyWriteService`. See "The boundary — what RI-ENT-WP-08 does NOT deliver" below, where the same claim is withdrawn in full. Not delivered — the same list the boundary section below enumerates in full, and it adds nothing to it: mutation-ledger integration, an idempotency key, proposal-validation integration, a retirement verb for `entity_assertions`, a split of `supersede_assertion`'s single refusal, no `correct_*` and no `retire_*` for the singleton `entity_organization_profiles` (which has the in-place `revise_organization_profile` instead — **five** families carry `correct_*`, not six), and no typed refusal for a correction whose successor collides with a *third* active row, which still surfaces the raw `IntegrityError` the plain `record_*` path surfaces. **The correction of a row holding the preferred slot IS delivered**: an earlier revision of this row called it inexpressible as a supersession and refused it outright, which was wrong — see "A preferred row is correctable, and the ordering that reaches it" below |
-| WP-09 | Entity resolution/search vNext | **Delivered (partial)** — resolution now reads typed names, communication values, affiliations and project participations; `entities.search` matches five further paths and carries two disambiguators (`RI-AC-038`). Not delivered: no supporting index (no migration in scope), no effective dating on search, no MCP capability change (`WP-10`/`WP-11`), and **three committed database-tier modules have never been executed** — see below |
+| WP-09 | Entity resolution/search vNext | **Delivered (partial)** — resolution now reads typed names, communication values, affiliations and project participations; `entities.search` matches five further paths and carries two disambiguators (`RI-AC-038`). Not delivered: no supporting index (no migration in scope), no effective dating on search, no MCP capability change (`WP-10`/`WP-11`), and the **two** committed database-tier modules, unexecuted during authoring, were executed afterwards and found two defects -- a `NameTypeCode` member that never existed (all eleven tests of that module had errored at setup) and a load-bearing search filter held by nothing -- both since corrected; see below |
 | WP-10 | MCP rich read contracts | **Delivered** — `entities.profile` plus four keyset `.list` reads over the record families, all under `Purpose.ENTITY_READ` and in no write register; four `*_page` port methods beside `identifier_page`/`alias_page`; `entities.context` unchanged and held so by `RULING-M7`'s exhaustive key-set assertions. Not delivered: no cursor on the profile, and the four SQL page bodies are unexecuted — see below |
 | WP-11 | MCP mutation contracts | **Delivered** — fifteen mutation contracts across all five Entity-bound record families, every one an explicitly-fielded command with an `idempotency_key`, every write accounted for by an `entity_mutation_events` row written through the new `application/entity_family_writes.py`; `MutationRecordFamily` widened from six to eleven. Not delivered, and disclosed rather than implied: the family write and its ledger row are two statements and not one, `RI-ENT-WP-08`'s `StatedAssertion`/`StatedEvidence` is not exposed, a three-way correction collision still answers `internal_error`, and every database-tier test written for it is committed and unexecuted — see below |
 | WP-12 | Legacy migration/backfill and compatibility adapters | Deferred |
@@ -2433,6 +2433,20 @@ which extends the recorded decision consistently rather than reversing it. It is
 one `WHERE` clause and is reversible without rework if the Manager reads audit
 section M differently.
 
+**The same disclosure test was applied to what search now *adds*, not only to
+what it withholds.** `WP09-DECISION-1` narrows the browse surface; this work
+package also widened it, and both directions were judged under the same
+question. `EntitySummary` now carries current employers and current project
+roles on every browse row, and a query can reach an entity through its
+communication values, job titles, project roles and relationship-type labels.
+That widening was accepted because each collection is bounded at three,
+restricted to `active` rows, and requested by `RI-AC-038` — a superseded
+affiliation offered as a way of telling two people apart would be offering an
+answer that is no longer true. Recorded here so a reader does not conclude that
+WP-09 only narrowed the disclosure envelope: it narrowed it in one place and
+widened it in another, deliberately, and the argument for the second is the
+port docstring's, not an omission.
+
 **The evaluation gate was made non-vacuous, and that was not automatic.**
 `_CorpusRepository` answered every six-family method with `NotImplementedError`
 and the corpus carried no rows for any of them, so a resolver reading a family
@@ -2480,12 +2494,51 @@ nor `resolved_exact:typed_name` is a key in the table.
   names, and a shared mail domain is an employer fact about many people that
   would manufacture candidate crowds on the resolution path.
 - **No `Capability`, MCP tool, route, CLI command, or request-shape change.**
-- **Three database-tier modules are committed and have NEVER been executed** —
-  `tests/database/test_entity_resolution_value_reads.py` and
-  `tests/database/test_entity_search_reaches_context.py` — because the WP-08
-  database gate was running on the same machine for the whole of this work
-  package. They are statically verified only and may need adjustment on first
-  execution. Their figures are collection, not execution.
+- **Two database-tier modules were committed unexecuted, and have since been
+  executed.** `tests/database/test_entity_resolution_value_reads.py` and
+  `tests/database/test_entity_search_reaches_context.py` were written and
+  committed while the WP-08 database gate held the machine, so no WP-09 worker
+  ran them. The controlling context ran them afterwards, and **executing them
+  found two defects that static verification had not**:
+
+  1. `test_entity_resolution_value_reads.py` named `NameTypeCode.TRADING`, a
+     member that has never existed — `NameTypeCode` has exactly nine
+     (`DISPLAY`, `LEGAL`, `OPERATING`, `DBA`, `BRAND`, `ACRONYM`, `ALIAS`,
+     `HISTORICAL_NAME`, `DOCUMENT_REFERENCE`). The module collects exactly 11
+     tests and its `staged` fixture is function-scoped, so **all eleven errored
+     at setup and not one test body had ever executed.** Corrected to
+     `OPERATING` in `f031c40` — chosen for meaning, not greenness: a `DBA` is a
+     *registered* "doing business as" filing, an operating name is what an
+     entity trades under day to day, and the row is a name being withdrawn from
+     service.
+  2. The widened search's active-state filter was **held by nothing**. Its own
+     comment states it is load-bearing ("a retired or superseded name form is a
+     name this entity no longer carries, and serving it to a browse query is
+     the disclosure the alias decision refuses"), yet deleting the line left
+     all nineteen tests in `test_entity_search_reaches_context.py` green.
+     Proved by mutation, closed in `b29340b` by two tests that assert
+     reachability *before* the lifecycle transition as well as after, with the
+     bite proved by re-running the same mutation.
+
+  Both modules are green, and on `ri-ent/wp09-resolution` at `2a0326ea` --
+  the head that sentence was written at and the head it is true of -- the full
+  `database or recovery or e2e` tier was **2008 passed, 0 failed**, measured
+  chunk by chunk and reconciled against a `--collect-only` of 2008/17216.
+  (Corrected there from 1995 / 1995-of-17140, which were true before that
+  branch integrated `origin/main` at `717e1d15`: UI-IMP-WP02 adds a
+  `database`-marked module and three schema tests, so the selection genuinely
+  grew and the earlier pair was false in a sentence that scopes itself "at this
+  head". Re-measured, not adjusted by a delta.) **Neither figure is true of
+  THIS tree, and the sentence said "at this head" while auto-merging into a
+  different one.** It reached this document from `origin/main` at `6db2a203`
+  with no conflict marker anywhere near it -- the exact shape of FINDING-M1 --
+  and was caught by re-measuring rather than by resolving. The selection here
+  collects 2,075 of 18,331 rather than 2,008 of 17,216, because this branch
+  carries RI-ENT-WP-10/11 on top of the same WP-09 commits; the executed figure
+  at this head is recorded in the closeout gate block below, and is the one that
+  governs. These two defects are
+  the same shape as the `correct_affiliation` defect that blocked RI-ENT-WP-08:
+  a documented invariant with nothing holding it, invisible to a green suite.
 
 ### Tiers run for this work package
 
@@ -2493,7 +2546,11 @@ The allowed tiers only: `tests/unit`, `tests/relationship`,
 `tests/architecture` and `tests/contract` under
 `-m "not slow and not database and not network and not connector and not
 evaluation and not e2e and not recovery"`, plus `ruff` and `mypy`. Nothing
-marked `database`, `recovery` or `e2e` was run at any point by any WP-09 worker.
+marked `database`, `recovery` or `e2e` was run at any point by any WP-09
+*worker* — the database gate was held elsewhere for the whole of this work
+package. The controlling context ran the database tier afterwards; see the
+executed-and-corrected note above. This paragraph describes who ran what during
+authoring, not the evidence standing at this head.
 
 ## RI-ENT-WP-10 — MCP rich read contracts
 

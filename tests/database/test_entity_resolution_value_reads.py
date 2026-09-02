@@ -255,11 +255,21 @@ def staged(migrated_engine: Engine) -> Engine:
             # A withdrawn name and a name about to be corrected away. Different
             # `name_type_code`s, so neither collides with the contested LEGAL
             # row under `an_active_entity_name_is_unique_per_entity_and_type`.
+            #
+            # `OPERATING`, not `DBA`, and the distinction is not cosmetic: a
+            # `DBA` is a *registered* "doing business as" filing, while an
+            # operating name is what an entity trades under day to day. A name
+            # being withdrawn from service is the second, and calling it the
+            # first would assert a registration this fixture never made. (This
+            # line read `NameTypeCode.TRADING` until its first execution --
+            # `NameTypeCode` has nine members and has never had that one, so
+            # every test below errored at setup and none of their bodies had
+            # ever run.)
             _name(
                 NAME_THREE,
                 entity_id=ORG_ONE,
                 display_value=WITHDRAWN_NAME,
-                name_type_code=NameTypeCode.TRADING,
+                name_type_code=NameTypeCode.OPERATING,
             ),
             _name(
                 NAME_FOUR,

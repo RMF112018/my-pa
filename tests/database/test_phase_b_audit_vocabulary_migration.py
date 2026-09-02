@@ -60,22 +60,23 @@ DISPOSABLE_DATABASE: Final = "my_pa_phase_b_vocabulary_test"
 #: The current head and the Phase B vocabulary edge this suite removes. Written
 #: out rather than imported so current chain drift and historical identity are
 #: checked independently.
-HEAD_REVISION: Final = "c99cd8ed8d1c"
+HEAD_REVISION: Final = "16f05c46b8c3"
 #: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-08's
 #: blocker-clearing pass, renaming the seeded `entity_relationship_types` row
 #: `design_coordinates_with` to `design_coordination_with`). Named so the chain
 #: assertion below stays a statement about the order rather than about whichever
 #: revision happens to be last.
-SECOND_TO_HEAD_REVISION: Final = "1cda4d536268"
+SECOND_TO_HEAD_REVISION: Final = "c99cd8ed8d1c"
 #: What was head until `SECOND_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-07,
 #: adding entity_assertions/entity_assertion_evidence).
-THIRD_TO_HEAD_REVISION: Final = "9a3f6c1e8d24"
+THIRD_TO_HEAD_REVISION: Final = "1cda4d536268"
 #: What was head until `THIRD_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-06b,
 #: widening the identity-effect family CHECKs).
-FOURTH_TO_HEAD_REVISION: Final = "8dc3619891bb"
-#: What was head until `FOURTH_TO_HEAD_REVISION` stacked on it. Named so the
-#: chain assertion below stays a statement about the order rather than about
-#: whichever revision happens to be last.
+FOURTH_TO_HEAD_REVISION: Final = "9a3f6c1e8d24"
+#: The identity-history revision, several links below `FOURTH_TO_HEAD_REVISION`
+#: rather than immediately beneath it -- the chain assertion below walks the
+#: intervening links by literal. Named so that assertion stays a statement about
+#: the order rather than about whichever revision happens to be last.
 IDENTITY_HISTORY_REVISION: Final = "8e1c4a7b2d90"
 PHASE_B_SCHEMA_REVISION: Final = "3d07af4dc513"
 PHASE_B_REVISION: Final = "b64e29a0f7c1"
@@ -212,23 +213,31 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     script = ScriptDirectory.from_config(_config())
     heads = list(script.get_heads())
     assert heads == [HEAD_REVISION], f"expected exactly {HEAD_REVISION}, found {heads}"
+    # `16f05c46b8c3` (RI-ENT-WP-10/11, widening `audit_events.capability_is_known`
+    # 115 -> 135, `entity_mutation_events.a_mutated_record_family_is_known` 6 -> 11
+    # and `entity_proposals.an_accepted_proposal_record_family_is_known` 6 -> 11
+    # for RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity
+    # mutation contracts, and creating and altering no table) is additive on
     # `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass, renaming the seeded
     # `entity_relationship_types` row `design_coordinates_with` to
-    # `design_coordination_with`) is additive on `1cda4d536268` (RI-ENT-WP-07),
-    # itself additive on `9a3f6c1e8d24` (RI-ENT-WP-06b), itself additive on
-    # `8dc3619891bb` (RI-ENT-WP-06a), itself additive on `17149a48fa30`
-    # (RI-ENT-WP-05), itself additive on `f5b06925857e` (RI-ENT-WP-04), itself
-    # additive on `441b071bf37b` (RI-ENT-WP-03), itself additive on
-    # `7e114f822af2` (RI-ENT-WP-02), itself additive on `b727e870d45e`, which is
-    # additive on `IDENTITY_HISTORY_REVISION` -- one more link than this chain
-    # had before `c99cd8ed8d1c` landed.
+    # `design_coordination_with`), itself additive on `1cda4d536268`
+    # (RI-ENT-WP-07), itself additive on `9a3f6c1e8d24` (RI-ENT-WP-06b), itself
+    # additive on `8dc3619891bb` (RI-ENT-WP-06a), itself additive on
+    # `17149a48fa30` (RI-ENT-WP-05), itself additive on `f5b06925857e`
+    # (RI-ENT-WP-04), itself additive on `441b071bf37b` (RI-ENT-WP-03), itself
+    # additive on `7e114f822af2` (RI-ENT-WP-02), itself additive on
+    # `b727e870d45e`, which is additive on `IDENTITY_HISTORY_REVISION` -- one
+    # more link than this chain had before `16f05c46b8c3` landed, and two more
+    # than before `c99cd8ed8d1c` did.
     assert script.get_revision(HEAD_REVISION).down_revision == SECOND_TO_HEAD_REVISION
     assert script.get_revision(SECOND_TO_HEAD_REVISION).down_revision == THIRD_TO_HEAD_REVISION
     assert script.get_revision(THIRD_TO_HEAD_REVISION).down_revision == FOURTH_TO_HEAD_REVISION
-    assert script.get_revision(FOURTH_TO_HEAD_REVISION).down_revision == "17149a48fa30"
-    # `17149a48fa30` used to be `FOURTH_TO_HEAD_REVISION` itself; naming it
-    # explicitly here keeps this chain covering exactly the links it covered
-    # before the constants above shifted by one.
+    assert script.get_revision(FOURTH_TO_HEAD_REVISION).down_revision == "8dc3619891bb"
+    # `8dc3619891bb` used to be `FOURTH_TO_HEAD_REVISION` itself, and
+    # `17149a48fa30` before that; naming both explicitly here keeps this chain
+    # covering exactly the links it covered before the constants above shifted --
+    # once when `c99cd8ed8d1c` landed, and again when `16f05c46b8c3` did.
+    assert script.get_revision("8dc3619891bb").down_revision == "17149a48fa30"
     assert script.get_revision("17149a48fa30").down_revision == "f5b06925857e"
     assert script.get_revision("441b071bf37b").down_revision == "7e114f822af2"
     assert script.get_revision("7e114f822af2").down_revision == "b727e870d45e"

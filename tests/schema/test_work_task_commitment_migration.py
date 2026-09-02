@@ -40,11 +40,17 @@ PHASE_B = "b64e29a0f7c1"
 PHASE_B_HEAD = "3d07af4dc513"
 GSQS_REVISION = "c4b0a1d9e827"
 PHASE_B_START = "c7a1f04b9e63"
-#: The chain's current head: `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
-#: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
-#: `design_coordination_with`. It stacked on `1cda4d536268` (RI-ENT-WP-07), which was head
-#: before it. Written out rather than derived so chain drift fails here rather than passing.
-HEAD = "c99cd8ed8d1c"
+#: The chain's current head: `16f05c46b8c3` (RI-ENT-WP-10/11), which widens three closed-set
+#: CHECKs -- `audit_events.capability_is_known` (115 -> 135),
+#: `entity_mutation_events.a_mutated_record_family_is_known` (6 -> 11) and
+#: `entity_proposals.an_accepted_proposal_record_family_is_known` (6 -> 11) -- to admit
+#: RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity mutation contracts. It
+#: creates and alters no table. It stacked on `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing
+#: pass), which was head before it and which renames the seeded `entity_relationship_types`
+#: row `design_coordinates_with` to `design_coordination_with`; that in turn stacked on
+#: `1cda4d536268` (RI-ENT-WP-07), head before it. Written out rather than derived so chain
+#: drift fails here rather than passing.
+HEAD = "16f05c46b8c3"
 REVISION_PATH = (
     ROOT
     / "migrations"

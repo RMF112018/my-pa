@@ -37,7 +37,7 @@ original chronological order. It deliberately omitted
 to the RI and MCV plans. The frozen branch at `50f29a0` remains intact.
 
 At pre-ledger commit `e155a823`, the GoodNotes diff from `origin/main` contains
-21 paths. It excludes:
+20 paths. It excludes:
 
 - `docs/plans/mcv-completion-plan.md`;
 - `docs/plans/relationship-intelligence-implementation-plan.md`;

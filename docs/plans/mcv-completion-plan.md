@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and eleven Python modules under `src/my_pa` and four hundred and forty-three test modules —
+Three hundred and eleven Python modules under `src/my_pa` and four hundred and forty-four test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -137,11 +137,52 @@ UI-IMP-WP02 added five source modules and three test modules:
 `tests/database/test_webauthn_auth_persistence.py`,
 `tests/schema/test_webauthn_auth_persistence_migration.py`, and
 `tests/unit/test_webauthn_auth_persistence.py`. 
-Corrected again on 2026-09-02 to **three hundred and eleven and four hundred and forty-one**, when `ri-ent/wp09-resolution` and `origin/main` were merged and NEITHER side's pair was true of the result: this branch had corrected the pair to 306/438 for RI-ENT-WP-09's six test modules, `origin/main` had corrected the same pair to 311/435 for UI-IMP-WP02's five source and three test modules, and both corrections were made from the same baseline. The merged tree carries both sets of modules, so the true pair is neither. **Re-measured on the merged tree by running the two commands above -- never by summing the two deltas**, which is the trap an independent reviewer named when it found this exact conflict before the merge was attempted. `95b16cf` and `34367b4` changed the contents of the WP-08 files without adding a module on either side, so neither moves either figure. The source-module ffive and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
+Corrected again on 2026-09-02 to **three hundred and eleven and four hundred and forty-one**, when `ri-ent/wp09-resolution` and `origin/main` were merged and NEITHER side's pair was true of the result: this branch had corrected the pair to 306/438 for RI-ENT-WP-09's six test modules, `origin/main` had corrected the same pair to 311/435 for UI-IMP-WP02's five source and three test modules, and both corrections were made from the same baseline. The merged tree carries both sets of modules, so the true pair is neither. **Re-measured on the merged tree by running the two commands above -- never by summing the two deltas**, which is the trap an independent reviewer named when it found this exact conflict before the merge was attempted. `95b16cf` and `34367b4` changed the contents of the WP-08 files without adding a module on either side, so neither moves either figure. The pair standing before this correction, three hundred and
+five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
 therefore skips from four hundred and twenty-six to four hundred and
 twenty-nine, because `f4eaa4f` moved the sentence without extending this note,
 and the skipped step is recorded here rather than reconstructed. (The audit basis `main@e773e6f` was fifty-six and twenty-seven; the
-pair recorded against it here was the revalidation's, one basis out.) **"Nothing checks them" was the
+pair recorded against it here was the revalidation's, one basis out.)
+Corrected again on 2026-09-02 at RI-ENT-WP-13 closeout to **three hundred and
+eleven and four hundred and forty-four**: the source figure is unmoved, and the
+test figure moves by exactly one, `tests/architecture/test_a_project_name_is_never_a_global_identity.py`,
+the guard that makes the `project_display_name` boundary mechanical. Re-measured
+by running the two commands above against the tree that carries it, not by
+adding one to the stated pair. The `441` recorded in the entry above is **not**
+superseded and must not be "corrected": it is the pair as it stood at the
+`ri-ent/wp09-resolution`/`origin/main` merge, and it was right for that tree.
+
+**Prose repair, 2026-09-02, RI-ENT-WP-13 closeout (`FINDING-M3`).** The
+sentence beginning "The pair standing before this correction" read "The
+source-module ffive and four hundred and twenty-nine" between `9943aa11` and
+this correction — eleven words gone and two sentences fused.
+
+**Git did not do this, and this record must not say it did.** `9943aa11` is the
+controlling context's own merge commit resolving the RI-ENT-WP-09 count
+conflict, and it resolved that conflict **programmatically, by splitting and
+concatenating the file as a Python string** rather than by editing it. The
+split anchor, `"The source-module f"`, was not unique in the document, so the
+trailing fragment ran straight into the surviving tail. No conflict marker
+survived because none was ever written: the corruption was introduced by the
+resolution, not by the merge. Attributing it to git would teach a future reader
+that merges silently mangle prose; the real lesson is narrower and far more
+actionable — **never resolve a text conflict by string concatenation, and read
+the affected paragraph after any programmatic edit to a document.**
+
+The damage travelled onto `main` at `6db2a203`. The restored wording is
+`717e1d15`'s, the last uncorrupted version, and its figures were re-derived
+rather than trusted: `git ls-tree -r --name-only f4eaa4f` gives three hundred
+and five modules under `src/my_pa` and four hundred and twenty-nine `test_*.py`
+under `tests`. `ri-ent/wp10-11-mcp` reached the identical restoration
+independently during its own base integration, so two contexts converged on the
+same eleven words from the same evidence.
+
+It is recorded at length because **every mechanical check passed over it**: the
+figures around the sentence were all correct, `ruff` and `mypy` do not read
+prose, and the count guards compare a figure to the tree rather than a sentence
+to grammar. It reached `main` through an independent review that PASSED. A
+count guard proves a figure; nothing in this repository proves a sentence, and
+the only thing that could have found this is someone reading it. **"Nothing checks them" was the
 diagnosis and it is now wrong**:
 `../../tests/architecture/test_spelled_counts_match_the_sets_they_name.py` runs
 both commands above, and the revision count and head below, and fails when an

@@ -1,7 +1,15 @@
 # End-to-end operations
 
-> **2026-08-12 local-candidate correction.** The exact remediation candidate is
-> at Alembic head `b4e8d2c7a613` (34 revisions). The older step transcripts
+> **2026-09-02 current-state correction.** The repository chain is at
+> **single head `2c00c9ac64bc`, 87 revisions**. Measured, not carried:
+> `ls migrations/versions/*.py | wc -l` and `ScriptDirectory.get_heads()`.
+>
+> **2026-08-12 local-candidate correction, superseded and kept.** This banner
+> read "The exact remediation candidate is at Alembic head `b4e8d2c7a613` (34
+> revisions)". `b4e8d2c7a613` is still in this chain and is still its 34th
+> revision, so the pair was self-consistent when written; 53 revisions have
+> landed on top of it since and nothing updated the banner, so it had been
+> stating a stale head as current. The older step transcripts
 > below remain historical evidence at their explicitly named heads; do not use
 > their head values as current-state claims. Current blocker closure and
 > validation are recorded in

@@ -2600,7 +2600,7 @@ the test body rather than trusting its name.
 |---|---|---|
 | Principal-scoped composite FK/unique discipline | Proven | `tests/schema/test_entity_names_and_organization_profile_migration.py::test_an_entity_name_cannot_bind_an_entity_of_a_different_principal` and its siblings in the address, participation and affiliation migration suites; reads by `tests/database/test_ri_ent_wp06b_merge_split.py::test_reads_of_the_six_new_families_are_partitioned_by_principal`; structurally by `test_only_the_global_seeded_vocabularies_stand_outside_the_partition` |
 | Server-issued canonical IDs | Proven, gap closed this increment | `tests/unit/test_entity_authoring.py::test_a_create_mints_the_identifier_the_version_and_the_status` covered `entity_id` only; `test_no_record_command_lets_a_caller_choose_the_identifier_of_a_new_row` and `test_each_family_mints_its_new_identifier_under_its_own_registered_kind` now cover the record families |
-| Append-only evidence/mutation/identity ledgers | Proven for the three ledgers that carry the trigger; **open for `entity_assertion_evidence`** | `tests/schema/test_entity_lifecycle_migration.py::test_a_mutation_event_cannot_be_rewritten`, `tests/database/test_identity_correction_ledger.py::test_an_effect_row_cannot_be_updated`. See open item `RI-ENT-WP13-OPEN-1` |
+| Append-only evidence/mutation/identity ledgers | Proven for the three ledgers that carry the trigger — `entity_mutation_events`, `entity_resolution_decisions`, `entity_identity_effects`; **open for BOTH `entity_assertions` and `entity_assertion_evidence`**, neither of which carries a trigger, and the evidence child of which is additionally `ON DELETE CASCADE` | `tests/schema/test_entity_lifecycle_migration.py::test_a_mutation_event_cannot_be_rewritten`, `tests/database/test_identity_correction_ledger.py::test_an_effect_row_cannot_be_updated`. See open item `RI-ENT-WP13-OPEN-1`. Corrected 2026-09-02 at closeout: this cell named only `entity_assertion_evidence` and so understated the gap, which the open item itself has always stated correctly as covering both tables |
 | Archive/end/supersede instead of delete | Proven behaviourally, and now structurally | `tests/database/test_entity_record_family_write_path.py::test_a_supersession_is_non_destructive`; `test_the_published_command_surface_declares_no_way_to_delete_a_record` and `test_no_repository_method_for_these_families_declares_a_delete_path` now prove no delete path is even declared |
 | Operator-only merge/split preview and apply | Proven | `tests/database/test_identity_correction_merge.py::test_a_caller_who_is_not_the_operator_is_denied_both_halves`; `tests/contract/test_capabilities_and_readiness.py::test_the_operator_only_set_is_enrollment_and_governed_identity_correction`; narrowed to the entity plane by `test_merge_and_split_stay_reserved_to_the_operator` |
 | Project-scoped records carry a project entity ID; no cross-project contamination | Proven | `tests/database/test_project_entity_participation_isolation.py::test_inserting_a_participation_never_touches_the_entitys_global_identity` and `tests/schema/test_entity_project_participations_migration.py::test_a_participation_cannot_bind_a_project_of_a_different_principal` |
@@ -2610,6 +2610,55 @@ the test body rather than trusting its name.
 | Merge preview enumerates downstream effects on every new table before apply | Proven for the six Entity-bound families; the assertion plane is a recorded exclusion | `tests/database/test_identity_correction_merge.py::test_a_preview_answers_for_every_family_the_contract_names`; `test_merge_and_split_enumerate_every_entity_bound_record_family` and `test_the_assertion_plane_is_a_recorded_exclusion_from_the_merge_surface`, the latter written so that adding an assertion family to the merge surface reddens and forces this record to be updated with it |
 | Split/undo extended to every new family before it becomes merge-reachable | Proven | the six `*_split_inverts` cases in `tests/database/test_ri_ent_wp06b_merge_split.py`, plus `test_a_name_created_after_the_merge_is_discovered_as_ambiguity` for the post-merge hazard |
 | Strict MCP schemas, purpose/capability authorization, whitelisted mutation fields (RULING 5) | **Deferred, not asserted** | No capability, tool or route exists for these families on this base. `RI-ENT-WP-10`/`RI-ENT-WP-11` own it; RULING 5 remains binding when they land |
+| A project-scoped name is never a global identity, and the reverse | Proven syntactically this increment; the residual is named, not implied | `tests/architecture/test_a_project_name_is_never_a_global_identity.py`. Added at closeout — see below |
+
+### The `project_display_name` boundary, made mechanical this increment
+
+RI-ENT-WP-04 wrote a prohibition into the DDL text of the column itself —
+nothing may write `entity_project_participations.project_display_name` into
+`entities.display_name` or `entities.canonical_name`, and nothing may read
+either of those into it — and called it "the single most important semantic
+boundary in this work package". It was restated in `persistence.tables`, in
+`EntityProjectParticipation`'s docstring, and in the revision's module
+docstring. **All four statements were prose.** Nothing reddened if production
+code violated the rule in either direction. That is `D-81`, the same defect
+class `test_no_revision_derives_a_closed_set_from_an_enum.py` exists because of.
+
+RI-ENT-WP-12's Orchestrator found this and deliberately declined to author the
+guard, on the ground that **a guard written by the context that wants the rule
+relaxed is not evidence**. That reasoning is correct and is preserved here: it
+disqualifies WP-12 and its successors, not the rule. WP-13 owns the security
+matrix, has no backfill in scope, and has no interest in the rule being
+relaxed, so the guard is authored here.
+
+`tests/architecture/test_a_project_name_is_never_a_global_identity.py` states
+three rules at expression and statement granularity — module granularity is
+useless, because `infrastructure/persistence/entity.py` names a global identity
+column thirty-eight times while legitimately owning both participation write
+sites — plus an anti-vacuity rule stated as **equalities** over the write-site
+and read-site populations, so a fourth site cannot be added silently. Each rule
+is paired with a plant that asserts it fires and a negative control that asserts
+it does not fire on the constructs the live surface really uses. Two false
+positives are registered by name and measured rather than matched around: the
+legacy ported `core.daily_brief_change_events.project_display_name`, and the
+CHECK constraint the boundary revision names after the column it constrains.
+
+**This does not close the whole class, and the module says so in its own
+docstring rather than leaving it to be discovered.** It is a syntactic rule: a
+value laundered through a local variable, a `**kwargs` splat, a mapping built
+by a helper, or SQL assembled at runtime from non-constant parts all pass it.
+Closing those needs a reaching-definitions analysis this repository does not
+have. What it does close is the surface as written today, in both directions,
+including the executed-SQL direction an expression rule structurally cannot see
+— which is the direction a bulk backfill would take.
+
+Two corrections to the record this work produced, both worth keeping:
+the prohibition names `entities.display_name` and `entities.canonical_name`,
+**not** the legacy `entity_assignments` table, which carries no name-bearing
+column at all and against which a rule would have quantified over nothing; and
+the persistence write site does not pass `project_display_name` to `values()`
+directly but to a `_bound(...)` helper inside it, so a rule shaped around the
+two constructs the prose names would have walked straight past the real site.
 
 ### Open items this increment found and deliberately did not close
 
@@ -2681,7 +2730,7 @@ against its own disposable database, never the configured one):
 - `.venv/bin/python -m mypy src` (RI-ENT-WP-08)
 - `.venv/bin/python -m ruff check .` / `.venv/bin/python -m ruff format --check .` (RI-ENT-WP-08)
 - `.venv/bin/python -m pytest tests/unit/test_entity_record_family_security_matrix.py -q` (RI-ENT-WP-13)
-- `.venv/bin/python -m pytest tests/database/test_tbr_completeness_fixture.py -q` (RI-ENT-WP-13; database tier, strictly serial across this campaign — **written and committed, NOT executed at this head**: three sibling work packages were active concurrently and the disposable-database names this tier uses are fixed and machine-wide, so the campaign's serialization gate had not cleared. The module was statically cross-checked instead — every table, column and closed-vocabulary literal it writes verified against the migration that admits it, and collection run — and this campaign's own `NameTypeCode.TRADING` episode is why "statically verified" is recorded here as *not* verified)
+- `.venv/bin/python -m pytest tests/database/test_tbr_completeness_fixture.py -q` (RI-ENT-WP-13; database tier, strictly serial across this campaign — **written and committed, then EXECUTED: 14 passed**. Superseded 2026-09-02: this entry read "written and committed, NOT executed at this head", which was true when written and is no longer. The controlling context executed the module once the serialization gate cleared and reported 14 passed, and then did the thing that makes a green fixture worth something — it **mutation-proved** it: removing one seeded name row fails `test_every_material_element_of_the_register_has_a_structured_retrieval_path` on an exact per-vocabulary count mismatch, so the fixture is discriminating and not merely green. The original caveat is preserved because it records a real constraint that governed authoring: three sibling work packages were active concurrently and the disposable-database names this tier uses are fixed and machine-wide, so at authoring time the gate had not cleared and the module was statically cross-checked instead — every table, column and closed-vocabulary literal it writes verified against the migration that admits it, and collection run — with this campaign's own `NameTypeCode.TRADING` episode the reason "statically verified" was recorded then as *not* verified. **This execution was performed by the controlling context, not by the RI-ENT-WP-13 closeout, which held no database gate at any point**)
 - `.venv/bin/python -m pytest tests/relationship/test_relationship_domain.py -q`
 - `.venv/bin/python -m pytest tests/architecture/test_relationship_scoring_surface_is_denied.py -q`
 - `.venv/bin/python -m pytest tests/architecture/ -q`

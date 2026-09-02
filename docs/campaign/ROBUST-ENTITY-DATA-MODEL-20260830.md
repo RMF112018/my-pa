@@ -3218,6 +3218,23 @@ resolves under `.claude/worktrees/...` where `.claude` is in that test's own
 `SKIPPED_DIRECTORIES` -- **passed here**, because this worktree is not under
 `.claude`. 4845 collected, 4845 passed, nothing skipped.
 
+**Three commits land after `3dfa74f9` under `RULING-M12`, and they move two of
+the figures above by one each.** The block stays as measured rather than being
+rewritten, because it is the record of a head that existed; what follows is the
+delta, measured on the later head rather than inferred.
+`tests/contract/test_relationship_intelligence_profiles.py` gained
+`test_every_governed_capability_is_granted_or_deliberately_withheld`, which is
+FAST-eligible and inside the gate-safe set, and binding the implementation
+plan's database-tier cell to `TIER_CLAIM` added one parametrized verification
+test to `tests/architecture`. So `tests/architecture` collects **4846** and the
+FAST selection collects **16247** of 18333, both re-measured; `database or
+recovery or e2e` is **unmoved at 2075**, because neither new test carries a
+marker in that selection, so the 2075-passed result above stands unqualified at
+the later head. `tests/architecture` was re-run green at that head.
+
+Nothing else in the gate moved: no source module, no test module count beyond
+those two tests, no migration, and one Alembic head throughout.
+
 
 ## Test evidence
 

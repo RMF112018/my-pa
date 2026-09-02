@@ -270,6 +270,7 @@ from my_pa.infrastructure.persistence.tables import (
     entity_proposal_evidence_links,
     entity_proposal_review_decisions,
     entity_proposals,
+    entity_relationship_types,
     entity_relationships,
     entity_resolution_decisions,
     extractions,
@@ -293,7 +294,7 @@ _ENTITY_COLUMNS = (
     entities.c.archived_from_status,
 )
 
-#: The prefix the two joined resolution lookups label their child table's
+#: The prefix the four joined resolution lookups label their child table's
 #: columns with.
 #:
 #: `entities`, `entity_external_identifiers` and `entity_aliases` all declare
@@ -318,10 +319,11 @@ def _labelled(column: Column[Any]) -> Label[Any]:
 class _ChildRow:
     """A joined row read as though it held only the child table's columns.
 
-    Both joined resolution lookups select `entities` and one child table at
+    All four joined resolution lookups select `entities` and one child table at
     once, and label the child side; this adapts the labelled row back to the
     attribute names the child row mappers read, so those mappers stay the single
-    definition of what a stored identifier or alias means.
+    definition of what a stored identifier, alias, name form or communication
+    method means.
     """
 
     def __init__(self, row: Row[Any]) -> None:
@@ -585,6 +587,28 @@ class SqlEntityRepository(EntitiesRepository):
             if located is None:
                 raise UnknownScopeError("a search cursor names an entity in this scope")
             after = (located.canonical_name, located.entity_id)
+        # **The two name types the alias decision was written about, derived.**
+        # `WP09-DECISION-1` extends `entity_aliases`' exclusion to the two
+        # `entity_names` types that hold the same thing -- a name somebody no
+        # longer uses. Spelled from the enum rather than as literals so a
+        # renamed member is a compile-time fact rather than a silent widening.
+        withheld_name_types = (NameTypeCode.ALIAS.value, NameTypeCode.HISTORICAL_NAME.value)
+        # **The affiliated organization's own name, as a partition-scoped
+        # derived table.** `entities` is already the outer `FROM`, so a second
+        # read of it inside the correlated subquery has to be a distinct
+        # relation or the correlation binds back to the outer row. It carries
+        # its own `_mine` rather than leaning on the affiliation's composite
+        # foreign key: a partition a reader has to infer from a constraint is a
+        # partition a reader can miss.
+        affiliated_organizations = (
+            select(
+                entities.c.entity_id.label("organization_entity_id"),
+                entities.c.canonical_name.label("organization_canonical_name"),
+                entities.c.display_name.label("organization_display_name"),
+            )
+            .where(_mine(entities, principal_id))
+            .subquery("affiliated_organization")
+        )
         rows = self._connection.execute(
             select(
                 entities.c.entity_id,
@@ -598,6 +622,116 @@ class SqlEntityRepository(EntitiesRepository):
                 or_(
                     entities.c.canonical_name.ilike(pattern, escape="\\"),
                     entities.c.display_name.ilike(pattern, escape="\\"),
+                    # **Typed names, minus the two `WP09-DECISION-1` withholds.**
+                    # Active rows only: a retired or superseded name form is a
+                    # name this entity no longer carries, and serving it to a
+                    # browse query is the disclosure the alias decision refuses.
+                    select(entity_names.c.entity_name_id)
+                    .where(
+                        _mine(entity_names, principal_id),
+                        entity_names.c.entity_id == entities.c.entity_id,
+                        entity_names.c.state == EntityNameState.ACTIVE.value,
+                        entity_names.c.name_type_code.notin_(withheld_name_types),
+                        or_(
+                            entity_names.c.display_value.ilike(pattern, escape="\\"),
+                            entity_names.c.normalized_value.ilike(pattern, escape="\\"),
+                        ),
+                    )
+                    .correlate_except(entity_names)
+                    .exists(),
+                    # **Communication values, which is where domain matching
+                    # comes from.** The match is already a substring `ILIKE`,
+                    # so `acme.test` reaches `alice@acme.test` with no domain
+                    # parser and no second column to keep in step with the
+                    # first.
+                    select(entity_communication_methods.c.communication_method_id)
+                    .where(
+                        _mine(entity_communication_methods, principal_id),
+                        entity_communication_methods.c.entity_id == entities.c.entity_id,
+                        entity_communication_methods.c.state
+                        == EntityCommunicationMethodState.ACTIVE.value,
+                        entity_communication_methods.c.normalized_value.ilike(pattern, escape="\\"),
+                    )
+                    .correlate_except(entity_communication_methods)
+                    .exists(),
+                    # **Affiliations: the job title, and the organization's own
+                    # name.** An outer join, because an affiliation may name no
+                    # organization at all and a job title alone still matches.
+                    select(entity_person_organization_affiliations.c.affiliation_id)
+                    .select_from(
+                        entity_person_organization_affiliations.outerjoin(
+                            affiliated_organizations,
+                            entity_person_organization_affiliations.c.organization_entity_id
+                            == affiliated_organizations.c.organization_entity_id,
+                        )
+                    )
+                    .where(
+                        _mine(entity_person_organization_affiliations, principal_id),
+                        entity_person_organization_affiliations.c.person_entity_id
+                        == entities.c.entity_id,
+                        entity_person_organization_affiliations.c.state
+                        == PersonOrganizationAffiliationState.ACTIVE.value,
+                        or_(
+                            entity_person_organization_affiliations.c.job_title.ilike(
+                                pattern, escape="\\"
+                            ),
+                            affiliated_organizations.c.organization_canonical_name.ilike(
+                                pattern, escape="\\"
+                            ),
+                            affiliated_organizations.c.organization_display_name.ilike(
+                                pattern, escape="\\"
+                            ),
+                        ),
+                    )
+                    .correlate_except(
+                        entity_person_organization_affiliations, affiliated_organizations
+                    )
+                    .exists(),
+                    # **Project roles, for the entity as participant.** The
+                    # project-scoped display name is a fact about this
+                    # participation, never about the entity's identity, and it
+                    # is read here and written nowhere.
+                    select(entity_project_participations.c.participation_id)
+                    .where(
+                        _mine(entity_project_participations, principal_id),
+                        entity_project_participations.c.participant_entity_id
+                        == entities.c.entity_id,
+                        entity_project_participations.c.state
+                        == EntityProjectParticipationState.ACTIVE.value,
+                        or_(
+                            entity_project_participations.c.role_text.ilike(pattern, escape="\\"),
+                            entity_project_participations.c.project_display_name.ilike(
+                                pattern, escape="\\"
+                            ),
+                        ),
+                    )
+                    .correlate_except(entity_project_participations)
+                    .exists(),
+                    # **Relationship-type labels, reached through the edge.**
+                    # `entity_relationship_types` is a global taxonomy with no
+                    # `principal_id` at all, so the partition is imposed on
+                    # `entity_relationships`, which has one. A subquery that
+                    # correlated on `entity_id` alone would reach another
+                    # Principal's edges.
+                    select(entity_relationships.c.relationship_id)
+                    .select_from(
+                        entity_relationships.join(
+                            entity_relationship_types,
+                            entity_relationships.c.relationship_type
+                            == entity_relationship_types.c.relationship_type_code,
+                        )
+                    )
+                    .where(
+                        _mine(entity_relationships, principal_id),
+                        or_(
+                            entity_relationships.c.from_entity_id == entities.c.entity_id,
+                            entity_relationships.c.to_entity_id == entities.c.entity_id,
+                        ),
+                        entity_relationships.c.state == RelationshipState.ACTIVE.value,
+                        entity_relationship_types.c.label.ilike(pattern, escape="\\"),
+                    )
+                    .correlate_except(entity_relationships, entity_relationship_types)
+                    .exists(),
                 ),
                 _optional(entities.c.entity_type == entity_type.value if entity_type else None),
                 _optional(
@@ -609,7 +743,116 @@ class SqlEntityRepository(EntitiesRepository):
             .order_by(entities.c.canonical_name, entities.c.entity_id)
             .limit(limit)
         ).all()
-        return [_row_to_summary(row) for row in rows]
+        page = [_row_to_summary(row) for row in rows]
+        if not page:
+            return page
+        # **Two more statements for the whole page, never one per row
+        # (`RI-AC-038`).** A browse page of fifty must not become fifty-one
+        # round trips, which is the shape of defect a per-row disambiguator
+        # acquires by default. Both reads are keyed by `IN (the page's ids)`,
+        # both carry their own `_mine`, and both are bounded twice over: a
+        # `row_number()` window cuts each entity to `DISAMBIGUATOR_CEILING`
+        # rows so one entity with forty affiliations cannot starve the rest of
+        # the page, and a `LIMIT` over the whole read caps it again in case the
+        # window is ever changed out from under that claim.
+        identifiers = [summary.entity_id for summary in page]
+        ceiling = EntitySummary.DISAMBIGUATOR_CEILING
+        # `entities` under a second name, partition-scoped in its own right:
+        # the organization whose display name a person's row carries is another
+        # row of the same table, and correlating to the outer one would read
+        # the person's own name back.
+        current_organizations = (
+            select(
+                entities.c.entity_id.label("organization_entity_id"),
+                entities.c.display_name.label("organization_display_name"),
+            )
+            .where(_mine(entities, principal_id))
+            .subquery("current_organization")
+        )
+        affiliation_places = (
+            select(
+                entity_person_organization_affiliations.c.person_entity_id.label("subject"),
+                current_organizations.c.organization_display_name.label("value"),
+                func.row_number()
+                .over(
+                    partition_by=entity_person_organization_affiliations.c.person_entity_id,
+                    order_by=(
+                        current_organizations.c.organization_display_name,
+                        entity_person_organization_affiliations.c.affiliation_id,
+                    ),
+                )
+                .label("place"),
+            )
+            .select_from(
+                entity_person_organization_affiliations.join(
+                    current_organizations,
+                    entity_person_organization_affiliations.c.organization_entity_id
+                    == current_organizations.c.organization_entity_id,
+                )
+            )
+            .where(
+                _mine(entity_person_organization_affiliations, principal_id),
+                entity_person_organization_affiliations.c.person_entity_id.in_(identifiers),
+                entity_person_organization_affiliations.c.state
+                == PersonOrganizationAffiliationState.ACTIVE.value,
+            )
+            .subquery("affiliation_place")
+        )
+        affiliated: dict[str, list[str]] = {}
+        for row in self._connection.execute(
+            select(affiliation_places.c.subject, affiliation_places.c.value)
+            .where(affiliation_places.c.place <= ceiling)
+            .order_by(affiliation_places.c.subject, affiliation_places.c.place)
+            .limit(len(identifiers) * ceiling)
+        ).all():
+            affiliated.setdefault(str(row.subject), []).append(str(row.value))
+        participation_places = (
+            select(
+                entity_project_participations.c.participant_entity_id.label("subject"),
+                entity_project_participations.c.project_display_name.label("project"),
+                entity_project_participations.c.role_text.label("role"),
+                func.row_number()
+                .over(
+                    partition_by=entity_project_participations.c.participant_entity_id,
+                    order_by=(
+                        entity_project_participations.c.project_display_name,
+                        entity_project_participations.c.participation_id,
+                    ),
+                )
+                .label("place"),
+            )
+            .where(
+                _mine(entity_project_participations, principal_id),
+                entity_project_participations.c.participant_entity_id.in_(identifiers),
+                entity_project_participations.c.state
+                == EntityProjectParticipationState.ACTIVE.value,
+            )
+            .subquery("participation_place")
+        )
+        engaged: dict[str, list[str]] = {}
+        for row in self._connection.execute(
+            select(
+                participation_places.c.subject,
+                participation_places.c.project,
+                participation_places.c.role,
+            )
+            .where(participation_places.c.place <= ceiling)
+            .order_by(participation_places.c.subject, participation_places.c.place)
+            .limit(len(identifiers) * ceiling)
+        ).all():
+            engaged.setdefault(str(row.subject), []).append(
+                EntitySummary.project_role(
+                    str(row.project), None if row.role is None else str(row.role)
+                )
+            )
+        return [
+            replace(
+                summary,
+                affiliated_organizations=tuple(affiliated.get(summary.entity_id, ())),
+                project_roles=tuple(engaged.get(summary.entity_id, ())),
+            )
+            for summary in page
+        ]
 
     def get(self, principal_id: str, entity_id: str) -> Entity | None:
         validate_identifier(principal_id, IdKind.PRINCIPAL)
@@ -1796,6 +2039,108 @@ class SqlEntityRepository(EntitiesRepository):
             .order_by(entities.c.entity_id)
         ).all()
         return [_row_to_entity(row) for row in rows]
+
+    # --- RI-ENT-WP-09: the two normalized-value reads over record families ----
+    #
+    # `entities_by_alias`' shape rather than `names`'/`communication_methods`',
+    # because the question is theirs: not "what is this entity called" but "who,
+    # if anyone, is called this". They sit here, beside the method whose question
+    # they share, rather than in the six-family by-entity block above.
+
+    def entities_by_typed_name(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityName]]:
+        """Every entity carrying this normalized name form, with the name that matched.
+
+        `entities_by_alias`' statement over `entity_names`: the partition applied
+        to both tables inside the one statement, equality on the already
+        normalized value and never a pattern or a fuzzy match, and the collection
+        read whole, because resolution has to see every claimant of a value
+        before it can say whether that value is contested.
+
+        **One filter `entities_by_alias` does not apply, and it is deliberate
+        rather than an oversight: only `EntityNameState.ACTIVE` rows match.**
+        `entity_names` carries an explicit `active`/`retired`/`superseded`
+        lifecycle that WP-08's correction path drives, and the two non-active
+        states are precisely the two a resolution answer must not be built from.
+        A superseded row holds a value the Principal has already corrected away,
+        so matching it hands back the very spelling the correction replaced; a
+        retired row holds one they withdrew, so matching it hands back something
+        they said to stop using. The state is read off `EntityNameState` rather
+        than spelled as a literal, so the enum stays the single definition of
+        what the column may hold. A later reader who wants this made consistent
+        with `entities_by_alias` should treat that as a decision taken with the
+        alias path's own callers in view, not as a tidy-up of an inconsistency.
+
+        **Effective dating stays out of this repository**, exactly as it does on
+        the alias path: `effective_from`/`effective_to` are judged by the service
+        against the caller's `as_of` (`entity_resolution.py::_is_effective`),
+        which is the only layer that knows that moment, and a row excluded there
+        is disclosed to the caller rather than quietly missing from a read.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        rows = self._connection.execute(
+            select(*_ENTITY_COLUMNS, *(_labelled(column) for column in entity_names.c))
+            .join_from(
+                entities,
+                entity_names,
+                entities.c.entity_id == entity_names.c.entity_id,
+            )
+            .where(
+                _mine(entities, principal_id),
+                _mine(entity_names, principal_id),
+                entity_names.c.normalized_value == normalized_value,
+                entity_names.c.state == EntityNameState.ACTIVE.value,
+            )
+            .order_by(entities.c.entity_id, entity_names.c.entity_name_id)
+        ).all()
+        return [(_row_to_entity(row), _row_to_name(_ChildRow(row))) for row in rows]
+
+    def entities_by_communication_value(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityCommunicationMethod]]:
+        """Every entity carrying this normalized communication value, with the row that matched.
+
+        `entities_by_typed_name`'s statement over
+        `entity_communication_methods`, on every one of its terms: the partition
+        applied to both tables inside the one statement, equality on the already
+        normalized value and never a pattern or a fuzzy match, the collection
+        read whole so no claimant of a contested address can fall off the end of
+        a page, and effective dating left to the service against `as_of`.
+
+        The active-state filter is `entities_by_typed_name`'s too, for the same
+        reason and with the same deliberate divergence from `entities_by_alias`:
+        `entity_communication_methods` carries the same explicit
+        `active`/`retired`/`superseded` lifecycle, driven by the same WP-08
+        correction path, so a superseded row is an address the Principal has
+        already corrected away and a retired one is an address they withdrew.
+        Neither is something a reference should be allowed to match today, and
+        the state is derived from `EntityCommunicationMethodState` rather than
+        spelled out.
+        """
+        validate_identifier(principal_id, IdKind.PRINCIPAL)
+        rows = self._connection.execute(
+            select(
+                *_ENTITY_COLUMNS,
+                *(_labelled(column) for column in entity_communication_methods.c),
+            )
+            .join_from(
+                entities,
+                entity_communication_methods,
+                entities.c.entity_id == entity_communication_methods.c.entity_id,
+            )
+            .where(
+                _mine(entities, principal_id),
+                _mine(entity_communication_methods, principal_id),
+                entity_communication_methods.c.normalized_value == normalized_value,
+                entity_communication_methods.c.state == EntityCommunicationMethodState.ACTIVE.value,
+            )
+            .order_by(
+                entities.c.entity_id,
+                entity_communication_methods.c.communication_method_id,
+            )
+        ).all()
+        return [(_row_to_entity(row), _row_to_communication_method(_ChildRow(row))) for row in rows]
 
     def assignments(
         self,

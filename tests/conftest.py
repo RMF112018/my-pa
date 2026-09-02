@@ -235,6 +235,7 @@ from my_pa.domain.relationship.entity import (
     IdentifierState,
     LegalIdentityStatusCode,
     MergedEndpointError,
+    NameTypeCode,
     OrganizationKindCode,
     PersonOrganizationAffiliation,
     PersonOrganizationAffiliationState,
@@ -3213,6 +3214,90 @@ class _Entities(EntitiesRepository):
                 # enforce.
                 _refuse_unnormalized_name(entity.canonical_name)
         needle = query.casefold()
+
+        def hit(value: str | None) -> bool:
+            """One substring test, on the server's terms.
+
+            `ILIKE '%…%'` with `_contains`' escaping is a literal substring
+            match, so `%` and `_` in a query stay literal here as well: `in` on
+            a casefolded string has no metacharacters to begin with. A `NULL`
+            column (`job_title`, `role_text`) answers no rather than raising,
+            which is what `NULL ILIKE …` does on the server.
+            """
+            return value is not None and needle in value.casefold()
+
+        def matches_context(entity_id: str) -> bool:
+            """The five `RI-ENT-WP-09` match paths `SqlEntityRepository.search` adds.
+
+            Held here for the reason the keyset below is: a fake that matched
+            differently would let a unit test assert a search the server does
+            not perform.
+
+            **One new divergence, stated rather than hidden.** The server
+            matches the relationship type's *label*, which lives in
+            `entity_relationship_types` -- a taxonomy table seeded by migration
+            and held on the server. This `World` has no taxonomy rows at all, so
+            the fake matches the relationship type's *code* instead. The codes
+            and their seeded labels differ in punctuation and case rather than
+            in words (`works_for` against "Works for"), so a one-word query
+            reaches the same edges through both; a query spanning the word
+            boundary does not. `tests/database` is where the label match itself
+            is measured.
+            """
+            names = any(
+                name.entity_id == entity_id
+                and name.principal_id == principal_id
+                and name.state is EntityNameState.ACTIVE
+                # `WP09-DECISION-1`: the two types the recorded alias decision
+                # was written about stay out of a browse result, derived from
+                # the enum rather than spelled as literals.
+                and name.name_type_code not in (NameTypeCode.ALIAS, NameTypeCode.HISTORICAL_NAME)
+                and (hit(name.display_value) or hit(name.normalized_value))
+                for name in self._world.entity_names
+            )
+            methods = any(
+                method.entity_id == entity_id
+                and method.principal_id == principal_id
+                and method.state is EntityCommunicationMethodState.ACTIVE
+                and hit(method.normalized_value)
+                for method in self._world.entity_communication_methods
+            )
+            organization_names = {
+                organization.entity_id: (organization.canonical_name, organization.display_name)
+                for organization in self._world.entities
+                if organization.principal_id == principal_id
+            }
+            affiliations = any(
+                affiliation.person_entity_id == entity_id
+                and affiliation.principal_id == principal_id
+                and affiliation.state is PersonOrganizationAffiliationState.ACTIVE
+                and (
+                    hit(affiliation.job_title)
+                    or any(
+                        hit(value)
+                        for value in organization_names.get(
+                            affiliation.organization_entity_id or "", ()
+                        )
+                    )
+                )
+                for affiliation in self._world.entity_person_organization_affiliations
+            )
+            participations = any(
+                participation.participant_entity_id == entity_id
+                and participation.principal_id == principal_id
+                and participation.state is EntityProjectParticipationState.ACTIVE
+                and (hit(participation.role_text) or hit(participation.project_display_name))
+                for participation in self._world.entity_project_participations
+            )
+            relationships = any(
+                entity_id in (edge.from_entity_id, edge.to_entity_id)
+                and edge.principal_id == principal_id
+                and edge.state is RelationshipState.ACTIVE
+                and hit(edge.relationship_type.value)
+                for edge in self._world.entity_relationships
+            )
+            return names or methods or affiliations or participations or relationships
+
         matched = [
             entity
             for entity in self._world.entities
@@ -3221,6 +3306,7 @@ class _Entities(EntitiesRepository):
             and (
                 needle in entity.canonical_name.casefold()
                 or needle in entity.display_name.casefold()
+                or matches_context(entity.entity_id)
             )
         ]
         matched.sort(key=lambda entity: (entity.canonical_name, entity.entity_id))
@@ -3243,6 +3329,52 @@ class _Entities(EntitiesRepository):
             matched = [
                 entity for entity in matched if (entity.canonical_name, entity.entity_id) > position
             ]
+
+        def affiliated_organizations(entity_id: str) -> tuple[str, ...]:
+            """The current employers, on `SqlEntityRepository.search`'s terms.
+
+            Ordered by the organization's display name then the affiliation
+            identifier and cut at `EntitySummary.DISAMBIGUATOR_CEILING`, which
+            is the same deterministic cut the server's `row_number()` window
+            makes -- a fake that cut differently would let a test assert a
+            browse row the server never renders.
+            """
+            names = {
+                organization.entity_id: organization.display_name
+                for organization in self._world.entities
+                if organization.principal_id == principal_id
+            }
+            found = sorted(
+                (names[affiliation.organization_entity_id], affiliation.affiliation_id)
+                for affiliation in self._world.entity_person_organization_affiliations
+                if affiliation.person_entity_id == entity_id
+                and affiliation.principal_id == principal_id
+                and affiliation.state is PersonOrganizationAffiliationState.ACTIVE
+                and affiliation.organization_entity_id in names
+            )
+            return tuple(name for name, _ in found[: EntitySummary.DISAMBIGUATOR_CEILING])
+
+        def project_roles(entity_id: str) -> tuple[str, ...]:
+            """The current project engagements, cut on the same terms."""
+            found = sorted(
+                (
+                    (
+                        participation.project_display_name,
+                        participation.participation_id,
+                        participation.role_text,
+                    )
+                    for participation in self._world.entity_project_participations
+                    if participation.participant_entity_id == entity_id
+                    and participation.principal_id == principal_id
+                    and participation.state is EntityProjectParticipationState.ACTIVE
+                ),
+                key=lambda item: (item[0], item[1]),
+            )
+            return tuple(
+                EntitySummary.project_role(project, role)
+                for project, _, role in found[: EntitySummary.DISAMBIGUATOR_CEILING]
+            )
+
         return [
             EntitySummary(
                 entity_id=entity.entity_id,
@@ -3250,6 +3382,8 @@ class _Entities(EntitiesRepository):
                 canonical_name=entity.canonical_name,
                 display_name=entity.display_name,
                 status=entity.status,
+                affiliated_organizations=affiliated_organizations(entity.entity_id),
+                project_roles=project_roles(entity.entity_id),
             )
             for entity in matched[:limit]
         ]
@@ -3993,6 +4127,68 @@ class _Entities(EntitiesRepository):
                 if entity.principal_id == principal_id and entity.canonical_name == normalized_value
             ),
             key=lambda entity: entity.entity_id,
+        )
+
+    # --- RI-ENT-WP-09: the two normalized-value reads --------------------
+    #
+    # `entities_by_alias`' question — "who, if anyone, is called this" — asked
+    # of `entity_names` and `entity_communication_methods`. Two properties of
+    # `SqlEntityRepository`'s statements are reproduced here exactly, because
+    # both are properties a resolution answer's safety is decided from, and a
+    # double that answered either more generously than the server would let a
+    # unit test assert a resolution the server never makes:
+    #
+    # * **The active-state filter.** The server restricts each read to
+    #   `EntityNameState.ACTIVE` / `EntityCommunicationMethodState.ACTIVE`, so a
+    #   superseded or retired row is not a claimant of its value. Held here from
+    #   the same enum members rather than a spelled `"active"`, on the terms
+    #   `_transition_alias` and the identifier reads already state. Note this is
+    #   narrower than `names`/`communication_methods`, which read a family *by
+    #   entity* and hand a caller the row's own `state` to judge; a read *by
+    #   value* is asked which rows still make a claim, and a retired one does
+    #   not.
+    # * **Equality on the normalized value.** Never a substring, never
+    #   case-folded again, never fuzzy. `search` is this class's substring
+    #   surface and these are not: resolution asks who *is* this, and for that a
+    #   partial match is evidence of nothing.
+    #
+    # Neither pages, on the port docstrings' own terms — resolution must see
+    # every claimant of a value to decide whether that value is contested, and a
+    # page is the one shape that could let a claimant fall off the end and leave
+    # a genuinely contested value reading as a clean match. Neither takes a
+    # `limit`, so `_refuse_empty_limit` does not apply to them. The entity comes
+    # from `_mine`, the same partition-guarded lookup the other joined reads
+    # use, so a row whose entity is absent or held by another Principal produces
+    # no candidate at all.
+
+    def entities_by_typed_name(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityName]]:
+        self._world.fail("entities.entities_by_typed_name")
+        matched = [
+            (entity, name)
+            for name in self._world.entity_names
+            if name.principal_id == principal_id
+            and name.state is EntityNameState.ACTIVE
+            and name.normalized_value == normalized_value
+            and (entity := self._mine(principal_id, name.entity_id)) is not None
+        ]
+        return sorted(matched, key=lambda pair: (pair[0].entity_id, pair[1].entity_name_id))
+
+    def entities_by_communication_value(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityCommunicationMethod]]:
+        self._world.fail("entities.entities_by_communication_value")
+        matched = [
+            (entity, method)
+            for method in self._world.entity_communication_methods
+            if method.principal_id == principal_id
+            and method.state is EntityCommunicationMethodState.ACTIVE
+            and method.normalized_value == normalized_value
+            and (entity := self._mine(principal_id, method.entity_id)) is not None
+        ]
+        return sorted(
+            matched, key=lambda pair: (pair[0].entity_id, pair[1].communication_method_id)
         )
 
     def assignments(

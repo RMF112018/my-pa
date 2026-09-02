@@ -397,7 +397,7 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
-    # The relationship-intelligence entity plane. Forty-eight `entities.` names
+    # The relationship-intelligence entity plane. Fifty-one `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
     # WP-RI-A-02's twelve, WP-RI-A-03's seven and WP-RI-A-04's three.
@@ -690,6 +690,9 @@ class Capability(StrEnum):
     ENTITIES_COMMUNICATION_ADD = "entities.communication.add"
     ENTITIES_COMMUNICATION_REVISE = "entities.communication.revise"
     ENTITIES_COMMUNICATION_RETIRE = "entities.communication.retire"
+    ENTITIES_PARTICIPATIONS_CREATE = "entities.participations.create"
+    ENTITIES_PARTICIPATIONS_REVISE = "entities.participations.revise"
+    ENTITIES_PARTICIPATIONS_END = "entities.participations.end"
 
     # The Relationship Memory plane: durable, entity-bound knowledge the user
     # meant to keep. **A family of its own rather than an `entities.update`**,
@@ -1124,6 +1127,9 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ENTITIES_COMMUNICATION_ADD: frozenset({Purpose.ENTITY_AUTHORING}),
         Capability.ENTITIES_COMMUNICATION_REVISE: frozenset({Purpose.ENTITY_AUTHORING}),
         Capability.ENTITIES_COMMUNICATION_RETIRE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_PARTICIPATIONS_END: frozenset({Purpose.ENTITY_AUTHORING}),
         # The Relationship Memory pair, and neither is a reuse. `D-91`'s test
         # asks whether reuse would widen the grant, and here it plainly would in
         # both directions: `entity_read` is the identity plane — aliases,
@@ -1262,6 +1268,9 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_COMMUNICATION_ADD,
         Capability.ENTITIES_COMMUNICATION_REVISE,
         Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
     }
 )
 
@@ -1320,6 +1329,7 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_NAMES_ADD,
         Capability.ENTITIES_ADDRESSES_ADD,
         Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
     }
 )
 

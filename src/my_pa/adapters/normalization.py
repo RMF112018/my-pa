@@ -76,6 +76,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
@@ -85,6 +86,7 @@ from my_pa.application.commands import (
     CreateTask,
     DecideReviewCase,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
@@ -157,6 +159,7 @@ from my_pa.application.commands import (
     ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -216,6 +219,10 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifierNamespace,
     IdentifierState,
     NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.governance import (
     ObservationAuthority,
@@ -1237,6 +1244,10 @@ _RECORD_FAMILY_VOCABULARIES: Mapping[str, type[StrEnum]] = MappingProxyType(
         "method_type_code": CommunicationMethodTypeCode,
         "usage_context_code": CommunicationUsageContextCode,
         "verification_status_code": CommunicationVerificationStatusCode,
+        "role_basis_code": RoleBasisCode,
+        "stakeholder_side_code": StakeholderSideCode,
+        "stakeholder_class_code": StakeholderClassCode,
+        "relationship_status_code": ParticipationStatusCode,
     }
 )
 
@@ -1309,6 +1320,18 @@ def _revise_entity_communication_method(payload: Mapping[str, Any]) -> Command:
 
 def _retire_entity_communication_method(payload: Mapping[str, Any]) -> Command:
     return RetireEntityCommunicationMethod(**_record_family_payload(payload))
+
+
+def _create_entity_participation(payload: Mapping[str, Any]) -> Command:
+    return CreateEntityParticipation(**_record_family_payload(payload))
+
+
+def _revise_entity_participation(payload: Mapping[str, Any]) -> Command:
+    return ReviseEntityParticipation(**_record_family_payload(payload))
+
+
+def _end_entity_participation(payload: Mapping[str, Any]) -> Command:
+    return EndEntityParticipation(**_record_family_payload(payload))
 
 
 def _create_entity(payload: Mapping[str, Any]) -> Command:
@@ -1794,6 +1817,9 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_COMMUNICATION_ADD: _add_entity_communication_method,
         Capability.ENTITIES_COMMUNICATION_REVISE: _revise_entity_communication_method,
         Capability.ENTITIES_COMMUNICATION_RETIRE: _retire_entity_communication_method,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: _create_entity_participation,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: _revise_entity_participation,
+        Capability.ENTITIES_PARTICIPATIONS_END: _end_entity_participation,
         Capability.ENTITIES_CREATE: _create_entity,
         Capability.ENTITIES_UPDATE: _update_entity,
         Capability.ENTITIES_ARCHIVE: _archive_entity,
@@ -1838,7 +1864,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a value outside
-    the 118 canonical names refers to nothing.
+    the 121 canonical names refers to nothing.
     """
     try:
         return Capability(capability)

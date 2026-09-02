@@ -69,6 +69,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
@@ -78,6 +79,7 @@ from my_pa.application.commands import (
     CreateTask,
     DecideReviewCase,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
@@ -149,6 +151,7 @@ from my_pa.application.commands import (
     ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -203,6 +206,10 @@ from my_pa.domain.relationship.entity import (
     EntityRelationshipType,
     EntityType,
     NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.governance import (
     ObservationAuthority,
@@ -668,6 +675,33 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             expected_version=1,
             idempotency_key="policy-entity-communication-retire",
         ),
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: CreateEntityParticipation(
+            project_entity_id=issue_identifier(IdKind.ENTITY),
+            participant_entity_id=issue_identifier(IdKind.ENTITY),
+            project_display_name="Synthetic Person on Synthetic Project",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=StakeholderSideCode.DESIGN,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="policy-entity-participations-create",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: ReviseEntityParticipation(
+            participation_id=issue_identifier(IdKind.ENTITY_PROJECT_PARTICIPATION),
+            expected_version=1,
+            project_entity_id=issue_identifier(IdKind.ENTITY),
+            participant_entity_id=issue_identifier(IdKind.ENTITY),
+            project_display_name="Synthetic Person, corrected",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=StakeholderSideCode.DESIGN,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="policy-entity-participations-revise",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_END: EndEntityParticipation(
+            participation_id=issue_identifier(IdKind.ENTITY_PROJECT_PARTICIPATION),
+            expected_version=1,
+            idempotency_key="policy-entity-participations-end",
+        ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,
             display_name="Synthetic Person",
@@ -1101,6 +1135,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_COMMUNICATION_ADD,
         Capability.ENTITIES_COMMUNICATION_REVISE,
         Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its
@@ -1297,6 +1334,9 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_COMMUNICATION_ADD,
         Capability.ENTITIES_COMMUNICATION_REVISE,
         Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its

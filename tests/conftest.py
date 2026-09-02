@@ -7425,7 +7425,7 @@ def build_service(
         # names its own service refuses.
         task_management_unit_of_work=lambda: FakeTaskManagementUnitOfWork(world),
         commitment_management_unit_of_work=lambda: FakeCommitmentManagementUnitOfWork(world),
-        # Enabled by the same default reasoning: the forty-eight `entities.` names are
+        # Enabled by the same default reasoning: the fifty-one `entities.` names are
         # withheld from a build that has not turned the plane on, and a suite
         # that quantifies over `Capability` would be quantifying over names its
         # own service refuses. A test about the *withheld* build passes `False`

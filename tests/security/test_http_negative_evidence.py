@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and eighteen capability names and none of them
+  ends: the transport routes one hundred and twenty-one capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -715,6 +715,33 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "expected_version": 1,
             "idempotency_key": "wire-entity-communication-retire-0001",
         },
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: {
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "Wire Person on Wire Works",
+            "role_basis_code": "source_verified",
+            "stakeholder_side_code": "design",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "wire-entity-participations-create-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: {
+            "participation_id": issue_identifier(IdKind.ENTITY_PROJECT_PARTICIPATION),
+            "expected_version": 1,
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "Wire Person, corrected",
+            "role_basis_code": "contractual",
+            "stakeholder_side_code": "consultant",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "wire-entity-participations-revise-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_END: {
+            "participation_id": issue_identifier(IdKind.ENTITY_PROJECT_PARTICIPATION),
+            "expected_version": 1,
+            "idempotency_key": "wire-entity-participations-end-0001",
+        },
         # A name no staged entity carries, so duplicate resolution admits it.
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
@@ -1290,6 +1317,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_COMMUNICATION_ADD,
         Capability.ENTITIES_COMMUNICATION_REVISE,
         Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_UPDATE,
         Capability.ENTITIES_ARCHIVE,
@@ -1559,6 +1589,30 @@ ENTITY_DIRECTED_EXEMPTION = frozenset(
 #: here.
 PHASE_B_PROPOSAL_EXEMPTION = frozenset({Capability.ENTITIES_PROPOSALS_CREATE})
 
+#: The record-family exemption (`RI-ENT-WP-11`), and it is deliberately the pair
+#: of `create` names, the way `ENTITY_DIRECTED_EXEMPTION` is.
+#: `entities.participations.create` and `entities.affiliations.create` are the
+#: only two of `RI-ENT-WP-11`'s fifteen record-family names the substring proxy
+#: refuses, and they are refused for the reason `capture.create`,
+#: `documents.create`, `relationship_memory.create` and the two directed
+#: `create` names are: a project participation and a person-organization
+#: affiliation are *product-owned* records under `ADR-003` -- the Principal's
+#: own statement about the Principal's own entities -- and writing one mutates
+#: no source. Their rows carry no `source_id`, and the plane reaches no
+#: `SourceProvider` at all.
+#:
+#: An extension of the registry the rule reads and not a relaxation of the rule.
+#: The other thirteen record-family names -- every `add`, `revise`, `retire` and
+#: `end` -- pass the name check unaided, which is the check working rather than
+#: an omission, and a future `entities.participations.delete` is still caught
+#: here. The property the proxy stands for is carried behaviourally for this
+#: plane by the recording-provider sweep, exactly as it is for `capture.*`.
+ENTITY_RECORD_FAMILY_EXEMPTION = frozenset(
+    {
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+    }
+)
+
 
 def test_the_transport_routes_no_mutating_capability() -> None:
     """One route, one method, and no name that mutates a *source*.
@@ -1599,6 +1653,7 @@ def test_the_transport_routes_no_mutating_capability() -> None:
         | ENTITY_AUTHORING_EXEMPTION
         | ENTITY_DIRECTED_EXEMPTION
         | PHASE_B_PROPOSAL_EXEMPTION
+        | ENTITY_RECORD_FAMILY_EXEMPTION
     )
     checked = [c for c in _BUILDERS if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

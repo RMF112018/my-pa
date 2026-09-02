@@ -447,7 +447,7 @@ def test_compose_stamps_idempotency_for_task_create() -> None:
 #: The `entities.` writes whose replay identity is **not** a caller-shaped key,
 #: and so are deliberately outside the sweep below.
 #:
-#: Every one of the twenty-seven keyed writes -- Phase A's eighteen plus
+#: Every one of the thirty keyed writes -- Phase A's eighteen plus
 #: `RI-ENT-WP-11`'s record-family writes -- carries an `idempotency_key` field on
 #: its command, which is what makes membership of
 #: `_IDEMPOTENT_REMOTE_CAPABILITIES` meaningful for it: the set's mechanism is
@@ -507,9 +507,9 @@ def _entity_writes() -> frozenset[Capability]:
 def test_every_entity_write_is_a_server_stamped_idempotent_remote_capability() -> None:
     """The whole write half, derived and compared rather than enumerated twice."""
     writes = _entity_writes()
-    # Twenty-seven after `RI-ENT-WP-11`'s first three record families: Phase A's
+    # Thirty after `RI-ENT-WP-11`'s first four record families: Phase A's
     # eighteen plus three verbs per family, each carrying its own key.
-    assert len(writes) == 27
+    assert len(writes) == 30
     assert writes <= _IDEMPOTENT_REMOTE_CAPABILITIES
     # And the exception is not the rule: every keyless write really does carry a
     # write purpose, so subtracting them narrowed the sweep rather than being a

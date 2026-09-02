@@ -37,9 +37,11 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     GetEntity,
     GetEntityContext,
@@ -70,6 +72,7 @@ from my_pa.application.commands import (
     ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     SearchEntities,
     SplitEntity,
@@ -107,6 +110,10 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.governance import (
     EntityMergeRecord,
@@ -150,6 +157,7 @@ FOREIGN_RELATIONSHIP: Final = "erel_foreign1foreign1"
 FOREIGN_ENTITY_NAME: Final = "enam_foreign1foreign1"
 FOREIGN_ENTITY_ADDRESS: Final = "eadr_foreign1foreign1"
 FOREIGN_COMMUNICATION_METHOD: Final = "ecmm_foreign1foreign"
+FOREIGN_PARTICIPATION: Final = "eppt_foreign1foreign"
 OWN_ENTITY: Final = "ent_mine0002mine00002"
 #: A second entity of my own, so a write of mine that has to name two of them
 #: does not have to borrow one of theirs.
@@ -444,6 +452,42 @@ _EVERY_CAPABILITY: Final = (
         ),
     ),
     (
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        CreateEntityParticipation(
+            project_entity_id=FOREIGN_ENTITY,
+            participant_entity_id=FOREIGN_SCOPE,
+            project_display_name="Confidential Participant",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=StakeholderSideCode.DESIGN,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="privacy-entity-participations-create",
+        ),
+    ),
+    (
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        ReviseEntityParticipation(
+            participation_id=FOREIGN_PARTICIPATION,
+            expected_version=1,
+            project_entity_id=FOREIGN_ENTITY,
+            participant_entity_id=FOREIGN_SCOPE,
+            project_display_name="Confidential Participant, corrected",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=StakeholderSideCode.DESIGN,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="privacy-entity-participations-revise",
+        ),
+    ),
+    (
+        Capability.ENTITIES_PARTICIPATIONS_END,
+        EndEntityParticipation(
+            participation_id=FOREIGN_PARTICIPATION,
+            expected_version=1,
+            idempotency_key="privacy-entity-participations-end",
+        ),
+    ),
+    (
         Capability.ENTITIES_CREATE,
         CreateEntity(
             entity_type=EntityType.PERSON,
@@ -721,10 +765,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    # Forty-eight after `RI-ENT-WP-11`'s first three record families. The count
+    # Fifty-one after `RI-ENT-WP-11`'s first four record families. The count
     # is asserted as well as the set, because a prefix scan that stopped matching
     # would satisfy the equality against an equally empty tuple.
-    assert len(served) == 48
+    assert len(served) == 51
 
 
 # --- the partition, under every capability ---------------------------------

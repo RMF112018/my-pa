@@ -45,7 +45,7 @@ request does too, because `1a4c9e77b2d5` creates the capture tables and widens
 
 ## What the gateway is, and what it does not yet do
 
-`apps/gateway.py` routes the one hundred and eighteen public capabilities over HTTP on
+`apps/gateway.py` routes the one hundred and twenty-one public capabilities over HTTP on
 loopback and, in a default process, serves fifty-five of them.
 One request is one call to `ApplicationService.invoke`, and the response body is
 the envelope that call produced — the transport maps and does not decide.
@@ -53,8 +53,8 @@ the envelope that call produced — the transport maps and does not decide.
 **Corrected 2026-08-19: this line read "serves the fifty-four public
 capabilities", and a default gateway does not.** Three families are composed
 only when their variable is set — the six `documents.` names behind
-`MY_PA_MANAGED_DOCUMENT_ROOT`, the forty-eight `entities.` names behind
-`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` (whose thirty-two writes need
+`MY_PA_MANAGED_DOCUMENT_ROOT`, the fifty-one `entities.` names behind
+`MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED` (whose thirty-five writes need
 `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` as well), and the nine
 `relationship_memory.` names behind `MY_PA_RELATIONSHIP_MEMORY_ENABLED` and the
 entity plane together. None of the four has a default.
@@ -63,7 +63,7 @@ reaches the handler, which refuses with `unsupported` and the transport maps tha
 to **`501`**. This section already discloses the source-root gate below in the
 same detail; it said nothing about these two, which is the omission being
 corrected. `capabilities.get` on such a process reports readiness `degraded` and
-`63 of 118 capabilities are unwired.` rather than `ready`.
+`66 of 121 capabilities are unwired.` rather than `ready`.
 
 **It is bound to `127.0.0.1` and there is no option to bind elsewhere.** That is
 `D-30` and `AGENTS.md` §5: `P00-OD-010` — which authentication mechanism this
@@ -147,7 +147,7 @@ curl -sS -X POST http://127.0.0.1:8765/v1/capabilities.get \
        "payload":{}}'
 ```
 
-**Current-state correction (2026-08-28):** the candidate has **one hundred and eighteen**
+**Current-state correction (2026-08-28):** the candidate has **one hundred and twenty-one**
 capabilities and **eighty-six** Alembic revisions at head `c99cd8ed8d1c`; `c99cd8ed8d1c` is additive on `1cda4d536268` and renames the seeded `entity_relationship_types` row `design_coordinates_with` to `design_coordination_with` (every other column unchanged), closing `EntityRelationshipType` to 35-of-35 parity with the taxonomy table (the WP-08 blocker-clearing rename); `1cda4d536268` is additive on `9a3f6c1e8d24` and adds the `entity_assertions`/`entity_assertion_evidence` tables, binding fact-level `assertion_status` and evidence to six Entity-bound record families (RI-ENT-WP-07, closes `ENTITY-PROVENANCE-001`); `9a3f6c1e8d24` is additive on `8dc3619891bb` and widens the `entity_identity_effects`/`entity_identity_preview_ambiguities`/`entity_identity_ambiguity_settlements` `record_family` CHECKs to admit six new Entity-bound families (RI-ENT-WP-06b); `8dc3619891bb` additive on `17149a48fa30` and adding the `entity_relationship_types` table, re-pointing `entity_relationships.relationship_type` at it by foreign key (RI-ENT-WP-06a); the merged chain admits GSQS at `c4b0a1d9e827` before continuing Phase B at `c7a1f04b9e63`, and the corrective `b727e870d45e` is additive on `8e1c4a7b2d90`, with `7e114f822af2` additive on `b727e870d45e` and adding the `entity_names`/`entity_organization_profiles` tables (RI-ENT-WP-02), `441b071bf37b` additive on `7e114f822af2` and adding the `entity_addresses`/`entity_communication_methods` tables (RI-ENT-WP-03), `f5b06925857e` additive on `441b071bf37b` and adding the `entity_project_participations`/`entity_role_types`/`entity_discipline_types` tables (RI-ENT-WP-04), and `17149a48fa30` additive on `f5b06925857e` and adding the `entity_person_organization_affiliations` table (RI-ENT-WP-05). Revision figure corrected 2026-08-31.
 `capabilities.get` now also returns `worker_planes`; backlog without a live
 heartbeat is `worker_absent`/`worker_stale`, never silently healthy. The dated

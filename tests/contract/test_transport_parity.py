@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and eighteen capabilities. There are two ways to prove that and only one stays
+one hundred and twenty-one capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -28,10 +28,10 @@ command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
 default composition exposes fifty-five: the six managed-document names, the
-forty-eight `entities.` names and the nine Relationship Memory names are
+fifty-one `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
-second switch over the `entities.` family and withholds its thirty-two writes on
+second switch over the `entities.` family and withholds its thirty-five writes on
 its own. Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
@@ -119,6 +119,7 @@ from my_pa.domain.relationship.entity import (
     EntityAlias,
     EntityCommunicationMethod,
     EntityName,
+    EntityProjectParticipation,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
@@ -126,6 +127,10 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
     normalize_address,
     normalize_communication_value,
 )
@@ -474,6 +479,54 @@ def staged_communication_method(
     return communication_method_id
 
 
+def staged_participation(scene: Scene, role_text: str) -> str:
+    """One recorded participation of the staged person on the staged organization.
+
+    `staged_entity_name`'s contract over the participation family, memoized on
+    `role_text` for the same reason the address helper memoizes on the type: the
+    active unique key is on `(project, participant, role_basis, side)`, so two
+    stagings that differ only in the role text would collide, and this helper
+    varies the whole tuple by varying the side along with the text.
+
+    The organization stands in for the project. Nothing on this plane restricts
+    `project_entity_id` to a `PROJECT` entity -- the domain requires only that
+    the two endpoints differ -- so the two staged entities are the two ends.
+    """
+    principal_id = scene.principal.principal_id
+    person, organization = staged_entities(scene)
+    held = next(
+        (
+            row
+            for row in scene.world.entity_project_participations
+            if row.principal_id == principal_id and row.role_text == role_text
+        ),
+        None,
+    )
+    if held is not None:
+        return held.participation_id
+    participation_id = issue_identifier(IdKind.ENTITY_PROJECT_PARTICIPATION)
+    FakeUnitOfWork(scene.world).entities.record_project_participation(
+        principal_id,
+        EntityProjectParticipation(
+            participation_id=participation_id,
+            principal_id=principal_id,
+            project_entity_id=organization.entity_id,
+            participant_entity_id=person.entity_id,
+            project_display_name=f"Parity {role_text}",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=(
+                StakeholderSideCode.CONSULTANT
+                if role_text == "consultant"
+                else StakeholderSideCode.VENDOR
+            ),
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            role_text=role_text,
+        ),
+    )
+    return participation_id
+
+
 def staged_entity_name(scene: Scene, name_type_code: NameTypeCode) -> str:
     """One recorded name the staged person carries, of the stated type.
 
@@ -785,6 +838,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
     revise_channel = staged_communication_method(scene, CommunicationUsageContextCode.CORPORATE)
     retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
+    revise_participation = staged_participation(scene, "consultant")
+    end_participation = staged_participation(scene, "supplier")
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -1186,6 +1241,33 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "communication_method_id": retire_channel,
             "expected_version": 1,
             "idempotency_key": "parity-entity-communication-retire-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: {
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "Parity Person on Parity Works",
+            "role_basis_code": "source_verified",
+            "stakeholder_side_code": "design",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "parity-entity-participations-create-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: {
+            "participation_id": revise_participation,
+            "expected_version": 1,
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "Parity Person, corrected",
+            "role_basis_code": "contractual",
+            "stakeholder_side_code": "consultant",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "parity-entity-participations-revise-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_END: {
+            "participation_id": end_participation,
+            "expected_version": 1,
+            "idempotency_key": "parity-entity-participations-end-0001",
         },
         # A name no staged entity carries, so duplicate resolution admits it.
         # A create naming "Parity Person" would be refused as ambiguous, which
@@ -1607,8 +1689,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and eighteen commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 119, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and twenty-one commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 122, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

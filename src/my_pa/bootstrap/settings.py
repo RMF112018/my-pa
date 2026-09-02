@@ -398,7 +398,7 @@ class Settings(StrictModel):
     goodnotes_tbr_bridge_enabled: bool = False
     #: Process-local gate for the relationship-intelligence entity plane
     #: (WP-RI-05, widened through Phase A). Default off. True composes all
-    #: forty-eight `entities.` names over the acting Principal's own entities
+    #: fifty-one `entities.` names over the acting Principal's own entities
     #: and publishes the sixteen that read; the twenty-three that write need the switch
     #: below as well, so this flag on its own serves a read-only plane. It
     #: enables no source traversal, because none exists. Off by default because
@@ -420,7 +420,7 @@ class Settings(StrictModel):
     #: A switch of its own rather than a reuse of the plane flag, on the argument
     #: `relationship_memory_enabled` makes beside it: the two admit different
     #: things. The plane flag publishes sixteen reads over the acting Principal's own
-    #: entities. This one is a prerequisite for all thirty-two writes that decide
+    #: entities. This one is a prerequisite for all thirty-five writes that decide
     #: who a person is, which external addresses resolve to them, who they report
     #: to, what a source said about them, or stage and apply Phase B governance.
     #: The merge and split preview/apply pairs additionally require the

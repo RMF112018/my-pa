@@ -400,6 +400,9 @@ _ORDINAL_UNITS = (
     "hundred-seventeenth",
     "hundred-eighteenth",
     "hundred-nineteenth",
+    "hundred-twentieth",
+    "hundred-twenty-first",
+    "hundred-twenty-second",
 )
 
 

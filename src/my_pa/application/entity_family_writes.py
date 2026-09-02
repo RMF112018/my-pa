@@ -84,11 +84,14 @@ from my_pa.application.commands import (
     AddEntityAddress,
     AddEntityCommunicationMethod,
     AddEntityName,
+    CreateEntityParticipation,
+    EndEntityParticipation,
     RetireEntityAddress,
     RetireEntityCommunicationMethod,
     RetireEntityName,
     ReviseEntityAddress,
     ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     SupersedeEntityName,
 )
 
@@ -110,6 +113,7 @@ from my_pa.domain.relationship.entity import (
     EntityAddressState,
     EntityCommunicationMethodState,
     EntityNameState,
+    EntityProjectParticipationState,
 )
 from my_pa.domain.relationship.governance import (
     DEFAULT_MUTATION_ACTOR_CLASS,
@@ -748,6 +752,203 @@ class EntityFamilyWriteService:
             actor_class=actor_class,
         )
 
+    # --- entity_project_participations --------------------------------------
+
+    def create_participation(
+        self,
+        repository: EntitiesRepository,
+        command: CreateEntityParticipation,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Record one project participation, or return the receipt this key already has."""
+        payload = _participation_payload(command)
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_PARTICIPATIONS_CREATE.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        recorded = self._families.record_project_participation(
+            repository,
+            record_families.RecordProjectParticipation(
+                project_entity_id=command.project_entity_id,
+                participant_entity_id=command.participant_entity_id,
+                project_display_name=command.project_display_name,
+                role_basis_code=command.role_basis_code,
+                stakeholder_side_code=command.stakeholder_side_code,
+                stakeholder_class_code=command.stakeholder_class_code,
+                relationship_status_code=command.relationship_status_code,
+                role_code=command.role_code,
+                role_text=command.role_text,
+                discipline_code=command.discipline_code,
+                discipline_text=command.discipline_text,
+                scope_text=command.scope_text,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+            ),
+            principal_id=principal_id,
+            at=at,
+            authority=authority,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_PARTICIPATIONS_CREATE,
+            family=MutationRecordFamily.PROJECT_PARTICIPATION,
+            record_id=recorded.record_id,
+            prior_version=None,
+            new_version=1,
+            state=EntityProjectParticipationState.ACTIVE.value,
+            before_state=None,
+            superseded_id=None,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
+    def revise_participation(
+        self,
+        repository: EntitiesRepository,
+        command: ReviseEntityParticipation,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Supersede one project participation with its corrected successor.
+
+        `revise` is the audit's spelling for this family and `supersede` is its
+        spelling for names; the act is the same one, and it is a supersession
+        rather than an edit in both.
+        """
+        payload = {
+            "participation_id": command.participation_id,
+            "expected_version": command.expected_version,
+            **_participation_payload(command),
+        }
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_PARTICIPATIONS_REVISE.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        corrected = self._families.correct_project_participation(
+            repository,
+            record_families.CorrectProjectParticipation(
+                participation_id=command.participation_id,
+                expected_version=command.expected_version,
+                project_entity_id=command.project_entity_id,
+                participant_entity_id=command.participant_entity_id,
+                project_display_name=command.project_display_name,
+                role_basis_code=command.role_basis_code,
+                stakeholder_side_code=command.stakeholder_side_code,
+                stakeholder_class_code=command.stakeholder_class_code,
+                relationship_status_code=command.relationship_status_code,
+                role_code=command.role_code,
+                role_text=command.role_text,
+                discipline_code=command.discipline_code,
+                discipline_text=command.discipline_text,
+                scope_text=command.scope_text,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+            ),
+            principal_id=principal_id,
+            at=at,
+            authority=authority,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_PARTICIPATIONS_REVISE,
+            family=MutationRecordFamily.PROJECT_PARTICIPATION,
+            record_id=corrected.record_id,
+            prior_version=None,
+            new_version=1,
+            state=EntityProjectParticipationState.ACTIVE.value,
+            before_state=_predecessor(corrected.superseded_record_id, command.expected_version),
+            superseded_id=corrected.superseded_record_id,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
+    def end_participation(
+        self,
+        repository: EntitiesRepository,
+        command: EndEntityParticipation,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Withdraw one project participation, keeping the row and its history.
+
+        `end` is the audit's spelling for this family and `retire` is its
+        spelling for the first three; the act is the same one, and the ledger
+        records the same `retired` state for both.
+        """
+        payload = {
+            "participation_id": command.participation_id,
+            "expected_version": command.expected_version,
+        }
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_PARTICIPATIONS_END.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        retired = self._families.retire_project_participation(
+            repository,
+            record_families.RetireProjectParticipation(
+                participation_id=command.participation_id,
+                expected_version=command.expected_version,
+            ),
+            principal_id=principal_id,
+            at=at,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_PARTICIPATIONS_END,
+            family=MutationRecordFamily.PROJECT_PARTICIPATION,
+            record_id=retired.record_id,
+            prior_version=command.expected_version,
+            new_version=command.expected_version + 1,
+            state=EntityProjectParticipationState.RETIRED.value,
+            before_state={"state": EntityProjectParticipationState.ACTIVE.value},
+            superseded_id=None,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
     # --- the ledger row every verb above leaves behind ----------------------
 
     def _account_for(
@@ -882,6 +1083,36 @@ def _communication_payload(
         "verification_status_code": command.verification_status_code.value,
         "linked_external_identifier_id": command.linked_external_identifier_id,
         "is_preferred": command.is_preferred,
+        "effective_from": _moment(command.effective_from),
+        "effective_to": _moment(command.effective_to),
+    }
+
+
+def _participation_payload(
+    command: CreateEntityParticipation | ReviseEntityParticipation,
+) -> dict[str, Any]:
+    """The caller-supplied half of a participation write, in canonical form.
+
+    Shared by the creation and the correction on `_address_payload`'s argument:
+    the two state the same participation, which is why
+    `EntityRecordFamilyService._participation` builds one row for both. The
+    correction's own two fields -- the predecessor it names and the version it
+    asserts -- are added by its caller, so a correction and a creation carrying
+    identical participations still hash differently.
+    """
+    return {
+        "project_entity_id": command.project_entity_id,
+        "participant_entity_id": command.participant_entity_id,
+        "project_display_name": command.project_display_name,
+        "role_basis_code": command.role_basis_code.value,
+        "stakeholder_side_code": command.stakeholder_side_code.value,
+        "stakeholder_class_code": command.stakeholder_class_code.value,
+        "relationship_status_code": command.relationship_status_code.value,
+        "role_code": command.role_code,
+        "role_text": command.role_text,
+        "discipline_code": command.discipline_code,
+        "discipline_text": command.discipline_text,
+        "scope_text": command.scope_text,
         "effective_from": _moment(command.effective_from),
         "effective_to": _moment(command.effective_to),
     }

@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and eighteen capabilities is addressable
+**Reachability.** Every one of the one hundred and twenty-one capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-nineteenth capability added to the domain arrives as
-a failing row instead of as an untested one. Thirteen of the one hundred and eighteen answer a
+written here, so a one-hundred-twenty-second capability added to the domain arrives as
+a failing row instead of as an untested one. Thirteen of the one hundred and twenty-one answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -75,6 +75,7 @@ from tests.contract.test_transport_parity import (
     staged_entity_address,
     staged_entity_name,
     staged_mention,
+    staged_participation,
 )
 from tests.wire import Wire, serve
 
@@ -100,6 +101,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
@@ -109,6 +111,7 @@ from my_pa.application.commands import (
     CreateTask,
     DecideReviewCase,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
@@ -181,6 +184,7 @@ from my_pa.application.commands import (
     ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -239,6 +243,10 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     IdentifierState,
     NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.governance import (
     ObservationAuthority,
@@ -423,6 +431,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
     revise_channel = staged_communication_method(scene, CommunicationUsageContextCode.CORPORATE)
     retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
+    revise_participation = staged_participation(scene, "consultant")
+    end_participation = staged_participation(scene, "supplier")
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -801,6 +811,33 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "expected_version": 1,
             "idempotency_key": "http-entity-communication-retire-0001",
         },
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: {
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "HTTP Person on HTTP Works",
+            "role_basis_code": "source_verified",
+            "stakeholder_side_code": "design",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "http-entity-participations-create-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: {
+            "participation_id": revise_participation,
+            "expected_version": 1,
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "HTTP Person, corrected",
+            "role_basis_code": "contractual",
+            "stakeholder_side_code": "consultant",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "http-entity-participations-revise-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_END: {
+            "participation_id": end_participation,
+            "expected_version": 1,
+            "idempotency_key": "http-entity-participations-end-0001",
+        },
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
             "display_name": "HTTP Newcomer",
@@ -1154,6 +1191,8 @@ def commands_for(
     retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
     revise_channel = staged_communication_method(scene, CommunicationUsageContextCode.CORPORATE)
     retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
+    revise_participation = staged_participation(scene, "consultant")
+    end_participation = staged_participation(scene, "supplier")
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -1505,6 +1544,33 @@ def commands_for(
             communication_method_id=retire_channel,
             expected_version=1,
             idempotency_key="http-entity-communication-retire-0001",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: CreateEntityParticipation(
+            project_entity_id=organization.entity_id,
+            participant_entity_id=person.entity_id,
+            project_display_name="HTTP Person on HTTP Works",
+            role_basis_code=RoleBasisCode.SOURCE_VERIFIED,
+            stakeholder_side_code=StakeholderSideCode.DESIGN,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="http-entity-participations-create-0001",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: ReviseEntityParticipation(
+            participation_id=revise_participation,
+            expected_version=1,
+            project_entity_id=organization.entity_id,
+            participant_entity_id=person.entity_id,
+            project_display_name="HTTP Person, corrected",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=StakeholderSideCode.CONSULTANT,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="http-entity-participations-revise-0001",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_END: EndEntityParticipation(
+            participation_id=end_participation,
+            expected_version=1,
+            idempotency_key="http-entity-participations-end-0001",
         ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,

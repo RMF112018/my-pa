@@ -60,11 +60,14 @@ from my_pa.application.commands import (
     AddEntityAddress,
     AddEntityCommunicationMethod,
     AddEntityName,
+    CreateEntityParticipation,
+    EndEntityParticipation,
     RetireEntityAddress,
     RetireEntityCommunicationMethod,
     RetireEntityName,
     ReviseEntityAddress,
     ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     SupersedeEntityName,
 )
 from my_pa.application.entity_family_writes import EntityFamilyWriteService
@@ -77,9 +80,14 @@ from my_pa.domain.relationship.entity import (
     EntityAddressState,
     EntityCommunicationMethodState,
     EntityNameState,
+    EntityProjectParticipationState,
     EntityStatus,
     EntityType,
     NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
     StaleDirectedVersionError,
 )
 from my_pa.domain.relationship.governance import (
@@ -94,6 +102,7 @@ from my_pa.infrastructure.persistence.tables import (
     entity_communication_methods,
     entity_mutation_events,
     entity_names,
+    entity_project_participations,
 )
 
 pytestmark = pytest.mark.database
@@ -103,6 +112,9 @@ DISPOSABLE_DATABASE: Final = "my_pa_entity_family_write_ledger_test"
 
 PRINCIPAL_A: Final = "prn_aaaa0001aaaa0001aaaa0001"
 PERSON: Final = "ent_aaaa0001aaaa0001"
+#: A second entity of the same Principal, so a participation and an affiliation
+#: have a second endpoint that is not the person themselves.
+PROJECT: Final = "ent_bbbb0002bbbb0002"
 
 WHEN: Final = datetime(2026, 9, 1, 12, tzinfo=UTC)
 LATER: Final = WHEN + timedelta(hours=1)
@@ -150,14 +162,15 @@ def migrated_engine(disposable_database: str) -> Iterator[Engine]:
 
 @pytest.fixture
 def staged(migrated_engine: Engine) -> Engine:
-    """One person, and nothing else.
+    """One person and one project, and nothing else.
 
     Every record-family row these tests read back was written by the service
     under test, which is the property that makes reading one evidence rather
     than a restatement of the fixture.
     """
     with migrated_engine.begin() as connection:
-        SqlEntityRepository(connection).create(
+        repository = SqlEntityRepository(connection)
+        repository.create(
             PRINCIPAL_A,
             Entity(
                 entity_id=PERSON,
@@ -165,6 +178,20 @@ def staged(migrated_engine: Engine) -> Engine:
                 entity_type=EntityType.PERSON,
                 canonical_name=normalize_name("Alice Synthetic"),
                 display_name="Alice Synthetic",
+                status=EntityStatus.ACTIVE,
+                created_at=WHEN,
+                updated_at=WHEN,
+                version=1,
+            ),
+        )
+        repository.create(
+            PRINCIPAL_A,
+            Entity(
+                entity_id=PROJECT,
+                principal_id=PRINCIPAL_A,
+                entity_type=EntityType.PROJECT,
+                canonical_name=normalize_name("Synthetic Tower"),
+                display_name="Synthetic Tower",
                 status=EntityStatus.ACTIVE,
                 created_at=WHEN,
                 updated_at=WHEN,
@@ -973,3 +1000,227 @@ def test_a_stale_channel_version_is_refused_and_leaves_no_ledger_row(
     with staged.connect() as connection:
         assert len(_ledger(connection)) == 1
         assert _channels(connection)[0]["version"] == 1
+
+
+# --- entity_project_participations -------------------------------------------
+
+
+def _participations(connection: Connection) -> list[dict[str, object]]:
+    rows = connection.execute(
+        select(entity_project_participations).where(
+            entity_project_participations.c.principal_id == PRINCIPAL_A
+        )
+    ).all()
+    return [dict(row._mapping) for row in rows]
+
+
+def _create_participation(
+    key: str = "wp11-participations-create-0001",
+    project_display_name: str = "Alice on Synthetic Tower",
+) -> CreateEntityParticipation:
+    return CreateEntityParticipation(
+        project_entity_id=PROJECT,
+        participant_entity_id=PERSON,
+        project_display_name=project_display_name,
+        role_basis_code=RoleBasisCode.CONTRACTUAL,
+        stakeholder_side_code=StakeholderSideCode.DESIGN,
+        stakeholder_class_code=StakeholderClassCode.CORE,
+        relationship_status_code=ParticipationStatusCode.ACTIVE,
+        idempotency_key=key,
+    )
+
+
+def test_a_created_participation_writes_a_ledger_row_naming_its_family(
+    staged: Engine,
+) -> None:
+    """`record_family` is `project_participation`, which the migration has to admit."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        receipt = service.create_participation(
+            SqlEntityRepository(connection),
+            _create_participation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    assert receipt.record_family is MutationRecordFamily.PROJECT_PARTICIPATION
+    assert receipt.version == 1
+    assert receipt.state == EntityProjectParticipationState.ACTIVE.value
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = _participations(connection)
+    assert len(ledger) == 1
+    assert ledger[0]["record_family"] == MutationRecordFamily.PROJECT_PARTICIPATION.value
+    assert ledger[0]["capability"] == "entities.participations.create"
+    assert ledger[0]["record_id"] == receipt.record_id
+    # No project-scoped display name anywhere in the photograph: that is a
+    # recorded value, and this ledger's own docstring forbids one here.
+    assert ledger[0]["after_state"] == {"state": EntityProjectParticipationState.ACTIVE.value}
+    assert len(written) == 1
+    assert written[0]["participation_id"] == receipt.record_id
+
+
+def test_a_participation_retry_with_the_same_key_and_payload_replays(staged: Engine) -> None:
+    """One row, and the second call says it did no work."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        first = service.create_participation(
+            SqlEntityRepository(connection),
+            _create_participation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        second = service.create_participation(
+            SqlEntityRepository(connection),
+            _create_participation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert first.replayed is False
+    assert second.replayed is True
+    assert second.record_id == first.record_id
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert len(_participations(connection)) == 1
+
+
+def test_a_participation_retry_with_a_different_payload_is_refused(staged: Engine) -> None:
+    """Same key, different participation: a conflict rather than a second write."""
+    from my_pa.domain.relationship.entity import DirectedWriteError
+
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        service.create_participation(
+            SqlEntityRepository(connection),
+            _create_participation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with pytest.raises(DirectedWriteError), staged.begin() as connection:
+        service.create_participation(
+            SqlEntityRepository(connection),
+            _create_participation(project_display_name="Alice, on another footing"),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert len(_participations(connection)) == 1
+
+
+def test_a_participation_revision_is_a_supersession_and_not_an_edit(staged: Engine) -> None:
+    """`revise` is this family's spelling of what names call `supersede`."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        created = service.create_participation(
+            SqlEntityRepository(connection),
+            _create_participation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        revised = service.revise_participation(
+            SqlEntityRepository(connection),
+            ReviseEntityParticipation(
+                participation_id=created.record_id,
+                expected_version=1,
+                project_entity_id=PROJECT,
+                participant_entity_id=PERSON,
+                project_display_name="Alice on Synthetic Tower, corrected",
+                role_basis_code=RoleBasisCode.SOURCE_VERIFIED,
+                stakeholder_side_code=StakeholderSideCode.DESIGN,
+                stakeholder_class_code=StakeholderClassCode.CORE,
+                relationship_status_code=ParticipationStatusCode.ACTIVE,
+                idempotency_key="wp11-participations-revise-0001",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert revised.superseded_id == created.record_id
+    assert revised.record_id != created.record_id
+    assert revised.prior_version is None
+    assert revised.version == 1
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = {row["participation_id"]: row for row in _participations(connection)}
+    assert ledger[1]["record_family"] == MutationRecordFamily.PROJECT_PARTICIPATION.value
+    assert ledger[1]["before_state"] == {"record_id": created.record_id, "version": 1}
+    assert written[created.record_id]["state"] == EntityProjectParticipationState.SUPERSEDED.value
+    assert written[created.record_id]["superseded_by_participation_id"] == revised.record_id
+    assert written[revised.record_id]["state"] == EntityProjectParticipationState.ACTIVE.value
+
+
+def test_a_participation_end_advances_the_version_it_names(staged: Engine) -> None:
+    """`version + 1` under the guarded `UPDATE`, read back off the row itself.
+
+    `end` is this family's spelling of what the first three families call
+    `retire`, and the row it leaves says `retired` in both.
+    """
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        created = service.create_participation(
+            SqlEntityRepository(connection),
+            _create_participation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        ended = service.end_participation(
+            SqlEntityRepository(connection),
+            EndEntityParticipation(
+                participation_id=created.record_id,
+                expected_version=1,
+                idempotency_key="wp11-participations-end-0001",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert ended.prior_version == 1
+    assert ended.version == 2
+    assert ended.state == EntityProjectParticipationState.RETIRED.value
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = _participations(connection)
+    assert ledger[1]["prior_version"] == 1
+    assert ledger[1]["new_version"] == 2
+    assert written[0]["state"] == EntityProjectParticipationState.RETIRED.value
+    assert written[0]["version"] == 2
+
+
+def test_a_stale_participation_version_is_refused_and_leaves_no_ledger_row(
+    staged: Engine,
+) -> None:
+    """The write comes first and the ledger second, so a refusal records nothing."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        created = service.create_participation(
+            SqlEntityRepository(connection),
+            _create_participation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with pytest.raises(StaleDirectedVersionError), staged.begin() as connection:
+        service.end_participation(
+            SqlEntityRepository(connection),
+            EndEntityParticipation(
+                participation_id=created.record_id,
+                expected_version=2,
+                idempotency_key="wp11-participations-end-stale",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert _participations(connection)[0]["version"] == 1

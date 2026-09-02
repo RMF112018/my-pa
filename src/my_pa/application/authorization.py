@@ -67,6 +67,7 @@ from my_pa.application.commands import (
     CreateCommitment,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
@@ -76,6 +77,7 @@ from my_pa.application.commands import (
     CreateTask,
     DecideReviewCase,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
@@ -147,6 +149,7 @@ from my_pa.application.commands import (
     ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -398,6 +401,9 @@ def _requested_scope(
             | AddEntityCommunicationMethod()
             | ReviseEntityCommunicationMethod()
             | RetireEntityCommunicationMethod()
+            | CreateEntityParticipation()
+            | ReviseEntityParticipation()
+            | EndEntityParticipation()
             | CreateEntity()
             | UpdateEntity()
             | ArchiveEntity()

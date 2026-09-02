@@ -398,6 +398,19 @@ class SafeDetail(StrEnum):
     USAGE_CONTEXT_CODE = "usage_context_code"
     VERIFICATION_STATUS_CODE = "verification_status_code"
     LINKED_EXTERNAL_IDENTIFIER_ID = "linked_external_identifier_id"
+    PARTICIPATION_ID = "participation_id"
+    PROJECT_ENTITY_ID = "project_entity_id"
+    PARTICIPANT_ENTITY_ID = "participant_entity_id"
+    PROJECT_DISPLAY_NAME = "project_display_name"
+    ROLE_BASIS_CODE = "role_basis_code"
+    STAKEHOLDER_SIDE_CODE = "stakeholder_side_code"
+    STAKEHOLDER_CLASS_CODE = "stakeholder_class_code"
+    RELATIONSHIP_STATUS_CODE = "relationship_status_code"
+    ROLE_CODE = "role_code"
+    ROLE_TEXT = "role_text"
+    DISCIPLINE_CODE = "discipline_code"
+    DISCIPLINE_TEXT = "discipline_text"
+    SCOPE_TEXT = "scope_text"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

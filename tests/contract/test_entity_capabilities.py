@@ -27,9 +27,11 @@ from my_pa.application.commands import (
     BindEntityIdentifier,
     CreateEntity,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     GetEntity,
     GetEntityContext,
@@ -60,6 +62,7 @@ from my_pa.application.commands import (
     ReviseEntityAddress,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     SearchEntities,
     SplitEntity,
@@ -92,7 +95,11 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     NameTypeCode,
+    ParticipationStatusCode,
     RelationshipState,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.governance import (
     EntityObservation,
@@ -124,6 +131,7 @@ RELATIONSHIP = "erel_offswitch1offswitch"
 ENTITY_NAME = "enam_offswitch1offswitc"
 ENTITY_ADDRESS = "eadr_offswitch1offswitc"
 COMMUNICATION_METHOD = "ecmm_offswitch1offswit"
+PARTICIPATION = "eppt_offswitch1offswit"
 WHEN = datetime(2026, 8, 18, 12, tzinfo=UTC)
 
 #: What the one staged memory says. Synthetic and about a working preference, so
@@ -855,6 +863,33 @@ _OFF_SWITCH_COMMANDS: dict[Capability, object] = {
         expected_version=1,
         idempotency_key="off-switch-communication-retire",
     ),
+    Capability.ENTITIES_PARTICIPATIONS_CREATE: CreateEntityParticipation(
+        project_entity_id=TOWER,
+        participant_entity_id=ALICE,
+        project_display_name="Alice Chen on Tower",
+        role_basis_code=RoleBasisCode.CONTRACTUAL,
+        stakeholder_side_code=StakeholderSideCode.DESIGN,
+        stakeholder_class_code=StakeholderClassCode.CORE,
+        relationship_status_code=ParticipationStatusCode.ACTIVE,
+        idempotency_key="off-switch-participations-create",
+    ),
+    Capability.ENTITIES_PARTICIPATIONS_REVISE: ReviseEntityParticipation(
+        participation_id=PARTICIPATION,
+        expected_version=1,
+        project_entity_id=TOWER,
+        participant_entity_id=ALICE,
+        project_display_name="Alice Chen on Tower, corrected",
+        role_basis_code=RoleBasisCode.CONTRACTUAL,
+        stakeholder_side_code=StakeholderSideCode.DESIGN,
+        stakeholder_class_code=StakeholderClassCode.CORE,
+        relationship_status_code=ParticipationStatusCode.ACTIVE,
+        idempotency_key="off-switch-participations-revise",
+    ),
+    Capability.ENTITIES_PARTICIPATIONS_END: EndEntityParticipation(
+        participation_id=PARTICIPATION,
+        expected_version=1,
+        idempotency_key="off-switch-participations-end",
+    ),
     Capability.ENTITIES_CREATE: CreateEntity(
         entity_type=EntityType.PERSON,
         display_name="Alice Chen",
@@ -1031,11 +1066,11 @@ def test_the_off_switch_sweep_covers_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert set(_OFF_SWITCH_COMMANDS) == served
-    # Forty-eight after `RI-ENT-WP-11`'s first three record families: the
+    # Fifty-one after `RI-ENT-WP-11`'s first four record families: the
     # thirty-nine `RI-ENT-WP-10` left plus three write verbs per family. The count is
     # asserted rather than derived for the reason it always was -- it is what
     # tells a reader the prefix scan found the plane and not a substring of it.
-    assert len(served) == 48
+    assert len(served) == 51
 
 
 @pytest.mark.parametrize(

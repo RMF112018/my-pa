@@ -117,6 +117,10 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifierNamespace,
     IdentifierState,
     NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.relationship.governance import (
@@ -4732,6 +4736,89 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 "a link."
             )
         },
+        "participation_id": {
+            "description": (
+                "Opaque identifier of the recorded participation, as returned by "
+                "entities.participations.list or entities.profile."
+            )
+        },
+        "project_entity_id": {
+            "description": (
+                "The project entity this participation is on. A project cannot "
+                "participate in itself, so it must differ from "
+                "participant_entity_id."
+            )
+        },
+        "participant_entity_id": {
+            "description": (
+                "Who or what participates: a person or an organization entity, "
+                "already resolved. Never a name."
+            )
+        },
+        "project_display_name": {
+            "description": (
+                "What this participant is called on THIS project, which may "
+                "differ from the entity's own display name -- a joint-venture "
+                "trading name, or a person credited under a title. It is "
+                "project-scoped fact and is never copied into the entity's own "
+                "identity."
+            )
+        },
+        "role_basis_code": {
+            "description": (
+                "On what footing this participation is asserted, from the closed "
+                "role-basis vocabulary: contractual, source_verified, "
+                "project_observed, inferred or unresolved. A named basis, not a "
+                "graded one."
+            )
+        },
+        "stakeholder_side_code": {
+            "description": (
+                "Which side of the project this participant sits on, from the "
+                "closed stakeholder-side vocabulary."
+            )
+        },
+        "stakeholder_class_code": {
+            "description": (
+                "How this participant relates to the project's own narrative, "
+                "from the closed stakeholder-class vocabulary: core, adjacent, "
+                "transactional or unresolved."
+            )
+        },
+        "relationship_status_code": {
+            "description": (
+                "Where the participation stands, from the closed participation-"
+                "status vocabulary: active, completed, terminated, on_hold or "
+                "unresolved."
+            )
+        },
+        "role_code": {
+            "description": (
+                "Optional taxonomy code for the role, where you have one. It is "
+                "independent of role_text: nothing here derives one from the "
+                "other in either direction."
+            )
+        },
+        "role_text": {
+            "description": (
+                "Optional role in the words a source used. Supply this when you "
+                "have the words and not a code."
+            )
+        },
+        "discipline_code": {
+            "description": (
+                "Optional taxonomy code for the discipline, where you have one. "
+                "Independent of discipline_text, exactly as role_code is of "
+                "role_text."
+            )
+        },
+        "discipline_text": {"description": "Optional discipline in the words a source used."},
+        "scope_text": {
+            "description": (
+                "Optional description of what this participant does on the "
+                "project, in the words a source used."
+            )
+        },
     }
 )
 
@@ -5672,6 +5759,221 @@ class RetireEntityCommunicationMethod:
             self.communication_method_id,
             IdKind.ENTITY_COMMUNICATION_METHOD,
             SafeDetail.COMMUNICATION_METHOD_ID,
+        )
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class CreateEntityParticipation:
+    """`entities.participations.create`: record one participation on one project.
+
+    `project_entity_id` is the project and `participant_entity_id` is who or
+    what participates in it. Both are entities you have already resolved, and
+    they must differ: a project cannot meaningfully participate in itself.
+
+    **`project_display_name` is project-scoped fact and never global identity.**
+    It is what this participant is called on *this* project, which may differ
+    from the entity's own display name. Nothing copies it into the entity's
+    identity, and nothing reads the entity's identity into it.
+
+    `role_code` and `role_text` are independent, and so are `discipline_code`
+    and `discipline_text`: a caller that knows only the words a source used
+    supplies the text and leaves the code absent, and nothing here maps one onto
+    the other in either direction.
+
+    Retrying with the same `idempotency_key` and the same payload returns the
+    original receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PARTICIPATIONS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "project_entity_id",
+        "participant_entity_id",
+        "project_display_name",
+        "role_basis_code",
+        "stakeholder_side_code",
+        "stakeholder_class_code",
+        "relationship_status_code",
+        "idempotency_key",
+        "role_code",
+        "role_text",
+        "discipline_code",
+        "discipline_text",
+        "scope_text",
+        "effective_from",
+        "effective_to",
+    )
+
+    project_entity_id: str
+    participant_entity_id: str
+    project_display_name: str = field(repr=False)
+    role_basis_code: RoleBasisCode
+    stakeholder_side_code: StakeholderSideCode
+    stakeholder_class_code: StakeholderClassCode
+    relationship_status_code: ParticipationStatusCode
+    idempotency_key: str
+    role_code: str | None = None
+    role_text: str | None = field(default=None, repr=False)
+    discipline_code: str | None = None
+    discipline_text: str | None = field(default=None, repr=False)
+    scope_text: str | None = field(default=None, repr=False)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.project_entity_id, IdKind.ENTITY, SafeDetail.PROJECT_ENTITY_ID)
+        _identifier(self.participant_entity_id, IdKind.ENTITY, SafeDetail.PARTICIPANT_ENTITY_ID)
+        _record_text(self.project_display_name, SafeDetail.PROJECT_DISPLAY_NAME)
+        _entity_vocabulary(self.role_basis_code, RoleBasisCode, SafeDetail.ROLE_BASIS_CODE)
+        _entity_vocabulary(
+            self.stakeholder_side_code, StakeholderSideCode, SafeDetail.STAKEHOLDER_SIDE_CODE
+        )
+        _entity_vocabulary(
+            self.stakeholder_class_code, StakeholderClassCode, SafeDetail.STAKEHOLDER_CLASS_CODE
+        )
+        _entity_vocabulary(
+            self.relationship_status_code,
+            ParticipationStatusCode,
+            SafeDetail.RELATIONSHIP_STATUS_CODE,
+        )
+        _idempotency_key(self.idempotency_key)
+        # Each optional part named at its own call site rather than routed
+        # through one helper taking `self`, for the reason the address family
+        # states: a helper that took the command would type-check every field
+        # and be invisible to `test_commands_check_the_type_before_the_content`.
+        _optional_record_text(self.role_code, SafeDetail.ROLE_CODE)
+        _optional_record_text(self.role_text, SafeDetail.ROLE_TEXT)
+        _optional_record_text(self.discipline_code, SafeDetail.DISCIPLINE_CODE)
+        _optional_record_text(self.discipline_text, SafeDetail.DISCIPLINE_TEXT)
+        _optional_record_text(self.scope_text, SafeDetail.SCOPE_TEXT)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseEntityParticipation:
+    """`entities.participations.revise`: replace one participation with a corrected one.
+
+    **A supersession, not an update**, exactly as `entities.names.supersede` is:
+    a new participation row is written and the one named by `participation_id`
+    is marked superseded, pointing at its successor. Nothing is edited in place
+    and nothing is deleted. The word is `revise` here and `supersede` for names
+    because the source audit fixed both names; the act is the same one.
+
+    The successor's content is stated in full rather than read off the
+    predecessor: a field you do not restate is not carried forward, because this
+    write performs no read. `expected_version` is the version a recent
+    `entities.participations.list` returned.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PARTICIPATIONS_REVISE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "participation_id",
+        "expected_version",
+        "project_entity_id",
+        "participant_entity_id",
+        "project_display_name",
+        "role_basis_code",
+        "stakeholder_side_code",
+        "stakeholder_class_code",
+        "relationship_status_code",
+        "idempotency_key",
+        "role_code",
+        "role_text",
+        "discipline_code",
+        "discipline_text",
+        "scope_text",
+        "effective_from",
+        "effective_to",
+    )
+
+    participation_id: str
+    expected_version: int
+    project_entity_id: str
+    participant_entity_id: str
+    project_display_name: str = field(repr=False)
+    role_basis_code: RoleBasisCode
+    stakeholder_side_code: StakeholderSideCode
+    stakeholder_class_code: StakeholderClassCode
+    relationship_status_code: ParticipationStatusCode
+    idempotency_key: str
+    role_code: str | None = None
+    role_text: str | None = field(default=None, repr=False)
+    discipline_code: str | None = None
+    discipline_text: str | None = field(default=None, repr=False)
+    scope_text: str | None = field(default=None, repr=False)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.participation_id,
+            IdKind.ENTITY_PROJECT_PARTICIPATION,
+            SafeDetail.PARTICIPATION_ID,
+        )
+        _expected_version(self.expected_version)
+        _identifier(self.project_entity_id, IdKind.ENTITY, SafeDetail.PROJECT_ENTITY_ID)
+        _identifier(self.participant_entity_id, IdKind.ENTITY, SafeDetail.PARTICIPANT_ENTITY_ID)
+        _record_text(self.project_display_name, SafeDetail.PROJECT_DISPLAY_NAME)
+        _entity_vocabulary(self.role_basis_code, RoleBasisCode, SafeDetail.ROLE_BASIS_CODE)
+        _entity_vocabulary(
+            self.stakeholder_side_code, StakeholderSideCode, SafeDetail.STAKEHOLDER_SIDE_CODE
+        )
+        _entity_vocabulary(
+            self.stakeholder_class_code, StakeholderClassCode, SafeDetail.STAKEHOLDER_CLASS_CODE
+        )
+        _entity_vocabulary(
+            self.relationship_status_code,
+            ParticipationStatusCode,
+            SafeDetail.RELATIONSHIP_STATUS_CODE,
+        )
+        _idempotency_key(self.idempotency_key)
+        # Each optional part named at its own call site rather than routed
+        # through one helper taking `self`, for the reason the address family
+        # states: a helper that took the command would type-check every field
+        # and be invisible to `test_commands_check_the_type_before_the_content`.
+        _optional_record_text(self.role_code, SafeDetail.ROLE_CODE)
+        _optional_record_text(self.role_text, SafeDetail.ROLE_TEXT)
+        _optional_record_text(self.discipline_code, SafeDetail.DISCIPLINE_CODE)
+        _optional_record_text(self.discipline_text, SafeDetail.DISCIPLINE_TEXT)
+        _optional_record_text(self.scope_text, SafeDetail.SCOPE_TEXT)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class EndEntityParticipation:
+    """`entities.participations.end`: withdraw one participation from service.
+
+    The row is kept and its history with it; there is no capability that
+    destroys a recorded participation. The word is `end` here and `retire` for
+    names, addresses and communication methods because the source audit fixed
+    both spellings; the act is the same one.
+
+    Use this when the participation stopped and nothing replaces it; use
+    `entities.participations.revise` when something does.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_PARTICIPATIONS_END
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "participation_id", "expected_version", "idempotency_key"
+    )
+
+    participation_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.participation_id,
+            IdKind.ENTITY_PROJECT_PARTICIPATION,
+            SafeDetail.PARTICIPATION_ID,
         )
         _expected_version(self.expected_version)
         _idempotency_key(self.idempotency_key)
@@ -6816,6 +7118,9 @@ type Command = (
     | AddEntityCommunicationMethod
     | ReviseEntityCommunicationMethod
     | RetireEntityCommunicationMethod
+    | CreateEntityParticipation
+    | ReviseEntityParticipation
+    | EndEntityParticipation
     | CreateEntity
     | UpdateEntity
     | ArchiveEntity

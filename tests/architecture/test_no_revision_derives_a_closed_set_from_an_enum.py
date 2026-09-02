@@ -737,8 +737,12 @@ def _declared_frozen(module: ModuleType) -> dict[str, str]:
 def test_the_chain_is_readable_and_non_empty() -> None:
     """Guards every other test here: an empty chain would make them all vacuous."""
     revisions = list(_revisions())
-    assert len(revisions) == 86
-    assert len({revision for revision, _ in revisions}) == 86
+    # Eighty-seven since `16f05c46b8c3` (RI-ENT-WP-10/11) admitted the twenty new
+    # `entities.` capability names and the five new record families. This is a
+    # derived fact about the tree, corrected by counting it; the deny rule, the
+    # allowlist and the freeze ledger are untouched.
+    assert len(revisions) == 87
+    assert len({revision for revision, _ in revisions}) == 87
     assert {
         "9c6b4a18ed72",
         "1a4c9e77b2d5",

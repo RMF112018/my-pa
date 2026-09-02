@@ -423,7 +423,7 @@ def test_this_revision_is_what_admits_them(migrated_engine: Engine) -> None:
     This is the whole claim, and it is the assertion that binds the revision
     rather than the schema. An equality at head between the stored vocabulary
     and the enums is true either side of a revision that did nothing; what makes
-    `16f05c46b8c3` load-bearing is that removing it takes the twenty capability
+    `16f05c46b8c3` load-bearing is that removing it takes the 20 capability
     names and the five record families with it and leaves everything else
     standing.
 
@@ -468,7 +468,7 @@ def test_the_stored_vocabularies_are_missing_nothing_the_domain_declares(
 ) -> None:
     """Every declared name, driven through the stored CHECKs, one row each.
 
-    This is the control the twenty-name gap needed and did not have. The
+    This is the control the 20-name gap needed and did not have. The
     superset direction is harmless -- the eleven retired `native_sources.*`
     names are stored and are not in `Capability`, and they predate all of this.
     The direction that breaks a request is a name the domain declares and the

@@ -2599,14 +2599,18 @@ the whole point: a key set derived from `_context_card_view` would agree with
 itself after any edit and would prove nothing. "No consumer broke" is now a test
 result rather than a sentence in a report.
 
-**One thing about them is not evidenced and is therefore not claimed.** The
-design specification asked the implementer to prove the new assertion bites by
-temporarily adding a key to `_context_card_view`, watching it redden, and
-removing it. Neither the tree nor the commit that landed the assertions records
-that demonstration, so this document does not assert it happened. The
-assertions' *shape* is checkable by reading them — an ordered list compared with
-`==`, and two set comparisons — and that is the whole of what is being claimed
-here.
+**The assertion was proved to bite, and here is what was done.** The
+implementing worker left no record of the demonstration the design specification
+asked for, so the Orchestrator performed it directly at head `7ffe8218`: a
+thirteenth key, `zz_probe_key`, was planted on `_context_card_view`, and
+`test_the_context_card_publishes_exactly_twelve_keys` failed immediately —
+`AssertionError: assert ['zz_probe_ke...tations', ...] == ['entity', 'a...`, at
+`tests/contract/test_entity_capabilities.py:522`. The plant was then reverted
+and the working tree confirmed byte-identical to the commit
+(tree `46ae09a518dc2e4f6e5c6f320f2a90899c7dbb1d` before and after), with the
+same test passing again. So the claim that a field added to the context card
+now reddens the suite is a measured result, not a reading of the assertion's
+shape.
 
 ### `RULING-M3` — the audit's own field names were not transcribed
 
@@ -3035,12 +3039,22 @@ unexecuted, as recorded above.
 Two guard diffs from `516f9e0` are **empty**, and were checked rather than
 assumed: `AGENTS.md`, which no worker on either package may amend, and
 `tests/architecture/test_relationship_scoring_surface_is_denied.py`.
-`tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py` has
-zero lines changed. Anti-laundering, across both packages: **0** skips, **0**
-xfails, **0** `noqa` added, **0** tests deleted, and **15** `type: ignore`
-comments added — all of them `[index]` or `[arg-type]` on JSON-response
-subscripts in test files, which is the pre-existing idiom in those files, and
-none of them suppressing an assertion.
+`tests/architecture/test_no_revision_derives_a_closed_set_from_an_enum.py` is
+**not** unchanged, and the exception is disclosed rather than buried: its
+`test_the_chain_is_readable_and_non_empty` counted eighty-six revisions and the
+chain now holds eighty-seven, so the Orchestrator corrected that count in
+`d58f1309` (+6/-2, the extra lines being the comment explaining why). It is a
+derived fact about the tree corrected by measuring it (`RULING-M2`), in the
+module's non-vacuity guard; the rule this module exists to enforce is untouched,
+and `DENIED`, `ALLOWED` and `FROZEN` are byte-identical to `516f9e0`.
+
+Anti-laundering, across both packages: **0** skips, **0** xfails, **0** tests
+deleted, **3** `noqa` added and **16** `type: ignore` comments added. Every
+`noqa` is `S608` on an f-string `INSERT` inside the unexecuted migration-test
+module, which is the pre-existing idiom for test SQL in this repository; every
+`type: ignore` is `[index]` or `[arg-type]` on a JSON-response subscript in a
+test file, which is the pre-existing idiom in those files. None of the nineteen
+suppresses an assertion.
 
 The sets these packages moved, measured rather than computed: `Capability`
 104 → **124**; `entities.` names 34 → **54**; `Purpose` 34, **unchanged**;

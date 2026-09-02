@@ -2597,9 +2597,16 @@ Three exhaustive assertions were therefore **added**:
 They are **written out rather than derived from the view functions**, which is
 the whole point: a key set derived from `_context_card_view` would agree with
 itself after any edit and would prove nothing. "No consumer broke" is now a test
-result. The assertion was proved to bite before it was relied on — a key was
-temporarily added to `_context_card_view`, the new assertion reddened, and the
-key was removed.
+result rather than a sentence in a report.
+
+**One thing about them is not evidenced and is therefore not claimed.** The
+design specification asked the implementer to prove the new assertion bites by
+temporarily adding a key to `_context_card_view`, watching it redden, and
+removing it. Neither the tree nor the commit that landed the assertions records
+that demonstration, so this document does not assert it happened. The
+assertions' *shape* is checkable by reading them — an ordered list compared with
+`==`, and two set comparisons — and that is the whole of what is being claimed
+here.
 
 ### `RULING-M3` — the audit's own field names were not transcribed
 

@@ -315,6 +315,36 @@ CAPABILITIES_ADDED_AFTER_THE_CAPTURE_REVISION: Final[frozenset[str]] = frozenset
         # that admits the pair on `capability_is_known`.
         "gsqs.start",
         "gsqs.status",
+        # `RI-ENT-WP-10`'s five paged entity reads and `RI-ENT-WP-11`'s fifteen
+        # entity mutation contracts. `16f05c46b8c3` is the forward `ALTER` that
+        # admits all twenty, and it is one revision for two work packages for
+        # the reason `823e23b6cc63` was one for three. This literal was left at
+        # its pre-`RI-ENT-WP-10/11` membership when those twenty names were
+        # declared, which is the whole of what the delta assertion below caught:
+        # the stored vocabulary and the domain agreed at one hundred and
+        # thirty-five, and only this hand-maintained delta still said one
+        # hundred and three. The twenty below were read off the difference
+        # rather than transcribed from the work packages' own lists.
+        "entities.profile",
+        "entities.names.add",
+        "entities.names.list",
+        "entities.names.retire",
+        "entities.names.supersede",
+        "entities.addresses.add",
+        "entities.addresses.list",
+        "entities.addresses.retire",
+        "entities.addresses.revise",
+        "entities.communication.add",
+        "entities.communication.list",
+        "entities.communication.retire",
+        "entities.communication.revise",
+        "entities.participations.create",
+        "entities.participations.end",
+        "entities.participations.list",
+        "entities.participations.revise",
+        "entities.affiliations.create",
+        "entities.affiliations.end",
+        "entities.affiliations.revise",
     }
 )
 

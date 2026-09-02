@@ -31,6 +31,7 @@ from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 from my_pa.application.commands import (
     AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
     AddEntityName,
     ArchiveEntity,
     BindEntityIdentifier,
@@ -63,10 +64,12 @@ from my_pa.application.commands import (
     RestoreEntity,
     RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
     ReviseEntityAddress,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
     ReviseEntityRelationship,
     SearchEntities,
     SplitEntity,
@@ -93,6 +96,8 @@ from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     Entity,
     EntityAlias,
     EntityRelationship,
@@ -144,6 +149,7 @@ FOREIGN_RELATIONSHIP: Final = "erel_foreign1foreign1"
 #: less than a refusal for a row that exists and is not mine.
 FOREIGN_ENTITY_NAME: Final = "enam_foreign1foreign1"
 FOREIGN_ENTITY_ADDRESS: Final = "eadr_foreign1foreign1"
+FOREIGN_COMMUNICATION_METHOD: Final = "ecmm_foreign1foreign"
 OWN_ENTITY: Final = "ent_mine0002mine00002"
 #: A second entity of my own, so a write of mine that has to name two of them
 #: does not have to borrow one of theirs.
@@ -405,6 +411,36 @@ _EVERY_CAPABILITY: Final = (
             entity_address_id=FOREIGN_ENTITY_ADDRESS,
             expected_version=1,
             idempotency_key="privacy-entity-addresses-retire",
+        ),
+    ),
+    (
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        AddEntityCommunicationMethod(
+            entity_id=FOREIGN_ENTITY,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="confidential@example.test",
+            idempotency_key="privacy-entity-communication-add",
+        ),
+    ),
+    (
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        ReviseEntityCommunicationMethod(
+            communication_method_id=FOREIGN_COMMUNICATION_METHOD,
+            expected_version=1,
+            entity_id=FOREIGN_ENTITY,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="confidential.corrected@example.test",
+            idempotency_key="privacy-entity-communication-revise",
+        ),
+    ),
+    (
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
+        RetireEntityCommunicationMethod(
+            communication_method_id=FOREIGN_COMMUNICATION_METHOD,
+            expected_version=1,
+            idempotency_key="privacy-entity-communication-retire",
         ),
     ),
     (
@@ -685,10 +721,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    # Forty-five after `RI-ENT-WP-11`'s first two record families. The count is
-    # asserted as well as the set, because a prefix scan that stopped matching
+    # Forty-eight after `RI-ENT-WP-11`'s first three record families. The count
+    # is asserted as well as the set, because a prefix scan that stopped matching
     # would satisfy the equality against an equally empty tuple.
-    assert len(served) == 45
+    assert len(served) == 48
 
 
 # --- the partition, under every capability ---------------------------------

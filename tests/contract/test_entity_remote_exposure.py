@@ -167,6 +167,9 @@ def test_the_names_this_file_is_about_are_the_family() -> None:
         "entities.addresses.add",
         "entities.addresses.revise",
         "entities.addresses.retire",
+        "entities.communication.add",
+        "entities.communication.revise",
+        "entities.communication.retire",
     }
     assert ENTITY_READS | ENTITY_WRITES == ENTITY_CAPABILITIES
 

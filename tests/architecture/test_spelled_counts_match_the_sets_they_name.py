@@ -397,6 +397,9 @@ _ORDINAL_UNITS = (
     "hundred-fourteenth",
     "hundred-fifteenth",
     "hundred-sixteenth",
+    "hundred-seventeenth",
+    "hundred-eighteenth",
+    "hundred-nineteenth",
 )
 
 

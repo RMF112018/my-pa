@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and fifteen capabilities is addressable
+**Reachability.** Every one of the one hundred and eighteen capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-sixteenth capability added to the domain arrives as
-a failing row instead of as an untested one. Thirteen of the one hundred and fifteen answer a
+written here, so a one-hundred-nineteenth capability added to the domain arrives as
+a failing row instead of as an untested one. Thirteen of the one hundred and eighteen answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -69,6 +69,7 @@ from tests.contract.test_transport_parity import (
     staged_archived_entity,
     staged_assignment,
     staged_child_records,
+    staged_communication_method,
     staged_edge,
     staged_entities,
     staged_entity_address,
@@ -83,6 +84,7 @@ from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
     AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
     AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
@@ -171,12 +173,14 @@ from my_pa.application.commands import (
     RestoreRelationshipMemory,
     RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -228,6 +232,8 @@ from my_pa.domain.relationship.entity import (
     AliasState,
     AliasType,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
@@ -415,6 +421,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
     revise_address = staged_entity_address(scene, AddressTypeCode.BUSINESS)
     retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
+    revise_channel = staged_communication_method(scene, CommunicationUsageContextCode.CORPORATE)
+    retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -772,6 +780,27 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "expected_version": 1,
             "idempotency_key": "http-entity-addresses-retire-0001",
         },
+        Capability.ENTITIES_COMMUNICATION_ADD: {
+            "entity_id": person.entity_id,
+            "method_type_code": "email",
+            "usage_context_code": "personal",
+            "display_value": "http.personal@example.test",
+            "idempotency_key": "http-entity-communication-add-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_REVISE: {
+            "communication_method_id": revise_channel,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "method_type_code": "email",
+            "usage_context_code": "corporate",
+            "display_value": "http.corrected@example.test",
+            "idempotency_key": "http-entity-communication-revise-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_RETIRE: {
+            "communication_method_id": retire_channel,
+            "expected_version": 1,
+            "idempotency_key": "http-entity-communication-retire-0001",
+        },
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
             "display_name": "HTTP Newcomer",
@@ -1123,6 +1152,8 @@ def commands_for(
     retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
     revise_address = staged_entity_address(scene, AddressTypeCode.BUSINESS)
     retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
+    revise_channel = staged_communication_method(scene, CommunicationUsageContextCode.CORPORATE)
+    retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -1453,6 +1484,27 @@ def commands_for(
             entity_address_id=retire_address,
             expected_version=1,
             idempotency_key="http-entity-addresses-retire-0001",
+        ),
+        Capability.ENTITIES_COMMUNICATION_ADD: AddEntityCommunicationMethod(
+            entity_id=person.entity_id,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.PERSONAL,
+            display_value="http.personal@example.test",
+            idempotency_key="http-entity-communication-add-0001",
+        ),
+        Capability.ENTITIES_COMMUNICATION_REVISE: ReviseEntityCommunicationMethod(
+            communication_method_id=revise_channel,
+            expected_version=1,
+            entity_id=person.entity_id,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="http.corrected@example.test",
+            idempotency_key="http-entity-communication-revise-0001",
+        ),
+        Capability.ENTITIES_COMMUNICATION_RETIRE: RetireEntityCommunicationMethod(
+            communication_method_id=retire_channel,
+            expected_version=1,
+            idempotency_key="http-entity-communication-retire-0001",
         ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,

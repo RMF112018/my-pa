@@ -53,6 +53,7 @@ from tests.conftest import (
 from my_pa.application.commands import (
     AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
     AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
@@ -140,12 +141,14 @@ from my_pa.application.commands import (
     RestoreRelationshipMemory,
     RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -195,6 +198,8 @@ from my_pa.domain.relationship.entity import (
     AddressTypeCode,
     AliasType,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     EntityRelationshipType,
     EntityType,
     NameTypeCode,
@@ -642,6 +647,27 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             expected_version=1,
             idempotency_key="policy-entity-addresses-retire",
         ),
+        Capability.ENTITIES_COMMUNICATION_ADD: AddEntityCommunicationMethod(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="policy.synthetic@example.test",
+            idempotency_key="policy-entity-communication-add",
+        ),
+        Capability.ENTITIES_COMMUNICATION_REVISE: ReviseEntityCommunicationMethod(
+            communication_method_id=issue_identifier(IdKind.ENTITY_COMMUNICATION_METHOD),
+            expected_version=1,
+            entity_id=issue_identifier(IdKind.ENTITY),
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="policy.corrected@example.test",
+            idempotency_key="policy-entity-communication-revise",
+        ),
+        Capability.ENTITIES_COMMUNICATION_RETIRE: RetireEntityCommunicationMethod(
+            communication_method_id=issue_identifier(IdKind.ENTITY_COMMUNICATION_METHOD),
+            expected_version=1,
+            idempotency_key="policy-entity-communication-retire",
+        ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,
             display_name="Synthetic Person",
@@ -1072,6 +1098,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_ADDRESSES_ADD,
         Capability.ENTITIES_ADDRESSES_REVISE,
         Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its
@@ -1265,6 +1294,9 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_ADDRESSES_ADD,
         Capability.ENTITIES_ADDRESSES_REVISE,
         Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its

@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and fifteen capabilities. There are two ways to prove that and only one stays
+one hundred and eighteen capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -28,10 +28,10 @@ command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
 default composition exposes fifty-five: the six managed-document names, the
-forty-five `entities.` names and the nine Relationship Memory names are
+forty-eight `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
-second switch over the `entities.` family and withholds its twenty-nine writes on
+second switch over the `entities.` family and withholds its thirty-two writes on
 its own. Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
@@ -112,9 +112,12 @@ from my_pa.domain.relationship.entity import (
     AliasType,
     Assignment,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     Entity,
     EntityAddress,
     EntityAlias,
+    EntityCommunicationMethod,
     EntityName,
     EntityRelationship,
     EntityRelationshipType,
@@ -124,6 +127,7 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifierNamespace,
     NameTypeCode,
     normalize_address,
+    normalize_communication_value,
 )
 from my_pa.domain.relationship.governance import (
     EntityObservation,
@@ -426,6 +430,48 @@ def staged_entity_address(scene: Scene, address_type_code: AddressTypeCode) -> s
         ),
     )
     return entity_address_id
+
+
+def staged_communication_method(
+    scene: Scene, usage_context_code: CommunicationUsageContextCode
+) -> str:
+    """One recorded contact channel the staged person carries, in the stated context.
+
+    `staged_entity_name`'s contract over the communication family, memoized on
+    the usage context rather than the method type: the active unique keys on
+    `(entity, type, normalized_value)`, and every staging here is an `EMAIL`, so
+    the context is what makes two stagings two rows and one staging one row.
+    """
+    principal_id = scene.principal.principal_id
+    person, _ = staged_entities(scene)
+    held = next(
+        (
+            method
+            for method in scene.world.entity_communication_methods
+            if method.principal_id == principal_id
+            and method.usage_context_code is usage_context_code
+        ),
+        None,
+    )
+    if held is not None:
+        return held.communication_method_id
+    communication_method_id = issue_identifier(IdKind.ENTITY_COMMUNICATION_METHOD)
+    display_value = f"parity.{usage_context_code.value}@example.test"
+    FakeUnitOfWork(scene.world).entities.record_communication_method(
+        principal_id,
+        EntityCommunicationMethod(
+            communication_method_id=communication_method_id,
+            entity_id=person.entity_id,
+            principal_id=principal_id,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=usage_context_code,
+            display_value=display_value,
+            normalized_value=normalize_communication_value(
+                CommunicationMethodTypeCode.EMAIL, display_value
+            ),
+        ),
+    )
+    return communication_method_id
 
 
 def staged_entity_name(scene: Scene, name_type_code: NameTypeCode) -> str:
@@ -737,6 +783,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
     revise_address = staged_entity_address(scene, AddressTypeCode.BUSINESS)
     retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
+    revise_channel = staged_communication_method(scene, CommunicationUsageContextCode.CORPORATE)
+    retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -1117,6 +1165,27 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_address_id": retire_address,
             "expected_version": 1,
             "idempotency_key": "parity-entity-addresses-retire-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_ADD: {
+            "entity_id": person.entity_id,
+            "method_type_code": "email",
+            "usage_context_code": "personal",
+            "display_value": "parity.personal@example.test",
+            "idempotency_key": "parity-entity-communication-add-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_REVISE: {
+            "communication_method_id": revise_channel,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "method_type_code": "email",
+            "usage_context_code": "corporate",
+            "display_value": "parity.corrected@example.test",
+            "idempotency_key": "parity-entity-communication-revise-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_RETIRE: {
+            "communication_method_id": retire_channel,
+            "expected_version": 1,
+            "idempotency_key": "parity-entity-communication-retire-0001",
         },
         # A name no staged entity carries, so duplicate resolution admits it.
         # A create naming "Parity Person" would be refused as ambiguous, which
@@ -1538,8 +1607,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and fifteen commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 116, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and eighteen commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 119, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

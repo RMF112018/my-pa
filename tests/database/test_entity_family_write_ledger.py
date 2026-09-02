@@ -58,18 +58,24 @@ from sqlalchemy.engine import make_url
 
 from my_pa.application.commands import (
     AddEntityAddress,
+    AddEntityCommunicationMethod,
     AddEntityName,
     RetireEntityAddress,
+    RetireEntityCommunicationMethod,
     RetireEntityName,
     ReviseEntityAddress,
+    ReviseEntityCommunicationMethod,
     SupersedeEntityName,
 )
 from my_pa.application.entity_family_writes import EntityFamilyWriteService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     Entity,
     EntityAddressState,
+    EntityCommunicationMethodState,
     EntityNameState,
     EntityStatus,
     EntityType,
@@ -85,6 +91,7 @@ from my_pa.infrastructure.database.engine import create_database_engine
 from my_pa.infrastructure.persistence.entity import SqlEntityRepository
 from my_pa.infrastructure.persistence.tables import (
     entity_addresses,
+    entity_communication_methods,
     entity_mutation_events,
     entity_names,
 )
@@ -744,3 +751,225 @@ def test_a_stale_address_version_is_refused_and_leaves_no_ledger_row(
     with staged.connect() as connection:
         assert len(_ledger(connection)) == 1
         assert _addresses(connection)[0]["version"] == 1
+
+
+# --- entity_communication_methods -------------------------------------------
+
+
+def _channels(connection: Connection) -> list[dict[str, object]]:
+    rows = connection.execute(
+        select(entity_communication_methods).where(
+            entity_communication_methods.c.principal_id == PRINCIPAL_A
+        )
+    ).all()
+    return [dict(row._mapping) for row in rows]
+
+
+def _add_channel(
+    key: str = "wp11-communication-add-0001",
+    display_value: str = "alice@example.test",
+) -> AddEntityCommunicationMethod:
+    return AddEntityCommunicationMethod(
+        entity_id=PERSON,
+        method_type_code=CommunicationMethodTypeCode.EMAIL,
+        usage_context_code=CommunicationUsageContextCode.CORPORATE,
+        display_value=display_value,
+        idempotency_key=key,
+    )
+
+
+def test_an_added_channel_writes_a_ledger_row_naming_the_communication_family(
+    staged: Engine,
+) -> None:
+    """`record_family` is `communication_method`, which the migration has to admit."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        receipt = service.add_communication_method(
+            SqlEntityRepository(connection),
+            _add_channel(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    assert receipt.record_family is MutationRecordFamily.COMMUNICATION_METHOD
+    assert receipt.version == 1
+    assert receipt.state == EntityCommunicationMethodState.ACTIVE.value
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = _channels(connection)
+    assert len(ledger) == 1
+    assert ledger[0]["record_family"] == MutationRecordFamily.COMMUNICATION_METHOD.value
+    assert ledger[0]["capability"] == "entities.communication.add"
+    assert ledger[0]["record_id"] == receipt.record_id
+    # No channel value anywhere in the photograph. An email address or a phone
+    # number in `after_state` is the disclosure this ledger's own docstring
+    # forbids, and this is exactly where it would land.
+    assert ledger[0]["after_state"] == {"state": EntityCommunicationMethodState.ACTIVE.value}
+    assert len(written) == 1
+    assert written[0]["communication_method_id"] == receipt.record_id
+
+
+def test_a_channel_retry_with_the_same_key_and_payload_replays(staged: Engine) -> None:
+    """One row, and the second call says it did no work."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        first = service.add_communication_method(
+            SqlEntityRepository(connection),
+            _add_channel(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        second = service.add_communication_method(
+            SqlEntityRepository(connection),
+            _add_channel(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert first.replayed is False
+    assert second.replayed is True
+    assert second.record_id == first.record_id
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert len(_channels(connection)) == 1
+
+
+def test_a_channel_retry_with_a_different_payload_is_refused(staged: Engine) -> None:
+    """Same key, different channel: a conflict rather than a silent second write."""
+    from my_pa.domain.relationship.entity import DirectedWriteError
+
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        service.add_communication_method(
+            SqlEntityRepository(connection),
+            _add_channel(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with pytest.raises(DirectedWriteError), staged.begin() as connection:
+        service.add_communication_method(
+            SqlEntityRepository(connection),
+            _add_channel(display_value="alice.other@example.test"),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert len(_channels(connection)) == 1
+
+
+def test_a_channel_revision_is_a_supersession_and_not_an_edit(staged: Engine) -> None:
+    """`revise` is this family's spelling of what names call `supersede`.
+
+    The predecessor is marked SUPERSEDED pointing at a brand-new successor row,
+    so both remain readable and neither was edited in place.
+    """
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        added = service.add_communication_method(
+            SqlEntityRepository(connection),
+            _add_channel(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        revised = service.revise_communication_method(
+            SqlEntityRepository(connection),
+            ReviseEntityCommunicationMethod(
+                communication_method_id=added.record_id,
+                expected_version=1,
+                entity_id=PERSON,
+                method_type_code=CommunicationMethodTypeCode.EMAIL,
+                usage_context_code=CommunicationUsageContextCode.CORPORATE,
+                display_value="alice.corrected@example.test",
+                idempotency_key="wp11-communication-revise-0001",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert revised.superseded_id == added.record_id
+    assert revised.record_id != added.record_id
+    assert revised.prior_version is None
+    assert revised.version == 1
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = {row["communication_method_id"]: row for row in _channels(connection)}
+    assert ledger[1]["record_family"] == MutationRecordFamily.COMMUNICATION_METHOD.value
+    assert ledger[1]["before_state"] == {"record_id": added.record_id, "version": 1}
+    assert written[added.record_id]["state"] == EntityCommunicationMethodState.SUPERSEDED.value
+    assert written[added.record_id]["superseded_by_communication_method_id"] == revised.record_id
+    assert written[revised.record_id]["state"] == EntityCommunicationMethodState.ACTIVE.value
+
+
+def test_a_channel_retirement_advances_its_version_and_releases_its_slot(
+    staged: Engine,
+) -> None:
+    """`version + 1` under the guarded `UPDATE`, read back off the row itself."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        added = service.add_communication_method(
+            SqlEntityRepository(connection),
+            _add_channel(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        retired = service.retire_communication_method(
+            SqlEntityRepository(connection),
+            RetireEntityCommunicationMethod(
+                communication_method_id=added.record_id,
+                expected_version=1,
+                idempotency_key="wp11-communication-retire-0001",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert retired.prior_version == 1
+    assert retired.version == 2
+    assert retired.state == EntityCommunicationMethodState.RETIRED.value
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = _channels(connection)
+    assert ledger[1]["prior_version"] == 1
+    assert ledger[1]["new_version"] == 2
+    assert written[0]["state"] == EntityCommunicationMethodState.RETIRED.value
+    assert written[0]["version"] == 2
+    assert written[0]["is_preferred"] is False
+
+
+def test_a_stale_channel_version_is_refused_and_leaves_no_ledger_row(
+    staged: Engine,
+) -> None:
+    """The write comes first and the ledger second, so a refusal records nothing."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        added = service.add_communication_method(
+            SqlEntityRepository(connection),
+            _add_channel(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with pytest.raises(StaleDirectedVersionError), staged.begin() as connection:
+        service.retire_communication_method(
+            SqlEntityRepository(connection),
+            RetireEntityCommunicationMethod(
+                communication_method_id=added.record_id,
+                expected_version=2,
+                idempotency_key="wp11-communication-retire-stale",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert _channels(connection)[0]["version"] == 1

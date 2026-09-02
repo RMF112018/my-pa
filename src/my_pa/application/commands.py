@@ -108,6 +108,9 @@ from my_pa.domain.relationship.entity import (
     AliasState,
     AliasType,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
+    CommunicationVerificationStatusCode,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
@@ -4691,6 +4694,44 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 "name for the record, not part of the address itself."
             )
         },
+        "communication_method_id": {
+            "description": (
+                "Opaque identifier of the recorded contact channel, as returned "
+                "by entities.communication.list or entities.profile."
+            )
+        },
+        "method_type_code": {
+            "description": (
+                "Which kind of channel this is, from the closed method-type "
+                "vocabulary: email, phone, domain or website. The value is "
+                "normalized for the type you state; nothing here reads a "
+                "string's shape and concludes what kind of channel it is."
+            )
+        },
+        "usage_context_code": {
+            "description": (
+                "What this channel is used for, from the closed usage-context "
+                "vocabulary. An entity may hold several simultaneously active "
+                "channels of one type in different contexts; a corporate "
+                "address and a personal one are not competing facts."
+            )
+        },
+        "verification_status_code": {
+            "description": (
+                "How well established this channel is, from the closed "
+                "verification vocabulary. Absent means unresolved -- the "
+                "vocabulary's own name for not yet known -- and never an "
+                "affirmative status you did not state."
+            )
+        },
+        "linked_external_identifier_id": {
+            "description": (
+                "Optional external identifier this channel is the same fact as, "
+                "where one is already bound to the entity. Supply it only when "
+                "you know the two are one; nothing here matches values to find "
+                "a link."
+            )
+        },
     }
 )
 
@@ -5440,6 +5481,198 @@ class RetireEntityAddress:
 
     def __post_init__(self) -> None:
         _identifier(self.entity_address_id, IdKind.ENTITY_ADDRESS, SafeDetail.ENTITY_ADDRESS_ID)
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+
+
+@dataclass(frozen=True, slots=True)
+class AddEntityCommunicationMethod:
+    """`entities.communication.add`: record one contact channel for an entity.
+
+    `method_type_code` says which kind of channel this is and the value is then
+    normalized *for* that stated type. Nothing here reads a string's shape and
+    concludes it is an email or a phone number, so a phone number filed as an
+    email is recorded as the caller filed it rather than silently reclassified.
+
+    `verification_status_code` is left at the vocabulary's own `unresolved`
+    member when you do not state one. That is what "not yet known" is called
+    here, and it is never promoted to an affirmative status by this write.
+
+    An entity may hold several simultaneously active channels of one type in
+    different usage contexts -- a corporate address and a personal one are not
+    competing facts.
+
+    Retrying with the same `idempotency_key` and the same payload returns the
+    original receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_COMMUNICATION_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "method_type_code",
+        "usage_context_code",
+        "display_value",
+        "idempotency_key",
+        "verification_status_code",
+        "linked_external_identifier_id",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    entity_id: str
+    method_type_code: CommunicationMethodTypeCode
+    usage_context_code: CommunicationUsageContextCode
+    display_value: str = field(repr=False)
+    idempotency_key: str
+    verification_status_code: CommunicationVerificationStatusCode = (
+        CommunicationVerificationStatusCode.UNRESOLVED
+    )
+    linked_external_identifier_id: str | None = None
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(
+            self.method_type_code, CommunicationMethodTypeCode, SafeDetail.METHOD_TYPE_CODE
+        )
+        _entity_vocabulary(
+            self.usage_context_code, CommunicationUsageContextCode, SafeDetail.USAGE_CONTEXT_CODE
+        )
+        _record_text(self.display_value, SafeDetail.DISPLAY_VALUE)
+        _idempotency_key(self.idempotency_key)
+        _entity_vocabulary(
+            self.verification_status_code,
+            CommunicationVerificationStatusCode,
+            SafeDetail.VERIFICATION_STATUS_CODE,
+        )
+        if self.linked_external_identifier_id is not None:
+            _identifier(
+                self.linked_external_identifier_id,
+                IdKind.EXTERNAL_IDENTIFIER,
+                SafeDetail.LINKED_EXTERNAL_IDENTIFIER_ID,
+            )
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseEntityCommunicationMethod:
+    """`entities.communication.revise`: replace one contact channel with a corrected one.
+
+    **A supersession, not an update**, exactly as `entities.names.supersede` is:
+    a new channel row is written and the one named by `communication_method_id`
+    is marked superseded, pointing at its successor. Nothing is edited in place
+    and nothing is deleted. The word is `revise` here and `supersede` for names
+    because the source audit fixed both names; the act is the same one.
+
+    The successor's content is stated in full rather than read off the
+    predecessor: a field you do not restate is not carried forward, because this
+    write performs no read. In particular `verification_status_code` is written
+    as stated and unpromoted, so a correction that omits it records
+    `unresolved` rather than inheriting whatever the predecessor claimed.
+    `expected_version` is the version a recent `entities.communication.list`
+    returned.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_COMMUNICATION_REVISE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "communication_method_id",
+        "expected_version",
+        "entity_id",
+        "method_type_code",
+        "usage_context_code",
+        "display_value",
+        "idempotency_key",
+        "verification_status_code",
+        "linked_external_identifier_id",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    communication_method_id: str
+    expected_version: int
+    entity_id: str
+    method_type_code: CommunicationMethodTypeCode
+    usage_context_code: CommunicationUsageContextCode
+    display_value: str = field(repr=False)
+    idempotency_key: str
+    verification_status_code: CommunicationVerificationStatusCode = (
+        CommunicationVerificationStatusCode.UNRESOLVED
+    )
+    linked_external_identifier_id: str | None = None
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.communication_method_id,
+            IdKind.ENTITY_COMMUNICATION_METHOD,
+            SafeDetail.COMMUNICATION_METHOD_ID,
+        )
+        _expected_version(self.expected_version)
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(
+            self.method_type_code, CommunicationMethodTypeCode, SafeDetail.METHOD_TYPE_CODE
+        )
+        _entity_vocabulary(
+            self.usage_context_code, CommunicationUsageContextCode, SafeDetail.USAGE_CONTEXT_CODE
+        )
+        _record_text(self.display_value, SafeDetail.DISPLAY_VALUE)
+        _idempotency_key(self.idempotency_key)
+        _entity_vocabulary(
+            self.verification_status_code,
+            CommunicationVerificationStatusCode,
+            SafeDetail.VERIFICATION_STATUS_CODE,
+        )
+        if self.linked_external_identifier_id is not None:
+            _identifier(
+                self.linked_external_identifier_id,
+                IdKind.EXTERNAL_IDENTIFIER,
+                SafeDetail.LINKED_EXTERNAL_IDENTIFIER_ID,
+            )
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class RetireEntityCommunicationMethod:
+    """`entities.communication.retire`: withdraw one contact channel from service.
+
+    The row is kept and its history with it; there is no capability that
+    destroys a recorded channel. Retiring releases the preferred slot the
+    channel held, if it held one.
+
+    Use this when the channel stopped working and nothing replaces it; use
+    `entities.communication.revise` when something does.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_COMMUNICATION_RETIRE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "communication_method_id", "expected_version", "idempotency_key"
+    )
+
+    communication_method_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.communication_method_id,
+            IdKind.ENTITY_COMMUNICATION_METHOD,
+            SafeDetail.COMMUNICATION_METHOD_ID,
+        )
         _expected_version(self.expected_version)
         _idempotency_key(self.idempotency_key)
 
@@ -6580,6 +6813,9 @@ type Command = (
     | AddEntityAddress
     | ReviseEntityAddress
     | RetireEntityAddress
+    | AddEntityCommunicationMethod
+    | ReviseEntityCommunicationMethod
+    | RetireEntityCommunicationMethod
     | CreateEntity
     | UpdateEntity
     | ArchiveEntity

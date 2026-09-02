@@ -82,10 +82,13 @@ from typing import Any
 from my_pa.application import entity_record_families as record_families
 from my_pa.application.commands import (
     AddEntityAddress,
+    AddEntityCommunicationMethod,
     AddEntityName,
     RetireEntityAddress,
+    RetireEntityCommunicationMethod,
     RetireEntityName,
     ReviseEntityAddress,
+    ReviseEntityCommunicationMethod,
     SupersedeEntityName,
 )
 
@@ -103,7 +106,11 @@ from my_pa.contracts.ports import (
 )
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.identity.operation import Capability
-from my_pa.domain.relationship.entity import EntityAddressState, EntityNameState
+from my_pa.domain.relationship.entity import (
+    EntityAddressState,
+    EntityCommunicationMethodState,
+    EntityNameState,
+)
 from my_pa.domain.relationship.governance import (
     DEFAULT_MUTATION_ACTOR_CLASS,
     DEFAULT_MUTATION_AUTHORITY,
@@ -559,6 +566,188 @@ class EntityFamilyWriteService:
             actor_class=actor_class,
         )
 
+    # --- entity_communication_methods --------------------------------------
+
+    def add_communication_method(
+        self,
+        repository: EntitiesRepository,
+        command: AddEntityCommunicationMethod,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Record one contact channel, or return the receipt this key already has."""
+        payload = _communication_payload(command)
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_COMMUNICATION_ADD.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        recorded = self._families.record_communication_method(
+            repository,
+            record_families.RecordCommunicationMethod(
+                entity_id=command.entity_id,
+                method_type_code=command.method_type_code,
+                usage_context_code=command.usage_context_code,
+                display_value=command.display_value,
+                verification_status_code=command.verification_status_code,
+                is_preferred=command.is_preferred,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+                linked_external_identifier_id=command.linked_external_identifier_id,
+            ),
+            principal_id=principal_id,
+            at=at,
+            authority=authority,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_COMMUNICATION_ADD,
+            family=MutationRecordFamily.COMMUNICATION_METHOD,
+            record_id=recorded.record_id,
+            prior_version=None,
+            new_version=1,
+            state=EntityCommunicationMethodState.ACTIVE.value,
+            before_state=None,
+            superseded_id=None,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
+    def revise_communication_method(
+        self,
+        repository: EntitiesRepository,
+        command: ReviseEntityCommunicationMethod,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Supersede one contact channel with its corrected successor.
+
+        `revise` is the audit's spelling for this family and `supersede` is its
+        spelling for names; the act is the same one, and it is a supersession
+        rather than an edit in both.
+        """
+        payload = {
+            "communication_method_id": command.communication_method_id,
+            "expected_version": command.expected_version,
+            **_communication_payload(command),
+        }
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_COMMUNICATION_REVISE.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        corrected = self._families.correct_communication_method(
+            repository,
+            record_families.CorrectCommunicationMethod(
+                communication_method_id=command.communication_method_id,
+                expected_version=command.expected_version,
+                entity_id=command.entity_id,
+                method_type_code=command.method_type_code,
+                usage_context_code=command.usage_context_code,
+                display_value=command.display_value,
+                verification_status_code=command.verification_status_code,
+                is_preferred=command.is_preferred,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+                linked_external_identifier_id=command.linked_external_identifier_id,
+            ),
+            principal_id=principal_id,
+            at=at,
+            authority=authority,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_COMMUNICATION_REVISE,
+            family=MutationRecordFamily.COMMUNICATION_METHOD,
+            record_id=corrected.record_id,
+            prior_version=None,
+            new_version=1,
+            state=EntityCommunicationMethodState.ACTIVE.value,
+            before_state=_predecessor(corrected.superseded_record_id, command.expected_version),
+            superseded_id=corrected.superseded_record_id,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
+    def retire_communication_method(
+        self,
+        repository: EntitiesRepository,
+        command: RetireEntityCommunicationMethod,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Withdraw one contact channel, keeping the row and releasing its slot."""
+        payload = {
+            "communication_method_id": command.communication_method_id,
+            "expected_version": command.expected_version,
+        }
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_COMMUNICATION_RETIRE.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        retired = self._families.retire_communication_method(
+            repository,
+            record_families.RetireCommunicationMethod(
+                communication_method_id=command.communication_method_id,
+                expected_version=command.expected_version,
+            ),
+            principal_id=principal_id,
+            at=at,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_COMMUNICATION_RETIRE,
+            family=MutationRecordFamily.COMMUNICATION_METHOD,
+            record_id=retired.record_id,
+            prior_version=command.expected_version,
+            new_version=command.expected_version + 1,
+            state=EntityCommunicationMethodState.RETIRED.value,
+            before_state={"state": EntityCommunicationMethodState.ACTIVE.value},
+            superseded_id=None,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
     # --- the ledger row every verb above leaves behind ----------------------
 
     def _account_for(
@@ -662,6 +851,36 @@ def _address_payload(command: AddEntityAddress | ReviseEntityAddress) -> dict[st
         "postal_code": command.postal_code,
         "country": command.country,
         "label": command.label,
+        "is_preferred": command.is_preferred,
+        "effective_from": _moment(command.effective_from),
+        "effective_to": _moment(command.effective_to),
+    }
+
+
+def _communication_payload(
+    command: AddEntityCommunicationMethod | ReviseEntityCommunicationMethod,
+) -> dict[str, Any]:
+    """The caller-supplied half of a contact-channel write, in canonical form.
+
+    Shared by the addition and the correction on `_address_payload`'s argument:
+    the two state the same channel, which is why
+    `EntityRecordFamilyService._channel` builds one row for both. The
+    correction's own two fields -- the predecessor it names and the version it
+    asserts -- are added by its caller, so a correction and an addition carrying
+    identical channels still hash differently.
+
+    The normalized value is deliberately absent. `EntityRecordFamilyService`
+    derives it from the stated type and value, so it is not a field a caller
+    supplied and including it would make the digest depend on a rule the family
+    writer owns rather than on what the caller sent.
+    """
+    return {
+        "entity_id": command.entity_id,
+        "method_type_code": command.method_type_code.value,
+        "usage_context_code": command.usage_context_code.value,
+        "display_value": command.display_value,
+        "verification_status_code": command.verification_status_code.value,
+        "linked_external_identifier_id": command.linked_external_identifier_id,
         "is_preferred": command.is_preferred,
         "effective_from": _moment(command.effective_from),
         "effective_to": _moment(command.effective_to),

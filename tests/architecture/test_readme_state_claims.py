@@ -330,6 +330,9 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     113: "One hundred and thirteen",
     114: "One hundred and fourteen",
     115: "One hundred and fifteen",
+    116: "One hundred and sixteen",
+    117: "One hundred and seventeen",
+    118: "One hundred and eighteen",
 }
 
 
@@ -456,18 +459,18 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
     # combined surface therefore still exposes fifty-five and withholds three
     # more feature-gated names than after `RI-ENT-WP-10`.
-    assert default == 55 and total == 115 and withheld == 60
+    assert default == 55 and total == 118 and withheld == 63
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and fifteen capabilities" in system_context
+    assert "one hundred and eighteen capabilities" in system_context
     assert "exposes fifty-five of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and fifteen capabilities" in module_boundaries
+    assert "one hundred and eighteen capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

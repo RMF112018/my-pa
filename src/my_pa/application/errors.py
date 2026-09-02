@@ -393,6 +393,11 @@ class SafeDetail(StrEnum):
     POSTAL_CODE = "postal_code"
     COUNTRY = "country"
     LABEL = "label"
+    COMMUNICATION_METHOD_ID = "communication_method_id"
+    METHOD_TYPE_CODE = "method_type_code"
+    USAGE_CONTEXT_CODE = "usage_context_code"
+    VERIFICATION_STATUS_CODE = "verification_status_code"
+    LINKED_EXTERNAL_IDENTIFIER_ID = "linked_external_identifier_id"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

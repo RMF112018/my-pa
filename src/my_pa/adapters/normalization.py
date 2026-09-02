@@ -60,6 +60,7 @@ from typing import Any, Final
 from my_pa.application.commands import (
     AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
     AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
@@ -148,12 +149,14 @@ from my_pa.application.commands import (
     RestoreRelationshipMemory,
     RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -204,6 +207,9 @@ from my_pa.domain.relationship.entity import (
     AliasState,
     AliasType,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
+    CommunicationVerificationStatusCode,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
@@ -1228,6 +1234,9 @@ _RECORD_FAMILY_VOCABULARIES: Mapping[str, type[StrEnum]] = MappingProxyType(
     {
         "name_type_code": NameTypeCode,
         "address_type_code": AddressTypeCode,
+        "method_type_code": CommunicationMethodTypeCode,
+        "usage_context_code": CommunicationUsageContextCode,
+        "verification_status_code": CommunicationVerificationStatusCode,
     }
 )
 
@@ -1288,6 +1297,18 @@ def _revise_entity_address(payload: Mapping[str, Any]) -> Command:
 
 def _retire_entity_address(payload: Mapping[str, Any]) -> Command:
     return RetireEntityAddress(**_record_family_payload(payload))
+
+
+def _add_entity_communication_method(payload: Mapping[str, Any]) -> Command:
+    return AddEntityCommunicationMethod(**_record_family_payload(payload))
+
+
+def _revise_entity_communication_method(payload: Mapping[str, Any]) -> Command:
+    return ReviseEntityCommunicationMethod(**_record_family_payload(payload))
+
+
+def _retire_entity_communication_method(payload: Mapping[str, Any]) -> Command:
+    return RetireEntityCommunicationMethod(**_record_family_payload(payload))
 
 
 def _create_entity(payload: Mapping[str, Any]) -> Command:
@@ -1770,6 +1791,9 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_ADDRESSES_ADD: _add_entity_address,
         Capability.ENTITIES_ADDRESSES_REVISE: _revise_entity_address,
         Capability.ENTITIES_ADDRESSES_RETIRE: _retire_entity_address,
+        Capability.ENTITIES_COMMUNICATION_ADD: _add_entity_communication_method,
+        Capability.ENTITIES_COMMUNICATION_REVISE: _revise_entity_communication_method,
+        Capability.ENTITIES_COMMUNICATION_RETIRE: _retire_entity_communication_method,
         Capability.ENTITIES_CREATE: _create_entity,
         Capability.ENTITIES_UPDATE: _update_entity,
         Capability.ENTITIES_ARCHIVE: _archive_entity,
@@ -1814,7 +1838,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a value outside
-    the 115 canonical names refers to nothing.
+    the 118 canonical names refers to nothing.
     """
     try:
         return Capability(capability)

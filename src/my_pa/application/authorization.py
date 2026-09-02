@@ -51,6 +51,7 @@ from datetime import datetime
 from my_pa.application.commands import (
     AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
     AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
@@ -138,12 +139,14 @@ from my_pa.application.commands import (
     RestoreRelationshipMemory,
     RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -392,6 +395,9 @@ def _requested_scope(
             | AddEntityAddress()
             | ReviseEntityAddress()
             | RetireEntityAddress()
+            | AddEntityCommunicationMethod()
+            | ReviseEntityCommunicationMethod()
+            | RetireEntityCommunicationMethod()
             | CreateEntity()
             | UpdateEntity()
             | ArchiveEntity()

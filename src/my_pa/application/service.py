@@ -122,6 +122,7 @@ from my_pa.application.capabilities import build_capability_manifest, build_read
 from my_pa.application.commands import (
     AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
     AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
@@ -215,12 +216,14 @@ from my_pa.application.commands import (
     RestoreRelationshipMemory,
     RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
     RetireEntityName,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseManagedDocumentCommand,
@@ -2762,7 +2765,7 @@ class ApplicationService:
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
         something the composition root did not supply — the six `documents.`
-        names in a process with no managed root, and the forty-five `entities.` names
+        names in a process with no managed root, and the forty-eight `entities.` names
         in one that has not enabled the relationship plane. It is one answer with
         two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
@@ -4875,7 +4878,7 @@ class ApplicationService:
         the request.
 
         **This is the floor, and it was missing.** `available_capabilities`
-        withholds the forty-five `entities.` names, and two readers consult it —
+        withholds the forty-eight `entities.` names, and two readers consult it —
         `capabilities.get` and the MCP tool list. The HTTP transport is not one
         of them: `/v1/{capability}` routes by path segment and `_run` dispatches
         straight from `_HANDLERS`, so every one of the six executed and
@@ -6270,6 +6273,64 @@ class ApplicationService:
         repository = self._entity_repository(unit_of_work)
         with _translated(), _directed_translated(), _record_family_translated():
             receipt = self._family_writes.retire_address(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _entities_communication_add(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: AddEntityCommunicationMethod,
+    ) -> _Result:
+        """`entities.communication.add`: record one contact channel for an entity."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated(), _record_family_translated():
+            receipt = self._family_writes.add_communication_method(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _entities_communication_revise(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: ReviseEntityCommunicationMethod,
+    ) -> _Result:
+        """`entities.communication.revise`: replace one contact channel with its successor.
+
+        A supersession and never an edit, exactly as `entities.names.supersede`
+        is; the audit's two spellings name one act.
+        """
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated(), _record_family_translated():
+            receipt = self._family_writes.revise_communication_method(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _entities_communication_retire(
+        self,
+        unit_of_work: UnitOfWork,
+        authorization: Authorization,
+        command: RetireEntityCommunicationMethod,
+    ) -> _Result:
+        """`entities.communication.retire`: withdraw one contact channel, keeping the row."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated(), _record_family_translated():
+            receipt = self._family_writes.retire_communication_method(
                 repository,
                 command,
                 principal_id=authorization.principal.principal_id,
@@ -9729,6 +9790,9 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_ADDRESSES_ADD: ApplicationService._entities_addresses_add,
         Capability.ENTITIES_ADDRESSES_REVISE: ApplicationService._entities_addresses_revise,
         Capability.ENTITIES_ADDRESSES_RETIRE: ApplicationService._entities_addresses_retire,
+        Capability.ENTITIES_COMMUNICATION_ADD: ApplicationService._entities_communication_add,
+        Capability.ENTITIES_COMMUNICATION_REVISE: ApplicationService._entities_communication_revise,
+        Capability.ENTITIES_COMMUNICATION_RETIRE: ApplicationService._entities_communication_retire,
         Capability.ENTITIES_CREATE: ApplicationService._entities_create,
         Capability.ENTITIES_UPDATE: ApplicationService._entities_update,
         Capability.ENTITIES_ARCHIVE: ApplicationService._entities_archive,
@@ -9837,6 +9901,9 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_ADDRESSES_ADD,
         Capability.ENTITIES_ADDRESSES_REVISE,
         Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
     }
 )
 
@@ -9894,6 +9961,9 @@ _ENTITY_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_ADDRESSES_ADD,
         Capability.ENTITIES_ADDRESSES_REVISE,
         Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
     }
 )
 

@@ -35,7 +35,7 @@ See [`../decisions/00_ADR_INDEX.md`](../decisions/00_ADR_INDEX.md) and the unres
 ## Implementation boundary
 
 This index records architecture direction and current composition. The `my_pa`
-package defines one hundred and fifteen capabilities and exposes them through the HTTP,
+package defines one hundred and eighteen capabilities and exposes them through the HTTP,
 MCP, and operator-CLI adapters; a default composition serves fifty-five of
 them, because the `documents.`, `entities.` and `relationship_memory.` families
 each require an environment variable that has no default. The gateway and worker

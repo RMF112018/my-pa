@@ -2472,7 +2472,190 @@ The allowed tiers only: `tests/unit`, `tests/relationship`,
 evaluation and not e2e and not recovery"`, plus `ruff` and `mypy`. Nothing
 marked `database`, `recovery` or `e2e` was run at any point by any WP-09 worker.
 
-## RI-ENT-WP-11 — record-family mutation contracts
+## RI-ENT-WP-10 — MCP rich read contracts
+
+**Objective** (source audit, section I): publish a rich structured profile read
+over the record families `RI-ENT-WP-02` through `RI-ENT-WP-06` added, and a
+paged read per family beside it. **Finding**: `MCP-CONTRACT-001` (Critical).
+**Non-goal**: every mutation contract (`RI-ENT-WP-11`), legacy backfill
+(`WP-12`), the TBR fixture (`WP-13`).
+
+### What the plane could not do before this work package
+
+Six record families had been stored since `RI-ENT-WP-02` — typed names, the
+organization profile, addresses, communication methods, project participations
+and person/organization affiliations — and `RI-ENT-WP-08` had given all six a
+repository and a service above it. **No capability named any of them.** A caller
+holding every `entities.` name the plane published could not read a legal name,
+a registered address, a work phone number, a project role or an employer, and
+`entities.context` did not help: its card assembles aliases, identifiers,
+assignments, relationships, observations and memories, and reads none of the
+six. The tables were written by the resolution and identity-correction paths and
+read back by nothing a transport could reach.
+
+### What was delivered
+
+**Every name below is a read under `Purpose.ENTITY_READ`. No `Purpose` was
+added, and `purpose_is_known` needed no widening on either account.**
+
+| Capability | Kind | What it reads |
+|---|---|---|
+| `entities.profile` | composite read | all six families in one bounded assembly |
+| `entities.names.list` | keyset page | `entity_names` |
+| `entities.addresses.list` | keyset page | `entity_addresses` |
+| `entities.communication.list` | keyset page | `entity_communication_methods` |
+| `entities.participations.list` | keyset page | `entity_project_participations`, from the stated end |
+
+None of the five is in any write register. They join `_ENTITY_CAPABILITIES` and
+not `_ENTITY_WRITE_CAPABILITIES`, and `tests/contract/test_entity_write_gate.py`
+derives that from the purpose map rather than taking it on trust.
+
+**`entities.profile` is bounded, and says so in the response rather than in a
+runbook.** Each collection is cut at `ENTITY_PROFILE_COLLECTION_LIMIT` (25) with
+one row read past it to detect the overflow; the card carries `is_complete`, and
+`Truncation(is_truncated=..., reason="profile_collection_limit_reached")`
+**issues no cursor**. That absence is deliberate and not an omission: a position
+into an assembly of seven collections would have to mean seven positions at
+once, and the four `.list` capabilities are the continuation for whichever
+collection overflowed. `limitations` and `is_complete` precede the records they
+qualify, per `RI-AC-013`. An unknown `entity_id` is `not_found` rather than an
+empty profile, exactly as `entities.relationships` answers. `principal_id` is
+emitted by no view.
+
+**`entities.participations.list` makes the caller state which end.** The
+port deliberately has no "either end" read, so `perspective` is exactly
+`"project"` or `"participant"` and anything else is an `InvalidRequestError`
+naming `SafeDetail.SELECTOR`. A read that silently unioned both ends would
+answer a question nobody asked and would page over two orderings at once.
+
+**Four `*_page` port methods** — `name_page`, `address_page`,
+`communication_method_page`, `participation_page` — were declared
+`@abstractmethod` on `EntitiesRepository` as siblings of the established
+`identifier_page`/`alias_page`, keyset-ordered on each family's own primary key,
+and implemented in `SqlEntityRepository` and in **both** in-memory doubles
+(`tests/conftest.py` and `tests/evaluation/resolution_harness.py`), because a
+missing method on a subclass of the port is a `TypeError` at instantiation. The
+existing `limit`-only readers are untouched: they answer identity correction,
+and these answer a caller scrolling. **The SQL half is database-gated and was
+never executed**; the doubles are what the contract tier exercises, and that is
+where this package's page evidence comes from.
+
+### `entities.context` is unchanged, and that is a test result rather than a claim
+
+`entities.profile` is a **new** capability and `entities.context` was not
+widened into it. That is not a preference. The audit's own compatibility table
+classifies "replace bounded `entities.context` with a complete profile" as
+**BREAKING**, and `COMPAT-001`'s policy — recorded in this document's
+`RI-ENT-WP-01` section — prohibits a breaking change to a published generated
+schema in this campaign. `entities.context` and `entities.profile` answer
+different questions off different tables, and both now exist rather than one
+having eaten the other. The diff carries the proof: `_entities_context`
+and `_context_card_view` are byte-identical to `516f9e0`.
+
+**`RULING-M7`, and why it was necessary.** The pre-existing card assertions at
+`tests/contract/test_entity_capabilities.py:406` and `:429` named the keys they
+cared about and compared no key *set*, so a field **added** to
+`_context_card_view` would have satisfied every one of them — the guard would
+have stayed green through exactly the change a consumer has to be told about.
+Three exhaustive assertions were therefore **added**:
+
+- `test_the_context_card_publishes_exactly_twelve_keys` — an *ordered*
+  comparison of the twelve card keys, ordered rather than set-equal because
+  `RI-AC-013` is about reading order and a card that moved `limitations` below
+  `memories` would satisfy a set comparison while losing the property the order
+  carries;
+- `test_the_context_cards_nested_entries_publish_exactly_their_own_keys` — the
+  `coverage` and `memories` entries, the card's own composed shapes and the two
+  a widening would most plausibly reach into;
+- `test_the_four_other_entity_reads_publish_exactly_the_keys_they_publish` —
+  `entities.get`, `entities.relationships`, `entities.identifiers.list` and
+  `entities.aliases.list`.
+
+They are **written out rather than derived from the view functions**, which is
+the whole point: a key set derived from `_context_card_view` would agree with
+itself after any edit and would prove nothing. "No consumer broke" is now a test
+result. The assertion was proved to bite before it was relied on — a key was
+temporarily added to `_context_card_view`, the new assertion reddened, and the
+key was removed.
+
+### `RULING-M3` — the audit's own field names were not transcribed
+
+The audit's example response shape in section I contains `"role_confidence"` and
+`"legal_identity_confidence"`. **Neither was transcribed, and no near-synonym
+was substituted for either.** What ships instead is the categorical, unordered
+vocabulary this campaign has used since `RI-ENT-WP-07`: `assertion_status`,
+`role_basis_code`, `legal_identity_status_code` and `verification_status_code`
+— each a closed set of named states rather than a position on a scale, and none
+of them a number a caller could sort people by.
+
+`tests/architecture/test_relationship_scoring_surface_is_denied.py` was **not
+amended, not widened, not exempted, and not reasoned around**. Its diff from
+`516f9e0` is empty, and that diff — not this paragraph — is the evidence.
+
+### The count defect this package introduced, and the correction that closed it
+
+`93885e2` corrected "thirty-four `entities.` names" everywhere the spelled-count
+sweep reads it and stopped there, which left two whole classes of derived figure
+stale and neither is one that sweep can see.
+
+The first is a defect this package introduced: `_ENTITY_CAPABILITIES` grew by
+five reads while `_ENTITY_WRITE_CAPABILITIES` did not move, so the read half of
+the plane went from eleven to sixteen and nine documents and docstrings still
+said eleven. `tests/architecture/test_spelled_counts_match_the_sets_they_name.py`
+compares a spelled count against `Capability` or `Purpose`, and every one of
+those figures is a *subset* — one clause of a sentence whose neighbouring clause
+names the whole — so the sweep parsed the sentence, checked the clause it
+understood, and was structurally blind to the one beside it. "The eleven reads
+and the twenty-three writes" stayed green while half of it was false.
+
+The second is that **the arbiter reads words and is blind to digits.**
+`bootstrap/gateway.py`, `adapters/cli/__init__.py`, `adapters/cli/app.py`,
+`adapters/mcp/__init__.py`, `contracts/ports.py`,
+`docs/architecture/module-boundaries.md`,
+`tests/contract/test_transport_parity.py` and two runbooks all carried a
+digit-form `104`, and the runbooks quoted the readiness string as
+`49 of 104 capabilities are unwired.` — every one of them green the whole time.
+`fc73555` corrected all of them by measurement, reading each replacement off the
+live sets or the live manifest string. It is recorded here because the same
+defect class recurred in `RI-ENT-WP-11` and in this phase's migration, and
+because a campaign that has been bitten three times by it should say so.
+
+### Not delivered, and disclosed rather than implied
+
+- **No mutation of any kind.** Every capability here is a read; the write
+  contracts are `RI-ENT-WP-11`'s and are recorded below.
+- **`entities.context` is not widened, and will not be by this campaign.** A
+  caller who wants the six families must name `entities.profile`. That is the
+  compatibility rule working, not a gap.
+- **`entities.profile` issues no cursor**, so an entity with more than
+  twenty-five rows in a collection is *reported* as incomplete and is not
+  *continuable* through that capability. The four `.list` reads are the
+  continuation and the caller has to switch to one.
+- **The four `*_page` SQL bodies were never executed.** They are keyset reads
+  written against a closed database tier and verified statically only; the
+  in-memory doubles that the contract tier exercises are a different
+  implementation of the same signature and cannot find a defect in the SQL.
+- **No assertion or evidence is exposed.** `RI-ENT-WP-07`'s `entity_assertions`
+  rows are not read by any view here, so `ENTITY-PROVENANCE-001`'s MCP-exposure
+  clause is untouched by this package.
+- **No supporting index and no migration in this package.** The phase's single
+  revision is `16f05c46b8c3`, recorded under `RI-ENT-WP-11` below; it widens
+  closed CHECK sets and adds no index.
+
+### Tiers run for this work package
+
+The gate-safe tiers only, and nothing else at any point by any `WP-10` worker:
+`tests/unit`, `tests/relationship`, `tests/architecture` and `tests/contract`
+under `-m "not database and not recovery and not e2e and not network and not
+connector and not evaluation"`, plus `ruff check`, `ruff format --check` and
+`mypy src`. Nothing marked `database`, `recovery` or `e2e`, and nothing under
+`tests/database`, `tests/schema`, `tests/migration`, `tests/concurrency`,
+`tests/end_to_end`, `tests/recovery`, `tests/security` or `tests/capture`, was
+run — a machine-wide serial database gate was closed for the whole of this work
+package and the whole of `RI-ENT-WP-11` after it. The phase's measured gate
+results are recorded once, at the end of the `RI-ENT-WP-11` section below.
+
+## RI-ENT-WP-11 — MCP mutation contracts
 
 `MCP-CONTRACT-002`. `RI-ENT-WP-08` gave the five Entity-bound record families a
 writer and `RI-ENT-WP-10` published five reads over them; neither published a

@@ -271,7 +271,17 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and twenty-four** current capabilities, and the schema has
-**eighty-six** revisions at head `c99cd8ed8d1c` (corrected 2026-08-31 from
+**eighty-seven** revisions at head `16f05c46b8c3` (corrected 2026-09-02 from
+eighty-six at `c99cd8ed8d1c`, on which `16f05c46b8c3` is additive and widens
+three closed CHECK sets -- `audit_events.capability_is_known` from 115 to 135
+values, `entity_mutation_events.a_mutated_record_family_is_known` from six to
+eleven, and `entity_proposals.an_accepted_proposal_record_family_is_known` from
+six to eleven for metadata parity with the shared
+`_one_of(..., MutationRecordFamily, ...)` declaration -- so the capability
+names RI-ENT-WP-10 and RI-ENT-WP-11 published, twenty in all, and their
+five new record families can be recorded at all, `purpose_is_known` being
+deliberately left alone because neither work package adds a `Purpose`;
+corrected 2026-08-31 from
 eighty-five at `1cda4d536268`, on which `c99cd8ed8d1c` is additive and
 renames the seeded `entity_relationship_types` row `design_coordinates_with`
 to `design_coordination_with` -- every other column unchanged -- closing

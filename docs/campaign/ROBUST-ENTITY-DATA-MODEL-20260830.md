@@ -2903,7 +2903,12 @@ for. Widening the subject vocabulary belongs to the re-enrichment package.
 The phase's single revision is **`16f05c46b8c3`**, commit `959f6c1b`, written by
 a dedicated owner rather than by any contract worker and landing after every
 capability name `RI-ENT-WP-10` and `RI-ENT-WP-11` publish -- twenty in all --
-was already committed. It is the chain's head, additive on `c99cd8ed8d1c`, and it widens
+was already committed. It is the chain's head. It was written against `c99cd8ed8d1c` and re-parented
+onto `UI-IMP-WP02`'s `2c00c9ac64bc` when `origin/main` was merged in on
+2026-09-02 -- both had been written against `c99cd8ed8d1c`, so the merged tree
+held two heads until one stacked on the other (RULING-M11); the two are
+disjoint, `2c00c9ac64bc` creating five `identity`-schema tables and touching
+none of the three `knowledge`-schema constraints below. It widens
 three closed CHECK sets and nothing else:
 
 | Constraint | Before | After |

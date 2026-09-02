@@ -61,19 +61,25 @@ DISPOSABLE_DATABASE: Final = "my_pa_phase_b_vocabulary_test"
 #: out rather than imported so current chain drift and historical identity are
 #: checked independently.
 HEAD_REVISION: Final = "16f05c46b8c3"
-#: What was head until `HEAD_REVISION` stacked on it (RI-ENT-WP-08's
+#: What was head until `HEAD_REVISION` stacked on it (UI-IMP-WP02, adding
+#: WebAuthn credential, challenge, recovery-code, and opaque session tables).
+#: `16f05c46b8c3` was written against `c99cd8ed8d1c`, as `2c00c9ac64bc` was, and
+#: was re-parented onto it when `origin/main` merged, because the two would
+#: otherwise have stood as two heads (RULING-M11). Named so the chain assertion
+#: below stays a statement about the order rather than about whichever revision
+#: happens to be last.
+SECOND_TO_HEAD_REVISION: Final = "2c00c9ac64bc"
+#: What was head until `SECOND_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-08's
 #: blocker-clearing pass, renaming the seeded `entity_relationship_types` row
-#: `design_coordinates_with` to `design_coordination_with`). Named so the chain
-#: assertion below stays a statement about the order rather than about whichever
-#: revision happens to be last.
-SECOND_TO_HEAD_REVISION: Final = "c99cd8ed8d1c"
-#: What was head until `SECOND_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-07,
+#: `design_coordinates_with` to `design_coordination_with`).
+THIRD_TO_HEAD_REVISION: Final = "c99cd8ed8d1c"
+#: What was head until `THIRD_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-07,
 #: adding entity_assertions/entity_assertion_evidence).
-THIRD_TO_HEAD_REVISION: Final = "1cda4d536268"
-#: What was head until `THIRD_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-06b,
+FOURTH_TO_HEAD_REVISION: Final = "1cda4d536268"
+#: What was head until `FOURTH_TO_HEAD_REVISION` stacked on it (RI-ENT-WP-06b,
 #: widening the identity-effect family CHECKs).
-FOURTH_TO_HEAD_REVISION: Final = "9a3f6c1e8d24"
-#: The identity-history revision, several links below `FOURTH_TO_HEAD_REVISION`
+FIFTH_TO_HEAD_REVISION: Final = "9a3f6c1e8d24"
+#: The identity-history revision, several links below `FIFTH_TO_HEAD_REVISION`
 #: rather than immediately beneath it -- the chain assertion below walks the
 #: intervening links by literal. Named so that assertion stays a statement about
 #: the order rather than about whichever revision happens to be last.
@@ -218,25 +224,31 @@ def test_the_chain_reaches_this_head_and_holds_one(migrated_engine: Engine) -> N
     # and `entity_proposals.an_accepted_proposal_record_family_is_known` 6 -> 11
     # for RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity
     # mutation contracts, and creating and altering no table) is additive on
-    # `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass, renaming the seeded
-    # `entity_relationship_types` row `design_coordinates_with` to
-    # `design_coordination_with`), itself additive on `1cda4d536268`
-    # (RI-ENT-WP-07), itself additive on `9a3f6c1e8d24` (RI-ENT-WP-06b), itself
-    # additive on `8dc3619891bb` (RI-ENT-WP-06a), itself additive on
-    # `17149a48fa30` (RI-ENT-WP-05), itself additive on `f5b06925857e`
-    # (RI-ENT-WP-04), itself additive on `441b071bf37b` (RI-ENT-WP-03), itself
-    # additive on `7e114f822af2` (RI-ENT-WP-02), itself additive on
-    # `b727e870d45e`, which is additive on `IDENTITY_HISTORY_REVISION` -- one
-    # more link than this chain had before `16f05c46b8c3` landed, and two more
-    # than before `c99cd8ed8d1c` did.
+    # `2c00c9ac64bc` (UI-IMP-WP02, adding the WebAuthn credential, challenge,
+    # recovery-code and opaque session tables) -- an edge the base merge made,
+    # because both revisions had been written against `c99cd8ed8d1c` and the
+    # pair would otherwise have stood as two heads (RULING-M11). `2c00c9ac64bc`
+    # is itself additive on `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing
+    # pass, renaming the seeded `entity_relationship_types` row
+    # `design_coordinates_with` to `design_coordination_with`), itself additive
+    # on `1cda4d536268` (RI-ENT-WP-07), itself additive on `9a3f6c1e8d24`
+    # (RI-ENT-WP-06b), itself additive on `8dc3619891bb` (RI-ENT-WP-06a), itself
+    # additive on `17149a48fa30` (RI-ENT-WP-05), itself additive on
+    # `f5b06925857e` (RI-ENT-WP-04), itself additive on `441b071bf37b`
+    # (RI-ENT-WP-03), itself additive on `7e114f822af2` (RI-ENT-WP-02), itself
+    # additive on `b727e870d45e`, which is additive on
+    # `IDENTITY_HISTORY_REVISION` -- two more links than this chain had before
+    # `c99cd8ed8d1c` landed, and one more than either branch had alone.
     assert script.get_revision(HEAD_REVISION).down_revision == SECOND_TO_HEAD_REVISION
     assert script.get_revision(SECOND_TO_HEAD_REVISION).down_revision == THIRD_TO_HEAD_REVISION
     assert script.get_revision(THIRD_TO_HEAD_REVISION).down_revision == FOURTH_TO_HEAD_REVISION
-    assert script.get_revision(FOURTH_TO_HEAD_REVISION).down_revision == "8dc3619891bb"
+    assert script.get_revision(FOURTH_TO_HEAD_REVISION).down_revision == FIFTH_TO_HEAD_REVISION
+    assert script.get_revision(FIFTH_TO_HEAD_REVISION).down_revision == "8dc3619891bb"
     # `8dc3619891bb` used to be `FOURTH_TO_HEAD_REVISION` itself, and
     # `17149a48fa30` before that; naming both explicitly here keeps this chain
     # covering exactly the links it covered before the constants above shifted --
-    # once when `c99cd8ed8d1c` landed, and again when `16f05c46b8c3` did.
+    # once when `c99cd8ed8d1c` landed, once when `16f05c46b8c3` did, and once
+    # more when the base merge put `2c00c9ac64bc` between the two.
     assert script.get_revision("8dc3619891bb").down_revision == "17149a48fa30"
     assert script.get_revision("17149a48fa30").down_revision == "f5b06925857e"
     assert script.get_revision("441b071bf37b").down_revision == "7e114f822af2"

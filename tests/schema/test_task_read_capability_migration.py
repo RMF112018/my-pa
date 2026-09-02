@@ -297,14 +297,16 @@ def test_the_chain_has_one_head_and_this_revision_revises_the_task_read_plane() 
     # migration on top of that; 86 since `c99cd8ed8d1c` (commit `37ead78`,
     # RI-ENT-WP-08's blocker-clearing pass) renamed the seeded
     # entity_relationship_types row `design_coordinates_with` to
-    # `design_coordination_with` on top of that; 87 since `16f05c46b8c3`
+    # `design_coordination_with` on top of that; 87 since `2c00c9ac64bc`
+    # (UI-IMP-WP02) added WebAuthn credential, challenge, recovery-code, and
+    # opaque session tables on top of that; 88 since `16f05c46b8c3`
     # (RI-ENT-WP-10/11) widened three closed-set CHECKs --
     # `audit_events.capability_is_known` 115 -> 135,
     # `entity_mutation_events.a_mutated_record_family_is_known` 6 -> 11 and
     # `entity_proposals.an_accepted_proposal_record_family_is_known` 6 -> 11 --
     # for RI-ENT-WP-10's five entity reads and RI-ENT-WP-11's fifteen entity
     # mutation contracts on top of that, creating and altering no table.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 87
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 88
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

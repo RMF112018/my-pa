@@ -78,17 +78,23 @@ DISPOSABLE_DATABASE: Final = "my_pa_ri_ent_wp_10_11_vocabulary_test"
 #: out rather than imported so current chain drift and historical identity are
 #: checked independently.
 HEAD_REVISION: Final = "16f05c46b8c3"
-#: What was head until `HEAD_REVISION` stacked on it (`RI-ENT-WP-08`'s
+#: What was head until `HEAD_REVISION` stacked on it, and therefore the revision
+#: this module downgrades to. This revision was written against `c99cd8ed8d1c`
+#: and re-parented onto `UI-IMP-WP02`'s `2c00c9ac64bc` when `origin/main` merged
+#: (RULING-M11): both had been written against `c99cd8ed8d1c`, so the pair would
+#: otherwise have stood as two heads. `2c00c9ac64bc` adds WebAuthn credential,
+#: challenge, recovery-code and opaque session tables in the `identity` schema
+#: and widens none of the three `knowledge`-schema CHECKs this module exercises,
+#: so downgrading to it leaves exactly the pre-`HEAD_REVISION` vocabularies the
+#: assertions below expect.
+PREVIOUS_REVISION: Final = "2c00c9ac64bc"
+#: What was head until `PREVIOUS_REVISION` stacked on it (`RI-ENT-WP-08`'s
 #: blocker-clearing pass, renaming the seeded `entity_relationship_types` row
-#: `design_coordinates_with` to `design_coordination_with`), and therefore the
-#: revision this module downgrades to.
-PREVIOUS_REVISION: Final = "c99cd8ed8d1c"
-#: What was head until `PREVIOUS_REVISION` stacked on it (`RI-ENT-WP-07`, adding
-#: entity_assertions/entity_assertion_evidence).
-SECOND_TO_PREVIOUS_REVISION: Final = "1cda4d536268"
+#: `design_coordinates_with` to `design_coordination_with`).
+SECOND_TO_PREVIOUS_REVISION: Final = "c99cd8ed8d1c"
 #: What was head until `SECOND_TO_PREVIOUS_REVISION` stacked on it
-#: (`RI-ENT-WP-06b`, widening the identity-effect family CHECKs).
-THIRD_TO_PREVIOUS_REVISION: Final = "9a3f6c1e8d24"
+#: (`RI-ENT-WP-07`, adding entity_assertions/entity_assertion_evidence).
+THIRD_TO_PREVIOUS_REVISION: Final = "1cda4d536268"
 
 #: What the revision admits to `capability_is_known`: `RI-ENT-WP-10`'s five paged
 #: reads and `RI-ENT-WP-11`'s fifteen writes. Restated here for the reason the

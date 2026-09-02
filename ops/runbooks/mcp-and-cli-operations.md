@@ -271,8 +271,13 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and twenty-four** current capabilities, and the schema has
-**eighty-seven** revisions at head `16f05c46b8c3` (corrected 2026-09-02 from
-eighty-six at `c99cd8ed8d1c`, on which `16f05c46b8c3` is additive and widens
+**eighty-eight** revisions at head `16f05c46b8c3` (counted on the merged tree
+2026-09-02: UI-IMP-WP02 corrected eighty-six at `c99cd8ed8d1c` to eighty-seven
+at `2c00c9ac64bc` on 2026-09-01, RI-ENT-WP-10/11 corrected that same eighty-six
+to its own eighty-seven at `16f05c46b8c3` on 2026-09-02, and neither figure is
+true of a tree carrying both revisions; `16f05c46b8c3` is additive on
+`2c00c9ac64bc` -- onto which it was re-parented at the base merge, both
+revisions having been written against `c99cd8ed8d1c` -- and widens
 three closed CHECK sets -- `audit_events.capability_is_known` from 115 to 135
 values, `entity_mutation_events.a_mutated_record_family_is_known` from six to
 eleven, and `entity_proposals.an_accepted_proposal_record_family_is_known` from
@@ -281,6 +286,8 @@ six to eleven for metadata parity with the shared
 names RI-ENT-WP-10 and RI-ENT-WP-11 published, twenty in all, and their
 five new record families can be recorded at all, `purpose_is_known` being
 deliberately left alone because neither work package adds a `Purpose`;
+`2c00c9ac64bc` is additive on `c99cd8ed8d1c` and adds WebAuthn credential,
+challenge, recovery-code, and opaque session tables, UI-IMP-WP02;
 corrected 2026-08-31 from
 eighty-five at `1cda4d536268`, on which `c99cd8ed8d1c` is additive and
 renames the seeded `entity_relationship_types` row `design_coordinates_with`

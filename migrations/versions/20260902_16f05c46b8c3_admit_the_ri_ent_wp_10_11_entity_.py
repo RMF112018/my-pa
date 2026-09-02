@@ -1,7 +1,7 @@
 """Admit the RI-ENT-WP-10/11 entity capability names and their five record families.
 
 Revision ID: 16f05c46b8c3
-Revises: c99cd8ed8d1c
+Revises: 2c00c9ac64bc
 Create Date: 2026-09-02
 
 **One revision for both work packages, and that is the point of it.**
@@ -56,6 +56,19 @@ and it is the last blocking item of both work packages.
 their writes carry `entity_authoring`, both admitted since `823e23b6cc63`. Its
 absence below is a decision, not an omission.
 
+**Re-parented onto `2c00c9ac64bc` when `origin/main` was merged in (RULING-M11).**
+This revision was written against `c99cd8ed8d1c`, and `UI-IMP-WP02`'s
+`2c00c9ac64bc` was written against `c99cd8ed8d1c` too, so the merged tree held
+two heads. `2c00c9ac64bc` creates five `identity`-schema tables
+(`webauthn_credentials`, `webauthn_challenges`, `recovery_code_sets`,
+`recovery_codes`, `auth_sessions`) and touches nothing this revision touches:
+the three constraints below live in `knowledge`, on `audit_events`,
+`entity_mutation_events` and `entity_proposals`, none of which `2c00c9ac64bc`
+mentions. The two are disjoint, so making this one stack on that one restores a
+single linear chain without changing what either emits. Nothing else moved:
+`down_revision` is the only line of code this re-parent touched, and every
+literal below is byte-identical to the one that was reviewed.
+
 **No table is created or altered here, and no row is touched.** `upgrade`
 widens three closed-set CHECK constraints and does nothing else, which is what
 admitting a capability and a record family costs. Every table this vocabulary
@@ -90,7 +103,8 @@ rather than left to be inferred:
   literal that happens to agree today; the next member added to that enum is the
   moment it stops agreeing, and nothing here will say so.
 
-`downgrade` restores `c99cd8ed8d1c`'s three vocabularies exactly, so
+`downgrade` restores the three vocabularies exactly as `c99cd8ed8d1c` left them
+-- `2c00c9ac64bc`, now the revision below, widens none of them -- so
 empty → head → empty leaves no residue and a database that went up and came back
 down enforces the same closed sets as one built from empty to the revision below.
 """
@@ -102,7 +116,7 @@ from typing import Final
 from alembic import op
 
 revision: str = "16f05c46b8c3"
-down_revision: str | None = "c99cd8ed8d1c"
+down_revision: str | None = "2c00c9ac64bc"
 branch_labels: str | None = None
 depends_on: str | None = None
 

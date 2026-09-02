@@ -16,10 +16,10 @@ from sqlalchemy import Connection, Engine, text
 from sqlalchemy.engine import make_url
 from webauthn.helpers import bytes_to_base64url
 
-from my_pa.application.webauthn_ceremony import WebAuthnCeremonyError, WebAuthnCeremonyService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
-from my_pa.domain.identity.webauthn_relying_party import WebAuthnRelyingParty
+from my_pa.domain.identity.webauthn_relying_party import WebAuthnCeremonyError, WebAuthnRelyingParty
 from my_pa.infrastructure.database.engine import create_database_engine
+from my_pa.infrastructure.security.webauthn_ceremony import WebAuthnCeremonyService
 
 pytestmark = pytest.mark.database
 

@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and eleven Python modules under `src/my_pa` and four hundred and thirty-five test modules —
+Three hundred and fifteen Python modules under `src/my_pa` and four hundred and thirty-seven test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -106,6 +106,8 @@ one source module and three test modules: `1b2dd18` added
 `tests/database/test_entity_record_family_service_write_path.py` — the first
 time the source-module figure has moved since the 2026-08-29 correction, every
 step between it and this one having been test-side only. Corrected again on
+2026-09-02 to three hundred and fifteen and four hundred and thirty-seven, when
+UI-IMP-WP03 added four source modules and two test modules, and earlier on
 2026-09-02 to three hundred and eleven and four hundred and thirty-five, when
 UI-IMP-WP02 added five source modules and three test modules:
 `src/my_pa/domain/identity/secret_digests.py`,

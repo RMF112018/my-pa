@@ -72,27 +72,173 @@ from __future__ import annotations
 
 import argparse
 import sys
-from typing import Final, Literal
+from collections.abc import Callable, Mapping
+from datetime import datetime
+from typing import Any, Final, Literal
+from uuid import UUID
 
 import uvicorn
+from sqlalchemy.engine import Engine
 
 from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
 from my_pa.adapters.http.oauth import build_origin_oauth_routes
-from my_pa.adapters.http.webauthn import WebAuthnHttpConfig, webauthn_http_handler
+from my_pa.adapters.http.webauthn import webauthn_http_handler
 from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
 from my_pa.adapters.mcp.server import SERVER_NAME
+from my_pa.application.webauthn_bff_attestation import verify_webauthn_attestation
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
 from my_pa.bootstrap.relationship_intelligence_profiles import RELATIONSHIP_GRANT_PROFILES
 from my_pa.bootstrap.settings import Settings, load_settings
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.common.time import utc_now
 from my_pa.domain.identity.operation import Capability
+from my_pa.domain.identity.webauthn_relying_party import (
+    WebAuthnCeremonyError,
+    WebAuthnRelyingParty,
+)
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.security import RemoteAuthenticationError, RemoteAuthenticator
 from my_pa.infrastructure.security.origin_authorization import OriginOAuthServer
+from my_pa.infrastructure.security.webauthn_ceremony import (
+    CeremonyResult,
+    WebAuthnCeremonyService,
+)
 
 #: The safe default address. Container binding is a validated deployment mode,
 #: not a CLI host argument, and Compose publishes no gateway host port.
 HOST: Final = "127.0.0.1"
+
+
+def _webauthn_relying_party(settings: object) -> WebAuthnRelyingParty | None:
+    reader = getattr(settings, "webauthn_relying_party", None)
+    if callable(reader):
+        result = reader()
+        return result if isinstance(result, WebAuthnRelyingParty) else None
+    return None
+
+
+def _webauthn_execute(
+    engine: Engine,
+    *,
+    relying_party: WebAuthnRelyingParty | None,
+    bff_secret: str,
+    clock: Callable[[], datetime] = utc_now,
+) -> Callable[[str, str, Mapping[str, Any], str | None], Mapping[str, Any]]:
+    def execute(
+        action: str,
+        origin: str,
+        document: Mapping[str, Any],
+        attestation: str | None,
+    ) -> Mapping[str, Any]:
+        if relying_party is None:
+            raise WebAuthnCeremonyError("backend_unavailable")
+        with engine.begin() as connection:
+            service = WebAuthnCeremonyService(connection, relying_party, clock=clock)
+            principal_id = None
+            if attestation:
+                tid, oid = verify_webauthn_attestation(bff_secret, attestation, now=clock())
+                principal_id = service.ensure_account(tid=tid, oid=oid, upn=None, display_name=None)
+            result = _dispatch_webauthn(service, action, origin, document, principal_id)
+        body: dict[str, Any] = dict(result.payload)
+        if result.recovery_codes is not None:
+            body["codes"] = list(result.recovery_codes)
+        if result.issued_session is not None:
+            body["sessionCreated"] = True
+        return body
+
+    return execute
+
+
+def _dispatch_webauthn(
+    service: WebAuthnCeremonyService,
+    action: str,
+    origin: str,
+    document: Mapping[str, Any],
+    principal_id: UUID | None,
+) -> CeremonyResult:
+    if action == "registration/options":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.registration_options(principal_id, origin=origin)
+    if action == "registration/complete":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        credential = document.get("credential")
+        if not isinstance(credential, dict):
+            raise WebAuthnCeremonyError("invalid_registration")
+        label = document.get("label")
+        return service.registration_complete(
+            principal_id,
+            origin=origin,
+            credential=credential,
+            label=label if isinstance(label, str) else None,
+        )
+    if action == "authentication/options":
+        return service.authentication_options(origin=origin)
+    if action == "authentication/complete":
+        credential = document.get("credential")
+        if not isinstance(credential, dict):
+            raise WebAuthnCeremonyError("invalid_assertion")
+        return service.authentication_complete(origin=origin, credential=credential)
+    if action == "credentials/list":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.list_credentials(principal_id)
+    if action == "credentials/revoke":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.revoke_credential(
+            principal_id,
+            origin=origin,
+            credential_id=_b64_field(document, "credentialId"),
+            administration_grant=_b64_field(document, "administrationGrant"),
+        )
+    if action == "recovery/issue":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.issue_recovery(
+            principal_id,
+            origin=origin,
+            administration_grant=_b64_field(document, "administrationGrant"),
+        )
+    if action == "recovery/consume":
+        presented = document.get("code")
+        if not isinstance(presented, str):
+            raise WebAuthnCeremonyError("invalid_recovery_code")
+        return service.consume_recovery(presented, origin=origin)
+    if action == "step-up/options":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.step_up_options(principal_id, origin=origin)
+    if action == "step-up/complete":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        credential = document.get("credential")
+        if not isinstance(credential, dict):
+            raise WebAuthnCeremonyError("invalid_assertion")
+        return service.step_up_complete(principal_id, origin=origin, credential=credential)
+    if action == "sessions/revoke-all":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.revoke_all_sessions(
+            principal_id,
+            origin=origin,
+            administration_grant=_b64_field(document, "administrationGrant"),
+        )
+    raise WebAuthnCeremonyError("invalid_request")
+
+
+def _b64_field(document: Mapping[str, Any], name: str) -> bytes:
+    import base64
+
+    value = document.get(name)
+    if not isinstance(value, str) or not value:
+        raise WebAuthnCeremonyError("invalid_request")
+    padding = "=" * (-len(value) % 4)
+    try:
+        return base64.urlsafe_b64decode(value + padding)
+    except Exception as error:
+        raise WebAuthnCeremonyError("invalid_request") from error
 
 
 def _remote_relationship_grant_profile(
@@ -170,12 +316,14 @@ def _run(args: argparse.Namespace) -> int:
     settings = load_settings()
     host = settings.gateway_bind_host()
     runtime = _build_serving_runtime(settings)
+    relying_party = _webauthn_relying_party(settings)
     webauthn = webauthn_http_handler(
-        WebAuthnHttpConfig(
-            engine=runtime.work_engine,
-            relying_party=settings.webauthn_relying_party(),
-            bff_secret=settings.webauthn_bff_secret,
-        )
+        relying_party=relying_party,
+        execute=_webauthn_execute(
+            runtime.work_engine,
+            relying_party=relying_party,
+            bff_secret=getattr(settings, "webauthn_bff_secret", ""),
+        ),
     )
     application = (
         create_http_app(

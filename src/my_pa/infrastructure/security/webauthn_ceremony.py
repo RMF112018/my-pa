@@ -38,27 +38,21 @@ from my_pa.domain.identity.webauthn_credentials import (
     WebAuthnChallengePurpose,
     WebAuthnCredential,
 )
-from my_pa.domain.identity.webauthn_relying_party import WebAuthnRelyingParty
+from my_pa.domain.identity.webauthn_relying_party import (
+    WebAuthnCeremonyError,
+    WebAuthnRelyingParty,
+)
 from my_pa.infrastructure.persistence.user_accounts import UserAccountRepository
 from my_pa.infrastructure.persistence.webauthn_auth import WebAuthnAuthPersistence
 
 __all__ = [
     "ADMIN_GRANT_TTL",
     "CeremonyResult",
-    "WebAuthnCeremonyError",
     "WebAuthnCeremonyService",
 ]
 
 ADMIN_GRANT_TTL: Final = timedelta(minutes=5)
 _LAST_CREDENTIAL_BLOCK: Final = "last_passkey_requires_recovery"
-
-
-class WebAuthnCeremonyError(Exception):
-    """Typed ceremony failure. `code` is the public error token."""
-
-    def __init__(self, code: str, message: str = "webauthn ceremony failed") -> None:
-        super().__init__(message)
-        self.code = code
 
 
 @dataclass(frozen=True, slots=True)

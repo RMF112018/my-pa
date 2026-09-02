@@ -11,6 +11,7 @@ from typing import Final
 from urllib.parse import urlsplit
 
 __all__ = [
+    "WebAuthnCeremonyError",
     "WebAuthnRelyingParty",
     "WebAuthnRelyingPartyError",
     "parse_allowed_origins",
@@ -21,6 +22,14 @@ _LOCAL_HOSTS: Final = frozenset({"localhost", "127.0.0.1", "::1"})
 
 class WebAuthnRelyingPartyError(ValueError):
     """Relying-party configuration is missing or unsafe."""
+
+
+class WebAuthnCeremonyError(Exception):
+    """Typed ceremony failure. `code` is the public error token."""
+
+    def __init__(self, code: str, message: str = "webauthn ceremony failed") -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def parse_allowed_origins(configured: str) -> tuple[str, ...]:

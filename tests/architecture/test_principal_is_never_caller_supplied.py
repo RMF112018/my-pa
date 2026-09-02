@@ -230,6 +230,17 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # by token hash so the successor is bound to the same Principal. The value
     # is server-owned session state, not a request-body owner.
     "infrastructure/persistence/webauthn_auth.py": (("current", "principal_id"),),
+    "application/webauthn_ceremony.py": (
+        ("record", "principal_id"),
+        ("revoked", "principal_id"),
+        ("stored", "principal_id"),
+        ("stored", "principal_id"),
+        ("stored", "principal_id"),
+        ("stored", "principal_id"),
+        ("stored", "principal_id"),
+        ("stored", "principal_id"),
+        ("stored", "principal_id"),
+    ),
     # `WP-RI-A-02`'s governed entity writes. `EntityWriteRequest.principal_id`
     # is *not* a caller-stated owner despite the shape this scan matches: the
     # request is built inside `application.entity_authoring` from

@@ -39,6 +39,14 @@ SHA-256 hex + `hmac.compare_digest`, same family as capture-client and Apple-bri
 
 Coherence is the database, not process memory. Two independent store instances (two connections/engines) on the same PostgreSQL database observe the same authoritative rows. Proof: `tests/database/test_webauthn_auth_persistence.py` (concurrent consume/rotate, second-instance resolve/consume). Do not use SQLite for these tests.
 
+## WP03 ceremony (in progress on this branch)
+
+Python `WebAuthnCeremonyService` verifies registration/assertion through the
+`webauthn` library and persists through WP02 stores. Next BFF `/api/webauthn/*`
+attests the verified HMAC session as `(tid, oid)` HMAC to the gateway. Successful
+authentication creates a WP02 `auth_sessions` row and still mints the legacy
+`mypa_session` cookie. The opaque SID is not the production cookie.
+
 ## What WP03 still owns
 
 - `navigator.credentials` and passkey UI

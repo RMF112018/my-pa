@@ -78,6 +78,7 @@ import uvicorn
 
 from my_pa.adapters.http import REMOTE_CAPTURE_PATH, create_http_app
 from my_pa.adapters.http.oauth import build_origin_oauth_routes
+from my_pa.adapters.http.webauthn import WebAuthnHttpConfig, webauthn_http_handler
 from my_pa.adapters.mcp import RemoteAccessContext, create_remote_mcp_app, serve_stdio
 from my_pa.adapters.mcp.server import SERVER_NAME
 from my_pa.bootstrap.gateway import GatewayRuntime, build_gateway_runtime
@@ -169,6 +170,13 @@ def _run(args: argparse.Namespace) -> int:
     settings = load_settings()
     host = settings.gateway_bind_host()
     runtime = _build_serving_runtime(settings)
+    webauthn = webauthn_http_handler(
+        WebAuthnHttpConfig(
+            engine=runtime.work_engine,
+            relying_party=settings.webauthn_relying_party(),
+            bff_secret=settings.webauthn_bff_secret,
+        )
+    )
     application = (
         create_http_app(
             runtime.service,
@@ -176,6 +184,7 @@ def _run(args: argparse.Namespace) -> int:
             remote_client=runtime.remote_client,
             apple_authenticate=runtime.apple_authenticate,
             apple_control=runtime.apple_control,
+            webauthn=webauthn,
         )
         if runtime.authenticate is None
         else create_http_app(
@@ -184,6 +193,7 @@ def _run(args: argparse.Namespace) -> int:
             remote_client=runtime.remote_client,
             apple_authenticate=runtime.apple_authenticate,
             apple_control=runtime.apple_control,
+            webauthn=webauthn,
         )
     )
     server = uvicorn.Server(

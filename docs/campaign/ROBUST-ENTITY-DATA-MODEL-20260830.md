@@ -2460,7 +2460,7 @@ shapes is defined solely by the view builders in
 `src/my_pa/application/service.py`, so a pin over their output is the only
 thing that can catch a compatibility break.
 
-The backfill cannot move those shapes: none of the three capabilities reads
+The backfill cannot move those shapes: not one of those read paths reads
 `entity_names` or any other new record family. `RULING-M10` kept the pin as a
 new file rather than an extension of `tests/contract/test_entity_capabilities.py`,
 because RI-ENT-WP-10/WP-11 is concurrently editing that file and the

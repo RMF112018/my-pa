@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and six Python modules under `src/my_pa` and four hundred and thirty-three test modules —
+Three hundred and six Python modules under `src/my_pa` and four hundred and thirty-four test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -112,7 +112,13 @@ hundred and thirty-three, when RI-ENT-WP-12 added
 `tests/contract/test_entity_read_shape_compatibility.py` — the exhaustive
 response key-set pin for `entities.get`/`entities.search`/`entities.context`
 that `RULING-M7` obliges — without adding a source module, so the
-source-module figure stays at three hundred and six. Both figures were recomputed by running
+source-module figure stays at three hundred and six. Corrected again on
+2026-09-02 to four hundred and thirty-four, when RI-ENT-WP-12's migration
+`b8e4d1a6c073` brought its own database-tier evidence module
+`tests/database/test_legacy_entity_backfill_migration.py` with it; the
+migration itself is not a test module and sits under the `migrations` mypy
+target instead, where it moves that figure from four hundred and thirty-five to
+four hundred and thirty-six. Both figures were recomputed by running
 the two commands above against this tree rather than by adding an assumed delta
 to the stated pair. The pair standing before this correction, three hundred and
 five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above

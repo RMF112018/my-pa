@@ -2410,6 +2410,20 @@ which extends the recorded decision consistently rather than reversing it. It is
 one `WHERE` clause and is reversible without rework if the Manager reads audit
 section M differently.
 
+**The same disclosure test was applied to what search now *adds*, not only to
+what it withholds.** `WP09-DECISION-1` narrows the browse surface; this work
+package also widened it, and both directions were judged under the same
+question. `EntitySummary` now carries current employers and current project
+roles on every browse row, and a query can reach an entity through its
+communication values, job titles, project roles and relationship-type labels.
+That widening was accepted because each collection is bounded at three,
+restricted to `active` rows, and requested by `RI-AC-038` — a superseded
+affiliation offered as a way of telling two people apart would be offering an
+answer that is no longer true. Recorded here so a reader does not conclude that
+WP-09 only narrowed the disclosure envelope: it narrowed it in one place and
+widened it in another, deliberately, and the argument for the second is the
+port docstring's, not an omission.
+
 **The evaluation gate was made non-vacuous, and that was not automatic.**
 `_CorpusRepository` answered every six-family method with `NotImplementedError`
 and the corpus carried no rows for any of them, so a resolver reading a family
@@ -2484,8 +2498,13 @@ nor `resolved_exact:typed_name` is a key in the table.
      bite proved by re-running the same mutation.
 
   Both modules are green at this head and the full `database or recovery or
-  e2e` tier is **1995 passed, 0 failed**, measured chunk by chunk and
-  reconciled against a `--collect-only` of 1995/17140. These two defects are
+  e2e` tier is **2008 passed, 0 failed**, measured chunk by chunk and
+  reconciled against a `--collect-only` of 2008/17216. (Corrected from
+  1995 / 1995-of-17140, which were true before this branch integrated
+  `origin/main` at `717e1d15`: UI-IMP-WP02 adds a `database`-marked
+  module and three schema tests, so the selection genuinely grew and the
+  earlier pair was false in a sentence that scopes itself "at this
+  head". Re-measured, not adjusted by a delta.) These two defects are
   the same shape as the `correct_affiliation` defect that blocked RI-ENT-WP-08:
   a documented invariant with nothing holding it, invisible to a green suite.
 

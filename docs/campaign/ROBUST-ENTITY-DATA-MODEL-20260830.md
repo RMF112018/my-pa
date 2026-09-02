@@ -123,7 +123,7 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-PROJECT-001` | Critical | Incomplete project participation | **Closed by RI-ENT-WP-04** — `entity_project_participations` (project/participant identity, project-scoped `project_display_name`, `role_code`/`role_text`, `discipline_code`/`discipline_text`, `scope_text`, `role_basis_code`, `stakeholder_side_code`, `stakeholder_class_code`, `relationship_status_code`, temporal state), plus the extensible `entity_role_types`/`entity_discipline_types` taxonomies. **The "no write path exists yet" clause is superseded**: RI-ENT-WP-08 delivered `record_project_participation`/`supersede_project_participation`/`retire_project_participation` on `EntitiesRepository` and `SqlEntityRepository`, and `EntityRecordFamilyService`'s three verbs above them. No MCP capability or tool exists yet (`RI-ENT-WP-10`/`WP-11`) and the service that calls the write path is unwired — see "RI-ENT-WP-08" and "Merge/split disposition" below |
 | `ENTITY-PROVENANCE-001` | High | No fact-level certainty/verification binding | **Closed for schema/domain/persistence by RI-ENT-WP-07** — `entity_assertions`/`entity_assertion_evidence` bind fact-level `assertion_status` (a discrete, unordered epistemic vocabulary, never a confidence score) and evidence to the six WP-02–WP-06 record families that previously had none. **The "repository/service-command wiring (`WP-08`)" clause is now partly closed, not fully**: RI-ENT-WP-08 declared all six assertion methods on the `EntitiesRepository` ABC and implemented them in both test doubles (`a5a939d`, corrected by `7bbc524`), and `EntityRecordFamilyService` records an optional `StatedAssertion` plus one `EntityAssertionEvidence` row per `StatedEvidence` alongside any create or correction of the six families. Still open: MCP exposure (`WP-10`/`WP-11`), which no part of WP-08 delivers, and — inside WP-08's own boundary — mutation-ledger integration, `supersede_assertion`'s collapsed refusal, and the absent retirement verb for `entity_assertions`. See "RI-ENT-WP-07" below and "RI-ENT-WP-08" below for the exact honest boundary of what is and is not delivered |
 | `ENTITY-PERSON-001` | High | Incomplete person affiliations | **Closed by RI-ENT-WP-05** — `entity_person_organization_affiliations` (nullable `organization_entity_id`, `job_title`, `affiliation_type_code`, temporal `effective_from`/`effective_to` with `state = 'active' AND effective_to IS NULL` denoting "current") |
-| `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Substantially closed, not fully closed** (`RI-ENT-WP-09`) — resolution reads `entity_names` and `entity_communication_methods` by normalized value and corroborates through affiliations and project participations; the three normalized-value indexes that were read by nothing now have their first readers. Two new match reasons and two new contextual signals ship as **unordered categorical** vocabulary per `RULING-M4`, and the domain's "a name alone does not resolve an entity" refusal was decoupled from `_BASIS_ORDER` onto an explicit `_BASES_THAT_NAME_AN_ENTITY`. Remaining: relationship-type and domain-only matching reach search but not resolution; the communication-value read is EMAIL-shaped (see the limitations below); and the database-tier evidence is written but unexecuted |
+| `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Substantially closed, not fully closed** (`RI-ENT-WP-09`) — resolution reads `entity_names` and `entity_communication_methods` by normalized value and corroborates through affiliations and project participations; the three normalized-value indexes that were read by nothing now have their first readers. Two new match reasons and two new contextual signals ship as **unordered categorical** vocabulary per `RULING-M4`, and the domain's "a name alone does not resolve an entity" refusal was decoupled from `_BASIS_ORDER` onto an explicit `_BASES_THAT_NAME_AN_ENTITY`. Remaining: relationship-type and domain-only matching reach search but not resolution; the communication-value read is EMAIL-shaped (see the limitations below); and the database-tier evidence, written unexecuted during authoring, has since been executed by the controlling context -- which found two defects static verification had not; see RI-ENT-WP-09 below |
 | `ENTITY-STATE-001` | High | No canonicalization/review state distinct from lifecycle | Design decision recorded in RI-ENT-WP-01 below (`canonicalization_state_code`, separate 1:1 record, deferred); not implemented this increment |
 | `MCP-CONTRACT-001` | Critical | No rich structured profile read | Not in scope (`RI-ENT-WP-10`) |
 | `MCP-CONTRACT-002` | High | No record-family mutation capabilities for the new families | Not in scope (`RI-ENT-WP-11`); RULING 5 (no mass-assignment endpoint) remains binding when it is |
@@ -144,7 +144,7 @@ Preserved from the source audit; status reflects this increment only.
 | WP-06 | Corporate/entity relationship graph expansion | **Delivered (partial, RI-ENT-WP-06a)** — `entity_relationship_types` taxonomy and the twenty new codes; merge/split coordination for the six WP-02/04/05 record families remains deferred to a separate PR2 |
 | WP-07 | Assertion/confidence/provenance binding | **Delivered (partial)** — `entity_assertions`/`entity_assertion_evidence` (schema, domain, minimal typed persistence helpers, tests); repository/service/command-layer wiring is `WP-08`, MCP exposure is `WP-10`/`WP-11`. No scalar confidence was added under any name (RULING 1) — see below |
 | WP-08 | Repository/domain services and validation | **Delivered (partial)** — seventeen `record_*`/`supersede_*`/`retire_*` methods on `SqlEntityRepository` for the six Entity-bound families, the same seventeen plus RI-ENT-WP-07's six assertion methods declared `@abstractmethod` on `EntitiesRepository`, in-memory equivalents in both test doubles, and the application service `EntityRecordFamilyService` with its own command/receipt DTOs. **The service is deliberately unwired** — no `Capability`, no MCP tool, no HTTP route, no CLI command, and no registration in `ApplicationService`; transport exposure is `WP-10`/`WP-11`. Not delivered — the same list the boundary section below enumerates in full, and it adds nothing to it: mutation-ledger integration, an idempotency key, proposal-validation integration, a retirement verb for `entity_assertions`, a split of `supersede_assertion`'s single refusal, no `correct_*` and no `retire_*` for the singleton `entity_organization_profiles` (which has the in-place `revise_organization_profile` instead — **five** families carry `correct_*`, not six), and no typed refusal for a correction whose successor collides with a *third* active row, which still surfaces the raw `IntegrityError` the plain `record_*` path surfaces. **The correction of a row holding the preferred slot IS delivered**: an earlier revision of this row called it inexpressible as a supersession and refused it outright, which was wrong — see "A preferred row is correctable, and the ordering that reaches it" below |
-| WP-09 | Entity resolution/search vNext | **Delivered (partial)** — resolution now reads typed names, communication values, affiliations and project participations; `entities.search` matches five further paths and carries two disambiguators (`RI-AC-038`). Not delivered: no supporting index (no migration in scope), no effective dating on search, no MCP capability change (`WP-10`/`WP-11`), and **three committed database-tier modules have never been executed** — see below |
+| WP-09 | Entity resolution/search vNext | **Delivered (partial)** — resolution now reads typed names, communication values, affiliations and project participations; `entities.search` matches five further paths and carries two disambiguators (`RI-AC-038`). Not delivered: no supporting index (no migration in scope), no effective dating on search, no MCP capability change (`WP-10`/`WP-11`), and the **two** committed database-tier modules, unexecuted during authoring, were executed afterwards and found two defects -- a `NameTypeCode` member that never existed (all eleven tests of that module had errored at setup) and a load-bearing search filter held by nothing -- both since corrected; see below |
 | WP-10 | MCP rich read contracts | Deferred |
 | WP-11 | MCP mutation contracts | Deferred |
 | WP-12 | Legacy migration/backfill and compatibility adapters | Deferred |
@@ -2457,12 +2457,37 @@ nor `resolved_exact:typed_name` is a key in the table.
   names, and a shared mail domain is an employer fact about many people that
   would manufacture candidate crowds on the resolution path.
 - **No `Capability`, MCP tool, route, CLI command, or request-shape change.**
-- **Three database-tier modules are committed and have NEVER been executed** —
-  `tests/database/test_entity_resolution_value_reads.py` and
-  `tests/database/test_entity_search_reaches_context.py` — because the WP-08
-  database gate was running on the same machine for the whole of this work
-  package. They are statically verified only and may need adjustment on first
-  execution. Their figures are collection, not execution.
+- **Two database-tier modules were committed unexecuted, and have since been
+  executed.** `tests/database/test_entity_resolution_value_reads.py` and
+  `tests/database/test_entity_search_reaches_context.py` were written and
+  committed while the WP-08 database gate held the machine, so no WP-09 worker
+  ran them. The controlling context ran them afterwards, and **executing them
+  found two defects that static verification had not**:
+
+  1. `test_entity_resolution_value_reads.py` named `NameTypeCode.TRADING`, a
+     member that has never existed — `NameTypeCode` has exactly nine
+     (`DISPLAY`, `LEGAL`, `OPERATING`, `DBA`, `BRAND`, `ACRONYM`, `ALIAS`,
+     `HISTORICAL_NAME`, `DOCUMENT_REFERENCE`). The module collects exactly 11
+     tests and its `staged` fixture is function-scoped, so **all eleven errored
+     at setup and not one test body had ever executed.** Corrected to
+     `OPERATING` in `f031c40` — chosen for meaning, not greenness: a `DBA` is a
+     *registered* "doing business as" filing, an operating name is what an
+     entity trades under day to day, and the row is a name being withdrawn from
+     service.
+  2. The widened search's active-state filter was **held by nothing**. Its own
+     comment states it is load-bearing ("a retired or superseded name form is a
+     name this entity no longer carries, and serving it to a browse query is
+     the disclosure the alias decision refuses"), yet deleting the line left
+     all nineteen tests in `test_entity_search_reaches_context.py` green.
+     Proved by mutation, closed in `b29340b` by two tests that assert
+     reachability *before* the lifecycle transition as well as after, with the
+     bite proved by re-running the same mutation.
+
+  Both modules are green at this head and the full `database or recovery or
+  e2e` tier is **1995 passed, 0 failed**, measured chunk by chunk and
+  reconciled against a `--collect-only` of 1995/17140. These two defects are
+  the same shape as the `correct_affiliation` defect that blocked RI-ENT-WP-08:
+  a documented invariant with nothing holding it, invisible to a green suite.
 
 ### Tiers run for this work package
 
@@ -2470,7 +2495,11 @@ The allowed tiers only: `tests/unit`, `tests/relationship`,
 `tests/architecture` and `tests/contract` under
 `-m "not slow and not database and not network and not connector and not
 evaluation and not e2e and not recovery"`, plus `ruff` and `mypy`. Nothing
-marked `database`, `recovery` or `e2e` was run at any point by any WP-09 worker.
+marked `database`, `recovery` or `e2e` was run at any point by any WP-09
+*worker* — the database gate was held elsewhere for the whole of this work
+package. The controlling context ran the database tier afterwards; see the
+executed-and-corrected note above. This paragraph describes who ran what during
+authoring, not the evidence standing at this head.
 
 ## Test evidence
 

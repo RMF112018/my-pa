@@ -3035,6 +3035,26 @@ The sets these packages moved, measured rather than computed: `Capability`
 104 → **124**; `entities.` names 34 → **54**; `Purpose` 34, **unchanged**;
 `PERMITTED_PAIRS` 106 → **126**; `MutationRecordFamily` 6 → **11**.
 
+The work is on `ri-ent/wp10-11-mcp`, based on `516f9e0` (tree `bf0d211`), and
+these are its commits in order:
+
+| Commit | What it landed |
+|---|---|
+| `93885e20` | `RI-ENT-WP-10`: the six Entity-bound record families published as five reads |
+| `fc735550` | `RI-ENT-WP-10`: every count derived from the read/write split, corrected by measurement |
+| `150f8713` | `RI-ENT-WP-11`: the typed-name family as three mutation contracts |
+| `aeb09b52` | `RI-ENT-WP-11`: the address family — a Manager checkpoint whose message is misleading, measured complete and green, disclosed above |
+| `4ea1a232` | `RI-ENT-WP-11`: the communication-method family |
+| `8349e200` | `RI-ENT-WP-11`: the project-participation family |
+| `e28916c1` | `RI-ENT-WP-11`: the person-organization-affiliation family |
+| `959f6c1b` | the phase's single migration `16f05c46b8c3` — the head the gate figures above were measured at |
+
+Commits landing after `959f6c1b` — the database-tier binding for that migration,
+and the documentation corrections this section is part of — are not covered by
+the figures above, which were measured at `959f6c1b` exactly and are not
+restated for a later head so that this document cannot drift ahead of what
+actually ran.
+
 
 ## Test evidence
 

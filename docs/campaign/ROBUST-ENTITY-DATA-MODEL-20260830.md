@@ -147,7 +147,7 @@ Preserved from the source audit; status reflects this increment only.
 | WP-09 | Entity resolution/search vNext | Deferred |
 | WP-10 | MCP rich read contracts | Deferred |
 | WP-11 | MCP mutation contracts | Deferred |
-| WP-12 | Legacy migration/backfill and compatibility adapters | **Delivered** — migration `b8e4d1a6c073` carries `entities.display_name`/`canonical_name` into one `display`-typed `entity_names` row per active entity (never a `legal` name), and writes **zero** `entity_project_participations` rows because, per `RULING-M10`, rule 3 correctly applied returns the empty set: no legacy row is directly representable. `entity_aliases`, `entity_assignments` and `entity_external_identifiers` are untouched. Upgrade/downgrade evidence is written but **unexecuted** — the database gate was held by the Manager. See "RI-ENT-WP-12 — legacy backfill" below |
+| WP-12 | Legacy migration/backfill and compatibility adapters | **Delivered** — migration `b8e4d1a6c073` carries `entities.display_name`/`canonical_name` into one `display`-typed `entity_names` row per active entity (never a `legal` name), and writes **zero** `entity_project_participations` rows because, per `RULING-M10`, rule 3 correctly applied returns the empty set: no legacy row is directly representable. `entity_aliases`, `entity_assignments` and `entity_external_identifiers` are untouched. Upgrade/downgrade evidence is **executed and mutation-proved**: `tests/database/test_legacy_entity_backfill_migration.py` is 14 passed, run twice at `a235a67a` — once by the Manager and once independently — and mutating the migration's frozen `_NAME_TYPE_CODE` from `display` to `legal` fails three of those tests, including `test_nothing_the_backfill_writes_is_a_legal_name` with `assert 2 == 0`. See "RI-ENT-WP-12 — legacy backfill" below |
 | WP-13 | TBR completeness fixture, security, compatibility and documentation | Deferred |
 
 ## RI-ENT-WP-01 — architecture/taxonomy freeze
@@ -2482,6 +2482,42 @@ That guard was **not** authored here. `RULING-M10` adopted the reasoning: a
 guard written by the context that wanted the rule relaxed is not evidence. It
 belongs to RI-ENT-WP-13 or a later increment, and is recorded as owed rather
 than quietly left out.
+
+### Database evidence — executed, and mutation-proved
+
+`tests/database/test_legacy_entity_backfill_migration.py` is no longer written
+but unrun. It was executed against a disposable PostgreSQL database at head
+`a235a67a`, **14 passed**, twice and independently — once by the Manager and once
+by this work package — with the worktree verified clean and the migration
+byte-identical before and after each run.
+
+Execution alone is the weaker claim, so the central property is **mutation-proved**
+rather than merely observed green. Changing the migration's frozen
+`_NAME_TYPE_CODE` from `"display"` to `"legal"` — a single line — fails three
+tests: `test_nothing_the_backfill_writes_is_a_legal_name` with `assert 2 == 0`,
+`test_every_active_entity_gets_one_display_name_carrying_both_legacy_values`,
+and `test_guard_a_refuses_when_an_in_scope_entity_already_has_an_active_display_name`
+with `DID NOT RAISE`. `ENTITY-SCHEMA-001` — the campaign's founding finding — is
+therefore held by an assertion that demonstrably bites, not by a row count that
+would pass on a backfill writing the wrong name type. The mutation was reverted
+from a byte-exact backup and the restored file's SHA-256 re-checked.
+
+**A known limitation, recorded rather than repaired.**
+`test_no_address_or_communication_method_is_inferred` is weaker than the other
+thirteen. It stages a deliberately tempting `email`-namespaced external
+identifier, asserts `entity_addresses` and `entity_communication_methods` are
+both empty, and anchors that with `entity_external_identifiers == 1` — but that
+anchor would hold even if the upgrade had written nothing at all, because it
+only proves the identifier was not consumed, not that the migration ran. It is
+therefore a **forward-regression guard rather than a proof**, unlike
+`test_no_project_participation_row_is_fabricated_from_a_legacy_assignment`,
+which anchors its zero on `entity_names == 3` and so cannot pass vacuously. The
+property it half-covers — that the migration actually executed and wrote only
+what rule 1 allows — is genuinely covered by
+`test_every_active_entity_gets_one_display_name_carrying_both_legacy_values`.
+It is left as it stands deliberately: a test rewritten during closeout is one
+more thing the independent reviewer must re-verify, for a property already
+proved elsewhere. Recorded as a known limitation, not as an omission.
 
 ## Test evidence
 

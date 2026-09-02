@@ -40,11 +40,20 @@ PHASE_B = "b64e29a0f7c1"
 PHASE_B_HEAD = "3d07af4dc513"
 GSQS_REVISION = "c4b0a1d9e827"
 PHASE_B_START = "c7a1f04b9e63"
-#: The chain's current head: `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
-#: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
-#: `design_coordination_with`. It stacked on `1cda4d536268` (RI-ENT-WP-07), which was head
-#: before it. Written out rather than derived so chain drift fails here rather than passing.
-HEAD = "c99cd8ed8d1c"
+#: The chain's current head: `b8e4d1a6c073` (RI-ENT-WP-12, backfilling one
+#: `display`-typed `entity_names` row per active `entities` row). It stacked on
+#: `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass, renaming the seeded
+#: `entity_relationship_types` row `design_coordinates_with` to
+#: `design_coordination_with`), which stacked on `1cda4d536268` (RI-ENT-WP-07).
+#: Written out rather than derived so chain drift fails here rather than passing.
+#:
+#: Corrected 2026-09-02 from `c99cd8ed8d1c`, which RI-ENT-WP-12 left stale when it
+#: moved the head. **Why it was missed:** this module spells the constant `HEAD`,
+#: and that branch's sweep looked for `HEAD_REVISION`, so this file matched no
+#: pattern and the assertion below was left *failing*, not merely out of date.
+#: `ruff` and `mypy` were clean over it; only executing the module caught it.
+#: Sweep for the assertion (`get_heads()`), never for a constant's name.
+HEAD = "b8e4d1a6c073"
 REVISION_PATH = (
     ROOT
     / "migrations"

@@ -164,8 +164,10 @@ def test_the_chain_has_one_head_and_this_revision_is_in_the_chain() -> None:
     # migration on top of that; 86 since `c99cd8ed8d1c` (commit `37ead78`,
     # RI-ENT-WP-08's blocker-clearing pass) renamed the seeded
     # entity_relationship_types row `design_coordinates_with` to
-    # `design_coordination_with` on top of that.
-    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 86
+    # `design_coordination_with` on top of that; 87 since `2c00c9ac64bc`
+    # (UI-IMP-WP02) added WebAuthn credential, challenge, recovery-code, and
+    # opaque session tables on top of that.
+    assert len(list((ROOT / "migrations" / "versions").glob("*.py"))) == 87
 
 
 def test_the_frozen_literals_are_the_domain_at_head() -> None:

@@ -40,11 +40,12 @@ PHASE_B = "b64e29a0f7c1"
 PHASE_B_HEAD = "3d07af4dc513"
 GSQS_REVISION = "c4b0a1d9e827"
 PHASE_B_START = "c7a1f04b9e63"
-#: The chain's current head: `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
+#: The chain's current head: `2c00c9ac64bc` (UI-IMP-WP02 auth persistence), additive on
+#: `c99cd8ed8d1c` (RI-ENT-WP-08's blocker-clearing pass), which
 #: renames the seeded `entity_relationship_types` row `design_coordinates_with` to
-#: `design_coordination_with`. It stacked on `1cda4d536268` (RI-ENT-WP-07), which was head
-#: before it. Written out rather than derived so chain drift fails here rather than passing.
-HEAD = "c99cd8ed8d1c"
+#: `design_coordination_with`. Written out rather than derived so chain drift
+#: fails here rather than passing.
+HEAD = "2c00c9ac64bc"
 REVISION_PATH = (
     ROOT
     / "migrations"

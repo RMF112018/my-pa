@@ -437,9 +437,14 @@ jobs:
     # 895c4ec in 44m24s. Fifty-five was sized for that. Combined Phase B plus
     # GSQS at f7f31812 locally ran 1,528 tests in 71m02s; GitHub run
     # 33003804651 then cancelled this job at 55m0s while pytest was still
-    # executing. Allow ninety so checkout, install, the 71-minute suite, and
-    # teardown sit inside the budget rather than pre-empting complete coverage.
-    timeout-minutes: 90
+    # executing. Ninety covered that 71-minute suite plus checkout. GitHub run
+    # 33606053189 at head 6500b6a (UI-IMP-WP02 reconciled onto RI-ENT-WP-08)
+    # then cancelled this job at 90m20s while pytest was still executing;
+    # the same `-m database` selection passed locally on that head, 1,973
+    # passed / 15,061 deselected in 61m15s. Allow one hundred twenty so the
+    # combined WP-08 + WP-02 suite, checkout, install, and teardown sit
+    # inside the budget rather than pre-empting complete coverage.
+    timeout-minutes: 120
 
     services:
       postgres:

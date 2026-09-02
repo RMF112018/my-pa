@@ -131,6 +131,20 @@ For these records:
 
 Historical evidence is preserved; supersession does not erase the original criterion text.
 
+## UI-IMP-WP02 persistence overrides
+
+These overrides record only the persistence substrate WP02 actually proved. They do **not** mark user-facing WebAuthn, production sign-in, or browser-cookie criteria `PASS_VERIFIED`. Remaining ceremony and cookie work stays with WP03/WP04. Controlling text remains Drive `08_ACCEPTANCE_AND_TEST_MATRIX`.
+
+| ID | Criterion (controlling text) | Override |
+|---|---|---|
+| PFE-AC-094 | Authentication challenges are random, one-time, and expiry-bounded | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (store) + `UI-IMP-WP03` (ceremony); `implementation_evidence = identity.webauthn_challenges atomic consume`; `test_evidence = tests/database/test_webauthn_auth_persistence.py` concurrent consume/replay/expiry/purpose/principal; `notes = Production registration/authentication options endpoints are not implemented. WP04 cookie is not wired.` |
+| PFE-AC-096 | Credential revocation is supported | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (store) + `UI-IMP-WP03` (admin UX); `implementation_evidence = identity.webauthn_credentials.revoked_at kept; active lookup excludes revoked`; `test_evidence = credential revoke persisted and excluded from active lookup`; `notes = No passkey UI or administration ceremony.` |
+| PFE-AC-097 | At least two recovery mechanisms are documented, including offline recovery codes or operator-local recovery | `implementation_disposition = IMPLEMENTATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (hashed recovery store) + `UI-IMP-WP03`/`UI-IMP-WP04` (second mechanism and UX); `notes = Hashed one-time recovery *persistence* exists. Operator-local recovery ceremony and any second live mechanism are not implemented. Not PASS_VERIFIED.` |
+| PFE-AC-098 | Recovery codes are stored hashed and are one-time use | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (store) + `UI-IMP-WP03` (issue/consume UX); `implementation_evidence = identity.recovery_codes.code_hash SHA-256 hex; plaintext never persisted`; `test_evidence = plaintext absent from DB; consume-once; concurrent == 1; revoked set fails`; `notes = Recovery UX is WP03. Production cookie/session is still legacy.` |
+| PFE-AC-101 | Application session cookie is HttpOnly, Secure in production, and revocable server-side | `implementation_disposition = VALIDATION_REQUIRED`; `owning_UI_IMP_WP = UI-IMP-WP02` (server session store) + `UI-IMP-WP04` (cookie cutover); `implementation_evidence = identity.auth_sessions token_hash, idle+absolute expiry, rotate, revoke, revoke-all`; `test_evidence = session create/resolve/touch-cap/rotate/concurrent rotate/second-instance`; `notes = Live cookie remains Principal-bearing HMAC; process-local registry remains runtime truth. WP04 must wire the opaque SID. Not PASS_VERIFIED.` |
+
+Unchanged and still not claimed by WP02: PFE-AC-091, 092, 093, 095, 099, 100, 102, 103, 104, 105, and user-facing WebAuthn/sign-in criteria. PFE-AC-136 security tests remain later-package evidence.
+
 ## Known evidence limitations / record overrides
 
 These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING` status and do not create a pass:

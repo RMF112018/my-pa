@@ -271,8 +271,10 @@ that names it again is refused.
 
 **Current-state correction (2026-08-28):** the tool list is derived from all
 **one hundred and four** current capabilities, and the schema has
-**eighty-six** revisions at head `c99cd8ed8d1c` (corrected 2026-08-31 from
-eighty-five at `1cda4d536268`, on which `c99cd8ed8d1c` is additive and
+**eighty-seven** revisions at head `2c00c9ac64bc` (corrected 2026-09-02 from
+eighty-six at `c99cd8ed8d1c`, on which `2c00c9ac64bc` is additive and adds
+WebAuthn credential, challenge, recovery-code, and opaque session tables,
+UI-IMP-WP02; `c99cd8ed8d1c` is additive on `1cda4d536268` and
 renames the seeded `entity_relationship_types` row `design_coordinates_with`
 to `design_coordination_with` -- every other column unchanged -- closing
 `EntityRelationshipType` to 35-of-35 parity with the taxonomy table by

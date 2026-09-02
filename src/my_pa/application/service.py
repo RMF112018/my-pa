@@ -1872,12 +1872,27 @@ def _entity_view(entity: Entity) -> dict[str, object]:
 
 
 def _entity_summary_view(summary: EntitySummary) -> dict[str, object]:
+    """One browse row, with the two disambiguators `RI-AC-038` asked for.
+
+    **The five original keys keep their names and their meanings**, because
+    this is the single choke point every `entities.search` response passes
+    through and renaming one here would break every caller at once. The two
+    additions are `EntitySummary`'s own bounded collections, rendered as lists
+    because JSON has no tuple; an entity with no current affiliation and no
+    current project answers with two empty lists, which is a fact about that
+    entity rather than a truncation, so nothing is disclosed about it.
+
+    `tests/contract/test_entity_search_disambiguators.py` holds that
+    compatibility claim as a test rather than as this paragraph.
+    """
     return {
         "entity_id": summary.entity_id,
         "entity_type": summary.entity_type.value,
         "canonical_name": summary.canonical_name,
         "display_name": summary.display_name,
         "status": summary.status.value,
+        "affiliated_organizations": list(summary.affiliated_organizations),
+        "project_roles": list(summary.project_roles),
     }
 
 

@@ -226,6 +226,10 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # Remote grant staging compares the NAS-issued contract Principal with the
     # store's authenticated Principal partition before persisting any bounds.
     "infrastructure/persistence/native_sources.py": (("grant", "principal_id"),),
+    # WP02 opaque-session rotate reads `current.principal_id` off the row loaded
+    # by token hash so the successor is bound to the same Principal. The value
+    # is server-owned session state, not a request-body owner.
+    "infrastructure/persistence/webauthn_auth.py": (("current", "principal_id"),),
     # `WP-RI-A-02`'s governed entity writes. `EntityWriteRequest.principal_id`
     # is *not* a caller-stated owner despite the shape this scan matches: the
     # request is built inside `application.entity_authoring` from

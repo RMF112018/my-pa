@@ -24,12 +24,16 @@ jobs:
         with:
           persist-credentials: false
           ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
       - id: classify
         shell: bash
         run: |
           set -euo pipefail
           git fetch --no-tags origin main
-          if git diff --name-only origin/main...HEAD | grep -Eq '^(web/|src/my_pa/.*/webauthn|src/my_pa/application/webauthn|src/my_pa/adapters/http/webauthn|src/my_pa/domain/identity/webauthn|pyproject.toml|web/package-lock.json)'; then
+          git merge-base origin/main HEAD >/dev/null
+          mapfile -t changed < <(git diff --name-only origin/main...HEAD)
+          printf '%s\n' "${changed[@]}"
+          if printf '%s\n' "${changed[@]}" | grep -Eq '^(web/|src/my_pa/.*/webauthn|src/my_pa/application/webauthn|src/my_pa/adapters/http/webauthn|src/my_pa/domain/identity/webauthn|src/my_pa/bootstrap/settings.py|src/my_pa/adapters/http/app.py|apps/gateway.py|pyproject.toml|web/package-lock.json)'; then
             echo "applicable=true" >> "$GITHUB_OUTPUT"
           else
             echo "applicable=false" >> "$GITHUB_OUTPUT"

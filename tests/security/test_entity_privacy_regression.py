@@ -36,10 +36,12 @@ from my_pa.application.commands import (
     ArchiveEntity,
     BindEntityIdentifier,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
     CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
+    EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
@@ -70,6 +72,7 @@ from my_pa.application.commands import (
     RetireEntityIdentifier,
     RetireEntityName,
     ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
     ReviseEntityParticipation,
@@ -96,6 +99,7 @@ from my_pa.domain.identity.purpose import Purpose
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
+    AffiliationTypeCode,
     AliasType,
     Assignment,
     AssignmentType,
@@ -158,6 +162,7 @@ FOREIGN_ENTITY_NAME: Final = "enam_foreign1foreign1"
 FOREIGN_ENTITY_ADDRESS: Final = "eadr_foreign1foreign1"
 FOREIGN_COMMUNICATION_METHOD: Final = "ecmm_foreign1foreign"
 FOREIGN_PARTICIPATION: Final = "eppt_foreign1foreign"
+FOREIGN_AFFILIATION: Final = "poaf_foreign1foreign"
 OWN_ENTITY: Final = "ent_mine0002mine00002"
 #: A second entity of my own, so a write of mine that has to name two of them
 #: does not have to borrow one of theirs.
@@ -488,6 +493,34 @@ _EVERY_CAPABILITY: Final = (
         ),
     ),
     (
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        CreateEntityAffiliation(
+            person_entity_id=FOREIGN_ENTITY,
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            idempotency_key="privacy-entity-affiliations-create",
+            organization_entity_id=FOREIGN_SCOPE,
+        ),
+    ),
+    (
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        ReviseEntityAffiliation(
+            affiliation_id=FOREIGN_AFFILIATION,
+            expected_version=1,
+            person_entity_id=FOREIGN_ENTITY,
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            organization_entity_id=FOREIGN_SCOPE,
+            idempotency_key="privacy-entity-affiliations-revise",
+        ),
+    ),
+    (
+        Capability.ENTITIES_AFFILIATIONS_END,
+        EndEntityAffiliation(
+            affiliation_id=FOREIGN_AFFILIATION,
+            expected_version=1,
+            idempotency_key="privacy-entity-affiliations-end",
+        ),
+    ),
+    (
         Capability.ENTITIES_CREATE,
         CreateEntity(
             entity_type=EntityType.PERSON,
@@ -765,10 +798,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    # Fifty-one after `RI-ENT-WP-11`'s first four record families. The count
+    # Fifty-four after `RI-ENT-WP-11`'s five record families. The count
     # is asserted as well as the set, because a prefix scan that stopped matching
     # would satisfy the equality against an equally empty tuple.
-    assert len(served) == 51
+    assert len(served) == 54
 
 
 # --- the partition, under every capability ---------------------------------

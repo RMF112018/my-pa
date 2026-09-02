@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route one hundred and twenty-one capability names and none of them mutates a
+  surface route one hundred and twenty-four capability names and none of them mutates a
   source, and every capability driven over both transports is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -404,6 +404,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_PARTICIPATIONS_CREATE,
         Capability.ENTITIES_PARTICIPATIONS_REVISE,
         Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_UPDATE,
         Capability.ENTITIES_ARCHIVE,
@@ -757,6 +760,7 @@ PHASE_B_PROPOSAL_EXEMPTION = frozenset({Capability.ENTITIES_PROPOSALS_CREATE})
 ENTITY_RECORD_FAMILY_EXEMPTION = frozenset(
     {
         Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
     }
 )
 

@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and twenty-one capability names and none of them
+  ends: the transport routes one hundred and twenty-four capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -742,6 +742,27 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "expected_version": 1,
             "idempotency_key": "wire-entity-participations-end-0001",
         },
+        Capability.ENTITIES_AFFILIATIONS_CREATE: {
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "idempotency_key": "wire-entity-affiliations-create-0001",
+            "organization_entity_id": organization.entity_id,
+            "job_title": "Wire Engineer",
+        },
+        Capability.ENTITIES_AFFILIATIONS_REVISE: {
+            "affiliation_id": issue_identifier(IdKind.PERSON_ORGANIZATION_AFFILIATION),
+            "expected_version": 1,
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "organization_entity_id": organization.entity_id,
+            "idempotency_key": "wire-entity-affiliations-revise-0001",
+            "job_title": "Wire Principal, corrected",
+        },
+        Capability.ENTITIES_AFFILIATIONS_END: {
+            "affiliation_id": issue_identifier(IdKind.PERSON_ORGANIZATION_AFFILIATION),
+            "expected_version": 1,
+            "idempotency_key": "wire-entity-affiliations-end-0001",
+        },
         # A name no staged entity carries, so duplicate resolution admits it.
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
@@ -1320,6 +1341,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_PARTICIPATIONS_CREATE,
         Capability.ENTITIES_PARTICIPATIONS_REVISE,
         Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_UPDATE,
         Capability.ENTITIES_ARCHIVE,
@@ -1610,6 +1634,7 @@ PHASE_B_PROPOSAL_EXEMPTION = frozenset({Capability.ENTITIES_PROPOSALS_CREATE})
 ENTITY_RECORD_FAMILY_EXEMPTION = frozenset(
     {
         Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
     }
 )
 

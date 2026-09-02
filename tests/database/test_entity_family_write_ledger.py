@@ -60,12 +60,15 @@ from my_pa.application.commands import (
     AddEntityAddress,
     AddEntityCommunicationMethod,
     AddEntityName,
+    CreateEntityAffiliation,
     CreateEntityParticipation,
+    EndEntityAffiliation,
     EndEntityParticipation,
     RetireEntityAddress,
     RetireEntityCommunicationMethod,
     RetireEntityName,
     ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityCommunicationMethod,
     ReviseEntityParticipation,
     SupersedeEntityName,
@@ -74,6 +77,7 @@ from my_pa.application.entity_family_writes import EntityFamilyWriteService
 from my_pa.bootstrap.settings import ENV_PREFIX, load_settings
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
+    AffiliationTypeCode,
     CommunicationMethodTypeCode,
     CommunicationUsageContextCode,
     Entity,
@@ -85,6 +89,7 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     NameTypeCode,
     ParticipationStatusCode,
+    PersonOrganizationAffiliationState,
     RoleBasisCode,
     StakeholderClassCode,
     StakeholderSideCode,
@@ -102,6 +107,7 @@ from my_pa.infrastructure.persistence.tables import (
     entity_communication_methods,
     entity_mutation_events,
     entity_names,
+    entity_person_organization_affiliations,
     entity_project_participations,
 )
 
@@ -1224,3 +1230,230 @@ def test_a_stale_participation_version_is_refused_and_leaves_no_ledger_row(
     with staged.connect() as connection:
         assert len(_ledger(connection)) == 1
         assert _participations(connection)[0]["version"] == 1
+
+
+# --- entity_person_organization_affiliations ---------------------------------
+
+
+def _affiliations(connection: Connection) -> list[dict[str, object]]:
+    rows = connection.execute(
+        select(entity_person_organization_affiliations).where(
+            entity_person_organization_affiliations.c.principal_id == PRINCIPAL_A
+        )
+    ).all()
+    return [dict(row._mapping) for row in rows]
+
+
+def _create_affiliation(
+    key: str = "wp11-affiliations-create-0001",
+    job_title: str | None = "Principal Engineer",
+) -> CreateEntityAffiliation:
+    return CreateEntityAffiliation(
+        person_entity_id=PERSON,
+        affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+        idempotency_key=key,
+        organization_entity_id=PROJECT,
+        job_title=job_title,
+    )
+
+
+def test_a_created_affiliation_writes_a_ledger_row_naming_its_family(
+    staged: Engine,
+) -> None:
+    """`record_family` is `person_organization_affiliation`.
+
+    That is the longest of the five new family values and the one the phase's
+    migration is most likely to mistype, which is why it is read back off the
+    row rather than off the receipt alone.
+    """
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        receipt = service.create_affiliation(
+            SqlEntityRepository(connection),
+            _create_affiliation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    assert receipt.record_family is MutationRecordFamily.PERSON_ORGANIZATION_AFFILIATION
+    assert receipt.version == 1
+    assert receipt.state == PersonOrganizationAffiliationState.ACTIVE.value
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = _affiliations(connection)
+    assert len(ledger) == 1
+    assert ledger[0]["record_family"] == MutationRecordFamily.PERSON_ORGANIZATION_AFFILIATION.value
+    assert ledger[0]["capability"] == "entities.affiliations.create"
+    assert ledger[0]["record_id"] == receipt.record_id
+    # No job title anywhere in the photograph: it is a recorded value.
+    assert ledger[0]["after_state"] == {"state": PersonOrganizationAffiliationState.ACTIVE.value}
+    assert len(written) == 1
+    assert written[0]["affiliation_id"] == receipt.record_id
+
+
+def test_an_affiliation_retry_with_the_same_key_and_payload_replays(staged: Engine) -> None:
+    """One row, and the second call says it did no work."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        first = service.create_affiliation(
+            SqlEntityRepository(connection),
+            _create_affiliation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        second = service.create_affiliation(
+            SqlEntityRepository(connection),
+            _create_affiliation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert first.replayed is False
+    assert second.replayed is True
+    assert second.record_id == first.record_id
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert len(_affiliations(connection)) == 1
+
+
+def test_an_affiliation_retry_with_a_different_payload_is_refused(staged: Engine) -> None:
+    """Same key, different affiliation: a conflict rather than a second write."""
+    from my_pa.domain.relationship.entity import DirectedWriteError
+
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        service.create_affiliation(
+            SqlEntityRepository(connection),
+            _create_affiliation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with pytest.raises(DirectedWriteError), staged.begin() as connection:
+        service.create_affiliation(
+            SqlEntityRepository(connection),
+            _create_affiliation(job_title="Associate Engineer"),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert len(_affiliations(connection)) == 1
+
+
+def test_an_affiliation_revision_is_a_supersession_and_not_an_edit(staged: Engine) -> None:
+    """`revise` is this family's spelling of what names call `supersede`."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        created = service.create_affiliation(
+            SqlEntityRepository(connection),
+            _create_affiliation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        revised = service.revise_affiliation(
+            SqlEntityRepository(connection),
+            ReviseEntityAffiliation(
+                affiliation_id=created.record_id,
+                expected_version=1,
+                person_entity_id=PERSON,
+                affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+                organization_entity_id=PROJECT,
+                idempotency_key="wp11-affiliations-revise-0001",
+                job_title="Principal Engineer, corrected",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert revised.superseded_id == created.record_id
+    assert revised.record_id != created.record_id
+    assert revised.prior_version is None
+    assert revised.version == 1
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = {row["affiliation_id"]: row for row in _affiliations(connection)}
+    assert ledger[1]["record_family"] == MutationRecordFamily.PERSON_ORGANIZATION_AFFILIATION.value
+    assert ledger[1]["before_state"] == {"record_id": created.record_id, "version": 1}
+    assert (
+        written[created.record_id]["state"] == PersonOrganizationAffiliationState.SUPERSEDED.value
+    )
+    assert written[created.record_id]["superseded_by_affiliation_id"] == revised.record_id
+    assert written[revised.record_id]["state"] == PersonOrganizationAffiliationState.ACTIVE.value
+
+
+def test_an_affiliation_end_advances_its_version_and_writes_no_date_it_was_not_given(
+    staged: Engine,
+) -> None:
+    """`version + 1`, and `effective_to` stays absent unless the caller states it.
+
+    Ending already releases the open-ended slot through `state`; *when* the
+    affiliation ended is a separate fact, and this write will not invent one.
+    """
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        created = service.create_affiliation(
+            SqlEntityRepository(connection),
+            _create_affiliation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with staged.begin() as connection:
+        ended = service.end_affiliation(
+            SqlEntityRepository(connection),
+            EndEntityAffiliation(
+                affiliation_id=created.record_id,
+                expected_version=1,
+                idempotency_key="wp11-affiliations-end-0001",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    assert ended.prior_version == 1
+    assert ended.version == 2
+    assert ended.state == PersonOrganizationAffiliationState.RETIRED.value
+    with staged.connect() as connection:
+        ledger = _ledger(connection)
+        written = _affiliations(connection)
+    assert ledger[1]["prior_version"] == 1
+    assert ledger[1]["new_version"] == 2
+    assert written[0]["state"] == PersonOrganizationAffiliationState.RETIRED.value
+    assert written[0]["version"] == 2
+    assert written[0]["effective_to"] is None
+
+
+def test_a_stale_affiliation_version_is_refused_and_leaves_no_ledger_row(
+    staged: Engine,
+) -> None:
+    """The write comes first and the ledger second, so a refusal records nothing."""
+    service = EntityFamilyWriteService()
+    with staged.begin() as connection:
+        created = service.create_affiliation(
+            SqlEntityRepository(connection),
+            _create_affiliation(),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT,
+            at=WHEN,
+        )
+    with pytest.raises(StaleDirectedVersionError), staged.begin() as connection:
+        service.end_affiliation(
+            SqlEntityRepository(connection),
+            EndEntityAffiliation(
+                affiliation_id=created.record_id,
+                expected_version=2,
+                idempotency_key="wp11-affiliations-end-stale",
+            ),
+            principal_id=PRINCIPAL_A,
+            audit_id=AUDIT_TWO,
+            at=LATER,
+        )
+    with staged.connect() as connection:
+        assert len(_ledger(connection)) == 1
+        assert _affiliations(connection)[0]["version"] == 1

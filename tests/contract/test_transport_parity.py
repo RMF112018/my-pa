@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and twenty-one capabilities. There are two ways to prove that and only one stays
+one hundred and twenty-four capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -28,10 +28,10 @@ command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
 default composition exposes fifty-five: the six managed-document names, the
-fifty-one `entities.` names and the nine Relationship Memory names are
+fifty-four `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
-second switch over the `entities.` family and withholds its thirty-five writes on
+second switch over the `entities.` family and withholds its thirty-eight writes on
 its own. Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
@@ -109,6 +109,7 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
+    AffiliationTypeCode,
     AliasType,
     Assignment,
     AssignmentType,
@@ -128,6 +129,7 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifierNamespace,
     NameTypeCode,
     ParticipationStatusCode,
+    PersonOrganizationAffiliation,
     RoleBasisCode,
     StakeholderClassCode,
     StakeholderSideCode,
@@ -527,6 +529,43 @@ def staged_participation(scene: Scene, role_text: str) -> str:
     return participation_id
 
 
+def staged_affiliation(scene: Scene, job_title: str) -> str:
+    """One recorded affiliation the staged person holds with the staged organization.
+
+    `staged_entity_name`'s contract over the affiliation family, memoized on
+    `job_title`. Every staged row carries an `effective_to`, so none of them
+    holds the open-ended slot `an_open_ended_affiliation_is_unique_per_person`
+    keys on and the payload table's own create can take it.
+    """
+    principal_id = scene.principal.principal_id
+    person, organization = staged_entities(scene)
+    held = next(
+        (
+            row
+            for row in scene.world.entity_person_organization_affiliations
+            if row.principal_id == principal_id and row.job_title == job_title
+        ),
+        None,
+    )
+    if held is not None:
+        return held.affiliation_id
+    affiliation_id = issue_identifier(IdKind.PERSON_ORGANIZATION_AFFILIATION)
+    FakeUnitOfWork(scene.world).entities.record_person_organization_affiliation(
+        principal_id,
+        PersonOrganizationAffiliation(
+            affiliation_id=affiliation_id,
+            principal_id=principal_id,
+            person_entity_id=person.entity_id,
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            organization_entity_id=organization.entity_id,
+            job_title=job_title,
+            effective_from=datetime(2026, 8, 1, 9, tzinfo=UTC),
+            effective_to=datetime(2026, 8, 2, 9, tzinfo=UTC),
+        ),
+    )
+    return affiliation_id
+
+
 def staged_entity_name(scene: Scene, name_type_code: NameTypeCode) -> str:
     """One recorded name the staged person carries, of the stated type.
 
@@ -840,6 +879,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
     revise_participation = staged_participation(scene, "consultant")
     end_participation = staged_participation(scene, "supplier")
+    revise_affiliation = staged_affiliation(scene, "Parity Principal")
+    end_affiliation = staged_affiliation(scene, "Parity Associate")
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -1269,6 +1310,27 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "expected_version": 1,
             "idempotency_key": "parity-entity-participations-end-0001",
         },
+        Capability.ENTITIES_AFFILIATIONS_CREATE: {
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "idempotency_key": "parity-entity-affiliations-create-0001",
+            "organization_entity_id": organization.entity_id,
+            "job_title": "Parity Engineer",
+        },
+        Capability.ENTITIES_AFFILIATIONS_REVISE: {
+            "affiliation_id": revise_affiliation,
+            "expected_version": 1,
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "organization_entity_id": organization.entity_id,
+            "idempotency_key": "parity-entity-affiliations-revise-0001",
+            "job_title": "Parity Principal, corrected",
+        },
+        Capability.ENTITIES_AFFILIATIONS_END: {
+            "affiliation_id": end_affiliation,
+            "expected_version": 1,
+            "idempotency_key": "parity-entity-affiliations-end-0001",
+        },
         # A name no staged entity carries, so duplicate resolution admits it.
         # A create naming "Parity Person" would be refused as ambiguous, which
         # is the plane behaving correctly and this table measuring the wrong
@@ -1689,8 +1751,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and twenty-one commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 122, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and twenty-four commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 125, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

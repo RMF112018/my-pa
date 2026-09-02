@@ -173,6 +173,9 @@ def test_the_names_this_file_is_about_are_the_family() -> None:
         "entities.participations.create",
         "entities.participations.revise",
         "entities.participations.end",
+        "entities.affiliations.create",
+        "entities.affiliations.revise",
+        "entities.affiliations.end",
     }
     assert ENTITY_READS | ENTITY_WRITES == ENTITY_CAPABILITIES
 

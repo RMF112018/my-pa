@@ -66,6 +66,7 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateCommitment,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
     CreateEntityParticipation,
     CreateEntityProposal,
@@ -76,6 +77,7 @@ from my_pa.application.commands import (
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
@@ -147,6 +149,7 @@ from my_pa.application.commands import (
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
     ReviseEntityParticipation,
@@ -404,6 +407,9 @@ def _requested_scope(
             | CreateEntityParticipation()
             | ReviseEntityParticipation()
             | EndEntityParticipation()
+            | CreateEntityAffiliation()
+            | ReviseEntityAffiliation()
+            | EndEntityAffiliation()
             | CreateEntity()
             | UpdateEntity()
             | ArchiveEntity()

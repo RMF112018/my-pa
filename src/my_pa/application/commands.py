@@ -105,6 +105,7 @@ from my_pa.domain.relationship.entity import (
     MAX_DIRECTED_REASON_CHARACTERS,
     MAX_DIRECTED_TEXT_CHARACTERS,
     AddressTypeCode,
+    AffiliationTypeCode,
     AliasState,
     AliasType,
     AssignmentType,
@@ -4819,6 +4820,37 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 "project, in the words a source used."
             )
         },
+        "affiliation_id": {
+            "description": (
+                "Opaque identifier of the recorded affiliation, as returned by entities.profile."
+            )
+        },
+        "person_entity_id": {
+            "description": "The person this affiliation belongs to, already resolved."
+        },
+        "affiliation_type_code": {
+            "description": (
+                "What kind of affiliation this is, from the closed "
+                "affiliation-type vocabulary: employment, principal_ownership, "
+                "independent_consultant, contractor, board_member, advisor or "
+                "other."
+            )
+        },
+        "organization_entity_id": {
+            "description": (
+                "Optional organization the person is affiliated with. Absence is "
+                "a complete answer -- an independent consultant needs no "
+                "placeholder organization -- and nothing here creates, selects "
+                "or substitutes an organization to fill it. On a revision it is "
+                "required rather than optional, so omitting it cannot be read "
+                "as either unchanged or cleared."
+            )
+        },
+        "job_title": {
+            "description": (
+                "Optional job title, in the words a source used. A title, not a ranking."
+            )
+        },
     }
 )
 
@@ -5980,6 +6012,159 @@ class EndEntityParticipation:
 
 
 @dataclass(frozen=True, slots=True)
+class CreateEntityAffiliation:
+    """`entities.affiliations.create`: record one person's affiliation.
+
+    `organization_entity_id` is genuinely optional and absence is a complete
+    answer: an independent consultant needs no placeholder organization, and
+    nothing here creates, selects or substitutes one to fill it.
+
+    A person holds at most one open-ended active affiliation at a time -- one
+    whose `effective_to` is absent -- so a second open-ended one is refused
+    rather than silently ending the first. Close the first with
+    `entities.affiliations.end` if that is what you meant.
+
+    Retrying with the same `idempotency_key` and the same payload returns the
+    original receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_AFFILIATIONS_CREATE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "person_entity_id",
+        "affiliation_type_code",
+        "idempotency_key",
+        "organization_entity_id",
+        "job_title",
+        "effective_from",
+        "effective_to",
+    )
+
+    person_entity_id: str
+    affiliation_type_code: AffiliationTypeCode
+    idempotency_key: str
+    organization_entity_id: str | None = None
+    job_title: str | None = field(default=None, repr=False)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.person_entity_id, IdKind.ENTITY, SafeDetail.PERSON_ENTITY_ID)
+        _entity_vocabulary(
+            self.affiliation_type_code, AffiliationTypeCode, SafeDetail.AFFILIATION_TYPE_CODE
+        )
+        _idempotency_key(self.idempotency_key)
+        if self.organization_entity_id is not None:
+            _identifier(
+                self.organization_entity_id, IdKind.ENTITY, SafeDetail.ORGANIZATION_ENTITY_ID
+            )
+        _optional_record_text(self.job_title, SafeDetail.JOB_TITLE)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class ReviseEntityAffiliation:
+    """`entities.affiliations.revise`: replace one affiliation with a corrected one.
+
+    **A supersession, not an update**, exactly as `entities.names.supersede` is:
+    a new affiliation row is written and the one named by `affiliation_id` is
+    marked superseded, pointing at its successor. Nothing is edited in place and
+    nothing is deleted.
+
+    **`organization_entity_id` is required here and optional on the create**, and
+    the asymmetry is deliberate: a correction states what the affiliation now
+    says, and a correction that could omit the organization would leave you
+    unable to tell "unchanged" from "cleared" when this write performs no read.
+    Send `null` to clear it and the entity to keep it.
+
+    `expected_version` is the version a recent `entities.profile` returned.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_AFFILIATIONS_REVISE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "affiliation_id",
+        "expected_version",
+        "person_entity_id",
+        "affiliation_type_code",
+        "organization_entity_id",
+        "idempotency_key",
+        "job_title",
+        "effective_from",
+        "effective_to",
+    )
+
+    affiliation_id: str
+    expected_version: int
+    person_entity_id: str
+    affiliation_type_code: AffiliationTypeCode
+    organization_entity_id: str | None
+    idempotency_key: str
+    job_title: str | None = field(default=None, repr=False)
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.affiliation_id,
+            IdKind.PERSON_ORGANIZATION_AFFILIATION,
+            SafeDetail.AFFILIATION_ID,
+        )
+        _expected_version(self.expected_version)
+        _identifier(self.person_entity_id, IdKind.ENTITY, SafeDetail.PERSON_ENTITY_ID)
+        _entity_vocabulary(
+            self.affiliation_type_code, AffiliationTypeCode, SafeDetail.AFFILIATION_TYPE_CODE
+        )
+        if self.organization_entity_id is not None:
+            _identifier(
+                self.organization_entity_id, IdKind.ENTITY, SafeDetail.ORGANIZATION_ENTITY_ID
+            )
+        _idempotency_key(self.idempotency_key)
+        _optional_record_text(self.job_title, SafeDetail.JOB_TITLE)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class EndEntityAffiliation:
+    """`entities.affiliations.end`: withdraw one affiliation from service.
+
+    The row is kept and its history with it; there is no capability that
+    destroys a recorded affiliation. The word is `end` here and `retire` for
+    names, addresses and communication methods because the source audit fixed
+    both spellings; the act is the same one.
+
+    `effective_to` is written only when you supply it. Ending already releases
+    the open-ended slot the affiliation held; *when* it ended is a separate fact
+    you state or leave unstated, and this write will not invent a date for it.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_AFFILIATIONS_END
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "affiliation_id", "expected_version", "idempotency_key", "effective_to"
+    )
+
+    affiliation_id: str
+    expected_version: int
+    idempotency_key: str
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(
+            self.affiliation_id,
+            IdKind.PERSON_ORGANIZATION_AFFILIATION,
+            SafeDetail.AFFILIATION_ID,
+        )
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
 class CreateEntity:
     """Bring one person, organization, project or other entity into existence.
 
@@ -7121,6 +7306,9 @@ type Command = (
     | CreateEntityParticipation
     | ReviseEntityParticipation
     | EndEntityParticipation
+    | CreateEntityAffiliation
+    | ReviseEntityAffiliation
+    | EndEntityAffiliation
     | CreateEntity
     | UpdateEntity
     | ArchiveEntity

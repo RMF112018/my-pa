@@ -388,6 +388,9 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.ENTITIES_PARTICIPATIONS_CREATE,
         Capability.ENTITIES_PARTICIPATIONS_REVISE,
         Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
     }
 )
 

@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and twenty-one capabilities is addressable
+**Reachability.** Every one of the one hundred and twenty-four capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-twenty-second capability added to the domain arrives as
-a failing row instead of as an untested one. Thirteen of the one hundred and twenty-one answer a
+written here, so a one-hundred-twenty-fifth capability added to the domain arrives as
+a failing row instead of as an untested one. Thirteen of the one hundred and twenty-four answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -66,6 +66,7 @@ from tests.conftest import (
 )
 from tests.contract.test_transport_parity import (
     ENTITY_EMAIL,
+    staged_affiliation,
     staged_archived_entity,
     staged_assignment,
     staged_child_records,
@@ -100,6 +101,7 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateCommitment,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
     CreateEntityParticipation,
     CreateEntityProposal,
@@ -110,6 +112,7 @@ from my_pa.application.commands import (
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
@@ -182,6 +185,7 @@ from my_pa.application.commands import (
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
     ReviseEntityParticipation,
@@ -233,6 +237,7 @@ from my_pa.domain.intelligence.catalog import (
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
+    AffiliationTypeCode,
     AliasState,
     AliasType,
     AssignmentType,
@@ -433,6 +438,8 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
     revise_participation = staged_participation(scene, "consultant")
     end_participation = staged_participation(scene, "supplier")
+    revise_affiliation = staged_affiliation(scene, "HTTP Principal")
+    end_affiliation = staged_affiliation(scene, "HTTP Associate")
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -838,6 +845,27 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "expected_version": 1,
             "idempotency_key": "http-entity-participations-end-0001",
         },
+        Capability.ENTITIES_AFFILIATIONS_CREATE: {
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "idempotency_key": "http-entity-affiliations-create-0001",
+            "organization_entity_id": organization.entity_id,
+            "job_title": "HTTP Engineer",
+        },
+        Capability.ENTITIES_AFFILIATIONS_REVISE: {
+            "affiliation_id": revise_affiliation,
+            "expected_version": 1,
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "organization_entity_id": organization.entity_id,
+            "idempotency_key": "http-entity-affiliations-revise-0001",
+            "job_title": "HTTP Principal, corrected",
+        },
+        Capability.ENTITIES_AFFILIATIONS_END: {
+            "affiliation_id": end_affiliation,
+            "expected_version": 1,
+            "idempotency_key": "http-entity-affiliations-end-0001",
+        },
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
             "display_name": "HTTP Newcomer",
@@ -1193,6 +1221,8 @@ def commands_for(
     retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
     revise_participation = staged_participation(scene, "consultant")
     end_participation = staged_participation(scene, "supplier")
+    revise_affiliation = staged_affiliation(scene, "HTTP Principal")
+    end_affiliation = staged_affiliation(scene, "HTTP Associate")
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -1571,6 +1601,27 @@ def commands_for(
             participation_id=end_participation,
             expected_version=1,
             idempotency_key="http-entity-participations-end-0001",
+        ),
+        Capability.ENTITIES_AFFILIATIONS_CREATE: CreateEntityAffiliation(
+            person_entity_id=person.entity_id,
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            idempotency_key="http-entity-affiliations-create-0001",
+            organization_entity_id=organization.entity_id,
+            job_title="HTTP Engineer",
+        ),
+        Capability.ENTITIES_AFFILIATIONS_REVISE: ReviseEntityAffiliation(
+            affiliation_id=revise_affiliation,
+            expected_version=1,
+            person_entity_id=person.entity_id,
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            organization_entity_id=organization.entity_id,
+            idempotency_key="http-entity-affiliations-revise-0001",
+            job_title="HTTP Principal, corrected",
+        ),
+        Capability.ENTITIES_AFFILIATIONS_END: EndEntityAffiliation(
+            affiliation_id=end_affiliation,
+            expected_version=1,
+            idempotency_key="http-entity-affiliations-end-0001",
         ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,

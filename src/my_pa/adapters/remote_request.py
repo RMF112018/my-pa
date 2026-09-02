@@ -148,6 +148,9 @@ _IDEMPOTENT_REMOTE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_PARTICIPATIONS_CREATE,
         Capability.ENTITIES_PARTICIPATIONS_REVISE,
         Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
         # **No keyless proposal or identity-correction write is here, and the reason is this set's
         # mechanism rather than a judgement about how replayable they are.**
         # Membership makes `compose_remote_arguments` derive a key and *insert it

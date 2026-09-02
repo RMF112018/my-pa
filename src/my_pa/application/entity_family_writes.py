@@ -84,12 +84,15 @@ from my_pa.application.commands import (
     AddEntityAddress,
     AddEntityCommunicationMethod,
     AddEntityName,
+    CreateEntityAffiliation,
     CreateEntityParticipation,
+    EndEntityAffiliation,
     EndEntityParticipation,
     RetireEntityAddress,
     RetireEntityCommunicationMethod,
     RetireEntityName,
     ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityCommunicationMethod,
     ReviseEntityParticipation,
     SupersedeEntityName,
@@ -114,6 +117,7 @@ from my_pa.domain.relationship.entity import (
     EntityCommunicationMethodState,
     EntityNameState,
     EntityProjectParticipationState,
+    PersonOrganizationAffiliationState,
 )
 from my_pa.domain.relationship.governance import (
     DEFAULT_MUTATION_ACTOR_CLASS,
@@ -949,6 +953,190 @@ class EntityFamilyWriteService:
             actor_class=actor_class,
         )
 
+    # --- entity_person_organization_affiliations -----------------------------
+
+    def create_affiliation(
+        self,
+        repository: EntitiesRepository,
+        command: CreateEntityAffiliation,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Record one affiliation, or return the receipt this key already has."""
+        payload = _affiliation_payload(command)
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_AFFILIATIONS_CREATE.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        recorded = self._families.record_affiliation(
+            repository,
+            record_families.RecordAffiliation(
+                person_entity_id=command.person_entity_id,
+                affiliation_type_code=command.affiliation_type_code,
+                organization_entity_id=command.organization_entity_id,
+                job_title=command.job_title,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+            ),
+            principal_id=principal_id,
+            at=at,
+            authority=authority,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_AFFILIATIONS_CREATE,
+            family=MutationRecordFamily.PERSON_ORGANIZATION_AFFILIATION,
+            record_id=recorded.record_id,
+            prior_version=None,
+            new_version=1,
+            state=PersonOrganizationAffiliationState.ACTIVE.value,
+            before_state=None,
+            superseded_id=None,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
+    def revise_affiliation(
+        self,
+        repository: EntitiesRepository,
+        command: ReviseEntityAffiliation,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Supersede one affiliation with its corrected successor.
+
+        `revise` is the audit's spelling for this family and `supersede` is its
+        spelling for names; the act is the same one, and it is a supersession
+        rather than an edit in both.
+        """
+        payload = {
+            "affiliation_id": command.affiliation_id,
+            "expected_version": command.expected_version,
+            **_affiliation_payload(command),
+        }
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_AFFILIATIONS_REVISE.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        corrected = self._families.correct_affiliation(
+            repository,
+            record_families.CorrectAffiliation(
+                affiliation_id=command.affiliation_id,
+                expected_version=command.expected_version,
+                person_entity_id=command.person_entity_id,
+                affiliation_type_code=command.affiliation_type_code,
+                organization_entity_id=command.organization_entity_id,
+                job_title=command.job_title,
+                effective_from=command.effective_from,
+                effective_to=command.effective_to,
+            ),
+            principal_id=principal_id,
+            at=at,
+            authority=authority,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_AFFILIATIONS_REVISE,
+            family=MutationRecordFamily.PERSON_ORGANIZATION_AFFILIATION,
+            record_id=corrected.record_id,
+            prior_version=None,
+            new_version=1,
+            state=PersonOrganizationAffiliationState.ACTIVE.value,
+            before_state=_predecessor(corrected.superseded_record_id, command.expected_version),
+            superseded_id=corrected.superseded_record_id,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
+    def end_affiliation(
+        self,
+        repository: EntitiesRepository,
+        command: EndEntityAffiliation,
+        *,
+        principal_id: str,
+        audit_id: str,
+        at: datetime,
+        authority: MutationAuthority = DEFAULT_MUTATION_AUTHORITY,
+        actor_class: ActorClass = DEFAULT_MUTATION_ACTOR_CLASS,
+    ) -> DirectedReceipt:
+        """Withdraw one affiliation, closing its window only when the caller said to.
+
+        `effective_to` is part of the digest because it is a caller-supplied
+        fact about *when* the affiliation ended: two ends of one affiliation
+        under one key that name different dates are two different requests, and
+        the second is a conflict rather than a silent second write.
+        """
+        payload = {
+            "affiliation_id": command.affiliation_id,
+            "expected_version": command.expected_version,
+            "effective_to": _moment(command.effective_to),
+        }
+        digest = _directed_digest(payload)
+        replayed = repository.directed_replay(
+            Capability.ENTITIES_AFFILIATIONS_END.value,
+            command.idempotency_key,
+            digest,
+            principal_id=principal_id,
+        )
+        if replayed is not None:
+            return replayed
+        retired = self._families.retire_affiliation(
+            repository,
+            record_families.RetireAffiliation(
+                affiliation_id=command.affiliation_id,
+                expected_version=command.expected_version,
+                effective_to=command.effective_to,
+            ),
+            principal_id=principal_id,
+            at=at,
+        )
+        return self._account_for(
+            repository,
+            capability=Capability.ENTITIES_AFFILIATIONS_END,
+            family=MutationRecordFamily.PERSON_ORGANIZATION_AFFILIATION,
+            record_id=retired.record_id,
+            prior_version=command.expected_version,
+            new_version=command.expected_version + 1,
+            state=PersonOrganizationAffiliationState.RETIRED.value,
+            before_state={"state": PersonOrganizationAffiliationState.ACTIVE.value},
+            superseded_id=None,
+            digest=digest,
+            idempotency_key=command.idempotency_key,
+            principal_id=principal_id,
+            audit_id=audit_id,
+            at=at,
+            authority=authority,
+            actor_class=actor_class,
+        )
+
     # --- the ledger row every verb above leaves behind ----------------------
 
     def _account_for(
@@ -1113,6 +1301,27 @@ def _participation_payload(
         "discipline_code": command.discipline_code,
         "discipline_text": command.discipline_text,
         "scope_text": command.scope_text,
+        "effective_from": _moment(command.effective_from),
+        "effective_to": _moment(command.effective_to),
+    }
+
+
+def _affiliation_payload(
+    command: CreateEntityAffiliation | ReviseEntityAffiliation,
+) -> dict[str, Any]:
+    """The caller-supplied half of an affiliation write, in canonical form.
+
+    Shared by the creation and the correction on `_address_payload`'s argument.
+    `organization_entity_id` is optional on the creation and required-with-no-
+    default on the correction, which changes nothing here: both state the value
+    the affiliation now carries, and `None` is a value rather than an absence in
+    the canonical form.
+    """
+    return {
+        "person_entity_id": command.person_entity_id,
+        "affiliation_type_code": command.affiliation_type_code.value,
+        "organization_entity_id": command.organization_entity_id,
+        "job_title": command.job_title,
         "effective_from": _moment(command.effective_from),
         "effective_to": _moment(command.effective_to),
     }

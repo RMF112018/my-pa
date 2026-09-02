@@ -2487,6 +2487,7 @@ verbs per family, and the mutation-ledger row that accounts for each write.
 | Addresses | `entities.addresses.add`, `entities.addresses.revise`, `entities.addresses.retire` | `address` |
 | Communication methods | `entities.communication.add`, `entities.communication.revise`, `entities.communication.retire` | `communication_method` |
 | Project participations | `entities.participations.create`, `entities.participations.revise`, `entities.participations.end` | `project_participation` |
+| Person-organization affiliations | `entities.affiliations.create`, `entities.affiliations.revise`, `entities.affiliations.end` | `person_organization_affiliation` |
 
 **RULING 5 holds and is enforced by the transport rather than by a convention.**
 There is no `entities.profile.save` and there will not be one. Every command

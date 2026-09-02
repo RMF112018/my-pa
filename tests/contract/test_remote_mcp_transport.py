@@ -357,6 +357,9 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.ENTITIES_PARTICIPATIONS_CREATE,
         Capability.ENTITIES_PARTICIPATIONS_REVISE,
         Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
     }
     destructive_writes = {
         Capability.CAPTURE_REVISE,
@@ -407,6 +410,8 @@ def test_canonical_tool_annotations_match_read_and_write_behavior(scene: Scene) 
         Capability.ENTITIES_COMMUNICATION_RETIRE,
         Capability.ENTITIES_PARTICIPATIONS_REVISE,
         Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
     }
     for capability in Capability:
         tool = tools.get(capability.value)

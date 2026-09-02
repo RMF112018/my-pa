@@ -75,6 +75,7 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateCommitment,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
     CreateEntityParticipation,
     CreateEntityProposal,
@@ -85,6 +86,7 @@ from my_pa.application.commands import (
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
@@ -157,6 +159,7 @@ from my_pa.application.commands import (
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
     ReviseEntityParticipation,
@@ -207,6 +210,7 @@ from my_pa.domain.intelligence.catalog import (
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
+    AffiliationTypeCode,
     AliasState,
     AliasType,
     AssignmentType,
@@ -1248,6 +1252,7 @@ _RECORD_FAMILY_VOCABULARIES: Mapping[str, type[StrEnum]] = MappingProxyType(
         "stakeholder_side_code": StakeholderSideCode,
         "stakeholder_class_code": StakeholderClassCode,
         "relationship_status_code": ParticipationStatusCode,
+        "affiliation_type_code": AffiliationTypeCode,
     }
 )
 
@@ -1332,6 +1337,18 @@ def _revise_entity_participation(payload: Mapping[str, Any]) -> Command:
 
 def _end_entity_participation(payload: Mapping[str, Any]) -> Command:
     return EndEntityParticipation(**_record_family_payload(payload))
+
+
+def _create_entity_affiliation(payload: Mapping[str, Any]) -> Command:
+    return CreateEntityAffiliation(**_record_family_payload(payload))
+
+
+def _revise_entity_affiliation(payload: Mapping[str, Any]) -> Command:
+    return ReviseEntityAffiliation(**_record_family_payload(payload))
+
+
+def _end_entity_affiliation(payload: Mapping[str, Any]) -> Command:
+    return EndEntityAffiliation(**_record_family_payload(payload))
 
 
 def _create_entity(payload: Mapping[str, Any]) -> Command:
@@ -1820,6 +1837,9 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_PARTICIPATIONS_CREATE: _create_entity_participation,
         Capability.ENTITIES_PARTICIPATIONS_REVISE: _revise_entity_participation,
         Capability.ENTITIES_PARTICIPATIONS_END: _end_entity_participation,
+        Capability.ENTITIES_AFFILIATIONS_CREATE: _create_entity_affiliation,
+        Capability.ENTITIES_AFFILIATIONS_REVISE: _revise_entity_affiliation,
+        Capability.ENTITIES_AFFILIATIONS_END: _end_entity_affiliation,
         Capability.ENTITIES_CREATE: _create_entity,
         Capability.ENTITIES_UPDATE: _update_entity,
         Capability.ENTITIES_ARCHIVE: _archive_entity,
@@ -1864,7 +1884,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a value outside
-    the 121 canonical names refers to nothing.
+    the 124 canonical names refers to nothing.
     """
     try:
         return Capability(capability)

@@ -403,6 +403,9 @@ _ORDINAL_UNITS = (
     "hundred-twentieth",
     "hundred-twenty-first",
     "hundred-twenty-second",
+    "hundred-twenty-third",
+    "hundred-twenty-fourth",
+    "hundred-twenty-fifth",
 )
 
 

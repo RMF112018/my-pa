@@ -411,6 +411,11 @@ class SafeDetail(StrEnum):
     DISCIPLINE_CODE = "discipline_code"
     DISCIPLINE_TEXT = "discipline_text"
     SCOPE_TEXT = "scope_text"
+    AFFILIATION_ID = "affiliation_id"
+    PERSON_ENTITY_ID = "person_entity_id"
+    AFFILIATION_TYPE_CODE = "affiliation_type_code"
+    ORGANIZATION_ENTITY_ID = "organization_entity_id"
+    JOB_TITLE = "job_title"
 
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a

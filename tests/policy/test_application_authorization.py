@@ -68,6 +68,7 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateCommitment,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
     CreateEntityParticipation,
     CreateEntityProposal,
@@ -78,6 +79,7 @@ from my_pa.application.commands import (
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAffiliation,
     EndEntityAssignment,
     EndEntityParticipation,
     EndEntityRelationship,
@@ -149,6 +151,7 @@ from my_pa.application.commands import (
     RevealSubject,
     ReviseCapture,
     ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
     ReviseEntityCommunicationMethod,
     ReviseEntityParticipation,
@@ -199,6 +202,7 @@ from my_pa.domain.policy.decision import DenialReason
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
     AddressTypeCode,
+    AffiliationTypeCode,
     AliasType,
     AssignmentType,
     CommunicationMethodTypeCode,
@@ -702,6 +706,25 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
             expected_version=1,
             idempotency_key="policy-entity-participations-end",
         ),
+        Capability.ENTITIES_AFFILIATIONS_CREATE: CreateEntityAffiliation(
+            person_entity_id=issue_identifier(IdKind.ENTITY),
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            idempotency_key="policy-entity-affiliations-create",
+            organization_entity_id=issue_identifier(IdKind.ENTITY),
+        ),
+        Capability.ENTITIES_AFFILIATIONS_REVISE: ReviseEntityAffiliation(
+            affiliation_id=issue_identifier(IdKind.PERSON_ORGANIZATION_AFFILIATION),
+            expected_version=1,
+            person_entity_id=issue_identifier(IdKind.ENTITY),
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            organization_entity_id=issue_identifier(IdKind.ENTITY),
+            idempotency_key="policy-entity-affiliations-revise",
+        ),
+        Capability.ENTITIES_AFFILIATIONS_END: EndEntityAffiliation(
+            affiliation_id=issue_identifier(IdKind.PERSON_ORGANIZATION_AFFILIATION),
+            expected_version=1,
+            idempotency_key="policy-entity-affiliations-end",
+        ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,
             display_name="Synthetic Person",
@@ -1138,6 +1161,9 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_PARTICIPATIONS_CREATE,
         Capability.ENTITIES_PARTICIPATIONS_REVISE,
         Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its
@@ -1337,6 +1363,9 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_PARTICIPATIONS_CREATE,
         Capability.ENTITIES_PARTICIPATIONS_REVISE,
         Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its

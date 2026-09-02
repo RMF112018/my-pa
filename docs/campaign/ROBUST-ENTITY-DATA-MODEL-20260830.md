@@ -2788,7 +2788,7 @@ it was unfinished.
 
 `EntityRecordFamilyService` returns `RecordedFact`/`CorrectedFact`/`RetiredFact`,
 writes no `entity_mutation_events` row and holds no idempotency key. Making the
-five families reach `SqlEntitiesRepository._append_mutation` would have meant
+five families reach `SqlEntityRepository._append_mutation` would have meant
 changing around fifteen accepted `EntitiesRepository` port methods from
 `-> None` to `-> DirectedReceipt` while `RI-ENT-WP-08` is under independent
 review, which is a redesign of an accepted contract rather than a use of one.

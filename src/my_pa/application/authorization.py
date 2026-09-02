@@ -50,6 +50,7 @@ from datetime import datetime
 
 from my_pa.application.commands import (
     AddEntityAlias,
+    AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -136,6 +137,7 @@ from my_pa.application.commands import (
     RestoreRelationshipMemory,
     RetireEntityAlias,
     RetireEntityIdentifier,
+    RetireEntityName,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAssignment,
@@ -154,6 +156,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     TransitionTask,
     UpdateCommitment,
     UpdateEntity,
@@ -375,6 +378,14 @@ def _requested_scope(
             | ListEntityAddresses()
             | ListEntityCommunicationMethods()
             | ListEntityParticipations()
+            # `RI-ENT-WP-11`'s record-family writes make the same measurement,
+            # and a write makes it more plainly than a read: recording,
+            # superseding or retiring a typed name is the Principal's own
+            # statement about the Principal's own contact, and the row it writes
+            # carries no `source_id` and no `enrollment_id` at all.
+            | AddEntityName()
+            | SupersedeEntityName()
+            | RetireEntityName()
             | CreateEntity()
             | UpdateEntity()
             | ArchiveEntity()

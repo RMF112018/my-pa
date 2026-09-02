@@ -366,6 +366,19 @@ _SCOPELESS: frozenset[Capability] = frozenset(
         Capability.ENTITIES_ADDRESSES_LIST,
         Capability.ENTITIES_COMMUNICATION_LIST,
         Capability.ENTITIES_PARTICIPATIONS_LIST,
+        # `RI-ENT-WP-11`'s record-family writes, scopeless on the identical
+        # argument, and the argument does not change because these write. A
+        # typed name, an address, a communication method, a participation and an
+        # affiliation are the Principal's own record of their own contacts:
+        # those rows carry no `source_id` and no `enrollment_id` for a requested
+        # scope to be checked against, so a scope requirement would make every
+        # one of them permanently unusable and accepting a scope would let a
+        # request name a grant this plane cannot hold. Omitting them here is the
+        # silent failure this set's docstring warns about -- `scope_not_authorized`
+        # on every request, with nothing saying the capability was never mapped.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
     }
 )
 

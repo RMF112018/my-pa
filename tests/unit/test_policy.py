@@ -336,6 +336,11 @@ PERMITTED_PAIRS: frozenset[tuple[Capability, Purpose]] = frozenset(
         (Capability.ENTITIES_ADDRESSES_LIST, Purpose.ENTITY_READ),
         (Capability.ENTITIES_COMMUNICATION_LIST, Purpose.ENTITY_READ),
         (Capability.ENTITIES_PARTICIPATIONS_LIST, Purpose.ENTITY_READ),
+        # `RI-ENT-WP-11`'s record-family writes, each under the `entity_authoring`
+        # the plane's other writes already hold and none under a read purpose.
+        (Capability.ENTITIES_NAMES_ADD, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_NAMES_SUPERSEDE, Purpose.ENTITY_AUTHORING),
+        (Capability.ENTITIES_NAMES_RETIRE, Purpose.ENTITY_AUTHORING),
     }
 )
 
@@ -386,9 +391,13 @@ def test_the_mismatch_parametrisation_is_not_empty() -> None:
     # preview/apply pair. GSQS B0 adds its start/status pairs. `RI-ENT-WP-10`
     # adds five `entities.` reads and no purpose, each under the `entity_read`
     # the plane's other reads already use, so it contributes five pairs.
-    # Unioned: 109 capabilities, 34 purposes, 111 permitted pairs.
-    assert len(PERMITTED_PAIRS) == 111
-    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 111 == 3595
+    # `RI-ENT-WP-11` adds the record families' writes and no purpose, each under
+    # the `entity_authoring` the plane's other writes already use, so it
+    # contributes one pair per capability rather than the thirty-four a cross
+    # product would give.
+    # Unioned: 112 capabilities, 34 purposes, 114 permitted pairs.
+    assert len(PERMITTED_PAIRS) == 114
+    assert len(MISMATCHED_PAIRS) == len(Capability) * len(Purpose) - 114 == 3694
 
 
 @pytest.mark.parametrize(("capability", "purpose"), MISMATCHED_PAIRS)

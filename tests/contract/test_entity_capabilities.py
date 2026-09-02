@@ -20,6 +20,7 @@ from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 
 from my_pa.application.commands import (
     AddEntityAlias,
+    AddEntityName,
     ArchiveEntity,
     BindEntityIdentifier,
     CreateEntity,
@@ -51,12 +52,14 @@ from my_pa.application.commands import (
     RestoreEntity,
     RetireEntityAlias,
     RetireEntityIdentifier,
+    RetireEntityName,
     ReviseEntityAssignment,
     ReviseEntityRelationship,
     SearchEntities,
     SplitEntity,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     UpdateEntity,
 )
 from my_pa.application.errors import InvalidRequestError
@@ -79,6 +82,7 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    NameTypeCode,
     RelationshipState,
 )
 from my_pa.domain.relationship.governance import (
@@ -108,6 +112,7 @@ TOWER = "ent_tower0004tower0004"
 #: has to exist for the refusal to be the one under test.
 ASSIGNMENT = "asn_offswitch01offswitch1"
 RELATIONSHIP = "erel_offswitch1offswitch"
+ENTITY_NAME = "enam_offswitch1offswitc"
 WHEN = datetime(2026, 8, 18, 12, tzinfo=UTC)
 
 #: What the one staged memory says. Synthetic and about a working preference, so
@@ -776,6 +781,29 @@ _OFF_SWITCH_COMMANDS: dict[Capability, object] = {
     Capability.ENTITIES_PARTICIPATIONS_LIST: ListEntityParticipations(
         entity_id=ALICE, perspective="participant"
     ),
+    # `RI-ENT-WP-11`'s record-family writes, all naming `ALICE` and a derived
+    # name identifier, on the same terms as the lifecycle writes above: the
+    # plane is disabled in this sweep, so what each command has to be is well
+    # formed rather than resolvable.
+    Capability.ENTITIES_NAMES_ADD: AddEntityName(
+        entity_id=ALICE,
+        name_type_code=NameTypeCode.LEGAL,
+        display_value="Alice Chen",
+        idempotency_key="off-switch-names-add",
+    ),
+    Capability.ENTITIES_NAMES_SUPERSEDE: SupersedeEntityName(
+        entity_name_id=ENTITY_NAME,
+        expected_version=1,
+        entity_id=ALICE,
+        name_type_code=NameTypeCode.LEGAL,
+        display_value="Alice Chen",
+        idempotency_key="off-switch-names-supersede",
+    ),
+    Capability.ENTITIES_NAMES_RETIRE: RetireEntityName(
+        entity_name_id=ENTITY_NAME,
+        expected_version=1,
+        idempotency_key="off-switch-names-retire",
+    ),
     Capability.ENTITIES_CREATE: CreateEntity(
         entity_type=EntityType.PERSON,
         display_name="Alice Chen",
@@ -952,12 +980,11 @@ def test_the_off_switch_sweep_covers_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert set(_OFF_SWITCH_COMMANDS) == served
-    # Thirty-nine after `RI-ENT-WP-10`: identity history and the governed
-    # split's two halves joined the plane at RI final completion, and the five
-    # record-family reads join it here. The count is asserted rather than
-    # derived for the reason it always was -- it is what tells a reader the
-    # prefix scan found the plane and not a substring of it.
-    assert len(served) == 39
+    # Forty-two after `RI-ENT-WP-11`'s first record family: the thirty-nine
+    # `RI-ENT-WP-10` left plus that family's three write verbs. The count is
+    # asserted rather than derived for the reason it always was -- it is what
+    # tells a reader the prefix scan found the plane and not a substring of it.
+    assert len(served) == 42
 
 
 @pytest.mark.parametrize(

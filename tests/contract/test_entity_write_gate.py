@@ -2,7 +2,7 @@
 
 The entity plane has two switches. `MY_PA_RELATIONSHIP_INTELLIGENCE_ENABLED`
 decides whether the plane exists at all, and
-`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` decides whether its twenty-three
+`MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` decides whether its twenty-six
 writes do. This file is about the second one, and it exists for the reason
 `_entity_plane`'s own docstring gives about the first: **a capability set is not
 a gate.**
@@ -24,13 +24,13 @@ these names is in a public enum.
 **Three states, and all three are asserted**, because a gate that refused in
 every state would satisfy a one-sided test:
 
-* plane off — all thirty-nine `entities.` names refuse, reads included;
-* plane on, writes off — the sixteen reads answer and the twenty-three writes refuse;
-* plane on, writes on — all thirty-nine are served.
+* plane off — all forty-two `entities.` names refuse, reads included;
+* plane on, writes off — the sixteen reads answer and the twenty-six writes refuse;
+* plane on, writes on — all forty-two are served.
 
 Every one of those four figures is derived from a live set rather than written
 down twice, and every one of them has been wrong here at some point: `sixteen`
-and `twenty-three` are `_ENTITY_CAPABILITIES` split by the purpose map, and the
+and `twenty-six` are `_ENTITY_CAPABILITIES` split by the purpose map, and the
 other two are the whole plane. `RI-ENT-WP-10` moved the read half from eleven to
 sixteen without moving the write half, which is what a work package that adds
 only reads should do -- and `thirty-one`, `twenty-one` and the ordinal below had
@@ -39,7 +39,7 @@ count against `Capability` and not against a *subset* one clause of a sentence
 names while its neighbour names another.
 
 The write population is derived from the purpose map rather than listed here, so
-a twenty-fourth write mapped to `entity_authoring` joins this sweep on arrival. It
+a twenty-seventh write mapped to `entity_authoring` joins this sweep on arrival. It
 is then compared against `_ENTITY_WRITE_CAPABILITIES`, which is the set the
 service actually subtracts, so the two statements of the same fact cannot drift.
 """
@@ -130,9 +130,9 @@ def test_the_write_set_the_service_subtracts_is_the_set_with_a_write_purpose() -
     here instead.
     """
     assert ENTITY_WRITES == _ENTITY_WRITE_CAPABILITIES
-    # Twenty-three after final identity recovery: the prior twenty-one plus the
-    # governed split's preview/apply pair.
-    assert len(ENTITY_WRITES) == 23
+    # Twenty-six after `RI-ENT-WP-11`'s first record family: the twenty-three
+    # that final identity recovery left plus that family's three verbs.
+    assert len(ENTITY_WRITES) == 26
     assert ENTITY_WRITES < _ENTITY_CAPABILITIES
     assert not ENTITY_READS & ENTITY_WRITES
 

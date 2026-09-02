@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and nine capabilities is addressable
+**Reachability.** Every one of the one hundred and twelve capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-tenth capability added to the domain arrives as
-a failing row instead of as an untested one. Thirteen of the one hundred and nine answer a
+written here, so a one-hundred-thirteenth capability added to the domain arrives as
+a failing row instead of as an untested one. Thirteen of the one hundred and twelve answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -71,6 +71,7 @@ from tests.contract.test_transport_parity import (
     staged_child_records,
     staged_edge,
     staged_entities,
+    staged_entity_name,
     staged_mention,
 )
 from tests.wire import Wire, serve
@@ -80,6 +81,7 @@ from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
     AddEntityAlias,
+    AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -167,6 +169,7 @@ from my_pa.application.commands import (
     RestoreRelationshipMemory,
     RetireEntityAlias,
     RetireEntityIdentifier,
+    RetireEntityName,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAssignment,
@@ -185,6 +188,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     TransitionTask,
     UpdateCommitment,
     UpdateEntity,
@@ -223,6 +227,7 @@ from my_pa.domain.relationship.entity import (
     EntityStatus,
     EntityType,
     IdentifierState,
+    NameTypeCode,
 )
 from my_pa.domain.relationship.governance import (
     ObservationAuthority,
@@ -398,6 +403,11 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     # expectation.
     revise_assignment = staged_assignment(scene, "HTTP Revise Role")
     end_assignment = staged_assignment(scene, "HTTP End Role")
+    # One staged name per record-family write that needs an existing row, of a
+    # type of its own -- `staged_entity_name` states why the type is what makes
+    # two staged names two rows.
+    supersede_name = staged_entity_name(scene, NameTypeCode.LEGAL)
+    retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -714,6 +724,27 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_id": person.entity_id,
             "perspective": "participant",
             "page_size": 10,
+        },
+        # `RI-ENT-WP-11`'s record-family writes, each meeting a record of its
+        # own for the reason the directed writes below do.
+        Capability.ENTITIES_NAMES_ADD: {
+            "entity_id": person.entity_id,
+            "name_type_code": "brand",
+            "display_value": "HTTP Brand Name",
+            "idempotency_key": "http-entity-names-add-0001",
+        },
+        Capability.ENTITIES_NAMES_SUPERSEDE: {
+            "entity_name_id": supersede_name,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "name_type_code": "legal",
+            "display_value": "HTTP Legal Name Corrected",
+            "idempotency_key": "http-entity-names-supersede-0001",
+        },
+        Capability.ENTITIES_NAMES_RETIRE: {
+            "entity_name_id": retire_name,
+            "expected_version": 1,
+            "idempotency_key": "http-entity-names-retire-0001",
         },
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
@@ -1059,6 +1090,11 @@ def commands_for(
     # scene per key, so both tables reach the same rows.
     revise_assignment = staged_assignment(scene, "HTTP Revise Role")
     end_assignment = staged_assignment(scene, "HTTP End Role")
+    # One staged name per record-family write that needs an existing row, of a
+    # type of its own -- `staged_entity_name` states why the type is what makes
+    # two staged names two rows.
+    supersede_name = staged_entity_name(scene, NameTypeCode.LEGAL)
+    retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -1351,6 +1387,25 @@ def commands_for(
             entity_id=person.entity_id,
             perspective="participant",
             page_size=10,
+        ),
+        Capability.ENTITIES_NAMES_ADD: AddEntityName(
+            entity_id=person.entity_id,
+            name_type_code=NameTypeCode.BRAND,
+            display_value="HTTP Brand Name",
+            idempotency_key="http-entity-names-add-0001",
+        ),
+        Capability.ENTITIES_NAMES_SUPERSEDE: SupersedeEntityName(
+            entity_name_id=supersede_name,
+            expected_version=1,
+            entity_id=person.entity_id,
+            name_type_code=NameTypeCode.LEGAL,
+            display_value="HTTP Legal Name Corrected",
+            idempotency_key="http-entity-names-supersede-0001",
+        ),
+        Capability.ENTITIES_NAMES_RETIRE: RetireEntityName(
+            entity_name_id=retire_name,
+            expected_version=1,
+            idempotency_key="http-entity-names-retire-0001",
         ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,

@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route one hundred and nine capability names and none of them mutates a
+  surface route one hundred and twelve capability names and none of them mutates a
   source, and every capability driven over both transports is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -389,6 +389,12 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_ADDRESSES_LIST,
         Capability.ENTITIES_COMMUNICATION_LIST,
         Capability.ENTITIES_PARTICIPATIONS_LIST,
+        # `RI-ENT-WP-11`'s record-family writes join them on the identical
+        # argument, unchanged by the fact that they write: the row a recorded
+        # name is written into belongs to no `src_…` and no `enr_…` either.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_UPDATE,
         Capability.ENTITIES_ARCHIVE,

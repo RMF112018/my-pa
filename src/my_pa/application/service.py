@@ -121,6 +121,7 @@ from my_pa.application.authorization import Authorization, authorize
 from my_pa.application.capabilities import build_capability_manifest, build_readiness_report
 from my_pa.application.commands import (
     AddEntityAlias,
+    AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveManagedDocumentCommand,
@@ -213,6 +214,7 @@ from my_pa.application.commands import (
     RestoreRelationshipMemory,
     RetireEntityAlias,
     RetireEntityIdentifier,
+    RetireEntityName,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAssignment,
@@ -232,6 +234,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     TransitionTask,
     UpdateCommitment,
     UpdateEntity,
@@ -251,6 +254,7 @@ from my_pa.application.disclosure import (
 from my_pa.application.entity_authoring import EntityAuthoringService, NamedValue
 from my_pa.application.entity_context import EntityContextService
 from my_pa.application.entity_directed import EntityDirectedService
+from my_pa.application.entity_family_writes import EntityFamilyWriteService
 from my_pa.application.entity_governance import (
     EntityGovernanceService,
     EntityProposalReviewService,
@@ -1698,6 +1702,61 @@ def _directed_translated() -> Iterator[None]:
         raise failure
 
 
+@contextmanager
+def _record_family_translated() -> Iterator[None]:
+    """The one refusal `RI-ENT-WP-11`'s writes add to the directed vocabulary.
+
+    Stacked *inside* `_directed_translated`, and it carries exactly one clause
+    because the rest of what these writes refuse is already that one's. The five
+    record families raise `UnknownScopeError` for a row outside this partition
+    and `StaleDirectedVersionError` for a version that moved, from the same
+    `_refuse_stale_or_absent` the directed writes reach -- so absent-or-foreign
+    is `not_found` naming `subject` and a stale expectation is `conflict` naming
+    `expected_version`, in one place rather than two that could drift apart.
+
+    What is new is the ledger write. `EntityRecordFamilyService` holds no
+    idempotency key, so the key is arbitrated by
+    `record_mutation_event`, whose refusal for a key held against a *different*
+    request is `EntityMutationConflictError` rather than the
+    `DirectedWriteError` the directed plane's own writer raises. Both are the
+    same fact about the same table and both answer `conflict` naming
+    `idempotency_key`: a caller told anything else would refresh the wrong thing.
+
+    **Not shared with `_entity_governance_translated`, which already classifies
+    `EntityMutationConflictError` the same way.** That contextmanager catches
+    seven further refusals belonging to the observation, resolution and proposal
+    surfaces -- `QuarantinedObservationError`, `ResolutionNotPermittedError`,
+    `ProposalPayloadError` and their neighbours -- none of which these writes can
+    raise, and stacking it here would put this plane behind a translator whose
+    next clause is about a plane it does not touch.
+
+    **What this deliberately does not catch: the driver's own `IntegrityError`
+    from a family's active partial unique.** A correction whose successor
+    collides with a third active row of the same type and normalized value
+    surfaces that today, untranslated, exactly as `EntityRecordFamilyService`'s
+    own docstrings say it does out of `record_name`. It is not caught here
+    because it cannot be: the application layer holds no `sqlalchemy`, so the
+    only place to classify a constraint violation is the persistence adapter --
+    the five families' inserts are `RI-ENT-WP-08`'s and are under review, and
+    reclassifying their refusals is that package's change to make, not this
+    one's. The consequence is stated rather than hidden: such a collision reaches
+    `invoke`'s terminal catch and answers `internal_error`, which is the wrong
+    class for a conflict a caller could act on, and is recorded as a limitation.
+    The one violation `RI-ENT-WP-11` itself introduces -- two writers racing for
+    one idempotency key -- *is* classified, by
+    `SqlEntityRepository.record_mutation_event`'s
+    `_duplicate_translated(_MUTATION_KEY_UNIQUE)`, and arrives here as the
+    `DirectedWriteError` the clause above already answers.
+    """
+    failure: ApplicationError | None = None
+    try:
+        yield
+    except EntityMutationConflictError:
+        failure = ConflictError(SafeDetail.IDEMPOTENCY_KEY)
+    if failure is not None:
+        raise failure
+
+
 def _named_values(supplied: tuple[dict[str, str], ...], kind_field: str) -> tuple[NamedValue, ...]:
     """The create command's alias and identifier objects as the use case takes them."""
     return tuple(
@@ -2667,6 +2726,12 @@ class ApplicationService:
         #: stateless, takes its port as an argument, and constructing one per
         #: call would say it held something.
         self._directed = EntityDirectedService()
+        #: `RI-ENT-WP-11`'s record-family writes. Composed unconditionally
+        #: beside `_directed`, for the reason that one is: the switches that
+        #: decide whether this plane is served are read at the handler, not at
+        #: composition, so a service holding the writer and refusing to reach
+        #: it is the shape every other gated plane here already has.
+        self._family_writes = EntityFamilyWriteService()
         #: WP-TM-02's task management service, held rather than built per request:
         #: it is stateless, takes its own unit-of-work factory as an argument, and
         #: constructing one per call would say it held something. The factory is
@@ -2694,7 +2759,7 @@ class ApplicationService:
         `_HANDLERS` is what this build *implements* and is fixed at import. This
         is what it can *serve*, which is smaller whenever a capability needs
         something the composition root did not supply — the six `documents.`
-        names in a process with no managed root, and the thirty-nine `entities.` names
+        names in a process with no managed root, and the forty-two `entities.` names
         in one that has not enabled the relationship plane. It is one answer with
         two readers: `capabilities.get` publishes it, and the MCP transport
         publishes the tools derived from it, so a client's tool list and the
@@ -4807,7 +4872,7 @@ class ApplicationService:
         the request.
 
         **This is the floor, and it was missing.** `available_capabilities`
-        withholds the thirty-nine `entities.` names, and two readers consult it —
+        withholds the forty-two `entities.` names, and two readers consult it —
         `capabilities.get` and the MCP tool list. The HTTP transport is not one
         of them: `/v1/{capability}` routes by path segment and `_run` dispatches
         straight from `_HANDLERS`, so every one of the six executed and
@@ -6083,6 +6148,83 @@ class ApplicationService:
                 ),
             ),
         )
+
+    # --- RI-ENT-WP-11: the record families' writes -------------------------
+    #
+    # One handler per capability and one shape for all of them: take the port
+    # through the *write* gate, translate what the plane refuses, hand the
+    # command to `EntityFamilyWriteService`, and answer with `_directed_receipt`.
+    # The receipt shape is shared with the directed writes deliberately -- both
+    # planes answer with the mutation-ledger row they wrote, and a second
+    # payload shape for the same fact would be a second thing to keep true.
+    #
+    # `_entity_repository` and not `_entity_plane`: these write, so both the
+    # plane switch and the write switch apply, which is what that method exists
+    # to check once rather than at every call site.
+    #
+    # **No re-enrichment is registered by any of them, and that is a decision
+    # rather than an omission.** `ReenrichmentSubjectKind` has no member for a
+    # name, an address, a communication method, a participation or an
+    # affiliation, and `_SUBJECT_ID_KINDS` maps every member it does have to an
+    # `IdKind`, so a direct caller here could not name the subject it changed.
+    # The generic path is the alternative and it is worse: an entry in
+    # `TRIGGERS_BY_MUTATION_CAPABILITY` would register Principal-wide work for
+    # every one of these writes under a trigger that belongs to a different
+    # record family -- `NEW_ALIAS` when no alias row was written, or
+    # `ROLE_OR_ORGANIZATION_CHANGE` when no assignment was. Naming a trigger for
+    # a change it does not describe is the shape
+    # `TRIGGERS_BY_ACCEPTED_PROPOSAL_KIND` records seven absences for. Widening
+    # the subject vocabulary belongs to the re-enrichment package.
+
+    def _entities_names_add(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: AddEntityName
+    ) -> _Result:
+        """`entities.names.add`: record one typed name form for an entity."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated(), _record_family_translated():
+            receipt = self._family_writes.add_name(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _entities_names_supersede(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: SupersedeEntityName
+    ) -> _Result:
+        """`entities.names.supersede`: replace one recorded name with its successor.
+
+        A supersession and never an edit. The receipt names the successor in
+        `record_id` and the predecessor in `superseded_id`, so a caller can read
+        both back.
+        """
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated(), _record_family_translated():
+            receipt = self._family_writes.supersede_name(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
+
+    def _entities_names_retire(
+        self, unit_of_work: UnitOfWork, authorization: Authorization, command: RetireEntityName
+    ) -> _Result:
+        """`entities.names.retire`: withdraw one recorded name, keeping the row."""
+        repository = self._entity_repository(unit_of_work)
+        with _translated(), _directed_translated(), _record_family_translated():
+            receipt = self._family_writes.retire_name(
+                repository,
+                command,
+                principal_id=authorization.principal.principal_id,
+                audit_id=authorization.audit_id,
+                at=authorization.at,
+            )
+        return self._directed_receipt(authorization, receipt)
 
     def _entities_create(
         self, unit_of_work: UnitOfWork, authorization: Authorization, command: CreateEntity
@@ -9529,6 +9671,9 @@ _HANDLERS: Final[Mapping[Capability, Callable[..., _Result]]] = MappingProxyType
         Capability.ENTITIES_ADDRESSES_LIST: ApplicationService._entities_addresses_list,
         Capability.ENTITIES_COMMUNICATION_LIST: ApplicationService._entities_communication_list,
         Capability.ENTITIES_PARTICIPATIONS_LIST: (ApplicationService._entities_participations_list),
+        Capability.ENTITIES_NAMES_ADD: ApplicationService._entities_names_add,
+        Capability.ENTITIES_NAMES_SUPERSEDE: ApplicationService._entities_names_supersede,
+        Capability.ENTITIES_NAMES_RETIRE: ApplicationService._entities_names_retire,
         Capability.ENTITIES_CREATE: ApplicationService._entities_create,
         Capability.ENTITIES_UPDATE: ApplicationService._entities_update,
         Capability.ENTITIES_ARCHIVE: ApplicationService._entities_archive,
@@ -9627,6 +9772,13 @@ _ENTITY_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_ADDRESSES_LIST,
         Capability.ENTITIES_COMMUNICATION_LIST,
         Capability.ENTITIES_PARTICIPATIONS_LIST,
+        # `RI-ENT-WP-11`'s record-family writes. Here *and* in
+        # `_ENTITY_WRITE_CAPABILITIES` below: turning the plane off withholds
+        # them like every other `entities.` name, and the write switch narrows
+        # the already-composed plane a second time.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
     }
 )
 
@@ -9673,6 +9825,14 @@ _ENTITY_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_SPLIT,
+        # `RI-ENT-WP-11`. Each inserts, supersedes or retires a row in one of
+        # the five Entity-bound record families and appends the mutation-ledger
+        # row that accounts for it, so a build with the plane on and writes off
+        # serves none of them -- which `test_entity_write_gate` derives from the
+        # purpose map rather than reading off this set.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
     }
 )
 

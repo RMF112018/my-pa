@@ -397,7 +397,7 @@ class Capability(StrEnum):
     REPORTS_LIST = "reports.list"
     REPORTS_SEARCH = "reports.search"
     REPORTS_RESOLVE_SET = "reports.resolve_set"
-    # The relationship-intelligence entity plane. Thirty-nine `entities.` names
+    # The relationship-intelligence entity plane. Forty-two `entities.` names
     # over `knowledge.entities` and the tables around it, declared in four
     # blocks by the package that added each: WP-RI-05's six reads here, then
     # WP-RI-A-02's twelve, WP-RI-A-03's seven and WP-RI-A-04's three.
@@ -639,6 +639,51 @@ class Capability(StrEnum):
     ENTITIES_ADDRESSES_LIST = "entities.addresses.list"
     ENTITIES_COMMUNICATION_LIST = "entities.communication.list"
     ENTITIES_PARTICIPATIONS_LIST = "entities.participations.list"
+
+    #: `RI-ENT-WP-11`, the write half of the same six record families
+    #: `RI-ENT-WP-10` published as reads. `RI-ENT-WP-08` gave every family a
+    #: writer and no capability reached one, so the plane could store a typed
+    #: name and had no name for recording one. These are the names.
+    #:
+    #: **Three verbs per family, and the third is never `delete`.** ADR-003
+    #: clause 3's frame, the one the directed family already keeps: an addition
+    #: appends, a correction is a *supersession* -- a new row, the predecessor
+    #: marked superseded -- and a withdrawal is a lifecycle transition that keeps
+    #: the row and its history. There is no capability that destroys a name, an
+    #: address, a channel, a participation or an affiliation, for the reason
+    #: there is no `relationship_memory.delete`.
+    #:
+    #: **The verb spelling is inconsistent across the five families and is the
+    #: accepted contract.** Names supersede where the other four revise, and the
+    #: first three families retire where the last two end. That came out of the
+    #: source audit that fixed this vocabulary, and normalizing it here would
+    #: rename a published capability to make a table look tidy. What matters is
+    #: that `supersede` and `revise` are the *same act* -- both reach the
+    #: family's `correct_*` verb, both mint a successor row and mark the
+    #: predecessor superseded, and neither edits anything in place.
+    #:
+    #: **There is no `entities.profile.save` and there will not be one.** A
+    #: capability that took the whole profile as a field map would be a mass
+    #: assignment: one grant able to rewrite every family at once, with no
+    #: per-family authority and no `expected_version` for any row it touched.
+    #: One narrow name per act is the shape that makes each write refusable on
+    #: its own.
+    #:
+    #: Every one carries an `idempotency_key`, and every correction and
+    #: withdrawal carries an `expected_version`. All fifteen are
+    #: `Purpose.ENTITY_AUTHORING`, reusing the purpose the directed writes hold
+    #: rather than minting one: they write canonical fact about the acting
+    #: Principal's own entities, which is exactly what that purpose names.
+    #:
+    #: Not operator-only, on the argument the directed six make: none of them
+    #: widens the scope a later request is evaluated against, which is the
+    #: property that puts `sources.enroll` there. Withholding them from a build
+    #: that has not enabled the plane -- or has enabled it with writes off -- is
+    #: `_ENTITY_CAPABILITIES` and `_ENTITY_WRITE_CAPABILITIES` in
+    #: `application.service`.
+    ENTITIES_NAMES_ADD = "entities.names.add"
+    ENTITIES_NAMES_SUPERSEDE = "entities.names.supersede"
+    ENTITIES_NAMES_RETIRE = "entities.names.retire"
 
     # The Relationship Memory plane: durable, entity-bound knowledge the user
     # meant to keep. **A family of its own rather than an `entities.update`**,
@@ -1045,6 +1090,28 @@ _PERMITTED_PURPOSES: Mapping[AuthorizedCapability, frozenset[Purpose]] = Mapping
         Capability.ENTITIES_ADDRESSES_LIST: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_COMMUNICATION_LIST: frozenset({Purpose.ENTITY_READ}),
         Capability.ENTITIES_PARTICIPATIONS_LIST: frozenset({Purpose.ENTITY_READ}),
+        # `RI-ENT-WP-11`'s record-family writes, all under `ENTITY_AUTHORING`
+        # and none under `ENTITY_READ`. The separation is the rule `purpose.py`
+        # states and the directed six already keep: a purpose wide enough to
+        # cover writing and reading is a purpose that grants both, and a grant
+        # issued so an assistant may read somebody's recorded addresses must not
+        # also let it record one.
+        #
+        # **Reusing `ENTITY_AUTHORING` rather than minting a purpose per family
+        # widens nothing.** A purpose is the authority a grant carries, and
+        # these write canonical fact about the acting Principal's own entities
+        # -- the same act, on neighbouring tables, that `entities.update` and
+        # the directed writes already perform under it. A purpose of its own
+        # would map to exactly these fifteen and separate them from nothing a
+        # holder of `ENTITY_AUTHORING` cannot already do.
+        #
+        # **The retire/end transitions travel with the writes**, exactly as the
+        # directed `end` names and `documents.archive` do. Withdrawing a name is
+        # the same authority over the same row as superseding it, so splitting
+        # it off would separate a pair of acts always held together.
+        Capability.ENTITIES_NAMES_ADD: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_NAMES_SUPERSEDE: frozenset({Purpose.ENTITY_AUTHORING}),
+        Capability.ENTITIES_NAMES_RETIRE: frozenset({Purpose.ENTITY_AUTHORING}),
         # The Relationship Memory pair, and neither is a reuse. `D-91`'s test
         # asks whether reuse would widen the grant, and here it plainly would in
         # both directions: `entity_read` is the identity plane — aliases,
@@ -1170,6 +1237,13 @@ _WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         Capability.ENTITIES_SPLIT_PREVIEW,
         Capability.ENTITIES_MERGE,
         Capability.ENTITIES_SPLIT,
+        # `RI-ENT-WP-11`'s record-family writes. Each inserts, supersedes or
+        # retires a row in one of the five Entity-bound families and appends the
+        # mutation-ledger row that accounts for it, so every one is a write by
+        # what it persists rather than by what it is called (operator §25).
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
     }
 )
 
@@ -1212,6 +1286,20 @@ _ADDITIVE_WRITE_CAPABILITIES: Final[frozenset[Capability]] = frozenset(
         # `entities.merge` is deliberately absent: it redirects entities,
         # reparents and coalesces children, supersedes self-edges and invalidates
         # dependent proposals. It is the destructive half of this plane.
+        #
+        # `RI-ENT-WP-11`: exactly the `add`/`create` third of the fifteen. Each
+        # of those inserts one new row in its family and reaches no existing one
+        # -- no predecessor is marked, no version is advanced, no state moves.
+        #
+        # **The `supersede`/`revise`/`retire`/`end` names are deliberately
+        # absent, and that is what `is_destructive_capability` reads.** A
+        # correction is *two* writes: it mints the successor and marks the
+        # predecessor SUPERSEDED, so it changes a record that already existed.
+        # A retirement moves a live row to RETIRED and releases whatever
+        # preferred or open-ended slot it held. Calling either additive would
+        # publish a `readOnlyHint`-adjacent annotation that contradicts the
+        # transaction, which is the same reading that keeps `entities.merge` out.
+        Capability.ENTITIES_NAMES_ADD,
     }
 )
 

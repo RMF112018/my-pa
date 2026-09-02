@@ -3788,40 +3788,59 @@ class SqlEntityRepository(EntitiesRepository):
                     "an entity mutation key is held for a different request"
                 )
             return
-        self._connection.execute(
-            insert(entity_mutation_events).values(
-                _bound(
-                    entity_mutation_events,
-                    principal_id,
-                    event_id=event.event_id,
-                    capability=event.capability,
-                    record_family=event.record_family.value,
-                    record_id=event.record_id,
-                    prior_version=event.prior_version,
-                    new_version=event.new_version,
-                    authority=event.authority.value,
-                    # `null()` and not `None`. A Python `None` bound to a
-                    # `JSONB` column is stored as the JSON value `null`, not as
-                    # SQL NULL -- so `a_mutation_before_state_is_an_object`,
-                    # which reads `IS NULL OR jsonb_typeof(...) = 'object'`,
-                    # refuses every row that carries no photograph. Measured
-                    # against a live server; the fake cannot see the difference,
-                    # which is exactly why this is written out here.
-                    before_state=(
-                        null() if event.before_state is None else dict(event.before_state)
-                    ),
-                    after_state=(null() if event.after_state is None else dict(event.after_state)),
-                    reason=event.reason,
-                    idempotency_key=event.idempotency_key,
-                    request_digest=event.request_digest,
-                    correlation_id=event.correlation_id,
-                    audit_id=event.audit_id,
-                    receipt_id=event.receipt_id,
-                    actor_class=event.actor_class.value,
-                    recorded_at=event.recorded_at,
+        # `_duplicate_translated` for the reason `_append_mutation` uses it on
+        # the same constraint: the pre-read above cannot see a concurrent
+        # writer. Two sessions that both find no held row both reach this
+        # INSERT, and only `one_entity_mutation_per_key_and_capability` refuses
+        # the second -- so without this the loser leaves as a driver
+        # `IntegrityError` across a port whose vocabulary is `PortError` and
+        # `DirectedWriteError`, and answers a caller `internal_error` for what
+        # is an ordinary idempotency conflict.
+        #
+        # Added by `RI-ENT-WP-11`, which is the first caller that races here in
+        # practice, and it changes no answer the earlier callers already got: an
+        # untranslated `IntegrityError` and an untranslated `DirectedWriteError`
+        # both reach `ApplicationService.invoke`'s terminal catch for
+        # `application.entity_governance`, which classifies neither. What it
+        # does change is that the two writers of this one table now classify one
+        # violation of one constraint the same way.
+        with _duplicate_translated(_MUTATION_KEY_UNIQUE):
+            self._connection.execute(
+                insert(entity_mutation_events).values(
+                    _bound(
+                        entity_mutation_events,
+                        principal_id,
+                        event_id=event.event_id,
+                        capability=event.capability,
+                        record_family=event.record_family.value,
+                        record_id=event.record_id,
+                        prior_version=event.prior_version,
+                        new_version=event.new_version,
+                        authority=event.authority.value,
+                        # `null()` and not `None`. A Python `None` bound to a
+                        # `JSONB` column is stored as the JSON value `null`, not
+                        # as SQL NULL -- so `a_mutation_before_state_is_an_object`,
+                        # which reads `IS NULL OR jsonb_typeof(...) = 'object'`,
+                        # refuses every row that carries no photograph. Measured
+                        # against a live server; the fake cannot see the
+                        # difference, which is exactly why this is written out.
+                        before_state=(
+                            null() if event.before_state is None else dict(event.before_state)
+                        ),
+                        after_state=(
+                            null() if event.after_state is None else dict(event.after_state)
+                        ),
+                        reason=event.reason,
+                        idempotency_key=event.idempotency_key,
+                        request_digest=event.request_digest,
+                        correlation_id=event.correlation_id,
+                        audit_id=event.audit_id,
+                        receipt_id=event.receipt_id,
+                        actor_class=event.actor_class.value,
+                        recorded_at=event.recorded_at,
+                    )
                 )
             )
-        )
 
     def mutation_event(
         self, principal_id: str, *, capability: str, idempotency_key: str

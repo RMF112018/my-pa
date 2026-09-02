@@ -365,6 +365,25 @@ class SafeDetail(StrEnum):
     PREVIEW_DIGEST = "preview_digest"
     CHOICES = "choices"
 
+    #: `RI-ENT-WP-11`'s record-family write fields. One token per field a
+    #: command can actually refuse, added with the code that reports it, which
+    #: is what this enum's own docstring asks for.
+    #:
+    #: **A token per field rather than one per family.** A caller told
+    #: `target_id` when the value it got wrong was `name_type_code` learns which
+    #: request failed and not which part of it, and these commands carry up to
+    #: fifteen caller-supplied fields each. The lifecycle writes already set the
+    #: precedent -- `assignment_id`, `alias_id`, `identifier_id` are three
+    #: tokens for three identifiers rather than one shared `record_id`.
+    #:
+    #: Each names a *field*, never a value: which key was rejected, and nothing
+    #: about what was in it. A display value, an address line and a job title
+    #: are exactly the content this vocabulary exists to keep out of a public
+    #: error, and none of them is echoed by naming the key it arrived under.
+    ENTITY_NAME_ID = "entity_name_id"
+    NAME_TYPE_CODE = "name_type_code"
+    IS_PREFERRED = "is_preferred"
+
 
 #: The complete set of sentences a public error may carry. Flat on purpose: a
 #: message that described the request would describe it to whoever guessed it.

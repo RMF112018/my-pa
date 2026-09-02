@@ -52,6 +52,7 @@ from tests.conftest import (
 
 from my_pa.application.commands import (
     AddEntityAlias,
+    AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -138,6 +139,7 @@ from my_pa.application.commands import (
     RestoreRelationshipMemory,
     RetireEntityAlias,
     RetireEntityIdentifier,
+    RetireEntityName,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAssignment,
@@ -156,6 +158,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     TransitionTask,
     UpdateCommitment,
     UpdateEntity,
@@ -190,6 +193,7 @@ from my_pa.domain.relationship.entity import (
     AssignmentType,
     EntityRelationshipType,
     EntityType,
+    NameTypeCode,
 )
 from my_pa.domain.relationship.governance import (
     ObservationAuthority,
@@ -590,6 +594,30 @@ def commands_for(scene: Scene) -> dict[Capability, Command]:
         ),
         Capability.ENTITIES_PARTICIPATIONS_LIST: ListEntityParticipations(
             entity_id=issue_identifier(IdKind.ENTITY), perspective="participant"
+        ),
+        # `RI-ENT-WP-11`'s record-family writes. Every field the command
+        # requires is stated, for the reason the reads above mint identifiers:
+        # a command that could not be constructed would answer
+        # `invalid_request`, which would stand in for the `denied` these tests
+        # exist to prove.
+        Capability.ENTITIES_NAMES_ADD: AddEntityName(
+            entity_id=issue_identifier(IdKind.ENTITY),
+            name_type_code=NameTypeCode.LEGAL,
+            display_value="Synthetic Person",
+            idempotency_key="policy-entity-names-add",
+        ),
+        Capability.ENTITIES_NAMES_SUPERSEDE: SupersedeEntityName(
+            entity_name_id=issue_identifier(IdKind.ENTITY_NAME),
+            expected_version=1,
+            entity_id=issue_identifier(IdKind.ENTITY),
+            name_type_code=NameTypeCode.LEGAL,
+            display_value="Synthetic Person",
+            idempotency_key="policy-entity-names-supersede",
+        ),
+        Capability.ENTITIES_NAMES_RETIRE: RetireEntityName(
+            entity_name_id=issue_identifier(IdKind.ENTITY_NAME),
+            expected_version=1,
+            idempotency_key="policy-entity-names-retire",
         ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,
@@ -1010,6 +1038,14 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_ADDRESSES_LIST,
         Capability.ENTITIES_COMMUNICATION_LIST,
         Capability.ENTITIES_PARTICIPATIONS_LIST,
+        # `RI-ENT-WP-11`'s record-family writes, on the identical argument and
+        # unchanged by the fact that they write: recording, superseding or
+        # retiring a typed name writes a row that carries no `source_id` and no
+        # `enrollment_id` for a scope to be compared against. They sit in
+        # `domain.policy.decision._SCOPELESS` beside the reads.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its
@@ -1192,6 +1228,14 @@ def test_the_capabilities_outside_the_scope_matrix_are_the_domains_own() -> None
         Capability.ENTITIES_ADDRESSES_LIST,
         Capability.ENTITIES_COMMUNICATION_LIST,
         Capability.ENTITIES_PARTICIPATIONS_LIST,
+        # `RI-ENT-WP-11`'s record-family writes, on the identical argument and
+        # unchanged by the fact that they write: recording, superseding or
+        # retiring a typed name writes a row that carries no `source_id` and no
+        # `enrollment_id` for a scope to be compared against. They sit in
+        # `domain.policy.decision._SCOPELESS` beside the reads.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
         # The Relationship Memory plane names an Entity, not a source. A memory
         # is the product's own knowledge under ADR-003 -- written by the
         # Principal about a person, never read out of a source root -- so its

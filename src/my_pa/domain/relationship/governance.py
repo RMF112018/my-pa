@@ -385,17 +385,40 @@ class MutationAuthority(StrEnum):
 class MutationRecordFamily(StrEnum):
     """Which canonical record family one ledger row is about.
 
-    Closed at the six families this plane holds as canonical fact. It is a family
-    rather than a table name because the ledger has to survive a table being
-    split or renamed without every historical row becoming unreadable, and it is
-    closed rather than free text because a ledger whose subject is unconstrained
-    is a ledger no reader can enumerate.
+    **Eleven families, and it was six until `RI-ENT-WP-11`.** This docstring used
+    to say the enum was "closed at the six families this plane holds as canonical
+    fact", and that sentence was true of what the ledger could then record rather
+    than of what the plane stored. `RI-ENT-WP-02`..`WP-06b` added five more
+    Entity-bound record families -- typed names, addresses, communication methods,
+    project participations and person/organization affiliations -- and
+    `RI-ENT-WP-08` gave every one of them a writer. None of those writes reached
+    this ledger, so the plane held canonical fact in eleven tables and could
+    account for six of them. `RI-ENT-WP-11` publishes the fifteen mutation
+    capabilities that reach the five, and each of them appends a row here, so the
+    closure had to move to where the fact actually is.
 
-    `entity_proposals` and `entity_merge_records` are deliberately absent: a
-    proposal is not canonical fact -- it is a request -- and a merge record is the
-    lineage an accepted proposal leaves, which is already an append-only row of
-    its own. A mutation ledger that also recorded proposals would record the
-    asking as if it were the doing.
+    It is still *closed*, and closed for the original reason: a ledger whose
+    subject is unconstrained is a ledger no reader can enumerate. It is still a
+    family rather than a table name, so the ledger survives a table being split or
+    renamed without every historical row becoming unreadable.
+
+    The five new spellings are `IdentityEffectFamily`'s
+    (`domain.relationship.identity_correction`) for the same five families, and
+    deliberately so: two vocabularies naming one concept differently is how a
+    merge plan and a mutation ledger come to disagree about which rows a
+    correction touched.
+
+    **`ORGANIZATION_PROFILE` is deliberately absent**, which is the one of the six
+    WP-08 families that does not arrive here. No `RI-ENT-WP-11` capability writes
+    `entity_organization_profiles`: the audit fixed three verbs over each of five
+    families and the organization profile is not one of the five, so a member for
+    it would name a ledger subject nothing can produce.
+
+    `entity_proposals` and `entity_merge_records` are deliberately absent for the
+    original reason, unchanged by the widening: a proposal is not canonical fact
+    -- it is a request -- and a merge record is the lineage an accepted proposal
+    leaves, which is already an append-only row of its own. A mutation ledger that
+    also recorded proposals would record the asking as if it were the doing.
     """
 
     ENTITY = "entity"
@@ -404,6 +427,12 @@ class MutationRecordFamily(StrEnum):
     ASSIGNMENT = "assignment"
     RELATIONSHIP = "relationship"
     OBSERVATION = "observation"
+    #: `RI-ENT-WP-11`'s five. Spelled as `IdentityEffectFamily` spells them.
+    NAME = "name"
+    ADDRESS = "address"
+    COMMUNICATION_METHOD = "communication_method"
+    PROJECT_PARTICIPATION = "project_participation"
+    PERSON_ORGANIZATION_AFFILIATION = "person_organization_affiliation"
 
 
 class EvidenceRole(StrEnum):

@@ -11,7 +11,7 @@ The five, each sent through a socket:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — there is no request that performs one, proved from both
-  ends: the transport routes one hundred and nine capability names and none of them
+  ends: the transport routes one hundred and twelve capability names and none of them
   mutates a source, and every capability driven over the wire is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -653,6 +653,28 @@ def payloads_for(marked: Scene, record: KnowledgeRecord) -> dict[Capability, dic
             "entity_id": person.entity_id,
             "perspective": "participant",
         },
+        # `RI-ENT-WP-11`'s record-family writes, over the same staged subject.
+        # The child identifiers are minted, because these tests never reach the
+        # handler that would look one up.
+        Capability.ENTITIES_NAMES_ADD: {
+            "entity_id": person.entity_id,
+            "name_type_code": "legal",
+            "display_value": "Wire Name",
+            "idempotency_key": "wire-entity-names-add-0001",
+        },
+        Capability.ENTITIES_NAMES_SUPERSEDE: {
+            "entity_name_id": issue_identifier(IdKind.ENTITY_NAME),
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "name_type_code": "legal",
+            "display_value": "Wire Name Corrected",
+            "idempotency_key": "wire-entity-names-supersede-0001",
+        },
+        Capability.ENTITIES_NAMES_RETIRE: {
+            "entity_name_id": issue_identifier(IdKind.ENTITY_NAME),
+            "expected_version": 1,
+            "idempotency_key": "wire-entity-names-retire-0001",
+        },
         # A name no staged entity carries, so duplicate resolution admits it.
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
@@ -1216,6 +1238,12 @@ SCOPED_CAPABILITIES = [
         Capability.ENTITIES_ADDRESSES_LIST,
         Capability.ENTITIES_COMMUNICATION_LIST,
         Capability.ENTITIES_PARTICIPATIONS_LIST,
+        # `RI-ENT-WP-11`'s record-family writes join them on the identical
+        # argument, unchanged by the fact that they write: the row a recorded
+        # name is written into belongs to no `src_…` and no `enr_…` either.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_UPDATE,
         Capability.ENTITIES_ARCHIVE,

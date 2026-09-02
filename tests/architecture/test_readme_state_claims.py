@@ -319,6 +319,14 @@ SPELLED_COUNTS: Final[dict[int, str]] = {
     107: "One hundred seven",
     108: "One hundred eight",
     109: "One hundred and nine",
+    # Extended at `RI-ENT-WP-11`, when the entity plane's record-family writes
+    # took the public set past a hundred and nine. Extended rather than the
+    # assertion relaxed, for the reason stated at the eighties and repeated at
+    # `RI-ENT-WP-10`: a figure this test cannot spell is a figure it cannot
+    # check.
+    110: "One hundred and ten",
+    111: "One hundred and eleven",
+    112: "One hundred and twelve",
 }
 
 
@@ -441,21 +449,22 @@ def test_current_state_docs_derive_the_default_capability_split() -> None:
     default = len(frozenset(_HANDLERS) - withheld_families)
     withheld = total - default
     # Phase B's additions all arrived on the withheld side; GSQS B0's pair is
-    # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrive
-    # on the withheld side too. The combined surface therefore still exposes
-    # fifty-five and withholds five more feature-gated names than before.
-    assert default == 55 and total == 109 and withheld == 54
+    # composed by default, and `RI-ENT-WP-10`'s five record-family reads arrived
+    # on the withheld side too, as do `RI-ENT-WP-11`'s record-family writes. The
+    # combined surface therefore still exposes fifty-five and withholds three
+    # more feature-gated names than after `RI-ENT-WP-10`.
+    assert default == 55 and total == 112 and withheld == 57
 
     readme = README.read_text(encoding="utf-8")
     assert f"{default} of the {total} capabilities are `available`" in readme
     assert f"`{withheld} of {total} capabilities are unwired.`" in readme
 
     system_context = SYSTEM_CONTEXT.read_text(encoding="utf-8").lower()
-    assert "one hundred and nine capabilities" in system_context
+    assert "one hundred and twelve capabilities" in system_context
     assert "exposes fifty-five of them" in system_context
 
     module_boundaries = MODULE_BOUNDARIES.read_text(encoding="utf-8").lower()
-    assert "one hundred and nine capabilities" in module_boundaries
+    assert "one hundred and twelve capabilities" in module_boundaries
 
 
 def test_readme_declares_apple_first_personal_data_ingestion() -> None:

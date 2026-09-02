@@ -59,6 +59,7 @@ from typing import Any, Final
 
 from my_pa.application.commands import (
     AddEntityAlias,
+    AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -146,6 +147,7 @@ from my_pa.application.commands import (
     RestoreRelationshipMemory,
     RetireEntityAlias,
     RetireEntityIdentifier,
+    RetireEntityName,
     RevealSubject,
     ReviseCapture,
     ReviseEntityAssignment,
@@ -164,6 +166,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     TransitionTask,
     UpdateCommitment,
     UpdateEntity,
@@ -202,6 +205,7 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifierNamespace,
     IdentifierState,
+    NameTypeCode,
 )
 from my_pa.domain.relationship.governance import (
     ObservationAuthority,
@@ -1200,6 +1204,75 @@ def _list_entity_participations(payload: Mapping[str, Any]) -> Command:
     return ListEntityParticipations(**payload)
 
 
+#: The record-family times a caller may supply (`RI-ENT-WP-11`). Separate from
+#: `_DIRECTED_MOMENTS` for the reason that mapping is separate from
+#: `_CAPTURE_MOMENTS`: the planes carry different fields, and one shared mapping
+#: would convert a key on a command that has no such field.
+_RECORD_FAMILY_MOMENTS: Mapping[str, SafeDetail] = MappingProxyType(
+    {
+        "effective_from": SafeDetail.EFFECTIVE_FROM,
+        "effective_to": SafeDetail.EFFECTIVE_TO,
+    }
+)
+
+#: Which closed vocabulary each record-family field is written in, by field
+#: name. One mapping across all five families rather than one per family,
+#: because every field name here is unique to its family -- `name_type_code`
+#: belongs to names and to nothing else -- so a shared table cannot convert a
+#: key on a command that does not declare it.
+_RECORD_FAMILY_VOCABULARIES: Mapping[str, type[StrEnum]] = MappingProxyType(
+    {
+        "name_type_code": NameTypeCode,
+    }
+)
+
+
+def _record_family_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
+    """One record-family write payload, in the shapes the command declares.
+
+    Shape conversion only, on `_directed_payload`'s terms: JSON has no datetime
+    and no enum. A value outside a closed vocabulary is left exactly as it
+    arrived so the command reports it under its own field name, which is the
+    rule `_memory_vocabulary` states and for the same reason -- refusing here
+    would report the wrong field for a payload that got two things wrong.
+    """
+    converted = dict(payload)
+    for name, detail in _RECORD_FAMILY_MOMENTS.items():
+        supplied = converted.get(name)
+        if supplied is None:
+            continue
+        if not isinstance(supplied, str):
+            raise InvalidRequestError(detail)
+        try:
+            converted[name] = datetime.fromisoformat(supplied)
+        except ValueError:
+            pass
+        else:
+            continue
+        # Outside the handler: the original renders the rejected value.
+        raise InvalidRequestError(detail)
+    for name, vocabulary in _RECORD_FAMILY_VOCABULARIES.items():
+        value = converted.get(name)
+        if isinstance(value, str):
+            try:
+                converted[name] = vocabulary(value)
+            except ValueError:
+                continue
+    return converted
+
+
+def _add_entity_name(payload: Mapping[str, Any]) -> Command:
+    return AddEntityName(**_record_family_payload(payload))
+
+
+def _supersede_entity_name(payload: Mapping[str, Any]) -> Command:
+    return SupersedeEntityName(**_record_family_payload(payload))
+
+
+def _retire_entity_name(payload: Mapping[str, Any]) -> Command:
+    return RetireEntityName(**_record_family_payload(payload))
+
+
 def _create_entity(payload: Mapping[str, Any]) -> Command:
     return CreateEntity(**_entity_vocabulary(dict(payload)))
 
@@ -1674,6 +1747,9 @@ _BUILDERS: Mapping[Capability, Callable[[Mapping[str, Any]], Command]] = Mapping
         Capability.ENTITIES_ADDRESSES_LIST: _list_entity_addresses,
         Capability.ENTITIES_COMMUNICATION_LIST: _list_entity_communication_methods,
         Capability.ENTITIES_PARTICIPATIONS_LIST: _list_entity_participations,
+        Capability.ENTITIES_NAMES_ADD: _add_entity_name,
+        Capability.ENTITIES_NAMES_SUPERSEDE: _supersede_entity_name,
+        Capability.ENTITIES_NAMES_RETIRE: _retire_entity_name,
         Capability.ENTITIES_CREATE: _create_entity,
         Capability.ENTITIES_UPDATE: _update_entity,
         Capability.ENTITIES_ARCHIVE: _archive_entity,
@@ -1718,7 +1794,7 @@ def _named(capability: str) -> Capability:
 
     An unknown name is `invalid_request` and not `unsupported`: `unsupported`
     says this build does not serve a capability that exists, and a value outside
-    the 104 canonical names refers to nothing.
+    the 112 canonical names refers to nothing.
     """
     try:
         return Capability(capability)

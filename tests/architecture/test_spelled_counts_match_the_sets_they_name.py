@@ -386,6 +386,14 @@ _ORDINAL_UNITS = (
     "hundred-eighth",
     "hundred-ninth",
     "hundred-tenth",
+    # `RI-ENT-WP-11`'s first record family took the public set past a hundred and
+    # ten, and the green-half plant indexes one past the set. The boundary
+    # announced itself exactly as every one above it did -- `IndexError` in the
+    # plant rather than a false pass -- which is the property the density of this
+    # tuple buys, and extending it is what this note has always asked for.
+    "hundred-eleventh",
+    "hundred-twelfth",
+    "hundred-thirteenth",
 )
 
 

@@ -158,6 +158,12 @@ def test_the_names_this_file_is_about_are_the_family() -> None:
         "entities.merge",
         "entities.split.preview",
         "entities.split",
+        # `RI-ENT-WP-11`'s record-family writes. Each carries `entity_authoring`
+        # alone, so all of them land in this half; one appearing in the read set
+        # above is what a purpose mis-mapping would look like from here.
+        "entities.names.add",
+        "entities.names.supersede",
+        "entities.names.retire",
     }
     assert ENTITY_READS | ENTITY_WRITES == ENTITY_CAPABILITIES
 

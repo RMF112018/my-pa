@@ -112,6 +112,7 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifierNamespace,
     IdentifierState,
+    NameTypeCode,
 )
 from my_pa.domain.relationship.event import RelationshipEventType
 from my_pa.domain.relationship.governance import (
@@ -4628,6 +4629,28 @@ _ENTITY_FIELD_DOCS: Final[Mapping[str, Mapping[str, str]]] = MappingProxyType(
                 "the two answer different questions."
             )
         },
+        # `RI-ENT-WP-11`'s record-family write fields.
+        "entity_name_id": {
+            "description": (
+                "Opaque identifier of the recorded name form, as returned by "
+                "entities.names.list or entities.profile. Never the name itself."
+            )
+        },
+        "name_type_code": {
+            "description": (
+                "What form of name this is, from the closed name-type vocabulary. "
+                "Required: an absent type is refused rather than defaulted, because "
+                "a name filed under the wrong form is a name a later read cannot "
+                "find."
+            )
+        },
+        "is_preferred": {
+            "description": (
+                "Whether this is the form to show for its type. At most one "
+                "recorded name per entity and type may hold the slot; a new "
+                "preferred form takes it from whichever held it before."
+            )
+        },
     }
 )
 
@@ -4643,6 +4666,24 @@ def _entity_name(value: object, detail: SafeDetail) -> str:
     if not name.strip():
         raise InvalidRequestError(detail)
     return name
+
+
+def _flag(value: object, detail: SafeDetail) -> bool:
+    """One caller-supplied boolean, reporting the field rather than the value.
+
+    `value` is `object` for the reason `_idempotency_key` states: the field *is*
+    annotated `bool`, so annotating it here too makes the `isinstance` check
+    unreachable to a type checker and it reads as dead code to delete. What
+    arrives from a transport is whatever the caller sent.
+
+    Written out rather than left as an inline `isinstance` at each call site,
+    because `RI-ENT-WP-11` added eight boolean fields across five families and
+    eight copies of one check is eight places it can be forgotten -- which is
+    the shape `_idempotency_key`'s own docstring records having been caught by.
+    """
+    if not isinstance(value, bool):
+        raise InvalidRequestError(detail)
+    return value
 
 
 def _entity_reason(value: object, *, required: bool = True) -> str | None:
@@ -4983,6 +5024,170 @@ class ListEntityParticipations:
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
         if self.after is not None:
             _identifier(self.after, IdKind.ENTITY_PROJECT_PARTICIPATION, SafeDetail.CURSOR)
+
+
+# --- RI-ENT-WP-11: the record families' writes ------------------------------
+#
+# Three verbs per family, one command per capability, and every field declared
+# by name. **No command here takes a field map, a `values` mapping, a `fields`
+# dict or `**kwargs`, and none ever will.** The published MCP schema is
+# generated from these dataclasses with `"additionalProperties": false`, so a
+# payload key nothing here declares is refused by the schema before the
+# constructor sees it -- which is what makes "the caller cannot name a
+# server-owned field" a property of the transport rather than a rule somebody
+# remembers to apply.
+#
+# **What is absent is the mechanism.** No command carries `principal_id`,
+# `authority`, `actor_class`, `state`, `version`, `recorded_at`, `updated_at`,
+# `retired_at` or `superseded_by_*`. The server supplies every one of them from
+# the `Authorization`, and there is nothing here that reads such a field and
+# decides to ignore it, because a field that can be sent is a field a later
+# change can start honouring. `application.entity_family_writes` states the
+# same rule from the other side.
+#
+# **`supersede` and `revise` name a supersession, not an edit.** Both reach the
+# family's `correct_*` verb: a successor row is minted and written, and the
+# predecessor is marked SUPERSEDED under the `expected_version` the caller
+# asserted. Nothing is updated in place and no row is destroyed. Each command's
+# own docstring says so, because the two words invite the opposite reading.
+#
+# **The caller-supplied assertion is deliberately not exposed.** WP-08's
+# `StatedAssertion`/`StatedEvidence` structure would have to arrive as a nested
+# object, and the schema builder describes no nested dataclass -- the only shape
+# that would publish is `dict[str, object]`, which is the free-form payload the
+# paragraph above forbids. It is omitted rather than half-exposed, and every
+# command below writes a fact with no assertion attached.
+
+
+@dataclass(frozen=True, slots=True)
+class AddEntityName:
+    """`entities.names.add`: record one typed name form for an entity.
+
+    Names an entity you have already resolved. The recorded name families are
+    separate from `entities.aliases.*`: an alias is a name resolution matches
+    on, and this is the entity's own record of what it is called in a stated
+    form, with its own lifecycle and its own version.
+
+    `name_type_code` is required. An absent type is refused rather than
+    defaulted, because a name filed under the wrong form is one a later read
+    cannot find. The server derives the normalized form the name is compared in;
+    you never send it.
+
+    Retrying with the same `idempotency_key` and the same payload returns the
+    original receipt and writes nothing.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_NAMES_ADD
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_id",
+        "name_type_code",
+        "display_value",
+        "idempotency_key",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    entity_id: str
+    name_type_code: NameTypeCode
+    display_value: str = field(repr=False)
+    idempotency_key: str
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(self.name_type_code, NameTypeCode, SafeDetail.NAME_TYPE_CODE)
+        _entity_name(self.display_value, SafeDetail.DISPLAY_VALUE)
+        _idempotency_key(self.idempotency_key)
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class SupersedeEntityName:
+    """`entities.names.supersede`: replace one recorded name form with a corrected one.
+
+    **A supersession, not an update.** A new name row is written and the one
+    named by `entity_name_id` is marked superseded, pointing at its successor.
+    Nothing is edited in place and nothing is deleted, so what was recorded and
+    what replaced it are both still readable.
+
+    The successor's content is stated in full rather than read off the
+    predecessor: a field you do not restate is not carried forward, because this
+    write performs no read and would otherwise have to guess. `expected_version`
+    is the version a recent `entities.names.list` returned; the write is refused
+    and nothing is written if the row moved since.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_NAMES_SUPERSEDE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_name_id",
+        "expected_version",
+        "entity_id",
+        "name_type_code",
+        "display_value",
+        "idempotency_key",
+        "is_preferred",
+        "effective_from",
+        "effective_to",
+    )
+
+    entity_name_id: str
+    expected_version: int
+    entity_id: str
+    name_type_code: NameTypeCode
+    display_value: str = field(repr=False)
+    idempotency_key: str
+    is_preferred: bool = False
+    effective_from: datetime | None = None
+    effective_to: datetime | None = None
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_name_id, IdKind.ENTITY_NAME, SafeDetail.ENTITY_NAME_ID)
+        _expected_version(self.expected_version)
+        _identifier(self.entity_id, IdKind.ENTITY, SafeDetail.ENTITY_ID)
+        _entity_vocabulary(self.name_type_code, NameTypeCode, SafeDetail.NAME_TYPE_CODE)
+        _entity_name(self.display_value, SafeDetail.DISPLAY_VALUE)
+        _idempotency_key(self.idempotency_key)
+        _flag(self.is_preferred, SafeDetail.IS_PREFERRED)
+        _moment(self.effective_from, SafeDetail.EFFECTIVE_FROM)
+        _moment(self.effective_to, SafeDetail.EFFECTIVE_TO)
+        _effective_window(self.effective_from, self.effective_to, SafeDetail.EFFECTIVE_TO)
+
+
+@dataclass(frozen=True, slots=True)
+class RetireEntityName:
+    """`entities.names.retire`: withdraw one recorded name form from service.
+
+    The row is kept and its history with it; there is no capability that
+    destroys a recorded name. Retiring releases the preferred slot the form
+    held, if it held one.
+
+    `expected_version` is the version a recent read returned. Use this when the
+    name stopped applying and nothing replaces it; use `entities.names.supersede`
+    when something does.
+    """
+
+    capability: ClassVar[Capability] = Capability.ENTITIES_NAMES_RETIRE
+
+    mcp_payload_properties: ClassVar[Mapping[str, Mapping[str, str]]] = _entity_docs(
+        "entity_name_id", "expected_version", "idempotency_key"
+    )
+
+    entity_name_id: str
+    expected_version: int
+    idempotency_key: str
+
+    def __post_init__(self) -> None:
+        _identifier(self.entity_name_id, IdKind.ENTITY_NAME, SafeDetail.ENTITY_NAME_ID)
+        _expected_version(self.expected_version)
+        _idempotency_key(self.idempotency_key)
 
 
 @dataclass(frozen=True, slots=True)
@@ -6115,6 +6320,9 @@ type Command = (
     | ListEntityAddresses
     | ListEntityCommunicationMethods
     | ListEntityParticipations
+    | AddEntityName
+    | SupersedeEntityName
+    | RetireEntityName
     | CreateEntity
     | UpdateEntity
     | ArchiveEntity

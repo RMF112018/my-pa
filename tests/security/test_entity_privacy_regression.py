@@ -30,6 +30,7 @@ from tests.conftest import FakeUnitOfWork, Scene, build_service, metadata_for
 
 from my_pa.application.commands import (
     AddEntityAlias,
+    AddEntityName,
     ArchiveEntity,
     BindEntityIdentifier,
     CreateEntity,
@@ -61,12 +62,14 @@ from my_pa.application.commands import (
     RestoreEntity,
     RetireEntityAlias,
     RetireEntityIdentifier,
+    RetireEntityName,
     ReviseEntityAssignment,
     ReviseEntityRelationship,
     SearchEntities,
     SplitEntity,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     UpdateEntity,
 )
 from my_pa.application.errors import SafeDetail
@@ -94,6 +97,7 @@ from my_pa.domain.relationship.entity import (
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    NameTypeCode,
 )
 from my_pa.domain.relationship.governance import (
     EntityMergeRecord,
@@ -131,6 +135,10 @@ FOREIGN_IDENTIFIER: Final = "xid_foreign01foreign1"
 #: proves less than a refusal for something that exists in another partition.
 FOREIGN_ASSIGNMENT: Final = "asn_foreign01foreign1"
 FOREIGN_RELATIONSHIP: Final = "erel_foreign1foreign1"
+#: `RI-ENT-WP-11`'s record-family rows in the other Principal's partition. Named
+#: here for the reason the two above are: a refusal for something absent proves
+#: less than a refusal for a row that exists and is not mine.
+FOREIGN_ENTITY_NAME: Final = "enam_foreign1foreign1"
 OWN_ENTITY: Final = "ent_mine0002mine00002"
 #: A second entity of my own, so a write of mine that has to name two of them
 #: does not have to borrow one of theirs.
@@ -331,6 +339,40 @@ _EVERY_CAPABILITY: Final = (
     (
         Capability.ENTITIES_PARTICIPATIONS_LIST,
         ListEntityParticipations(entity_id=FOREIGN_ENTITY, perspective="participant"),
+    ),
+    # `RI-ENT-WP-11`'s record-family writes, aimed at the other Principal's
+    # entity and at a name row in their partition. Sharper than the reads above
+    # for exactly the reason the authoring half is sharper than the read half: a
+    # plane that refused a foreign recorded name with anything but the answer an
+    # absent one gets would let a caller confirm a stranger's contact record by
+    # trying to correct it.
+    (
+        Capability.ENTITIES_NAMES_ADD,
+        AddEntityName(
+            entity_id=FOREIGN_ENTITY,
+            name_type_code=NameTypeCode.LEGAL,
+            display_value="Confidential Counterparty",
+            idempotency_key="privacy-entity-names-add",
+        ),
+    ),
+    (
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        SupersedeEntityName(
+            entity_name_id=FOREIGN_ENTITY_NAME,
+            expected_version=1,
+            entity_id=FOREIGN_ENTITY,
+            name_type_code=NameTypeCode.LEGAL,
+            display_value="Confidential Counterparty",
+            idempotency_key="privacy-entity-names-supersede",
+        ),
+    ),
+    (
+        Capability.ENTITIES_NAMES_RETIRE,
+        RetireEntityName(
+            entity_name_id=FOREIGN_ENTITY_NAME,
+            expected_version=1,
+            idempotency_key="privacy-entity-names-retire",
+        ),
     ),
     (
         Capability.ENTITIES_CREATE,
@@ -610,10 +652,10 @@ def test_this_file_exercises_every_capability_on_the_plane() -> None:
     """
     served = {capability for capability in Capability if capability.value.startswith("entities.")}
     assert {capability for capability, _ in _EVERY_CAPABILITY} == served
-    # Thirty-nine after `RI-ENT-WP-10`. The count is asserted as
-    # well as the set, because a prefix scan that stopped matching would satisfy
-    # the equality against an equally empty tuple.
-    assert len(served) == 39
+    # Forty-two after `RI-ENT-WP-11`'s first record family. The count is
+    # asserted as well as the set, because a prefix scan that stopped matching
+    # would satisfy the equality against an equally empty tuple.
+    assert len(served) == 42
 
 
 # --- the partition, under every capability ---------------------------------

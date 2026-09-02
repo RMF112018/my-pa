@@ -126,7 +126,7 @@ Preserved from the source audit; status reflects this increment only.
 | `ENTITY-RESOLUTION-001` | Critical | Resolution cannot follow typed names/identity graph | **Substantially closed, not fully closed** (`RI-ENT-WP-09`) — resolution reads `entity_names` and `entity_communication_methods` by normalized value and corroborates through affiliations and project participations; the three normalized-value indexes that were read by nothing now have their first readers. Two new match reasons and two new contextual signals ship as **unordered categorical** vocabulary per `RULING-M4`, and the domain's "a name alone does not resolve an entity" refusal was decoupled from `_BASIS_ORDER` onto an explicit `_BASES_THAT_NAME_AN_ENTITY`. Remaining: relationship-type and domain-only matching reach search but not resolution; the communication-value read is EMAIL-shaped (see the limitations below); and the database-tier evidence is written but unexecuted |
 | `ENTITY-STATE-001` | High | No canonicalization/review state distinct from lifecycle | Design decision recorded in RI-ENT-WP-01 below (`canonicalization_state_code`, separate 1:1 record, deferred); not implemented this increment |
 | `MCP-CONTRACT-001` | Critical | No rich structured profile read | Not in scope (`RI-ENT-WP-10`) |
-| `MCP-CONTRACT-002` | High | No record-family mutation capabilities for the new families | Not in scope (`RI-ENT-WP-11`); RULING 5 (no mass-assignment endpoint) remains binding when it is |
+| `MCP-CONTRACT-002` | High | No record-family mutation capabilities for the new families | **Being closed by RI-ENT-WP-11** — three verbs per record family, each an explicit command with named fields and an `idempotency_key`, each appending an `entity_mutation_events` row through the new `application/entity_family_writes.py`. RULING 5 holds and is enforced by the generated schema's `"additionalProperties": false` rather than by convention: there is no `entities.profile.save`. See "RI-ENT-WP-11" below for the families that have landed, the atomicity this bridge does *not* have, and the caller-supplied assertion that is deliberately not exposed |
 | `COMPAT-001` | High | Additive-vs-breaking policy needed for generated strict schemas | Addressed procedurally in RI-ENT-WP-01 (below); no generated schema exists yet to apply it to |
 | `MIGRATION-001` | Critical | Legacy `relationship_people`/`relationship_organizations` coexist; must not infer legal identity from names | Honored: migration `7e114f822af2` is purely additive, backfills nothing, infers nothing |
 | `SECURITY-001` | High | New families must preserve Principal partitioning, composite keys, append-only ledgers, operator-only merge/split | Partitioning and composite keys: proven by `tests/schema/test_entity_names_and_organization_profile_migration.py`. `entity_project_participations` is Principal-partitioned the same way; `entity_role_types`/`entity_discipline_types` are deliberately **not** Principal-partitioned (global reference vocabularies — see `tests/architecture/test_user_owned_tables_are_partitioned.py`'s `UNPARTITIONED_USER_OWNED` entry for both). Merge/split: **fully wired as of RI-ENT-WP-06b** for all six Entity-bound families (deferred, not silently, through RI-ENT-WP-05) — see "Merge/split disposition" below |
@@ -2471,6 +2471,151 @@ The allowed tiers only: `tests/unit`, `tests/relationship`,
 `-m "not slow and not database and not network and not connector and not
 evaluation and not e2e and not recovery"`, plus `ruff` and `mypy`. Nothing
 marked `database`, `recovery` or `e2e` was run at any point by any WP-09 worker.
+
+## RI-ENT-WP-11 — record-family mutation contracts
+
+`MCP-CONTRACT-002`. `RI-ENT-WP-08` gave the five Entity-bound record families a
+writer and `RI-ENT-WP-10` published five reads over them; neither published a
+way to *change* one. This work package publishes the capabilities that do, three
+verbs per family, and the mutation-ledger row that accounts for each write.
+
+**RULING 5 holds and is enforced by the transport rather than by a convention.**
+There is no `entities.profile.save` and there will not be one. Every command
+declares its fields explicitly and the generated MCP schema carries
+`"additionalProperties": false`, so a payload key nothing declares is refused
+before the constructor runs. No command accepts a field map, a `values` mapping,
+a `fields` dict or `**kwargs`.
+
+**The absence mechanism is `EntityDirectedService`'s.** No command carries
+`principal_id`, `authority`, `actor_class`, `state`, `version`, `recorded_at`,
+`updated_at`, `retired_at` or `superseded_by_*`. The server supplies all of them
+from the `Authorization`, and there is nothing that reads such a field and
+ignores it. Optimistic concurrency is `expected_version` on every supersession
+and every withdrawal.
+
+**`supersede` and `revise` are one act under two spellings, and neither is an
+edit.** Both reach the family's `correct_*` verb: a successor row is minted and
+written, and the predecessor is marked SUPERSEDED under the version the caller
+asserted. The audit fixed the inconsistent spelling and it is not normalised
+here, because renaming a published capability to make a table look tidy is a
+worse defect than an inconsistent verb.
+
+### The ledger bridge, and the atomicity it does *not* have
+
+`EntityRecordFamilyService` returns `RecordedFact`/`CorrectedFact`/`RetiredFact`,
+writes no `entity_mutation_events` row and holds no idempotency key. Making the
+five families reach `SqlEntitiesRepository._append_mutation` would have meant
+changing around fifteen accepted `EntitiesRepository` port methods from
+`-> None` to `-> DirectedReceipt` while `RI-ENT-WP-08` is under independent
+review, which is a redesign of an accepted contract rather than a use of one.
+
+So a new application module — `src/my_pa/application/entity_family_writes.py` —
+uses two port methods that were already there and are already family-agnostic:
+`directed_replay` (which filters on `(principal_id, capability,
+idempotency_key)` and has no `record_family` predicate) and
+`record_mutation_event`. `entity_mutation_events` carries no family-specific
+column and no foreign key on `record_id`; the only thing standing between it and
+these five families was the closed CHECK `a_mutated_record_family_is_known`,
+which the phase's migration widens.
+
+**The write and its ledger row are two statements, not one, and this is a real
+difference from the directed plane.** `_append_mutation` writes the record and
+the ledger row inside one repository method, so
+`one_entity_mutation_per_key_and_capability` arbitrates the whole act. Here the
+family write and the ledger insert are two separate calls, so that unique
+arbitrates only because **the caller owns the transaction** —
+`SqlUnitOfWork.entities` hands out a repository bound to the open transaction and
+`ApplicationService.invoke` is what opens and commits it. Inside a transaction
+the outcome is still correct: two concurrent writers holding one key both write a
+family row, exactly one commits the ledger row, and the loser's whole transaction
+aborts and takes its family row with it. **Called outside a transaction, a family
+row can be left with no ledger row.** That is stated here and in the module's own
+docstring rather than described as equivalent to the directed plane's
+single-statement arbitration.
+
+`SqlEntityRepository.record_mutation_event` now wraps its INSERT in the same
+`_duplicate_translated(_MUTATION_KEY_UNIQUE)` the directed writer already used,
+so two writers racing past its own pre-read produce a typed refusal rather than a
+raw driver `IntegrityError`. That changes no answer an earlier caller got — an
+untranslated `IntegrityError` and an untranslated `DirectedWriteError` both reach
+`invoke`'s terminal catch for `application.entity_governance`, which classifies
+neither — and it makes the two writers of one table classify one constraint one
+way.
+
+### `MutationRecordFamily` widened from six to eleven
+
+`NAME`, `ADDRESS`, `COMMUNICATION_METHOD`, `PROJECT_PARTICIPATION` and
+`PERSON_ORGANIZATION_AFFILIATION`, spelled exactly as `IdentityEffectFamily`
+spells the same five families, because two vocabularies for one concept are two
+things that can start disagreeing about which rows a correction touched. The
+enum's docstring asserted a closure at six and has been rewritten rather than
+left standing.
+
+`ORGANIZATION_PROFILE` is deliberately **not** added: no `RI-ENT-WP-11`
+capability writes `entity_organization_profiles`, so a member for it would name a
+ledger subject nothing can produce.
+
+**Disclosed side effect.** `entity_proposals`' CHECK
+`an_accepted_proposal_record_family_is_known` is built by the same
+`_one_of(..., MutationRecordFamily, ...)` helper, so widening the enum widens
+that constraint's metadata too and the phase's migration must widen both to keep
+`tables.py` and the DDL in agreement. It is a metadata-parity consequence with no
+behavioural effect: `_PROMOTION_BY_KIND` covers exactly the fifteen existing
+`EntityProposalKind` members and `EntityProposalKind` is not widened here, so no
+new family becomes promotable through a proposal. That is not the same as "no
+change", and it is not left undisclosed.
+
+`SqlEntityRepository.proposal_target_version` is deliberately **not** extended to
+the five new families. It returns `None` for an unmapped family, which would be a
+silent degradation if anything could reach it with one — and nothing can, for the
+reason above: no proposal kind names any of the five.
+
+### No re-enrichment trigger, and why
+
+Nothing is added to `TRIGGERS_BY_MUTATION_CAPABILITY` or to
+`_DIRECT_REENRICHMENT_CAPABILITIES`. `ReenrichmentSubjectKind` has no member for
+a name, an address, a communication method, a participation or an affiliation,
+and `_SUBJECT_ID_KINDS` maps every member it does have to an `IdKind` — so a
+direct caller could not name the subject it changed. The generic path is worse:
+an entry in `TRIGGERS_BY_MUTATION_CAPABILITY` would register Principal-wide work
+under a trigger belonging to a different record family (`NEW_ALIAS` where no
+alias row was written, `ROLE_OR_ORGANIZATION_CHANGE` where no assignment was),
+which is the shape `TRIGGERS_BY_ACCEPTED_PROPOSAL_KIND` records seven absences
+for. Widening the subject vocabulary belongs to the re-enrichment package.
+
+### Deliberately not delivered
+
+- **The caller-supplied assertion is not exposed.** `RI-ENT-WP-08`'s
+  `StatedAssertion`/`StatedEvidence` structure would have to arrive as a nested
+  object; the schema builder describes no nested dataclass, so the only shape
+  that would publish is `dict[str, object]` — the free-form payload RULING 5
+  forbids. It is omitted rather than half-exposed, and every command here writes
+  a fact with no assertion attached. `ENTITY-PROVENANCE-001`'s MCP-exposure
+  clause therefore remains open.
+- **A correction whose successor collides with a *third* active row still
+  answers `internal_error`.** The five families' inserts raise the driver's own
+  `IntegrityError`, untranslated, exactly as `EntityRecordFamilyService`'s
+  docstrings already say they do; the application layer holds no `sqlalchemy`, so
+  the only place to classify that is the persistence adapter, and those methods
+  are `RI-ENT-WP-08`'s and under review. The exception does not reach a caller —
+  `invoke`'s terminal catch answers `internal_error` — but `internal_error` is
+  the wrong class for a conflict a caller could act on, and it is recorded as a
+  limitation rather than described as handled. The one violation this work
+  package itself introduces, two writers racing for one idempotency key, *is*
+  classified.
+- **No migration.** A single dedicated owner writes one revision for the whole
+  phase, widening `knowledge.audit_events.capability_is_known`,
+  `knowledge.entity_mutation_events.a_mutated_record_family_is_known` and
+  `knowledge.entity_proposals.an_accepted_proposal_record_family_is_known`.
+  Until it lands, every capability here is green in the tests and refused by the
+  stored constraint on the first audited call against a migrated database.
+- **The database-tier module is committed and has NEVER been executed.**
+  `tests/database/test_entity_family_write_ledger.py` was written under an
+  absolute prohibition on running anything marked `database`, because another
+  work package's measurement was in flight machine-wide. It is statically
+  verified only, and it is *expected* to fail until the phase's migration lands.
+  Its figures are collection, not execution.
+
 
 ## Test evidence
 

@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and nine capabilities. There are two ways to prove that and only one stays
+one hundred and twelve capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -28,10 +28,10 @@ command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
 default composition exposes fifty-five: the six managed-document names, the
-thirty-nine `entities.` names and the nine Relationship Memory names are
+forty-two `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
-second switch over the `entities.` family and withholds its twenty-three writes on
+second switch over the `entities.` family and withholds its twenty-six writes on
 its own. Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
@@ -113,12 +113,14 @@ from my_pa.domain.relationship.entity import (
     AssignmentType,
     Entity,
     EntityAlias,
+    EntityName,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    NameTypeCode,
 )
 from my_pa.domain.relationship.governance import (
     EntityObservation,
@@ -376,6 +378,48 @@ def staged_assignment(scene: Scene, role: str) -> str:
     )
     FakeUnitOfWork(scene.world).entities.record_assignment(principal_id, assignment)
     return assignment.assignment_id
+
+
+def staged_entity_name(scene: Scene, name_type_code: NameTypeCode) -> str:
+    """One recorded name the staged person carries, of the stated type.
+
+    Written through the entity repository rather than pushed into `World`, on
+    `staged_assignment`'s terms, and memoized on the type for the same reason
+    that one is memoized on the role.
+
+    **The type is what makes two staged names two rows.**
+    `an_active_entity_name_is_unique_per_entity_and_type` is partial on
+    `state = 'active'`, so two stagings of one type would be one name at the
+    database and the second write would be refused. A caller that needs a row to
+    supersede and a row to retire therefore asks for two types -- and the type
+    `entities.names.add` writes has to be a third, or the addition meets the
+    unique instead of the handler.
+    """
+    principal_id = scene.principal.principal_id
+    person, _ = staged_entities(scene)
+    held = next(
+        (
+            name
+            for name in scene.world.entity_names
+            if name.principal_id == principal_id and name.name_type_code is name_type_code
+        ),
+        None,
+    )
+    if held is not None:
+        return held.entity_name_id
+    entity_name_id = issue_identifier(IdKind.ENTITY_NAME)
+    FakeUnitOfWork(scene.world).entities.record_entity_name(
+        principal_id,
+        EntityName(
+            entity_name_id=entity_name_id,
+            entity_id=person.entity_id,
+            principal_id=principal_id,
+            name_type_code=name_type_code,
+            display_value=f"Parity {name_type_code.value} Name",
+            normalized_value=f"parity {name_type_code.value} name",
+        ),
+    )
+    return entity_name_id
 
 
 def staged_edge(scene: Scene, relationship_type: EntityRelationshipType) -> str:
@@ -638,6 +682,11 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     end_assignment = staged_assignment(scene, "Parity End Role")
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
+    # One staged name per record-family write that needs an existing row, of a
+    # type of its own, for `staged_entity_name`'s stated reason. `add` writes a
+    # third type that no staged row holds.
+    supersede_name = staged_entity_name(scene, NameTypeCode.LEGAL)
+    retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -975,6 +1024,30 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "entity_id": person.entity_id,
             "perspective": "participant",
             "page_size": 10,
+        },
+        # `RI-ENT-WP-11`'s record-family writes, each meeting a record of its
+        # own. Driven in one pass over one scene like the directed writes above,
+        # and for the same reason: a supersession takes its predecessor out of
+        # the active set, so two writes sharing a staged row would leave the
+        # second meeting a row that is no longer there.
+        Capability.ENTITIES_NAMES_ADD: {
+            "entity_id": person.entity_id,
+            "name_type_code": "brand",
+            "display_value": "Parity Brand Name",
+            "idempotency_key": "parity-entity-names-add-0001",
+        },
+        Capability.ENTITIES_NAMES_SUPERSEDE: {
+            "entity_name_id": supersede_name,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "name_type_code": "legal",
+            "display_value": "Parity Legal Name Corrected",
+            "idempotency_key": "parity-entity-names-supersede-0001",
+        },
+        Capability.ENTITIES_NAMES_RETIRE: {
+            "entity_name_id": retire_name,
+            "expected_version": 1,
+            "idempotency_key": "parity-entity-names-retire-0001",
         },
         # A name no staged entity carries, so duplicate resolution admits it.
         # A create naming "Parity Person" would be refused as ambiguous, which
@@ -1396,8 +1469,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and nine commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 110, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and twelve commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 113, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))

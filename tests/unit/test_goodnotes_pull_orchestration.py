@@ -6,6 +6,7 @@ import base64
 import dataclasses
 import hashlib
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 
 import pytest
@@ -87,6 +88,8 @@ class _MemoryPullRepository:
     source_mutations: int = 0
     fail_claim: bool = False
     assignment_clients: list[str] = field(default_factory=list)
+    corrupt_receipt: Callable[[PullCompletionReceipt], PullCompletionReceipt] | None = None
+    reverse_receipts: bool = False
 
     @classmethod
     def with_work(cls, *works: GoodNotesPageWork) -> _MemoryPullRepository:
@@ -184,6 +187,10 @@ class _MemoryPullRepository:
             self.receipts[(principal_id, receipt.assignment_id)] = receipt
             self.keys[(principal_id, receipt.idempotency_key)] = receipt
             self.states[key] = replace(self.states[key], completed=True)
+        if self.corrupt_receipt is not None:
+            result = [self.corrupt_receipt(receipt) for receipt in result]
+        if self.reverse_receipts:
+            result.reverse()
         return tuple(result)
 
 
@@ -380,6 +387,57 @@ def test_completion_replays_idempotently_and_completed_work_is_not_rediscovered(
     assert second[0].completion_id == first[0].completion_id
     assert service.discover(context, PullRequest(batch_size=1)).assignments == ()
     assert repo.source_mutations == 0
+
+
+@pytest.mark.parametrize(
+    "corrupt_receipt",
+    (
+        lambda receipt: replace(receipt, completion_id="not-a-sha256"),
+        lambda receipt: replace(receipt, assignment_id="f" * 64),
+        lambda receipt: replace(receipt, idempotency_key="wrong-key"),
+        lambda receipt: replace(receipt, request_fingerprint="f" * 64),
+        lambda receipt: replace(receipt, result_sha256="f" * 64),
+        lambda receipt: replace(receipt, replayed=1),
+    ),
+    ids=(
+        "completion-id",
+        "assignment-id",
+        "idempotency-key",
+        "request-fingerprint",
+        "result-sha256",
+        "replayed-flag",
+    ),
+)
+def test_corrupt_completion_receipt_is_rejected(
+    corrupt_receipt: Callable[[PullCompletionReceipt], PullCompletionReceipt],
+) -> None:
+    repo = _MemoryPullRepository.with_work(_work("corrupt-receipt"))
+    repo.corrupt_receipt = corrupt_receipt
+    service = _service(repo, max_batch_size=1)
+    context = _context()
+    assignment = service.discover(context, PullRequest(batch_size=1)).assignments[0]
+
+    with pytest.raises(GoodNotesPullError) as raised:
+        service.complete(context, (_completion(assignment),))
+
+    assert raised.value.code == ERROR_REPOSITORY_CONFLICT
+
+
+def test_completion_receipts_must_correspond_to_admission_order() -> None:
+    repo = _MemoryPullRepository.with_work(_work("first"), _work("second"))
+    repo.reverse_receipts = True
+    service = _service(repo)
+    context = _context()
+    assignments = service.discover(context, PullRequest(batch_size=2)).assignments
+    completions = tuple(
+        _completion(assignment, result_label=str(index))
+        for index, assignment in enumerate(assignments)
+    )
+
+    with pytest.raises(GoodNotesPullError) as raised:
+        service.complete(context, completions)
+
+    assert raised.value.code == ERROR_REPOSITORY_CONFLICT
 
 
 def test_changed_idempotent_completion_conflicts_without_overwrite() -> None:

@@ -366,7 +366,14 @@ class GoodNotesPullOrchestrator:
             raise GoodNotesPullError(ERROR_COMPLETION_CONFLICT) from None
         except PullRepositoryConflictError:
             raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT) from None
-        if len(receipts) != len(values):
+        if (
+            len(receipts) != len(admissions)
+            or any(
+                not _receipt_matches_admission(receipt, admission)
+                for receipt, admission in zip(receipts, admissions, strict=True)
+            )
+            or len({receipt.completion_id for receipt in receipts}) != len(receipts)
+        ):
             raise GoodNotesPullError(ERROR_REPOSITORY_CONFLICT)
         return receipts
 
@@ -443,6 +450,28 @@ def _completion_fingerprint(context: AuthenticatedPullContext, completion: PullC
             completion.content_sha256,
             completion.result_sha256,
         ]
+    )
+
+
+def _receipt_matches_admission(receipt: object, admission: PullCompletionAdmission) -> bool:
+    if not isinstance(receipt, PullCompletionReceipt):
+        return False
+    completion = admission.completion
+    return (
+        _is_sha256(receipt.completion_id)
+        and receipt.assignment_id == completion.assignment_id
+        and receipt.idempotency_key == completion.idempotency_key
+        and receipt.request_fingerprint == admission.request_fingerprint
+        and receipt.result_sha256 == completion.result_sha256
+        and isinstance(receipt.replayed, bool)
+    )
+
+
+def _is_sha256(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and len(value) == 64
+        and all(character in "0123456789abcdef" for character in value)
     )
 
 

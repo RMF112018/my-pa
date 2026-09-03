@@ -25,10 +25,14 @@ avoidance is expressed here as four executable claims:
    parser each reject the other's scheme, read off the composition root itself.
 4. **`D-15`'s pin and the corrected queue semantics are change-detected.** Four web
    files carry the property that exactly one Principal is admissible under
-   `local_operator` and that the offline queue behaves as WP-08 left it. Their
-   SHA-256 digests are pinned here, so an edit to any of them fails the build and
-   has to be argued about — which is the WP-04 quarantine-registry mechanism
-   applied to the one condition this package promised not to create.
+   `local_operator` backend mode and that the offline queue behaves as WP-08
+   left it. Web `MYPA_AUTH_MODE` is now `passkey` or `synthetic` only;
+   `local_operator` is no longer a web mode; production synthetic still throws;
+   HMAC and local_operator browser sessions cannot exist because those surfaces
+   are gone — so WP-08 NOTE 1 is still not created. Their SHA-256 digests are
+   pinned here, so an edit to any of them fails the build and has to be argued
+   about — which is the WP-04 quarantine-registry mechanism applied to the one
+   condition this package promised not to create.
 
 **What claim 4 is and is not.** It is a change detector, not a proof of
 behaviour: it fails on a whitespace edit and it would not notice a behavioural
@@ -91,8 +95,11 @@ INGRESS_MARKERS: Final = (
 #: * `synthetic.ts` holds `admissibleSyntheticPrincipals()`, the `D-15` narrowing
 #:   to exactly one Principal under `local_operator`;
 #: * `mode.ts` decides which auth mode is in force, refuses synthetic sign-in
-#:   in production, and admits only the credentialed single-Principal
-#:   `local_operator` production mode added by this campaign;
+#:   in production, and admits only `passkey` or `synthetic`. `local_operator`
+#:   and `entra` are not web modes; two identities cannot hold HMAC or
+#:   local_operator browser sessions because those surfaces are gone. WP-08
+#:   NOTE 1 is still not created: production synthetic still throws, and the
+#:   retired Entra/local_operator browser paths cannot mint a second session;
 #: * `replay.ts` and `queue.ts` are WP-08's offline queue, whose NOTE 1 this
 #:   package exists not to trigger.
 #:
@@ -101,7 +108,7 @@ INGRESS_MARKERS: Final = (
 #: WP-08 named is still not created.
 PINNED: Final = {
     "lib/auth/synthetic.ts": "3d5c196ac3475433aa3a391507ded753b942d51f6b383180ae93db3c43d87f60",
-    "lib/auth/mode.ts": "33f71d39f7b59067ea673e0d997e147d417e43a3b038e80450d43b22a999cc77",
+    "lib/auth/mode.ts": "731b24fd88dc7f3ba46611249a0ec4474e1f4be9a6d26f161a710a8b6f069fc5",
     "lib/offline/replay.ts": "d50531075de6019a5be503fb36fbfa0fb97faf42136fdd5fec6b85b167c51e5d",
     "lib/offline/queue.ts": "c4bf1cd90ff88696583aa9e377eedcf1f3e16169868dee4e08ff711ae3792ead",
 }
@@ -278,10 +285,11 @@ def test_the_pinned_web_files_are_unchanged(relative: str) -> None:
     assert path.is_file(), f"{relative} is gone; the pin describes a file that no longer exists"
     assert _digest(path) == PINNED[relative], (
         f"web/src/{relative} changed. It carries either the `D-15` pin (exactly "
-        "one admissible Principal under `local_operator`) or WP-08's offline "
-        "queue semantics, and WP-10's whole position is that the condition "
-        "WP-08's NOTE 1 names — two identities holding sessions while the backend "
-        "serves — is not created. Re-derive the digest here and argue the change"
+        "one admissible Principal under `local_operator` backend mode), WP-08's "
+        "offline queue, or web `MYPA_AUTH_MODE` (`passkey`|`synthetic` only). "
+        "WP-08 NOTE 1 is still not created: production synthetic still throws, "
+        "and HMAC/local_operator browser sessions cannot exist because those "
+        "surfaces are gone. Re-derive the digest here and argue the change"
     )
 
 

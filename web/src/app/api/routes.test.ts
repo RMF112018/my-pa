@@ -43,6 +43,7 @@ import { POST as reveal } from "@/app/api/reveal/route";
 import { GET as timeline } from "@/app/api/relationships/[personId]/timeline/route";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resetSessionRegistry } from "@/lib/auth/session-registry";
+import { withSessionServiceFetch } from "@/lib/auth/session-service-fetch-stub";
 import { SyntheticProviderDisabledError } from "@/lib/fixtures/gate";
 import { syntheticPulse, syntheticDisclosure } from "@/lib/fixtures/pulse";
 import { syntheticReviewCases } from "@/lib/fixtures/review";
@@ -68,7 +69,7 @@ let sent: Array<{ url: string; body: Record<string, unknown> }> = [];
 function stubGateway(result: unknown = {}) {
   vi.stubGlobal(
     "fetch",
-    vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    withSessionServiceFetch(async (url: string | URL | Request, init?: RequestInit) => {
       sent.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
       return new Response(JSON.stringify({ result, disclosure: DISCLOSURE }), {
         status: 200,
@@ -117,6 +118,7 @@ beforeEach(() => {
   vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "local_operator");
   // MYPA_DATA_PROVIDER is deliberately not stubbed here. Unset is the default
   // build, and the default build is the subject.
+  vi.stubGlobal("fetch", withSessionServiceFetch(vi.fn()));
 });
 
 afterEach(() => {
@@ -201,7 +203,9 @@ describe("a default build produces no fixture data at all", () => {
     expect(response.status).toBe(503);
     const body = await response.text();
     expect(looksSynthetic(body)).toBe(false);
-    expect(JSON.parse(body).error.code).toBe("gateway_not_configured");
+    // Session-service and Capture share MYPA_GATEWAY_URL. An unset URL fails
+    // SID resolve first, which is still a refusal rather than fixture data.
+    expect(JSON.parse(body).error.code).toBe("authority_unavailable");
   });
 });
 
@@ -244,7 +248,7 @@ describe("Library distinguishes an unavailable scope from an empty one", () => {
   function stubGatewayWith(result: unknown, disclosure: unknown) {
     vi.stubGlobal(
       "fetch",
-      vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      withSessionServiceFetch(async (url: string | URL | Request, init?: RequestInit) => {
         sent.push({ url: String(url), body: JSON.parse(String(init?.body ?? "{}")) });
         return new Response(JSON.stringify({ result, disclosure }), {
           status: 200,
@@ -619,14 +623,13 @@ describe("the review decision is the backend's own", () => {
     const cookie = await signIn();
     vi.stubGlobal(
       "fetch",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              error: { code: "conflict", message: "stale version", correlation_id: "corr_x" },
-            }),
-            { status: 409, headers: { "content-type": "application/json" } },
-          ),
+      withSessionServiceFetch(async () =>
+        new Response(
+          JSON.stringify({
+            error: { code: "conflict", message: "stale version", correlation_id: "corr_x" },
+          }),
+          { status: 409, headers: { "content-type": "application/json" } },
+        ),
       ),
     );
     const response = await reviewDecide(

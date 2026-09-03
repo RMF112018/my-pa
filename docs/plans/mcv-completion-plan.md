@@ -65,7 +65,7 @@ is not a defect.
 
 ## 3. What is implemented
 
-Three hundred and sixteen Python modules under `src/my_pa` and four hundred and forty-seven test modules —
+Three hundred and eighteen Python modules under `src/my_pa` and four hundred and forty-nine test modules —
 `find src/my_pa -name "*.py"` and `find tests -name "test_*.py"`. The figures
 published here have now gone stale three times: sixty-eight and forty were true at the
 2026-08-02 revalidation basis `main@8274d88`, ninety-three and sixty-nine were
@@ -199,7 +199,22 @@ The pair stated at the head of this section was re-measured by running the two
 commands above against the merged tree once every conflict marker was gone --
 never by adding this integration's four and two to the previous pair, which is
 the arithmetic RULING-M2 forbids and which would have been wrong here for the
-third consecutive integration. The pair standing before this
+third consecutive integration. **Moved again on 2026-09-03 by the UI-IMP-WP04
+integration** (`origin/main` at `cac110ad`), which added two source modules --
+`src/my_pa/adapters/http/auth_sessions.py` and
+`src/my_pa/application/session_service_auth.py` -- and two test modules,
+`tests/unit/test_session_service_auth.py` and
+`tests/unit/test_session_service_isolation.py`. That base also deletes ten
+`web/` files as it retires the legacy browser auth path, and adds several more,
+none of which either `find` above reaches: both are scoped to `src/my_pa` and
+`tests`, so a large `web/` churn moves neither figure. `origin/main` recorded
+the resulting pair as three hundred and seventeen and four hundred and
+forty-five, true of *its* tree and not of this one, which also carries
+RI-ENT-WP-10/11's modules and the entity-plane prose guard. Re-measured on the
+merged tree with every conflict marker gone -- **for the fourth consecutive
+integration neither side's pair was true of the result**, which is now less a
+caution than a description of what merging two active branches does to a
+derived count. The pair standing before this
 correction, three hundred and
 five and four hundred and twenty-nine, was true at `f4eaa4f`; the chain above
 therefore skips from four hundred and twenty-six to four hundred and

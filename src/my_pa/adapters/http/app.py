@@ -202,7 +202,7 @@ REMOTE_CAPTURE_CAPABILITY: Final = "capture.create"
 
 APPLE_POLL_PATH: Final = "/apple/v1/grant.poll"
 APPLE_ADMIT_PATH: Final = "/apple/v1/envelope.admit"
-WEBAUTHN_PATH: Final = "/webauthn/v1/{action}"
+WEBAUTHN_PATH: Final = "/webauthn/v1/{action:path}"
 
 #: The one media type this transport reads and writes.
 _JSON: Final = "application/json"

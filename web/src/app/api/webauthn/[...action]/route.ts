@@ -4,16 +4,18 @@ import { requirePrincipal } from "@/lib/api/guard";
 import { isSameOrigin } from "@/lib/http/origin";
 import { callWebAuthnGateway } from "@/lib/auth/webauthn-server";
 import {
-  encodeSession,
-  newSessionId,
+  isOpaqueSessionSid,
+  parseOpaqueSessionSid,
   SESSION_COOKIE_NAME,
   SESSION_COOKIE_OPTIONS,
   SESSION_MAX_AGE_SECONDS,
 } from "@/lib/auth/session";
-import { registerSession } from "@/lib/auth/session-registry";
-import { localOperatorPrincipal } from "@/lib/auth/local-operator";
-import { SYNTHETIC_MOSS_TENANT_ID } from "@/lib/auth/synthetic";
-import type { PrincipalSession } from "@/contracts/identity";
+import {
+  rotateSid,
+  revokeSid,
+  MissingSessionServiceSecretError,
+  SessionServiceUnavailableError,
+} from "@/lib/auth/session-service";
 
 const PUBLIC_ACTIONS = new Set([
   "authentication/options",
@@ -21,17 +23,63 @@ const PUBLIC_ACTIONS = new Set([
   "recovery/consume",
 ]);
 
+const SESSION_ISSUE_ACTIONS = new Set(["authentication/complete", "recovery/consume"]);
+
 function refuse(code: string, status: number): NextResponse {
   return NextResponse.json({ error: { code } }, { status });
+}
+
+function authorityUnavailable(): NextResponse {
+  return NextResponse.json({ error: { code: "authority_unavailable" } }, { status: 503 });
+}
+
+function asAuthorityFailure(error: unknown): NextResponse | null {
+  if (
+    error instanceof MissingSessionServiceSecretError ||
+    error instanceof SessionServiceUnavailableError
+  ) {
+    return authorityUnavailable();
+  }
+  return null;
+}
+
+function browserPayload(payload: Record<string, unknown>): Record<string, unknown> {
+  const { issuedSid: _stripped, ...rest } = payload;
+  return rest;
+}
+
+/**
+ * Set the HttpOnly session cookie to the Python-issued SID, then revoke a
+ * prior cookie SID if one was presented and differs. Sign-in must not fail
+ * when that revoke returns false or the service is already done with it.
+ */
+export async function attachIssuedSidCookie(
+  response: NextResponse,
+  issuedSid: string,
+  request: NextRequest,
+): Promise<void> {
+  response.cookies.set(SESSION_COOKIE_NAME, issuedSid, {
+    ...SESSION_COOKIE_OPTIONS,
+    maxAge: SESSION_MAX_AGE_SECONDS,
+  });
+  const prior = parseOpaqueSessionSid(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+  if (!prior || prior === issuedSid) return;
+  try {
+    await revokeSid(prior, request);
+  } catch {
+    // Session fixation cleanup is best-effort after the new cookie is set.
+  }
+}
+
+function jsonResponse(payload: Record<string, unknown>, status: number): NextResponse {
+  return NextResponse.json(browserPayload(payload), { status });
 }
 
 export async function POST(
   request: NextRequest,
   context: { params: Promise<{ action: string[] }> },
 ): Promise<Response> {
-  const blocked = isSameOrigin(request)
-    ? null
-    : refuse("cross_site_request", 403);
+  const blocked = isSameOrigin(request) ? null : refuse("cross_site_request", 403);
   if (blocked) return blocked;
   const { action } = await context.params;
   const joined = action.join("/");
@@ -54,53 +102,77 @@ export async function POST(
     principal = guard.principal;
   }
   const upstream = await callWebAuthnGateway(joined, body, request, principal);
-  if (
-    upstream.ok &&
-    (joined === "authentication/complete" || joined === "recovery/consume")
-  ) {
-    const payload = JSON.parse(await upstream.clone().text()) as {
-      tid?: string;
-      oid?: string;
-      sessionCreated?: boolean;
-    };
-    if (payload.sessionCreated && payload.tid && payload.oid) {
-      const sessionPrincipal = principalFromClaims(payload.tid, payload.oid);
-      const sid = newSessionId();
-      const token = await encodeSession(sessionPrincipal, sid);
-      registerSession(sessionPrincipal.principalId, sid);
-      const response = NextResponse.json(await upstream.json());
-      response.cookies.set(SESSION_COOKIE_NAME, token, {
-        ...SESSION_COOKIE_OPTIONS,
-        maxAge: SESSION_MAX_AGE_SECONDS,
-      });
-      return response;
+  const text = await upstream.text();
+  let payload: Record<string, unknown> | null = null;
+  try {
+    const parsed: unknown = JSON.parse(text);
+    if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
+      payload = parsed as Record<string, unknown>;
     }
+  } catch {
+    return new Response(text, {
+      status: upstream.status,
+      headers: { "content-type": "application/json", "cache-control": "no-store" },
+    });
   }
-  return upstream;
+
+  if (upstream.ok && joined === "step-up/complete") {
+    return finishStepUp(request, payload ?? {});
+  }
+
+  if (upstream.ok && SESSION_ISSUE_ACTIONS.has(joined)) {
+    return finishIssuedSession(request, payload ?? {}, upstream.status);
+  }
+
+  if (payload) return jsonResponse(payload, upstream.status);
+  return new Response(text, {
+    status: upstream.status,
+    headers: { "content-type": "application/json", "cache-control": "no-store" },
+  });
 }
 
-function principalFromClaims(tid: string, oid: string): PrincipalSession {
-  if (tid === "local_operator") return localOperatorPrincipal();
-  if (tid === SYNTHETIC_MOSS_TENANT_ID) {
-    return {
-      principalId: `syn-${oid.slice(0, 8)}`,
-      tid,
-      oid,
-      upn: `${oid}@moss.example`,
-      displayName: "Passkey",
-      lifecycleState: "active",
-      synthetic: true,
-      authenticationProvider: "synthetic",
-    };
+async function finishIssuedSession(
+  request: NextRequest,
+  payload: Record<string, unknown>,
+  status: number,
+): Promise<NextResponse> {
+  const raw = payload.issuedSid;
+  if (typeof raw !== "string" || !isOpaqueSessionSid(raw)) {
+    if (payload.sessionCreated === true) return authorityUnavailable();
+    return jsonResponse(payload, status);
   }
-  return {
-    principalId: `entra-${oid}`,
-    tid,
-    oid,
-    upn: "",
-    displayName: "Passkey",
-    lifecycleState: "active",
-    synthetic: false,
-    authenticationProvider: "entra",
-  };
+  const issuedSid = parseOpaqueSessionSid(raw);
+  if (!issuedSid) return authorityUnavailable();
+  const response = jsonResponse(payload, status);
+  await attachIssuedSidCookie(response, issuedSid, request);
+  return response;
+}
+
+async function finishStepUp(
+  request: NextRequest,
+  payload: Record<string, unknown>,
+): Promise<NextResponse> {
+  const currentSid = parseOpaqueSessionSid(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+  if (!currentSid) return refuse("unauthenticated", 401);
+  let issuedSid: string | null;
+  try {
+    issuedSid = await rotateSid(currentSid, request);
+  } catch (error) {
+    const failure = asAuthorityFailure(error);
+    if (failure) return failure;
+    throw error;
+  }
+  if (issuedSid === null) {
+    const denied = refuse("unauthenticated", 401);
+    denied.cookies.set(SESSION_COOKIE_NAME, "", { ...SESSION_COOKIE_OPTIONS, maxAge: 0 });
+    return denied;
+  }
+  const normalized = parseOpaqueSessionSid(issuedSid);
+  if (!normalized) return authorityUnavailable();
+  const response = jsonResponse(payload, 200);
+  response.cookies.set(SESSION_COOKIE_NAME, normalized, {
+    ...SESSION_COOKIE_OPTIONS,
+    maxAge: SESSION_MAX_AGE_SECONDS,
+  });
+  return response;
 }

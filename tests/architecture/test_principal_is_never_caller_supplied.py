@@ -230,6 +230,11 @@ VERIFIED_CALLER_STATEMENTS: Final = {
     # by token hash so the successor is bound to the same Principal. The value
     # is server-owned session state, not a request-body owner.
     "infrastructure/persistence/webauthn_auth.py": (("current", "principal_id"),),
+    # WP04 session-service resolve/touch loads the AuthSessionStore row by SID
+    # hash and reads `session.principal_id` to look up the bound account. The
+    # value is server-owned session state, not a request-body owner — the same
+    # pattern as `webauthn_auth.py` `current.principal_id`.
+    "bootstrap/gateway.py": (("session", "principal_id"),),
     "infrastructure/security/webauthn_ceremony.py": (
         ("record", "principal_id"),
         ("revoked", "principal_id"),

@@ -49,24 +49,28 @@ about a measurement taken for this document name the database and the date.
 
 ---
 
-## 1. Authentication is implemented; live Entra activation is not proven
+## 1. Authentication is implemented; live production activation is not proven
 
 The local gateway still binds `127.0.0.1` and configures either an explicit
-`local_operator` mode or an Entra bearer-verification mode. The web BFF now has a
-Node-only Entra authorization-code + PKCE start/callback/session path. It checks
-state and nonce, derives identity from MSAL-validated claims, keeps the access
-token in the server session registry, and forwards it only from server to
-gateway. No browser request or payload supplies a Principal or bearer.
+`local_operator` mode or an Entra bearer-verification mode. Browser Entra/MSAL
+sign-in is retired. The web BFF holds an opaque SID cookie and asks Python's
+session-service to resolve, touch, rotate, or revoke it. Web `MYPA_AUTH_MODE` is
+`passkey` or `synthetic` only; `local_operator` is not a web mode. No browser
+request or payload supplies a Principal or bearer, and this tier does not
+restore an Entra authorization-code path.
 
-What remains unproven is live activation: there is no repository credential,
-tenant registration, public ingress, TLS termination, or live-tenant test. The
-authorization-code protocol is tested with an injected synthetic MSAL result;
-the Python verifier is tested with synthetic signed JWTs. Do not turn either
-into a claim that a tenant is configured or production-ready.
+What remains unproven is live production activation: there is no repository
+credential, tenant registration, public ingress, TLS termination, or live-tenant
+test. The opaque-SID and session-service wiring, and the Python verifier's
+synthetic signed JWTs, are not a claim that a tenant is configured or
+production-ready.
 
 Evidence: `apps/gateway.py`, `src/my_pa/bootstrap/gateway.py`,
-`web/src/lib/auth/entra-code-flow.ts`,
-`web/src/lib/auth/entra-session.test.ts`,
+`src/my_pa/application/session_service_auth.py`,
+`src/my_pa/domain/identity/auth_sessions.py`,
+`src/my_pa/adapters/http/auth_sessions.py`,
+`web/src/lib/auth/session.ts`,
+`web/src/lib/auth/session-service.ts`,
 `tests/security/test_entra_authentication.py`.
 
 ## 2. Multi-principal runtime wiring exists; live tenant operation remains unproven

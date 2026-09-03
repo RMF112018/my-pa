@@ -22,9 +22,8 @@
  * **A disabled Microsoft Graph connector is shown as deliberately off, and is
  * given its own region so it cannot be read as a degraded or failing source.**
  * Graph is retained in the product definition and is not the active ingestion
- * path; the Entra sign-in this shell uses for identity is a separate concern
- * from Graph activation, and the two are stated separately here for exactly that
- * reason.
+ * path. Browser Entra/MSAL sign-in is retired; Graph activation remains a
+ * separate, still-off concern.
  *
  * **The schema head is not restated here and must not be.** A migration revision
  * copied into the web tier is a claim nothing on this side can check, and it was
@@ -34,7 +33,6 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
-import { msalSeamConfig } from "@/lib/auth/msal.config";
 import { callGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled, gatewayAuthMode } from "@/lib/api/gateway-config";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
@@ -89,7 +87,6 @@ export default async function SystemPage() {
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
 
-  const msal = msalSeamConfig();
   const synthetic = syntheticDataEnabled();
   // **A gateway auth mode this build cannot read is a misconfiguration, and it
   // is shown as one.** The previous default of `"not configured"` fell through
@@ -183,8 +180,8 @@ export default async function SystemPage() {
             personal-data ingestion path in this build, and nothing is waiting on it.
           </p>
           <p className="mt-2">
-            Entra sign-in for <em>identity</em> is a separate concern from Graph connector
-            activation: {msal.enabled ? "Entra sign-in is configured" : "Entra sign-in is not configured, and the synthetic development provider is active"}.
+            Browser Entra/MSAL sign-in is retired. Graph connector activation remains a
+            separate, still-off concern from identity.
           </p>
         </CardBody>
       </Card>

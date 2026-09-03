@@ -1,88 +1,86 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { encodeSession, MissingSessionSecretError, verifySession } from "@/lib/auth/session";
-import type { PrincipalSession } from "@/contracts/identity";
+import { describe, expect, it } from "vitest";
+import * as session from "@/lib/auth/session";
+import {
+  isOpaqueSessionSid,
+  parseOpaqueSessionSid,
+  SESSION_COOKIE_OPTIONS,
+  sessionReplayBinding,
+} from "@/lib/auth/session";
 
-const PRINCIPAL: PrincipalSession = {
-  principalId: "syn-aaaa0001",
-  tid: "11111111-2222-3333-4444-555555555555",
-  oid: "aaaa0001-0000-0000-0000-000000000001",
-  upn: "synthetic.a@moss.example",
-  displayName: "Synthetic A",
-  lifecycleState: "active",
-  synthetic: true,
-};
+const SID = "ab".repeat(32);
+const OTHER = "cd".repeat(32);
 
-describe("session encode/verify", () => {
-  it("round-trips a principal", async () => {
-    const token = await encodeSession(PRINCIPAL);
-    const verified = await verifySession(token);
-    expect(verified).not.toBeNull();
-    expect(verified?.oid).toBe(PRINCIPAL.oid);
-    expect(verified?.upn).toBe(PRINCIPAL.upn);
+describe("opaque SID parse", () => {
+  it("accepts 64 hex characters and normalizes to lowercase", () => {
+    const mixed = "A".repeat(32) + "b".repeat(32);
+    expect(isOpaqueSessionSid(mixed)).toBe(true);
+    expect(parseOpaqueSessionSid(mixed)).toBe(mixed.toLowerCase());
+    expect(parseOpaqueSessionSid(SID)).toBe(SID);
   });
 
-  it("rejects a tampered payload (fail closed)", async () => {
-    const token = await encodeSession(PRINCIPAL);
-    const [payload, signature] = token.split(".");
-    // Flip a character in the payload; the HMAC must no longer verify.
-    const tampered = `${payload.slice(0, -1)}${payload.endsWith("A") ? "B" : "A"}.${signature}`;
-    expect(await verifySession(tampered)).toBeNull();
+  it("rejects missing, short, long, and non-hex values", () => {
+    expect(parseOpaqueSessionSid(undefined)).toBeNull();
+    expect(parseOpaqueSessionSid(null)).toBeNull();
+    expect(parseOpaqueSessionSid("")).toBeNull();
+    expect(parseOpaqueSessionSid("ab".repeat(16))).toBeNull();
+    expect(parseOpaqueSessionSid(`${SID}aa`)).toBeNull();
+    expect(parseOpaqueSessionSid("g".repeat(64))).toBeNull();
+    expect(parseOpaqueSessionSid("not-a-token")).toBeNull();
+    expect(parseOpaqueSessionSid("a.b.c")).toBeNull();
+    expect(parseOpaqueSessionSid("forged.hmac.token")).toBeNull();
+    const hmac = "eyJpYXQiOjE3MjUwMDAwMDB9.0123456789abcdef0123456789abcdef";
+    expect(parseOpaqueSessionSid(hmac)).toBeNull();
   });
 
-  it("rejects a tampered signature", async () => {
-    const token = await encodeSession(PRINCIPAL);
-    const [payload] = token.split(".");
-    expect(await verifySession(`${payload}.AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`)).toBeNull();
-  });
-
-  it("rejects garbage, empty, and missing tokens", async () => {
-    expect(await verifySession("not-a-token")).toBeNull();
-    expect(await verifySession("")).toBeNull();
-    expect(await verifySession(undefined)).toBeNull();
-    expect(await verifySession("a.b.c")).toBeNull();
+  it("is not an HMAC payload.sig cookie", () => {
+    const hmac = "eyJpYXQiOjE3MjUwMDAwMDB9.0123456789abcdef0123456789abcdef";
+    expect(hmac).toContain(".");
+    expect(isOpaqueSessionSid(hmac)).toBe(false);
+    expect(isOpaqueSessionSid("ab".repeat(32))).toBe(true);
   });
 });
 
-/**
- * The session envelope carries `principalId` and is trusted by `middleware.ts`
- * and every `requirePrincipal` route. Until WP-04 an unset `MYPA_SESSION_SECRET`
- * silently selected a hardcoded key, so a deployment that forgot one
- * environment variable accepted sessions minted by anyone — failing open, with
- * no signal at all. There is now no default, and these assert that.
- */
-describe("session secret configuration", () => {
-  afterEach(() => {
-    vi.unstubAllEnvs();
+describe("session cookie flags", () => {
+  it("is HttpOnly so document.cookie cannot read the SID", () => {
+    expect(SESSION_COOKIE_OPTIONS.httpOnly).toBe(true);
+    expect(SESSION_COOKIE_OPTIONS.sameSite).toBe("lax");
+    expect(SESSION_COOKIE_OPTIONS.path).toBe("/");
+  });
+});
+
+describe("session replay binding", () => {
+  it("is stable for one SID and changes when the SID changes", async () => {
+    const first = await sessionReplayBinding(SID);
+    const again = await sessionReplayBinding(SID);
+    const other = await sessionReplayBinding(OTHER);
+    expect(first).toBe(again);
+    expect(first).not.toBe(other);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
   });
 
-  it("refuses to sign when no secret is configured", async () => {
-    vi.stubEnv("MYPA_SESSION_SECRET", "");
-    await expect(encodeSession(PRINCIPAL)).rejects.toBeInstanceOf(MissingSessionSecretError);
+  it("hashes the opaque SID with the offline-replay prefix", async () => {
+    const digest = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(`my-pa:offline-replay:v1:${SID}`) as BufferSource,
+    );
+    const expected = Array.from(new Uint8Array(digest), (byte) =>
+      byte.toString(16).padStart(2, "0"),
+    ).join("");
+    expect(await sessionReplayBinding(SID)).toBe(expected);
+  });
+});
+
+describe("HMAC session API is gone", () => {
+  it("does not export encode/verify helpers or a session secret error", () => {
+    expect(session).not.toHaveProperty("encodeSession");
+    expect(session).not.toHaveProperty("verifySession");
+    expect(session).not.toHaveProperty("verifySessionEnvelope");
+    expect(session).not.toHaveProperty("newSessionId");
+    expect(session).not.toHaveProperty("MissingSessionSecretError");
   });
 
-  it("refuses to verify when no secret is configured, rather than answering", async () => {
-    // The refusal has to reach the caller. Returning `null` here would be
-    // indistinguishable from "not signed in" and would hide the
-    // misconfiguration behind a login screen.
-    const token = await encodeSession(PRINCIPAL);
-    vi.stubEnv("MYPA_SESSION_SECRET", "");
-    await expect(verifySession(token)).rejects.toBeInstanceOf(MissingSessionSecretError);
-  });
-
-  it("refuses a secret too short to be one", async () => {
-    vi.stubEnv("MYPA_SESSION_SECRET", "short");
-    await expect(encodeSession(PRINCIPAL)).rejects.toBeInstanceOf(MissingSessionSecretError);
-  });
-
-  it("signs with the configured secret and not with any other", async () => {
-    // The control: two different configured secrets must not verify each
-    // other's tokens. Without it, "a secret is required" could be satisfied by
-    // an implementation that required the variable and then ignored it.
-    vi.stubEnv("MYPA_SESSION_SECRET", "first-synthetic-signing-key-000000000000");
-    const token = await encodeSession(PRINCIPAL);
-    expect(await verifySession(token)).not.toBeNull();
-
-    vi.stubEnv("MYPA_SESSION_SECRET", "second-synthetic-signing-key-00000000000");
-    expect(await verifySession(token)).toBeNull();
+  it("parses and binds SIDs without MYPA_SESSION_SECRET", async () => {
+    expect(parseOpaqueSessionSid(SID)).toBe(SID);
+    await expect(sessionReplayBinding(SID)).resolves.toMatch(/^[0-9a-f]{64}$/);
   });
 });

@@ -1,18 +1,16 @@
 /**
  * Server-side route guard helpers.
  *
- * Every app API route derives its principal from the verified session
- * cookie — never from the request payload — and rejects payloads that
- * carry identity fields.
+ * Every app API route derives its principal from the opaque session cookie SID
+ * via `resolveSessionPrincipal` — never from the request payload — and rejects
+ * payloads that carry identity fields.
  *
- * The resolution is `resolveSessionPrincipal`, not `verifySession`, and the
- * difference is revocation: this runs in the Node runtime, where the session
- * registry exists, so a signed-out or superseded or idle session is refused
- * here even though the middleware that ran first could not see it.
+ * A dead or missing SID is 401. A missing session-service secret or a down
+ * gateway is 503 `authority_unavailable`, never 401.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
-import { resolveSessionPrincipal } from "@/lib/auth/principal";
+import { AuthorityUnavailableError, resolveSessionPrincipal } from "@/lib/auth/principal";
 import { rejectCallerSuppliedPrincipal, TokenClaimsError } from "@/lib/auth/claims";
 import type { PrincipalSession } from "@/contracts/identity";
 
@@ -20,19 +18,35 @@ export type Guarded =
   | { ok: true; principal: PrincipalSession }
   | { ok: false; response: NextResponse };
 
-/** Resolve the principal from the session cookie or produce a 401. */
+/** Resolve the principal from the session cookie or produce 401 / 503. */
 export async function requirePrincipal(request: NextRequest): Promise<Guarded> {
-  const principal = await resolveSessionPrincipal(request.cookies.get(SESSION_COOKIE_NAME)?.value);
-  if (!principal) {
-    return {
-      ok: false,
-      response: NextResponse.json(
-        { error: { code: "unauthenticated", message: "no valid session" } },
-        { status: 401 },
-      ),
-    };
+  try {
+    const principal = await resolveSessionPrincipal(
+      request.cookies.get(SESSION_COOKIE_NAME)?.value,
+      request,
+    );
+    if (!principal) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: { code: "unauthenticated", message: "no valid session" } },
+          { status: 401 },
+        ),
+      };
+    }
+    return { ok: true, principal };
+  } catch (error) {
+    if (error instanceof AuthorityUnavailableError) {
+      return {
+        ok: false,
+        response: NextResponse.json(
+          { error: { code: "authority_unavailable", message: "session authority unavailable" } },
+          { status: 503 },
+        ),
+      };
+    }
+    throw error;
   }
-  return { ok: true, principal };
 }
 
 /** Parse a JSON body and refuse caller-supplied identity fields. */

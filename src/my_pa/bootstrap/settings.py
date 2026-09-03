@@ -557,6 +557,7 @@ class Settings(StrictModel):
     webauthn_rp_name: str = "my-pa"
     webauthn_allowed_origins: str = ""
     webauthn_bff_secret: str = Field(default="", repr=False)
+    session_service_secret: str = Field(default="", repr=False)
     redaction_enabled: bool = True
     contract_strict_mode: bool = True
     max_page_size: int = Field(default=200, gt=0, le=1000)

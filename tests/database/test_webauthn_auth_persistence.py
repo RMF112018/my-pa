@@ -458,6 +458,62 @@ def test_malformed_and_rollback_leave_state_unchanged(engine: Engine) -> None:
             )
 
 
+def test_two_principals_cannot_resolve_each_others_sids(engine: Engine) -> None:
+    """Distinct SIDs bind distinct synthetic principals; A never resolves as B."""
+    principal_a = _seed_principal(engine)
+    principal_b = _seed_principal(engine)
+    with engine.begin() as connection:
+        store = AuthSessionStore(connection)
+        sid_a = store.create(principal_id=principal_a, now=WHEN).raw_sid
+        sid_b = store.create(principal_id=principal_b, now=WHEN).raw_sid
+        assert sid_a != sid_b
+        assert len(sid_a) == 64 and "." not in sid_a
+        resolved_a = store.resolve(sid_a, now=WHEN)
+        resolved_b = store.resolve(sid_b, now=WHEN)
+        assert resolved_a is not None and resolved_a.principal_id == principal_a
+        assert resolved_b is not None and resolved_b.principal_id == principal_b
+        assert resolved_a.principal_id != resolved_b.principal_id
+        assert store.revoke(sid_a, now=WHEN + timedelta(seconds=1))
+        assert store.resolve(sid_a, now=WHEN + timedelta(seconds=1)) is None
+        assert store.resolve(sid_b, now=WHEN + timedelta(seconds=1)) is not None
+
+
+def test_session_authority_is_postgresql_not_process_local(
+    disposable_database: str, engine: Engine
+) -> None:
+    """Two independent AuthSessionStore instances share PostgreSQL as authority.
+
+    Playwright restart of Next is not this proof: restarting the browser-suite
+    Next process is impractical as the WP04 bar. This test opens a second
+    SQLAlchemy engine (a second connection pool, a second store object) against
+    the same disposable database. A SID created on the first store resolves on
+    the second; revoke on the first is visible to the second. That is
+    PostgreSQL, not a process-local Map.
+    """
+    principal = _seed_principal(engine)
+    with engine.begin() as connection:
+        issued = AuthSessionStore(connection).create(principal_id=principal, now=WHEN)
+        sid = issued.raw_sid
+        assert len(sid) == 64
+        assert "." not in sid
+        assert set(sid) <= set("0123456789abcdef")
+
+    other = create_database_engine(disposable_database)
+    try:
+        with other.begin() as connection:
+            resolved = AuthSessionStore(connection).resolve(sid, now=WHEN + timedelta(seconds=1))
+            assert resolved is not None
+            assert resolved.principal_id == principal
+        with engine.begin() as connection:
+            assert AuthSessionStore(connection).revoke(sid, now=WHEN + timedelta(seconds=2))
+        with other.begin() as connection:
+            assert (
+                AuthSessionStore(connection).resolve(sid, now=WHEN + timedelta(seconds=3)) is None
+            )
+    finally:
+        other.dispose()
+
+
 def test_credential_insert_without_principal_is_rejected(engine: Engine) -> None:
     missing = uuid4()
     with engine.begin() as connection:

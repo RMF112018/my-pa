@@ -481,8 +481,8 @@ def test_web_readme_names_the_routes_and_capabilities_the_bff_reaches() -> None:
         "/api/situations",
         "/api/system",
         "/api/session",
-        "/auth/sign-in",
-        "/auth/callback",
+        "/api/webauthn",
+        "/sign-in",
     ):
         assert route in text, f"web README lost current route {route}"
 
@@ -533,13 +533,16 @@ def test_web_readme_does_not_restore_superseded_frontend_claims() -> None:
         "implements no real sign-in",
         "dispatches fifteen",
         "none exists",
-    ):
-        assert stale not in text, f"web README restored stale claim: {stale}"
-    for current in (
         "authorization-code",
         "pkce s256",
         "process-local",
         "server-held bearer",
+    ):
+        assert stale not in text, f"web README restored stale claim: {stale}"
+    for current in (
+        "opaque sid",
+        "passkey",
+        "session-service",
         "explicitly release it for retry or delete the local copy",
     ):
         assert current in text, f"web README lost current claim: {current}"

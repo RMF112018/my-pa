@@ -341,6 +341,7 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
         "oauth_operator_secret",
         "gsqs_remote_eval_oauth_operator_secret",
         "webauthn_bff_secret",
+        "session_service_secret",
     }
     for name in Settings.model_fields:
         if name in admitted:
@@ -350,6 +351,7 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
     assert Settings.model_fields["oauth_operator_secret"].repr is False
     assert Settings.model_fields["gsqs_remote_eval_oauth_operator_secret"].repr is False
     assert Settings.model_fields["webauthn_bff_secret"].repr is False
+    assert Settings.model_fields["session_service_secret"].repr is False
 
 
 def test_an_absent_database_url_is_refused_rather_than_defaulted() -> None:

@@ -31,14 +31,31 @@ import { POST } from "@/app/api/session/route";
 import { GET as library } from "@/app/api/library/route";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resetSessionRegistry } from "@/lib/auth/session-registry";
+import { issueSyntheticSession } from "@/lib/auth/session-service";
 import {
   admissibleSyntheticPrincipals,
   resolveAdmissibleSyntheticPrincipal,
   PrincipalNotAdmissibleError,
   PINNED_SYNTHETIC_PRINCIPAL_KEY,
+  SYNTHETIC_MOSS_TENANT_ID,
 } from "@/lib/auth/synthetic";
 
+vi.mock("@/lib/auth/session-service", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/auth/session-service")>();
+  return {
+    ...actual,
+    issueSyntheticSession: vi.fn(),
+  };
+});
+
 const ORIGIN = "http://localhost:3000";
+const mockedIssue = vi.mocked(issueSyntheticSession);
+let sidSeq = 0;
+
+function nextSid(): string {
+  sidSeq += 1;
+  return sidSeq.toString(16).padStart(64, "0");
+}
 
 function signInRequest(key: string): NextRequest {
   return new NextRequest(`${ORIGIN}/api/session`, {
@@ -56,6 +73,26 @@ function issuedCookie(response: Response): string | undefined {
 
 beforeEach(() => {
   resetSessionRegistry();
+  sidSeq = 0;
+  mockedIssue.mockImplementation(async (key) => {
+    const issuedSid = nextSid();
+    return {
+      issuedSid,
+      principal: {
+        principalId: key === "synthetic-b" ? "syn-bbbb0002" : "syn-aaaa0001",
+        tid: SYNTHETIC_MOSS_TENANT_ID,
+        oid:
+          key === "synthetic-b"
+            ? "bbbb0002-0000-0000-0000-000000000002"
+            : "aaaa0001-0000-0000-0000-000000000001",
+        upn: key === "synthetic-b" ? "synthetic.b@moss.example" : "synthetic.a@moss.example",
+        displayName: key === "synthetic-b" ? "Synthetic B" : "Synthetic A",
+        lifecycleState: "active" as const,
+        synthetic: true,
+        authenticationProvider: "synthetic" as const,
+      },
+    };
+  });
 });
 
 afterEach(() => {

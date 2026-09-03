@@ -29,11 +29,9 @@
  * disclosure the caller receives says so, through `LOCAL_OPERATOR_LIMITATION`.
  * Claiming session-scoped data in that mode would be false: the gateway serves
  * one principal per process regardless of who is signed in here. In `entra` mode
- * a bearer token is required. The cookie deliberately carries none;
- * `establishValidatedEntraSession` stores an MSAL-validated access token beside
- * the server-side session and this module retrieves it by that session's
- * Principal. If operator-gated live MSAL configuration has not established one,
- * the honest answer is `unavailable`. Minting a token, accepting one from the
+ * a bearer token is required. Browser Entra/MSAL is retired, so this BFF has no
+ * forwardable Entra credential: the honest answer is `unavailable`. Minting a
+ * token, sending the session cookie as a bearer, accepting a token from the
  * request, or falling back to unauthenticated mode remain impossible here.
  *
  * **Where the request stops.** Failure is always a typed state, never an empty
@@ -47,7 +45,6 @@ import { rejectCallerSuppliedPrincipal } from "@/lib/auth/claims";
 import { gatewayAuthMode, gatewayBaseUrl } from "@/lib/api/gateway-config";
 import type { DisclosureEnvelope, ErrorEnvelope } from "@/contracts/envelope";
 import type { PrincipalSession } from "@/contracts/identity";
-import { gatewayBearerForPrincipal } from "@/lib/auth/session-registry";
 
 /** A capability name this BFF is allowed to address. */
 export type GatewayCapability = keyof typeof contract.capabilities;
@@ -194,22 +191,15 @@ function assertServerContext(): void {
 /**
  * The headers one request carries, or a refusal naming what is missing.
  *
- * In `entra` mode only a bearer stored with the current server-side session is
- * forwarded. None is created or accepted from request input here.
+ * In `entra` gateway mode a bearer is required and this BFF has none: browser
+ * Entra/MSAL is retired. None is created or accepted from request input here.
  */
-function requestHeaders(principal: PrincipalSession):
+function requestHeaders():
   | { ok: true; headers: Record<string, string> }
   | { ok: false; failure: { status: number; error: ErrorEnvelope } } {
   const mode = gatewayAuthMode();
   if (mode === "local_operator") {
     return { ok: true, headers: { "content-type": "application/json" } };
-  }
-  const bearer = gatewayBearerForPrincipal(principal.principalId);
-  if (bearer) {
-    return {
-      ok: true,
-      headers: { "content-type": "application/json", authorization: `Bearer ${bearer}` },
-    };
   }
   return {
     ok: false,
@@ -266,7 +256,7 @@ export async function callGateway<T = Record<string, unknown>>(
   let headers: Record<string, string>;
   try {
     base = gatewayBaseUrl();
-    const resolved = requestHeaders(principal);
+    const resolved = requestHeaders();
     if (!resolved.ok) return { ok: false, ...resolved.failure };
     headers = resolved.headers;
   } catch (error) {

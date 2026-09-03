@@ -168,6 +168,10 @@ from uuid import UUID
 
 from sqlalchemy import Connection, Engine
 
+from my_pa.adapters.http.auth_sessions import (
+    dispatch_webauthn_http,
+    session_service_http_handler,
+)
 from my_pa.adapters.http.webauthn import webauthn_http_handler
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.apple_machine import AppleBridgeIdentity, AppleMachineControl
@@ -179,6 +183,11 @@ from my_pa.application.goodnotes_gsqs_b0_workflow import WorkflowPorts
 from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
+from my_pa.application.session_service_auth import (
+    SYNTHETIC_CATALOGUE,
+    SessionServiceError,
+    session_principal_payload,
+)
 from my_pa.application.webauthn_bff_attestation import verify_webauthn_attestation
 from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
 from my_pa.bootstrap.settings import AuthMode, Settings
@@ -187,6 +196,7 @@ from my_pa.domain.capture.client import admit_client_binding, parse_client_crede
 from my_pa.domain.capture.errors import CaptureError
 from my_pa.domain.common.identifiers import IdKind
 from my_pa.domain.common.time import utc_now
+from my_pa.domain.identity.auth_sessions import AuthSession
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.user_account import TokenClaimsError
@@ -226,6 +236,8 @@ from my_pa.infrastructure.persistence.tables import (
 )
 from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from my_pa.infrastructure.persistence.user_accounts import UserAccountRepository
+from my_pa.infrastructure.persistence.webauthn_auth import AuthSessionStore
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
 from my_pa.infrastructure.security.principal_identity import PrincipalIdentityService
 from my_pa.infrastructure.security.webauthn_ceremony import (
@@ -609,14 +621,75 @@ def _webauthn_execute(
                 tid, oid = verify_webauthn_attestation(bff_secret, attestation, now=clock())
                 principal_id = service.ensure_account(tid=tid, oid=oid, upn=None, display_name=None)
             result = _dispatch_webauthn(service, action, origin, document, principal_id)
-        body: dict[str, Any] = dict(result.payload)
-        if result.recovery_codes is not None:
-            body["codes"] = list(result.recovery_codes)
-        if result.issued_session is not None:
-            body["sessionCreated"] = True
-        return body
+        return _ceremony_response_body(result)
 
     return execute
+
+
+def _ceremony_response_body(result: CeremonyResult) -> dict[str, Any]:
+    """Loopback JSON for a ceremony outcome, including the raw SID once."""
+    body: dict[str, Any] = dict(result.payload)
+    if result.recovery_codes is not None:
+        body["codes"] = list(result.recovery_codes)
+    if result.issued_session is not None:
+        body["sessionCreated"] = True
+        body["issuedSid"] = result.issued_session.raw_sid
+    return body
+
+
+def _session_service_execute(
+    engine: Engine,
+    *,
+    clock: Callable[[], datetime] = utc_now,
+) -> Callable[[str, Mapping[str, Any]], Mapping[str, Any]]:
+    """SID resolve/touch/rotate/revoke and synthetic mint on the work engine."""
+
+    def execute(action: str, document: Mapping[str, Any]) -> Mapping[str, Any]:
+        now = clock()
+        with engine.begin() as connection:
+            store = AuthSessionStore(connection)
+            accounts = UserAccountRepository(connection)
+            if action == "sessions/issue-synthetic":
+                key = document.get("key")
+                if not isinstance(key, str):
+                    raise SessionServiceError("invalid_request")
+                claims = SYNTHETIC_CATALOGUE.get(key)
+                if claims is None:
+                    raise SessionServiceError("invalid_request")
+                account = accounts.resolve_or_create(claims, now=now)
+                issued = store.create(principal_id=account.principal_id, now=now)
+                return {
+                    "issuedSid": issued.raw_sid,
+                    "principal": session_principal_payload(account),
+                }
+            sid = document.get("sid")
+            if not isinstance(sid, str):
+                raise SessionServiceError("unauthenticated")
+            if action == "sessions/resolve":
+                return _live_principal(accounts, store.resolve(sid, now=now))
+            if action == "sessions/touch":
+                return _live_principal(accounts, store.touch(sid, now=now))
+            if action == "sessions/rotate":
+                rotated = store.rotate(sid, now=now)
+                if rotated is None:
+                    raise SessionServiceError("unauthenticated")
+                return {"issuedSid": rotated.raw_sid}
+            if action == "sessions/revoke":
+                if not store.revoke(sid, now=now):
+                    raise SessionServiceError("unauthenticated")
+                return {"revoked": True}
+            raise SessionServiceError("invalid_request")
+
+    return execute
+
+
+def _live_principal(accounts: UserAccountRepository, session: AuthSession | None) -> dict[str, Any]:
+    if session is None:
+        raise SessionServiceError("unauthenticated")
+    account = accounts.get(session.principal_id)
+    if account is None:
+        raise SessionServiceError("unauthenticated")
+    return {"principal": session_principal_payload(account)}
 
 
 def _dispatch_webauthn(
@@ -712,9 +785,9 @@ def _b64_field(document: Mapping[str, Any], name: str) -> bytes:
 
 
 def _compose_webauthn_handler(settings: Settings, work_engine: Engine) -> Callable[..., Any]:
-    """Wire the SQL-free HTTP handler to ceremony execution on the work engine."""
+    """Wire ceremony and session-service handlers; dispatch by path action."""
     relying_party = settings.webauthn_relying_party()
-    return webauthn_http_handler(
+    ceremony = webauthn_http_handler(
         relying_party=relying_party,
         execute=_webauthn_execute(
             work_engine,
@@ -722,6 +795,13 @@ def _compose_webauthn_handler(settings: Settings, work_engine: Engine) -> Callab
             bff_secret=settings.webauthn_bff_secret,
         ),
     )
+    sessions = session_service_http_handler(
+        relying_party=relying_party,
+        service_secret=settings.session_service_secret,
+        execute=_session_service_execute(work_engine),
+        clock=utc_now,
+    )
+    return dispatch_webauthn_http(session_service=sessions, ceremony=ceremony)
 
 
 @dataclass(frozen=True, slots=True)

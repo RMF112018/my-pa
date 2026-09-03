@@ -576,7 +576,7 @@ class Capability(StrEnum):
     #: asks for a mutation and performs none, which is why it is not operator-only
     #: and why it carries a purpose of its own rather than `entity_authoring`: a
     #: rule, a source worker or a local model may hold it, and holding it must
-    #: not amount to holding the eighteen writes above. Operator §16 lists it
+    #: not amount to holding the thirty-eight entity writes above. Operator §16 lists it
     #: among the capabilities a producer client may have, beside
     #: `entities.observe` and `review.list`, and beside no disposition at all.
     #:

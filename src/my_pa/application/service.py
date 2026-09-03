@@ -4906,7 +4906,7 @@ class ApplicationService:
 
         The same floor `_entity_plane` is, one switch narrower, and it exists for
         the same reason that one does: `available_capabilities` withholds the
-        eighteen write names and two readers consult it -- `capabilities.get`
+        thirty-eight entity write names and two readers consult it -- `capabilities.get`
         and the MCP tool list -- while the HTTP transport consults neither. It
         routes by path segment and `_run` dispatches straight from `_HANDLERS`,
         so a build with `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED` unset

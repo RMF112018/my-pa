@@ -643,7 +643,7 @@ class Settings(StrictModel):
         ):
             # Fail closed, and closed in the direction that says what was meant.
             # The alternatives were to serve the writes anyway — which would put
-            # eighteen identity writes on a process whose operator turned the
+            # thirty-eight identity writes on a process whose operator turned the
             # plane off — or to ignore the variable, which is the shape where an
             # operator sets a switch, sees no error, and believes a surface is
             # gated when it is not. Neither is better than refusing to start.

@@ -1903,7 +1903,7 @@ class RecordingService(ApplicationService):
             # reported it `not_implemented`, and this suite asserted the `200`.
             relationship_intelligence_enabled=True,
             # And its write half, on exactly the same argument one line up: the
-            # eighteen `entities.` writes are withheld by a second switch, so a
+            # thirty-eight `entities.` writes are withheld by a second switch, so a
             # service composed with the plane and without this one would have
             # this suite asserting reachability for names its own build refuses.
             relationship_intelligence_writes_enabled=True,

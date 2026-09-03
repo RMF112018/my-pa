@@ -24,7 +24,7 @@ evidence only and was not transplanted.
 | Item | Exact state | Treatment |
 | --- | --- | --- |
 | Current `origin/main` | commit `8f0e47795a698a5e51e55e06253d91312ef932fb`; tree `46afa161aa0f94dd568ff9db984bcc369d6a7c03` | Exact merge-base for the current isolated GoodNotes synchronization. |
-| Current GoodNotes code head | commit `1ceb5b1b8e882748db0437d4cd82b4fea0696dd6`; tree `3da1ac856d2329988873674d1ae67de3d0539fe7` | Clean isolated integration state before this one-file ledger update. It includes the bounded R7 identity-target seam described below. |
+| Current GoodNotes corrected code head | commit `11f77f4770af8c335e9590bd5db4a2925cdc0196`; tree `bad9b8042ddf37f360140c40211d04885439806d` | Clean isolated integration state before this one-file ledger update. It includes the bounded R7 identity-target seam and the validator-driven correction described below. |
 | Frozen pre-WP08 GoodNotes branch | commit `50f29a042da716e75820bf150d606b67aa99718e`; tree `2c68219fb3db82a6b071a84f8d18a402ff6adda3` | Preserved without mutation as historical evidence. |
 | Current main Alembic graph | sole head `16f05c46b8c3` | The GoodNotes tranche adds no migration. |
 | RI WP12 | clean commit `fc8911b2241654f03210d77bfe22894dd2d41ddd`; tree `1ba3ae769d3594516b684c6bbe9e69f8860c3950` | Owns successor migration `b8e4d1a6c073`, shared service/plans/runbooks, and schema-test ancestry. GoodNotes migration or shared-path work remains serialized behind it. |
@@ -72,6 +72,19 @@ identity-target seam. Person and organization candidates target generalized
 Entity identity (`ent_`); project context targets the existing continuity
 Project identity (`prj_`).
 
+The independent validation of ledger head
+`a6ac0d45d32b8111ac0f2e60757af41d692935ec`, tree
+`19b12784314ec790600d8bcc4d6168d9859c6811`, returned `FAIL`. Its major finding
+showed that a successfully parsed identifier outside the two intended planes,
+including legacy `per_` or source `src_` identifiers, could still fall back to
+normalized-name matching. Its minor finding showed that callers could directly
+construct an associated resolution result with an ID from the wrong plane.
+Commit `11f77f4770af8c335e9590bd5db4a2925cdc0196`, tree
+`bad9b8042ddf37f360140c40211d04885439806d`, corrects both issues: every
+successfully parsed identifier is exact-ID-only, and associated result objects
+enforce `ent_` for person or organization targets and `prj_` for project
+targets.
+
 During synchronization, a worker mistakenly operated in the primary checkout.
 The tracked checkout was restored to its pre-incident detached commit
 `e004942b076bbfe26cfd836bd448350236f326cb`, tree
@@ -90,7 +103,7 @@ read, changed, staged, or incorporated.
 | GN-WP-R4 | `INDEPENDENT_SLICE_INTEGRATED` | Local-source disappearance, reappearance acknowledgment, bounded staleness, and digest continuity are explicit. |
 | GN-WP-R5 | `INCOMPLETE_SHARED_WIRING` | A distinct GoodNotes/GSQS production composition gate remains across settings, bootstrap, service, authorization, MCP publication, and operational documentation. |
 | GN-WP-R6 | `INDEPENDENT_SLICE_INTEGRATED` | Page-version render identity is append-only; only absent render metadata may be backfilled. |
-| GN-WP-R7 | `BOUNDED_TYPED_IDENTITY_SEAM_INTEGRATED; PUBLIC_AND_PERSISTENCE_WIRING_SERIALIZED` | The operator selected Option 2: person and organization candidates use generalized Entity identity (`ent_`), while project context uses continuity Project identity (`prj_`). The current seam carries an explicit target kind plus the original literal, confidence, and evidence references. It resolves only an exact matching ID or a unique normalized name within that target kind, and fails closed on ambiguity, identifier-plane mismatch, an unknown ID, or any case that would require type inference. This seam is not yet reachable through the public proposal contract and is not populated from or written through a persistence adapter. |
+| GN-WP-R7 | `BOUNDED_TYPED_IDENTITY_SEAM_CORRECTED; FRESH_REVIEW_REQUIRED; PUBLIC_AND_PERSISTENCE_WIRING_SERIALIZED` | The operator selected Option 2: person and organization candidates use generalized Entity identity (`ent_`), while project context uses continuity Project identity (`prj_`). The current seam carries an explicit target kind plus the original literal, confidence, and evidence references. It resolves only an exact matching ID or a unique normalized name within that target kind. Every syntactically valid identifier is exact-ID-only, including identifiers from other planes, and associated result construction enforces the selected identity plane. Ambiguity, an unknown ID, a mismatched plane, or any case requiring type inference remains unresolved. This seam is not yet reachable through the public proposal contract and is not populated from or written through a persistence adapter. |
 | GN-WP-R8 | `INDEPENDENT_SLICE_INTEGRATED` | Corrections and delivery require current accepted evidence with exact Principal-bound provenance; rejected or superseded evidence is excluded and receipt replay is immutable. |
 | GN-WP-R9 | `APPLICATION_CORE_INTEGRATED; SHARED_WIRING_INCOMPLETE` | Authenticated HMAC-bound cursors, client/context-bound assignments, bounded retry, resume, receipt validation, and idempotent completion exist. Public authorization, persistence, gateway, MCP, and schedule wiring remain absent. |
 | GN-WP-R10 | `INDEPENDENT_SLICE_INTEGRATED_AND_CORRECTED` | The optimizer remains production-inert. Hard gates, `plateau_limit`, and optimizer state types fail closed on values outside their exact contracts without changing evaluator identity. |
@@ -135,6 +148,12 @@ commits:
   `211 passed`, and the dependency-architecture selection completed with
   `1,520 passed`; targeted mypy covered the two changed source files with no
   issues, and Ruff check, Ruff format check, and `git diff --check` passed;
+- on exact corrected code head `11f77f47`, the correction author completed the
+  focused R7 identity selection with `39 passed`, the broader GoodNotes unit
+  selection with `216 passed`, and the dependency-architecture selection with
+  `1,520 passed`; Ruff check, Ruff format check, targeted mypy over the two
+  changed source files, and `git diff --check` also passed. These author results
+  do not substitute for fresh independent validation or exact-head review;
 - the isolated database campaign partially executed `1,462 passed, 0 failed`
   in `56:03`; 620 tests in the named database/recovery/e2e selection were not
   executed, so this is not a completed database tier or an applicable PR-tier
@@ -174,8 +193,13 @@ The review chronology is preserved rather than overwritten:
   blocker, major, or minor findings for that bounded code-and-evidence head. It
   did not establish an applicable PR-tier pass, PR eligibility, merge
   eligibility, or objective completion. The later R7 commit `1ceb5b1b`
-  invalidated that exact-head verdict for merge purposes, and the commit
-  containing this ledger update will likewise require a fresh review.
+  invalidated that exact-head verdict for merge purposes;
+- independent validation of `a6ac0d45`, tree `19b12784`, returned `FAIL` with
+  the legacy/other-identifier normalized-name fallback major and the direct
+  wrong-plane result-construction minor described above; and
+- correction `11f77f47`, tree `bad9b804`, addresses those findings, but neither
+  it nor the commit containing this ledger update has a fresh independent
+  validation or exact-head review verdict.
 
 No historical verdict authorizes the current or eventual head. Required count
 guards remain red because their authoritative claims are in shared plans, the
@@ -206,7 +230,8 @@ The objective remains incomplete pending:
   required for the final changed surface;
 - operator decisions for R11, R12, and OP-GN-01; and
 - a fresh independent review bound to the final exact head, followed by the
-  applicable PR and merge decisions.
+  applicable PR and merge decisions. Fresh validation must first confirm the
+  two R7 findings are closed on the current head.
 
 No blocker was bypassed. This ledger records the bounded R7 Option 2 decision,
 but no R7 completion, request completion, applicable PR-tier pass, PR or merge

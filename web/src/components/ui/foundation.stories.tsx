@@ -11,6 +11,8 @@ import { RichContent } from "@/components/ui/rich-content";
 import { Select } from "@/components/ui/select";
 import { Sheet } from "@/components/ui/sheet";
 import { SurfaceState } from "@/components/ui/surface-state";
+import { LiveAnnouncement } from "@/components/ui/live-region";
+import { TextField } from "@/components/ui/field";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Textarea } from "@/components/ui/textarea";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -95,6 +97,14 @@ function ControlGallery() {
           Open sheet
         </Button>
       </div>
+      <TextField
+        label="Correction"
+        hint="The original proposal is preserved."
+        error="A correction has to carry the value you are accepting instead."
+        required
+        defaultValue=""
+      />
+      <LiveAnnouncement tone="alert">Conflict: compare every canonical field, then reapply deliberately.</LiveAnnouncement>
       <Sheet
         open={sheetOpen}
         onOpenChange={setSheetOpen}
@@ -135,9 +145,16 @@ export const EpistemicAndContent: Story = {
       <RichContent
         nodes={[
           { type: "heading", text: "Synthetic evidence" },
-          { type: "paragraph", text: "A semantic paragraph with no raw HTML execution." },
+          { type: "paragraph", text: "A semantic paragraph with no raw HTML execution.", epistemic: "source" },
+          { type: "paragraph", text: "A model summary remains labelled as AI derived.", epistemic: "ai-derived" },
           { type: "quote", text: "A source excerpt remains visibly distinct." },
-          { type: "list", items: ["Source attribution", "Freshness", "Limitations"] },
+          { type: "list", ordered: true, items: ["Source attribution", { text: "Freshness", children: ["Limitations"] }] },
+          {
+            type: "table",
+            caption: "Coverage",
+            headers: ["Field", "State"],
+            rows: [["Authority", "accepted"]],
+          },
           { type: "code", text: "record.status = 'proposed'" },
           { type: "link", text: "Open an allowed HTTPS reference", href: "https://example.test" },
         ]}

@@ -22,8 +22,8 @@ import { RevealDialog } from "@/components/shell/reveal-dialog";
 import { apiPost } from "@/lib/api/client";
 
 interface DecideResponse {
-  receipt: Receipt;
-  status: string;
+  receipt?: Receipt;
+  status?: string;
 }
 
 const DISPOSITION_LABEL: Record<ReviewDisposition, string> = {
@@ -39,6 +39,7 @@ type CaseStatus =
   | { phase: "correcting" }
   | { phase: "submitting" }
   | { phase: "decided"; disposition: ReviewDisposition; receipt: Receipt }
+  | { phase: "not_persisted"; detail: string }
   | { phase: "error"; message: string };
 
 export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
@@ -69,11 +70,16 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
         `/api/review/${encodeURIComponent(reviewCaseId)}/decide`,
         payload,
       );
-      if (response.ok && response.data) {
+      if (response.ok && response.data?.status === "persisted" && response.data.receipt) {
         setStatus(reviewCaseId, {
           phase: "decided",
           disposition,
           receipt: response.data.receipt,
+        });
+      } else if (response.ok) {
+        setStatus(reviewCaseId, {
+          phase: "not_persisted",
+          detail: response.data?.status ?? "the server did not report a stored decision",
         });
       } else {
         setStatus(reviewCaseId, {
@@ -143,6 +149,16 @@ export function ReviewWorkbench({ cases }: { cases: readonly ReviewCase[] }) {
                       {status.receipt.transition} · policy {status.receipt.policyVersion}
                     </p>
                   </div>
+                ) : status.phase === "not_persisted" ? (
+                  <p
+                    role="alert"
+                    data-testid={`review-not-persisted-${item.reviewCaseId}`}
+                    className="mt-3 text-sm text-moss-coral-strong"
+                  >
+                    <strong>No decision was stored.</strong> The server answered &ldquo;
+                    {status.detail}&rdquo; rather than a stored decision, so this case is
+                    unchanged.
+                  </p>
                 ) : status.phase === "correcting" ? (
                   <CorrectionForm
                     onCancel={() => setStatus(item.reviewCaseId, { phase: "open" })}

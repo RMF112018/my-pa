@@ -5,6 +5,7 @@ from my_pa.domain.goodnotes.models import (
     GoodNotesEntityResolution,
     GoodNotesIdentityCandidate,
     GoodNotesIdentityDirectoryRecord,
+    GoodNotesIdentityResolutionResult,
     GoodNotesIdentityTargetKind,
 )
 from my_pa.domain.relationship import EntityType
@@ -126,6 +127,8 @@ def test_r7_directory_contract_rejects_wrong_identity_planes() -> None:
         ("prj_eeeeeeeeeeeeeeee", GoodNotesIdentityTargetKind.PERSON),
         ("ent_eeeeeeeeeeeeeeee", GoodNotesIdentityTargetKind.PROJECT),
         ("prj_eeeeeeeeeeeeeeee", GoodNotesIdentityTargetKind.PROJECT),
+        ("per_eeeeeeeeeeeeeeee", GoodNotesIdentityTargetKind.PERSON),
+        ("src_eeeeeeeeeeeeeeee", GoodNotesIdentityTargetKind.PERSON),
     ),
 )
 def test_r7_id_shaped_literals_never_fall_back_to_name_matching(
@@ -149,3 +152,26 @@ def test_r7_id_shaped_literals_never_fall_back_to_name_matching(
     )
     assert result.resolution is GoodNotesEntityResolution.UNRESOLVED
     assert result.resolved_id is None
+
+
+@pytest.mark.parametrize(
+    ("target_kind", "resolved_id", "expected_prefix"),
+    (
+        (GoodNotesIdentityTargetKind.PERSON, "prj_aaaaaaaaaaaaaaaa", "ent"),
+        (GoodNotesIdentityTargetKind.ORGANIZATION, "prj_aaaaaaaaaaaaaaaa", "ent"),
+        (GoodNotesIdentityTargetKind.PROJECT, "ent_aaaaaaaaaaaaaaaa", "prj"),
+    ),
+)
+def test_r7_resolution_result_rejects_wrong_identity_plane(
+    target_kind: GoodNotesIdentityTargetKind,
+    resolved_id: str,
+    expected_prefix: str,
+) -> None:
+    with pytest.raises(ValueError, match=rf"expected '{expected_prefix}' identifier"):
+        GoodNotesIdentityResolutionResult(
+            candidate=GoodNotesIdentityCandidate(
+                literal="synthetic target", target_kind=target_kind
+            ),
+            resolution=GoodNotesEntityResolution.ASSOCIATED,
+            resolved_id=resolved_id,
+        )

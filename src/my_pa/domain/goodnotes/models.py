@@ -1169,6 +1169,13 @@ class GoodNotesIdentityResolutionResult:
         associated = self.resolution is GoodNotesEntityResolution.ASSOCIATED
         if associated != (self.resolved_id is not None):
             raise ValueError("resolved identity is required exactly when associated")
+        if self.resolved_id is not None:
+            expected_id_kind = (
+                IdKind.PROJECT
+                if self.candidate.target_kind is GoodNotesIdentityTargetKind.PROJECT
+                else IdKind.ENTITY
+            )
+            validate_identifier(self.resolved_id, expected_id_kind)
 
 
 @dataclass(frozen=True, slots=True)

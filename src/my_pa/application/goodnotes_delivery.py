@@ -147,15 +147,13 @@ def resolve_typed_identity_candidate(
         resolved_id = identifier_hits[0].target_id if len(identifier_hits) == 1 else None
     else:
         try:
-            literal_kind, _ = parse_identifier(candidate.literal)
+            parse_identifier(candidate.literal)
         except ValueError:
-            literal_kind = None
-        if literal_kind in (IdKind.ENTITY, IdKind.PROJECT):
-            resolved_id = None
-        else:
             wanted = normalize_entity_name(candidate.literal)
             name_hits = tuple(item for item in eligible if item.normalized_name == wanted)
             resolved_id = name_hits[0].target_id if len(name_hits) == 1 else None
+        else:
+            resolved_id = None
     return GoodNotesIdentityResolutionResult(
         candidate=candidate,
         resolution=(

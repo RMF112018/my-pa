@@ -132,6 +132,15 @@ test.describe("the signed-in surfaces", () => {
     }
   });
 
+  test("tablet landscape keeps Inspector in the utility region", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "tablet", "tablet inspector orientation");
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.getByRole("button", { name: "Open Inspector" }).click();
+    const utility = page.getByRole("complementary", { name: "Utility region" });
+    await expect(utility.getByRole("slider", { name: "Inspector width" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Inspector" })).toHaveCount(0);
+  });
+
   test("Review renders a truthful state and never fabricates a proposal", async ({ page }) => {
     await page.goto("/review");
     await expect(page.getByRole("heading", { name: "Review", level: 1 })).toBeVisible();

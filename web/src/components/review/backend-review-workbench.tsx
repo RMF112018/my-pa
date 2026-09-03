@@ -285,35 +285,35 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     </div>
                   ) : null}
 
-                  {state.phase === "decided" ? null : (
-                    <div className="mt-3 flex flex-wrap gap-2">
-                      {DISPOSITIONS.map((option) => (
-                        <Button
-                          key={option.value}
-                          variant={option.value === "accept" ? "primary" : "secondary"}
-                          disabled={state.phase === "submitting"}
-                          onClick={() => {
-                            if (option.value === "correct" && state.phase !== "correcting") {
-                              setState(row.reviewCaseId, { phase: "correcting" });
-                              return;
-                            }
-                            void decide(row, option.value);
-                          }}
-                          data-testid={`review-${option.value}`}
-                        >
-                          {option.label}
-                        </Button>
-                      ))}
-                      <Button
-                        variant="ghost"
-                        aria-haspopup="dialog"
-                        onClick={() => setRevealSubject(row.captureId)}
-                        data-testid="review-reveal"
-                      >
-                        Reveal
-                      </Button>
-                    </div>
-                  )}
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {state.phase === "decided"
+                      ? null
+                      : DISPOSITIONS.map((option) => (
+                          <Button
+                            key={option.value}
+                            variant={option.value === "accept" ? "primary" : "secondary"}
+                            disabled={state.phase === "submitting"}
+                            onClick={() => {
+                              if (option.value === "correct" && state.phase !== "correcting") {
+                                setState(row.reviewCaseId, { phase: "correcting" });
+                                return;
+                              }
+                              void decide(row, option.value);
+                            }}
+                            data-testid={`review-${option.value}`}
+                          >
+                            {option.label}
+                          </Button>
+                        ))}
+                    <Button
+                      variant="ghost"
+                      aria-haspopup="dialog"
+                      onClick={() => setRevealSubject(row.captureId)}
+                      data-testid="review-reveal"
+                    >
+                      Reveal
+                    </Button>
+                  </div>
                 </CardBody>
               </Card>
             </li>

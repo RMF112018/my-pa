@@ -79,6 +79,9 @@ echo "e2e: migrating it to head"
 echo "e2e: seeding one Principal-scoped synthetic counterparty"
 ( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_work.py )
 
+echo "e2e: seeding two Principal-scoped open review cases"
+( cd "${REPO_DIR}" && PYTHONPATH="${REPO_DIR}/src" MY_PA_DATABASE_URL="${DATABASE_URL}" "${PYTHON}" tests/end_to_end/seed_review.py )
+
 echo "e2e: starting the Python gateway on 127.0.0.1:${GATEWAY_PORT}"
 (
   cd "${REPO_DIR}"

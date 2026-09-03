@@ -187,7 +187,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
             state.phase === "decided" || isTerminalDisposition(row.latestDisposition);
           return (
             <li key={row.reviewCaseId}>
-              <Card data-testid="backend-review-case">
+              <Card data-testid="backend-review-case" data-review-case-id={row.reviewCaseId}>
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <CardTitle>
                     <span className="font-mono text-sm break-all">{row.proposalId}</span>

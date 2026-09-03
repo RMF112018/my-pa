@@ -102,10 +102,14 @@ commits:
   the RI/MCV-owned plans, not GoodNotes behavior failures;
 - on `5121cfd5`, focused GoodNotes, dependency, and Principal-bound coverage
   completed with `3,085 passed`;
-- correction `9ef15275` completed its focused pull-orchestration selection with
-  `78 passed`;
-- correction `da3f3969` completed its focused optimizer selection with
-  `189 passed`;
+- correction worker head `9ef15275` completed its focused pull-orchestration
+  selection with `28 passed`;
+- correction worker head `4b7b1086` completed its focused optimizer selection
+  with `50 passed`;
+- on integrated head `da3f3969`, the orchestrator's combined post-integration
+  R9/R10 selection completed with `78 passed`; and
+- the independent reviewer later ran a changed-GoodNotes unit selection on
+  `da3f3969` with `189 passed`;
 - on `da3f3969`, the three count-governance files completed with `48 passed,
   5 failed in 143.22s`: the RI plan claims FAST `16,380` where the tree collects
   `16,512`, database/recovery/e2e `2,081` where the tree collects `2,082`, mypy

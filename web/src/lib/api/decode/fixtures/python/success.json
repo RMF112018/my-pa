@@ -1,0 +1,839 @@
+{
+  "capabilities.get": {
+    "manifest": {
+      "capabilities": [
+        {
+          "availability": "available",
+          "name": "capabilities.get",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "sources.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "sources.metadata",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "sources.fetch",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "sources.status",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "sources.enroll",
+          "operator_only": true,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "knowledge.search",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "knowledge.read",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "knowledge.reveal",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "capture.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "capture.revise",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "capture.read",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "capture.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "capture.search",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "review.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "review.decide",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "continuity.pulse",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "continuity.situations",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "continuity.projects",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "continuity.projects.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "continuity.situations.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "continuity.tasks.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "knowledge.coverage",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "documents.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "documents.revise",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "documents.read",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "documents.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "documents.archive",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "documents.restore",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "tasks.read",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "tasks.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "tasks.search",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "tasks.history",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "tasks.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "tasks.update",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "tasks.transition",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "tasks.bulk_preview",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "tasks.bulk_confirm",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "commitments.read",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "commitments.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "commitments.search",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "commitments.history",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "commitments.waiting_on",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "commitments.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "commitments.update",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "commitments.close",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "context.prepare",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "context.feedback",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "goodnotes.work",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "goodnotes.propose",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "goodnotes.content",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "gsqs.start",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "gsqs.status",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "reports.begin_cycle",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "reports.commit",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "reports.record_run_state",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "reports.read",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "reports.latest",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "reports.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "reports.search",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "reports.resolve_set",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.search",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.get",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.resolve",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.context",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.relationships",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.unresolved_mentions",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.identifiers.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.aliases.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.update",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.archive",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.restore",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.identifiers.bind",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.identifiers.retire",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.identifiers.supersede",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.aliases.add",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.aliases.retire",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.aliases.supersede",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.assignments.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.assignments.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.assignments.revise",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.assignments.end",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.relationships.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.relationships.revise",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.relationships.end",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.observations.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.observe",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.unresolved_mentions.resolve",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.proposals.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.merge.preview",
+          "operator_only": true,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.merge",
+          "operator_only": true,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.identity_history",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.split.preview",
+          "operator_only": true,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "entities.split",
+          "operator_only": true,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "relationship_memory.create",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "relationship_memory.get",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "relationship_memory.list",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "relationship_memory.search",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "relationship_memory.history",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "relationship_memory.revise",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "relationship_memory.archive",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "relationship_memory.restore",
+          "operator_only": false,
+          "version": "v1"
+        },
+        {
+          "availability": "available",
+          "name": "relationship_memory.propose",
+          "operator_only": false,
+          "version": "v1"
+        }
+      ],
+      "content_types": [
+        {
+          "availability": "available",
+          "media_type": "text/markdown"
+        },
+        {
+          "availability": "available",
+          "media_type": "text/plain"
+        },
+        {
+          "availability": "decision_gated",
+          "media_type": "application/pdf"
+        }
+      ],
+      "contract_family": "my-pa-public-capabilities",
+      "contract_version": "v1",
+      "limits": {
+        "default_page_size": 50,
+        "max_enrollment_depth": 0,
+        "max_fetch_bytes": 8388608,
+        "max_page_size": 200
+      }
+    },
+    "readiness": {
+      "contract_version": "v1",
+      "implemented_capabilities": 104,
+      "limitations": [
+        "Content types awaiting an operator decision: application/pdf. They are reported rather than silently skipped.",
+        "Listings stop at the page size; truncation is disclosed. These issue a continuation cursor: commitments.history, commitments.list, commitments.search, commitments.waiting_on, entities.aliases.list, entities.assignments.list, entities.identifiers.list, entities.identity_history, entities.observations.list, entities.relationships, entities.search, entities.unresolved_mentions, knowledge.search, relationship_memory.history, relationship_memory.list, relationship_memory.search, reports.list, review.list, tasks.history, tasks.list, tasks.search. Every other listing does not, so a caller cannot ask for the next page.",
+        "Model proposals and semantic retrieval are disabled; deterministic lexical retrieval remains active.",
+        "Worker-plane health is unavailable, stale, absent for queued work, or reports dead-lettered work; inspect worker_planes."
+      ],
+      "state": "degraded",
+      "total_capabilities": 104
+    },
+    "worker_planes": [
+      {
+        "backlog": null,
+        "dead_lettered": null,
+        "last_heartbeat_at": null,
+        "plane": "capture",
+        "state": "unavailable"
+      },
+      {
+        "backlog": null,
+        "dead_lettered": null,
+        "last_heartbeat_at": null,
+        "plane": "enrollment",
+        "state": "unavailable"
+      }
+    ]
+  },
+  "capture.create": {
+    "capture_id": "cap_aaaaaaaa11111111",
+    "content_sha256": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "created": true,
+    "idempotency_key": "idem-1",
+    "issued_at": "2026-08-09T12:00:00.000Z",
+    "receipt_id": "rcpt_aaaaaaaa11111111",
+    "version_id": "capver_aaaaaaaa11111111",
+    "version_number": 1
+  },
+  "commitments.read": {
+    "commitment": {
+      "accepted_by_review_decision_id": null,
+      "closed_at": null,
+      "closure_evidence_ref": null,
+      "commitment_id": "cmt_aaaa0001aaaa0001aaaa0001",
+      "counterparty": {
+        "display_name": "Synthetic B",
+        "person_id": "per_aaaa0001aaaa0001aaaa0001"
+      },
+      "counterparty_person_id": "per_aaaa0001aaaa0001aaaa0001",
+      "created_at": "2026-01-01T00:00:00+00:00",
+      "description": null,
+      "direction": "owed_to_principal",
+      "due_date": "2026-01-02T00:00:00+00:00",
+      "evidence_state": "accepted",
+      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "state": "open",
+      "title": "Send the drawing",
+      "updated_at": "2026-01-01T00:00:00+00:00",
+      "version": 1
+    },
+    "counterparty_options": [
+      {
+        "display_name": "Synthetic B",
+        "person_id": "per_aaaa0001aaaa0001aaaa0001"
+      }
+    ],
+    "counterparty_options_truncated": false,
+    "follow_up_task": null
+  },
+  "continuity.pulse": {
+    "pulse_items": [
+      {
+        "attention_rank": 1,
+        "basis_refs": [
+          "asr_aaaa0001aaaa0001aaaa0001"
+        ],
+        "consequence": null,
+        "generated_at": "2026-08-09T12:00:00.000Z",
+        "item_ref": "cmt_aaaa0001aaaa0001aaaa0001",
+        "item_type": "commitment",
+        "next_step": null,
+        "pulse_id": "puls_aaaaaaaa11111111",
+        "reason": "two days past its agreed moment",
+        "reason_code": "commitment_overdue"
+      }
+    ]
+  },
+  "continuity.situations": {
+    "situations": [
+      {
+        "closed_at": null,
+        "description": null,
+        "object_refs": [
+          "cmt_aaaa0001aaaa0001aaaa0001"
+        ],
+        "opened_at": "2026-01-01T00:00:00.000Z",
+        "outcome": null,
+        "situation_id": "sit_aaaa0001aaaa0001aaaa0001",
+        "state": "open",
+        "title": "North pour"
+      }
+    ]
+  },
+  "knowledge.reveal": {
+    "accepted": [],
+    "capture_id": null,
+    "gap": "subject_kind_is_outside_the_evidence_model",
+    "proposed": [],
+    "spans": [],
+    "state": "unavailable",
+    "subject_id": "cap_aaaaaaaa11111111",
+    "subject_kind": null,
+    "versions": [],
+    "versions_with_completed_derivation": 0
+  },
+  "review.decide": {
+    "assertion_id": "asrt_aaaaaaaa11111111",
+    "decision_id": "rdec_aaaaaaaa11111111",
+    "disposition": "correct_and_accept",
+    "proposal_state": "corrected_accepted",
+    "receipt_id": "rcpt_bbbbbbbb22222222",
+    "review_case_id": "rvw_aaaaaaaa11111111",
+    "review_version": 1
+  },
+  "tasks.history": {
+    "history": [
+      {
+        "action": "create",
+        "actor": "principal",
+        "after_version": 1,
+        "before_version": 0,
+        "history_id": "thst_aaaa0001aaaa0001aaaa0001",
+        "occurred_at": "2026-01-01T00:00:00.000Z",
+        "outcome": "applied",
+        "recorded_at": "2026-01-01T00:00:00.000Z",
+        "task_id": "tsk_aaaa0001aaaa0001aaaa0001"
+      }
+    ]
+  },
+  "tasks.list": {
+    "tasks": [
+      {
+        "archived_at": null,
+        "created_at": "2026-01-01T00:00:00.000Z",
+        "deferred_until": null,
+        "due_at": "2026-01-02T00:00:00.000Z",
+        "lifecycle_state": "open",
+        "priority": "p2",
+        "scheduled_at": null,
+        "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+        "title": "Check the pour",
+        "updated_at": "2026-01-01T00:00:00.000Z",
+        "version": 1
+      }
+    ]
+  },
+  "tasks.read": {
+    "task": {
+      "acceptance_kind": "direct_principal",
+      "accepted_by_review_decision_id": null,
+      "archived_at": null,
+      "closed_at": null,
+      "closure_evidence_ref": null,
+      "closure_history_id": null,
+      "commitment_id": null,
+      "created_at": "2026-01-01T00:00:00.000Z",
+      "deferred_until": null,
+      "description": null,
+      "due_at": "2026-01-02T00:00:00.000Z",
+      "evidence_state": "accepted",
+      "lifecycle_state": "open",
+      "opened_at": "2026-01-01T00:00:00.000Z",
+      "origin_evidence_ref": "asr_aaaa0001aaaa0001aaaa0001",
+      "priority": "p2",
+      "project_id": null,
+      "recurrence_id": null,
+      "role": null,
+      "scheduled_at": null,
+      "situation_id": null,
+      "task_id": "tsk_aaaa0001aaaa0001aaaa0001",
+      "title": "Check the pour",
+      "updated_at": "2026-01-01T00:00:00.000Z",
+      "version": 1
+    }
+  }
+}

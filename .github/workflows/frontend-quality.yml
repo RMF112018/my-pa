@@ -117,7 +117,16 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
-      - run: python -m pytest tests/unit/test_webauthn_ceremony.py tests/unit/test_session_service_auth.py tests/unit/test_session_service_isolation.py -q
+      - run: python -m pytest tests/unit/test_webauthn_ceremony.py tests/unit/test_session_service_auth.py tests/unit/test_session_service_isolation.py tests/contract/test_bff_success_decoder_parity.py -q
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run test:contract
+        working-directory: web
 
   security:
     name: frontend / security

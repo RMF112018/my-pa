@@ -134,6 +134,15 @@ jobs:
           python-version: "3.12"
       - run: python -m pip install -e ".[dev]"
       - run: python -m pytest tests/unit/test_webauthn_ceremony.py tests/unit/test_session_service_auth.py tests/unit/test_session_service_isolation.py -q
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npx vitest run src/lib/http/mutation-admission.test.ts src/lib/http/origin.test.ts src/lib/http/mutation-route-manifest.test.ts src/lib/http/security-headers.test.ts src/lib/http/safe-href.test.ts
+        working-directory: web
 
   e2e-critical:
     name: frontend / e2e-critical
@@ -174,7 +183,7 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: npm ci
       - run: npx playwright install chromium
-      - name: Run curated WebAuthn desktop e2e
+      - name: Run curated WebAuthn and browser-security desktop e2e
         env:
           MYPA_E2E_PYTHON: python
           MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
@@ -185,7 +194,7 @@ jobs:
           # so resolve the setup-python interpreter rather than the bare name.
           python_bin="$(command -v python)"
           test -x "${python_bin}"
-          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts --project=desktop
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts e2e/browser-security.spec.ts --project=desktop
 
   required:
     name: frontend / required

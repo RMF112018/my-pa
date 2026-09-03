@@ -163,6 +163,17 @@ Conservative dispositions for the opaque-SID cutover on this PR. Production Entr
 - Browser Entra/MSAL and browser `local_operator` are retired as *web* `MYPA_AUTH_MODE` values (`passkey` | `synthetic` only). Python `MY_PA_AUTH_MODE` / `MYPA_GATEWAY_AUTH_MODE` are unchanged. That is a repository web-mode cutover, not a production Entra retirement or production activation.
 - No Redis, no Next→PostgreSQL, no WP-05 mutation admission, no deploy.
 
+## UI-IMP-WP05 central mutation admission notes
+
+Conservative dispositions for central mutation admission and browser security on this PR. Production activation is **not** claimed.
+
+- **PFE-AC-097** remains `IMPLEMENTATION_REQUIRED`. Hashed recovery is live. Operator-local recovery is not implemented. Not `PASS_VERIFIED`.
+- **PFE-AC-101** remains not `PASS_VERIFIED`. `implementation_disposition = VALIDATION_REQUIRED`.
+- **PFE-AC-136** is not passed from this package. Security tests remain later-package evidence.
+- PFE-AC-023..029 (safe rich content / WP-07) are not passed because of `safeHref`. This package added a central fail-closed `safeHref` used by current RichContent without expanding WP-07.
+- Residuals: NAS secrets cleanup is not this package; GET idle-touch Origin gating is not this package; production activation is not claimed.
+- `frontend / security` now also runs the WP-05 vitest corpus; `frontend / e2e-critical` now also runs `web/e2e/browser-security.spec.ts` alongside `web/e2e/webauthn.spec.ts`. Later CI gates remain `NOT_YET_INTRODUCED`.
+
 ## Known evidence limitations / record overrides
 
 These limitations are additive to the default `FINAL_WP02_RECONCILIATION_MISSING` status and do not create a pass:

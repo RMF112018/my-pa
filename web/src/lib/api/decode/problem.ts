@@ -4,7 +4,8 @@
  * Maps onto the web `ErrorEnvelope` vocabulary. Unknown extra keys are
  * ignored. `safe_details` is never copied into the error body.
  *
- * WP06-E: rate_limited HTTP status stays 503 until Worker E.
+ * `rate_limited` stays errorClass `unavailable` (no ninth class). HTTP 429
+ * is applied by `httpStatusForProblem`, not by widening the class map.
  */
 import type { ErrorEnvelope } from "@/contracts/envelope";
 import {
@@ -74,9 +75,18 @@ export const PROBLEM_ERROR_CLASS: Record<string, ErrorEnvelope["errorClass"]> = 
   not_found: "not_found",
   conflict: "conflict",
   cancelled: "conflict",
-  // WP06-E: rate_limited HTTP status stays 503 until Worker E
   rate_limited: "unavailable",
   unsupported: "unavailable",
   unavailable: "unavailable",
   internal_error: "internal",
 };
+
+/**
+ * HTTP status override keyed by Python code, not errorClass.
+ *
+ * `statusForErrorClass` cannot express 429 while `rate_limited` remains
+ * `unavailable` (503). Callers apply this before the class table.
+ */
+export function httpStatusForProblem(code: string): number | undefined {
+  return code === "rate_limited" ? 429 : undefined;
+}

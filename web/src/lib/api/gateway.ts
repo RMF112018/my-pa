@@ -45,7 +45,11 @@ import { rejectCallerSuppliedPrincipal } from "@/lib/auth/claims";
 import { DECODERS } from "@/lib/api/decode";
 import type { DecodedDisclosure } from "@/lib/api/decode/disclosure";
 import { decodeEnvelope } from "@/lib/api/decode/envelope";
-import { PROBLEM_ERROR_CLASS, type DecodedProblem } from "@/lib/api/decode/problem";
+import {
+  httpStatusForProblem,
+  PROBLEM_ERROR_CLASS,
+  type DecodedProblem,
+} from "@/lib/api/decode/problem";
 import { gatewayAuthMode, gatewayBaseUrl } from "@/lib/api/gateway-config";
 import type { DisclosureEnvelope, ErrorEnvelope } from "@/contracts/envelope";
 import type { PrincipalSession } from "@/contracts/identity";
@@ -203,7 +207,7 @@ function problemToError(problem: DecodedProblem, fallbackStatus: number): {
 } {
   const errorClass = ERROR_CLASS[problem.code] ?? "unavailable";
   return {
-    status: ERROR_STATUS[errorClass] ?? fallbackStatus,
+    status: httpStatusForProblem(problem.code) ?? ERROR_STATUS[errorClass] ?? fallbackStatus,
     error: {
       errorClass,
       code: problem.code,
@@ -333,7 +337,7 @@ export async function invokeGateway(
   if (!outcome.ok) return outcome;
   const decoded = DECODERS[capability](outcome.result);
   if (!decoded.ok) {
-    logDecodeFailure(capability, decoded.code);
+    logDecodeFailure(capability, "upstream_contract_invalid");
     return {
       ok: false,
       status: 503,

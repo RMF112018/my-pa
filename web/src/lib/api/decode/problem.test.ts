@@ -1,6 +1,11 @@
 // @vitest-environment node
 import { describe, expect, it } from "vitest";
-import { decodeProblem, ERROR_CODES, PROBLEM_ERROR_CLASS } from "./problem";
+import {
+  decodeProblem,
+  ERROR_CODES,
+  httpStatusForProblem,
+  PROBLEM_ERROR_CLASS,
+} from "./problem";
 
 describe("decodeProblem", () => {
   it("reads code, message, and correlation id", () => {
@@ -50,8 +55,26 @@ describe("decodeProblem", () => {
     expect(Object.keys(PROBLEM_ERROR_CLASS).sort()).toEqual([...ERROR_CODES].sort());
   });
 
-  it("maps rate_limited as unavailable until Worker E", () => {
-    // WP06-E: rate_limited HTTP status stays 503 until Worker E
+  it("keeps rate_limited as errorClass unavailable with HTTP 429", () => {
     expect(PROBLEM_ERROR_CLASS.rate_limited).toBe("unavailable");
+    expect(httpStatusForProblem("rate_limited")).toBe(429);
+    expect(httpStatusForProblem("unavailable")).toBeUndefined();
+    expect(httpStatusForProblem("denied")).toBeUndefined();
+    expect(httpStatusForProblem("conflict")).toBeUndefined();
+  });
+
+  it("does not echo safe_details or extra keys into a decoded problem", () => {
+    const decoded = decodeProblem({
+      code: "rate_limited",
+      message: "slow down",
+      correlation_id: "corr_synthetic_0003",
+      safe_details: ["assertion_payload", "recovery_code_xyz"],
+    });
+    expect(decoded.ok).toBe(true);
+    if (decoded.ok) {
+      expect(decoded.value.code).toBe("rate_limited");
+      expect(JSON.stringify(decoded.value)).not.toContain("assertion_payload");
+      expect(JSON.stringify(decoded.value)).not.toContain("recovery_code_xyz");
+    }
   });
 });

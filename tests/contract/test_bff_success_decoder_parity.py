@@ -701,7 +701,10 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         },
         "entities.profile": {"profile": _entity_profile_payload()},
         "entities.names.list": {"entity_id": entity_id, "names": [_entity_name_payload()]},
-        "entities.addresses.list": {"entity_id": entity_id, "addresses": [_entity_address_payload()]},
+        "entities.addresses.list": {
+            "entity_id": entity_id,
+            "addresses": [_entity_address_payload()],
+        },
         "entities.communication.list": {
             "entity_id": entity_id,
             "communication_methods": [_communication_method_payload()],

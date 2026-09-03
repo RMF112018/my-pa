@@ -20,6 +20,7 @@ import {
   buildRequestDocument,
   callGateway,
   correlationPrincipalId,
+  invokeGateway,
   transportLimitations,
   type PythonDisclosure,
 } from "@/lib/api/gateway";
@@ -279,6 +280,108 @@ describe("the wire", () => {
     expect(outcome.ok).toBe(false);
     if (!outcome.ok) expect(outcome.error.code).toBe("gateway_response_uncontracted");
   });
+
+  it("treats HTML as unreadable, not as a decoded result", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("<html>gateway</html>", { status: 200, headers: { "content-type": "text/html" } })),
+    );
+    const outcome = await callGateway(PRINCIPAL, "capture.list");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.code).toBe("gateway_response_unreadable");
+  });
+
+  it("treats an empty body as unreadable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("", { status: 200, headers: { "content-type": "application/json" } })),
+    );
+    const outcome = await callGateway(PRINCIPAL, "capture.list");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.code).toBe("gateway_response_unreadable");
+  });
+
+  it("treats malformed JSON as unreadable", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response("{not json", { status: 200, headers: { "content-type": "application/json" } })),
+    );
+    const outcome = await callGateway(PRINCIPAL, "capture.list");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.code).toBe("gateway_response_unreadable");
+  });
+
+  it("fails closed when a success omits result rather than substituting {}", async () => {
+    stubGateway({ disclosure: DISCLOSURE });
+    const outcome = await callGateway(PRINCIPAL, "capture.list");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.code).toBe("upstream_contract_invalid");
+      expect(outcome.error.errorClass).toBe("unavailable");
+      expect(outcome.status).toBe(503);
+    }
+  });
+
+  it("fails closed when result and error are both present", async () => {
+    stubGateway({
+      result: { a: 1 },
+      error: { code: "not_found", message: "no such thing", correlation_id: "corr_x" },
+    });
+    const outcome = await callGateway(PRINCIPAL, "capture.list");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.code).toBe("upstream_contract_invalid");
+  });
+
+  it("ignores extra unknown envelope fields on success", async () => {
+    stubGateway({
+      contract_version: "v1",
+      extra_envelope_field: "ignored",
+      result: { a: 1 },
+      disclosure: {
+        ...DISCLOSURE,
+        scope: { source_ids: ["src_aaaaaaaa11111111"], enrollment_ids: [] },
+        classification: "private_local",
+      },
+    });
+    const outcome = await callGateway(PRINCIPAL, "capture.list");
+    expect(outcome.ok).toBe(true);
+    if (outcome.ok) {
+      expect(outcome.result).toEqual({ a: 1 });
+      expect(outcome.disclosure).not.toHaveProperty("scope");
+    }
+  });
+
+  it("fails closed when a required disclosure field is missing", async () => {
+    const { trust: _trust, ...incomplete } = DISCLOSURE;
+    stubGateway({ result: { a: 1 }, disclosure: incomplete });
+    const outcome = await callGateway(PRINCIPAL, "capture.list");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.code).toBe("upstream_contract_invalid");
+      expect(outcome.status).toBe(503);
+    }
+  });
+
+  it("fails closed on an invalid disclosure enum", async () => {
+    stubGateway({
+      result: { a: 1 },
+      disclosure: { ...DISCLOSURE, coverage: { state: "not_a_coverage_state" } },
+    });
+    const outcome = await callGateway(PRINCIPAL, "capture.list");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.code).toBe("upstream_contract_invalid");
+  });
+
+  it("maps rate_limited as unavailable until Worker E", async () => {
+    // WP06-E: rate_limited HTTP status stays 503 until Worker E
+    stubGateway({ error: { code: "rate_limited", message: "slow down", correlation_id: "corr_x" } }, 429);
+    const outcome = await callGateway(PRINCIPAL, "capture.list");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.error.errorClass).toBe("unavailable");
+      expect(outcome.status).toBe(503);
+    }
+  });
 });
 
 describe("the disclosure a backend answer carries", () => {
@@ -315,6 +418,40 @@ describe("the disclosure a backend answer carries", () => {
 
   it("states the local-operator boundary rather than implying session scoping", () => {
     expect(transportLimitations()).toContain(LOCAL_OPERATOR_LIMITATION);
+  });
+});
+
+describe("invokeGateway", () => {
+  it("rejects a transport-ok body through the stub decoder as upstream_contract_invalid", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    stubGateway({ result: { anything: true }, disclosure: DISCLOSURE });
+    const transported = await callGateway(PRINCIPAL, "continuity.pulse");
+    expect(transported.ok).toBe(true);
+
+    const outcome = await invokeGateway(PRINCIPAL, "continuity.pulse");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) {
+      expect(outcome.status).toBe(503);
+      expect(outcome.error.errorClass).toBe("unavailable");
+      expect(outcome.error.code).toBe("upstream_contract_invalid");
+      const serialized = JSON.stringify(outcome.error);
+      expect(serialized).not.toContain("anything");
+      expect(serialized).not.toContain("pulse_items");
+    }
+    expect(errorSpy).toHaveBeenCalled();
+    const logged = JSON.stringify(errorSpy.mock.calls);
+    expect(logged).not.toContain("anything");
+    expect(logged).not.toContain("sid_");
+    errorSpy.mockRestore();
+  });
+
+  it("still refuses entra mode without sending a request", async () => {
+    vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "entra");
+    const { fetchStub } = stubGateway({ result: { anything: true }, disclosure: DISCLOSURE });
+    const outcome = await invokeGateway(PRINCIPAL, "capabilities.get");
+    expect(outcome.ok).toBe(false);
+    if (!outcome.ok) expect(outcome.error.code).toBe("no_forwardable_credential");
+    expect(fetchStub).not.toHaveBeenCalled();
   });
 });
 

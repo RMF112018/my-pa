@@ -670,10 +670,10 @@ def _session_service_execute(
             if action == "sessions/touch":
                 return _live_principal(accounts, store.touch(sid, now=now))
             if action == "sessions/rotate":
-                issued = store.rotate(sid, now=now)
-                if issued is None:
+                rotated = store.rotate(sid, now=now)
+                if rotated is None:
                     raise SessionServiceError("unauthenticated")
-                return {"issuedSid": issued.raw_sid}
+                return {"issuedSid": rotated.raw_sid}
             if action == "sessions/revoke":
                 if not store.revoke(sid, now=now):
                     raise SessionServiceError("unauthenticated")

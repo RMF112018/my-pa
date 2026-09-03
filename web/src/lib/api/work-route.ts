@@ -2,7 +2,8 @@ import { NextResponse, type NextRequest } from "next/server";
 import { backendDisclosure, callGateway, transportLimitations, type GatewayCapability } from "@/lib/api/gateway";
 import { requirePrincipal, readCleanBody } from "@/lib/api/guard";
 import { gatewayRefusal, notImplemented, resolveServing } from "@/lib/api/serving";
-import { isSameOrigin } from "@/lib/http/origin";
+import type { PrincipalSession } from "@/contracts/identity";
+import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 
 export type WorkField = {
   readonly gateway: string;
@@ -184,26 +185,24 @@ function publicResult(result: Record<string, unknown>) {
   ) as Record<string, unknown>;
 }
 
-async function serve(
-  request: NextRequest,
+async function dispatch(
+  principal: PrincipalSession,
   scope: string,
   capability: GatewayCapability,
   payload: Record<string, unknown>,
 ) {
-  const guard = await requirePrincipal(request);
-  if (!guard.ok) return guard.response;
   const serving = resolveServing();
   if (serving.kind === "refused") return serving.response;
   if (serving.kind === "synthetic") {
     return notImplemented(scope, "Work mutations and reads require the executable Python Work plane; synthetic fixtures are not canonical Task or Commitment state.");
   }
-  const outcome = await callGateway<Record<string, unknown>>(guard.principal, capability, payload);
+  const outcome = await callGateway<Record<string, unknown>>(principal, capability, payload);
   if (!outcome.ok) {
     const identifier = typeof payload.task_id === "string" ? { capability: "tasks.read" as const, payload: { task_id: payload.task_id }, key: "task" }
       : typeof payload.commitment_id === "string" ? { capability: "commitments.read" as const, payload: { commitment_id: payload.commitment_id }, key: "commitment" }
       : undefined;
     if (outcome.status === 409 && identifier) {
-      const current = await callGateway<Record<string, unknown>>(guard.principal, identifier.capability, identifier.payload);
+      const current = await callGateway<Record<string, unknown>>(principal, identifier.capability, identifier.payload);
       if (current.ok) {
         const refusal = await gatewayRefusal(scope, outcome.status, outcome.error).json();
         return NextResponse.json({ ...refusal, current: publicResult(current.result)[identifier.key] ?? publicResult(current.result) }, { status: 409 });
@@ -216,6 +215,17 @@ async function serve(
     ...publicResult(outcome.result),
     disclosure: backendDisclosure(scope, outcome.disclosure, transportLimitations()),
   });
+}
+
+async function serve(
+  request: NextRequest,
+  scope: string,
+  capability: GatewayCapability,
+  payload: Record<string, unknown>,
+) {
+  const guard = await requirePrincipal(request);
+  if (!guard.ok) return guard.response;
+  return dispatch(guard.principal, scope, capability, payload);
 }
 
 export async function workGet(
@@ -238,21 +248,13 @@ export async function workPost(
   fields: FieldMap,
   fixed: Record<string, unknown> = {},
 ) {
-  if (!isSameOrigin(request)) {
-    return noStore(NextResponse.json(
-      {
-        error: {
-          errorClass: "authorization",
-          code: "cross_site_request",
-          message: "this endpoint refuses cross-site requests",
-        },
-      },
-      { status: 403 },
-    ));
-  }
+  const blocked = admitBrowserMutation(request);
+  if (blocked) return noStore(blocked as NextResponse);
+  const guard = await requirePrincipal(request);
+  if (!guard.ok) return noStore(guard.response);
   const parsed = await readCleanBody(request);
   if (!parsed.ok) return noStore(parsed.response);
   const result = mapped(parsed.body, fields, "body");
   if (!result.ok) return noStore(result.response);
-  return noStore(await serve(request, scope, capability, { ...result.payload, ...fixed }));
+  return noStore(await dispatch(guard.principal, scope, capability, { ...result.payload, ...fixed }));
 }

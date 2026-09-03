@@ -94,6 +94,10 @@ function moment(value: string): string {
     : `${parsed.toISOString().replace("T", " ").slice(0, 16)} UTC`;
 }
 
+function isTerminalDisposition(value: string | null): boolean {
+  return value === "accept" || value === "correct_and_accept";
+}
+
 export function BackendReviewWorkbench({ cases }: { cases: readonly BackendReviewCase[] }) {
   const [states, setStates] = useState<Record<string, RowState>>({});
   const [corrections, setCorrections] = useState<Record<string, string>>({});
@@ -179,6 +183,8 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
       <ul className="flex flex-col gap-3" data-testid="backend-review-list">
         {cases.map((row) => {
           const state = stateFor(row.reviewCaseId);
+          const terminal =
+            state.phase === "decided" || isTerminalDisposition(row.latestDisposition);
           return (
             <li key={row.reviewCaseId}>
               <Card data-testid="backend-review-case">
@@ -266,6 +272,14 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                     >
                       <strong>Refused, and nothing was stored.</strong> {state.message}
                     </p>
+                  ) : isTerminalDisposition(row.latestDisposition) ? (
+                    <p
+                      role="status"
+                      data-testid="review-already-decided"
+                      className="mt-3 text-sm text-moss-green"
+                    >
+                      This case already has a stored {row.latestDisposition} disposition.
+                    </p>
                   ) : null}
 
                   {state.phase === "correcting" ? (
@@ -286,7 +300,7 @@ export function BackendReviewWorkbench({ cases }: { cases: readonly BackendRevie
                   ) : null}
 
                   <div className="mt-3 flex flex-wrap gap-2">
-                    {state.phase === "decided"
+                    {terminal
                       ? null
                       : DISPOSITIONS.map((option) => (
                           <Button

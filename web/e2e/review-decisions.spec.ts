@@ -13,7 +13,10 @@ test("Review accept persists a decision and does not invent proposal text", asyn
   await expect(page.getByTestId("review-queue-unavailable")).toHaveCount(0);
   await expect(page.getByTestId("review-listing-limitation")).toBeVisible();
 
-  const first = page.getByTestId("backend-review-case").first();
+  const first = page
+    .getByTestId("backend-review-case")
+    .filter({ has: page.getByTestId("review-accept") })
+    .first();
   await expect(first).toBeVisible();
   await expect(first).not.toContainText(/If accepted:/);
 
@@ -24,29 +27,26 @@ test("Review accept persists a decision and does not invent proposal text", asyn
   await expect(first.getByTestId("review-not-persisted")).toHaveCount(0);
 
   await first.getByTestId("review-reveal").click();
-  await expect(page.getByRole("heading", { name: "Why am I seeing this?" })).toBeVisible();
-  await page.getByRole("button", { name: "Reveal", exact: true }).click();
+  const reveal = page.getByRole("dialog", { name: "Why am I seeing this?" });
+  await expect(reveal).toBeVisible();
+  await reveal.getByRole("button", { name: "Reveal", exact: true }).click();
   await expect(
-    page.locator(
+    reveal.locator(
       '[data-testid="reveal-evidence"], [data-testid="reveal-no-evidence"], [data-testid="reveal-unavailable"]',
-    ).last(),
+    ),
   ).toBeVisible();
-  await page.getByRole("button", { name: "Close" }).click();
+  await reveal.getByRole("button", { name: "Close" }).click();
   expect(versionBefore).toBeGreaterThanOrEqual(0);
 });
 
 test("Review correct-and-accept requires a value and persists the correction", async ({ page }) => {
   test.setTimeout(180_000);
   await page.goto("/review");
-  const row = page.getByTestId("backend-review-case").first();
-  await expect(row).toBeVisible();
-  if ((await row.getByTestId("review-decided").count()) > 0) {
-    await expect(page.getByTestId("backend-review-case").nth(1)).toBeVisible();
-  }
   const open = page
     .getByTestId("backend-review-case")
     .filter({ has: page.getByTestId("review-correct") })
     .first();
+  await expect(open).toBeVisible();
   await open.getByTestId("review-correct").click();
   await expect(open.getByTestId("review-correction-field")).toBeVisible();
   await open.getByTestId("review-correct").click();

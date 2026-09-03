@@ -1105,4 +1105,3 @@ def test_list_honors_cursor_and_refuses_a_foreign_one(scene: Scene) -> None:
     )
     assert envelope.error is not None
     assert envelope.error.code is ErrorCode.INVALID_REQUEST
-

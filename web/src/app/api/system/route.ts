@@ -26,7 +26,8 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
-import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
+import type { CapabilitiesGetResult } from "@/lib/api/decode/capabilities/capabilities.get";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
 
@@ -76,23 +77,17 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const outcome = await callGateway<{
-    manifest: unknown;
-    readiness: unknown;
-    worker_planes: unknown;
-  }>(
-    guard.principal,
-    "capabilities.get",
-  );
+  const outcome = await invokeGateway(guard.principal, "capabilities.get");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
+  const result = outcome.result as CapabilitiesGetResult;
 
   return NextResponse.json({
     ...identity,
     dataProvider: "backend",
     backend: {
-      manifest: outcome.result.manifest,
-      readiness: outcome.result.readiness,
-      workerPlanes: outcome.result.worker_planes,
+      manifest: result.manifest,
+      readiness: result.readiness,
+      workerPlanes: result.worker_planes,
     },
     connectedSources: null,
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, [

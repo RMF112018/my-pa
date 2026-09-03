@@ -1,8 +1,16 @@
 import type { Decoder } from "../types";
+import {
+  decodeCommitmentListPage,
+  type CommitmentListEntry,
+  type CounterpartyProjection,
+} from "./_read-helpers";
 
-/** Fail-closed stub. Workers C/D replace this module with the real capability guard. */
-export const decodeCommitmentsSearch: Decoder<unknown> = () => ({
-  ok: false,
-  code: "capability_decoder_pending",
-  message: "the capability result was rejected as uncontracted",
-});
+export type { CommitmentListEntry, CounterpartyProjection };
+
+export type CommitmentsSearchResult = {
+  readonly commitments: readonly CommitmentListEntry[];
+  readonly counterparty_options: readonly CounterpartyProjection[];
+  readonly counterparty_options_truncated: boolean;
+};
+
+export const decodeCommitmentsSearch: Decoder<CommitmentsSearchResult> = decodeCommitmentListPage;

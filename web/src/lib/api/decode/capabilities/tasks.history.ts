@@ -1,8 +1,24 @@
+import { ok } from "../primitives";
 import type { Decoder } from "../types";
+import {
+  decodeItems,
+  decodeTaskHistoryEntry,
+  fail,
+  pick,
+  type TaskHistoryEntry,
+} from "./_read-helpers";
 
-/** Fail-closed stub. Workers C/D replace this module with the real capability guard. */
-export const decodeTasksHistory: Decoder<unknown> = () => ({
-  ok: false,
-  code: "capability_decoder_pending",
-  message: "the capability result was rejected as uncontracted",
-});
+export type { TaskHistoryEntry };
+
+export interface TasksHistoryResult {
+  readonly history: readonly TaskHistoryEntry[];
+}
+
+export const decodeTasksHistory: Decoder<TasksHistoryResult> = (input) => {
+  const known = pick(input, ["history"]);
+  if (!known.ok) return known;
+  if (known.value.history === undefined) return fail("a required array was omitted");
+  const history = decodeItems(known.value.history, decodeTaskHistoryEntry);
+  if (!history.ok) return history;
+  return ok({ history: history.value });
+};

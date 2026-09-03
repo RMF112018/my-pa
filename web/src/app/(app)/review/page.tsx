@@ -25,12 +25,14 @@ import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { syntheticReviewCases } from "@/lib/fixtures/review";
-import { callGateway } from "@/lib/api/gateway";
+import { invokeGateway, type GatewayOutcome } from "@/lib/api/gateway";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
 import { surfaceAnswer } from "@/lib/api/surface-answer";
 import { ReviewWorkbench } from "@/components/review/review-workbench";
 import { BackendReviewWorkbench } from "@/components/review/backend-review-workbench";
 import { SurfaceState, DegradedBanner } from "@/components/ui/surface-state";
+import type { ReviewCase } from "@/lib/api/decode/capabilities/review.list";
+import type { ReviewListResult } from "@/lib/api/decode/capabilities/review.list";
 import type { BackendReviewCase } from "@/contracts/views";
 
 export const metadata = { title: "Review — my-pa" };
@@ -44,26 +46,17 @@ const BLURB =
   "Proposals wait here for your disposition. Nothing is asserted on your behalf — a captured " +
   "item becomes a canonical record only when you accept or correct-and-accept it.";
 
-interface PythonReviewCase {
-  readonly review_case_id: string;
-  readonly proposal_id: string;
-  readonly capture_id: string;
-  readonly version_id: string;
-  readonly proposal_type: string;
-  readonly proposal_state: string;
-  readonly risk_class: string;
-  readonly opened_at: string;
-  readonly review_version: number;
-  readonly latest_disposition: string | null;
-}
-
-function toCase(row: PythonReviewCase): BackendReviewCase {
+function toCase(row: ReviewCase): BackendReviewCase {
+  const captureId = row.subject_kind === "capture_proposal" ? row.capture_id : row.review_case_id;
+  const versionId = row.subject_kind === "capture_proposal" ? row.version_id : row.proposal_id;
+  const proposalType =
+    row.subject_kind === "capture_proposal" ? row.proposal_type : row.subject_kind;
   return {
     reviewCaseId: row.review_case_id,
     proposalId: row.proposal_id,
-    captureId: row.capture_id,
-    versionId: row.version_id,
-    proposalType: row.proposal_type,
+    captureId,
+    versionId,
+    proposalType,
     proposalState: row.proposal_state,
     riskClass: row.risk_class,
     openedAt: row.opened_at,
@@ -107,8 +100,8 @@ export default async function ReviewPage() {
 
   const answer = surfaceAnswer(
     `${SCOPE}:review.list`,
-    await callGateway<{ review_cases?: readonly PythonReviewCase[] }>(principal, "review.list"),
-    (result) => (result.review_cases ?? []).length,
+    (await invokeGateway(principal, "review.list")) as GatewayOutcome<ReviewListResult>,
+    (result) => result.review_cases.length,
   );
 
   if (answer.kind === "unavailable") {
@@ -156,13 +149,13 @@ export default async function ReviewPage() {
             testId="review-queue-degraded-empty"
           />
         ) : (
-          <BackendReviewWorkbench cases={(answer.result.review_cases ?? []).map(toCase)} />
+          <BackendReviewWorkbench cases={answer.result.review_cases.map(toCase)} />
         )}
       </>,
     );
   }
 
   return frame(
-    <BackendReviewWorkbench cases={(answer.result.review_cases ?? []).map(toCase)} />,
+    <BackendReviewWorkbench cases={answer.result.review_cases.map(toCase)} />,
   );
 }

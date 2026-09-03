@@ -4,9 +4,9 @@ import { decodeContinuityPulse, type ContinuityPulseResult } from "./continuity.
 
 const ITEM = {
   pulse_id: "pls_aaaa0001aaaa0001aaaa0001",
-  item_type: "commitment",
+  item_type: "commitment" as const,
   item_ref: "cmt_aaaa0001aaaa0001aaaa0001",
-  reason_code: "commitment_overdue",
+  reason_code: "commitment_overdue" as const,
   reason: "two days past its agreed moment",
   basis_refs: ["asr_aaaa0001aaaa0001aaaa0001"],
   consequence: null,

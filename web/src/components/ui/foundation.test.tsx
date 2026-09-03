@@ -9,7 +9,7 @@ afterEach(cleanup);
 describe("safe rich content", () => {
   it("allows only the admitted semantic node and URL schemes", () => {
     expect(safeHref("https://example.test/evidence")).toBe("https://example.test/evidence");
-    expect(safeHref("mailto:synthetic@example.test")).toBe("mailto:synthetic@example.test");
+    expect(safeHref("mailto:synthetic@example.test")).toBeNull();
     expect(safeHref("/knowledge/record-1")).toBe("/knowledge/record-1");
     expect(safeHref("javascript:alert(1)")).toBeNull();
     expect(safeHref("data:text/html,unsafe")).toBeNull();

@@ -141,6 +141,8 @@ class IntelligenceStore(Protocol):
         report_date: date | None,
         include_superseded: bool,
         limit: int,
+        after_committed_at: datetime | None = None,
+        after_artifact_id: str | None = None,
     ) -> tuple[IntelligenceArtifact, ...]: ...
 
     def search_artifacts(
@@ -916,6 +918,8 @@ def list_artifacts(
     report_date: date | None,
     include_superseded: bool,
     page_size: int,
+    after_committed_at: datetime | None = None,
+    after_artifact_id: str | None = None,
 ) -> tuple[IntelligenceArtifact, ...]:
     return store.list_artifacts(
         principal_id,
@@ -927,6 +931,8 @@ def list_artifacts(
         report_date=report_date,
         include_superseded=include_superseded,
         limit=page_size,
+        after_committed_at=after_committed_at,
+        after_artifact_id=after_artifact_id,
     )
 
 
@@ -1234,6 +1240,8 @@ class InMemoryIntelligenceStore:
         report_date: date | None,
         include_superseded: bool,
         limit: int,
+        after_committed_at: datetime | None = None,
+        after_artifact_id: str | None = None,
     ) -> tuple[IntelligenceArtifact, ...]:
         found = []
         for artifact in self.artifacts.values():
@@ -1257,6 +1265,13 @@ class InMemoryIntelligenceStore:
                 continue
             found.append(artifact)
         found.sort(key=lambda item: (item.committed_at, item.artifact_id), reverse=True)
+        if after_committed_at is not None and after_artifact_id is not None:
+            cursor = (after_committed_at, after_artifact_id)
+            found = [
+                artifact
+                for artifact in found
+                if (artifact.committed_at, artifact.artifact_id) < cursor
+            ]
         return tuple(found[:limit])
 
     def search_artifacts(

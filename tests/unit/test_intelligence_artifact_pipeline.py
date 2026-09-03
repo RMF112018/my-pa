@@ -6,6 +6,7 @@ from my_pa.application.commands import (
     BeginIntelligenceCycle,
     CommitIntelligenceArtifact,
     GetLatestIntelligenceArtifact,
+    ListIntelligenceArtifacts,
     ReadIntelligenceArtifact,
     RecordIntelligenceRunState,
     ResolveIntelligenceSet,
@@ -191,6 +192,7 @@ def test_collector_commit_and_readback_preserve_digest(scene: Scene) -> None:
     assert read["body_markdown"] == body
     assert read["content_sha256"] == committed["content_sha256"]
     assert read["cycle_run_id"] == cycle
+    assert "structured_content" not in read
 
 
 def test_researcher_without_collector_dependency_is_rejected(scene: Scene) -> None:
@@ -1005,3 +1007,101 @@ def test_search_and_resolve_are_principal_scoped(scene: Scene) -> None:
     assert envelope.error is None
     assert envelope.result is not None
     assert envelope.result["items"] == []
+
+
+def test_read_returns_persisted_structured_content(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, "cycle-structured")
+    structure = {"kind": "opaque", "items": [{"id": "sec-1"}]}
+    committed = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_AUTHORING,
+            CommitIntelligenceArtifact(
+                cycle_run_id=cycle,
+                stage=IntelligenceStage.COLLECTOR,
+                artifact_kind=ArtifactKind.COLLECTOR_CANDIDATES,
+                producer_task_id="task-collector",
+                producer_task_name="Collector communications",
+                automation_platform="abacus_chatllm",
+                report_date="2026-08-20",
+                title="Collector communications",
+                body_markdown="# Collector\n",
+                artifact_state=ArtifactState.FINAL,
+                schema_version="1",
+                idempotency_key="structured-1",
+                focus_area_id=FOCUS,
+                structured_content=structure,
+            ),
+        )
+    )
+    report_id = committed["report_id"]
+    assert isinstance(report_id, str)
+    read = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ReadIntelligenceArtifact(report_id=report_id),
+        )
+    )
+    assert read["structured_content"] == structure
+    assert read["body_markdown"] == "# Collector\n"
+
+
+def test_list_honors_cursor_and_refuses_a_foreign_one(scene: Scene) -> None:
+    service = build_service(scene.world, scene.providers)
+    cycle = begin(service, scene, "cycle-list-cursor")
+    first = commit(
+        service,
+        scene,
+        cycle_run_id=cycle,
+        stage=IntelligenceStage.COLLECTOR,
+        kind=ArtifactKind.COLLECTOR_CANDIDATES,
+        key="list-a",
+        title="Collector A",
+        body="a",
+        focus=FocusAreaId.COMMUNICATIONS,
+    )
+    second = commit(
+        service,
+        scene,
+        cycle_run_id=cycle,
+        stage=IntelligenceStage.COLLECTOR,
+        kind=ArtifactKind.COLLECTOR_CANDIDATES,
+        key="list-b",
+        title="Collector B",
+        body="b",
+        focus=FocusAreaId.DECISION_APPROVAL,
+    )
+    page = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ListIntelligenceArtifacts(cycle_run_id=cycle, page_size=1),
+        )
+    )
+    assert len(page["items"]) == 1
+    assert page["next_cursor"] in {first["report_id"], second["report_id"]}
+    rest = payload(
+        run(
+            service,
+            scene,
+            Purpose.REPORT_READ,
+            ListIntelligenceArtifacts(
+                cycle_run_id=cycle, page_size=1, cursor=str(page["next_cursor"])
+            ),
+        )
+    )
+    assert len(rest["items"]) == 1
+    assert rest["items"][0]["report_id"] != page["items"][0]["report_id"]
+    other = operator()
+    envelope = service.invoke(
+        metadata_for(Capability.REPORTS_LIST, Purpose.REPORT_READ, other),
+        ListIntelligenceArtifacts(cycle_run_id=cycle, page_size=1, cursor=str(page["next_cursor"])),
+        principal=other,
+    )
+    assert envelope.error is not None
+    assert envelope.error.code is ErrorCode.INVALID_REQUEST

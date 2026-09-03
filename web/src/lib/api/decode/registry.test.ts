@@ -4,11 +4,11 @@ import contract from "@/contracts/gateway.json";
 import { DECODERS } from "./index";
 
 describe("DECODERS registry", () => {
-  it("covers exactly the 29 gateway.json capabilities", () => {
+  it("covers exactly the gateway.json capabilities", () => {
     const contractKeys = Object.keys(contract.capabilities).sort();
     const decoderKeys = Object.keys(DECODERS).sort();
     expect(decoderKeys).toEqual(contractKeys);
-    expect(decoderKeys).toHaveLength(29);
+    expect(decoderKeys).toHaveLength(contractKeys.length);
   });
 
   it("does not include SESSION_INTERNAL_SERVICE or WEBAUTHN", () => {

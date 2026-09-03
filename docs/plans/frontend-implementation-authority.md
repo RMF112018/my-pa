@@ -48,9 +48,9 @@ WP02 persistence substrate exists (`identity.webauthn_credentials`, `identity.we
 
 The next executable package is:
 
-`UI-IMP-WP07 — Shared Rich Content, Overlay, Form, and Status Primitives`
+`UI-IMP-WP13 — Canonical Entity / People BFF Read Plane`
 
-WP07 must not infer production activation, whole-frontend `PASS_VERIFIED`, or Wave 1 closure. UI-IMP-WP06 typed BFF contracts on this PR are implementation substrate, not a post-merge audit.
+WP11 Reports/Morning Intelligence BFF on this PR is contract substrate, not WP12 Morning Brief UI, production activation, or `PASS_VERIFIED` of `PFE-AC-048..057`.
 
 ## 2. Authentication/session authority
 

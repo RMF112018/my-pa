@@ -252,6 +252,113 @@ def _commitments_read() -> dict[str, Any]:
     }
 
 
+def _reports_read() -> dict[str, Any]:
+    """Handler-identical `_reports_read` keys, including optional structured_content."""
+    return {
+        "report_id": "rpt_aaaaaaaa11111111",
+        "report_run_id": "rrun_aaaaaaaa11111111",
+        "cycle_run_id": "micr_aaaaaaaa11111111",
+        "focus_area_id": "communications",
+        "stage": "collector",
+        "artifact_kind": "collector_candidates",
+        "source_lane": None,
+        "report_date": "2026-08-20",
+        "title": "E2E morning brief collector",
+        "artifact_state": "final",
+        "content_sha256": DIGEST,
+        "content_bytes": 48,
+        "committed_at": format_rfc3339(AT),
+        "version": 1,
+        "supersedes_report_id": None,
+        "dependency_report_ids": [],
+        "provenance": [
+            {
+                "source_system": "synthetic",
+                "source_ref": "src_aaaaaaaa11111111",
+                "relation": "supports",
+                "source_url": None,
+            }
+        ],
+        "body_markdown": "# Morning Brief\n\n- scraped item one",
+        "structured_content": {"lane": "persisted", "marker": "not-from-markdown"},
+    }
+
+
+def _reports_latest() -> dict[str, Any]:
+    """Handler-identical `_reports_latest` current-head selection."""
+    return {
+        "report_id": "rpt_aaaaaaaa11111111",
+        "cycle_run_id": "micr_aaaaaaaa11111111",
+        "stage": "collector",
+        "artifact_kind": "collector_candidates",
+        "focus_area_id": "communications",
+        "source_lane": None,
+        "content_sha256": DIGEST,
+        "artifact_state": "final",
+    }
+
+
+def _reports_list() -> dict[str, Any]:
+    """Handler-identical `_reports_list` page, including required next_cursor."""
+    return {
+        "items": [
+            {
+                "report_id": "rpt_aaaaaaaa11111111",
+                "cycle_run_id": "micr_aaaaaaaa11111111",
+                "stage": "collector",
+                "artifact_kind": "collector_candidates",
+                "focus_area_id": "communications",
+                "source_lane": None,
+                "title": "E2E morning brief collector",
+                "content_sha256": DIGEST,
+                "artifact_state": "final",
+            }
+        ],
+        "next_cursor": None,
+    }
+
+
+def _reports_search() -> dict[str, Any]:
+    """Handler-identical `_reports_search` lexical matches."""
+    return {
+        "items": [
+            {
+                "report_id": "rpt_aaaaaaaa11111111",
+                "title": "E2E morning brief collector",
+                "snippet": "morning brief",
+                "cycle_run_id": "micr_aaaaaaaa11111111",
+                "stage": "collector",
+                "artifact_kind": "collector_candidates",
+            }
+        ]
+    }
+
+
+def _reports_resolve_set() -> dict[str, Any]:
+    """Handler-identical `resolve_set` payload: aggregate plus per-member states."""
+    return {
+        "cycle_run_id": "micr_aaaaaaaa11111111",
+        "cycle_id": "morning_intelligence",
+        "business_date": "2026-08-20",
+        "set_id": "morning_brief_inputs",
+        "aggregate": "BLOCKED",
+        "members": [
+            {
+                "member_id": "communications",
+                "focus_area_id": "communications",
+                "source_lane": None,
+                "readiness": "MISSING",
+                "required": True,
+                "artifact_id": None,
+                "producer_run_id": None,
+                "content_sha256": None,
+                "committed_at": None,
+                "readiness_reason": "missing",
+            }
+        ],
+    }
+
+
 def python_success_payloads() -> dict[str, dict[str, Any]]:
     """Capability name → gateway `result` dict the matching Vitest decoder must accept."""
     return {
@@ -265,6 +372,11 @@ def python_success_payloads() -> dict[str, dict[str, Any]]:
         "review.decide": _review_decide(),
         "capabilities.get": _capabilities_get(),
         "commitments.read": _commitments_read(),
+        "reports.read": _reports_read(),
+        "reports.latest": _reports_latest(),
+        "reports.list": _reports_list(),
+        "reports.search": _reports_search(),
+        "reports.resolve_set": _reports_resolve_set(),
     }
 
 

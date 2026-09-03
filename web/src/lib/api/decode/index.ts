@@ -1,5 +1,5 @@
 /**
- * Capability decoder registry. Exactly the 29 GatewayCapability keys.
+ * Capability decoder registry. Exactly the GatewayCapability keys in gateway.json.
  *
  * Workers C and D replace files under `capabilities/` only. This module wires
  * the imports so those workers do not need to edit the registry.
@@ -33,6 +33,11 @@ import { decodeCommitmentsWaitingOn } from "./capabilities/commitments.waiting_o
 import { decodeCommitmentsCreate } from "./capabilities/commitments.create";
 import { decodeCommitmentsUpdate } from "./capabilities/commitments.update";
 import { decodeCommitmentsClose } from "./capabilities/commitments.close";
+import { decodeReportsRead } from "./capabilities/reports.read";
+import { decodeReportsLatest } from "./capabilities/reports.latest";
+import { decodeReportsList } from "./capabilities/reports.list";
+import { decodeReportsSearch } from "./capabilities/reports.search";
+import { decodeReportsResolveSet } from "./capabilities/reports.resolve_set";
 import type { Decoder, GatewayCapability } from "./types";
 
 export type { CapabilityResults, DecodeResult, Decoder } from "./types";
@@ -71,4 +76,9 @@ export const DECODERS = {
   "commitments.create": decodeCommitmentsCreate,
   "commitments.update": decodeCommitmentsUpdate,
   "commitments.close": decodeCommitmentsClose,
+  "reports.read": decodeReportsRead,
+  "reports.latest": decodeReportsLatest,
+  "reports.list": decodeReportsList,
+  "reports.search": decodeReportsSearch,
+  "reports.resolve_set": decodeReportsResolveSet,
 } satisfies Record<GatewayCapability, Decoder<unknown>>;

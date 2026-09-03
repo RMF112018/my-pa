@@ -3858,8 +3858,8 @@ class ListIntelligenceArtifacts:
         if self.report_date is not None:
             _iso_date(self.report_date, SafeDetail.REPORT_DATE)
         _positive(self.page_size, SafeDetail.PAGE_SIZE)
-        if self.cursor is not None and not isinstance(self.cursor, str):
-            raise InvalidRequestError(SafeDetail.CURSOR)
+        if self.cursor is not None:
+            _identifier(self.cursor, IdKind.INTELLIGENCE_ARTIFACT, SafeDetail.CURSOR)
 
 
 @dataclass(frozen=True, slots=True)

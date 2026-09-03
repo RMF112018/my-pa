@@ -340,8 +340,15 @@ class OptimizerState:
     def __post_init__(self) -> None:
         if isinstance(self.incumbent_score, bool) or not 0 <= self.incumbent_score <= 1:
             raise ValueError("incumbent score must be between zero and one")
-        if self.consecutive_non_improvements < 0:
-            raise ValueError("plateau count is not negative")
+        raw_plateau_count: object = self.consecutive_non_improvements
+        if (
+            isinstance(raw_plateau_count, bool)
+            or not isinstance(raw_plateau_count, int)
+            or raw_plateau_count < 0
+        ):
+            raise ValueError("plateau count must be a non-negative integer")
+        if not isinstance(self.paused, bool):
+            raise ValueError("paused must be a boolean")
 
 
 class TrialDisposition(StrEnum):

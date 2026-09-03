@@ -77,6 +77,41 @@ def test_plateau_limit_accepts_the_positive_integer_boundary() -> None:
     assert OptimizerPolicy(minimum_improvement=0.02, plateau_limit=1).plateau_limit == 1
 
 
+@pytest.mark.parametrize(
+    "plateau_count",
+    [True, False, -1, 0.5, float("nan"), float("inf"), "0", None],
+)
+def test_optimizer_state_rejects_non_integer_plateau_counts(plateau_count: object) -> None:
+    with pytest.raises(ValueError, match="plateau count must be a non-negative integer"):
+        OptimizerState(
+            _config(),
+            incumbent_score=0.5,
+            consecutive_non_improvements=cast(int, plateau_count),
+        )
+
+
+@pytest.mark.parametrize("paused", [0, 1, 0.0, "false", None])
+def test_optimizer_state_rejects_non_boolean_pause_values(paused: object) -> None:
+    with pytest.raises(ValueError, match="paused must be a boolean"):
+        OptimizerState(
+            _config(),
+            incumbent_score=0.5,
+            paused=cast(bool, paused),
+        )
+
+
+@pytest.mark.parametrize("paused", [False, True])
+def test_optimizer_state_accepts_valid_boundary_state(paused: bool) -> None:
+    state = OptimizerState(
+        _config(),
+        incumbent_score=0.5,
+        consecutive_non_improvements=0,
+        paused=paused,
+    )
+    assert state.consecutive_non_improvements == 0
+    assert state.paused is paused
+
+
 def test_configuration_benchmark_and_evaluator_are_digest_bound() -> None:
     first = _config()
     assert first == _config()

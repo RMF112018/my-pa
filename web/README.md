@@ -7,15 +7,15 @@ gateway; it is not a second source of domain truth.
 ## Current implementation
 
 The normal application path is backend-served. Server routes resolve a
-Principal from the signed application session, call the loopback Python gateway,
-and pass through the gateway's disclosure and refusal semantics. The browser
-cannot submit a Principal or a gateway bearer.
+Principal from the opaque SID cookie via the Python session-service, call the
+loopback Python gateway, and pass through the gateway's disclosure and refusal
+semantics. The browser cannot submit a Principal or a gateway bearer.
 
 An explicitly enabled synthetic provider remains available for development and
 is refused when `NODE_ENV=production`. It does not silently replace an
 unconfigured or unavailable backend.
 
-The Python contract contains one hundred and four capability names. The System route reads
+The Python contract contains one hundred and twenty-four capability names. The System route reads
 the live `capabilities.get` manifest, including each capability's runtime
 availability, instead of restating an availability count in this tier. Six of
 those names are the managed-document lifecycle (`documents.create`,
@@ -26,8 +26,7 @@ does not currently expose a managed-document screen or API route.
 
 ## Routes and capability mapping
 
-All application pages require a verified session. `/sign-in` is public;
-`/auth/sign-in` and `/auth/callback` implement the Entra redirect flow.
+All application pages require a verified session. `/sign-in` is public.
 
 | UI or BFF route | Backend capability | Current behavior |
 |---|---|---|
@@ -53,12 +52,13 @@ All application pages require a verified session. `/sign-in` is public;
 | `GET /api/commitments/:commitmentId/history` | `commitments.history` | Reads the Commitment's append-only history |
 | `POST /api/commitments/:commitmentId/close` | `commitments.close` | Closes a Commitment explicitly with validated closure evidence |
 | `/system`, `GET /api/system` | `capabilities.get` | Reports the runtime manifest, readiness, and worker planes; connected-source enumeration remains unknown because no v1 capability provides it |
-| `POST /api/session` | none | Synthetic development sign-in only; refused in Entra mode and in production |
+| `POST /api/session` | none | Synthetic development sign-in only; refused in passkey mode and in production |
+| `POST /api/webauthn` | none | Passkey ceremony BFF; Python issues the opaque SID cookie after authentication or recovery |
 
 The relationship timeline is therefore implemented, but it is not a separate
 public capability. It is a projection of `relationship_events` already returned
 by `continuity.situations`. Microsoft Graph remains off by default and is not an
-active personal-data source; Entra authentication does not activate Graph.
+active personal-data source. Browser Entra/MSAL sign-in is retired.
 
 ## Worker-plane reporting
 
@@ -75,20 +75,15 @@ the gateway, it renders the refusal rather than an empty healthy state.
 
 ## Authentication and gateway identity
 
-`MYPA_AUTH_MODE` is required and has exactly two values:
+`MYPA_AUTH_MODE` is required and has exactly two web values:
 
 - `synthetic` exposes fixed development principals. It is refused in production.
-- `entra` uses a Node-only MSAL authorization-code flow with a confidential client at `/auth/sign-in` and
-  `/auth/callback`. The flow validates state and nonce, uses PKCE S256, consumes
-  callback state before token exchange, expires abandoned flows after ten
-  minutes, and bounds the number of live pending flows. The access token, client
-  secret, PKCE verifier, and nonce stay server-side. The `HttpOnly` session cookie
-  contains signed Principal/session identifiers, never the access token.
+- `passkey` is production web authentication. Sessions are an opaque SID issued
+  by Python after WebAuthn or recovery; `POST /api/session` does not mint a
+  synthetic identity.
 
-The Entra path requires the application's own gateway API scope. A Microsoft
-Graph scope is rejected. No live app registration, tenant credential, or
-personal-data account is stored in this repository or exercised by the test
-suite.
+Browser Entra/MSAL and browser local-operator sign-in are retired. There is no
+`/auth/sign-in` route and no MSAL package on this tier.
 
 `MYPA_GATEWAY_AUTH_MODE` separately describes the Python gateway:
 
@@ -96,13 +91,9 @@ suite.
   process Principal, and the web tier admits only the matching synthetic
   Principal so browser sessions cannot imply backend partitioning that does not
   exist.
-- `entra` requires the server-held bearer produced by the completed Entra flow.
-  Missing bearer state is a refusal; the BFF never falls back to an
-  unauthenticated request or caller-supplied identity.
-
-The session and pending-flow registries are process-local. A Node restart safely
-invalidates their entries and requires sign-in again. Multi-instance deployment
-would require a shared, bounded server-side registry and is not claimed here.
+- `entra` requires a bearer token. Browser Entra/MSAL is retired, so this BFF
+  has no forwardable Entra credential and refuses (`no_forwardable_credential`)
+  rather than sending the session cookie as a bearer or fabricating a token.
 
 ## Configuration
 
@@ -111,21 +102,19 @@ values out of band and never commit them.
 
 | Variable | Required use |
 |---|---|
-| `MYPA_SESSION_SECRET` | At least 32 characters; signs the application session cookie |
-| `MYPA_AUTH_MODE` | `synthetic` or `entra`; no default |
+| `MYPA_SESSION_SERVICE_SECRET` | At least 32 characters; BFF→Python session-service HMAC; distinct from the WebAuthn BFF secret |
+| `MYPA_WEBAUTHN_BFF_SECRET` | At least 32 characters; WebAuthn BFF ceremony HMAC; distinct from the session-service secret |
+| `MYPA_AUTH_MODE` | `synthetic` or `passkey`; no default |
 | `MYPA_GATEWAY_URL` | Absolute HTTP(S) URL for the Python gateway; no default |
-| `MYPA_GATEWAY_AUTH_MODE` | `local_operator` or `entra`; must match the Python gateway |
+| `MYPA_GATEWAY_AUTH_MODE` | `local_operator` or `entra`; must match the Python gateway plane |
 | `MYPA_DATA_PROVIDER` | Optional explicit `synthetic` fixture switch; unset means off |
-| `MYPA_ENTRA_HOME_TENANT_ID` | Required in Entra mode; accepted home tenant |
-| `MYPA_ENTRA_CLIENT_ID` | Required in Entra mode; server-only app identifier |
-| `MYPA_ENTRA_CLIENT_SECRET` | Required in Entra mode; server-only credential |
-| `MYPA_ENTRA_REDIRECT_URI` | Required in Entra mode; callback URI |
-| `MYPA_ENTRA_API_SCOPE` | Required in Entra mode; this application's gateway scope |
+| `MYPA_ENTRA_HOME_TENANT_ID` | Optional home tenant when configured; not a browser MSAL client id |
 
 A minimal synthetic development configuration is:
 
 ```sh
-export MYPA_SESSION_SECRET='replace-with-a-local-random-value-of-at-least-32-characters'
+export MYPA_SESSION_SERVICE_SECRET='replace-with-a-local-random-value-of-at-least-32-characters'
+export MYPA_WEBAUTHN_BFF_SECRET='replace-with-a-distinct-local-random-value-of-at-least-32-characters'
 export MYPA_AUTH_MODE=synthetic
 export MYPA_GATEWAY_URL=http://127.0.0.1:8000
 export MYPA_GATEWAY_AUTH_MODE=local_operator
@@ -133,8 +122,8 @@ export MYPA_DATA_PROVIDER=synthetic
 npm run dev
 ```
 
-The placeholder above is documentation, not an acceptable shared or deployed
-secret. Generate a local value out of band.
+The placeholders above are documentation, not acceptable shared or deployed
+secrets. Generate local values out of band.
 
 ## Offline Quick Capture
 

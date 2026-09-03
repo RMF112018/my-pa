@@ -76,7 +76,7 @@ principal is the only principal; no credential is issued, read, or required.
 `OPERATOR` rather than `GATEWAY` because the process *is* the operator's local
 transport — a `GATEWAY` principal cannot invoke `sources.enroll`, so the choice
 is between naming what this is and shipping a transport that cannot reach one of
-the 104 capabilities.
+the 124 capabilities.
 
 `entra` composes `entra_authenticator` instead and issues **no** process
 principal. Every request presents a bearer token, the token's validated
@@ -164,9 +164,15 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from uuid import UUID
 
 from sqlalchemy import Connection, Engine
 
+from my_pa.adapters.http.auth_sessions import (
+    dispatch_webauthn_http,
+    session_service_http_handler,
+)
+from my_pa.adapters.http.webauthn import webauthn_http_handler
 from my_pa.adapters.normalization import PAYLOAD_KEY
 from my_pa.application.apple_machine import AppleBridgeIdentity, AppleMachineControl
 from my_pa.application.entity_reenrichment import (
@@ -177,15 +183,27 @@ from my_pa.application.goodnotes_gsqs_b0_workflow import WorkflowPorts
 from my_pa.application.native_sources import NativeSourceController
 from my_pa.application.producer_origin import ProducerOrigin, ProducerOriginRegistry
 from my_pa.application.service import ApplicationService
+from my_pa.application.session_service_auth import (
+    SYNTHETIC_CATALOGUE,
+    SessionServiceError,
+    session_principal_payload,
+)
+from my_pa.application.webauthn_bff_attestation import verify_webauthn_attestation
 from my_pa.bootstrap.apple_machine_control import SqlAppleMachineControl
 from my_pa.bootstrap.settings import AuthMode, Settings
 from my_pa.contracts.ports import ManagedByteStore, UnitOfWork
 from my_pa.domain.capture.client import admit_client_binding, parse_client_credential
 from my_pa.domain.capture.errors import CaptureError
 from my_pa.domain.common.identifiers import IdKind
+from my_pa.domain.common.time import utc_now
+from my_pa.domain.identity.auth_sessions import AuthSession
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
 from my_pa.domain.identity.principal import Principal, PrincipalKind
 from my_pa.domain.identity.user_account import TokenClaimsError
+from my_pa.domain.identity.webauthn_relying_party import (
+    WebAuthnCeremonyError,
+    WebAuthnRelyingParty,
+)
 from my_pa.domain.policy.decision import POLICY_VERSION
 from my_pa.domain.source.registry import issue_identifier
 from my_pa.infrastructure.database.engine import create_database_engine
@@ -218,8 +236,14 @@ from my_pa.infrastructure.persistence.tables import (
 )
 from my_pa.infrastructure.persistence.task_management import SqlAlchemyTaskManagementUnitOfWork
 from my_pa.infrastructure.persistence.unit_of_work import SqlAlchemyUnitOfWork
+from my_pa.infrastructure.persistence.user_accounts import UserAccountRepository
+from my_pa.infrastructure.persistence.webauthn_auth import AuthSessionStore
 from my_pa.infrastructure.security.entra_token import EntraTokenVerifier, jwks_signing_key_source
 from my_pa.infrastructure.security.principal_identity import PrincipalIdentityService
+from my_pa.infrastructure.security.webauthn_ceremony import (
+    CeremonyResult,
+    WebAuthnCeremonyService,
+)
 
 __all__ = [
     "Authenticator",
@@ -573,6 +597,213 @@ def mcp_surface_enabled(
     return any(client.client_id == bound and client.usable for client in held)
 
 
+def _webauthn_execute(
+    engine: Engine,
+    *,
+    relying_party: WebAuthnRelyingParty | None,
+    bff_secret: str,
+    clock: Callable[[], datetime] = utc_now,
+) -> Callable[[str, str, Mapping[str, Any], str | None], Mapping[str, Any]]:
+    """Attestation mapping and ceremony dispatch, composed off the process file."""
+
+    def execute(
+        action: str,
+        origin: str,
+        document: Mapping[str, Any],
+        attestation: str | None,
+    ) -> Mapping[str, Any]:
+        if relying_party is None:
+            raise WebAuthnCeremonyError("backend_unavailable")
+        with engine.begin() as connection:
+            service = WebAuthnCeremonyService(connection, relying_party, clock=clock)
+            principal_id = None
+            if attestation:
+                tid, oid = verify_webauthn_attestation(bff_secret, attestation, now=clock())
+                principal_id = service.ensure_account(tid=tid, oid=oid, upn=None, display_name=None)
+            result = _dispatch_webauthn(service, action, origin, document, principal_id)
+        return _ceremony_response_body(result)
+
+    return execute
+
+
+def _ceremony_response_body(result: CeremonyResult) -> dict[str, Any]:
+    """Loopback JSON for a ceremony outcome, including the raw SID once."""
+    body: dict[str, Any] = dict(result.payload)
+    if result.recovery_codes is not None:
+        body["codes"] = list(result.recovery_codes)
+    if result.issued_session is not None:
+        body["sessionCreated"] = True
+        body["issuedSid"] = result.issued_session.raw_sid
+    return body
+
+
+def _session_service_execute(
+    engine: Engine,
+    *,
+    clock: Callable[[], datetime] = utc_now,
+) -> Callable[[str, Mapping[str, Any]], Mapping[str, Any]]:
+    """SID resolve/touch/rotate/revoke and synthetic mint on the work engine."""
+
+    def execute(action: str, document: Mapping[str, Any]) -> Mapping[str, Any]:
+        now = clock()
+        with engine.begin() as connection:
+            store = AuthSessionStore(connection)
+            accounts = UserAccountRepository(connection)
+            if action == "sessions/issue-synthetic":
+                key = document.get("key")
+                if not isinstance(key, str):
+                    raise SessionServiceError("invalid_request")
+                claims = SYNTHETIC_CATALOGUE.get(key)
+                if claims is None:
+                    raise SessionServiceError("invalid_request")
+                account = accounts.resolve_or_create(claims, now=now)
+                issued = store.create(principal_id=account.principal_id, now=now)
+                return {
+                    "issuedSid": issued.raw_sid,
+                    "principal": session_principal_payload(account),
+                }
+            sid = document.get("sid")
+            if not isinstance(sid, str):
+                raise SessionServiceError("unauthenticated")
+            if action == "sessions/resolve":
+                return _live_principal(accounts, store.resolve(sid, now=now))
+            if action == "sessions/touch":
+                return _live_principal(accounts, store.touch(sid, now=now))
+            if action == "sessions/rotate":
+                rotated = store.rotate(sid, now=now)
+                if rotated is None:
+                    raise SessionServiceError("unauthenticated")
+                return {"issuedSid": rotated.raw_sid}
+            if action == "sessions/revoke":
+                if not store.revoke(sid, now=now):
+                    raise SessionServiceError("unauthenticated")
+                return {"revoked": True}
+            raise SessionServiceError("invalid_request")
+
+    return execute
+
+
+def _live_principal(accounts: UserAccountRepository, session: AuthSession | None) -> dict[str, Any]:
+    if session is None:
+        raise SessionServiceError("unauthenticated")
+    account = accounts.get(session.principal_id)
+    if account is None:
+        raise SessionServiceError("unauthenticated")
+    return {"principal": session_principal_payload(account)}
+
+
+def _dispatch_webauthn(
+    service: WebAuthnCeremonyService,
+    action: str,
+    origin: str,
+    document: Mapping[str, Any],
+    principal_id: UUID | None,
+) -> CeremonyResult:
+    if action == "registration/options":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.registration_options(principal_id, origin=origin)
+    if action == "registration/complete":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        credential = document.get("credential")
+        if not isinstance(credential, dict):
+            raise WebAuthnCeremonyError("invalid_registration")
+        label = document.get("label")
+        return service.registration_complete(
+            principal_id,
+            origin=origin,
+            credential=credential,
+            label=label if isinstance(label, str) else None,
+        )
+    if action == "authentication/options":
+        return service.authentication_options(origin=origin)
+    if action == "authentication/complete":
+        credential = document.get("credential")
+        if not isinstance(credential, dict):
+            raise WebAuthnCeremonyError("invalid_assertion")
+        return service.authentication_complete(origin=origin, credential=credential)
+    if action == "credentials/list":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.list_credentials(principal_id)
+    if action == "credentials/revoke":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.revoke_credential(
+            principal_id,
+            origin=origin,
+            credential_id=_b64_field(document, "credentialId"),
+            administration_grant=_b64_field(document, "administrationGrant"),
+        )
+    if action == "recovery/issue":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.issue_recovery(
+            principal_id,
+            origin=origin,
+            administration_grant=_b64_field(document, "administrationGrant"),
+        )
+    if action == "recovery/consume":
+        presented = document.get("code")
+        if not isinstance(presented, str):
+            raise WebAuthnCeremonyError("invalid_recovery_code")
+        return service.consume_recovery(presented, origin=origin)
+    if action == "step-up/options":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.step_up_options(principal_id, origin=origin)
+    if action == "step-up/complete":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        credential = document.get("credential")
+        if not isinstance(credential, dict):
+            raise WebAuthnCeremonyError("invalid_assertion")
+        return service.step_up_complete(principal_id, origin=origin, credential=credential)
+    if action == "sessions/revoke-all":
+        if principal_id is None:
+            raise WebAuthnCeremonyError("unauthenticated")
+        return service.revoke_all_sessions(
+            principal_id,
+            origin=origin,
+            administration_grant=_b64_field(document, "administrationGrant"),
+        )
+    raise WebAuthnCeremonyError("invalid_request")
+
+
+def _b64_field(document: Mapping[str, Any], name: str) -> bytes:
+    import base64
+
+    value = document.get(name)
+    if not isinstance(value, str) or not value:
+        raise WebAuthnCeremonyError("invalid_request")
+    padding = "=" * (-len(value) % 4)
+    try:
+        return base64.urlsafe_b64decode(value + padding)
+    except Exception as error:
+        raise WebAuthnCeremonyError("invalid_request") from error
+
+
+def _compose_webauthn_handler(settings: Settings, work_engine: Engine) -> Callable[..., Any]:
+    """Wire ceremony and session-service handlers; dispatch by path action."""
+    relying_party = settings.webauthn_relying_party()
+    ceremony = webauthn_http_handler(
+        relying_party=relying_party,
+        execute=_webauthn_execute(
+            work_engine,
+            relying_party=relying_party,
+            bff_secret=settings.webauthn_bff_secret,
+        ),
+    )
+    sessions = session_service_http_handler(
+        relying_party=relying_party,
+        service_secret=settings.session_service_secret,
+        execute=_session_service_execute(work_engine),
+        clock=utc_now,
+    )
+    return dispatch_webauthn_http(session_service=sessions, ceremony=ceremony)
+
+
 @dataclass(frozen=True, slots=True)
 class GatewayRuntime:
     """The application, the principal, and the two engines behind them.
@@ -613,6 +844,10 @@ class GatewayRuntime:
     mcp_enabled: bool
     work_engine: Engine
     audit_engine: Engine
+    #: HTTP WebAuthn ceremony handler. Composed here so `apps/gateway.py` only
+    #: selects the runtime and never maps attested tenant/object identifiers.
+    #: Default `None` keeps test constructions that omit ceremony safe.
+    webauthn: Callable[..., Any] | None = None
 
     def close(self) -> None:
         """Release both pools. Safe to call after a failed start."""
@@ -799,4 +1034,5 @@ def build_gateway_runtime(settings: Settings) -> GatewayRuntime:
         mcp_enabled=mcp_surface_enabled(settings, work_engine, principal),
         work_engine=work_engine,
         audit_engine=audit_engine,
+        webauthn=_compose_webauthn_handler(settings, work_engine),
     )

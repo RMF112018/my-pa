@@ -102,30 +102,99 @@ class ResolutionOutcome(StrEnum):
 class ResolutionBasis(StrEnum):
     """What a candidate matched on. The explainability half of an answer.
 
-    Ordered from strongest to weakest evidence in `_BASIS_ORDER` below, which is
-    the ordering `EntityResolution.candidates` is presented in. An order over
-    *kinds of evidence* rather than a number per candidate: section 15.2 says an
-    exact identifier is strong evidence and a name alone is insufficient, which
-    is a statement about kinds.
+    These are *unordered categorical* match reasons. A verified identifier and a
+    communication value are different **kinds** of evidence, not two amounts of
+    one thing, and this vocabulary deliberately declines to say which is worth
+    more: section 15.2 says an exact identifier is strong evidence and a name
+    alone is insufficient, which is a statement about kinds and about what may
+    resolve, not a scale a candidate can be placed on.
+
+    `_BASIS_ORDER` below is therefore **a deterministic presentation tie-break
+    and nothing else**. It exists so that a candidate list does not reorder
+    itself between two identical queries, which is the failure
+    `order_candidates` explains: an answer that comes back shuffled reads as
+    though it changed. It is never published as a strength, a rank or a score,
+    it is exposed as no field on any record here, and nothing serializes it. A
+    caller that wants to know why a candidate is a candidate reads its evidence,
+    which names the basis; there is no position to read.
+
+    Which bases may *resolve* is a separate question with its own separate
+    answer, `_BASES_THAT_NAME_AN_ENTITY`, held apart from this ordering on
+    purpose -- see the comment there.
     """
 
-    #: An external identifier something verified. The strongest evidence here.
+    #: An external identifier something verified.
     VERIFIED_EXTERNAL_IDENTIFIER = "verified_external_identifier"
     #: An external identifier nothing has verified yet.
     EXTERNAL_IDENTIFIER = "external_identifier"
     #: A recorded alias of the entity.
     ALIAS = "alias"
-    #: The entity's own canonical name. Weakest: section 15.2's "names alone are
+    #: The entity's own canonical name. Section 15.2's "names alone are
     #: insufficient" applies exactly here.
     CANONICAL_NAME = "canonical_name"
+    #: The reference matched a row in `entity_names` by `normalized_value` -- a
+    #: recorded name form of the entity, whatever type of name it is.
+    #:
+    #: The basis stays coarse on purpose: the *name type* (legal, trading,
+    #: former, ...) is a fact on the row that matched, not a member of this
+    #: vocabulary. A member per name type would multiply the vocabulary and
+    #: invite exactly the graded reading this enum refuses.
+    #:
+    #: **This may never resolve an entity on its own.** A typed name is a name,
+    #: and the audit's section M acceptance rule is "name/alias alone ->
+    #: retrieval candidates, never automatic merge". It is absent from
+    #: `_BASES_THAT_NAME_AN_ENTITY` for that reason and no other.
+    TYPED_NAME = "typed_name"
+    #: The reference matched a row in `entity_communication_methods` by
+    #: `normalized_value` -- an address or number recorded against the entity.
+    #:
+    #: **This may never resolve an entity on its own** either. A communication
+    #: value is claimable by more than one entity and is not an identifier this
+    #: product has verified, so on the same section M rule it yields retrieval
+    #: candidates and never an automatic merge.
+    COMMUNICATION_VALUE = "communication_value"
 
 
+#: The presentation tie-break of `ResolutionBasis`, and *only* that.
+#:
+#: New members are appended at the weak end, below `CANONICAL_NAME`, and that
+#: placement is load-bearing rather than tidy. `ResolutionCandidate`
+#: `strongest_basis` is the minimum of this map over a candidate's evidence, so
+#: a new member placed anywhere *above* `ALIAS` would change `strongest_basis`
+#: for every candidate that matched both -- and with it the `names_itself` and
+#: `is_corroborated` behaviour computed downstream of it. Appending at the weak
+#: end leaves every existing candidate's `strongest_basis` bit-identical, so no
+#: existing outcome can move. That is what makes adding a basis a safe change.
 _BASIS_ORDER: dict[ResolutionBasis, int] = {
     ResolutionBasis.VERIFIED_EXTERNAL_IDENTIFIER: 0,
     ResolutionBasis.EXTERNAL_IDENTIFIER: 1,
     ResolutionBasis.ALIAS: 2,
     ResolutionBasis.CANONICAL_NAME: 3,
+    ResolutionBasis.TYPED_NAME: 4,
+    ResolutionBasis.COMMUNICATION_VALUE: 5,
 }
+
+#: The bases that, on their own, say the reference *named this entity*.
+#: Every other basis produces a retrieval candidate and nothing more, which
+#: is audit section M's rule: "name/alias alone -> retrieval candidates,
+#: never automatic merge".
+#:
+#: **Stated as a set rather than read off `_BASIS_ORDER`.** The refusal below
+#: used to be `strongest_basis is ResolutionBasis.CANONICAL_NAME`, which was
+#: correct only for as long as `CANONICAL_NAME` happened to sort last: it
+#: coupled a safety property to a presentation order, and it would have
+#: mis-fired silently the moment a weaker basis was appended -- which is
+#: exactly what appending `TYPED_NAME` and `COMMUNICATION_VALUE` does. Naming
+#: the set makes the safety rule say what it means, and makes adding a basis a
+#: decision about whether that basis may resolve rather than an accident of
+#: where it landed in a dictionary.
+_BASES_THAT_NAME_AN_ENTITY: frozenset[ResolutionBasis] = frozenset(
+    {
+        ResolutionBasis.VERIFIED_EXTERNAL_IDENTIFIER,
+        ResolutionBasis.EXTERNAL_IDENTIFIER,
+        ResolutionBasis.ALIAS,
+    }
+)
 
 
 class ContextualSignal(StrEnum):
@@ -138,12 +207,16 @@ class ContextualSignal(StrEnum):
     though the reference had named it.
 
     Section 15.1 admits "organization and role overlap" and "project-team
-    membership" as resolution evidence, and both of those are here. It also
+    membership" as resolution evidence, and this product now observes both:
+    `AFFILIATED_WITH_THE_NAMED_SCOPE` is the first and
+    `PARTICIPATES_IN_THE_NAMED_SCOPE` is the second, alongside the recorded
+    assignment and the typed edge that were here before them. Section 15.1 also
     admits calendar attendees, email participants, introduction chains and
-    negative evidence -- none of which this product observes yet. They arrive
+    negative evidence -- none of which this product observes yet. Those arrive
     with the observation record, and with them the question of whether a signal
     may *select* a candidate or only support one; today every signal here is a
-    recorded assignment or a typed edge, and both are specific enough to select.
+    recorded assignment, a typed edge, a recorded affiliation or a recorded
+    participation, and all four are specific enough to select.
     """
 
     #: The candidate holds an assignment whose scope is the entity the caller
@@ -153,6 +226,19 @@ class ContextualSignal(StrEnum):
     #: A typed relationship of the candidate reaches the named scope -- works
     #: for that organization, is a contractor on that project.
     RELATED_TO_THE_NAMED_SCOPE = "related_to_the_named_scope"
+    #: The candidate holds a recorded affiliation with the entity the caller
+    #: named -- section 15.1's "organization and role overlap", read off
+    #: `entity_person_organization_affiliations` rather than inferred. Judged in
+    #: force at the moment asked about on the same terms as every other signal
+    #: here, so an ended or superseded affiliation corroborates nothing.
+    AFFILIATED_WITH_THE_NAMED_SCOPE = "affiliated_with_the_named_scope"
+    #: The candidate is a recorded participant in the entity the caller named --
+    #: section 15.1's "project-team membership", read off
+    #: `entity_project_participations`. It is distinct from
+    #: `ASSIGNED_TO_THE_NAMED_SCOPE` because a participation and an assignment
+    #: are different records making different claims, and folding them together
+    #: would report a corroboration the reader could not go and check.
+    PARTICIPATES_IN_THE_NAMED_SCOPE = "participates_in_the_named_scope"
 
 
 class ResolutionWarning(StrEnum):
@@ -263,6 +349,11 @@ class ResolutionCandidate:
         )
 
     @property
+    def names_the_entity(self) -> bool:
+        """Whether any evidence here says the reference named this entity."""
+        return any(item.basis in _BASES_THAT_NAME_AN_ENTITY for item in self.evidence)
+
+    @property
     def is_current(self) -> bool:
         return self.status is EntityStatus.ACTIVE
 
@@ -341,10 +432,7 @@ class EntityResolution:
         if self.candidates_were_truncated and self.is_resolved:
             raise ValueError("a resolved outcome is not one candidate out of an unknown many")
         named_only = {ResolutionOutcome.RESOLVED_EXACT, ResolutionOutcome.HISTORICAL_MATCH}
-        if (
-            self.outcome in named_only
-            and self.candidates[0].strongest_basis is ResolutionBasis.CANONICAL_NAME
-        ):
+        if self.outcome in named_only and not self.candidates[0].names_the_entity:
             raise ValueError("a name alone does not resolve an entity")
 
     @property
@@ -372,7 +460,7 @@ class EntityResolution:
 def order_candidates(
     candidates: tuple[ResolutionCandidate, ...],
 ) -> tuple[ResolutionCandidate, ...]:
-    """Candidates strongest evidence first, then by identifier.
+    """Candidates in `_BASIS_ORDER`, then by identifier.
 
     The identifier tiebreak is there so the order is total and stable: two
     candidates with the same basis would otherwise be presented in whatever
@@ -382,6 +470,17 @@ def order_candidates(
     Ordering is *presentation*, and does not make the first candidate the
     answer. `resolved_entity_id` is the only thing that names an answer, and it
     is `None` whenever there is more than one candidate.
+
+    **This said "strongest evidence first" until RI-ENT-WP-09, and that phrasing
+    had to go rather than be left as harmless prose.** `_BASIS_ORDER` is a
+    deterministic presentation tie-break and not a scale of evidential worth --
+    see `ResolutionBasis`, which says so at length -- so a docstring calling the
+    first position "strongest" republished, in the one place a reader would look
+    for the meaning of the order, exactly the graded reading that vocabulary
+    refuses. Which bases may *resolve* is a separate question with its own
+    separate answer, `_BASES_THAT_NAME_AN_ENTITY`; position here answers it
+    neither way, and a candidate at the top of this list may still be one no
+    outcome is allowed to name.
     """
     return tuple(
         sorted(

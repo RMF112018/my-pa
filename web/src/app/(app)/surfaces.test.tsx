@@ -67,6 +67,7 @@ import ReviewPage from "@/app/(app)/review/page";
 import TodayPage from "@/app/(app)/today/page";
 import SituationsPage from "@/app/(app)/situations/page";
 import SystemPage from "@/app/(app)/system/page";
+import RelationshipPage from "@/app/(app)/relationships/[personId]/page";
 
 /** A disclosure whose coverage says the answer is whole. */
 function whole(overrides: Record<string, unknown> = {}) {
@@ -166,6 +167,7 @@ const CAPTURE = {
 const REVIEW_CASE = {
   review_case_id: "rvc_aaaa0001aaaa0001aaaa0001",
   proposal_id: "prop_aaaa0001aaaa0001aaaa0001",
+  subject_kind: "capture_proposal",
   capture_id: CAPTURE.capture_id,
   version_id: CAPTURE.latest_version_id,
   proposal_type: "commitment",
@@ -185,7 +187,7 @@ const PULSE_ITEM = {
   basis_refs: ["asr_aaaa0001aaaa0001aaaa0001"],
   consequence: null,
   next_step: null,
-  priority: 1,
+  attention_rank: 1,
   generated_at: "2026-01-01T00:00:00Z",
 };
 
@@ -246,17 +248,24 @@ describe("Library reaches the record instead of asserting about it", () => {
   });
 
   it("separates 'nothing matched' from 'the search did not run'", async () => {
-    answerWith({ matches: [] }, whole());
+    answerWith({ matches: [], searchable_versions: 0, stored_versions: 0 }, whole());
     const { unmount } = await renderServerPage(() => LibraryPage({ searchParams: Promise.resolve({ q: "slab" }) }));
     expect(screen.getByTestId("library-search-empty")).toHaveAttribute("data-state", "empty");
     unmount();
 
-    answerWith({ matches: [] }, notSearched());
+    answerWith({ matches: [], searchable_versions: 0, stored_versions: 0 }, notSearched());
     await renderServerPage(() => LibraryPage({ searchParams: Promise.resolve({ q: "slab" }) }));
     expect(screen.getByTestId("library-search-unavailable")).toHaveAttribute(
       "data-state",
       "unavailable",
     );
+  });
+
+  it("does NOT say empty when the backend omitted the required captures array", async () => {
+    answerWith({}, whole());
+    await renderServerPage(() => LibraryPage({ searchParams: NO_PARAMS }));
+    expect(screen.getByTestId("library-unavailable")).toHaveAttribute("data-state", "unavailable");
+    expect(screen.queryByTestId("library-empty")).toBeNull();
   });
 
   it("offers no synthetic Library and says so rather than inventing one", async () => {
@@ -310,6 +319,13 @@ describe("Today distinguishes a quiet day from a failed derivation", () => {
     unmount();
 
     answerWith({ pulse_items: [] }, notSearched());
+    await renderServerPage(() => TodayPage());
+    expect(screen.getByTestId("today-unavailable")).toHaveAttribute("data-state", "unavailable");
+    expect(screen.queryByTestId("today-empty")).toBeNull();
+  });
+
+  it("does NOT treat omitted pulse_items as a quiet day", async () => {
+    answerWith({}, whole());
     await renderServerPage(() => TodayPage());
     expect(screen.getByTestId("today-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(screen.queryByTestId("today-empty")).toBeNull();
@@ -378,35 +394,65 @@ describe("Situations never calls a partial answer an empty board", () => {
 });
 
 describe("System reports what it was told, and says so when it was told nothing", () => {
-  const MANIFEST = { contract_version: "v1", capabilities: [] };
+  const CAPABILITIES_GET = {
+    manifest: {
+      contract_version: "v1",
+      contract_family: "my-pa-public-capabilities",
+      capabilities: [
+        {
+          name: "capabilities.get",
+          version: "v1",
+          availability: "available",
+          operator_only: false,
+        },
+      ],
+      content_types: [{ media_type: "text/plain", availability: "available" }],
+      limits: {
+        max_page_size: 50,
+        default_page_size: 20,
+        max_fetch_bytes: 1_048_576,
+        max_enrollment_depth: 8,
+      },
+    },
+    readiness: {
+      state: "degraded",
+      contract_version: "v1",
+      implemented_capabilities: 24,
+      total_capabilities: 26,
+      limitations: [],
+    },
+    worker_planes: [
+      {
+        plane: "capture",
+        state: "idle_or_not_required",
+        backlog: 0,
+        dead_lettered: 0,
+        last_heartbeat_at: null,
+      },
+    ],
+  };
 
   it("prints the readiness count the application actually returned", async () => {
-    answerWith(
-      {
-        manifest: MANIFEST,
-        readiness: { state: "degraded", implemented_capabilities: 24, total_capabilities: 26 },
-      },
-      whole(),
-    );
+    answerWith(CAPABILITIES_GET, whole());
     await renderServerPage(() => SystemPage());
     expect(screen.getByTestId("system-readiness").textContent).toMatch(/24 of 26/);
     expect(screen.queryByTestId("system-readiness-unknown")).toBeNull();
   });
 
   it("does NOT render '0 of 0' for a response that carried no readiness", async () => {
-    // A successful answer with the `readiness` key simply absent. `?? 0` on both
-    // halves turned that into a confident claim that nothing is implemented.
-    answerWith({ manifest: MANIFEST }, whole());
+    // A successful-looking answer with the `readiness` key absent is a contract
+    // failure after WP06 decode. Missing nested objects must not become a
+    // confident claim that nothing is implemented.
+    answerWith({ manifest: CAPABILITIES_GET.manifest }, whole());
     await renderServerPage(() => SystemPage());
     expect(screen.queryByTestId("system-readiness")).toBeNull();
-    const unknown = screen.getByTestId("system-readiness-unknown");
-    expect(unknown.textContent).toMatch(/unknown/i);
+    expect(screen.getByTestId("system-unavailable")).toHaveAttribute("data-state", "unavailable");
     expect(document.body.textContent).not.toMatch(/0 of 0/);
   });
 
   it("shows a gateway auth mode it cannot read as a misconfiguration", async () => {
     vi.stubEnv("MYPA_GATEWAY_AUTH_MODE", "");
-    answerWith({ manifest: MANIFEST }, whole());
+    answerWith(CAPABILITIES_GET, whole());
     await renderServerPage(() => SystemPage());
     const alert = screen.getByTestId("system-auth-mode-misconfigured");
     expect(alert.getAttribute("role")).toBe("alert");
@@ -416,10 +462,23 @@ describe("System reports what it was told, and says so when it was told nothing"
   });
 
   it("still discloses the local_operator limit when the mode is readable", async () => {
-    answerWith({ manifest: MANIFEST }, whole());
+    answerWith(CAPABILITIES_GET, whole());
     await renderServerPage(() => SystemPage());
     expect(screen.getByTestId("system-local-operator").textContent).toMatch(/one fixed principal/);
     expect(screen.queryByTestId("system-auth-mode-misconfigured")).toBeNull();
+  });
+});
+
+describe("Relationship timeline fails closed without relationship_events", () => {
+  it("does not emit an empty timeline when the workspace group is absent", async () => {
+    answerWith({ situations: [] }, whole());
+    await renderServerPage(() =>
+      RelationshipPage({ params: Promise.resolve({ personId: "per_aaaa0001aaaa0001aaaa0001" }) }),
+    );
+    expect(screen.getByTestId("relationship-unavailable")).toHaveAttribute(
+      "data-state",
+      "unavailable",
+    );
   });
 });
 

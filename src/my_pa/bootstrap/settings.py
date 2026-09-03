@@ -64,6 +64,11 @@ from my_pa.contracts.v1.base import StrictModel
 from my_pa.contracts.v1.capabilities import EffectiveLimits
 from my_pa.domain.extraction.text import MAX_EXTRACTED_CHARACTERS
 from my_pa.domain.identity.binding import LOCAL_OPERATOR_UUID, capture_principal_id
+from my_pa.domain.identity.webauthn_relying_party import (
+    WebAuthnRelyingParty,
+    WebAuthnRelyingPartyError,
+    parse_allowed_origins,
+)
 from my_pa.domain.source.enrollment import MAX_ENROLLMENT_DEPTH
 
 __all__ = [
@@ -398,8 +403,8 @@ class Settings(StrictModel):
     goodnotes_tbr_bridge_enabled: bool = False
     #: Process-local gate for the relationship-intelligence entity plane
     #: (WP-RI-05, widened through Phase A). Default off. True composes all
-    #: thirty-four `entities.` names over the acting Principal's own entities
-    #: and publishes the eleven that read; the twenty-three that write need the switch
+    #: fifty-four `entities.` names over the acting Principal's own entities
+    #: and publishes the sixteen that read; the thirty-eight that write need the switch
     #: below as well, so this flag on its own serves a read-only plane. It
     #: enables no source traversal, because none exists. Off by default because
     #: the remote MCP profile is derived from the capability set with no
@@ -419,8 +424,8 @@ class Settings(StrictModel):
     #:
     #: A switch of its own rather than a reuse of the plane flag, on the argument
     #: `relationship_memory_enabled` makes beside it: the two admit different
-    #: things. The plane flag publishes eleven reads over the acting Principal's own
-    #: entities. This one is a prerequisite for all twenty-three writes that decide
+    #: things. The plane flag publishes sixteen reads over the acting Principal's own
+    #: entities. This one is a prerequisite for all thirty-eight writes that decide
     #: who a person is, which external addresses resolve to them, who they report
     #: to, what a source said about them, or stage and apply Phase B governance.
     #: The merge and split preview/apply pairs additionally require the
@@ -442,7 +447,7 @@ class Settings(StrictModel):
     #: plane that owns their subjects would be serving writes it cannot validate.
     #:
     #: A switch of its own rather than a reuse of the entity flag, because the
-    #: two admit different things. The entity flag publishes eleven *read*
+    #: two admit different things. The entity flag publishes sixteen *read*
     #: capabilities over identity. This one publishes four reads and five
     #: **writes** over the most private records this product holds, and the
     #: remote MCP profile is derived from the capability set with no
@@ -457,7 +462,7 @@ class Settings(StrictModel):
     #: write switch does.
     #:
     #: A third switch rather than a reuse of the write switch, because the two
-    #: admit different things. The write switch gates all twenty-three Entity
+    #: admit different things. The write switch gates all thirty-eight Entity
     #: writes; the eighteen Phase A writes each change one record of one entity
     #: and are reversible by their own inverse. This additionally publishes
     #: merge and split preview/apply pairs: merge collapses up to eleven identities
@@ -545,6 +550,14 @@ class Settings(StrictModel):
     gateway_bind_mode: GatewayBindMode = GatewayBindMode.LOOPBACK
     remote_ingress_enabled: bool = False
     apple_ingress_enabled: bool = False
+    #: WebAuthn relying party. Empty rp_id disables ceremony routes (fail closed
+    #: at the handler) so an unconfigured process still serves the rest of the
+    #: gateway. Origins are exact, comma- or space-separated; wildcards refused.
+    webauthn_rp_id: str = ""
+    webauthn_rp_name: str = "my-pa"
+    webauthn_allowed_origins: str = ""
+    webauthn_bff_secret: str = Field(default="", repr=False)
+    session_service_secret: str = Field(default="", repr=False)
     redaction_enabled: bool = True
     contract_strict_mode: bool = True
     max_page_size: int = Field(default=200, gt=0, le=1000)
@@ -630,7 +643,7 @@ class Settings(StrictModel):
         ):
             # Fail closed, and closed in the direction that says what was meant.
             # The alternatives were to serve the writes anyway — which would put
-            # eighteen identity writes on a process whose operator turned the
+            # thirty-eight identity writes on a process whose operator turned the
             # plane off — or to ignore the variable, which is the shape where an
             # operator sets a switch, sees no error, and believes a surface is
             # gated when it is not. Neither is better than refusing to start.
@@ -819,6 +832,19 @@ class Settings(StrictModel):
         if self.auth_mode is not AuthMode.LOCAL_OPERATOR:
             return None
         return capture_principal_id(LOCAL_OPERATOR_UUID)
+
+    def webauthn_relying_party(self) -> WebAuthnRelyingParty | None:
+        """Configured RP, or `None` when ceremony is not enabled."""
+        if not self.webauthn_rp_id.strip():
+            return None
+        try:
+            return WebAuthnRelyingParty(
+                rp_id=self.webauthn_rp_id,
+                rp_name=self.webauthn_rp_name,
+                allowed_origins=parse_allowed_origins(self.webauthn_allowed_origins),
+            )
+        except WebAuthnRelyingPartyError as error:
+            raise SettingsError(str(error)) from error
 
     def parsed_database_url(self) -> URL:
         """`database_url` as validation read it, for `create_database_engine`.

@@ -116,13 +116,31 @@ ENTITY_KEYS = {
     "superseded_by_entity_id",
 }
 
+#: The two keys `entities.search` carries that `entities.get` does not:
+#: RI-ENT-WP-09's disambiguators (`RI-AC-038`, `5700c378`), each a list because
+#: JSON has no tuple, each empty rather than absent for an entity with no
+#: current affiliation or project. Named apart from the identity keys so the
+#: subset assertion below can say exactly which part of a search row is the
+#: entity and which part is the search's own.
+SEARCH_DISAMBIGUATOR_KEYS = {
+    "affiliated_organizations",
+    "project_roles",
+}
+
+#: Corrected 2026-09-03 when this branch integrated `origin/main` at
+#: `e004942b`: this pin was written against `42684d1d`, before RI-ENT-WP-09
+#: (PR #175) added the two disambiguators to the search row, and it reddened
+#: on the merged tree with "Extra items in the left set: 'project_roles',
+#: 'affiliated_organizations'". That is the pin doing its job -- an added key
+#: fails it -- and the established shape it must hold is `origin/main`'s seven
+#: keys, not this branch's pre-merge five. Still exhaustive equality.
 ENTITY_SUMMARY_KEYS = {
     "entity_id",
     "entity_type",
     "canonical_name",
     "display_name",
     "status",
-}
+} | SEARCH_DISAMBIGUATOR_KEYS
 
 CONTEXT_CARD_KEYS = {
     "entity",
@@ -465,7 +483,7 @@ def test_entities_search_result_shape_is_unchanged(staged_card: Scene) -> None:
 
 
 def test_entities_search_entry_shape_is_unchanged(staged_card: Scene) -> None:
-    """`_entity_summary_view`'s five keys, on every row of the page.
+    """`_entity_summary_view`'s seven keys, on every row of the page.
 
     Not vacuous: the page is asserted non-empty first, and the query matches the
     staged subject. A search returning nothing would fail here rather than skip
@@ -486,8 +504,14 @@ def test_the_search_summary_is_a_strict_subset_of_the_full_entity(staged_card: S
     The two views are separate functions, so nothing but this stops a rename in
     one from drifting past the other — a caller that reads `entity_id` off a
     search row and then re-reads it off `entities.get` depends on the agreement.
+
+    The search row's two disambiguators are the search's own and are asserted
+    to be exactly the part of the row that `entities.get` does not carry, so
+    this stays a statement about the entity half of the row rather than a
+    subset check that a search-only key would silently fail.
     """
-    assert ENTITY_SUMMARY_KEYS < ENTITY_KEYS
+    assert ENTITY_SUMMARY_KEYS - SEARCH_DISAMBIGUATOR_KEYS < ENTITY_KEYS
+    assert ENTITY_SUMMARY_KEYS - ENTITY_KEYS == SEARCH_DISAMBIGUATOR_KEYS
 
 
 # --- entities.context -------------------------------------------------------

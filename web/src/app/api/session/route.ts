@@ -6,23 +6,25 @@
  *
  * 1. **Cross-site.** `POST` and `DELETE` change state and the cookie is
  *    `sameSite: "lax"`, so a request that did not come from this origin is
- *    refused before anything else happens (`lib/http/origin.ts`).
+ *    refused before anything else happens (`admitBrowserMutation`).
  * 2. **Mode.** `MYPA_AUTH_MODE` decides whether a synthetic sign-in exists at
  *    all. Unset is a refusal, not a default, and `synthetic` in a production
- *    build is a refusal too. Until WP-05 this route minted a session for either
- *    hardcoded principal with no gate whatsoever — the deployment did not have
- *    to be a development one, and nothing said so.
+ *    build is a refusal too. `passkey` is the production web mode; this route
+ *    does not mint a synthetic identity in that mode.
  * 3. **Caller-supplied identity.** The body may not carry `principal_id`,
  *    `principalId`, `tid`, or `oid`, at any depth.
  * 4. **Claims.** The synthetic provider's own claims go through the same
  *    validation a real token's will, against the *configured* home tenant
  *    rather than a constant this module holds.
  *
- * Sign-in mints a fresh `sid` and registers it, which revokes any session that
- * principal already held — so a session identifier from before the sign-in
- * cannot be carried across it. Sign-out revokes the `sid` server-side *and*
- * clears the cookie; the first is what makes replaying the cookie fail, and the
- * second is only tidiness.
+ * Sign-in asks Python to issue a durable SID (`issueSyntheticSession`) and
+ * sets that raw SID as the HttpOnly cookie. The SID is never returned in
+ * browser JSON. A prior cookie SID, if present and different, is revoked after
+ * the new cookie is set — session fixation of *this* browser only, not every
+ * SID for the principal.
+ *
+ * Sign-out revokes the SID via the session-service *and* clears the cookie;
+ * the first is what makes replaying the cookie fail.
  */
 import { NextResponse, type NextRequest } from "next/server";
 import {
@@ -34,46 +36,75 @@ import {
   PrincipalNotAdmissibleError,
   resolveAdmissibleSyntheticPrincipal,
 } from "@/lib/auth/synthetic";
-import { authMode, homeTenantId } from "@/lib/auth/mode";
+import { authMode, homeTenantId, type AuthMode } from "@/lib/auth/mode";
 import {
-  authenticateLocalOperator,
-  localOperatorPrincipal,
-  MissingLocalOperatorSecretError,
-} from "@/lib/auth/local-operator";
-import {
-  encodeSession,
-  newSessionId,
+  parseOpaqueSessionSid,
   sessionReplayBinding,
-  verifySessionEnvelope,
   SESSION_COOKIE_NAME,
   SESSION_COOKIE_OPTIONS,
   SESSION_MAX_AGE_SECONDS,
 } from "@/lib/auth/session";
+import {
+  issueSyntheticSession,
+  revokeSid,
+  MissingSessionServiceSecretError,
+  SessionServiceUnavailableError,
+} from "@/lib/auth/session-service";
 import { requirePrincipal } from "@/lib/api/guard";
-import { registerSession, revokeSession } from "@/lib/auth/session-registry";
-import { isSameOrigin } from "@/lib/http/origin";
-import type { PrincipalSession } from "@/contracts/identity";
+import { admitBrowserMutation } from "@/lib/http/mutation-admission";
 
 function refuse(code: string, message: string, status: number): NextResponse {
   return NextResponse.json({ error: { code, message } }, { status });
 }
 
-/** The cross-site gate both methods share. */
-function crossSite(request: NextRequest): NextResponse | null {
-  return isSameOrigin(request)
-    ? null
-    : refuse("cross_site_request", "this endpoint refuses cross-site requests", 403);
+function authorityUnavailable(): NextResponse {
+  return refuse("authority_unavailable", "session authority unavailable", 503);
 }
 
-/** Current authenticated replay authority, derived from this request's cookie. */
+function asAuthorityFailure(error: unknown): NextResponse | null {
+  if (
+    error instanceof MissingSessionServiceSecretError ||
+    error instanceof SessionServiceUnavailableError
+  ) {
+    return authorityUnavailable();
+  }
+  return null;
+}
+
+function setSessionCookie(response: NextResponse, issuedSid: string): void {
+  response.cookies.set(SESSION_COOKIE_NAME, issuedSid, {
+    ...SESSION_COOKIE_OPTIONS,
+    maxAge: SESSION_MAX_AGE_SECONDS,
+  });
+}
+
+function clearSessionCookie(response: NextResponse): void {
+  response.cookies.set(SESSION_COOKIE_NAME, "", { ...SESSION_COOKIE_OPTIONS, maxAge: 0 });
+}
+
+/** Revoke a prior cookie SID after the new cookie is set. Never fails the sign-in. */
+async function revokePriorSid(
+  request: NextRequest,
+  issuedSid: string,
+): Promise<void> {
+  const prior = parseOpaqueSessionSid(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+  if (!prior || prior === issuedSid) return;
+  try {
+    await revokeSid(prior, request);
+  } catch {
+    // Fixation cleanup is best-effort. The new session is already issued.
+  }
+}
+
+/** Current authenticated replay authority, derived from this request's cookie SID. */
 export async function GET(request: NextRequest) {
   const guard = await requirePrincipal(request);
   if (!guard.ok) return guard.response;
-  const token = request.cookies.get(SESSION_COOKIE_NAME)?.value;
-  if (!token) return refuse("unauthenticated", "no valid session", 401);
+  const sid = parseOpaqueSessionSid(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+  if (!sid) return refuse("unauthenticated", "no valid session", 401);
   return NextResponse.json({
     principalId: guard.principal.principalId,
-    replayBinding: await sessionReplayBinding(token),
+    replayBinding: await sessionReplayBinding(sid),
   });
 }
 
@@ -82,10 +113,9 @@ export async function GET(request: NextRequest) {
  *
  * A misconfiguration answers `500`, deliberately: it is not the visitor's
  * request that is wrong, and answering `401` would hide a deployment fault
- * behind a login screen — the same reason `verifySession` throws rather than
- * returning `null` when the signing key is missing.
+ * behind a login screen.
  */
-function configuredMode(): { mode: "synthetic" | "entra" | "local_operator" } | { failure: NextResponse } {
+function configuredMode(): { mode: AuthMode } | { failure: NextResponse } {
   try {
     return { mode: authMode() };
   } catch (error) {
@@ -100,7 +130,7 @@ function configuredMode(): { mode: "synthetic" | "entra" | "local_operator" } | 
 }
 
 export async function POST(request: NextRequest) {
-  const blocked = crossSite(request);
+  const blocked = admitBrowserMutation(request);
   if (blocked) return blocked;
 
   const configured = configuredMode();
@@ -122,51 +152,14 @@ export async function POST(request: NextRequest) {
     throw error;
   }
 
-  if (configured.mode === "local_operator") {
-    let result;
-    try {
-      result = authenticateLocalOperator(body["operatorSecret"]);
-    } catch (error) {
-      if (error instanceof MissingLocalOperatorSecretError) {
-        return refuse("auth_mode_not_configured", error.message, 500);
-      }
-      throw error;
-    }
-    if (result === "rate_limited") {
-      return refuse("sign_in_rate_limited", "sign-in temporarily refused", 429);
-    }
-    if (result !== "authenticated") {
-      return refuse("invalid_credentials", "sign-in failed", 401);
-    }
-    const principal = localOperatorPrincipal();
-    const sid = newSessionId();
-    const token = await encodeSession(principal, sid);
-    registerSession(principal.principalId, sid);
-    const response = NextResponse.json({ signedIn: true });
-    response.cookies.set(SESSION_COOKIE_NAME, token, {
-      ...SESSION_COOKIE_OPTIONS,
-      maxAge: SESSION_MAX_AGE_SECONDS,
-    });
-    return response;
-  }
-
   if (configured.mode !== "synthetic") {
-    // The synthetic principals do not exist outside the synthetic mode. Refused
-    // rather than falling through to a real sign-in, which this route does not
-    // implement: `lib/auth/msal.config.ts` is the seam, and a live app
-    // registration is operator-gated and out of scope.
     return refuse(
       "synthetic_sign_in_disabled",
-      "MYPA_AUTH_MODE is 'entra'; the synthetic provider is not available",
+      "MYPA_AUTH_MODE is 'passkey'; the synthetic provider is not available",
       403,
     );
   }
 
-  // The admissible set, not the catalogue. Over a `local_operator` gateway there
-  // is exactly one admissible principal (`D-15`), and a request for the other is
-  // refused here rather than rebound to it: the gateway serves one identity, so a
-  // second sign-in would read the first principal's durable captures while
-  // presenting itself as someone else.
   let synthetic;
   try {
     synthetic = resolveAdmissibleSyntheticPrincipal(body["syntheticPrincipal"]);
@@ -180,9 +173,8 @@ export async function POST(request: NextRequest) {
     return refuse("unknown_principal", "unknown synthetic principal key", 400);
   }
 
-  let claims;
   try {
-    claims = validateTokenClaims({ ...synthetic.claims }, homeTenantId());
+    validateTokenClaims({ ...synthetic.claims }, homeTenantId());
   } catch (error) {
     if (error instanceof TokenClaimsError) {
       return refuse("invalid_claims", error.message, 401);
@@ -190,40 +182,40 @@ export async function POST(request: NextRequest) {
     throw error;
   }
 
-  const principal: PrincipalSession = {
-    principalId: `syn-${claims.oid.slice(0, 8)}`,
-    tid: claims.tid,
-    oid: claims.oid,
-    upn: claims.upn,
-    displayName: claims.name,
-    lifecycleState: "active",
-    synthetic: true,
-  };
+  let issued;
+  try {
+    issued = await issueSyntheticSession(synthetic.key, request);
+  } catch (error) {
+    const failure = asAuthorityFailure(error);
+    if (failure) return failure;
+    throw error;
+  }
 
-  const sid = newSessionId();
-  const token = await encodeSession(principal, sid);
-  // Registered before the cookie is handed out, and registering revokes any
-  // session this principal already held.
-  registerSession(principal.principalId, sid);
-  const response = NextResponse.json({ signedIn: true, upn: principal.upn });
-  response.cookies.set(SESSION_COOKIE_NAME, token, {
-    ...SESSION_COOKIE_OPTIONS,
-    maxAge: SESSION_MAX_AGE_SECONDS,
-  });
+  const issuedSid = parseOpaqueSessionSid(issued.issuedSid);
+  if (!issuedSid) return authorityUnavailable();
+
+  const response = NextResponse.json({ signedIn: true, upn: issued.principal.upn });
+  setSessionCookie(response, issuedSid);
+  await revokePriorSid(request, issuedSid);
   return response;
 }
 
 export async function DELETE(request: NextRequest) {
-  const blocked = crossSite(request);
+  const blocked = admitBrowserMutation(request);
   if (blocked) return blocked;
 
-  // Revoke first, clear second. Clearing the cookie is a request the holder may
-  // decline; revoking the `sid` is not, and it is what makes a replay of the
-  // exact same cookie value fail afterwards.
-  const envelope = await verifySessionEnvelope(request.cookies.get(SESSION_COOKIE_NAME)?.value);
-  if (envelope) revokeSession(envelope.sid);
+  const sid = parseOpaqueSessionSid(request.cookies.get(SESSION_COOKIE_NAME)?.value);
+  if (sid) {
+    try {
+      await revokeSid(sid, request);
+    } catch (error) {
+      const failure = asAuthorityFailure(error);
+      if (failure) return failure;
+      throw error;
+    }
+  }
 
   const response = NextResponse.json({ signedOut: true });
-  response.cookies.set(SESSION_COOKIE_NAME, "", { ...SESSION_COOKIE_OPTIONS, maxAge: 0 });
+  clearSessionCookie(response);
   return response;
 }

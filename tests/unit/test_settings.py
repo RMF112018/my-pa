@@ -336,7 +336,13 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
     other field must stay plainly non-secret.
     """
     tokens = ("password", "secret", "token", "key", "credential", "dsn", "url", "path")
-    admitted = {"database_url", "oauth_operator_secret", "gsqs_remote_eval_oauth_operator_secret"}
+    admitted = {
+        "database_url",
+        "oauth_operator_secret",
+        "gsqs_remote_eval_oauth_operator_secret",
+        "webauthn_bff_secret",
+        "session_service_secret",
+    }
     for name in Settings.model_fields:
         if name in admitted:
             continue
@@ -344,6 +350,8 @@ def test_only_explicitly_admitted_settings_may_be_credential_bearing() -> None:
             assert token not in name, f"settings field {name!r} looks secret-bearing"
     assert Settings.model_fields["oauth_operator_secret"].repr is False
     assert Settings.model_fields["gsqs_remote_eval_oauth_operator_secret"].repr is False
+    assert Settings.model_fields["webauthn_bff_secret"].repr is False
+    assert Settings.model_fields["session_service_secret"].repr is False
 
 
 def test_an_absent_database_url_is_refused_rather_than_defaulted() -> None:
@@ -638,7 +646,7 @@ def test_the_entity_plane_and_its_write_half_are_both_off_by_default() -> None:
 def test_the_write_switch_without_the_plane_refuses_to_start() -> None:
     """Fail closed, and closed in the direction that says what was meant.
 
-    The two alternatives were serving the writes anyway — eighteen identity
+    The two alternatives were serving the writes anyway — thirty-eight identity
     writes on a process whose operator turned the plane off — or ignoring the
     variable, which is the shape where an operator sets a switch, sees no error,
     and believes a surface is gated when it is not. The message names both

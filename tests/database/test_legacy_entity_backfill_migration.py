@@ -67,10 +67,19 @@ from my_pa.infrastructure.database.engine import create_database_engine
 ROOT: Final = Path(__file__).resolve().parents[2]
 
 REVISION: Final = "b8e4d1a6c073"
-PREVIOUS_REVISION: Final = "c99cd8ed8d1c"
+#: What was head until `REVISION` stacked on it, and therefore the revision
+#: this module downgrades to. `REVISION` was written against `c99cd8ed8d1c` and
+#: re-parented onto `16f05c46b8c3` (RI-ENT-WP-10/11) once that merged, because
+#: both had been written against `c99cd8ed8d1c` and the pair would otherwise
+#: have stood as two heads (RULING-M11). `16f05c46b8c3` widens three closed-set
+#: CHECKs and creates and alters no table, so nothing this module reads or
+#: writes in `entity_names` differs between the two parents.
+PREVIOUS_REVISION: Final = "16f05c46b8c3"
 
 #: Every `migrations/versions/*.py` on the chain, this revision included.
-REVISION_FILE_COUNT: Final = 87
+#: Counted on the merged tree after the re-parent (RULING-M2): 88 on
+#: `origin/main` at `16f05c46b8c3` plus this revision.
+REVISION_FILE_COUNT: Final = 89
 
 #: Unique to this module, so the database-tier suite can hold several of these
 #: fixtures without one dropping what another is mid-transaction against.
@@ -440,7 +449,7 @@ def _expected_backfilled_row(
 
 
 def test_the_revision_is_the_single_head_and_revises_the_prior_head() -> None:
-    """One head, it is this revision, and it sits directly on `c99cd8ed8d1c`."""
+    """One head, it is this revision, and it sits directly on `16f05c46b8c3`."""
     script = ScriptDirectory.from_config(_config())
     assert list(script.get_heads()) == [REVISION]
     assert script.get_revision(REVISION).down_revision == PREVIOUS_REVISION

@@ -22,9 +22,8 @@
  * **A disabled Microsoft Graph connector is shown as deliberately off, and is
  * given its own region so it cannot be read as a degraded or failing source.**
  * Graph is retained in the product definition and is not the active ingestion
- * path; the Entra sign-in this shell uses for identity is a separate concern
- * from Graph activation, and the two are stated separately here for exactly that
- * reason.
+ * path. Browser Entra/MSAL sign-in is retired; Graph activation remains a
+ * separate, still-off concern.
  *
  * **The schema head is not restated here and must not be.** A migration revision
  * copied into the web tier is a claim nothing on this side can check, and it was
@@ -34,48 +33,17 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
-import { msalSeamConfig } from "@/lib/auth/msal.config";
-import { callGateway } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { syntheticDataEnabled, gatewayAuthMode } from "@/lib/api/gateway-config";
 import { Card, CardTitle, CardBody } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { SurfaceState } from "@/components/ui/surface-state";
+import type { CapabilitiesGetResult } from "@/lib/api/decode/capabilities/capabilities.get";
 
 export const metadata = { title: "System — my-pa" };
 
 /** What this page reports is what is true now, so it is never cached. */
 export const dynamic = "force-dynamic";
-
-interface CapabilityStatus {
-  readonly name: string;
-  readonly availability: string;
-  readonly operator_only: boolean;
-}
-
-interface Manifest {
-  readonly contract_version?: string;
-  readonly capabilities?: readonly CapabilityStatus[];
-  readonly limits?: {
-    readonly max_page_size?: number;
-    readonly default_page_size?: number;
-    readonly max_fetch_bytes?: number;
-  };
-}
-
-interface Readiness {
-  readonly state?: string;
-  readonly implemented_capabilities?: number;
-  readonly total_capabilities?: number;
-  readonly limitations?: readonly string[];
-}
-
-interface WorkerPlane {
-  readonly plane?: string;
-  readonly state?: string;
-  readonly backlog?: number | null;
-  readonly dead_lettered?: number | null;
-  readonly last_heartbeat_at?: string | null;
-}
 
 const READINESS_TONE: Record<string, "green" | "gold" | "coral" | "neutral"> = {
   ready: "green",
@@ -89,7 +57,6 @@ export default async function SystemPage() {
   const principal = await resolveSessionPrincipal(cookieStore.get(SESSION_COOKIE_NAME)?.value);
   if (!principal) redirect("/sign-in");
 
-  const msal = msalSeamConfig();
   const synthetic = syntheticDataEnabled();
   // **A gateway auth mode this build cannot read is a misconfiguration, and it
   // is shown as one.** The previous default of `"not configured"` fell through
@@ -107,24 +74,18 @@ export default async function SystemPage() {
 
   const outcome = synthetic
     ? null
-    : await callGateway<{
-        manifest?: Manifest;
-        readiness?: Readiness;
-        worker_planes?: readonly WorkerPlane[];
-      }>(
-        principal,
-        "capabilities.get",
-      );
+    : await invokeGateway(principal, "capabilities.get");
 
-  const manifest = outcome?.ok ? outcome.result.manifest : undefined;
-  const readiness = outcome?.ok ? outcome.result.readiness : undefined;
-  const workerPlanes = outcome?.ok ? outcome.result.worker_planes : undefined;
-  const available = (manifest?.capabilities ?? []).filter(
-    (entry) => entry.availability === "available",
-  );
-  const unavailable = (manifest?.capabilities ?? []).filter(
-    (entry) => entry.availability !== "available",
-  );
+  const result = outcome?.ok ? (outcome.result as CapabilitiesGetResult) : undefined;
+  const manifest = result?.manifest;
+  const readiness = result?.readiness;
+  const workerPlanes = result?.worker_planes;
+  const available = manifest
+    ? manifest.capabilities.filter((entry) => entry.availability === "available")
+    : [];
+  const unavailable = manifest
+    ? manifest.capabilities.filter((entry) => entry.availability !== "available")
+    : [];
 
   return (
     <section aria-labelledby="system-heading" className="mx-auto flex max-w-2xl flex-col gap-3">
@@ -183,8 +144,8 @@ export default async function SystemPage() {
             personal-data ingestion path in this build, and nothing is waiting on it.
           </p>
           <p className="mt-2">
-            Entra sign-in for <em>identity</em> is a separate concern from Graph connector
-            activation: {msal.enabled ? "Entra sign-in is configured" : "Entra sign-in is not configured, and the synthetic development provider is active"}.
+            Browser Entra/MSAL sign-in is retired. Graph connector activation remains a
+            separate, still-off concern from identity.
           </p>
         </CardBody>
       </Card>
@@ -256,9 +217,9 @@ export default async function SystemPage() {
                   is something this page was told.
                 </p>
               )}
-              {(readiness?.limitations ?? []).length > 0 ? (
+              {readiness && readiness.limitations.length > 0 ? (
                 <ul className="mt-2 list-inside list-disc" data-testid="system-limitations">
-                  {(readiness?.limitations ?? []).map((limitation) => (
+                  {readiness.limitations.map((limitation) => (
                     <li key={limitation}>{limitation}</li>
                   ))}
                 </ul>
@@ -295,11 +256,11 @@ export default async function SystemPage() {
           <Card>
             <CardTitle>Background workers</CardTitle>
             <CardBody>
-              {workerPlanes && workerPlanes.length > 0 ? (
+              {workerPlanes ? (
                 <ul className="space-y-2" data-testid="system-worker-planes">
                   {workerPlanes.map((plane) => (
-                    <li key={plane.plane ?? "unknown"}>
-                      <strong>{plane.plane ?? "unknown"}</strong>: {plane.state ?? "unknown"}
+                    <li key={plane.plane}>
+                      <strong>{plane.plane}</strong>: {plane.state}
                       {typeof plane.backlog === "number" ? ` — ${plane.backlog} queued/running` : ""}
                       {typeof plane.dead_lettered === "number"
                         ? `, ${plane.dead_lettered} dead-lettered`

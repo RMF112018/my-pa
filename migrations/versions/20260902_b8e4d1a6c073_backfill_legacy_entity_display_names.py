@@ -1,7 +1,7 @@
 """Backfill legacy entity display names into entity_names (RI-ENT-WP-12).
 
 Revision ID: b8e4d1a6c073
-Revises: c99cd8ed8d1c
+Revises: 16f05c46b8c3
 Create Date: 2026-09-02
 
 RI-ENT-WP-12 (conservative legacy backfill). Authorized per
@@ -192,7 +192,7 @@ from typing import Final
 from alembic import op
 
 revision: str = "b8e4d1a6c073"
-down_revision: str | None = "c99cd8ed8d1c"
+down_revision: str | None = "16f05c46b8c3"
 branch_labels: str | None = None
 depends_on: str | None = None
 

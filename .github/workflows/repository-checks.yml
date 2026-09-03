@@ -17,7 +17,15 @@ concurrency:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30, raised from 20 on 2026-09-03. The FAST selection this job runs grew to
+    # 16,380 tests. Across six runs in under twenty hours (2026-09-02 20:38 to
+    # 2026-09-03 15:58) this job's wall clock measured 19m43s, 19m42s and 19m36s
+    # (1687b634, 5cc645d8, 251a495c), then timed out at 20m02s and 20m18s
+    # (9c1e463b, 53797f5b), then ran 14m45s at 8f981f1c while the dependency-floor
+    # job took 20m39s. A timeout that fires on a green suite reports a red job for
+    # a reason no test names; the value is sized to the measured duration, not to
+    # a guess.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -235,7 +243,15 @@ jobs:
     # green. `src/my_pa/contracts/v1/envelope.py` avoids that form for this
     # reason, and this job is what keeps that reason true.
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # 30, raised from 20 on 2026-09-03. The FAST selection this job runs grew to
+    # 16,380 tests. Across six runs in under twenty hours (2026-09-02 20:38 to
+    # 2026-09-03 15:58) this job's wall clock measured 19m49s, 19m10s and 19m41s
+    # (1687b634, 5cc645d8, 251a495c), then timed out at 20m15s and 20m17s
+    # (9c1e463b, 53797f5b), then ran 20m39s at 8f981f1c, the run that made 30 the
+    # value for this job as well as for validate. A timeout that fires on a green
+    # suite reports a red job for a reason no test names; the value is sized to
+    # the measured duration, not to a guess.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -437,9 +453,14 @@ jobs:
     # 895c4ec in 44m24s. Fifty-five was sized for that. Combined Phase B plus
     # GSQS at f7f31812 locally ran 1,528 tests in 71m02s; GitHub run
     # 33003804651 then cancelled this job at 55m0s while pytest was still
-    # executing. Allow ninety so checkout, install, the 71-minute suite, and
-    # teardown sit inside the budget rather than pre-empting complete coverage.
-    timeout-minutes: 90
+    # executing. Ninety covered that 71-minute suite plus checkout. GitHub run
+    # 33606053189 at head 6500b6a (UI-IMP-WP02 reconciled onto RI-ENT-WP-08)
+    # then cancelled this job at 90m20s while pytest was still executing;
+    # the same `-m database` selection passed locally on that head, 1,973
+    # passed / 15,061 deselected in 61m15s. Allow one hundred twenty so the
+    # combined WP-08 + WP-02 suite, checkout, install, and teardown sit
+    # inside the budget rather than pre-empting complete coverage.
+    timeout-minutes: 120
 
     services:
       postgres:

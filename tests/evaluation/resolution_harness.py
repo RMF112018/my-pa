@@ -42,19 +42,31 @@ from my_pa.contracts.ports import (
     EntitySummary,
     EntityWriteRequest,
     RelationshipWriteRequest,
+    UnknownScopeError,
 )
 from my_pa.domain.relationship.entity import (
     AliasState,
     AliasType,
     Assignment,
     Entity,
+    EntityAddress,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityCommunicationMethodState,
+    EntityName,
+    EntityNameState,
     EntityOrganizationProfile,
+    EntityProjectParticipation,
+    EntityProjectParticipationState,
     EntityRelationship,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    NameTypeCode,
+    PersonOrganizationAffiliation,
+    PersonOrganizationAffiliationState,
+    RelationshipState,
 )
 from my_pa.domain.relationship.governance import (
     EntityFactEvidenceLink,
@@ -79,10 +91,14 @@ from tests.evaluation.fixtures.resolution_cases import (
     ResolutionCase,
 )
 from tests.evaluation.fixtures.resolution_corpus import (
+    CORPUS_AFFILIATIONS,
     CORPUS_ALIASES,
     CORPUS_ASSIGNMENTS,
+    CORPUS_COMMUNICATION_METHODS,
     CORPUS_ENTITIES,
     CORPUS_IDENTIFIERS,
+    CORPUS_NAMES,
+    CORPUS_PARTICIPATIONS,
     CORPUS_RELATIONSHIPS,
 )
 
@@ -168,6 +184,19 @@ class _CorpusRepository(EntitiesRepository):
         entity = self._entities.get(entity_id)
         return entity if entity is not None and entity.principal_id == principal_id else None
 
+    def _bounded[Row](self, rows: list[Row], limit: int | None) -> list[Row]:
+        """`limit` rows of an already-ordered read, refusing a limit below one.
+
+        The in-memory counterpart of `_require_row_limit`/`_limited` on the SQL
+        plane, and it refuses rather than clamps for that method's own reason: a
+        caller that asked for zero rows asked a question this port does not
+        answer, and quietly handing back one row -- or none -- would let the
+        mistake reach a resolution answer as a silently short read.
+        """
+        if limit is not None and limit < 1:
+            raise ValueError("a row limit is at least one")
+        return rows if limit is None else rows[:limit]
+
     _entities: Final = {entity.entity_id: entity for entity in CORPUS_ENTITIES}
 
     # --- reads -----------------------------------------------------------
@@ -178,15 +207,171 @@ class _CorpusRepository(EntitiesRepository):
         query: str,
         entity_type: EntityType | None = None,
         limit: int = 50,
+        *,
+        after_entity_id: str | None = None,
     ) -> list[EntitySummary]:
+        """The port's search over the corpus, on `SqlEntityRepository.search`' terms.
+
+        **Three pre-existing divergences from the port were closed here
+        (`RI-ENT-WP-09`), and saying which is the point.** This method took no
+        `after_entity_id` while the port and the other two implementations all
+        did, ordered by `entity_id` while the port orders by `(canonical_name,
+        entity_id)`, and matched `canonical_name` alone while the port matches
+        `display_name` too. A cursor keyword absent from one implementation of
+        an `ABC` is a keyword no test of that implementation can exercise, and a
+        keyset over an order the port does not use is a page nobody could walk.
+
+        Nothing in `EntityResolutionService` reads this method -- resolution
+        asks "who is called this", not "what should I list" -- so no number in
+        `RESOLUTION_CALIBRATION.md` moves with it. It is aligned anyway, because
+        a double that answers a question differently from the server is a
+        licence to assert a search the server does not perform.
+
+        **One divergence remains, and it cannot be closed here.** The server
+        matches the relationship type's *label* out of `entity_relationship_types`,
+        a taxonomy seeded by migration. The corpus carries no taxonomy rows, so
+        this matches the relationship type's *code*.
+        """
         needle = query.casefold()
+
+        def hit(value: str | None) -> bool:
+            """One substring test, with no metacharacter of its own.
+
+            The server's `ILIKE '%…%'` is escaped by `_contains`, so a `%` or
+            `_` in the query is literal there; `in` over a casefolded string is
+            literal here for free. `None` answers no, as `NULL ILIKE …` does.
+            """
+            return value is not None and needle in value.casefold()
+
+        organization_names = {
+            organization.entity_id: (organization.canonical_name, organization.display_name)
+            for organization in CORPUS_ENTITIES
+            if organization.principal_id == principal_id
+        }
+
+        def matches_context(entity_id: str) -> bool:
+            """The five match paths `RI-ENT-WP-09` added, active rows only."""
+            return (
+                any(
+                    name.entity_id == entity_id
+                    and name.principal_id == principal_id
+                    and name.state is EntityNameState.ACTIVE
+                    # `WP09-DECISION-1`: an alias and a historical name stay out
+                    # of a browse result, derived from the enum.
+                    and name.name_type_code
+                    not in (NameTypeCode.ALIAS, NameTypeCode.HISTORICAL_NAME)
+                    and (hit(name.display_value) or hit(name.normalized_value))
+                    for name in CORPUS_NAMES
+                )
+                or any(
+                    method.entity_id == entity_id
+                    and method.principal_id == principal_id
+                    and method.state is EntityCommunicationMethodState.ACTIVE
+                    and hit(method.normalized_value)
+                    for method in CORPUS_COMMUNICATION_METHODS
+                )
+                or any(
+                    affiliation.person_entity_id == entity_id
+                    and affiliation.principal_id == principal_id
+                    and affiliation.state is PersonOrganizationAffiliationState.ACTIVE
+                    and (
+                        hit(affiliation.job_title)
+                        or any(
+                            hit(value)
+                            for value in organization_names.get(
+                                affiliation.organization_entity_id or "", ()
+                            )
+                        )
+                    )
+                    for affiliation in CORPUS_AFFILIATIONS
+                )
+                or any(
+                    participation.participant_entity_id == entity_id
+                    and participation.principal_id == principal_id
+                    and participation.state is EntityProjectParticipationState.ACTIVE
+                    and (hit(participation.role_text) or hit(participation.project_display_name))
+                    for participation in CORPUS_PARTICIPATIONS
+                )
+                or any(
+                    entity_id in (edge.from_entity_id, edge.to_entity_id)
+                    and edge.principal_id == principal_id
+                    and edge.state is RelationshipState.ACTIVE
+                    and hit(edge.relationship_type.value)
+                    for edge in CORPUS_RELATIONSHIPS
+                )
+            )
+
         matched = [
             entity
             for entity in CORPUS_ENTITIES
             if entity.principal_id == principal_id
             and (entity_type is None or entity.entity_type is entity_type)
-            and needle in entity.canonical_name
+            and (
+                hit(entity.canonical_name)
+                or hit(entity.display_name)
+                or matches_context(entity.entity_id)
+            )
         ]
+        matched.sort(key=lambda item: (item.canonical_name, item.entity_id))
+        if after_entity_id is not None:
+            position = next(
+                (
+                    (entity.canonical_name, entity.entity_id)
+                    for entity in CORPUS_ENTITIES
+                    if entity.principal_id == principal_id and entity.entity_id == after_entity_id
+                ),
+                None,
+            )
+            # Refused rather than silently restarted, as the server does: a
+            # cursor naming an entity outside the partition is not a position in
+            # this Principal's ordering.
+            if position is None:
+                raise UnknownScopeError("a search cursor names an entity in this scope")
+            matched = [
+                entity for entity in matched if (entity.canonical_name, entity.entity_id) > position
+            ]
+        organization_display_names = {
+            organization.entity_id: organization.display_name
+            for organization in CORPUS_ENTITIES
+            if organization.principal_id == principal_id
+        }
+
+        def affiliated_organizations(entity_id: str) -> tuple[str, ...]:
+            """The current employers, cut as `SqlEntityRepository.search` cuts them."""
+            found = sorted(
+                (
+                    organization_display_names[affiliation.organization_entity_id],
+                    affiliation.affiliation_id,
+                )
+                for affiliation in CORPUS_AFFILIATIONS
+                if affiliation.person_entity_id == entity_id
+                and affiliation.principal_id == principal_id
+                and affiliation.state is PersonOrganizationAffiliationState.ACTIVE
+                and affiliation.organization_entity_id in organization_display_names
+            )
+            return tuple(name for name, _ in found[: EntitySummary.DISAMBIGUATOR_CEILING])
+
+        def project_roles(entity_id: str) -> tuple[str, ...]:
+            """The current project engagements, cut on the same terms."""
+            found = sorted(
+                (
+                    (
+                        participation.project_display_name,
+                        participation.participation_id,
+                        participation.role_text,
+                    )
+                    for participation in CORPUS_PARTICIPATIONS
+                    if participation.participant_entity_id == entity_id
+                    and participation.principal_id == principal_id
+                    and participation.state is EntityProjectParticipationState.ACTIVE
+                ),
+                key=lambda item: (item[0], item[1]),
+            )
+            return tuple(
+                EntitySummary.project_role(project, role)
+                for project, _, role in found[: EntitySummary.DISAMBIGUATOR_CEILING]
+            )
+
         return [
             EntitySummary(
                 entity_id=entity.entity_id,
@@ -194,8 +379,10 @@ class _CorpusRepository(EntitiesRepository):
                 canonical_name=entity.canonical_name,
                 display_name=entity.display_name,
                 status=entity.status,
+                affiliated_organizations=affiliated_organizations(entity.entity_id),
+                project_roles=project_roles(entity.entity_id),
             )
-            for entity in sorted(matched, key=lambda item: item.entity_id)[:limit]
+            for entity in matched[:limit]
         ]
 
     def get(self, principal_id: str, entity_id: str) -> Entity | None:
@@ -242,6 +429,84 @@ class _CorpusRepository(EntitiesRepository):
             key=lambda entity: entity.entity_id,
         )
 
+    # --- RI-ENT-WP-09: the two normalized-value reads over record families ----
+    #
+    # `entities_by_alias`' shape rather than `names`'/`communication_methods`',
+    # because the question is theirs -- not "what is this entity called" but
+    # "who, if anyone, is called this" -- so they sit beside it here exactly as
+    # they do in `SqlEntityRepository`.
+    #
+    # **These two are implemented over real corpus rows rather than refused, and
+    # that is the whole point of the pair.** Every other six-family accessor on
+    # this class raises, because resolution reads none of them and a corpus that
+    # answered `[]` would let a resolver consult an empty world and be reported
+    # as precise. Once resolution *does* read a family, the same argument runs
+    # the other way: an empty answer would be indistinguishable from a corpus
+    # that carries no claimant of a contested value, and the calibration figures
+    # would silently stop measuring the basis they name.
+
+    def entities_by_typed_name(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityName]]:
+        """Every entity carrying this normalized name form, with the name that matched.
+
+        `SqlEntityRepository.entities_by_typed_name`'s contract, term for term:
+        the partition applied to the name row and to the entity before anything
+        else, **equality** on the already-normalized value and never a substring
+        or a fuzzy match, only `EntityNameState.ACTIVE` rows, and the collection
+        read whole so no claimant of a contested name can fall off an end.
+
+        The state filter is derived from the enum rather than spelled as a
+        literal, matching the server, and it is what makes
+        `enam_halvard0009supers` and `enam_halvard0010retird` unmatchable: a
+        superseded row holds a spelling the Principal already corrected away and
+        a retired one holds a spelling they withdrew.
+
+        Effective dating is deliberately absent here, as it is on the server and
+        on the alias path: `effective_from`/`effective_to` are judged by the
+        service against the caller's `as_of`, which is the only layer that knows
+        that moment, and a row excluded there is disclosed rather than missing.
+        """
+        matched: list[tuple[Entity, EntityName]] = []
+        for name in CORPUS_NAMES:
+            if name.principal_id != principal_id or name.normalized_value != normalized_value:
+                continue
+            if name.state is not EntityNameState.ACTIVE:
+                continue
+            entity = self._mine(principal_id, name.entity_id)
+            if entity is not None:
+                matched.append((entity, name))
+        return sorted(matched, key=lambda pair: (pair[0].entity_id, pair[1].entity_name_id))
+
+    def entities_by_communication_value(
+        self, principal_id: str, normalized_value: str
+    ) -> list[tuple[Entity, EntityCommunicationMethod]]:
+        """Every entity carrying this normalized communication value, with the row that matched.
+
+        `entities_by_typed_name`'s scan over `CORPUS_COMMUNICATION_METHODS`, on
+        every one of its terms including the `ACTIVE`-only filter, which is what
+        keeps `ecmm_halvard0005retird` -- a withdrawn mailbox -- from producing
+        a candidate.
+
+        More than one result is not an error: `ecmm_halvard0001phone` and
+        `ecmm_halvard0002phone` are one switchboard answered by two juristic
+        entities of one corporate family, which is what a corporate family is.
+        Deciding what to do about that is the resolution service's, and audit
+        section M's answer is candidates and never a merge.
+        """
+        matched: list[tuple[Entity, EntityCommunicationMethod]] = []
+        for method in CORPUS_COMMUNICATION_METHODS:
+            if method.principal_id != principal_id or method.normalized_value != normalized_value:
+                continue
+            if method.state is not EntityCommunicationMethodState.ACTIVE:
+                continue
+            entity = self._mine(principal_id, method.entity_id)
+            if entity is not None:
+                matched.append((entity, method))
+        return sorted(
+            matched, key=lambda pair: (pair[0].entity_id, pair[1].communication_method_id)
+        )
+
     def external_identifiers(self, principal_id: str, entity_id: str) -> list[ExternalIdentifier]:
         return [
             identifier
@@ -256,10 +521,20 @@ class _CorpusRepository(EntitiesRepository):
             if alias.principal_id == principal_id and alias.entity_id == entity_id
         ]
 
-    # RI-ENT-WP-06b's six Entity-bound families: resolution never reads any
-    # of them, and the corpus carries no fixture data for them, so every
-    # accessor below follows this class's own established pattern for a
-    # family it does not need -- raise, on the same terms as `observations`.
+    # RI-ENT-WP-06b's six Entity-bound families. Four of the eight accessors
+    # below still raise, on this class's own established terms and for the
+    # reason `observations` gives: resolution reads none of those four, the
+    # corpus carries nothing for them, and an empty answer would let a resolver
+    # that started consulting one be measured against nothing and reported fine.
+    #
+    # The two RI-ENT-WP-09 *does* read -- affiliations as the person, and
+    # participations as the participant -- answer over real corpus rows instead,
+    # because for a family resolution reads the same argument inverts: refusing
+    # would break the run, and answering `[]` would make the corroboration
+    # signals vacuous. They are read whole and unfiltered by state or date,
+    # matching `SqlEntityRepository`: currency is the service's judgement
+    # against `at`/`as_of` through `is_in_force`, and a row excluded there sets
+    # `withheld` rather than vanishing from the read.
 
     def names(self, principal_id: str, entity_id: str, *, limit: int | None = None) -> list:
         raise NotImplementedError("resolution reads no name form")
@@ -284,13 +559,45 @@ class _CorpusRepository(EntitiesRepository):
 
     def project_participations_as_participant(
         self, principal_id: str, entity_id: str, *, limit: int | None = None
-    ) -> list:
-        raise NotImplementedError("resolution reads no project participation")
+    ) -> list[EntityProjectParticipation]:
+        """Participations naming `entity_id` as `participant_entity_id`.
+
+        The partition applied first, then the participant column, then
+        `SqlEntityRepository`'s own `ORDER BY participation_id`. No state or
+        date filter, deliberately: `eppt_leo0003superseded` is open-ended and in
+        force by every date rule and only `state` excludes it, so filtering here
+        would move the currency judgement out of the layer that knows the
+        moment and hide the exclusion from the answer's `withheld` disclosure.
+        """
+        matched = [
+            participation
+            for participation in CORPUS_PARTICIPATIONS
+            if participation.principal_id == principal_id
+            and participation.participant_entity_id == entity_id
+        ]
+        ordered = sorted(matched, key=lambda row: row.participation_id)
+        return self._bounded(ordered, limit)
 
     def person_organization_affiliations_as_person(
         self, principal_id: str, entity_id: str, *, limit: int | None = None
-    ) -> list:
-        raise NotImplementedError("resolution reads no person affiliation")
+    ) -> list[PersonOrganizationAffiliation]:
+        """Affiliations naming `entity_id` as `person_entity_id`.
+
+        `project_participations_as_participant`'s scan on every term, ordered by
+        `affiliation_id` as the server orders it, and unfiltered by state or
+        date for the same reason: `poaf_leo0004superseded` is open-ended and
+        excluded by nothing but `state`, and `poaf_priya0003ended00` is `ACTIVE`
+        and excluded by nothing but its dates. Both exclusions belong to
+        `is_in_force`, not to this read.
+        """
+        matched = [
+            affiliation
+            for affiliation in CORPUS_AFFILIATIONS
+            if affiliation.principal_id == principal_id
+            and affiliation.person_entity_id == entity_id
+        ]
+        ordered = sorted(matched, key=lambda row: row.affiliation_id)
+        return self._bounded(ordered, limit)
 
     def person_organization_affiliations_as_organization(
         self, principal_id: str, entity_id: str, *, limit: int | None = None
@@ -655,6 +962,52 @@ class _CorpusRepository(EntitiesRepository):
     ) -> EntityChildPage[EntityAlias]:
         raise NotImplementedError("resolution reads aliases whole")
 
+    # RI-ENT-WP-10's four paged record-family reads. Resolution pages none of
+    # them -- it reads the collections it corroborates against whole, for the
+    # reason stated above `names` -- so each refuses on this class's own terms.
+    # Declared rather than inherited because the port makes them abstract.
+
+    def name_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_entity_name_id: str | None = None,
+    ) -> EntityChildPage[EntityName]:
+        raise NotImplementedError("resolution pages no name form")
+
+    def address_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_entity_address_id: str | None = None,
+    ) -> EntityChildPage[EntityAddress]:
+        raise NotImplementedError("resolution pages no address")
+
+    def communication_method_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        limit: int,
+        after_communication_method_id: str | None = None,
+    ) -> EntityChildPage[EntityCommunicationMethod]:
+        raise NotImplementedError("resolution pages no communication method")
+
+    def participation_page(
+        self,
+        entity_id: str,
+        *,
+        principal_id: str,
+        perspective: str,
+        limit: int,
+        after_participation_id: str | None = None,
+    ) -> EntityChildPage[EntityProjectParticipation]:
+        raise NotImplementedError("resolution pages no project participation")
+
 
 def build_repository() -> EntitiesRepository:
     """The corpus, behind the port the service takes."""
@@ -827,9 +1180,16 @@ def render_report(record: dict[str, object]) -> str:
         "\n"
         "`calibration_by_outcome_and_basis` is the table a reader consults: a `RESOLVED_*`\n"
         "answer names the basis it rests on, and this says what that combination has\n"
-        "been worth against a corpus built to break it. Note that `canonical_name`\n"
-        "appears only under `resolved_contextual` — a bare name never resolves on its\n"
-        "own, and `exact_resolutions_on_a_bare_name` is the count that must stay zero.\n"
+        "been worth against a corpus built to break it. Note that the two name-shaped\n"
+        "bases, `canonical_name` and `typed_name`, appear only under\n"
+        "`resolved_contextual` — a name never resolves on its own however it was\n"
+        "recorded, and a contextual signal did the selecting wherever one of them is\n"
+        "named. `communication_value` appears under neither `RESOLVED_*` outcome, for\n"
+        "the same reason: it is not a verified identifier.\n"
+        "`exact_resolutions_on_a_bare_name` is the count that must stay zero. It is\n"
+        "measured against a hardcoded allowlist of the three bases that may resolve\n"
+        "exactly, rather than against the basis vocabulary itself, so a basis added\n"
+        "later is caught by it rather than admitted by it.\n"
         "\n"
         "**What this does not measure.** The corpus is synthetic and small. It is\n"
         "evidence that the stated refusals hold and that the resolver still answers\n"

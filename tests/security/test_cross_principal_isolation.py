@@ -114,7 +114,7 @@ pytestmark = pytest.mark.database
 
 
 def test_the_identity_revision_round_trips_from_empty(disposable_database: str) -> None:
-    """`c4a7e2d81b53` upgrades from empty and downgrades back to empty."""
+    """The identity schema upgrades from empty to head and downgrades back."""
     engine = create_database_engine(disposable_database)
     try:
         command.upgrade(_config(), "head")
@@ -139,6 +139,11 @@ def test_the_identity_revision_round_trips_from_empty(disposable_database: str) 
                 "oauth_access_tokens",
                 "oauth_refresh_token_families",
                 "oauth_refresh_tokens",
+                "webauthn_credentials",
+                "webauthn_challenges",
+                "recovery_code_sets",
+                "recovery_codes",
+                "auth_sessions",
             }
         command.downgrade(_config(), "base")
         with engine.connect() as connection:

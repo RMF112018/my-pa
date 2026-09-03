@@ -24,12 +24,21 @@ from my_pa.application.entity_resolution import (
 )
 from my_pa.contracts.ports import EntitiesRepository
 from my_pa.domain.relationship.entity import (
+    AffiliationTypeCode,
     AliasType,
     Assignment,
     AssignmentState,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     Entity,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityCommunicationMethodState,
+    EntityName,
+    EntityNameState,
+    EntityProjectParticipation,
+    EntityProjectParticipationState,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
@@ -37,7 +46,15 @@ from my_pa.domain.relationship.entity import (
     ExternalIdentifier,
     ExternalIdentifierNamespace,
     IdentifierState,
+    NameTypeCode,
+    ParticipationStatusCode,
+    PersonOrganizationAffiliation,
+    PersonOrganizationAffiliationState,
     RelationshipState,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
+    normalize_communication_value,
 )
 from my_pa.domain.relationship.normalization import (
     NormalizationError,
@@ -64,6 +81,15 @@ ALICE_TWO = "ent_bbbb0002bbbb0002"
 TOWER = "ent_dddd0004dddd0004"
 THIRD = "ent_eeee0005eeee0005"
 SECOND_ORG = "ent_ffff0006ffff0006"
+
+#: The four juristic organizations of the GS4 case. They are one family in the
+#: world and four legal persons in the record, which is the whole reason a
+#: shared name form must never collapse them -- see
+#: `test_four_similarly_named_organizations_are_not_collapsed_by_a_shared_name`.
+FIRM_STUDIO = "ent_1111aaaa1111aaaa"
+FIRM_HOLDINGS = "ent_2222bbbb2222bbbb"
+FIRM_LEGAL = "ent_3333cccc3333cccc"
+FIRM_BRAND = "ent_4444dddd4444dddd"
 
 WHEN = datetime(2026, 8, 17, 12, tzinfo=UTC)
 BEFORE = WHEN - timedelta(days=365)
@@ -1727,3 +1753,918 @@ def test_an_undated_record_is_in_force_at_every_moment_and_at_none() -> None:
     assert is_in_force(datetime(2026, 2, 1, tzinfo=UTC), None, far_future) is True
     # Closed at the end and no moment named: an ended record does not corroborate.
     assert is_in_force(None, datetime(2026, 12, 31, tzinfo=UTC), None) is False
+
+
+# --- RI-ENT-WP-09: three record families the resolver now reads -------------
+#
+# Every test below names a way the three new reads could manufacture a false
+# join, and asserts that this one does not. Two of the three -- typed names and
+# communication values -- produce evidence that may never resolve on its own,
+# so most of what follows is about the *refusal* rather than the match: a name
+# form is still a name however it is typed, and an address recorded as a way to
+# reach somebody is not a verified claim about who they are.
+
+
+def a_typed_name(
+    entity_name_id: str,
+    entity_id: str,
+    name: str,
+    name_type_code: NameTypeCode = NameTypeCode.LEGAL,
+    principal_id: str = PRINCIPAL,
+    **kwargs: object,
+) -> EntityName:
+    """One `entity_names` row, `an_alias`' shape over the typed-name family."""
+    return EntityName(
+        entity_name_id=entity_name_id,
+        entity_id=entity_id,
+        principal_id=principal_id,
+        name_type_code=name_type_code,
+        display_value=name,
+        normalized_value=normalize_name(name),
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def a_channel(
+    communication_method_id: str,
+    entity_id: str,
+    value: str,
+    method_type_code: CommunicationMethodTypeCode = CommunicationMethodTypeCode.EMAIL,
+    principal_id: str = PRINCIPAL,
+    **kwargs: object,
+) -> EntityCommunicationMethod:
+    """One `entity_communication_methods` row -- a way to reach an entity, not an identity."""
+    return EntityCommunicationMethod(
+        communication_method_id=communication_method_id,
+        entity_id=entity_id,
+        principal_id=principal_id,
+        method_type_code=method_type_code,
+        usage_context_code=CommunicationUsageContextCode.GENERIC,
+        normalized_value=normalize_communication_value(method_type_code, value),
+        display_value=value,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def an_affiliation(
+    affiliation_id: str,
+    person_entity_id: str = ALICE,
+    organization_entity_id: str | None = SECOND_ORG,
+    principal_id: str = PRINCIPAL,
+    **kwargs: object,
+) -> PersonOrganizationAffiliation:
+    return PersonOrganizationAffiliation(
+        affiliation_id=affiliation_id,
+        principal_id=principal_id,
+        person_entity_id=person_entity_id,
+        organization_entity_id=organization_entity_id,
+        affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+def a_participation(
+    participation_id: str,
+    participant_entity_id: str = ALICE,
+    project_entity_id: str = TOWER,
+    principal_id: str = PRINCIPAL,
+    **kwargs: object,
+) -> EntityProjectParticipation:
+    return EntityProjectParticipation(
+        participation_id=participation_id,
+        principal_id=principal_id,
+        project_entity_id=project_entity_id,
+        participant_entity_id=participant_entity_id,
+        project_display_name="Alice Synthetic",
+        role_basis_code=RoleBasisCode.CONTRACTUAL,
+        stakeholder_side_code=StakeholderSideCode.CONSULTANT,
+        stakeholder_class_code=StakeholderClassCode.CORE,
+        relationship_status_code=ParticipationStatusCode.ACTIVE,
+        **kwargs,  # type: ignore[arg-type]
+    )
+
+
+# --- a typed name is a name, and a name alone resolves nothing ---------------
+
+
+def test_a_typed_name_alone_is_ambiguous_however_few_entities_carry_it(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The single most important refusal of this increment.
+
+    One organization records "Meridian Group" as its legal name and no other
+    entity records it at all. That is a recorded fact about the entity, and it
+    is still a *name* -- audit section M's rule is "name/alias alone ->
+    retrieval candidates, never automatic merge", and there is no number of
+    name matches at which a name becomes an identifier.
+    """
+    entities = _Entities(world)
+    entities.create(
+        PRINCIPAL,
+        an_entity(SECOND_ORG, "Meridian Studio Limited", entity_type=EntityType.ORGANIZATION),
+    )
+    entities.record_entity_name(
+        PRINCIPAL, a_typed_name("enam_aaaa0001aaaa0001", SECOND_ORG, "Meridian Group")
+    )
+    answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Meridian Group"))
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert [candidate.entity_id for candidate in answer.candidates] == [SECOND_ORG]
+    assert answer.candidates[0].strongest_basis is ResolutionBasis.TYPED_NAME
+    assert answer.candidates[0].names_the_entity is False
+
+
+def test_several_entities_sharing_a_typed_name_are_ambiguous(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The crowd case, so the refusal is not an artefact of there being one claimant."""
+    entities = _Entities(world)
+    for index, entity_id in enumerate((ALICE, ALICE_TWO, THIRD)):
+        entities.create(PRINCIPAL, an_entity(entity_id, f"Alice Number {index}"))
+        entities.record_entity_name(
+            PRINCIPAL,
+            a_typed_name(f"enam_{index:04d}name{index:04d}", entity_id, "Alice Historic"),
+        )
+    answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Alice Historic"))
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert {candidate.entity_id for candidate in answer.candidates} == {ALICE, ALICE_TWO, THIRD}
+    assert ResolutionWarning.SEVERAL_ENTITIES_SHARE_THIS_NAME in answer.warnings
+
+
+def test_a_typed_name_beside_an_alias_keeps_both_and_still_rests_on_the_alias(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """Section 6.2: a material statement retains its source references.
+
+    "Matched an alias and a legal name row" is a different fact from "matched an
+    alias", and the answer says both -- while the *resolution* rests on the
+    alias alone, because that is the only one of the two that names the entity.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.record_alias(PRINCIPAL, an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
+    entities.record_entity_name(PRINCIPAL, a_typed_name("enam_aaaa0001aaaa0001", ALICE, "Ali"))
+    answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Ali"))
+    assert answer.outcome is ResolutionOutcome.RESOLVED_EXACT
+    assert answer.resolved_entity_id == ALICE
+    assert {evidence.basis for evidence in answer.candidates[0].evidence} == {
+        ResolutionBasis.ALIAS,
+        ResolutionBasis.TYPED_NAME,
+    }
+    assert {evidence.source_record_id for evidence in answer.candidates[0].evidence} == {
+        "eals_aaaa0001aaaa0001",
+        "enam_aaaa0001aaaa0001",
+    }
+
+
+@pytest.mark.parametrize(
+    "state", [EntityNameState.RETIRED, EntityNameState.SUPERSEDED], ids=("retired", "superseded")
+)
+def test_a_typed_name_that_is_no_longer_the_current_row_matches_nothing(
+    world: World, resolving: EntityResolutionService, state: EntityNameState
+) -> None:
+    """The repository filters the state; this asserts the service sees the consequence.
+
+    A retired or superseded row is not a claimant of its value -- a read *by
+    value* asks which rows still make a claim, and neither of these does. It
+    matches nothing at all rather than matching and being warned about, which is
+    why no staleness warning is owed: nothing reached the answer to disclose.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.record_entity_name(
+        PRINCIPAL, a_typed_name("enam_aaaa0001aaaa0001", ALICE, "Alice Historic", state=state)
+    )
+    answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Alice Historic"))
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND
+    assert answer.candidates == ()
+    assert answer.warnings == ()
+
+
+def test_a_typed_name_outside_its_effective_dates_is_excluded_and_disclosed(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """Dated exactly as the alias read is dated, and disclosed for `RI-AC-014`'s reason.
+
+    An excluded-by-date row is not the same as no row: the caller asked about a
+    moment, something matched outside it, and being told is the difference
+    between "nobody is called that" and "somebody was".
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.record_entity_name(
+        PRINCIPAL,
+        a_typed_name(
+            "enam_aaaa0001aaaa0001",
+            ALICE,
+            "Alice Historic",
+            effective_from=BEFORE,
+            effective_to=BEFORE + timedelta(days=1),
+        ),
+    )
+    answer = resolving.resolve(
+        PRINCIPAL, ResolutionRequest(raw_reference="Alice Historic", as_of=WHEN)
+    )
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
+def test_a_typed_name_within_its_effective_dates_still_only_makes_a_candidate(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The other half of the trade: a rule that excluded everything would prove nothing."""
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.record_entity_name(
+        PRINCIPAL,
+        a_typed_name(
+            "enam_aaaa0001aaaa0001",
+            ALICE,
+            "Alice Historic",
+            effective_from=BEFORE,
+            effective_to=AFTER,
+        ),
+    )
+    answer = resolving.resolve(
+        PRINCIPAL, ResolutionRequest(raw_reference="Alice Historic", as_of=WHEN)
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.candidates[0].strongest_basis is ResolutionBasis.TYPED_NAME
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT not in answer.warnings
+
+
+def test_a_typed_name_on_a_stale_entity_is_ambiguous_rather_than_a_historical_match(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """`HISTORICAL_MATCH` is a *named* entity that is not current.
+
+    The refusal that used to read `strongest_basis is CANONICAL_NAME` now reads
+    `not names_the_entity`, and this is the case that separates the two: a
+    typed-name-only candidate has `strongest_basis is TYPED_NAME`, so the old
+    formulation would have sent it to `HISTORICAL_MATCH` -- where
+    `EntityResolution` refuses it outright with "a name alone does not resolve
+    an entity", turning a refusal into an `internal_error`.
+
+    The archived entity is corroborated by a live participation, because that is
+    what carries the answer past `resolves` and into the currency branch at all.
+    Corroboration is why this reaches the branch; it is not why the branch
+    refuses, and `ENTITY_IS_NOT_CURRENT` on the answer is what says the branch
+    was reached rather than skipped.
+    """
+    entities = _Entities(world)
+    entities.create(
+        PRINCIPAL,
+        replace(
+            an_entity(ALICE, "Alice Synthetic"),
+            status=EntityStatus.ARCHIVED,
+            archived_from_status=EntityStatus.ACTIVE,
+        ),
+    )
+    entities.create(PRINCIPAL, an_entity(TOWER, "Harbour Tower", entity_type=EntityType.PROJECT))
+    entities.record_entity_name(
+        PRINCIPAL, a_typed_name("enam_aaaa0001aaaa0001", ALICE, "Alice Historic")
+    )
+    entities.record_project_participation(PRINCIPAL, a_participation("eppt_aaaa0001aaaa0001"))
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Historic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert ResolutionWarning.ENTITY_IS_NOT_CURRENT in answer.warnings
+    # The refusal must not also claim a scope lifted it -- both halves of that
+    # disclosure's own definition are false for an answer that was refused.
+    assert ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE not in answer.warnings
+
+
+def test_an_alias_on_a_stale_entity_is_still_a_historical_match(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The equivalence the refactor had to preserve, at the service rather than the type.
+
+    An alias names the entity, so a stale entity matched by one is still
+    reported as a historical match rather than refused. This is the branch the
+    test beside it takes the other way, and the pair is what says
+    `names_the_entity` replaced the ordering without changing any pre-existing
+    answer.
+    """
+    entities = _Entities(world)
+    entities.create(
+        PRINCIPAL,
+        replace(
+            an_entity(ALICE, "Alice Synthetic"),
+            status=EntityStatus.ARCHIVED,
+            archived_from_status=EntityStatus.ACTIVE,
+        ),
+    )
+    entities.record_alias(PRINCIPAL, an_alias("eals_aaaa0001aaaa0001", ALICE, "Ali"))
+    answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Ali"))
+    assert answer.outcome is ResolutionOutcome.HISTORICAL_MATCH
+    assert ResolutionWarning.ENTITY_IS_NOT_CURRENT in answer.warnings
+
+
+def test_four_similarly_named_organizations_are_not_collapsed_by_a_shared_name(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """GS4: one family in the world, four legal persons in the record.
+
+    A studio, its holding company, its legal-services arm and its brand entity
+    all record the same trading name form, because in the world they are one
+    business. They are four distinct juristic entities, and a resolver that
+    picked one would silently attribute a contract, an invoice or a liability
+    to the wrong legal person. All four are shown and none is chosen.
+
+    Built here rather than imported from `tests/evaluation/fixtures/`, so this
+    file states the rule in its own terms and stays readable on its own.
+    """
+    entities = _Entities(world)
+    family = (
+        (FIRM_STUDIO, "Meridel Studio LLC"),
+        (FIRM_HOLDINGS, "Meridel Holdings LLC"),
+        (FIRM_LEGAL, "Meridel Legal LLC"),
+        (FIRM_BRAND, "Meridel Brand LLC"),
+    )
+    for index, (entity_id, display_name) in enumerate(family):
+        entities.create(
+            PRINCIPAL,
+            an_entity(entity_id, display_name, entity_type=EntityType.ORGANIZATION),
+        )
+        entities.record_entity_name(
+            PRINCIPAL,
+            a_typed_name(
+                f"enam_{index:04d}firm{index:04d}",
+                entity_id,
+                "Meridel",
+                name_type_code=NameTypeCode.OPERATING,
+            ),
+        )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Meridel", entity_type=EntityType.ORGANIZATION),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert {candidate.entity_id for candidate in answer.candidates} == {
+        FIRM_STUDIO,
+        FIRM_HOLDINGS,
+        FIRM_LEGAL,
+        FIRM_BRAND,
+    }
+    assert ResolutionWarning.SEVERAL_ENTITIES_SHARE_THIS_NAME in answer.warnings
+
+
+# --- a communication value is a way to reach somebody, not a claim about them -
+
+
+def test_a_communication_value_claimed_by_one_entity_is_still_ambiguous(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A recorded address is not a verified identifier, and one claimant does not make it one.
+
+    `EntityCommunicationMethod`'s own docstring keeps
+    `entity_external_identifiers` "the sole authority for identity resolution".
+    This read exists so a reference that matched no identity binding is not
+    reported as unknown when somebody records it as a way to reach them -- and
+    that is the whole of what it may say.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.record_communication_method(
+        PRINCIPAL, a_channel("ecmm_aaaa0001aaaa0001", ALICE, "info@acme.test")
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="info@acme.test", namespace=ExternalIdentifierNamespace.EMAIL
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert [candidate.entity_id for candidate in answer.candidates] == [ALICE]
+    assert answer.candidates[0].strongest_basis is ResolutionBasis.COMMUNICATION_VALUE
+    assert answer.candidates[0].names_the_entity is False
+    assert answer.candidates[0].evidence[0].verified is False
+
+
+def test_a_communication_value_claimed_by_several_names_them_all(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A shared switchboard is the ordinary case, not the exotic one."""
+    entities = _Entities(world)
+    for index, entity_id in enumerate((ALICE, ALICE_TWO, SECOND_ORG)):
+        entities.create(PRINCIPAL, an_entity(entity_id, f"Acme Person {index}"))
+        entities.record_communication_method(
+            PRINCIPAL,
+            a_channel(f"ecmm_{index:04d}chan{index:04d}", entity_id, "info@acme.test"),
+        )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="info@acme.test", namespace=ExternalIdentifierNamespace.EMAIL
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert {candidate.entity_id for candidate in answer.candidates} == {
+        ALICE,
+        ALICE_TWO,
+        SECOND_ORG,
+    }
+
+
+def test_an_identifier_that_matched_a_row_never_reaches_the_communication_value_read(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The fall-through was enriched, not widened, and this is the proof.
+
+    `_by_identifier`'s stated rule is that it falls through "only when the
+    reference is not an identifier in this namespace at all, or matches no
+    row"; once a row matched, every exit is an answer. Here a *different*
+    entity records the same address as a contact channel, and the identifier
+    holder is resolved exactly as before with the channel holder absent from
+    the answer -- a widened fall-through would have turned a resolution into an
+    ambiguous pair.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Acme Reception"))
+    entities.bind_identifier(
+        PRINCIPAL,
+        ALICE,
+        an_email("xid_aaaa0001aaaa0001", ALICE, "shared@example.test", verified=True),
+    )
+    entities.record_communication_method(
+        PRINCIPAL, a_channel("ecmm_bbbb0002bbbb0002", ALICE_TWO, "shared@example.test")
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="shared@example.test", namespace=ExternalIdentifierNamespace.EMAIL
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_EXACT
+    assert answer.resolved_entity_id == ALICE
+    assert [candidate.entity_id for candidate in answer.candidates] == [ALICE]
+    assert answer.candidates[0].strongest_basis is ResolutionBasis.VERIFIED_EXTERNAL_IDENTIFIER
+
+
+def test_an_expired_identifier_is_still_not_found_even_when_a_channel_carries_the_value(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The sharper half of the same rule, on the branch most likely to be widened.
+
+    The identifier matched and every row it matched is out of date. That was
+    already an answer rather than a miss, and adding a weaker read must not
+    reopen it: falling through here would let a *contact channel* overrule an
+    identity binding the caller was told nothing about.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Acme Reception"))
+    entities.bind_identifier(
+        PRINCIPAL,
+        ALICE,
+        an_email(
+            "xid_aaaa0001aaaa0001",
+            ALICE,
+            "shared@example.test",
+            verified=True,
+            effective_from=BEFORE,
+            effective_to=BEFORE + timedelta(days=1),
+        ),
+    )
+    entities.record_communication_method(
+        PRINCIPAL, a_channel("ecmm_bbbb0002bbbb0002", ALICE_TWO, "shared@example.test")
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="shared@example.test",
+            namespace=ExternalIdentifierNamespace.EMAIL,
+            as_of=WHEN,
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND
+    assert answer.candidates == ()
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
+def test_a_communication_value_matching_nothing_still_falls_through_to_the_name(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The new read must not pre-empt the fall-through it sits on.
+
+    Channels exist in this Principal's partition and none of them carries this
+    value, so the reference may still be a name -- and answering "no such
+    person" while a name match was available is the least informative honest
+    answer there is.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "alice@example.test"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Acme Reception"))
+    entities.record_alias(PRINCIPAL, an_alias("eals_aaaa0001aaaa0001", ALICE, "alice@example.test"))
+    entities.record_communication_method(
+        PRINCIPAL, a_channel("ecmm_bbbb0002bbbb0002", ALICE_TWO, "someone.else@example.test")
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="alice@example.test", namespace=ExternalIdentifierNamespace.EMAIL
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_EXACT
+    assert answer.resolved_entity_id == ALICE
+    assert answer.candidates[0].strongest_basis is ResolutionBasis.ALIAS
+
+
+def test_a_communication_value_outside_its_effective_dates_is_excluded_and_disclosed(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A number the company gave up is not a way to reach it, and the caller is told."""
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.record_communication_method(
+        PRINCIPAL,
+        a_channel(
+            "ecmm_aaaa0001aaaa0001",
+            ALICE,
+            "info@acme.test",
+            effective_from=BEFORE,
+            effective_to=BEFORE + timedelta(days=1),
+        ),
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="info@acme.test",
+            namespace=ExternalIdentifierNamespace.EMAIL,
+            as_of=WHEN,
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND
+    assert answer.candidates == ()
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
+@pytest.mark.parametrize(
+    "state",
+    [EntityCommunicationMethodState.RETIRED, EntityCommunicationMethodState.SUPERSEDED],
+    ids=("retired", "superseded"),
+)
+def test_a_communication_value_that_is_no_longer_the_current_row_matches_nothing(
+    world: World, resolving: EntityResolutionService, state: EntityCommunicationMethodState
+) -> None:
+    """The repository filters the state; this asserts the service sees the consequence."""
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.record_communication_method(
+        PRINCIPAL, a_channel("ecmm_aaaa0001aaaa0001", ALICE, "info@acme.test", state=state)
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="info@acme.test", namespace=ExternalIdentifierNamespace.EMAIL
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND
+    assert answer.warnings == ()
+
+
+def test_a_channel_held_by_the_wrong_kind_of_entity_is_not_found(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A matched channel must not be re-read as a name either.
+
+    The identical branch above this one exists because falling through re-reads
+    the address as a *name*: here that would answer `RESOLVED_EXACT` naming a
+    project whose alias happens to be spelled the way `normalize_name` spells
+    the address, discarding channel evidence that pointed at a person to do it.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "info acme test", entity_type=EntityType.PROJECT))
+    entities.record_communication_method(
+        PRINCIPAL, a_channel("ecmm_aaaa0001aaaa0001", ALICE, "info@acme.test")
+    )
+    entities.record_alias(PRINCIPAL, an_alias("eals_dddd0004dddd0004", TOWER, "info acme test"))
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="info@acme.test",
+            namespace=ExternalIdentifierNamespace.EMAIL,
+            entity_type=EntityType.PROJECT,
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND
+    assert answer.resolved_entity_id is None
+
+
+def test_a_communication_value_past_the_candidate_limit_still_answers(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The safety answer must not fail when a value is most contested.
+
+    `EntityResolution` raises on an over-long candidate list, so an unbounded
+    one would reach the caller as `internal_error` in exactly the case the
+    refusal exists for -- a generic company mailbox recorded against every team
+    that uses it. Bounded on `CONFLICTED_IDENTIFIER`'s terms, and disclosed.
+    """
+    entities = _Entities(world)
+    claimants = RESOLUTION_CANDIDATE_LIMIT + 2
+    for index in range(claimants):
+        entity_id = f"ent_{index:04d}chan{index:04d}"
+        entities.create(PRINCIPAL, an_entity(entity_id, f"Team {index} Synthetic"))
+        entities.record_communication_method(
+            PRINCIPAL,
+            a_channel(f"ecmm_{index:04d}chan{index:04d}", entity_id, "info@acme.test"),
+        )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="info@acme.test", namespace=ExternalIdentifierNamespace.EMAIL
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert len(answer.candidates) == RESOLUTION_CANDIDATE_LIMIT
+    assert answer.candidates_were_truncated is True
+    assert ResolutionWarning.MORE_CANDIDATES_THAN_THIS_ANSWER_CARRIES in answer.warnings
+
+
+# --- two more corroborating records, judged in force like the two before them
+
+
+def test_an_affiliation_with_the_named_scope_corroborates_a_bare_name(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """Section 15.1's "organization and role overlap", read off a record rather than inferred."""
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
+    entities.record_person_organization_affiliation(
+        PRINCIPAL, an_affiliation("poaf_aaaa0001aaaa0001")
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=SECOND_ORG, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.resolved_entity_id == ALICE
+    assert answer.candidates[0].signals == (ContextualSignal.AFFILIATED_WITH_THE_NAMED_SCOPE,)
+    assert ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE in answer.warnings
+
+
+def test_a_participation_in_the_named_scope_corroborates_a_bare_name(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """Section 15.1's "project-team membership", and its own signal rather than an assignment's.
+
+    A participation and an assignment are different records making different
+    claims, so folding them into one signal would report a corroboration the
+    reader could not go and check.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Harbour Tower", entity_type=EntityType.PROJECT))
+    entities.record_project_participation(PRINCIPAL, a_participation("eppt_aaaa0001aaaa0001"))
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.resolved_entity_id == ALICE
+    assert answer.candidates[0].signals == (ContextualSignal.PARTICIPATES_IN_THE_NAMED_SCOPE,)
+
+
+def test_an_affiliation_with_a_different_organization_corroborates_nothing(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The scope filter is a constraint, not a default nobody checked."""
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
+    entities.create(PRINCIPAL, an_entity(THIRD, "Other Co", entity_type=EntityType.ORGANIZATION))
+    entities.record_person_organization_affiliation(
+        PRINCIPAL, an_affiliation("poaf_aaaa0001aaaa0001", organization_entity_id=THIRD)
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=SECOND_ORG, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.candidates[0].signals == ()
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT not in answer.warnings
+
+
+def test_only_a_participation_naming_the_scope_as_the_project_corroborates(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The candidate is the *participant*, which is why the sibling read is not used.
+
+    Reading `project_participations_as_project` here would let the row be
+    matched from the wrong end: a project would corroborate itself as a
+    participant in the entity somebody named.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Harbour Tower", entity_type=EntityType.PROJECT))
+    entities.create(PRINCIPAL, an_entity(THIRD, "Riverside", entity_type=EntityType.PROJECT))
+    entities.record_project_participation(
+        PRINCIPAL, a_participation("eppt_aaaa0001aaaa0001", project_entity_id=THIRD)
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.candidates[0].signals == ()
+
+
+@pytest.mark.parametrize(
+    "dates",
+    [
+        {"effective_from": BEFORE, "effective_to": BEFORE + timedelta(days=1)},
+        {"state": PersonOrganizationAffiliationState.RETIRED},
+        {"state": PersonOrganizationAffiliationState.SUPERSEDED},
+        {"effective_from": datetime(2030, 1, 1, tzinfo=UTC)},
+    ],
+    ids=("ended", "retired", "superseded", "not-yet-begun"),
+)
+def test_an_affiliation_that_is_not_in_force_corroborates_nothing_and_says_so(
+    world: World, resolving: EntityResolutionService, dates: dict[str, object]
+) -> None:
+    """A former employer must not lift a bare name, and the silence must be disclosed.
+
+    Four ways one row fails to be in force: its window closed, its `state` says
+    it is no longer the authoritative record, it was replaced, or it has not
+    begun. `RI-AC-014`'s duty does not care which column recorded that, so all
+    four set `withheld` and reach the caller as a warning rather than as
+    nothing at all.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
+    entities.record_person_organization_affiliation(
+        PRINCIPAL, an_affiliation("poaf_aaaa0001aaaa0001", **dates)
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=SECOND_ORG, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert answer.candidates[0].signals == ()
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
+@pytest.mark.parametrize(
+    "dates",
+    [
+        {"effective_from": BEFORE, "effective_to": BEFORE + timedelta(days=1)},
+        {"state": EntityProjectParticipationState.RETIRED},
+        {"state": EntityProjectParticipationState.SUPERSEDED},
+        {"effective_from": datetime(2030, 1, 1, tzinfo=UTC)},
+    ],
+    ids=("ended", "retired", "superseded", "not-yet-begun"),
+)
+def test_a_participation_that_is_not_in_force_corroborates_nothing_and_says_so(
+    world: World, resolving: EntityResolutionService, dates: dict[str, object]
+) -> None:
+    """The same four shapes on the participation family, on the same terms."""
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Harbour Tower", entity_type=EntityType.PROJECT))
+    entities.record_project_participation(
+        PRINCIPAL, a_participation("eppt_aaaa0001aaaa0001", **dates)
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.AMBIGUOUS
+    assert answer.resolved_entity_id is None
+    assert answer.candidates[0].signals == ()
+    assert ResolutionWarning.EVIDENCE_WAS_NOT_EFFECTIVE_AT_THAT_MOMENT in answer.warnings
+
+
+def test_an_affiliation_narrows_two_same_named_people_to_one(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The new signals do the same work the two before them do, including narrowing."""
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(ALICE_TWO, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
+    entities.record_person_organization_affiliation(
+        PRINCIPAL, an_affiliation("poaf_aaaa0001aaaa0001")
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Synthetic", scope_entity_id=SECOND_ORG, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.resolved_entity_id == ALICE
+    assert ResolutionWarning.NARROWED_BY_SUPPLIED_SCOPE in answer.warnings
+
+
+def test_a_typed_name_corroborated_by_a_participation_resolves_contextually(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """A typed name may be *lifted* by context, exactly as a canonical name may be.
+
+    That is sanctioned rather than incidental -- section 15.1 admits
+    project-team membership as resolution evidence -- and it is still not the
+    typed name resolving on its own: strip the participation and the same
+    request answers `AMBIGUOUS`, which the assertion below re-runs to show.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Harbour Tower", entity_type=EntityType.PROJECT))
+    entities.record_entity_name(
+        PRINCIPAL, a_typed_name("enam_aaaa0001aaaa0001", ALICE, "Alice Historic")
+    )
+    unlifted = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Historic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert unlifted.outcome is ResolutionOutcome.AMBIGUOUS
+    entities.record_project_participation(PRINCIPAL, a_participation("eppt_aaaa0001aaaa0001"))
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(raw_reference="Alice Historic", scope_entity_id=TOWER, at=NOW),
+    )
+    assert answer.outcome is ResolutionOutcome.RESOLVED_CONTEXTUAL
+    assert answer.resolved_entity_id == ALICE
+    assert answer.candidates[0].signals == (ContextualSignal.PARTICIPATES_IN_THE_NAMED_SCOPE,)
+
+
+# --- the partition holds through every new read -----------------------------
+
+
+def test_a_typed_name_does_not_reach_another_principals_row(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The leak this read is most exposed to: it is keyed by *value*, not by entity."""
+    entities = _Entities(world)
+    entities.create(OTHER, an_entity(ALICE, "Other Alice", principal_id=OTHER))
+    entities.record_entity_name(
+        OTHER, a_typed_name("enam_aaaa0001aaaa0001", ALICE, "Alice Historic", principal_id=OTHER)
+    )
+    answer = resolving.resolve(PRINCIPAL, ResolutionRequest(raw_reference="Alice Historic"))
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND
+    assert answer.candidates == ()
+
+
+def test_a_communication_value_does_not_reach_another_principals_row(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """Two Principals may hold the same company's switchboard number and see only their own."""
+    entities = _Entities(world)
+    entities.create(OTHER, an_entity(ALICE, "Other Alice", principal_id=OTHER))
+    entities.record_communication_method(
+        OTHER, a_channel("ecmm_aaaa0001aaaa0001", ALICE, "info@acme.test", principal_id=OTHER)
+    )
+    answer = resolving.resolve(
+        PRINCIPAL,
+        ResolutionRequest(
+            raw_reference="info@acme.test", namespace=ExternalIdentifierNamespace.EMAIL
+        ),
+    )
+    assert answer.outcome is ResolutionOutcome.NOT_FOUND
+    assert answer.candidates == ()
+
+
+def test_neither_new_signal_reads_a_row_from_another_principals_partition(
+    world: World, resolving: EntityResolutionService
+) -> None:
+    """The rows are planted, because no repository will write them, and that is the point.
+
+    Both signal reads are keyed by `(principal_id, entity_id)`, and an entity
+    identifier is unique across the whole store -- so the only way to state the
+    property is to put on the table exactly the row a missing partition
+    predicate would return: one naming this Principal's person and this
+    Principal's scope, filed under someone else's `principal_id`. The
+    repository refuses to write it (`_writable` cannot find either entity in
+    `OTHER`'s partition), which is why it is appended directly here.
+    """
+    entities = _Entities(world)
+    entities.create(PRINCIPAL, an_entity(ALICE, "Alice Synthetic"))
+    entities.create(PRINCIPAL, an_entity(SECOND_ORG, "Acme", entity_type=EntityType.ORGANIZATION))
+    entities.create(PRINCIPAL, an_entity(TOWER, "Harbour Tower", entity_type=EntityType.PROJECT))
+    world.entity_person_organization_affiliations.append(
+        an_affiliation("poaf_aaaa0001aaaa0001", principal_id=OTHER)
+    )
+    world.entity_project_participations.append(
+        a_participation("eppt_aaaa0001aaaa0001", principal_id=OTHER)
+    )
+    for scope_entity_id in (SECOND_ORG, TOWER):
+        answer = resolving.resolve(
+            PRINCIPAL,
+            ResolutionRequest(
+                raw_reference="Alice Synthetic", scope_entity_id=scope_entity_id, at=NOW
+            ),
+        )
+        assert answer.outcome is ResolutionOutcome.AMBIGUOUS, scope_entity_id
+        assert answer.resolved_entity_id is None, scope_entity_id
+        assert answer.candidates[0].signals == (), scope_entity_id

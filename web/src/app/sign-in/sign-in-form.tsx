@@ -9,14 +9,13 @@
  * takes the answer rather than computing it — and takes only `key` and `label`,
  * never the claims, which stay on the server where they are validated.
  *
- * A button for a principal `POST /api/session` would refuse is not offered
- * (`D-15`): showing a person a control that is guaranteed to fail is a worse
- * failure UX than not showing it, and the two halves are consistent because they
- * read the same set.
+ * After a successful POST, navigation honours a safe `?next=` return path and
+ * ignores anything `safeReturnPath` rejects.
  */
 import { useState } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Button } from "@/components/ui/button";
+import { safeReturnPath } from "@/lib/auth/return-path";
 
 export interface OfferedPrincipal {
   readonly key: string;
@@ -25,6 +24,7 @@ export interface OfferedPrincipal {
 
 export function SignInForm({ principals }: { principals: readonly OfferedPrincipal[] }) {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -38,7 +38,7 @@ export function SignInForm({ principals }: { principals: readonly OfferedPrincip
       credentials: "same-origin",
     });
     if (response.ok) {
-      router.push("/today");
+      router.push(safeReturnPath(searchParams.get("next")) ?? "/today");
       router.refresh();
     } else {
       setBusy(false);

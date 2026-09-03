@@ -8,6 +8,7 @@
     "start": "next start",
     "lint": "eslint",
     "test": "vitest run",
+    "test:contract": "vitest run src/lib/api/decode src/lib/api/gateway.test.ts --environment node",
     "typecheck": "tsc --noEmit",
     "storybook": "storybook dev -p 6006",
     "build-storybook": "storybook build",
@@ -15,8 +16,6 @@
     "e2e:report": "playwright show-report"
   },
   "dependencies": {
-    "@azure/msal-browser": "^5.18.0",
-    "@azure/msal-node": "^5.5.0",
     "@radix-ui/react-dialog": "1.1.23",
     "@radix-ui/react-dropdown-menu": "2.1.24",
     "@radix-ui/react-popover": "1.1.23",

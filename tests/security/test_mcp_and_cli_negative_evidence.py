@@ -11,7 +11,7 @@ The five, over both:
 
 * **traversal** — an enrolled object replaced by a symlink out of the root;
 * **source mutation** — proved from both ends: the tool list and the option
-  surface route one hundred and four capability names and none of them mutates a
+  surface route one hundred and twenty-four capability names and none of them mutates a
   source, and every capability driven over both transports is shown to have
   called only the three read-only provider methods;
 * **unknown scope** — a source the principal holds no enrollment over;
@@ -380,6 +380,33 @@ SCOPED_CAPABILITIES = [
         # `domain.policy.decision._SCOPELESS`.
         Capability.ENTITIES_IDENTIFIERS_LIST,
         Capability.ENTITIES_ALIASES_LIST,
+        # `RI-ENT-WP-10`'s five record-family reads join them: a typed name, an
+        # address, a communication method, a participation and an affiliation
+        # belong to no `src_…` and no `enr_…` either. All five sit in
+        # `domain.policy.decision._SCOPELESS`.
+        Capability.ENTITIES_PROFILE,
+        Capability.ENTITIES_NAMES_LIST,
+        Capability.ENTITIES_ADDRESSES_LIST,
+        Capability.ENTITIES_COMMUNICATION_LIST,
+        Capability.ENTITIES_PARTICIPATIONS_LIST,
+        # `RI-ENT-WP-11`'s record-family writes join them on the identical
+        # argument, unchanged by the fact that they write: the row a recorded
+        # name is written into belongs to no `src_…` and no `enr_…` either.
+        Capability.ENTITIES_NAMES_ADD,
+        Capability.ENTITIES_NAMES_SUPERSEDE,
+        Capability.ENTITIES_NAMES_RETIRE,
+        Capability.ENTITIES_ADDRESSES_ADD,
+        Capability.ENTITIES_ADDRESSES_REVISE,
+        Capability.ENTITIES_ADDRESSES_RETIRE,
+        Capability.ENTITIES_COMMUNICATION_ADD,
+        Capability.ENTITIES_COMMUNICATION_REVISE,
+        Capability.ENTITIES_COMMUNICATION_RETIRE,
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_PARTICIPATIONS_REVISE,
+        Capability.ENTITIES_PARTICIPATIONS_END,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_REVISE,
+        Capability.ENTITIES_AFFILIATIONS_END,
         Capability.ENTITIES_CREATE,
         Capability.ENTITIES_UPDATE,
         Capability.ENTITIES_ARCHIVE,
@@ -712,6 +739,31 @@ ENTITY_DIRECTED_EXEMPTION = frozenset(
 #: here.
 PHASE_B_PROPOSAL_EXEMPTION = frozenset({Capability.ENTITIES_PROPOSALS_CREATE})
 
+#: The record-family exemption (`RI-ENT-WP-11`), and it is deliberately the pair
+#: of `create` names, the way `ENTITY_DIRECTED_EXEMPTION` is.
+#: `entities.participations.create` and `entities.affiliations.create` are the
+#: only two of `RI-ENT-WP-11`'s fifteen record-family names the substring proxy
+#: refuses, and they are refused for the reason `capture.create`,
+#: `documents.create`, `relationship_memory.create` and the two directed
+#: `create` names are: a project participation and a person-organization
+#: affiliation are *product-owned* records under `ADR-003` -- the Principal's
+#: own statement about the Principal's own entities -- and writing one mutates
+#: no source. Their rows carry no `source_id`, and the plane reaches no
+#: `SourceProvider` at all.
+#:
+#: An extension of the registry the rule reads and not a relaxation of the rule.
+#: The other thirteen record-family names -- every `add`, `revise`, `retire` and
+#: `end` -- pass the name check unaided, which is the check working rather than
+#: an omission, and a future `entities.participations.delete` is still caught
+#: here. The property the proxy stands for is carried behaviourally for this
+#: plane by the recording-provider sweep, exactly as it is for `capture.*`.
+ENTITY_RECORD_FAMILY_EXEMPTION = frozenset(
+    {
+        Capability.ENTITIES_PARTICIPATIONS_CREATE,
+        Capability.ENTITIES_AFFILIATIONS_CREATE,
+    }
+)
+
 
 def test_neither_transport_routes_a_mutating_capability() -> None:
     """The tool list and the CLI's positional, and no name that mutates a *source*.
@@ -735,6 +787,7 @@ def test_neither_transport_routes_a_mutating_capability() -> None:
         | ENTITY_AUTHORING_EXEMPTION
         | ENTITY_DIRECTED_EXEMPTION
         | PHASE_B_PROPOSAL_EXEMPTION
+        | ENTITY_RECORD_FAMILY_EXEMPTION
     )
     checked = [c for c in Capability if c not in exempt]
     assert len(checked) == len(Capability) - len(exempt)

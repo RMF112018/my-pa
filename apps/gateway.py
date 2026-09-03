@@ -176,6 +176,7 @@ def _run(args: argparse.Namespace) -> int:
             remote_client=runtime.remote_client,
             apple_authenticate=runtime.apple_authenticate,
             apple_control=runtime.apple_control,
+            webauthn=runtime.webauthn,
         )
         if runtime.authenticate is None
         else create_http_app(
@@ -184,6 +185,7 @@ def _run(args: argparse.Namespace) -> int:
             remote_client=runtime.remote_client,
             apple_authenticate=runtime.apple_authenticate,
             apple_control=runtime.apple_control,
+            webauthn=runtime.webauthn,
         )
     )
     server = uvicorn.Server(
@@ -359,10 +361,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
 
-    run = subcommands.add_parser("run", help="serve the 104 capabilities over HTTP")
+    run = subcommands.add_parser("run", help="serve the 124 capabilities over HTTP")
     run.add_argument("--port", type=int, default=DEFAULT_PORT)
 
-    subcommands.add_parser("mcp", help="serve the 104 capabilities over MCP on stdio")
+    subcommands.add_parser("mcp", help="serve the 124 capabilities over MCP on stdio")
     remote = subcommands.add_parser("mcp-remote", help="serve authenticated MCP over HTTP")
     remote.add_argument(
         "--host",

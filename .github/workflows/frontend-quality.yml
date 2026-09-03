@@ -1,0 +1,235 @@
+name: frontend-quality
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: frontend-quality-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  classify:
+    name: frontend / classify
+    runs-on: ubuntu-latest
+    outputs:
+      applicable: ${{ steps.classify.outputs.applicable }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+      - id: classify
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch --no-tags origin main
+          git merge-base origin/main HEAD >/dev/null
+          mapfile -t changed < <(git diff --name-only origin/main...HEAD)
+          printf '%s\n' "${changed[@]}"
+          if printf '%s\n' "${changed[@]}" | grep -Eq '^(web/|src/my_pa/.*/webauthn|src/my_pa/application/webauthn|src/my_pa/adapters/http/webauthn|src/my_pa/domain/identity/webauthn|src/my_pa/application/session_service|src/my_pa/adapters/http/auth_sessions|src/my_pa/bootstrap/settings.py|src/my_pa/bootstrap/gateway.py|src/my_pa/adapters/http/app.py|apps/gateway.py|pyproject.toml|web/package-lock.json)'; then
+            echo "applicable=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "applicable=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  static:
+    name: frontend / static
+    needs: classify
+    if: needs.classify.outputs.applicable == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+
+  unit:
+    name: frontend / unit
+    needs: classify
+    if: needs.classify.outputs.applicable == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm test
+
+  production-build:
+    name: frontend / production-build
+    needs: classify
+    if: needs.classify.outputs.applicable == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npm run build
+
+  contract:
+    name: frontend / contract
+    needs: classify
+    if: needs.classify.outputs.applicable == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest tests/unit/test_webauthn_ceremony.py tests/unit/test_session_service_auth.py tests/unit/test_session_service_isolation.py tests/contract/test_bff_success_decoder_parity.py -q
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npm run test:contract
+        working-directory: web
+
+  security:
+    name: frontend / security
+    needs: classify
+    if: needs.classify.outputs.applicable == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+      - run: python -m pytest tests/unit/test_webauthn_ceremony.py tests/unit/test_session_service_auth.py tests/unit/test_session_service_isolation.py -q
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+        working-directory: web
+      - run: npx vitest run src/lib/http/mutation-admission.test.ts src/lib/http/origin.test.ts src/lib/http/mutation-route-manifest.test.ts src/lib/http/security-headers.test.ts src/lib/http/safe-href.test.ts
+        working-directory: web
+
+  e2e-critical:
+    name: frontend / e2e-critical
+    needs: classify
+    if: needs.classify.outputs.applicable == 'true'
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: my_pa
+          POSTGRES_PASSWORD: ci_throwaway_not_a_secret
+          POSTGRES_DB: my_pa_ci
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready --username my_pa --dbname my_pa_ci"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e ".[dev]"
+        working-directory: .
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - run: npx playwright install chromium
+      - name: Run curated WebAuthn and browser-security desktop e2e
+        env:
+          MYPA_E2E_PYTHON: python
+          MYPA_E2E_ADMIN_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/postgres
+          MYPA_E2E_DATABASE_URL: postgresql+psycopg://my_pa:ci_throwaway_not_a_secret@localhost:5432/my_pa_wp13_e2e
+        run: |
+          set -euo pipefail
+          # stack.sh requires MYPA_E2E_PYTHON to be an executable path (`-x`),
+          # so resolve the setup-python interpreter rather than the bare name.
+          python_bin="$(command -v python)"
+          test -x "${python_bin}"
+          MYPA_E2E_PYTHON="${python_bin}" npm run e2e -- e2e/webauthn.spec.ts e2e/browser-security.spec.ts --project=desktop
+
+  required:
+    name: frontend / required
+    needs: [classify, static, unit, production-build, contract, security, e2e-critical]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Gate
+        env:
+          APPLICABLE: ${{ needs.classify.outputs.applicable }}
+          STATIC: ${{ needs.static.result }}
+          UNIT: ${{ needs.unit.result }}
+          BUILD: ${{ needs.production-build.result }}
+          CONTRACT: ${{ needs.contract.result }}
+          SECURITY: ${{ needs.security.result }}
+          E2E: ${{ needs.e2e-critical.result }}
+        run: |
+          set -euo pipefail
+          if [[ "${APPLICABLE}" != "true" ]]; then
+            echo "frontend / required = NOT_APPLICABLE"
+            exit 0
+          fi
+          for result in "$STATIC" "$UNIT" "$BUILD" "$CONTRACT" "$SECURITY" "$E2E"; do
+            if [[ "${result}" != "success" ]]; then
+              echo "frontend / required failed: ${result}"
+              exit 1
+            fi
+          done
+          echo "frontend / required = PROMOTED_REQUIRED"

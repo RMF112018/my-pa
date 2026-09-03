@@ -2,7 +2,7 @@
 
 The criterion asks that HTTP, MCP, and the CLI produce **byte-equivalent
 normalised requests** and semantically identical responses and errors, over all
-one hundred and four capabilities. There are two ways to prove that and only one stays
+one hundred and twenty-four capabilities. There are two ways to prove that and only one stays
 true, so this file makes the structural claim first and the comparative claim
 second.
 
@@ -28,10 +28,10 @@ command through its fields.
 
 **And the answers, over every fully composed capability and ten refusals.** A
 default composition exposes fifty-five: the six managed-document names, the
-thirty-four `entities.` names and the nine Relationship Memory names are
+fifty-four `entities.` names and the nine Relationship Memory names are
 withheld without their explicit configuration, and this harness sets all of
 them — including `MY_PA_RELATIONSHIP_INTELLIGENCE_WRITES_ENABLED`, which is a
-second switch over the `entities.` family and withholds its twenty-three writes on
+second switch over the `entities.` family and withholds its thirty-eight writes on
 its own. Each
 transport answers from its own deep copy of the world, so all three see the same
 starting state rather than the state the previous one left; without that,
@@ -108,17 +108,33 @@ from my_pa.domain.intelligence.catalog import (
     IntelligenceStage,
 )
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
+    AffiliationTypeCode,
     AliasType,
     Assignment,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     Entity,
+    EntityAddress,
     EntityAlias,
+    EntityCommunicationMethod,
+    EntityName,
+    EntityProjectParticipation,
     EntityRelationship,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
     ExternalIdentifier,
     ExternalIdentifierNamespace,
+    NameTypeCode,
+    ParticipationStatusCode,
+    PersonOrganizationAffiliation,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
+    normalize_address,
+    normalize_communication_value,
 )
 from my_pa.domain.relationship.governance import (
     EntityObservation,
@@ -376,6 +392,220 @@ def staged_assignment(scene: Scene, role: str) -> str:
     )
     FakeUnitOfWork(scene.world).entities.record_assignment(principal_id, assignment)
     return assignment.assignment_id
+
+
+def staged_entity_address(scene: Scene, address_type_code: AddressTypeCode) -> str:
+    """One recorded address the staged person carries, of the stated type.
+
+    `staged_entity_name`'s contract over the address family, memoized on the
+    type for the same reason: the active unique keys on
+    `(entity, type, normalized_address_value)`, so two stagings that differ only
+    in the type are two rows and two that differ in neither are one.
+    """
+    principal_id = scene.principal.principal_id
+    person, _ = staged_entities(scene)
+    held = next(
+        (
+            address
+            for address in scene.world.entity_addresses
+            if address.principal_id == principal_id
+            and address.address_type_code is address_type_code
+        ),
+        None,
+    )
+    if held is not None:
+        return held.entity_address_id
+    entity_address_id = issue_identifier(IdKind.ENTITY_ADDRESS)
+    raw_value = f"1 Parity {address_type_code.value} Way"
+    FakeUnitOfWork(scene.world).entities.record_entity_address(
+        principal_id,
+        EntityAddress(
+            entity_address_id=entity_address_id,
+            entity_id=person.entity_id,
+            principal_id=principal_id,
+            address_type_code=address_type_code,
+            raw_value=raw_value,
+            normalized_address_value=normalize_address(
+                line1=None,
+                line2=None,
+                city=None,
+                region=None,
+                postal_code=None,
+                country=None,
+                raw_value=raw_value,
+            ),
+        ),
+    )
+    return entity_address_id
+
+
+def staged_communication_method(
+    scene: Scene, usage_context_code: CommunicationUsageContextCode
+) -> str:
+    """One recorded contact channel the staged person carries, in the stated context.
+
+    `staged_entity_name`'s contract over the communication family, memoized on
+    the usage context rather than the method type: the active unique keys on
+    `(entity, type, normalized_value)`, and every staging here is an `EMAIL`, so
+    the context is what makes two stagings two rows and one staging one row.
+    """
+    principal_id = scene.principal.principal_id
+    person, _ = staged_entities(scene)
+    held = next(
+        (
+            method
+            for method in scene.world.entity_communication_methods
+            if method.principal_id == principal_id
+            and method.usage_context_code is usage_context_code
+        ),
+        None,
+    )
+    if held is not None:
+        return held.communication_method_id
+    communication_method_id = issue_identifier(IdKind.ENTITY_COMMUNICATION_METHOD)
+    display_value = f"parity.{usage_context_code.value}@example.test"
+    FakeUnitOfWork(scene.world).entities.record_communication_method(
+        principal_id,
+        EntityCommunicationMethod(
+            communication_method_id=communication_method_id,
+            entity_id=person.entity_id,
+            principal_id=principal_id,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=usage_context_code,
+            display_value=display_value,
+            normalized_value=normalize_communication_value(
+                CommunicationMethodTypeCode.EMAIL, display_value
+            ),
+        ),
+    )
+    return communication_method_id
+
+
+def staged_participation(scene: Scene, role_text: str) -> str:
+    """One recorded participation of the staged person on the staged organization.
+
+    `staged_entity_name`'s contract over the participation family, memoized on
+    `role_text` for the same reason the address helper memoizes on the type: the
+    active unique key is on `(project, participant, role_basis, side)`, so two
+    stagings that differ only in the role text would collide, and this helper
+    varies the whole tuple by varying the side along with the text.
+
+    The organization stands in for the project. Nothing on this plane restricts
+    `project_entity_id` to a `PROJECT` entity -- the domain requires only that
+    the two endpoints differ -- so the two staged entities are the two ends.
+    """
+    principal_id = scene.principal.principal_id
+    person, organization = staged_entities(scene)
+    held = next(
+        (
+            row
+            for row in scene.world.entity_project_participations
+            if row.principal_id == principal_id and row.role_text == role_text
+        ),
+        None,
+    )
+    if held is not None:
+        return held.participation_id
+    participation_id = issue_identifier(IdKind.ENTITY_PROJECT_PARTICIPATION)
+    FakeUnitOfWork(scene.world).entities.record_project_participation(
+        principal_id,
+        EntityProjectParticipation(
+            participation_id=participation_id,
+            principal_id=principal_id,
+            project_entity_id=organization.entity_id,
+            participant_entity_id=person.entity_id,
+            project_display_name=f"Parity {role_text}",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=(
+                StakeholderSideCode.CONSULTANT
+                if role_text == "consultant"
+                else StakeholderSideCode.VENDOR
+            ),
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            role_text=role_text,
+        ),
+    )
+    return participation_id
+
+
+def staged_affiliation(scene: Scene, job_title: str) -> str:
+    """One recorded affiliation the staged person holds with the staged organization.
+
+    `staged_entity_name`'s contract over the affiliation family, memoized on
+    `job_title`. Every staged row carries an `effective_to`, so none of them
+    holds the open-ended slot `an_open_ended_affiliation_is_unique_per_person`
+    keys on and the payload table's own create can take it.
+    """
+    principal_id = scene.principal.principal_id
+    person, organization = staged_entities(scene)
+    held = next(
+        (
+            row
+            for row in scene.world.entity_person_organization_affiliations
+            if row.principal_id == principal_id and row.job_title == job_title
+        ),
+        None,
+    )
+    if held is not None:
+        return held.affiliation_id
+    affiliation_id = issue_identifier(IdKind.PERSON_ORGANIZATION_AFFILIATION)
+    FakeUnitOfWork(scene.world).entities.record_person_organization_affiliation(
+        principal_id,
+        PersonOrganizationAffiliation(
+            affiliation_id=affiliation_id,
+            principal_id=principal_id,
+            person_entity_id=person.entity_id,
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            organization_entity_id=organization.entity_id,
+            job_title=job_title,
+            effective_from=datetime(2026, 8, 1, 9, tzinfo=UTC),
+            effective_to=datetime(2026, 8, 2, 9, tzinfo=UTC),
+        ),
+    )
+    return affiliation_id
+
+
+def staged_entity_name(scene: Scene, name_type_code: NameTypeCode) -> str:
+    """One recorded name the staged person carries, of the stated type.
+
+    Written through the entity repository rather than pushed into `World`, on
+    `staged_assignment`'s terms, and memoized on the type for the same reason
+    that one is memoized on the role.
+
+    **The type is what makes two staged names two rows.**
+    `an_active_entity_name_is_unique_per_entity_and_type` is partial on
+    `state = 'active'`, so two stagings of one type would be one name at the
+    database and the second write would be refused. A caller that needs a row to
+    supersede and a row to retire therefore asks for two types -- and the type
+    `entities.names.add` writes has to be a third, or the addition meets the
+    unique instead of the handler.
+    """
+    principal_id = scene.principal.principal_id
+    person, _ = staged_entities(scene)
+    held = next(
+        (
+            name
+            for name in scene.world.entity_names
+            if name.principal_id == principal_id and name.name_type_code is name_type_code
+        ),
+        None,
+    )
+    if held is not None:
+        return held.entity_name_id
+    entity_name_id = issue_identifier(IdKind.ENTITY_NAME)
+    FakeUnitOfWork(scene.world).entities.record_entity_name(
+        principal_id,
+        EntityName(
+            entity_name_id=entity_name_id,
+            entity_id=person.entity_id,
+            principal_id=principal_id,
+            name_type_code=name_type_code,
+            display_value=f"Parity {name_type_code.value} Name",
+            normalized_value=f"parity {name_type_code.value} name",
+        ),
+    )
+    return entity_name_id
 
 
 def staged_edge(scene: Scene, relationship_type: EntityRelationshipType) -> str:
@@ -638,6 +868,19 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     end_assignment = staged_assignment(scene, "Parity End Role")
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
+    # One staged name per record-family write that needs an existing row, of a
+    # type of its own, for `staged_entity_name`'s stated reason. `add` writes a
+    # third type that no staged row holds.
+    supersede_name = staged_entity_name(scene, NameTypeCode.LEGAL)
+    retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
+    revise_address = staged_entity_address(scene, AddressTypeCode.BUSINESS)
+    retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
+    revise_channel = staged_communication_method(scene, CommunicationUsageContextCode.CORPORATE)
+    retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
+    revise_participation = staged_participation(scene, "consultant")
+    end_participation = staged_participation(scene, "supplier")
+    revise_affiliation = staged_affiliation(scene, "Parity Principal")
+    end_affiliation = staged_affiliation(scene, "Parity Associate")
     return {
         Capability.CAPABILITIES_GET: {},
         Capability.SOURCES_LIST: {"source_id": scene.source.source_id, "page_size": 10},
@@ -955,6 +1198,138 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "states": ["active"],
             "alias_types": ["nickname"],
             "page_size": 10,
+        },
+        # `RI-ENT-WP-10`'s five record-family reads, over the same staged
+        # person. `perspective` is spelled because the command has no default.
+        Capability.ENTITIES_PROFILE: {"entity_id": person.entity_id},
+        Capability.ENTITIES_NAMES_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_ADDRESSES_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_COMMUNICATION_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_PARTICIPATIONS_LIST: {
+            "entity_id": person.entity_id,
+            "perspective": "participant",
+            "page_size": 10,
+        },
+        # `RI-ENT-WP-11`'s record-family writes, each meeting a record of its
+        # own. Driven in one pass over one scene like the directed writes above,
+        # and for the same reason: a supersession takes its predecessor out of
+        # the active set, so two writes sharing a staged row would leave the
+        # second meeting a row that is no longer there.
+        Capability.ENTITIES_NAMES_ADD: {
+            "entity_id": person.entity_id,
+            "name_type_code": "brand",
+            "display_value": "Parity Brand Name",
+            "idempotency_key": "parity-entity-names-add-0001",
+        },
+        Capability.ENTITIES_NAMES_SUPERSEDE: {
+            "entity_name_id": supersede_name,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "name_type_code": "legal",
+            "display_value": "Parity Legal Name Corrected",
+            "idempotency_key": "parity-entity-names-supersede-0001",
+        },
+        Capability.ENTITIES_NAMES_RETIRE: {
+            "entity_name_id": retire_name,
+            "expected_version": 1,
+            "idempotency_key": "parity-entity-names-retire-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_ADD: {
+            "entity_id": person.entity_id,
+            "address_type_code": "headquarters",
+            "raw_value": "1 Parity Headquarters Way",
+            "idempotency_key": "parity-entity-addresses-add-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_REVISE: {
+            "entity_address_id": revise_address,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "address_type_code": "business",
+            "raw_value": "2 Parity Business Way",
+            "idempotency_key": "parity-entity-addresses-revise-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_RETIRE: {
+            "entity_address_id": retire_address,
+            "expected_version": 1,
+            "idempotency_key": "parity-entity-addresses-retire-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_ADD: {
+            "entity_id": person.entity_id,
+            "method_type_code": "email",
+            "usage_context_code": "personal",
+            "display_value": "parity.personal@example.test",
+            "idempotency_key": "parity-entity-communication-add-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_REVISE: {
+            "communication_method_id": revise_channel,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "method_type_code": "email",
+            "usage_context_code": "corporate",
+            "display_value": "parity.corrected@example.test",
+            "idempotency_key": "parity-entity-communication-revise-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_RETIRE: {
+            "communication_method_id": retire_channel,
+            "expected_version": 1,
+            "idempotency_key": "parity-entity-communication-retire-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: {
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "Parity Person on Parity Works",
+            "role_basis_code": "source_verified",
+            "stakeholder_side_code": "design",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "parity-entity-participations-create-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: {
+            "participation_id": revise_participation,
+            "expected_version": 1,
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "Parity Person, corrected",
+            "role_basis_code": "contractual",
+            "stakeholder_side_code": "consultant",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "parity-entity-participations-revise-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_END: {
+            "participation_id": end_participation,
+            "expected_version": 1,
+            "idempotency_key": "parity-entity-participations-end-0001",
+        },
+        Capability.ENTITIES_AFFILIATIONS_CREATE: {
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "idempotency_key": "parity-entity-affiliations-create-0001",
+            "organization_entity_id": organization.entity_id,
+            "job_title": "Parity Engineer",
+        },
+        Capability.ENTITIES_AFFILIATIONS_REVISE: {
+            "affiliation_id": revise_affiliation,
+            "expected_version": 1,
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "organization_entity_id": organization.entity_id,
+            "idempotency_key": "parity-entity-affiliations-revise-0001",
+            "job_title": "Parity Principal, corrected",
+        },
+        Capability.ENTITIES_AFFILIATIONS_END: {
+            "affiliation_id": end_affiliation,
+            "expected_version": 1,
+            "idempotency_key": "parity-entity-affiliations-end-0001",
         },
         # A name no staged entity carries, so duplicate resolution admits it.
         # A create naming "Parity Person" would be refused as ambiguous, which
@@ -1376,8 +1751,8 @@ def test_there_are_three_transports_to_compare() -> None:
     """Guard every rule below: an empty list passes them all."""
     subtrees = {p.relative_to(ADAPTERS).parts[0] for p in _transport_modules()}
     assert subtrees >= TRANSPORT_NAMES, f"only {sorted(subtrees)} exist"
-    # The one hundred and four commands and `RequestMetadata` beside them.
-    assert len(REQUEST_VALUES) == 105, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
+    # The one hundred and twenty-four commands and `RequestMetadata` beside them.
+    assert len(REQUEST_VALUES) == 125, f"the command union changed shape: {sorted(REQUEST_VALUES)}"
 
 
 @pytest.mark.parametrize("path", _transport_modules(), ids=lambda p: str(p.name))
@@ -2096,7 +2471,7 @@ def test_the_world_is_copied_per_transport(staged: tuple[Scene, KnowledgeRecord]
 def test_every_transport_answers_a_world_that_is_not_empty(
     staged: tuple[Scene, KnowledgeRecord],
 ) -> None:
-    """Guard the matrix: 104 capabilities answered from an empty world prove little."""
+    """Guard the matrix: 109 capabilities answered from an empty world prove little."""
     scene, record = staged
     assert scene.world.enrollments and scene.world.records
     assert set(payloads_for(scene, record)) == set(Capability)

@@ -2,10 +2,10 @@
 
 Three claims, and they are different in kind.
 
-**Reachability.** Every one of the one hundred and four capabilities is addressable
+**Reachability.** Every one of the one hundred and twenty-four capabilities is addressable
 over HTTP and answers. Parametrised over `Capability` rather than over a list
-written here, so a one-hundred-fifth capability added to the domain arrives as
-a failing row instead of as an untested one. Thirteen of the one hundred and four answer a
+written here, so a one-hundred-twenty-fifth capability added to the domain arrives as
+a failing row instead of as an untested one. Thirteen of the one hundred and twenty-four answer a
 well-formed `501 unsupported` rather than a result — `_UNCOMPOSED_CAPABILITIES`,
 the plane this harness does not switch on — and one, `tasks.bulk_confirm`,
 answers a well-formed `404 not_found`, because a confirm names a preview this
@@ -66,12 +66,17 @@ from tests.conftest import (
 )
 from tests.contract.test_transport_parity import (
     ENTITY_EMAIL,
+    staged_affiliation,
     staged_archived_entity,
     staged_assignment,
     staged_child_records,
+    staged_communication_method,
     staged_edge,
     staged_entities,
+    staged_entity_address,
+    staged_entity_name,
     staged_mention,
+    staged_participation,
 )
 from tests.wire import Wire, serve
 
@@ -79,7 +84,10 @@ from my_pa.adapters.http import create_http_app
 from my_pa.adapters.http.app import _STATUS
 from my_pa.adapters.normalization import MAX_REQUEST_BYTES, normalize
 from my_pa.application.commands import (
+    AddEntityAddress,
     AddEntityAlias,
+    AddEntityCommunicationMethod,
+    AddEntityName,
     ArchiveEntity,
     ArchiveManagedDocument,
     ArchiveRelationshipMemory,
@@ -93,7 +101,9 @@ from my_pa.application.commands import (
     CreateCapture,
     CreateCommitment,
     CreateEntity,
+    CreateEntityAffiliation,
     CreateEntityAssignment,
+    CreateEntityParticipation,
     CreateEntityProposal,
     CreateEntityRelationship,
     CreateManagedDocument,
@@ -102,7 +112,9 @@ from my_pa.application.commands import (
     CreateSituation,
     CreateTask,
     DecideReviewCase,
+    EndEntityAffiliation,
     EndEntityAssignment,
+    EndEntityParticipation,
     EndEntityRelationship,
     EnrollSource,
     FetchSource,
@@ -112,6 +124,7 @@ from my_pa.application.commands import (
     GetEntity,
     GetEntityContext,
     GetEntityIdentityHistory,
+    GetEntityProfile,
     GetEntityRelationships,
     GetGoodNotesContent,
     GetGoodNotesWork,
@@ -125,10 +138,14 @@ from my_pa.application.commands import (
     GetTaskHistory,
     ListCaptures,
     ListCommitments,
+    ListEntityAddresses,
     ListEntityAliases,
     ListEntityAssignments,
+    ListEntityCommunicationMethods,
     ListEntityIdentifiers,
+    ListEntityNames,
     ListEntityObservations,
+    ListEntityParticipations,
     ListIntelligenceArtifacts,
     ListManagedDocuments,
     ListProjects,
@@ -160,11 +177,18 @@ from my_pa.application.commands import (
     RestoreEntity,
     RestoreManagedDocument,
     RestoreRelationshipMemory,
+    RetireEntityAddress,
     RetireEntityAlias,
+    RetireEntityCommunicationMethod,
     RetireEntityIdentifier,
+    RetireEntityName,
     RevealSubject,
     ReviseCapture,
+    ReviseEntityAddress,
+    ReviseEntityAffiliation,
     ReviseEntityAssignment,
+    ReviseEntityCommunicationMethod,
+    ReviseEntityParticipation,
     ReviseEntityRelationship,
     ReviseManagedDocument,
     ReviseRelationshipMemory,
@@ -180,6 +204,7 @@ from my_pa.application.commands import (
     SubmitGoodNotesProposal,
     SupersedeEntityAlias,
     SupersedeEntityIdentifier,
+    SupersedeEntityName,
     TransitionTask,
     UpdateCommitment,
     UpdateEntity,
@@ -211,13 +236,22 @@ from my_pa.domain.intelligence.catalog import (
 )
 from my_pa.domain.relationship.authoring import CallerNamespace
 from my_pa.domain.relationship.entity import (
+    AddressTypeCode,
+    AffiliationTypeCode,
     AliasState,
     AliasType,
     AssignmentType,
+    CommunicationMethodTypeCode,
+    CommunicationUsageContextCode,
     EntityRelationshipType,
     EntityStatus,
     EntityType,
     IdentifierState,
+    NameTypeCode,
+    ParticipationStatusCode,
+    RoleBasisCode,
+    StakeholderClassCode,
+    StakeholderSideCode,
 )
 from my_pa.domain.relationship.governance import (
     ObservationAuthority,
@@ -393,6 +427,19 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
     # expectation.
     revise_assignment = staged_assignment(scene, "HTTP Revise Role")
     end_assignment = staged_assignment(scene, "HTTP End Role")
+    # One staged name per record-family write that needs an existing row, of a
+    # type of its own -- `staged_entity_name` states why the type is what makes
+    # two staged names two rows.
+    supersede_name = staged_entity_name(scene, NameTypeCode.LEGAL)
+    retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
+    revise_address = staged_entity_address(scene, AddressTypeCode.BUSINESS)
+    retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
+    revise_channel = staged_communication_method(scene, CommunicationUsageContextCode.CORPORATE)
+    retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
+    revise_participation = staged_participation(scene, "consultant")
+    end_participation = staged_participation(scene, "supplier")
+    revise_affiliation = staged_affiliation(scene, "HTTP Principal")
+    end_affiliation = staged_affiliation(scene, "HTTP Associate")
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -689,6 +736,135 @@ def payloads_for(scene: Scene, record: KnowledgeRecord) -> dict[Capability, dict
             "states": ["active"],
             "alias_types": ["nickname"],
             "page_size": 10,
+        },
+        # `RI-ENT-WP-10`'s five record-family reads, over the same staged
+        # person. `perspective` is spelled because the command has no default.
+        Capability.ENTITIES_PROFILE: {"entity_id": person.entity_id},
+        Capability.ENTITIES_NAMES_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_ADDRESSES_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_COMMUNICATION_LIST: {
+            "entity_id": person.entity_id,
+            "page_size": 10,
+        },
+        Capability.ENTITIES_PARTICIPATIONS_LIST: {
+            "entity_id": person.entity_id,
+            "perspective": "participant",
+            "page_size": 10,
+        },
+        # `RI-ENT-WP-11`'s record-family writes, each meeting a record of its
+        # own for the reason the directed writes below do.
+        Capability.ENTITIES_NAMES_ADD: {
+            "entity_id": person.entity_id,
+            "name_type_code": "brand",
+            "display_value": "HTTP Brand Name",
+            "idempotency_key": "http-entity-names-add-0001",
+        },
+        Capability.ENTITIES_NAMES_SUPERSEDE: {
+            "entity_name_id": supersede_name,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "name_type_code": "legal",
+            "display_value": "HTTP Legal Name Corrected",
+            "idempotency_key": "http-entity-names-supersede-0001",
+        },
+        Capability.ENTITIES_NAMES_RETIRE: {
+            "entity_name_id": retire_name,
+            "expected_version": 1,
+            "idempotency_key": "http-entity-names-retire-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_ADD: {
+            "entity_id": person.entity_id,
+            "address_type_code": "headquarters",
+            "raw_value": "1 HTTP Headquarters Way",
+            "idempotency_key": "http-entity-addresses-add-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_REVISE: {
+            "entity_address_id": revise_address,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "address_type_code": "business",
+            "raw_value": "2 HTTP Business Way",
+            "idempotency_key": "http-entity-addresses-revise-0001",
+        },
+        Capability.ENTITIES_ADDRESSES_RETIRE: {
+            "entity_address_id": retire_address,
+            "expected_version": 1,
+            "idempotency_key": "http-entity-addresses-retire-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_ADD: {
+            "entity_id": person.entity_id,
+            "method_type_code": "email",
+            "usage_context_code": "personal",
+            "display_value": "http.personal@example.test",
+            "idempotency_key": "http-entity-communication-add-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_REVISE: {
+            "communication_method_id": revise_channel,
+            "expected_version": 1,
+            "entity_id": person.entity_id,
+            "method_type_code": "email",
+            "usage_context_code": "corporate",
+            "display_value": "http.corrected@example.test",
+            "idempotency_key": "http-entity-communication-revise-0001",
+        },
+        Capability.ENTITIES_COMMUNICATION_RETIRE: {
+            "communication_method_id": retire_channel,
+            "expected_version": 1,
+            "idempotency_key": "http-entity-communication-retire-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: {
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "HTTP Person on HTTP Works",
+            "role_basis_code": "source_verified",
+            "stakeholder_side_code": "design",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "http-entity-participations-create-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: {
+            "participation_id": revise_participation,
+            "expected_version": 1,
+            "project_entity_id": organization.entity_id,
+            "participant_entity_id": person.entity_id,
+            "project_display_name": "HTTP Person, corrected",
+            "role_basis_code": "contractual",
+            "stakeholder_side_code": "consultant",
+            "stakeholder_class_code": "core",
+            "relationship_status_code": "active",
+            "idempotency_key": "http-entity-participations-revise-0001",
+        },
+        Capability.ENTITIES_PARTICIPATIONS_END: {
+            "participation_id": end_participation,
+            "expected_version": 1,
+            "idempotency_key": "http-entity-participations-end-0001",
+        },
+        Capability.ENTITIES_AFFILIATIONS_CREATE: {
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "idempotency_key": "http-entity-affiliations-create-0001",
+            "organization_entity_id": organization.entity_id,
+            "job_title": "HTTP Engineer",
+        },
+        Capability.ENTITIES_AFFILIATIONS_REVISE: {
+            "affiliation_id": revise_affiliation,
+            "expected_version": 1,
+            "person_entity_id": person.entity_id,
+            "affiliation_type_code": "employment",
+            "organization_entity_id": organization.entity_id,
+            "idempotency_key": "http-entity-affiliations-revise-0001",
+            "job_title": "HTTP Principal, corrected",
+        },
+        Capability.ENTITIES_AFFILIATIONS_END: {
+            "affiliation_id": end_affiliation,
+            "expected_version": 1,
+            "idempotency_key": "http-entity-affiliations-end-0001",
         },
         Capability.ENTITIES_CREATE: {
             "entity_type": "person",
@@ -1034,6 +1210,19 @@ def commands_for(
     # scene per key, so both tables reach the same rows.
     revise_assignment = staged_assignment(scene, "HTTP Revise Role")
     end_assignment = staged_assignment(scene, "HTTP End Role")
+    # One staged name per record-family write that needs an existing row, of a
+    # type of its own -- `staged_entity_name` states why the type is what makes
+    # two staged names two rows.
+    supersede_name = staged_entity_name(scene, NameTypeCode.LEGAL)
+    retire_name = staged_entity_name(scene, NameTypeCode.OPERATING)
+    revise_address = staged_entity_address(scene, AddressTypeCode.BUSINESS)
+    retire_address = staged_entity_address(scene, AddressTypeCode.MAILING)
+    revise_channel = staged_communication_method(scene, CommunicationUsageContextCode.CORPORATE)
+    retire_channel = staged_communication_method(scene, CommunicationUsageContextCode.OFFICE)
+    revise_participation = staged_participation(scene, "consultant")
+    end_participation = staged_participation(scene, "supplier")
+    revise_affiliation = staged_affiliation(scene, "HTTP Principal")
+    end_affiliation = staged_affiliation(scene, "HTTP Associate")
     revise_edge = staged_edge(scene, EntityRelationshipType.CONSULTANT_TO)
     end_edge = staged_edge(scene, EntityRelationshipType.REPRESENTS)
     return {
@@ -1308,6 +1497,131 @@ def commands_for(
             states=(AliasState.ACTIVE,),
             alias_types=(AliasType.NICKNAME,),
             page_size=10,
+        ),
+        Capability.ENTITIES_PROFILE: GetEntityProfile(entity_id=person.entity_id),
+        Capability.ENTITIES_NAMES_LIST: ListEntityNames(
+            entity_id=person.entity_id,
+            page_size=10,
+        ),
+        Capability.ENTITIES_ADDRESSES_LIST: ListEntityAddresses(
+            entity_id=person.entity_id,
+            page_size=10,
+        ),
+        Capability.ENTITIES_COMMUNICATION_LIST: ListEntityCommunicationMethods(
+            entity_id=person.entity_id,
+            page_size=10,
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_LIST: ListEntityParticipations(
+            entity_id=person.entity_id,
+            perspective="participant",
+            page_size=10,
+        ),
+        Capability.ENTITIES_NAMES_ADD: AddEntityName(
+            entity_id=person.entity_id,
+            name_type_code=NameTypeCode.BRAND,
+            display_value="HTTP Brand Name",
+            idempotency_key="http-entity-names-add-0001",
+        ),
+        Capability.ENTITIES_NAMES_SUPERSEDE: SupersedeEntityName(
+            entity_name_id=supersede_name,
+            expected_version=1,
+            entity_id=person.entity_id,
+            name_type_code=NameTypeCode.LEGAL,
+            display_value="HTTP Legal Name Corrected",
+            idempotency_key="http-entity-names-supersede-0001",
+        ),
+        Capability.ENTITIES_NAMES_RETIRE: RetireEntityName(
+            entity_name_id=retire_name,
+            expected_version=1,
+            idempotency_key="http-entity-names-retire-0001",
+        ),
+        Capability.ENTITIES_ADDRESSES_ADD: AddEntityAddress(
+            entity_id=person.entity_id,
+            address_type_code=AddressTypeCode.HEADQUARTERS,
+            raw_value="1 HTTP Headquarters Way",
+            idempotency_key="http-entity-addresses-add-0001",
+        ),
+        Capability.ENTITIES_ADDRESSES_REVISE: ReviseEntityAddress(
+            entity_address_id=revise_address,
+            expected_version=1,
+            entity_id=person.entity_id,
+            address_type_code=AddressTypeCode.BUSINESS,
+            raw_value="2 HTTP Business Way",
+            idempotency_key="http-entity-addresses-revise-0001",
+        ),
+        Capability.ENTITIES_ADDRESSES_RETIRE: RetireEntityAddress(
+            entity_address_id=retire_address,
+            expected_version=1,
+            idempotency_key="http-entity-addresses-retire-0001",
+        ),
+        Capability.ENTITIES_COMMUNICATION_ADD: AddEntityCommunicationMethod(
+            entity_id=person.entity_id,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.PERSONAL,
+            display_value="http.personal@example.test",
+            idempotency_key="http-entity-communication-add-0001",
+        ),
+        Capability.ENTITIES_COMMUNICATION_REVISE: ReviseEntityCommunicationMethod(
+            communication_method_id=revise_channel,
+            expected_version=1,
+            entity_id=person.entity_id,
+            method_type_code=CommunicationMethodTypeCode.EMAIL,
+            usage_context_code=CommunicationUsageContextCode.CORPORATE,
+            display_value="http.corrected@example.test",
+            idempotency_key="http-entity-communication-revise-0001",
+        ),
+        Capability.ENTITIES_COMMUNICATION_RETIRE: RetireEntityCommunicationMethod(
+            communication_method_id=retire_channel,
+            expected_version=1,
+            idempotency_key="http-entity-communication-retire-0001",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_CREATE: CreateEntityParticipation(
+            project_entity_id=organization.entity_id,
+            participant_entity_id=person.entity_id,
+            project_display_name="HTTP Person on HTTP Works",
+            role_basis_code=RoleBasisCode.SOURCE_VERIFIED,
+            stakeholder_side_code=StakeholderSideCode.DESIGN,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="http-entity-participations-create-0001",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_REVISE: ReviseEntityParticipation(
+            participation_id=revise_participation,
+            expected_version=1,
+            project_entity_id=organization.entity_id,
+            participant_entity_id=person.entity_id,
+            project_display_name="HTTP Person, corrected",
+            role_basis_code=RoleBasisCode.CONTRACTUAL,
+            stakeholder_side_code=StakeholderSideCode.CONSULTANT,
+            stakeholder_class_code=StakeholderClassCode.CORE,
+            relationship_status_code=ParticipationStatusCode.ACTIVE,
+            idempotency_key="http-entity-participations-revise-0001",
+        ),
+        Capability.ENTITIES_PARTICIPATIONS_END: EndEntityParticipation(
+            participation_id=end_participation,
+            expected_version=1,
+            idempotency_key="http-entity-participations-end-0001",
+        ),
+        Capability.ENTITIES_AFFILIATIONS_CREATE: CreateEntityAffiliation(
+            person_entity_id=person.entity_id,
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            idempotency_key="http-entity-affiliations-create-0001",
+            organization_entity_id=organization.entity_id,
+            job_title="HTTP Engineer",
+        ),
+        Capability.ENTITIES_AFFILIATIONS_REVISE: ReviseEntityAffiliation(
+            affiliation_id=revise_affiliation,
+            expected_version=1,
+            person_entity_id=person.entity_id,
+            affiliation_type_code=AffiliationTypeCode.EMPLOYMENT,
+            organization_entity_id=organization.entity_id,
+            idempotency_key="http-entity-affiliations-revise-0001",
+            job_title="HTTP Principal, corrected",
+        ),
+        Capability.ENTITIES_AFFILIATIONS_END: EndEntityAffiliation(
+            affiliation_id=end_affiliation,
+            expected_version=1,
+            idempotency_key="http-entity-affiliations-end-0001",
         ),
         Capability.ENTITIES_CREATE: CreateEntity(
             entity_type=EntityType.PERSON,
@@ -1589,7 +1903,7 @@ class RecordingService(ApplicationService):
             # reported it `not_implemented`, and this suite asserted the `200`.
             relationship_intelligence_enabled=True,
             # And its write half, on exactly the same argument one line up: the
-            # eighteen `entities.` writes are withheld by a second switch, so a
+            # thirty-eight `entities.` writes are withheld by a second switch, so a
             # service composed with the plane and without this one would have
             # this suite asserting reachability for names its own build refuses.
             relationship_intelligence_writes_enabled=True,

@@ -44,11 +44,13 @@ Execution is organized as `UI-IMP-WP01..WP30`. Older `WP-FE-*` sequencing is his
 - `UI-IMP-WP29` — Deployment, Rollback, Environment, and Observability Contract.
 - `UI-IMP-WP30` — Final Runtime / Acceptance Validation.
 
-The next executable package after WP01 is:
+WP02 persistence substrate exists (`identity.webauthn_credentials`, `identity.webauthn_challenges`, `identity.recovery_code_sets`, `identity.recovery_codes`, `identity.auth_sessions`; see [frontend-auth-persistence.md](frontend-auth-persistence.md)). The production browser cookie and session registry remain the legacy HMAC + process-local map. WP02 does not activate WebAuthn.
 
-`UI-IMP-WP02 — Auth Persistence and Session Topology`
+The next executable package is:
 
-WP02 must not infer that any WebAuthn/session runtime implementation was completed by WP01.
+`UI-IMP-WP07 — Shared Rich Content, Overlay, Form, and Status Primitives`
+
+WP07 must not infer production activation, whole-frontend `PASS_VERIFIED`, or Wave 1 closure. UI-IMP-WP06 typed BFF contracts on this PR are implementation substrate, not a post-merge audit.
 
 ## 2. Authentication/session authority
 
@@ -75,9 +77,9 @@ Required authority rules:
 
 ### Current implementation truth versus target
 
-At the WP01 repository basis the web runtime still supports `synthetic | entra | local_operator`, still contains Entra/MSAL code, still uses a signed session cookie carrying Principal/session data, and still uses a process-local session registry. These are legacy/current implementation facts, not the target architecture.
+At the WP02 repository basis the web runtime still supports `synthetic | entra | local_operator`, still contains Entra/MSAL code, still uses a signed session cookie carrying Principal/session data, and still uses a process-local session registry. Durable PostgreSQL stores for credentials, challenges, recovery hashes, and opaque sessions now exist but are not wired to that runtime. These are legacy/current implementation facts, not the target architecture.
 
-`UI-IMP-WP02..WP04` own the replacement. WP01 does not remove or repair those runtime paths.
+`UI-IMP-WP03..WP04` own ceremony and cookie cutover. WP02 does not remove or repair those runtime paths.
 
 ### Prior ADR supersession
 

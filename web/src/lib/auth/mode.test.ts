@@ -1,32 +1,15 @@
 /**
- * The auth mode fails closed, and the WP-04 secret control is unregressed.
- *
- * An unset `MYPA_AUTH_MODE` is the same class of defect as the unset session
- * secret WP-04 closed: a deployment that configured nothing would otherwise get
- * a working passwordless sign-in, and nothing anywhere would say so.
+ * The auth mode fails closed. Unset `MYPA_AUTH_MODE` is a deployment defect,
+ * not a default synthetic provider.
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   authMode,
   homeTenantId,
   MissingAuthModeError,
-  MissingHomeTenantError,
-  LocalOperatorHasNoHomeTenantError,
   SyntheticModeInProductionError,
 } from "@/lib/auth/mode";
-import { encodeSession, MissingSessionSecretError } from "@/lib/auth/session";
 import { SYNTHETIC_MOSS_TENANT_ID } from "@/lib/auth/synthetic";
-import type { PrincipalSession } from "@/contracts/identity";
-
-const PRINCIPAL: PrincipalSession = {
-  principalId: "syn-aaaa0001",
-  tid: SYNTHETIC_MOSS_TENANT_ID,
-  oid: "aaaa0001-0000-0000-0000-000000000001",
-  upn: "synthetic.a@moss.example",
-  displayName: "Synthetic A",
-  lifecycleState: "active",
-  synthetic: true,
-};
 
 afterEach(() => {
   vi.unstubAllEnvs();
@@ -43,31 +26,30 @@ describe("auth mode", () => {
     expect(() => authMode()).toThrow(MissingAuthModeError);
   });
 
+  it("refuses retired entra and local_operator web modes", () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "entra");
+    expect(() => authMode()).toThrow(MissingAuthModeError);
+    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
+    expect(() => authMode()).toThrow(MissingAuthModeError);
+  });
+
   it("refuses the synthetic provider in a production build", () => {
     vi.stubEnv("MYPA_AUTH_MODE", "synthetic");
     vi.stubEnv("NODE_ENV", "production");
     expect(() => authMode()).toThrow(SyntheticModeInProductionError);
   });
 
-  it("accepts the three configured modes", () => {
+  it("accepts the two configured modes", () => {
     vi.stubEnv("MYPA_AUTH_MODE", "synthetic");
     expect(authMode()).toBe("synthetic");
-    vi.stubEnv("MYPA_AUTH_MODE", "entra");
-    expect(authMode()).toBe("entra");
-    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
-    expect(authMode()).toBe("local_operator");
+    vi.stubEnv("MYPA_AUTH_MODE", "passkey");
+    expect(authMode()).toBe("passkey");
   });
 
-  it("permits entra in a production build", () => {
-    vi.stubEnv("MYPA_AUTH_MODE", "entra");
+  it("permits passkey in a production build", () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "passkey");
     vi.stubEnv("NODE_ENV", "production");
-    expect(authMode()).toBe("entra");
-  });
-
-  it("permits credentialed local_operator in a production build", () => {
-    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
-    vi.stubEnv("NODE_ENV", "production");
-    expect(authMode()).toBe("local_operator");
+    expect(authMode()).toBe("passkey");
   });
 });
 
@@ -83,22 +65,10 @@ describe("home tenant", () => {
     expect(homeTenantId()).toBe(SYNTHETIC_MOSS_TENANT_ID);
   });
 
-  it("refuses entra mode with no configured home tenant", () => {
-    vi.stubEnv("MYPA_AUTH_MODE", "entra");
+  it("does not require an Entra home tenant in passkey mode and does not invent one", () => {
+    vi.stubEnv("MYPA_AUTH_MODE", "passkey");
     vi.stubEnv("MYPA_ENTRA_HOME_TENANT_ID", "");
-    expect(() => homeTenantId()).toThrow(MissingHomeTenantError);
-  });
-
-  it("never invents an Entra-shaped tenant for local_operator", () => {
-    vi.stubEnv("MYPA_AUTH_MODE", "local_operator");
-    vi.stubEnv("MYPA_ENTRA_HOME_TENANT_ID", "");
-    expect(() => homeTenantId()).toThrow(LocalOperatorHasNoHomeTenantError);
-  });
-});
-
-describe("the WP-04 session secret control, unregressed", () => {
-  it("still refuses to sign when no secret is configured", async () => {
-    vi.stubEnv("MYPA_SESSION_SECRET", "");
-    await expect(encodeSession(PRINCIPAL)).rejects.toBeInstanceOf(MissingSessionSecretError);
+    expect(() => homeTenantId()).not.toThrow();
+    expect(homeTenantId()).toBe("");
   });
 });

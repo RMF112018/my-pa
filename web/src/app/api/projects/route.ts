@@ -11,25 +11,16 @@
  */
 import { NextResponse, type NextRequest } from "next/server";
 import { requirePrincipal } from "@/lib/api/guard";
-import { backendDisclosure, callGateway, transportLimitations } from "@/lib/api/gateway";
+import { backendDisclosure, invokeGateway, transportLimitations } from "@/lib/api/gateway";
 import { gatewayRefusal, resolveServing } from "@/lib/api/serving";
 import { syntheticProjects } from "@/lib/fixtures/situation";
 import { syntheticDisclosure } from "@/lib/fixtures/pulse";
+import type { ProjectRow } from "@/lib/api/decode/capabilities/continuity.projects";
 import type { BackendProject, ProjectState } from "@/contracts/views";
 
 const SCOPE = "projects";
 
-interface PythonProject {
-  readonly project_id: string;
-  readonly name: string;
-  readonly state: string;
-  readonly description: string | null;
-  readonly participants: readonly string[];
-  readonly opened_at: string;
-  readonly closed_at: string | null;
-}
-
-function toBackendProject(row: PythonProject): BackendProject {
+function toBackendProject(row: ProjectRow): BackendProject {
   return {
     projectId: row.project_id,
     name: row.name,
@@ -56,15 +47,13 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  const outcome = await callGateway<{ projects?: readonly PythonProject[] }>(
-    guard.principal,
-    "continuity.projects",
-  );
+  const outcome = await invokeGateway(guard.principal, "continuity.projects");
   if (!outcome.ok) return gatewayRefusal(SCOPE, outcome.status, outcome.error);
+  const result = outcome.result as { projects: readonly ProjectRow[] };
 
   return NextResponse.json({
     shape: "backend",
-    projects: (outcome.result.projects ?? []).map(toBackendProject),
+    projects: result.projects.map(toBackendProject),
     disclosure: backendDisclosure(SCOPE, outcome.disclosure, transportLimitations()),
   });
 }

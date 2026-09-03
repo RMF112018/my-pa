@@ -4,21 +4,13 @@ import { notFound, redirect } from "next/navigation";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/session";
 import { resolveSessionPrincipal } from "@/lib/auth/principal";
 import { syntheticDataEnabled } from "@/lib/api/gateway-config";
-import { callGateway } from "@/lib/api/gateway";
+import { invokeGateway } from "@/lib/api/gateway";
 import { acceptedTimeline, syntheticPersonId } from "@/lib/fixtures/situation";
 import { RelationshipTimeline } from "@/components/relationship/relationship-timeline";
 import { SurfaceState } from "@/components/ui/surface-state";
+import type { ContinuitySituationsResult } from "@/lib/api/decode/capabilities/continuity.situations";
 
 export const metadata = { title: "Relationship — my-pa" };
-
-interface PythonRelationshipEvent {
-  readonly event_id: string;
-  readonly person_id: string;
-  readonly event_type: "interaction" | "meeting" | "commitment" | "observation" | "affiliation_change" | "project_link";
-  readonly occurred_at: string;
-  readonly context: string | null;
-  readonly source_ref: string | null;
-}
 
 export default async function RelationshipPage({
   params,
@@ -43,9 +35,7 @@ export default async function RelationshipPage({
   );
 
   if (!syntheticDataEnabled()) {
-    const outcome = await callGateway<{
-      relationship_events?: readonly PythonRelationshipEvent[];
-    }>(principal, "continuity.situations");
+    const outcome = await invokeGateway(principal, "continuity.situations");
     if (!outcome.ok) {
       return (
         <section aria-labelledby="relationship-heading" className="mx-auto max-w-2xl">
@@ -59,7 +49,21 @@ export default async function RelationshipPage({
         </section>
       );
     }
-    const events = (outcome.result.relationship_events ?? [])
+    const result = outcome.result as ContinuitySituationsResult;
+    if (result.relationship_events === undefined) {
+      return (
+        <section aria-labelledby="relationship-heading" className="mx-auto max-w-2xl">
+          {heading}
+          <SurfaceState
+            kind="unavailable"
+            title="Relationship timeline could not be read"
+            detail="the gateway result did not match the capability contract"
+            testId="relationship-unavailable"
+          />
+        </section>
+      );
+    }
+    const events = result.relationship_events
       .filter((event) => event.person_id === personId)
       .map((event) => ({
         eventId: event.event_id,

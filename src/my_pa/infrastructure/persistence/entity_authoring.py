@@ -1194,7 +1194,27 @@ def _record_mutation(
     contract requires is that the *result* carry a `receipt_id`, and it does:
     `_entity_receipt` returns this row's `event_id`, which is durable, readable
     and carries the digest, the key, the before and after state and the audit
-    identifier. All eighteen writes on this plane agree on both halves.
+    identifier. Every write that reaches this function agrees on both halves,
+    by construction: it is the single place this module appends the row.
+
+    **No count is stated here, and the omission is deliberate.** This
+    docstring said "all eighteen writes on this plane" from Phase A, when
+    eighteen was the whole entity write surface. It is now thirty-eight, and
+    the fifteen RI-ENT-WP-11 record-family writes do not reach this function
+    at all -- they land through `my_pa.application.entity_record_families`.
+    Whether those fifteen satisfy both halves is a question about their own
+    write path, not about this one, and the two halves stand differently: the
+    ledger-row half is asserted by
+    `tests/database/test_entity_family_write_ledger.py`, and the `receipt_id`
+    half is not -- that module does not read the column, and the statement that
+    the family writes leave it null rests on `EntityFamilyWriteService`'s own
+    docstring rather than on a test. Writing "thirty-eight" here would have
+    asserted a property this module cannot see and one test only half checks,
+    which is why the number was removed rather than corrected. A count is not
+    derivable at this site in any case -- this module has no class whose writes
+    could be enumerated -- so stating one would mean maintaining a figure by
+    hand that nothing binds, which is the defect
+    `test_entity_plane_prose_matches_the_capability_sets.py` exists to prevent.
     """
     try:
         connection.execute(

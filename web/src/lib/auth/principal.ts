@@ -1,32 +1,41 @@
 /**
  * The authoritative answer to "who is calling?" on the Node side.
  *
- * Three things have to hold before a request has a principal, and only this
- * function checks all three:
+ * Edge middleware only checks that a `mypa_session` cookie is 64 hex characters.
+ * Python `AuthSessionStore` is the authority: this module POSTs the opaque SID
+ * to `sessions/touch` so idle TTL advances, and maps the returned Principal.
  *
- * 1. the cookie verifies against the session secret and is inside its absolute
- *    expiry (`verifySessionEnvelope`);
- * 2. its `sid` is still registered **to the principal the envelope names** — it
- *    has not been signed out, superseded by a later sign-in, lost to a restart,
- *    or paired with a different identity than the one the server registered;
- * 3. it has been used inside the idle window.
- *
- * `src/middleware.ts` checks only the first, because the Edge runtime cannot
- * reach the registry. So middleware is a pre-filter and this is the authority:
- * every `/api/*` route handler and every server component that needs a principal
- * calls this, and a route that called `verifySession` directly would accept a
- * revoked session. Nothing else in the tree should call `verifySession`.
+ * A missing or dead SID is `null` (unauthenticated). A missing service secret,
+ * gateway outage, or 503 is `AuthorityUnavailableError` — never `null`, so a
+ * deployment defect is not answered as "please sign in".
  */
-import { verifySessionEnvelope } from "@/lib/auth/session";
-import { touchSession } from "@/lib/auth/session-registry";
+import { parseOpaqueSessionSid } from "@/lib/auth/session";
+import {
+  callSessionService,
+  principalFromSessionServiceResponse,
+} from "@/lib/auth/session-service";
 import type { PrincipalSession } from "@/contracts/identity";
 
-/** The signed-in principal, or `null` — signature, expiry, revocation, idle. */
+/** The session-service cannot decide who this caller is. Distinct from 401. */
+export class AuthorityUnavailableError extends Error {
+  constructor() {
+    super("session authority unavailable");
+    this.name = "AuthorityUnavailableError";
+  }
+}
+
+/** The signed-in principal, or `null` — SID shape, then Python liveness. */
 export async function resolveSessionPrincipal(
   token: string | undefined | null,
+  request?: Request,
 ): Promise<PrincipalSession | null> {
-  const envelope = await verifySessionEnvelope(token);
-  if (!envelope) return null;
-  if (!touchSession(envelope.sid, envelope.principal.principalId)) return null;
-  return envelope.principal;
+  const sid = parseOpaqueSessionSid(token);
+  if (!sid) return null;
+  try {
+    const response = await callSessionService("sessions/touch", { sid }, request);
+    return await principalFromSessionServiceResponse(response);
+  } catch (error) {
+    if (error instanceof AuthorityUnavailableError) throw error;
+    throw new AuthorityUnavailableError();
+  }
 }

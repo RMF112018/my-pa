@@ -23,8 +23,8 @@ test.describe("an unauthenticated visitor reaches no destination", () => {
       "/situations",
       "/library",
     ]) {
-      await page.goto(path);
-      await expect(page).toHaveURL(/\/sign-in$/);
+                    await page.goto(path);
+      await expect(page).toHaveURL(/\/sign-in(?:\?|$)/);
     }
   });
 
@@ -37,7 +37,7 @@ test.describe("an unauthenticated visitor reaches no destination", () => {
       },
     ]);
     await page.goto("/today");
-    await expect(page).toHaveURL(/\/sign-in$/);
+    await expect(page).toHaveURL(/\/sign-in(?:\?|$)/);
   });
 });
 
@@ -132,6 +132,15 @@ test.describe("the signed-in surfaces", () => {
     }
   });
 
+  test("tablet landscape keeps Inspector in the utility region", async ({ page }, testInfo) => {
+    test.skip(testInfo.project.name !== "tablet", "tablet inspector orientation");
+    await page.setViewportSize({ width: 1024, height: 768 });
+    await page.getByRole("button", { name: "Open Inspector" }).click();
+    const utility = page.getByRole("complementary", { name: "Utility region" });
+    await expect(utility.getByRole("slider", { name: "Inspector width" })).toBeVisible();
+    await expect(page.getByRole("dialog", { name: "Inspector" })).toHaveCount(0);
+  });
+
   test("Review renders a truthful state and never fabricates a proposal", async ({ page }) => {
     await page.goto("/review");
     await expect(page.getByRole("heading", { name: "Review", level: 1 })).toBeVisible();
@@ -217,23 +226,45 @@ test.describe("the signed-in surfaces", () => {
       idempotencyKey: `cap-e2e-${marker}`,
     };
 
-    const first = await page.request.post("/api/capture", { data: submission });
-    expect(first.status(), "the first submission must be accepted").toBe(200);
-    const firstBody = await first.json();
-    expect(firstBody.status, "the capture must be persisted, not merely acknowledged").toBe(
+    const first = await page.evaluate(
+      async (submission) => {
+        const response = await fetch("/api/capture", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(submission),
+        });
+        return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+      },
+      submission,
+    );
+    expect(first.status, "the first submission must be accepted").toBe(200);
+    expect(first.body.status, "the capture must be persisted, not merely acknowledged").toBe(
       "persisted",
     );
-    expect(firstBody.created, "the first submission creates the capture").toBe(true);
+    expect(first.body.created, "the first submission creates the capture").toBe(true);
 
-    const replay = await page.request.post("/api/capture", { data: submission });
-    expect(replay.status(), "a replay is answered, not refused").toBe(200);
-    const replayBody = await replay.json();
+    const replay = await page.evaluate(
+      async (payload) => {
+        const response = await fetch("/api/capture", {
+          method: "POST",
+          cache: "no-store",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        return { status: response.status, body: (await response.json()) as Record<string, unknown> };
+      },
+      submission,
+    );
+    expect(replay.status, "a replay is answered, not refused").toBe(200);
 
     // The whole claim, in three assertions: the replay created nothing, and it
     // named the *same* stored row and the same receipt rather than a new one.
-    expect(replayBody.created, "the replay must not create a second capture").toBe(false);
-    expect(replayBody.receipt.captureId).toBe(firstBody.receipt.captureId);
-    expect(replayBody.receipt.receiptId).toBe(firstBody.receipt.receiptId);
+    expect(replay.body.created, "the replay must not create a second capture").toBe(false);
+    const firstReceipt = first.body.receipt as { captureId: string; receiptId: string };
+    const replayReceipt = replay.body.receipt as { captureId: string; receiptId: string };
+    expect(replayReceipt.captureId).toBe(firstReceipt.captureId);
+    expect(replayReceipt.receiptId).toBe(firstReceipt.receiptId);
   });
 });
 

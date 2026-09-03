@@ -96,7 +96,7 @@ describe("review workbench", () => {
     expect(screen.getByText("No proposals are waiting for your review.")).toBeInTheDocument();
   });
 
-  it("accepts a proposal, posts only the disposition, and shows the receipt", async () => {
+  it("does not treat an acknowledged-not-persisted answer as a recorded decision", async () => {
     const user = userEvent.setup();
     const fetchSpy = vi
       .spyOn(globalThis, "fetch")
@@ -108,10 +108,11 @@ describe("review workbench", () => {
     await user.click(screen.getByTestId(`accept-${first.reviewCaseId}`));
 
     await waitFor(() =>
-      expect(screen.getByTestId(`receipt-${first.reviewCaseId}`)).toHaveTextContent(
-        "rcpt-accept-1",
+      expect(screen.getByTestId(`review-not-persisted-${first.reviewCaseId}`)).toHaveTextContent(
+        "acknowledged_not_persisted",
       ),
     );
+    expect(screen.queryByTestId(`receipt-${first.reviewCaseId}`)).not.toBeInTheDocument();
 
     expect(fetchSpy).toHaveBeenCalledWith(
       `/api/review/${first.reviewCaseId}/decide`,
@@ -119,9 +120,39 @@ describe("review workbench", () => {
     );
     const body = JSON.parse((fetchSpy.mock.calls[0][1] as RequestInit).body as string);
     expect(body.disposition).toBe("accept");
-    // The payload must never carry identity fields.
     expect(Object.keys(body)).not.toContain("principalId");
     expect(Object.keys(body)).not.toContain("oid");
+  });
+
+  it("shows the receipt only when the server reports a persisted decision", async () => {
+    const user = userEvent.setup();
+    vi.spyOn(globalThis, "fetch").mockResolvedValue(
+      new Response(
+        JSON.stringify({
+          receipt: {
+            receiptId: "rcpt-accept-1",
+            principalId: PRINCIPAL.principalId,
+            subjectKind: "review_case",
+            subjectId: "rev-x",
+            transition: "needs_review->accepted",
+            policyVersion: "review-policy-v4.0",
+            issuedAt: "2026-08-05T14:00:00+00:00",
+            authority: "review_disposition:accept",
+          },
+          status: "persisted",
+        }),
+        { status: 200 },
+      ),
+    );
+
+    const [first] = syntheticReviewCases(PRINCIPAL);
+    render(<ReviewWorkbench cases={[first]} />);
+    await user.click(screen.getByTestId(`accept-${first.reviewCaseId}`));
+    await waitFor(() =>
+      expect(screen.getByTestId(`receipt-${first.reviewCaseId}`)).toHaveTextContent(
+        "rcpt-accept-1",
+      ),
+    );
   });
 
   it("requires a corrected value before a correct-and-accept can be recorded", async () => {

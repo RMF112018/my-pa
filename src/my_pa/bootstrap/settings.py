@@ -404,7 +404,7 @@ class Settings(StrictModel):
     #: Process-local gate for the relationship-intelligence entity plane
     #: (WP-RI-05, widened through Phase A). Default off. True composes all
     #: fifty-four `entities.` names over the acting Principal's own entities
-    #: and publishes the sixteen that read; the twenty-three that write need the switch
+    #: and publishes the sixteen that read; the thirty-eight that write need the switch
     #: below as well, so this flag on its own serves a read-only plane. It
     #: enables no source traversal, because none exists. Off by default because
     #: the remote MCP profile is derived from the capability set with no
@@ -462,7 +462,7 @@ class Settings(StrictModel):
     #: write switch does.
     #:
     #: A third switch rather than a reuse of the write switch, because the two
-    #: admit different things. The write switch gates all twenty-three Entity
+    #: admit different things. The write switch gates all thirty-eight Entity
     #: writes; the eighteen Phase A writes each change one record of one entity
     #: and are reversible by their own inverse. This additionally publishes
     #: merge and split preview/apply pairs: merge collapses up to eleven identities

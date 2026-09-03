@@ -2533,7 +2533,7 @@ nor `resolved_exact:typed_name` is a key in the table.
   different one.** It reached this document from `origin/main` at `6db2a203`
   with no conflict marker anywhere near it -- the exact shape of FINDING-M1 --
   and was caught by re-measuring rather than by resolving. The selection here
-  collects 2,079 of 18,387 rather than 2,008 of 17,216, because this branch
+  collects 2,079 of 18,398 rather than 2,008 of 17,216, because this branch
   carries RI-ENT-WP-10/11 on top of the same WP-09 commits; the executed figure
   at this head is recorded in the closeout gate block below, and is the one that
   governs. These two defects are
@@ -3148,7 +3148,7 @@ one `slow` in `tests/integration/test_gsqs_remote_eval_http.py`, two
 `evaluation` in `tests/evaluation/test_semantic_gate_harness.py`, and three
 `connector` in `tests/unit/test_wp12_slice_c_application.py`. **The identity is
 re-derived at every head rather than carried**, and at the UI-IMP-WP03 merge it
-is 16,297 + 2,079 + 11 = 18,387, which is the whole tree. It read
+is 16,308 + 2,079 + 11 = 18,398, which is the whole tree. It read
 16,247 + 2,075 + 11 = 18,333 before that integration; the residue is the same
 eleven tests, enumerated by name above rather than counted, because that base
 added none.

@@ -234,7 +234,7 @@ def test_a_build_with_the_plane_withholds_every_write_until_writes_are_enabled()
 
     A remote client with `remote_writes_enabled` off can read who a person is
     and cannot decide it. The gate is the purpose mapping rather than a name
-    list, so this fails the moment one of the twenty-three is mapped to `entity_read`.
+    list, so this fails the moment one of the thirty-eight is mapped to `entity_read`.
     """
     withheld = remote_tool_names(_service(enabled=True), writes_enabled=False)
     assert withheld & ENTITY_WRITES == frozenset()

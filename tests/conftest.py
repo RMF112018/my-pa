@@ -7434,7 +7434,7 @@ def build_service(
         relationship_intelligence_enabled=relationship_intelligence_enabled,
         # Enabled by the same default reasoning, and conjoined with the plane
         # switch for the reason the memory one below is: `ApplicationService`
-        # refuses the plane's twenty-three writes unless *both* are on, and a
+        # refuses the plane's thirty-eight writes unless *both* are on, and a
         # test that turns the plane off should not have to say so twice. A test
         # about the *read-only* build passes `False` explicitly and says so --
         # `tests/contract/test_entity_write_gate.py` is the one that does.
